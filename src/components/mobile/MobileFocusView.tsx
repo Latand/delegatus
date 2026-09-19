@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "@/components/icons";
 import { TaskSheet, type TaskSheetView } from "@/components/tasks/TaskSheet";
 import { taskRelationsByPath } from "@/components/tasks/taskRelations";
+import { accountIdFromPath, DEFAULT_ACCOUNT_ID } from "@/lib/accounts/badge";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
@@ -757,6 +758,7 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
   const model = file.model
     ? file.effort ? t("mobile2.chat.identity", { model: file.model, effort: file.effort }) : file.model
     : badge.label;
+  const account = accountIdFromPath(file.path);
   return (
     <span
       data-mobile2-chat-title
@@ -775,6 +777,17 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
             <span aria-hidden className="shrink-0 text-muted">·</span>
             <ChatEngineMark file={file} />
             <span className="min-w-0 truncate" title={effortTitle(file)}>{model}</span>
+            {/* Which account this conversation runs on (#1795): the operator
+                could read the model and the tier here but never the account,
+                and the phone has no card header to carry the badge. The legacy
+                home names no managed account, so it stays out, exactly as the
+                desktop badge leaves it out. */}
+            {account === DEFAULT_ACCOUNT_ID ? null : (
+              <>
+                <span aria-hidden className="shrink-0 text-muted">·</span>
+                <span data-mobile2-chat-account className="min-w-0 truncate" title={account}>@ {account}</span>
+              </>
+            )}
             {stage?.current ? (
               <>
                 <span aria-hidden className="shrink-0 text-muted">·</span>

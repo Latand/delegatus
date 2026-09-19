@@ -42,6 +42,8 @@ import { translate } from "@/lib/i18n";
 const browserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" ? test : test.skip;
 const OUT = path.resolve(".artifacts/issue-1671");
 const EVIDENCE = path.resolve("evidence/issue-1671");
+/** The fixture's running conversation, under its managed account's home. */
+const RUNNING_PATH = "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl";
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
 
@@ -335,7 +337,7 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
   await pause(page, 450);
 
   /* 7. A conversation's Close writes only the board, and Reopen round-trips. */
-  const running = '[data-mobile2-board] [data-mobile2-swipe-row="conversation:/repo/running.jsonl"]';
+  const running = `[data-mobile2-board] [data-mobile2-swipe-row="conversation:${RUNNING_PATH}"]`;
   await swipeLeft(page, cdp, running, viewport.width);
   const conversationTray = await page.evaluate((sel) => [...document.querySelectorAll(`${sel} [data-mobile2-swipe-action]`)].map((button) => button.getAttribute("aria-label")), running);
   await shot("conversation-tray");
@@ -424,9 +426,9 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
 
 const TASK_0 = "Fast conversation switching";
 
-browserTest("#1671 at phone width: real touches on the real Viewer, in both schemes", async () => {
+/** The fixture page, bundled and served: one setup both cases below run on. */
+async function serveFixture(): Promise<{ base: string; stop: () => void }> {
   fs.mkdirSync(OUT, { recursive: true });
-  fs.mkdirSync(EVIDENCE, { recursive: true });
   const build = await Bun.build({
     entrypoints: [path.resolve("src/components/mobile/issue1671Evidence.fixture.tsx")],
     target: "browser",
@@ -450,14 +452,22 @@ browserTest("#1671 at phone width: real touches on the real Viewer, in both sche
       );
     },
   });
-  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  return { base: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
+}
+
+const launchChromium = () => chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+
+browserTest("#1671 at phone width: real touches on the real Viewer, in both schemes", async () => {
+  fs.mkdirSync(EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
   const results: Awaited<ReturnType<typeof run>>[] = [];
   try {
     for (const viewport of VIEWPORTS) {
       for (const scheme of SCHEMES) {
         const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
         try {
-          results.push(await run(context, `http://127.0.0.1:${server.port}`, viewport, scheme));
+          results.push(await run(context, fixtureBase, viewport, scheme));
         } finally {
           await context.close();
         }
@@ -465,9 +475,243 @@ browserTest("#1671 at phone width: real touches on the real Viewer, in both sche
     }
   } finally {
     await browser.close();
-    server.stop(true);
+    stop();
   }
   fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(results, null, 2)}\n`);
   const failed = results.filter((result) => result.failures.length > 0);
   if (failed.length) throw new Error(JSON.stringify(failed.map((result) => ({ key: result.key, failures: result.failures, pageErrors: result.pageErrors })), null, 2));
+}, 300_000);
+
+/*
+ * #1795 — the runtime pill's sheet, on the same real Viewer, at the two phone
+ * surfaces the operator reached it from and at a desktop viewport:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#1795"
+ *
+ * happy-dom lays nothing out, so the defect the operator photographed — the
+ * sheet rendered INSIDE the conversation pane, its grab bar, title and most of
+ * the Model group above the visible area, the feed's down button floating over
+ * it — is a browser question. Each surface records the chain of ancestors that
+ * establish a containing block for `position: fixed` between the pill and the
+ * document, then measures the open sheet against the viewport, hit-tests the
+ * controls that were unreachable, re-taps the row the conversation already
+ * runs on, and reads the account the surface names. The desktop case is here
+ * rather than in a driver of its own because it is the same control: the
+ * popover the sheet is the phone's face of.
+ *
+ * Readings go to `evidence/issue-1795/runtime-sheet.json`; frames to
+ * `.artifacts/issue-1795/`, which is not committed.
+ */
+const SHEET_OUT = path.resolve(".artifacts/issue-1795");
+const SHEET_EVIDENCE = path.resolve("evidence/issue-1795");
+
+interface Containing { tag: string; marks: string[]; reasons: string[]; rect: Rect }
+
+/** Every ancestor of `selector` that makes `position: fixed` resolve against
+    itself instead of the viewport, nearest first. */
+const containingBlocks = (page: Page, selector: string) => page.evaluate((sel): Containing[] => {
+  const chain: Containing[] = [];
+  const start = document.querySelector(sel);
+  for (let node = start?.parentElement ?? null; node; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    const reasons: string[] = [];
+    if (style.transform !== "none") reasons.push(`transform: ${style.transform}`);
+    if (style.perspective !== "none") reasons.push(`perspective: ${style.perspective}`);
+    if (style.filter !== "none") reasons.push(`filter: ${style.filter}`);
+    if (style.backdropFilter && style.backdropFilter !== "none") reasons.push(`backdrop-filter: ${style.backdropFilter}`);
+    if (/paint|layout|strict|content/.test(style.contain ?? "")) reasons.push(`contain: ${style.contain}`);
+    if ((style.containerType ?? "normal") !== "normal") reasons.push(`container-type: ${style.containerType}`);
+    if ((style.contentVisibility ?? "visible") !== "visible") reasons.push(`content-visibility: ${style.contentVisibility}`);
+    if (/transform|filter|perspective|contain/.test(style.willChange ?? "")) reasons.push(`will-change: ${style.willChange}`);
+    if (!reasons.length) continue;
+    const box = node.getBoundingClientRect();
+    chain.push({
+      tag: node.tagName.toLowerCase(),
+      marks: [...node.attributes].map((attribute) => attribute.name).filter((name) => name.startsWith("data-")),
+      reasons,
+      rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+    });
+  }
+  return chain;
+}, selector);
+
+/** What the operator can actually see and hit: the box, whether it is inside
+    the viewport, and what the topmost element at its centre belongs to. */
+const reachable = (page: Page, selector: string, within: string) => page.evaluate(([sel, root]): null | (Rect & { inside: boolean; hitOwn: boolean }) => {
+  const element = document.querySelector(sel!);
+  const container = document.querySelector(root!);
+  if (!element || !container) return null;
+  const box = element.getBoundingClientRect();
+  const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+  return {
+    x: box.x, y: box.y, width: box.width, height: box.height,
+    inside: box.top >= 0 && box.left >= 0 && box.bottom <= innerHeight + 0.5 && box.right <= innerWidth + 0.5,
+    hitOwn: top !== null && (container.contains(top) || element.contains(top) || element === top),
+  };
+}, [selector, within] as const);
+
+async function sheetSurface(context: BrowserContext, base: string, surface: "pane-on-board" | "conversation-view") {
+  const page = await context.newPage();
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const cdp = await context.newCDPSession(page);
+  const shot = (name: string) => page.screenshot({ path: path.join(SHEET_OUT, `${surface}-${name}.png`) });
+  const failures: string[] = [];
+  const check = (label: string, ok: boolean) => { if (!ok) failures.push(label); };
+  const recorded = () => page.evaluate(() => structuredClone((window as unknown as { evidence: { runtimeRequests: unknown[]; accountSelects: unknown[] } }).evidence));
+
+  if (surface === "pane-on-board") {
+    /* Exactly the operator's route: the board, then the conversation opened
+       from it, which the board mounts inside its own shell. */
+    await page.goto(`${base}/#p=atlas`);
+    const row = `[data-mobile2-board] [data-mobile2-swipe-row="conversation:${RUNNING_PATH}"]`;
+    await page.waitForSelector(row, { timeout: 20_000 });
+    await pause(page, 600);
+    /* The row is below the fold under ten parked lanes: scroll to it, then tap
+       where it now is. */
+    await touch(cdp, [await centre(page, row)]);
+  } else {
+    /* The conversation on its own, deep-linked, with no board under it. */
+    await page.goto(`${base}/#c=conversation_running`);
+  }
+  await page.waitForSelector("[data-runtime-pill]", { timeout: 20_000 });
+  await pause(page, 600);
+
+  /* What `fixed` is measured against here, with the sheet still closed. */
+  const ancestors = await containingBlocks(page, "[data-runtime-pill]");
+  await tap(page, cdp, "[data-runtime-pill]");
+  await pause(page, 400);
+  await shot("sheet");
+
+  const geometry = await page.evaluate(() => {
+    const sheet = document.querySelector("[data-runtime-sheet]");
+    const backdrop = sheet?.parentElement ?? null;
+    if (!sheet || !backdrop) return null;
+    const box = backdrop.getBoundingClientRect();
+    const card = sheet.getBoundingClientRect();
+    return {
+      portalledToBody: backdrop.parentElement === document.body,
+      backdrop: { x: box.x, y: box.y, width: box.width, height: box.height },
+      card: { x: card.x, y: card.y, width: card.width, height: card.height },
+      viewport: { width: innerWidth, height: innerHeight },
+      coversViewport: box.top <= 0.5 && box.left <= 0.5 && box.width >= innerWidth - 0.5 && box.height >= innerHeight - 0.5,
+      scrollsInsideItself: sheet.scrollHeight <= sheet.clientHeight || getComputedStyle(sheet).overflowY === "auto",
+    };
+  });
+  const title = await reachable(page, "[data-runtime-sheet] h2", "[data-runtime-sheet]");
+  const close = await reachable(page, "[data-runtime-sheet-close]", "[data-runtime-sheet]");
+  const accounts = await reachable(page, "[data-runtime-sheet-accounts]", "[data-runtime-sheet]");
+  const firstModelRow = await reachable(page, "[data-runtime-sheet] [role=\"radiogroup\"] [data-runtime-sheet-row]", "[data-runtime-sheet]");
+  const accountRows = await page.evaluate(() => [...document.querySelectorAll("[data-runtime-sheet-account]")].map((row) => ({
+    id: row.getAttribute("data-runtime-sheet-account"),
+    state: row.getAttribute("data-runtime-account-state"),
+    disabled: (row as HTMLButtonElement).disabled,
+  })));
+  const namesAccount = await page.evaluate(() => document.querySelector("[data-runtime-sheet-account-current]")?.textContent ?? "");
+
+  check("the sheet is portalled to the document body", geometry?.portalledToBody === true);
+  check("the sheet covers the whole viewport from this surface", geometry?.coversViewport === true);
+  check("the sheet scrolls inside itself", geometry?.scrollsInsideItself === true);
+  check("its title is on screen and nothing floats over it", Boolean(title?.inside && title.hitOwn));
+  check("its close control is on screen and hittable", Boolean(close?.inside && close.hitOwn));
+  check("the account group is on screen", Boolean(accounts?.inside && accounts.hitOwn));
+  check("the first model row is on screen", Boolean(firstModelRow?.inside && firstModelRow.hitOwn));
+  check("the account the conversation runs on is named", namesAccount.includes("spare"));
+  check("the account it runs on is the marked, inert row", accountRows.some((row) => row.id === "spare" && row.state === "current" && row.disabled));
+  check("another authenticated account is a one-tap select", accountRows.some((row) => row.id === "relief" && row.state === "ready" && !row.disabled));
+  check("a signed-out account keeps its sign-in row", accountRows.some((row) => row.id === "dormant" && row.state === "needs-sign-in"));
+
+  /* Re-tap the reasoning tier the conversation already runs on. */
+  const checkedTier = "[data-runtime-sheet-row][aria-checked=\"true\"]";
+  const beforeReselect = await recorded();
+  await tap(page, cdp, checkedTier);
+  await pause(page, 500);
+  const afterReselect = await recorded();
+  const sheetGone = await page.evaluate(() => document.querySelector("[data-runtime-sheet]") === null);
+  check("re-selecting what it already runs on sends no reconfigure", afterReselect.runtimeRequests.length === beforeReselect.runtimeRequests.length);
+  check("re-selecting what it already runs on closes the sheet", sheetGone);
+
+  /* …and a row that IS a change still goes out, so the guard is equality. */
+  await tap(page, cdp, "[data-runtime-pill]");
+  await pause(page, 400);
+  const changed = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll("[data-runtime-sheet-row]")] as HTMLButtonElement[];
+    const row = rows.find((candidate) => candidate.getAttribute("aria-checked") === "false");
+    row?.setAttribute("data-evidence-change", "1");
+    return row?.textContent ?? "";
+  });
+  await tap(page, cdp, "[data-evidence-change]");
+  await pause(page, 600);
+  const afterChange = await recorded();
+  check("a real change still sends its reconfigure", afterChange.runtimeRequests.length > afterReselect.runtimeRequests.length);
+  await shot("after-change");
+  check("no page errors", pageErrors.length === 0);
+
+  await page.close();
+  return { surface, ancestors, geometry, title, close, accounts, firstModelRow, accountRows, namesAccount, changedTo: changed, pageErrors, failures };
+}
+
+async function popoverSurface(context: BrowserContext, base: string) {
+  const page = await context.newPage();
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const failures: string[] = [];
+  const check = (label: string, ok: boolean) => { if (!ok) failures.push(label); };
+  await page.goto(`${base}/#c=conversation_running`);
+  await page.waitForSelector("[data-runtime-pill]", { timeout: 20_000 });
+  await pause(page, 600);
+  const ancestors = await containingBlocks(page, "[data-runtime-pill]");
+  /* The desktop board is taller than the window; bring the pane's composer row
+     into view before clicking where it now is. */
+  await page.evaluate(() => document.querySelector("[data-runtime-pill]")?.scrollIntoView({ block: "center", inline: "center" }));
+  await pause(page, 500);
+  await page.mouse.click(...(await page.evaluate(() => {
+    const box = document.querySelector("[data-runtime-pill]")!.getBoundingClientRect();
+    return [box.x + box.width / 2, box.y + box.height / 2] as [number, number];
+  })));
+  await pause(page, 400);
+  await page.screenshot({ path: path.join(SHEET_OUT, "desktop-popover.png") });
+  const namesAccount = await page.evaluate(() => document.querySelector("[data-runtime-popover-account]")?.textContent ?? "");
+  const popover = await reachable(page, "[data-runtime-popover]", "[data-runtime-popover]");
+  check("the popover is open and on screen", Boolean(popover?.inside && popover.hitOwn));
+  check("the popover names the account the conversation runs on", namesAccount.includes("spare"));
+  check("no page errors", pageErrors.length === 0);
+  await page.close();
+  return { surface: "desktop-popover", ancestors, popover, namesAccount, pageErrors, failures };
+}
+
+browserTest("#1795: the runtime sheet covers the phone from every surface, closes, ignores a re-tap, and names the account", async () => {
+  fs.mkdirSync(SHEET_OUT, { recursive: true });
+  fs.mkdirSync(SHEET_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: { surface: string; failures: string[]; pageErrors: string[] }[] = [];
+  try {
+    for (const viewport of VIEWPORTS) {
+      for (const surface of ["pane-on-board", "conversation-view"] as const) {
+        const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+        try {
+          const result = await sheetSurface(context, fixtureBase, surface);
+          results.push({ viewport, ...result });
+          if (result.failures.length) failures.push({ surface: `${viewport.width}-${surface}`, failures: result.failures, pageErrors: result.pageErrors });
+        } finally {
+          await context.close();
+        }
+      }
+    }
+    const desktop = await browser.newContext({ viewport: { width: 1_280, height: 900 }, colorScheme: "dark" });
+    try {
+      const result = await popoverSurface(desktop, fixtureBase);
+      results.push({ viewport: { width: 1_280, height: 900 }, ...result });
+      if (result.failures.length) failures.push({ surface: "1280-popover", failures: result.failures, pageErrors: result.pageErrors });
+    } finally {
+      await desktop.close();
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(SHEET_EVIDENCE, "runtime-sheet.json"), `${JSON.stringify(results, null, 2)}\n`);
+  if (failures.length) throw new Error(JSON.stringify(failures, null, 2));
 }, 300_000);

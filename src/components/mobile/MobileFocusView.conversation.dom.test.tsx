@@ -253,6 +253,36 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   expect(dom.document.querySelector("[data-mobile2-chat-title]")?.textContent).not.toContain("Claude");
 });
 
+/* #1795: the phone had no card header to carry the account badge, so nothing
+   on the phone said which account a conversation was running on — the meta
+   line does now, read off the transcript path like every other surface. */
+test("the meta line names the managed account the conversation runs on, and stays quiet for the legacy home", async () => {
+  const managed = entry({
+    path: "/state/agent-log-viewer/shared/accounts/claude/spare/projects/demo/managed.jsonl",
+    title: "Rebuild the board status projection",
+    conversationId: "conv-managed",
+    activity: "live",
+    mtime: 9_000,
+  });
+  const { host } = browser();
+  const nav = createMobileNav(host);
+  detach = nav.attach();
+  mount(nav, [managed], managed.path);
+  await settle();
+  const account = dom.document.querySelector("[data-mobile2-chat-account]");
+  expect(account?.textContent).toBe("@ spare");
+  /* It yields before the state phrase does, like the model beside it. */
+  expect((account as unknown as HTMLElement).className).toContain("min-w-0");
+
+  /* The legacy home names no managed account, and the line stays as it was. */
+  const { host: second } = browser();
+  const legacy = createMobileNav(second);
+  detach = legacy.attach();
+  mount(legacy, [stageConversation], stageConversation.path);
+  await settle();
+  expect(dom.document.querySelectorAll("[data-mobile2-chat-account]").length).toBe(1);
+});
+
 test("offline is screen-level: the meta line says so instead of the last state, and drops the identity", async () => {
   mock.module("@/hooks/useRuntime", () => ({
     ...actualRuntimeHooks,

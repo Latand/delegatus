@@ -41,7 +41,10 @@ function lane(id: string, task: string, attempts: unknown[], over: Record<string
   return {
     id, task, taskIds: [], project: PROJECT, repoDir: "/repo", worktreeDir: `/repo-${id}`, branch: `lane/${id}`,
     baseBranch: "main", baseRef: "main", lastPassedCommit: "",
-    stages: [{ id: "implement", kind: "run" }, { id: "review", kind: "review-loop" }],
+    stages: [
+      { id: "implement", kind: "run", effectiveRole: { roleId: "builder", access: "read-write", promptScaffold: null } },
+      { id: "review", kind: "review-loop", effectiveRole: { roleId: "reviewer", access: "read-only", promptScaffold: null } },
+    ],
     runs: [{ stageId: "review", attempts }],
     cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
     state: "needs_decision", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
@@ -52,6 +55,10 @@ function lane(id: string, task: string, attempts: unknown[], over: Record<string
 
 const failedRound = (n: number, startedAgo: number, completedAgo: number, findings = 1) => ({
   n, state: "failed", startedAt: iso(startedAgo), completedAt: iso(completedAgo),
+  /* Every recorded attempt carries the role it ran under; the desktop board's
+     task projection reads it without a guard, and a round without one took the
+     whole board down when this fixture was first opened at desktop width. */
+  effectiveRole: { roleId: "reviewer", access: "read-only", promptScaffold: null },
   verdict: { status: "fail", findings: Array.from({ length: findings }, (_, i) => `finding ${i + 1}`) },
 });
 
@@ -65,9 +72,15 @@ const pipelines = [
   lane("lane-parked-again", "Board bands keep their order", [failedRound(1, 9_000, 8_400), failedRound(2, 3_000, 2_400)], { dismissedAt: iso(7_800) }),
 ];
 
+/* The running conversation lives under a managed account home, the way a real
+   transcript of a managed account does, so the surfaces that name the account
+   (#1795) have a real one to name rather than the legacy default. */
+const RUNNING_PATH = "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl";
+
 const files: FileEntry[] = [
-  conversation("/repo/running.jsonl", "Rebuild the board status projection", {
+  conversation(RUNNING_PATH, "Rebuild the board status projection", {
     activity: "live", proc: "running", pid: 4_401, mtime: now - 20,
+    effort: "high",
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
   }),
   ...Array.from({ length: 30 }, (_, i) => conversation(
@@ -91,6 +104,11 @@ let board = {
 
 const evidence = {
   catalogRequests: [] as string[],
+  /* Every reconfigure the runtime pill sends, so a re-tap of the tier the
+     conversation already runs on can be shown to send nothing (#1795). */
+  runtimeRequests: [] as Array<Record<string, unknown>>,
+  /* Every account select, the one path that moves the next message. */
+  accountSelects: [] as Array<{ engine: string; body: unknown }>,
   pipelinePatches: [] as Array<{ id: string; action: string }>,
   closesAnswered: [] as string[],
   hidesAnswered: [] as Array<{ id: string; action: string; dismissedAt: string | null }>,
@@ -138,6 +156,30 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ items: catalog.slice(offset, offset + limit), total: 4_595, nextCursor: offset + limit < catalog.length ? String(offset + limit) : null });
   }
   if (url.pathname === "/api/orchestrator/seat") return json({ seat: null, pending: null, exists: true });
+  /* Three invented Claude accounts: the one the running conversation is on,
+     one ready to take the next message, one signed out. */
+  if (url.pathname === "/api/accounts") {
+    return json({
+      claude: {
+        active: "spare",
+        accounts: [
+          { id: "spare", label: "spare", kind: "managed", authPresent: true, authHealth: "authenticated", loginPending: false, loginState: "authenticated", deviceAuth: null },
+          { id: "relief", label: "relief", kind: "managed", authPresent: true, authHealth: "authenticated", loginPending: false, loginState: "authenticated", deviceAuth: null },
+          { id: "dormant", label: "dormant", kind: "managed", authPresent: false, authHealth: "signed_out", loginPending: false, loginState: "idle", deviceAuth: null },
+        ],
+        migration: null, autoBalance: null,
+      },
+      codex: { active: "", accounts: [], migration: null, autoBalance: null },
+    });
+  }
+  if (url.pathname === "/api/accounts/claude/active" && method === "POST") {
+    evidence.accountSelects.push({ engine: "claude", body: JSON.parse(String(init?.body ?? "null")) });
+    return json({ ok: true });
+  }
+  if (url.pathname === "/api/tmux" && method === "POST") {
+    evidence.runtimeRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return json({ ok: true, outcome: "pending", operationId: "reconfigure-evidence" });
+  }
   if (url.pathname.startsWith("/api/pipelines/") && method === "PATCH") {
     const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
     const body = JSON.parse(String(init?.body)) as { action: string };

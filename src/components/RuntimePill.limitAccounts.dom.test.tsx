@@ -106,7 +106,11 @@ async function openSheet(file: FileEntry = limitedFile): Promise<{ host: HTMLEle
   return { host, root };
 }
 
-const rows = (host: HTMLElement) => [...host.querySelectorAll("[data-runtime-sheet-account]")] as HTMLButtonElement[];
+/* The sheet is portalled to the document's body (#1795) — inside the phone's
+   conversation pane an ancestor establishes a containing block and `fixed`
+   was measured against the PANE — so its rows are looked for in the document
+   rather than under the mount, exactly as the popover's are. */
+const rows = () => [...document.querySelectorAll("[data-runtime-sheet-account]")] as HTMLButtonElement[];
 
 test("the chip names the wall instead of a reasoning tier the next message cannot use", async () => {
   const { host, root } = await openSheet();
@@ -117,8 +121,8 @@ test("the chip names the wall instead of a reasoning tier the next message canno
 });
 
 test("the sheet leads with the accounts, the blocked one first and naming its reset", async () => {
-  const { host, root } = await openSheet();
-  const listed = rows(host);
+  const { root } = await openSheet();
+  const listed = rows();
   expect(listed.map((row) => row.getAttribute("data-runtime-sheet-account"))).toEqual(["acct-one", "acct-two", "acct-three"]);
   expect(listed.map((row) => row.getAttribute("data-runtime-account-state")))
     .toEqual(["limit", "ready", "needs-sign-in"]);
@@ -126,14 +130,14 @@ test("the sheet leads with the accounts, the blocked one first and naming its re
   /* The wall is a fact, not an action. */
   expect(listed[0]!.disabled).toBe(true);
   /* And it comes BEFORE Model — reading order is the order of usefulness. */
-  const groups = [...host.querySelectorAll("[data-runtime-sheet-accounts], [role=\"radiogroup\"]")];
+  const groups = [...document.querySelectorAll("[data-runtime-sheet-accounts], [role=\"radiogroup\"]")];
   expect(groups[0]!.hasAttribute("data-runtime-sheet-accounts")).toBe(true);
   await act(async () => root.unmount());
 });
 
 test("an authenticated account is `ready`, and one tap moves the next launch there", async () => {
-  const { host, root } = await openSheet();
-  const ready = rows(host)[1]!;
+  const { root } = await openSheet();
+  const ready = rows()[1]!;
   expect(ready.textContent).toContain("ready");
   expect(ready.disabled).toBe(false);
   await act(async () => {
@@ -147,8 +151,8 @@ test("an authenticated account is `ready`, and one tap moves the next launch the
 });
 
 test("a signed-out account opens the device sign-in and never becomes the launch target", async () => {
-  const { host, root } = await openSheet();
-  const signedOut = rows(host)[2]!;
+  const { root } = await openSheet();
+  const signedOut = rows()[2]!;
   expect(signedOut.textContent).toContain("sign in");
   expect(signedOut.getAttribute("aria-label")).toContain("takes no message until it returns");
   await act(async () => {
@@ -164,11 +168,81 @@ test("a signed-out account opens the device sign-in and never becomes the launch
   await act(async () => root.unmount());
 });
 
-test("with no limit the sheet subscribes to no accounts at all", async () => {
-  const { host, root } = await openSheet({ ...limitedFile, rateLimit: null } as FileEntry);
-  expect(host.querySelector("[data-runtime-sheet-accounts]")).toBeNull();
-  expect(calls.some((call) => call.url === "/api/accounts")).toBe(false);
-  /* And the chip goes back to the ordinary model · reasoning face. */
+/* #1795: the group is no longer the limit's own. The operator could not see
+   which account a conversation was running on anywhere on the phone, and could
+   not move the next message to another one unless the current one had already
+   hit its wall — so the group leads every sheet, the conversation's own account
+   is named and marked, and only the WORDING is the limit's. */
+test("with no limit the account group is still there, naming the account the conversation runs on", async () => {
+  const onAccountTwo = { ...limitedFile, path: "/accounts/claude/acct-two/projects/repo/session.jsonl", rateLimit: null } as FileEntry;
+  const { host, root } = await openSheet(onAccountTwo);
+  const group = document.querySelector("[data-runtime-sheet-accounts]");
+  expect(group).not.toBeNull();
+  /* It says which account this conversation runs on, in the group's own head… */
+  expect(group!.querySelector("[data-runtime-sheet-account-current]")!.textContent).toContain("acct-two");
+  /* …and the row for that account is the marked, inert one, with every other
+     authenticated account a one-tap select. */
+  const listed = rows();
+  expect(listed.map((row) => row.getAttribute("data-runtime-sheet-account"))).toEqual(["acct-two", "acct-one", "acct-three"]);
+  expect(listed.map((row) => row.getAttribute("data-runtime-account-state")))
+    .toEqual(["current", "ready", "needs-sign-in"]);
+  expect(listed[0]!.textContent).toContain("current");
+  expect(listed[0]!.disabled).toBe(true);
+  expect(listed[1]!.disabled).toBe(false);
+  /* And the chip is the ordinary model · reasoning face, unchanged. */
   expect(host.querySelector("[data-runtime-pill]")!.textContent).toContain("· high");
+  await act(async () => root.unmount());
+});
+
+test("tapping another authenticated account with no limit sends the same select the accounts screen sends", async () => {
+  /* Running on the account the engine is launching from, so the tap is a real
+     move rather than a re-pick of what the store already holds. */
+  const onAccountOne = { ...limitedFile, path: "/accounts/claude/acct-one/projects/repo/session.jsonl", rateLimit: null } as FileEntry;
+  const { root } = await openSheet(onAccountOne);
+  const ready = rows().find((row) => row.getAttribute("data-runtime-sheet-account") === "acct-two")!;
+  expect(ready.getAttribute("data-runtime-account-state")).toBe("ready");
+  await act(async () => {
+    ready.click();
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  const select = calls.find((call) => call.url.endsWith("/api/accounts/claude/active"));
+  expect(select).toBeTruthy();
+  expect(select!.body).toMatchObject({ id: "acct-two", mode: "select" });
+  await act(async () => root.unmount());
+});
+
+test("the sheet is mounted under the document body, not inside the pane that hosts the pill", async () => {
+  /* A pane with its own containing block — a transform is one — is exactly
+     what clipped the sheet on the phone (#1795). The portal is what keeps the
+     sheet measured against the viewport, so this pins where it mounts. */
+  const pane = document.createElement("div");
+  pane.style.transform = "translateZ(0)";
+  document.body.append(pane);
+  const host = document.createElement("div");
+  pane.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<RuntimePill file={limitedFile} surface="live-root" />);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    (host.querySelector("[data-runtime-pill]") as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  const sheet = document.querySelector("[data-runtime-sheet]")!;
+  expect(sheet).not.toBeNull();
+  /* Its backdrop is a direct child of the body: nothing between it and the
+     viewport can clip it. */
+  expect(sheet.parentElement!.parentElement).toBe(document.body as unknown as HTMLElement);
+  expect(pane.contains(sheet as unknown as Node)).toBe(false);
+  /* And the way out is visible: a close control that is not the backdrop. */
+  const close = sheet.querySelector("[data-runtime-sheet-close]") as HTMLButtonElement;
+  expect(close).not.toBeNull();
+  expect(close.getAttribute("aria-label")).toBe("Close");
+  await act(async () => {
+    close.click();
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  expect(document.querySelector("[data-runtime-sheet]")).toBeNull();
   await act(async () => root.unmount());
 });

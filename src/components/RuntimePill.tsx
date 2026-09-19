@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, Zap } from "@/components/icons";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, X, Zap } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
+import { accountIdFromPath } from "@/lib/accounts/badge";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { effortScale } from "@/lib/agent/efforts";
 import { ENGINE_MODELS, normalizeClaudeLaunchModel } from "@/lib/agent/models";
@@ -455,18 +456,24 @@ export function RuntimePill({
     setOpen(true);
   }, []);
 
+  /* Choosing what the face already reads is not a change, so it applies
+     nothing, sends nothing and just closes (#1795): `commit` would otherwise
+     reconfigure the conversation onto the tier it is already running. */
   const selectEffort = (tier: string) => {
     if (effortLocked) return;
+    if (face.effort === tier) return closePopover();
     commit({ effort: tier });
     if (!isMobile) closePopover();
   };
   const selectModel = (id: string) => {
     if (modelLocked) return;
+    if (face.model === id) return closePopover();
     commit({ model: id });
     if (!isMobile) closePopover();
   };
   const selectFast = (fast: boolean) => {
     if (speedLocked) return;
+    if (face.fast === fast) return closePopover();
     commit({ fast });
     if (!isMobile) closePopover();
   };
@@ -480,6 +487,11 @@ export function RuntimePill({
      message cannot use and names the wall instead (mobile v2 §4.2, §4.4); its
      sheet leads with the accounts that can take the message. */
   const limitedAccount = isMobile ? file.rateLimit?.accountId ?? null : null;
+  /* The account this conversation actually runs on, read off the live
+     transcript path exactly as the card's account badge reads it (#229). No
+     runtime surface named it before, so the operator could not tell which
+     account a message was about to go to (#1795). */
+  const runsOnAccount = accountIdFromPath(file.path);
   const chipText = limitedAccount
     ? t("mobile2.composer.chipAtLimit", { model: faceModelShort, account: limitedAccount })
     : `${faceModelShort} · ${faceTier}`;
@@ -552,6 +564,7 @@ export function RuntimePill({
           owner={pillRef.current?.ownerDocument ?? document}
           t={t}
           engine={engine}
+          account={runsOnAccount}
           face={face}
           efforts={efforts}
           speedShown={speedShown}
@@ -572,6 +585,8 @@ export function RuntimePill({
         <RuntimeSheet
           t={t}
           engine={engine}
+          account={runsOnAccount}
+          owner={pillRef.current?.ownerDocument ?? document}
           face={face}
           efforts={efforts}
           speedShown={speedShown}
@@ -583,10 +598,7 @@ export function RuntimePill({
           onSelectEffort={selectEffort}
           onSelectModel={selectModel}
           onSelectFast={selectFast}
-          onClose={() => {
-            setOpen(false);
-            pillRef.current?.focus();
-          }}
+          onClose={closePopover}
         />
       ) : null}
 
@@ -608,6 +620,8 @@ export function RuntimePill({
 interface PanelProps {
   t: TFunction;
   engine: "claude" | "codex";
+  /** The account this conversation runs on, which both surfaces name (#1795). */
+  account: string;
   face: RuntimeDraft;
   efforts: readonly string[];
   speedShown: boolean;
@@ -622,7 +636,7 @@ interface PanelProps {
 }
 
 function RuntimePopover({
-  t, engine, face, efforts, speedShown, panel, setPanel,
+  t, engine, account, face, efforts, speedShown, panel, setPanel,
   effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
 }: PanelProps & {
@@ -720,6 +734,12 @@ function RuntimePopover({
     >
       {panel === "root" ? (
         <>
+          {/* Which account the conversation runs on (#1795). The desktop card
+              carries the badge in its header; the popover is where the runtime
+              is chosen, so it says it here too. */}
+          <div className="px-2 pb-1 pt-1.5 text-label text-muted" data-runtime-popover-account>
+            {t("mobile2.composer.accountRunsOn", { account })}
+          </div>
           <RowGroup label={t("composer.reasoningGroup")}>
             {rows.filter((row) => row.kind === "tier").map((row) => (
               <MenuRow key={row.key} row={row} active={rows.indexOf(row) === activeIndex} refFor={(el) => { rowRefs.current[rows.indexOf(row)] = el; }} />
@@ -771,7 +791,7 @@ interface Row {
 function buildRows({
   t, engine, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onOpenPanel,
-}: Omit<PanelProps, "onClose"> & {
+}: Omit<PanelProps, "onClose" | "account"> & {
   panel: "root" | "model" | "speed";
   onOpenPanel: (panel: "root" | "model" | "speed") => void;
 }): Row[] {
@@ -894,10 +914,10 @@ function MenuRow({
 // ---------------------------------------------------------------------------
 
 function RuntimeSheet({
-  t, engine, face, efforts, speedShown,
+  t, engine, account, owner, face, efforts, speedShown,
   effortLocked, modelLocked, speedLocked, lockReason, limit = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose,
-}: PanelProps & { limit?: RateLimitState | null }) {
+}: PanelProps & { limit?: RateLimitState | null; owner: Document }) {
   const sheetRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -912,7 +932,14 @@ function RuntimeSheet({
     };
   }, [onClose]);
 
-  return (
+  /* PORTALLED, LIKE THE POPOVER BESIDE IT. `fixed` is measured against the
+     nearest ancestor that establishes a containing block, and the phone's
+     conversation pane has one, so the sheet was laid out inside the PANE: its
+     grab bar, its title and most of the Model group sat above the visible area
+     and the backdrop that closes it was clipped away with them (#1795). It
+     escapes the same way the popover escaped the composer's scrolling box
+     (#1629) — into the document the pill is actually in. */
+  return createPortal(
     <div
       className="fixed inset-0 z-[70] flex items-end justify-center bg-black/40"
       role="presentation"
@@ -929,16 +956,32 @@ function RuntimeSheet({
         className="max-h-[80vh] w-full max-w-[440px] overflow-y-auto rounded-t-[16px] bg-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2 focus-visible:outline-none"
       >
         <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-border" aria-hidden />
-        {/* The sheet names itself (§4.4) — it is not «settings», it is what the
-            NEXT message will be sent with. */}
-        <h2 className="px-1 text-title font-semibold leading-tight text-primary">{t("mobile2.composer.sheetTitle")}</h2>
-        {/* What the sheet is FOR, in one line (§4.4): every row below changes
-            the next message, never the turn that is already running. */}
-        <p className="mb-2 px-1 text-label leading-snug text-secondary" data-mobile2-next-message>
-          {t("mobile2.composer.nextMessage", { model: modelShortLabel(engine, face.model), effort: tierWord(t, face.effort, true) })}
-        </p>
+        <div className="mb-2 flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            {/* The sheet names itself (§4.4) — it is not «settings», it is what
+                the NEXT message will be sent with. */}
+            <h2 className="px-1 text-title font-semibold leading-tight text-primary">{t("mobile2.composer.sheetTitle")}</h2>
+            {/* What the sheet is FOR, in one line (§4.4): every row below
+                changes the next message, never the turn that is already
+                running. */}
+            <p className="px-1 text-label leading-snug text-secondary" data-mobile2-next-message>
+              {t("mobile2.composer.nextMessage", { model: modelShortLabel(engine, face.model), effort: tierWord(t, face.effort, true) })}
+            </p>
+          </div>
+          {/* A phone has no Escape and the backdrop is a guess, so the way out
+              is a control the operator can see (#1795). */}
+          <button
+            type="button"
+            data-runtime-sheet-close
+            aria-label={t("common.close")}
+            onClick={onClose}
+            className="-mr-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-control text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <X className="h-5 w-5" aria-hidden />
+          </button>
+        </div>
 
-        {limit ? <LimitAccountSection t={t} engine={engine} limit={limit} /> : null}
+        <AccountSection t={t} engine={engine} account={account} limit={limit} />
 
         <SheetSection label={t("composer.modelGroup")}>
           {ENGINE_MODELS[engine].map((model) => (
@@ -973,7 +1016,8 @@ function RuntimeSheet({
           </SheetSection>
         ) : null}
       </div>
-    </div>
+    </div>,
+    owner.body,
   );
 }
 
@@ -995,11 +1039,16 @@ function limitResetClock(limit: RateLimitState): string | null {
 }
 
 /**
- * The Account group the sheet leads with while this conversation's account is
- * at its limit (mobile v2 §4.4, P2-8). Three row kinds, and the rule the P2-8
- * finding is about is the third one:
+ * The Account group the sheet leads with (mobile v2 §4.4, P2-8, #1795). It is
+ * always present, because «which account is this going to» is a question the
+ * operator had no answer to anywhere on the phone, and it names the account
+ * this conversation runs on even when that account is the legacy home and so
+ * has no row of its own. Four row kinds, and the rule P2-8 is about is the
+ * last one:
  *
  *  - the blocked account, naming its wall (`limit · resets 16:40`), inert;
+ *  - the account this conversation RUNS ON, checked and inert — choosing what
+ *    is already chosen changes nothing, exactly as a re-tapped model row does;
  *  - every other AUTHENTICATED account as a `ready` row — one tap sends the
  *    next message there, the same `select` the accounts screen uses;
  *  - an account that is not signed in as a `sign in →` row. It opens the
@@ -1012,51 +1061,74 @@ function limitResetClock(limit: RateLimitState): string | null {
  * either, so its signed-out row states the fact and stays inert rather than
  * offering a tap that would do nothing.
  *
- * Mounted only at the limit, so the ordinary chip never subscribes to the
- * accounts store at all.
+ * Mounted with the sheet and nothing else, so the ordinary chip still
+ * subscribes to the accounts store only while the sheet is open.
  */
-function LimitAccountSection({ t, engine, limit }: { t: TFunction; engine: "claude" | "codex"; limit: RateLimitState }) {
+function AccountSection({ t, engine, account, limit }: {
+  t: TFunction;
+  engine: "claude" | "codex";
+  /** The account this conversation runs on. */
+  account: string;
+  limit: RateLimitState | null;
+}) {
   const state = useEngineAccounts(engine);
-  if (!state.accounts.length) return null;
-  const reset = limitResetClock(limit);
-  const ordered = [...state.accounts].sort((a, b) => Number(b.id === limit.accountId) - Number(a.id === limit.accountId));
+  const reset = limit ? limitResetClock(limit) : null;
+  /* The wall first, then the account this conversation runs on, then the rest
+     in the order the accounts screen lists them. */
+  const rank = (id: string) => (limit && id === limit.accountId ? 0 : id === account ? 1 : 2);
+  const ordered = [...state.accounts].sort((a, b) => rank(a.id) - rank(b.id));
   return (
     <div className="mb-2" data-runtime-sheet-accounts>
-      <div className="mb-1 px-1 text-label font-semibold text-secondary">{t("mobile2.composer.accountGroup")}</div>
-      {ordered.map((account) => {
-        const blocked = account.id === limit.accountId;
-        const authenticated = account.authPresent && (account.authHealth ?? "unknown") !== "signed_out" && !account.loginPending;
+      <div className="mb-1 flex min-w-0 items-baseline gap-2 px-1">
+        <span className="shrink-0 text-label font-semibold text-secondary">{t("mobile2.composer.accountGroup")}</span>
+        {/* Named even when no row carries it: the legacy home is an account
+            the accounts list does not enumerate. */}
+        <span className="min-w-0 truncate text-label text-muted" data-runtime-sheet-account-current>
+          {t("mobile2.composer.accountRunsOn", { account })}
+        </span>
+      </div>
+      {ordered.map((option) => {
+        const blocked = limit !== null && option.id === limit.accountId;
+        const current = !blocked && option.id === account;
+        const authenticated = option.authPresent && (option.authHealth ?? "unknown") !== "signed_out" && !option.loginPending;
         const signInReachable = !authenticated && engine === "claude";
-        const inert = blocked || (!authenticated && !signInReachable);
+        const inert = blocked || current || (!authenticated && !signInReachable);
         return (
           <button
-            key={account.id}
+            key={option.id}
             type="button"
-            data-runtime-sheet-account={account.id}
-            data-runtime-account-state={blocked ? "limit" : authenticated ? "ready" : "needs-sign-in"}
+            data-runtime-sheet-account={option.id}
+            data-runtime-account-state={blocked ? "limit" : current ? "current" : authenticated ? "ready" : "needs-sign-in"}
             disabled={inert || state.mutation !== null}
             aria-disabled={inert || undefined}
             aria-label={blocked
-              ? t("mobile2.composer.accountAtLimit", { account: account.label, time: reset ?? "" }).trim()
-              : authenticated
-                ? t("mobile2.composer.accountReadyAria", { account: account.label })
-                : t("mobile2.composer.accountSignInAria", { account: account.label })}
+              ? t("mobile2.composer.accountAtLimit", { account: option.label, time: reset ?? "" }).trim()
+              : current
+                ? t("mobile2.composer.accountCurrentAria", { account: option.label })
+                : authenticated
+                  ? t("mobile2.composer.accountReadyAria", { account: option.label })
+                  : t("mobile2.composer.accountSignInAria", { account: option.label })}
             onClick={() => {
               if (inert) return;
               /* An account that is not signed in goes to the device sign-in and
                  stays out of the launch: `select` is never reached from here. */
-              if (authenticated) void state.select(account.id);
-              else void state.retryLogin(account.id);
+              if (authenticated) void state.select(option.id);
+              else void state.retryLogin(option.id);
             }}
             className={`flex min-h-11 w-full items-center gap-2 rounded-control px-2 text-left text-body focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-100 ${
               inert ? "text-secondary" : "text-primary active:bg-sunken"
-            }`}
+            } ${current ? "text-primary" : ""}`}
           >
-            <span className="min-w-0 flex-1 truncate">{account.label}</span>
+            <span className="min-w-0 flex-1 truncate">{option.label}</span>
             {blocked ? (
               <span className="shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-caption font-bold text-warning">
                 {reset === null ? t("mobile2.composer.accountLimitBadge") : t("mobile2.composer.accountLimitBadgeAt", { time: reset })}
               </span>
+            ) : current ? (
+              <>
+                <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountCurrent")}</span>
+                <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
+              </>
             ) : authenticated ? (
               <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountReady")}</span>
             ) : signInReachable ? (
