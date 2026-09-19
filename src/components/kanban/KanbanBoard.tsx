@@ -2146,6 +2146,36 @@ export function KanbanBoard(props: KanbanBoardProps) {
     />
   ) : null;
 
+  /* The search field and the Hidden pill, shared by the project's bar and the Overview's. */
+  const searchField = (group?: string) => (
+    <label className="search" data-bar-group={group}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+      <input
+        type="search"
+        placeholder={t("kanban.find")}
+        aria-label={t("kanban.find")}
+        data-kanban-search=""
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+    </label>
+  );
+  /* Narrow, the project's pill is icon and count, the shape Tasks has (#1801), and its name moves to the tooltip. */
+  const hiddenPill = (labelled: boolean) => (
+    <button
+      type="button"
+      className="btn hidden-pill"
+      data-count={hiddenCount}
+      data-hidden-pill=""
+      aria-label={t("kanban.hiddenAria", { count: hiddenCount })}
+      title={labelled ? undefined : t("kanban.hiddenAria", { count: hiddenCount })}
+      onClick={(event) => menu.setOpen({ anchor: event.currentTarget, value: { kind: "tray" } })}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18" /><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 4.2A10.9 10.9 0 0 1 12 4c6 0 10 8 10 8a17.7 17.7 0 0 1-3.2 4.1" /><path d="M6.6 6.6C3.9 8.5 2 12 2 12s4 8 10 8a10.9 10.9 0 0 0 4.4-.9" /></svg>
+      {labelled ? <>{t("kanban.hidden")} </> : null}<span className="count num">{hiddenCount}</span>
+    </button>
+  );
+
   return (
     <AccountChoiceContext.Provider value={accountChoice}>
     <KanbanDraftContext.Provider value={draftActions}>
@@ -2153,62 +2183,70 @@ export function KanbanBoard(props: KanbanBoardProps) {
       {/* The project board's one header bar (#1801, docs/design/board-header.md): where am I, what is
           happening, one spacer, find, view, create, panels, more. The two ends are the project's own
           (`barLead`, `barTrail`); the right reserve is the Viewer's attention island. */}
-      <header className="bar" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined}>
-        {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead(barWide)}</div> : null}
-        <span className="summary" data-bar-group="status">
-          {catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : (
-            <>
-              <span className="dot" aria-hidden="true" />
-              <span className="num" data-bar-working="">{t("kanban.summaryWorking", { count: model.totals.working })}</span>
-            </>
-          )}
-        </span>
-        <span className="grow" />
-        <label className="search" data-bar-group="find">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
-          <input
-            type="search"
-            placeholder={t("kanban.find")}
-            aria-label={t("kanban.find")}
-            data-kanban-search=""
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
-        <div className="bar-group" data-bar-group="view">
-          <button
-            type="button"
-            className="btn hidden-pill"
-            data-count={hiddenCount}
-            data-hidden-pill=""
-            aria-label={t("kanban.hiddenAria", { count: hiddenCount })}
-            title={t("kanban.hiddenAria", { count: hiddenCount })}
-            onClick={(event) => menu.setOpen({ anchor: event.currentTarget, value: { kind: "tray" } })}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18" /><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 4.2A10.9 10.9 0 0 1 12 4c6 0 10 8 10 8a17.7 17.7 0 0 1-3.2 4.1" /><path d="M6.6 6.6C3.9 8.5 2 12 2 12s4 8 10 8a10.9 10.9 0 0 0 4.4-.9" /></svg>
-            {/* Narrow, icon and count, the shape Tasks has (#1801). */}
-            {barWide ? <>{t("kanban.hidden")} </> : null}<span className="count num">{hiddenCount}</span>
-          </button>
-          {viewSwitch ? <span className="bar-slot view-switch">{viewSwitch}</span> : null}
-        </div>
-        {/* Both creation surfaces write into ONE project's board. The Overview
-            has no single project to write into, so it offers neither rather
-            than picking one for the operator — and the slot itself goes with
-            them, so the bar keeps no empty cell where they were (#1820).
-            Narrow, the two are one `+` with a two-row menu. */}
-        {props.overview && !props.onNewAgent ? null : (
+      {props.overview ? (
+        /* The Overview keeps the bar it had before the project board's header was put in order
+           (#1801 was the project board only): its three facts, and the tools wrapping under the
+           island on its narrow faces. */
+        <header className="bar" data-bar="overview">
+          <span className="summary">
+            <span className="dot" aria-hidden="true" />
+            <span className="num">{t("kanban.overviewWorking", { count: model.totals.working })}</span>
+            {model.totals.needsYou ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="dot warn" aria-hidden="true" />
+                <span className="num">{t("kanban.overviewNeeds", { count: model.totals.needsYou })}</span>
+              </>
+            ) : null}
+            <span aria-hidden="true">·</span>
+            <span className="num">{t("kanban.overviewTasks", { count: model.totals.onBoard })}</span>
+          </span>
+          {catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : null}
+          <span className="grow" />
+          <div className="bar-tools">
+            {searchField()}
+            {hiddenPill(true)}
+            {viewSwitch ? <span className="view-switch">{viewSwitch}</span> : null}
+          </div>
+          {props.onNewAgent ? (
+            <div className="bar-create">
+              <button type="button" className="btn" data-new-agent="" aria-label={t("dash.newConvo")} disabled={!loaded} onClick={props.onNewAgent}>
+                <span className="plus" aria-hidden="true">+</span> {t("dash.agent")}
+              </button>
+            </div>
+          ) : null}
+        </header>
+      ) : (
+        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined}>
+          {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead(barWide)}</div> : null}
+          <span className="summary" data-bar-group="status">
+            {catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : (
+              <>
+                <span className="dot" aria-hidden="true" />
+                <span className="num" data-bar-working="">{t("kanban.summaryWorking", { count: model.totals.working })}</span>
+              </>
+            )}
+          </span>
+          <span className="grow" />
+          {searchField("find")}
+          <div className="bar-group" data-bar-group="view">
+            {hiddenPill(barWide)}
+            {viewSwitch ? <span className="bar-slot view-switch">{viewSwitch}</span> : null}
+          </div>
+          {/* Both creation surfaces write into this project's board. Narrow, the two are one `+`
+              with a two-row menu. */}
           <div className="bar-slot">
             <BarCreateGroup
-              wide={barWide || Boolean(props.overview)}
-              task={props.overview ? null : { onClick: openNewTask, expanded: composingTask }}
+              wide={barWide}
+              task={{ onClick: openNewTask, expanded: composingTask }}
               agent={props.onNewAgent ? { onClick: props.onNewAgent, disabled: !loaded } : null}
-              onMenu={props.overview ? undefined : (anchor) => menu.setOpen({ anchor, value: { kind: "create" } })}
+              onMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "create" } })}
               menuOpen={menu.open?.value.kind === "create" || composingTask}
             />
           </div>
-        )}
-        {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barWide)}</div> : null}
-      </header>
+          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barWide)}</div> : null}
+        </header>
+      )}
 
       <div className="kb-body">
       <div className="kb-page">

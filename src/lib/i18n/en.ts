@@ -2880,6 +2880,10 @@ export const en = {
   "kanban.noMatchHint": "Try a shorter search.",
   "kanban.openProjectBoard": "Open {project}",
   "kanban.summaryWorking": { one: "{count} working", other: "{count} working" },
+  // The Overview's bar keeps its three facts; the project board's bar says only who is working (#1801).
+  "kanban.overviewWorking": { one: "{count} agent working", other: "{count} agents working" },
+  "kanban.overviewNeeds": { one: "{count} needs you", other: "{count} need you" },
+  "kanban.overviewTasks": { one: "{count} task on the board", other: "{count} tasks on the board" },
   "kanban.filesFailed": "Conversations could not be loaded; cards may be missing members.",
   "kanban.loading": "Loading the board…",
   "kanban.find": "Find a task",

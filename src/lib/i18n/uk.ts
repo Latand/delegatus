@@ -1622,8 +1622,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "dash.pipeline": "Пайплайн",
   "dash.newPipeline": "Новий пайплайн",
 
-  // Історія дій дошки (скасувати/повторити нещодавні дії, напр. закриття картки)
-
   "scheme.pipeline": "Пайплайн",
   "scheme.pipelineTitle": "Запустити пайплайн із цієї розмови",
   "board.pipeline": "Пайплайн",
@@ -2795,6 +2793,9 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.noMatchHint": "Спробуйте коротший запит.",
   "kanban.openProjectBoard": "Відкрити {project}",
   "kanban.summaryWorking": { one: "{count} працює", few: "{count} працюють", many: "{count} працюють", other: "{count} працюють" },
+  "kanban.overviewWorking": { one: "{count} агент працює", few: "{count} агенти працюють", many: "{count} агентів працюють", other: "{count} агентів працюють" },
+  "kanban.overviewNeeds": { one: "{count} чекає на вас", few: "{count} чекають на вас", many: "{count} чекають на вас", other: "{count} чекають на вас" },
+  "kanban.overviewTasks": { one: "{count} задача на дошці", few: "{count} задачі на дошці", many: "{count} задач на дошці", other: "{count} задач на дошці" },
   "kanban.filesFailed": "Не вдалося завантажити розмови; на картках можуть бракувати учасників.",
   "kanban.loading": "Завантаження дошки…",
   "kanban.find": "Знайти задачу",

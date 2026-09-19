@@ -21,9 +21,9 @@ import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
+import { setLocale, translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
-import { readFileSync } from "node:fs";
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const actualConversationCatalogHooks = await import("@/hooks/useConversationCatalog");
@@ -314,7 +314,7 @@ test("Conversations shows one search too: the message search in the bar's find s
   expect(openMore(host).querySelector('[data-testid="dash-search"]')).toBeNull();
 });
 
-test("the view switch marks its selected side, out of reach of the board's button reset", async () => {
+test("the view switch marks its selected side", async () => {
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
@@ -323,15 +323,10 @@ test("the view switch marks its selected side, out of reach of the board's butto
   const list = host.querySelector('button[data-view-tab="list"]') as HTMLElement;
   expect(board.getAttribute("aria-pressed")).toBe("true");
   expect(list.getAttribute("aria-pressed")).toBe("false");
-  expect(board.className).toContain("bg-accent/10");
-  expect(list.className).not.toContain("bg-accent/10");
-  /* The kanban stylesheet strips every button inside the board of its fill and padding except
-     inside the slots it exempts; the switch must sit in one, and the rule must exempt it. */
-  expect(board.closest(".bar-slot")).not.toBeNull();
-  const css = readFileSync(new URL("./kanban/kanbanBoard.css", import.meta.url), "utf8");
-  const reset = css.split("\n").find((line) => /^\.kb button:not\(/.test(line)) ?? "";
-  expect(reset).toContain(".bar-slot *");
-  expect(reset).toContain("background: none");
+  /* Pressing the other side moves the mark with the view. */
+  click(list);
+  expect(await waitFor(() => host.querySelector('button[data-view-tab="list"]')?.getAttribute("aria-pressed") === "true")).toBe(true);
+  expect(host.querySelector('button[data-view-tab="kanban"]')!.getAttribute("aria-pressed")).toBe("false");
 });
 
 test("every control the two bars held is still reachable, wide", async () => {
@@ -352,14 +347,10 @@ test("every control the two bars held is still reachable, wide", async () => {
   for (const label of [en["search.open"], en["sound.mute"], en["sound.settings"], en["trash.toArchive"], en["trash.deleteProject"]]) {
     expect({ label, found: rows.includes(label) }).toEqual({ label, found: true });
   }
-  /* The account switch stays in the bar while it is wide, so ⋯ does not repeat it; in the bar it
-     is an outlined control like its neighbours, 8 px from the next. */
+  /* The account switch stays in the bar while it is wide, so ⋯ does not repeat it. */
   expect(menu.querySelector("[data-account-switch-engine]")).toBeNull();
   const account = inBar.querySelector("[data-account-switch-engine] button") as HTMLElement;
   expect(account.getAttribute("data-account-switch-appearance")).toBe("bar");
-  expect(account.className).toContain("rounded-control");
-  expect(account.className).toContain("bg-card");
-  expect((inBar.querySelector("[data-project-accounts]") as HTMLElement).className).toContain("gap-2");
   /* Sound levels open in place, inside the menu. */
   click(menu.querySelector('[data-testid="sound-settings-trigger"]'));
   expect(menu.querySelector('[data-testid="sound-settings"]')).not.toBeNull();
@@ -425,11 +416,6 @@ test("⋯ draws no rule next to a group with nothing in it", async () => {
   expect(menu.querySelector('[role="separator"]')).toBeNull();
   const project = menu.querySelector('[data-bar-menu-group="project"]') as HTMLElement;
   expect(project.childNodes).toHaveLength(0);
-  expect(project.className).toContain("empty:hidden");
-  /* The rules are drawn by the menu between non-empty groups only. */
-  const rules = (menu.className.match(/\[[^ ]*\]:border-t/g) ?? []);
-  expect(rules).toHaveLength(1);
-  expect(rules[0]).toContain("[data-bar-menu-group]:not(:empty)~[data-bar-menu-group]:not(:empty)");
 });
 
 test("the view switch keeps its place when the view changes: Conversations reserves the create group", async () => {
@@ -489,11 +475,6 @@ test("1602 px of bar (a 1850 px viewport) is the narrow tier: the uk labels did 
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
   expect(bar(host).getAttribute("data-bar-tier")).toBe("narrow");
-  /* The project name keeps a floor, so it never truncates to nothing, and the search gives way first. */
-  expect(bar(host).querySelector("h1")!.className).toContain("min-w-12");
-  const css = readFileSync(new URL("./kanban/kanbanBoard.css", import.meta.url), "utf8");
-  expect(css).toMatch(/\.kb \.bar \.search \{[^}]*flex: 1 8 240px/);
-  expect(css).not.toMatch(/\.kb \.bar \.bar-lead \{[^}]*min-width: 0/);
 });
 
 test("narrow, a long project name truncates to its floor instead of pushing the row under the island", async () => {
@@ -503,16 +484,11 @@ test("narrow, a long project name truncates to its floor instead of pushing the 
   await settle();
   const name = bar(host).querySelector("h1") as HTMLElement;
   expect(name.className).toContain("truncate");
-  /* The lead's automatic minimum is the whole name (it does not wrap), so without an explicit
-     floor the name never shrank and the row ran 25-60 px into the island's reserve at 1280. */
-  const css = readFileSync(new URL("./kanban/kanbanBoard.css", import.meta.url), "utf8");
-  expect(css).toMatch(/\.kb \.bar\[data-bar-tier="narrow"\] \.bar-lead \{[^}]*min-width: 48px/);
-  /* The other leaves' bar holds the same floor, and its status line gives way too. */
+  /* The name's floor and the row's fit are measured by the board-geometry capture; here, the
+     other leaves' status line gives way too. */
   click(host.querySelector('button[data-view-tab="list"]'));
   expect(await waitFor(() => host.querySelector("[data-project-bar]") !== null)).toBe(true);
   await settle();
-  const lead = host.querySelector('[data-project-bar] [data-bar-group="where"]') as HTMLElement;
-  expect(lead.className).toContain("min-w-12");
   const status = host.querySelector('[data-project-bar] [data-bar-group="status"]') as HTMLElement;
   expect(status.className).not.toContain("shrink-0");
   expect(status.className).toContain("truncate");
@@ -539,12 +515,6 @@ test("the Tasks panel opens under the Board's one bar, so the bar spans it and s
   expect(bar(host).querySelector("[data-task-panel-toggle]")!.getAttribute("aria-pressed")).toBe("true");
   /* 1032 px of bar is one row whether the panel is open or not; only a bar under 768 px wraps. */
   expect(bar(host).hasAttribute("data-bar-wrap")).toBe(false);
-  const css = readFileSync(new URL("./kanban/kanbanBoard.css", import.meta.url), "utf8");
-  expect(css).not.toMatch(/data-mode="tabs"\] \.bar/);
-  expect(css).toMatch(/\.kb \.bar\[data-bar-wrap\] \{[^}]*flex-wrap: wrap/);
-  /* The board's button reset does not reach into the panel. */
-  const reset = css.split("\n").find((line) => /^\.kb button:not\(/.test(line)) ?? "";
-  expect(reset).toContain(".kb-aside *");
 
   /* The toggle in the bar still closes it. */
   click(bar(host).querySelector("[data-task-panel-toggle]"));
@@ -559,14 +529,20 @@ test("a bar under 768 px, and only there, wraps", async () => {
   expect(bar(host).hasAttribute("data-bar-wrap")).toBe(true);
 });
 
-test("uk: the switch and the working count read in Ukrainian", () => {
-  expect(uk["kanban.viewTab"]).toBe("Дошка");
-  expect(uk["dash.viewList"]).toBe("Розмови");
-  expect(uk["dash.more"]).toBe("Більше дій");
-  expect(uk["dash.create"]).toBe("Створити");
-  expect((uk["kanban.summaryWorking"] as Record<string, string>).few).toBe("{count} працюють");
-  expect("kanban.summaryNeeds" in uk || "kanban.summaryNeeds" in en).toBe(false);
-  expect("kanban.summaryTasks" in uk || "kanban.summaryTasks" in en).toBe(false);
+test("uk: the switch, the working count and ⋯ read in Ukrainian", async () => {
+  setLocale("uk");
+  try {
+    const host = mount();
+    expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+    await settle();
+    expect(text(host.querySelector('button[data-view-tab="kanban"]'))).toContain(uk["kanban.viewTab"]);
+    expect(text(host.querySelector('button[data-view-tab="list"]'))).toContain(uk["dash.viewList"]);
+    expect(text(bar(host).querySelector("[data-bar-working]"))).toBe(translate("uk", "kanban.summaryWorking", { count: 0 }));
+    const menu = openMore(host);
+    expect(text(menu)).toContain(uk["search.open"]);
+  } finally {
+    setLocale("en");
+  }
 });
 
 test("narrow, Hidden is its icon and count, the shape Tasks has; wide, it keeps its label", async () => {

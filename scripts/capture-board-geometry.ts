@@ -7,6 +7,9 @@
  *
  *   bun run build && bun scripts/capture-board-geometry.ts
  *
+ * From a `git archive` export, set BOARD_CAPTURE_COMMIT to the exported SHA so
+ * the record names the commit it measured.
+ *
  * With BOARD_CAPTURE_CASE=header it measures the project board's one header
  * bar instead (#1801) on a home seeded the way production looks: three Claude
  * accounts and one Codex account with usage readings, bound to the project;
@@ -44,6 +47,10 @@ import { chromium, type Browser, type Page } from "playwright-core";
 import { createCaptureDirectory } from "./capture-directory";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
+/* The commit the record was captured from. A `git archive` export has no repository, so the caller
+   names it in BOARD_CAPTURE_COMMIT; inside a checkout it is HEAD. */
+const captureCommit = () => process.env.BOARD_CAPTURE_COMMIT?.trim()
+  || Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout.toString().trim();
 const BASE = createCaptureDirectory({ envName: "BOARD_CAPTURE_DIR", prefix: "llv-issue-1641", raw: process.env.BOARD_CAPTURE_DIR, repoRoot });
 const HOME = path.join(BASE, "home");
 const OUT_DIR = path.join(BASE, "out");
@@ -503,7 +510,7 @@ async function main(): Promise<void> {
   const baseUrl = `http://127.0.0.1:${port}`;
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
-  const report: Record<string, unknown> = { commit: Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout.toString().trim() };
+  const report: Record<string, unknown> = { commit: captureCommit() };
   try {
     /* The project key is the scan's own. A throwaway boot names it; the
        state (tasks and the review flow) is then written and the server booted
@@ -1290,7 +1297,7 @@ async function headerMain(): Promise<void> {
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const holders: ChildProcess[] = [];
-  const report: Record<string, unknown> = { commit: Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout.toString().trim() };
+  const report: Record<string, unknown> = { commit: captureCommit() };
   try {
     server = startServer(port);
     await waitForServer(baseUrl, server);

@@ -467,9 +467,6 @@ function ProjectDashboardView({
      first painted board already reflects closes, worker-stack collapse and caps
      instead of flashing the raw scan snapshot and culling it. */
   const boardReady = boardFirstPaintReady(loaded, board.loaded);
-  /* Per-project, device-local undo/redo log of recent board actions (issue
-     #184). v1 records card closes; undo reopens the last-closed card through the
-     shared restore path, redo closes it again. */
   const prefs = useMemo<ColumnPrefs>(
     () => ({ manual: board.prefs.manual, hidden: board.prefs.hidden, expanded: board.prefs.expanded }),
     [board.prefs],
