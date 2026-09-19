@@ -16,7 +16,12 @@ import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { applyStructuredReconfigure } from "./structuredReconfigure";
 import { projectEngineHostEvent } from "./engineHostEvents";
-import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
+import { conversationTurnLiveness, readTranscriptEvidence, type TurnLivenessDependencies } from "./liveness";
+import {
+  interruptionObligationDirectory,
+  interruptionObligationStore,
+  type InterruptionObligationStore,
+} from "./interruptionObligations";
 import { reapSeveredStructuredHost } from "./registry";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
@@ -1416,18 +1421,91 @@ export async function releaseStructuredDeliveryHost(key: SessionKey): Promise<bo
   return await state.releaseActiveHost?.(key) ?? false;
 }
 
+export interface DemotionInterruptionOptions {
+  /** The deployment boundary this release belongs to; part of each
+      obligation's identity. */
+  boundary?: string;
+  store?: InterruptionObligationStore;
+  /** The orchestrator seat a conversation holds, if any. */
+  seatFor?: (conversationId: ViewerConversationId) => Promise<{ project: string; seatEpoch: number } | null>;
+}
+
+async function orchestratorSeatFor(conversationId: ViewerConversationId): Promise<{ project: string; seatEpoch: number } | null> {
+  const { activeOrchestratorSeats } = await import("@/lib/orchestrator/seats");
+  const seat = activeOrchestratorSeats().find((candidate) => candidate.conversationId === conversationId);
+  return seat ? { project: seat.project, seatEpoch: seat.seatEpoch } : null;
+}
+
+/**
+ * Writes the continuation this release owes a host whose turn is in flight
+ * (#1835), before anything releases it. The host's own active turn is the
+ * evidence; the registry's turn word only backs it up, so a host that finished
+ * its turn before the release is owed nothing.
+ */
+async function recordDemotionInterruption(
+  registry: AgentRegistry,
+  key: SessionKey,
+  current: HostState,
+  options: DemotionInterruptionOptions,
+): Promise<void> {
+  const snapshot = registry.readOnlySnapshot();
+  const hostKey = sessionKeyId(key);
+  const entry = snapshot.entries[hostKey];
+  const conversation = Object.values(snapshot.conversations).find((candidate) =>
+    candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
+  if (!entry || !conversation || conversation.supersededBy) return;
+  const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
+  if (turnRef === null && conversation.turn.state !== "busy") return;
+  const conversationId = registry.canonicalConversationId(conversation.id);
+  const generation = conversation.generations.at(-1)!;
+  const transcript = await readTranscriptEvidence(conversation.engine, generation.path).catch(() => null);
+  let seat: { project: string; seatEpoch: number } | null = null;
+  try {
+    seat = await (options.seatFor ?? orchestratorSeatFor)(conversationId);
+  } catch (error) {
+    console.error("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error });
+  }
+  const store = options.store ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  const { obligation, created } = store.record({
+    conversationId,
+    engine: conversation.engine,
+    hostKey,
+    path: generation.path,
+    owner: current.pid === null ? null : { pid: current.pid, startIdentity: current.processStartIdentity },
+    claimEpoch: entry.claimEpoch,
+    turnRef,
+    boundary: options.boundary ?? "viewer-release",
+    reason: "viewer-release",
+    checkpoint: { lastEventKind: transcript?.kind ?? null, lastEventAt: transcript?.lastEventAt ?? null },
+    seat,
+  });
+  if (created) {
+    console.error("[viewer release] recorded an interrupted turn owed one continuation", {
+      conversationId, hostKey, turnRef, obligation: obligation.id,
+    });
+  }
+}
+
 /** Releases every engine host owned by this Viewer before release demotion.
  *
  * Structured engines run outside the Viewer container namespace, so exiting
  * the Viewer does not end them. Release the process-scoped registrations while
  * their transports and writer fences still exist; the promoted Viewer can then
  * claim each durable row on its bounded startup retry. All releases begin in
- * one turn so several slow engine shutdowns consume one grace window. */
-export async function releaseStructuredDeliveryHostsForDemotion(): Promise<void> {
+ * one turn so several slow engine shutdowns consume one grace window.
+ *
+ * A host whose turn is in flight is cut by this release, so the continuation
+ * it is owed is recorded first (#1835). A host whose obligation could not be
+ * written is still released — the Viewer is exiting either way — and the
+ * failure is reported with the rest. */
+export async function releaseStructuredDeliveryHostsForDemotion(
+  options: DemotionInterruptionOptions = {},
+): Promise<void> {
   const registrations = state.activeRegistrations?.() ?? [];
   const release = state.releaseActiveHost;
   if (!release || registrations.length === 0) return;
   const registry = state.activeRegistry;
+  const recordFailures: unknown[] = [];
   await Promise.all(registrations.map(async ({ key, host }) => {
     const current = await host.health();
     if ((current.status !== "active" && current.status !== "attention")
@@ -1437,9 +1515,17 @@ export async function releaseStructuredDeliveryHostsForDemotion(): Promise<void>
       key,
       captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
     )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+    try {
+      await recordDemotionInterruption(registry, key, current, options);
+    } catch (error) {
+      recordFailures.push(error);
+    }
   }));
   const outcomes = await Promise.allSettled(registrations.map(({ key }) => release(key)));
-  const failures = outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []);
+  const failures = [
+    ...recordFailures,
+    ...outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []),
+  ];
   if (failures.length > 0) {
     throw new AggregateError(failures, `failed to release ${failures.length} structured host(s) during Viewer demotion`);
   }

@@ -2024,14 +2024,15 @@ test("viewer boot re-hosts the orchestrator seats whose own turn was severed and
       session.conversationId === codexSeat.id || session.conversationId === claudeSeat.id);
     for (const session of recoveredSessions) {
       const receipt = session.recentReceipts.find((candidate) =>
-        candidate.idempotencyKey.startsWith("orchestrator-restart-recovery-"));
+        candidate.idempotencyKey.startsWith("interruption-continuation-"));
       expect(receipt).toBeDefined();
       const conversation = registry.conversation(session.conversationId as `conversation_${string}`)!;
       const replay = await enqueueStructuredMessage({
         path: conversation.generations.at(-1)!.path,
         conversationId: session.conversationId,
         clientMessageId: receipt!.idempotencyKey,
-        text: receipt!.text ?? "",
+        /* The receipt keeps a preview; the replay carries the text delivered. */
+        text: writes.find((entry) => entry.text?.startsWith(receipt!.text ?? ""))?.text ?? "",
         images: [],
       }, {
         enabled: () => true,
@@ -2215,7 +2216,7 @@ test("a seat whose host is still working through a long step is left alone at bo
 
     expect(ledger.writes).toEqual([]);
     expect(journal.snapshot().sessions.flatMap((session) => session.recentReceipts)
-      .filter((receipt) => receipt.idempotencyKey.startsWith("orchestrator-restart-recovery-"))).toEqual([]);
+      .filter((receipt) => receipt.idempotencyKey.startsWith("interruption-continuation-"))).toEqual([]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
@@ -2750,9 +2751,9 @@ test("a seat whose row reads busy is owed no nudge when its transcript cannot be
     expect(launches).toBe(0);
     expect(ledger.writes).toEqual([]);
     expect(registry.pendingDeliveries(conversation.id).filter((delivery) =>
-      delivery.clientMessageId?.startsWith("orchestrator-restart-recovery-") === true)).toHaveLength(0);
+      delivery.clientMessageId?.startsWith("interruption-continuation-") === true)).toHaveLength(0);
     expect(journal.snapshot().recentOperations.filter((receipt) =>
-      receipt.idempotencyKey.startsWith("orchestrator-restart-recovery-"))).toEqual([]);
+      receipt.idempotencyKey.startsWith("interruption-continuation-"))).toEqual([]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
@@ -2826,7 +2827,7 @@ test("viewer boot launches no host it cannot hand to a delivery controller, and 
     /* Nothing is owed a message either: the nudge belongs to a seat this boot
        actually re-hosted. */
     expect(registry.pendingDeliveries(conversation.id).filter((delivery) =>
-      delivery.clientMessageId?.startsWith("orchestrator-restart-recovery-") === true)).toHaveLength(0);
+      delivery.clientMessageId?.startsWith("interruption-continuation-") === true)).toHaveLength(0);
     expect(ledger.writes).toEqual([]);
 
     /* The retry the startup loop runs once a client exists: one launch, claimed
@@ -2848,7 +2849,7 @@ test("viewer boot launches no host it cannot hand to a delivery controller, and 
       text: expect.stringContaining("Viewer restarted"),
     })]);
     expect(journal.snapshot().recentOperations.filter((receipt) =>
-      receipt.idempotencyKey.startsWith("orchestrator-restart-recovery-"))).toHaveLength(1);
+      receipt.idempotencyKey.startsWith("interruption-continuation-"))).toHaveLength(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
@@ -2956,7 +2957,7 @@ test("startup retry admits one orchestrator recovery nudge after the first runti
       status: "delivered",
     });
     expect(journal.snapshot().recentOperations.filter((receipt) =>
-      receipt.idempotencyKey.startsWith("orchestrator-restart-recovery-"))).toHaveLength(1);
+      receipt.idempotencyKey.startsWith("interruption-continuation-"))).toHaveLength(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
@@ -3042,7 +3043,7 @@ test.each(["dead", "unhosted", "rotated"] as const)(
       expect(adoptionAttempts).toEqual([]);
       expect(ledger.writes).toEqual([]);
       expect(journal.snapshot().sessions.flatMap((session) => session.recentReceipts)
-        .filter((receipt) => receipt.idempotencyKey.startsWith("orchestrator-restart-recovery-"))).toEqual([]);
+        .filter((receipt) => receipt.idempotencyKey.startsWith("interruption-continuation-"))).toEqual([]);
     } finally {
       await bindStructuredDeliveryQueue([], { registry, client: null });
       journal.close();
@@ -3139,7 +3140,7 @@ test.each(["busy", "terminal"] as const)(
       expect(ledger.writes).toEqual([]);
     }
     expect(journal.snapshot().sessions.flatMap((session) => session.recentReceipts)
-      .filter((receipt) => receipt.idempotencyKey.startsWith("orchestrator-restart-recovery-"))).toEqual([]);
+      .filter((receipt) => receipt.idempotencyKey.startsWith("interruption-continuation-"))).toEqual([]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
