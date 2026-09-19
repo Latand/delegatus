@@ -2937,6 +2937,8 @@ describe("#1846 one account pick, every surface in the same frame", () => {
      повідомленням» is the longer tail the chip has to hold (#1846 critique P3). */
   const PASSES = [
     { lang: "en", viewport: VIEWPORT },
+    { lang: "uk", viewport: VIEWPORT },
+    { lang: "en", viewport: { width: 1_280, height: 900 } },
     { lang: "uk", viewport: { width: 1_280, height: 900 } },
   ] as const;
 
@@ -2998,7 +3000,12 @@ describe("#1846 one account pick, every surface in the same frame", () => {
              and the reader's account chip hold the longer tail whole. */
           record.pillMark = await cellReading(page, `${READER} [data-runtime-pill-next-account]`);
           record.boardChip = await cellReading(page, CHIP);
-          record.readerChip = await cellReading(page, `${READER} [data-conversation-account-chip]`);
+          /* The reader's own header chip, in the board column that holds the reader: the narrow pane. The
+             conversation pane's «@ A → B» badge is not mounted here — a kanban reader replaces the pane's
+             header with this one — so the reading below also records that it is absent. */
+          record.readerChip = await cellReading(page, `${READER} [data-account-trigger]`);
+          record.readerWidth = await page.evaluate((reader) => Math.round((document.querySelector(reader)?.getBoundingClientRect().width ?? 0) * 10) / 10, READER);
+          record.paneBadges = await page.evaluate(() => document.querySelectorAll("[data-conversation-account-chip]").length);
           await page.screenshot({ path: path.join(OUT, `${key}-pill-pick-chip.png`) });
           if (!("chip" in pillPick) || pillPick.chip !== chipMoving) fail(`pill pick: chip ${JSON.stringify(pillPick)}`);
           const pillMark = record.pillMark as Awaited<ReturnType<typeof cellReading>>;
@@ -3006,7 +3013,7 @@ describe("#1846 one account pick, every surface in the same frame", () => {
           const boardChip = record.boardChip as Awaited<ReturnType<typeof cellReading>>;
           if (boardChip?.cut !== false) fail(`the board chip holds its tail whole: ${JSON.stringify(boardChip)}`);
           const readerChip = record.readerChip as Awaited<ReturnType<typeof cellReading>>;
-          if (readerChip && (readerChip.cut || !readerChip.text.includes("→ Account C"))) fail(`the reader's chip: ${JSON.stringify(readerChip)}`);
+          if (!readerChip || readerChip.cut || !readerChip.text.includes("Account C")) fail(`the reader's header chip names the pick whole: ${JSON.stringify(readerChip)}`);
 
           /* 2. The board picker, opened now, says the same thing. */
           await page.click(CHIP);

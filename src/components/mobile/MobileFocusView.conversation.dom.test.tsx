@@ -323,7 +323,8 @@ test("the title line says where the next message goes the moment an account is p
      keeps the tag's one line and truncates only past the whole tag; the running account sits before it when
      both fit, and otherwise wraps onto a second line the one-line tag clips, so no sliver of it shows. */
   const tag = account().className;
-  for (const rule of ["max-w-[64%]", "h-[1lh]", "overflow-hidden", "flex-wrap", "flex-row-reverse"]) expect(tag).toContain(rule);
+  /* The title keeps at least 6rem beside it (critique round 4 P3): the tag stops short of it. */
+  for (const rule of ["max-w-[min(64%,calc(100%-6rem-0.375rem))]", "h-[1lh]", "overflow-hidden", "flex-wrap", "flex-row-reverse"]) expect(tag).toContain(rule);
   const runs = account().querySelector("[data-mobile2-chat-account-runs]") as unknown as HTMLElement;
   const to = account().querySelector("[data-mobile2-chat-account-to]") as unknown as HTMLElement;
   expect(to.nextElementSibling).toBe(runs);

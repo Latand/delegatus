@@ -12,10 +12,10 @@
       "before": {
         "line": {
           "width": 197.2,
-          "text": "working 6:40·fable-5-1 · high"
+          "text": "working 6:41·fable-5-1 · high"
         },
         "state": {
-          "text": "working 6:40",
+          "text": "working 6:41",
           "width": 62.3,
           "cut": false
         },
@@ -98,10 +98,10 @@
       "before": {
         "line": {
           "width": 197.2,
-          "text": "working 6:41·fable-5-1 · high"
+          "text": "working 6:40·fable-5-1 · high"
         },
         "state": {
-          "text": "working 6:41",
+          "text": "working 6:40",
           "width": 62.3,
           "cut": false
         },
@@ -139,12 +139,12 @@
         },
         "account": {
           "text": "→ production-backup-7@ review-relief-2",
-          "width": 126.2,
+          "width": 95.2,
           "cut": false
         },
         "title": {
           "text": "Rebuild the board status projection",
-          "width": 65,
+          "width": 96,
           "cut": true
         }
       },
@@ -158,9 +158,9 @@
         },
         "to": {
           "text": "→ production-backup-7",
-          "width": 116.1,
+          "width": 95.2,
           "need": 116.1,
-          "cut": false,
+          "cut": true,
           "shown": true
         }
       },
@@ -311,12 +311,12 @@
         },
         "account": {
           "text": "→ production-backup-7@ review-relief-2",
-          "width": 126.2,
+          "width": 95.2,
           "cut": false
         },
         "title": {
           "text": "Rebuild the board status projection",
-          "width": 65,
+          "width": 96,
           "cut": true
         }
       },
@@ -330,9 +330,9 @@
         },
         "to": {
           "text": "→ production-backup-7",
-          "width": 116.1,
+          "width": 95.2,
           "need": 116.1,
-          "cut": false,
+          "cut": true,
           "shown": true
         }
       },

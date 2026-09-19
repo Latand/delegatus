@@ -802,12 +802,13 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
   /* While a pick waits, the account the next message goes to is the new information, so it is laid first and
      keeps the line; the running account sits before it only when both fit whole, and otherwise wraps onto a
      second line the tag clips, rather than showing a sliver. The sheet, one tap away, names both in full
-     (#1846 critique). */
+     (#1846 critique). The tag stops short of the title's 6rem, so the title always keeps that minimum width,
+     and a short title leaves no gap before the tag the way a min-width on the title would. */
   return (
     <span
       data-mobile2-chat-account
       data-mobile2-chat-account-next={next}
-      className="flex h-[1lh] max-w-[64%] shrink-0 flex-row-reverse flex-wrap justify-end gap-x-1 overflow-hidden text-label font-medium leading-tight text-muted"
+      className="flex h-[1lh] max-w-[min(64%,calc(100%-6rem-0.375rem))] shrink-0 flex-row-reverse flex-wrap justify-end gap-x-1 overflow-hidden text-label font-medium leading-tight text-muted"
       title={t("mobile2.composer.accountRunsOnNext", { account: nameOf(account), next: nameOf(next) })}
     >
       <span data-mobile2-chat-account-to className="min-w-0 max-w-full truncate text-accent">→ {nameOf(next)}</span>
