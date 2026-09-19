@@ -65,11 +65,21 @@ export type PipelineStageKind = "run" | "review-loop";
 
 export type PipelineEdgeKind = "pass" | "fail";
 
-/** Verdict-keyed fail successor (#353): where a `fail` verdict routes next, and
-    how many times this edge may fire before the pipeline parks for the
-    operator. Cycles live exclusively on fail edges; the pass graph stays
-    acyclic so every pass path terminates. */
-export type PipelineFailEdge = { to: string; maxRounds: number };
+/** What a fail edge does once its `maxRounds` reviewed rounds are spent
+    (#1868). `advance` (the default, and every edge without the field) reads
+    `maxRounds` as the number of reviews: the last review's findings go to the
+    target once more and, when that fix passes, the lane follows the source's
+    own pass edge without re-running the source. `park` keeps the older count,
+    one more review after `maxRounds` traversals, then stops for the operator. */
+export type PipelineFailEdgeExhaustion = "advance" | "park";
+
+export const PIPELINE_FAIL_EDGE_EXHAUSTIONS: readonly PipelineFailEdgeExhaustion[] = ["advance", "park"];
+
+/** Verdict-keyed fail successor (#353): where a `fail` verdict routes next, how
+    many rounds of it the source reviews, and what happens once those are spent.
+    Cycles live exclusively on fail edges; the pass graph stays acyclic so
+    every pass path terminates. */
+export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: PipelineFailEdgeExhaustion };
 
 export type PipelineStageInput = {
   id: string;
@@ -141,7 +151,15 @@ export type PipelineAttemptState =
 /** Durable provenance for a cursor activation / attempt: which stage's attempt
     advanced here, along which verdict edge. Loop budgets are derived from these
     records (never a separate counter), so counts cannot drift from evidence. */
-export type PipelineEdgeActivation = { stageId: string; attempt: number; edge: PipelineEdgeKind };
+export type PipelineEdgeActivation = {
+  stageId: string;
+  attempt: number;
+  edge: PipelineEdgeKind;
+  /** On a fail activation: the source's budget was spent, so this is the
+      one handoff past it (#1868). It spends no reviewed round, and the
+      target's pass follows the source's pass edge instead of re-running it. */
+  budgetSpent?: true;
+};
 
 export type PipelineVerdictRecovery = {
   state: "pending" | "recovered" | "exhausted";
@@ -412,6 +430,10 @@ export type PipelineStageAttempt = {
       reviewer reported; this is what says the reviewer asked for a decision and
       the lane kept going instead of parking on it. */
   decisionRequested?: boolean;
+  /** Set on the failed attempt whose findings were handed along a spent fail
+      edge (#1868): they went to the fix stage and the source was not asked
+      again. The verdict and its findings stay on this attempt. */
+  budgetSpent?: boolean;
   /** Bounded, append-only reconciliation receipt for terminal parser misses. */
   verdictRecovery?: PipelineVerdictRecovery;
   /** What a close could prove it did not finish (#1501): the authorized host
@@ -657,6 +679,8 @@ export type PatchPipelineRequest = {
   edge?: PipelineEdgeKind;
   to?: string | null;
   maxRounds?: number;
+  /** Fail edges only: what happens once `maxRounds` is spent (#1868). */
+  onExhausted?: PipelineFailEdgeExhaustion;
 };
 
 export type PipelinesResponse = {

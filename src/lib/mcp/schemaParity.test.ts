@@ -651,6 +651,13 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     /* The two rules the reported walk actually turned on. */
     expect(stage?.next?.description).toContain("DEFAULTS TO null");
     expect(stage?.role?.description).toContain("Runtime overrides do not go here");
+    /* #1868: the fail edge publishes what happens once its rounds are spent. */
+    type EdgeSchema = { properties?: Record<string, { enum?: string[]; description?: string }>; anyOf?: EdgeSchema[] };
+    const onFailSchema = stage?.onFail as EdgeSchema | undefined;
+    const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
+    expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "park"]);
+    expect(onFail?.properties?.onExhausted?.description).toContain("without asking this stage again");
+    expect(tool?.description).toContain("onExhausted");
     for (const [field, expected] of [
       ["id", "unique within the pipeline"],
       ["prompt", "role scaffold"],
@@ -695,6 +702,9 @@ test("create_pipeline admits the stage shapes the engine accepts", () => {
       sandbox: "restricted", outputs: ["reports/audit.md"],
     },
     { id: "build", kind: "run", "prompt": "Implement.", next: "review-1", onFail: { to: "build", maxRounds: 3 }, engine: "claude", model: "opus", effort: "high" },
+    /* #1868: what a spent budget does survives the boundary in both values. */
+    { id: "critique", kind: "run", "prompt": "Critique.", next: null, onFail: { to: "build", maxRounds: 3, onExhausted: "park" } },
+    { id: "critique", kind: "run", "prompt": "Critique.", next: null, onFail: { to: "build", maxRounds: 3, onExhausted: "advance" } },
     /* The engine trims before it checks, so padding it accepts must not be
        refused at the protocol boundary. */
     { id: " build ", kind: "run", "prompt": " Implement. " },

@@ -124,6 +124,18 @@ describe("bounded list rows", () => {
     expect(row.stages.map((stage) => stage.latestAttempt)).toEqual([null, null]);
   });
 
+  /* A compact read tells a park edge from an advance edge (#1868), with the
+     unnamed option read as its default, the same as get_pipeline's stage view. */
+  test("a fail edge projects its onExhausted, defaulted to advance", () => {
+    const record = corpus[1];
+    const [build, ...rest] = record.stages;
+    const withEdge = (onFail: Pipeline["stages"][number]["onFail"]) =>
+      pipelineListRow({ ...record, stages: [{ ...build, onFail }, ...rest] }).stages[0].onFail;
+    expect(withEdge({ to: "build", maxRounds: 2 })).toEqual({ to: "build", maxRounds: 2, onExhausted: "advance" });
+    expect(withEdge({ to: "build", maxRounds: 2, onExhausted: "park" })).toEqual({ to: "build", maxRounds: 2, onExhausted: "park" });
+    expect(withEdge(null)).toBeNull();
+  });
+
   test("a row aliases nothing from the source record", async () => {
     const [row] = await listPage({ project: "viewer", limit: 1 });
     const [record] = naiveFilter(corpus, { project: "viewer" });
