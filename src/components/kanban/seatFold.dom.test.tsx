@@ -22,6 +22,9 @@ import type { FileEntry } from "@/lib/types";
  * handed its read rather than fetching one.
  */
 
+/* The Previous seats rows print clock times; read them in one zone. */
+process.env.TZ = "UTC";
+
 /* A desktop window: under 800px tall the seat store starts every project
    folded, which is not the state these cases are about. */
 const dom = new HappyWindow({ url: "http://localhost/", width: 1440, height: 900 });
@@ -71,7 +74,7 @@ mock.module("@/hooks/useLogTail", () => ({
 }));
 
 const { KanbanSeat } = await import("./KanbanSeat");
-const { SEAT_STORAGE_KEY } = await import("./kanbanSeatStore");
+const { SEAT_STORAGE_KEY, SEAT_STORAGE_KEY_V1 } = await import("./kanbanSeatStore");
 
 const PROJECT = "atlas";
 const CONVERSATION = "conversation_orch";
@@ -277,4 +280,121 @@ test("a folded seat whose read lands after the first render marks nothing until 
   render(seatRead, [{ ...seatFile, lastAssistantMessageAt: LAST_REPLY + 60, mtime: LAST_REPLY + 60 } as FileEntry]);
   await settle();
   expect(marker()?.textContent).toContain(translate("en", "orchPanel.seatUnreadReply"));
+});
+
+/* ── #1841: placement, the collapsed shapes, and Previous seats ─────────── */
+
+test("the seat docks at the side and back, remembered per browser, and each placement has its collapsed shape", async () => {
+  const host = mountSeat();
+  await settle();
+  expect(section(host).getAttribute("data-placement")).toBe("top");
+  const dock = () => host.querySelector("[data-seat-placement]") as HTMLButtonElement;
+  expect(dock().getAttribute("aria-label")).toBe(translate("en", "orchPanel.dockSide"));
+
+  /* Top, collapsed: the 40 px strip, without the project name or Rotate. */
+  click(foldButton(host));
+  expect(host.querySelector("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("strip");
+  expect(host.querySelector(".seat-title .proj")).toBeNull();
+  click(foldButton(host));
+  expect(host.querySelector("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("full");
+
+  click(dock());
+  expect(section(host).getAttribute("data-placement")).toBe("side");
+  expect(section(host).className).toContain("side");
+  expect(JSON.parse(dom.localStorage.getItem(SEAT_STORAGE_KEY) ?? "{}").placement).toBe("side");
+  expect(host.querySelector('[data-seat-grip="width"]')?.getAttribute("aria-orientation")).toBe("vertical");
+  expect(dock().getAttribute("aria-label")).toBe(translate("en", "orchPanel.dockTop"));
+
+  /* Side, collapsed: the rail is one button that expands it. */
+  click(foldButton(host));
+  const rail = host.querySelector("[data-seat-rail]") as HTMLButtonElement;
+  expect(rail).not.toBeNull();
+  expect(rail.getAttribute("aria-expanded")).toBe("false");
+  expect(rail.querySelector("[data-seat-rail-state]")).not.toBeNull();
+  expect(host.querySelector("[data-seat-head]")).toBeNull();
+  click(rail);
+  expect(section(host).getAttribute("data-collapsed")).toBe("0");
+  expect(host.querySelector("[data-seat-rail]")).toBeNull();
+
+  click(dock());
+  expect(section(host).getAttribute("data-placement")).toBe("top");
+});
+
+test("the v1 seat record carries its height and collapsed flags into v2 once", async () => {
+  dom.localStorage.setItem(SEAT_STORAGE_KEY_V1, JSON.stringify({ height: 300, collapsed: { [PROJECT]: true } }));
+  const host = mountSeat();
+  await settle();
+  expect(section(host).getAttribute("data-collapsed")).toBe("1");
+  expect(JSON.parse(dom.localStorage.getItem(SEAT_STORAGE_KEY) ?? "{}")).toEqual({ height: 300, collapsed: { [PROJECT]: true }, placement: "top", width: null });
+});
+
+const withPrevious = (previous: unknown[], currentTaskId: string | null = "task-current") => ({
+  ...(seatRead as unknown as { status: object }),
+  status: { ...(seatRead as unknown as { status: object }).status, previous, currentTaskId },
+}) as never;
+
+const PREVIOUS = [
+  { conversationId: "conversation_prev_new", path: null, title: "Manager seat, release week", engine: "claude", heldFrom: "2026-09-18T14:02:00.000Z", heldTo: "2026-09-19T03:10:00.000Z", taskId: "task-new" },
+  { conversationId: "conversation_prev_old", path: null, title: null, engine: "codex", heldFrom: null, heldTo: "2026-09-18T14:02:00.000Z", taskId: "task-old" },
+];
+const TASKS = [
+  { id: "task-current", project: PROJECT, text: "Current seat", details: "current notes", status: "assigned", assignments: [] },
+  { id: "task-new", project: PROJECT, text: "Manager seat, release week", details: "release notes\nline two", status: "assigned", assignments: [] },
+  { id: "task-old", project: PROJECT, text: "Old", details: "old notes", status: "done", assignments: [] },
+] as never[];
+
+function mountWith(read: never): HTMLElement {
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  flushSync(() => root.render(
+    <KanbanSeat project={PROJECT} projectName="Atlas" projectCwd="/repos/atlas" files={[seatFile]} tasks={TASKS} boardId="board" seatRead={read} />,
+  ));
+  return host as unknown as HTMLElement;
+}
+
+test("Previous seats: closed by default, counted, newest first under the live seat, one Notes row open at a time", async () => {
+  const host = mountWith(withPrevious(PREVIOUS));
+  await settle();
+  expect(host.querySelector(".lock")).toBeNull();
+  const control = host.querySelector("[data-previous-seats]") as HTMLButtonElement;
+  expect(control.getAttribute("data-previous-seats")).toBe("2");
+  expect(control.getAttribute("aria-label")).toBe(translate("en", "orchPanel.previousSeatsAria", { count: 2 }));
+  expect(dom.document.querySelector("[data-previous-seats-popover]")).toBeNull();
+
+  click(control);
+  const popover = dom.document.querySelector("[data-previous-seats-popover]") as unknown as HTMLElement;
+  expect(popover).not.toBeNull();
+  const rows = [...popover.querySelectorAll("[data-seat-row]")].map((row) => row.getAttribute("data-seat-row"));
+  expect(rows).toEqual([CONVERSATION, "conversation_prev_new", "conversation_prev_old"]);
+  const newest = popover.querySelector('[data-seat-row="conversation_prev_new"]') as HTMLElement;
+  expect(newest.querySelector("a")?.getAttribute("href")).toBe("#c=conversation_prev_new");
+  expect(newest.textContent).toContain("Manager seat, release week");
+  /* A revocation with no recorded start says only when it ended. */
+  expect(popover.querySelector('[data-seat-row="conversation_prev_old"]')?.textContent).toContain("until ");
+  /* No title on the revocation: the seat task's own title stands in. */
+  expect(popover.querySelector('[data-seat-row="conversation_prev_old"]')?.textContent).toContain("Old");
+  expect(popover.querySelector('[data-seat-row="conversation_prev_new"]')?.textContent).toContain("18 Sep 14:02 – 19 Sep 03:10 · 13 h");
+
+  click(newest.querySelector("[data-seat-notes-toggle]") as HTMLElement);
+  expect(popover.querySelectorAll("[data-seat-notes]").length).toBe(1);
+  expect(newest.querySelector("[data-seat-notes]")?.textContent).toBe("release notes\nline two");
+  click(popover.querySelector('[data-seat-row="conversation_prev_old"] [data-seat-notes-toggle]') as HTMLElement);
+  expect(popover.querySelectorAll("[data-seat-notes]").length).toBe(1);
+  expect(popover.querySelector('[data-seat-row="conversation_prev_old"] [data-seat-notes]')?.textContent).toBe("old notes");
+
+  /* Escape closes it. */
+  flushSync(() => (document as Document).dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
+  expect(dom.document.querySelector("[data-previous-seats-popover]")).toBeNull();
+});
+
+test("Previous seats is hidden at zero, and reads Seat notes when only the live seat has notes", async () => {
+  const bare = mountWith(withPrevious([], null));
+  await settle();
+  expect(bare.querySelector("[data-previous-seats]")).toBeNull();
+  const notesOnly = mountWith(withPrevious([]));
+  await settle();
+  const control = notesOnly.querySelector("[data-previous-seats]") as HTMLButtonElement;
+  expect(control.textContent).toContain(translate("en", "orchPanel.seatNotesOnly"));
 });

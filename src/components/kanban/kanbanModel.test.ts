@@ -502,3 +502,60 @@ test("each card names its own project, so cards from several can share one colum
   const built = model(tasks, [mine]);
   expect(built.columns.assigned.cards[0]!.project).toBe("atlas");
 });
+
+test("seat conversations draw no band: a seat-only task is the seat panel's, and a mixed band keeps its card without the seat tile (#1841)", () => {
+  /* Conversations 1–3 are product work, 4 the live seat, 5 and 6 two seats
+     the project revoked; 7 is a previous seat whose task also carries work. */
+  const files = [1, 2, 3, 4, 5, 6, 7, 8].map((index) => file(index, index === 4 || index === 1 ? { activity: "live", lastTurn: { startedAt: (NOW - 120) * 1000, endedAt: null } } as Partial<FileEntry> : {}));
+  const tasks = [
+    task("t1", "assigned", [files[0]!.path]),
+    task("t2", "inbox", [files[1]!.path]),
+    task("t3", "done", [files[2]!.path]),
+    task("t4", "assigned", [files[3]!.path]),
+    task("t5", "assigned", [files[4]!.path]),
+    task("t6", "done", [files[5]!.path]),
+    task("t7", "assigned", [files[6]!.path, files[7]!.path]),
+  ];
+  const projection = projectTaskWorkflows([...tasks], [], [], [...files]);
+  const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
+  const seat = {
+    conversationIds: [files[3]!.conversationId!],
+    paths: [files[3]!.path],
+    previous: { conversationIds: [files[4]!.conversationId!, files[5]!.conversationId!, files[6]!.conversationId!], paths: [] },
+  };
+  const board = buildKanbanModel({ bands, tasks, pipelines: [], projection, files, seat, now: NOW });
+  const carded = KANBAN_STATUSES.flatMap((status) => board.columns[status].cards.map((card) => card.task?.id));
+  expect(carded.sort()).toEqual(["t1", "t2", "t3", "t7"]);
+  expect(board.seatTasks.map((entry) => entry.id).sort()).toEqual(["t4", "t5", "t6"]);
+  expect(board.offBoard).toEqual([]);
+  expect(board.totals.tasks).toBe(4);
+  expect(board.columns.assigned.cards.length).toBe(2);
+  expect(board.columns.done.cards.length).toBe(1);
+  /* The live seat's working conversation is no share of any counter. */
+  expect(board.totals.working).toBe(1);
+  expect(board.columns.assigned.working).toBe(1);
+  expect(KANBAN_STATUSES.flatMap((status) => board.columns[status].cards).some((card) => card.members.some((member) => member.file.path === files[3]!.path))).toBe(false);
+  /* The mixed band keeps its card and its product conversation, without the seat tile. */
+  const mixed = board.columns.assigned.cards.find((card) => card.task?.id === "t7")!;
+  expect(mixed.members.map((member) => member.file.path)).toEqual([files[7]!.path]);
+  expect(mixed.conversations).toBe(1);
+
+  /* A failed seat read passes no `previous`: the bands draw as before, seats included. */
+  const unread = buildKanbanModel({ bands, tasks, pipelines: [], projection, files, seat: { conversationIds: seat.conversationIds, paths: seat.paths }, now: NOW });
+  expect(KANBAN_STATUSES.reduce((sum, status) => sum + unread.columns[status].cards.length, 0)).toBe(7);
+  expect(unread.totals.working).toBe(2);
+  expect(unread.seatTasks).toEqual([]);
+});
+
+test("a rotation moves the old seat's card off the board with no task write (#1841)", () => {
+  const files = [1, 2].map((index) => file(index));
+  const tasks = [task("seat-a", "assigned", [files[0]!.path]), task("work", "assigned", [files[1]!.path])];
+  const projection = projectTaskWorkflows([...tasks], [], [], [...files]);
+  const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
+  const before = buildKanbanModel({ bands, tasks, pipelines: [], projection, files, seat: { conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } }, now: NOW });
+  expect(before.columns.assigned.cards.map((card) => card.task?.id).sort()).toEqual(["seat-a", "work"]);
+  /* The rotation's revocation is all that changed: the same tasks, byte for byte. */
+  const after = buildKanbanModel({ bands, tasks, pipelines: [], projection, files, seat: { conversationIds: [], paths: [], previous: { conversationIds: [files[0]!.conversationId!], paths: [] } }, now: NOW });
+  expect(after.columns.assigned.cards.map((card) => card.task?.id)).toEqual(["work"]);
+  expect(after.seatTasks.map((entry) => entry.id)).toEqual(["seat-a"]);
+});

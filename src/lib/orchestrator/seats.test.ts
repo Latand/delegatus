@@ -15,7 +15,9 @@ import {
   failOrchestratorSeatIntent,
   orchestratorRevocations,
   orchestratorSeatFor,
+  previousOrchestratorSeats,
   readOrchestratorSeatFile,
+  seatTaskOf,
   rekeyOrchestratorSeatPaths,
   revokedOrchestratorSeatConversationsOrUnknown,
 } from "./seats";
@@ -85,6 +87,10 @@ test("replacement revokes the predecessor in the same write and bumps the epoch"
       /* Nothing named an actor for this designation, so provenance stays
          unknown; the operator is never assumed (#1402). */
       triggeredBy: null,
+      /* …and the span it held the seat for (#1841). */
+      activatedAt: AT,
+      path: null,
+      engine: null,
     });
     expect(swapped.seat.seatEpoch).toBe(2);
     /* …and the successor seat names its predecessor. */
@@ -565,4 +571,55 @@ test("a persisted pre-canonical alias seat is recovered under its canonical proj
   expect(orchestratorSeatFor(canonical).active).toMatchObject({ project: canonical, conversationId: "conversation_a" });
   expect(orchestratorSeatFor("legacy-project").active?.conversationId).toBe("conversation_a");
   expect(activeOrchestratorSeats()).toHaveLength(1);
+});
+
+test("previous seats are the project's revoked seats, newest first, with the span each held the seat for (#1841)", () => {
+  const seat = (n: number, at: string, path: string | null) => {
+    beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: `req_000000${n}`, mode: "spawn", now: at });
+    completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: `req_000000${n}`, conversationId: `conversation_${n}`, path, engine: "claude", now: at });
+  };
+  seat(1, "2026-09-17T09:40:00.000Z", "/seats/one.jsonl");
+  seat(2, "2026-09-18T14:02:00.000Z", null);
+  seat(3, "2026-09-19T03:10:00.000Z", "/seats/three.jsonl");
+  /* Another project's rotation never shows here. */
+  beginOrchestratorSeatIntent({ project: "proj-b", mandate: "m", clientRequestId: "req_b000001", mode: "spawn", now: AT });
+  completeOrchestratorSeatIntent({ project: "proj-b", clientRequestId: "req_b000001", conversationId: "conversation_b", path: null, now: AT });
+
+  expect(previousOrchestratorSeats("proj-a")).toEqual([
+    { conversationId: "conversation_2", path: null, engine: "claude", heldFrom: "2026-09-18T14:02:00.000Z", heldTo: "2026-09-19T03:10:00.000Z" },
+    { conversationId: "conversation_1", path: "/seats/one.jsonl", engine: "claude", heldFrom: "2026-09-17T09:40:00.000Z", heldTo: "2026-09-18T14:02:00.000Z" },
+  ]);
+  expect(previousOrchestratorSeats("proj-a", 1).map((entry) => entry.conversationId)).toEqual(["conversation_2"]);
+  expect(previousOrchestratorSeats("proj-b")).toEqual([]);
+});
+
+test("a revocation written before spans were recorded reads back unchanged and lists with no start (#1841)", () => {
+  fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), JSON.stringify({
+    schemaVersion: readOrchestratorSeatFile().schemaVersion,
+    nextSeatEpoch: 3,
+    seats: {},
+    pending: {},
+    revocations: [{ project: "proj-a", conversationId: "conversation_old", seatEpoch: 1, revokedAt: "2026-09-10T08:00:00.000Z", successorConversationId: null }],
+    history: [],
+    rollbacks: {},
+  }));
+  expect(readOrchestratorSeatFile().revocations[0]).toEqual({
+    project: "proj-a", conversationId: "conversation_old", seatEpoch: 1, revokedAt: "2026-09-10T08:00:00.000Z", successorConversationId: null, triggeredBy: null,
+  });
+  expect(previousOrchestratorSeats("proj-a")).toEqual([
+    { conversationId: "conversation_old", path: null, engine: null, heldFrom: null, heldTo: "2026-09-10T08:00:00.000Z" },
+  ]);
+});
+
+test("a seat's notes live in the task whose assignment names it, the newest when several do (#1841)", () => {
+  const base = { project: "proj-a", status: "assigned", placement: "unplaced", createdAt: AT } as const;
+  const tasks = [
+    { ...base, id: "old", text: "Old seat task", updatedAt: "2026-09-01T00:00:00.000Z", assignments: [{ conversationId: "conversation_1", path: null }] },
+    { ...base, id: "new", text: "Manager seat, release week\nmore", updatedAt: "2026-09-02T00:00:00.000Z", assignments: [{ conversationId: null, path: "/seats/one.jsonl" }] },
+    { ...base, id: "pending", text: "Placeholder", updatedAt: "2026-09-03T00:00:00.000Z", origin: { refinement: "pending" }, assignments: [{ conversationId: "conversation_2", path: null }] },
+    { ...base, id: "elsewhere", project: "proj-b", text: "Other", updatedAt: "2026-09-04T00:00:00.000Z", assignments: [{ conversationId: "conversation_1", path: null }] },
+  ] as unknown as Parameters<typeof seatTaskOf>[0];
+  expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_1", path: "/seats/one.jsonl" })).toEqual({ taskId: "new", title: "Manager seat, release week" });
+  expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_2", path: null })).toEqual({ taskId: "pending", title: null });
+  expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_9", path: null })).toBeNull();
 });

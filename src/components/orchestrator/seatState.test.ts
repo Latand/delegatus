@@ -432,9 +432,9 @@ describe("the rotate draft renders the same two states the create draft does (#9
 
 describe("seat status parsing", () => {
   test("a malformed body reads as no seat rather than throwing", () => {
-    expect(parseSeatStatus(null)).toEqual({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false });
+    expect(parseSeatStatus(null)).toEqual({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false, previous: [], currentTaskId: null });
     expect(parseSeatStatus({ seat: { project: 7 }, pending: [], exists: false }))
-      .toEqual({ seat: null, pending: null, lastFailure: null, exists: false, viewerMcpRegistered: false });
+      .toEqual({ seat: null, pending: null, lastFailure: null, exists: false, viewerMcpRegistered: false, previous: [], currentTaskId: null });
   });
 
   test("a well-formed seat keeps the fields the panel renders from", () => {

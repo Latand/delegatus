@@ -56,7 +56,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     const section = sectionRef.current;
     if (!section) return;
     if (!seat.collapsed) {
-      requestAnimationFrame(() => section.querySelector<HTMLElement>("[data-orchestrator-conversation] textarea")?.focus({ preventScroll: true }));
+      section.querySelector<HTMLElement>("[data-orchestrator-conversation] textarea")?.focus({ preventScroll: true });
     } else if (section.contains(document.activeElement)) {
       section.querySelector<HTMLElement>("[data-seat-collapse]")?.focus({ preventScroll: true });
     }

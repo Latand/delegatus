@@ -66,14 +66,13 @@ export function seatDuration(t: TFunction, fromIso: string, toIso: string): stri
 export function seatTime(locale: Locale, iso: string, now = new Date()): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", {
-    day: "numeric",
-    month: "short",
-    ...(date.getFullYear() !== now.getFullYear() ? { year: "numeric" as const } : {}),
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(date).replace(",", "");
+  /* Day, short month, the year when it differs, then a 24 h clock: 18 Sep 14:02. */
+  const parts = new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-US", {
+    day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? "";
+  const year = date.getFullYear() !== now.getFullYear() ? ` ${part("year")}` : "";
+  return `${part("day")} ${part("month")}${year} ${part("hour")}:${part("minute")}`;
 }
 
 /** The row's second line: the span it held the seat for, as much as is known. */

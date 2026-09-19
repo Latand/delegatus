@@ -629,11 +629,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useLayoutEffect(() => {
     const element = rootRef.current;
     if (!element) return;
-    /* The bar spans the board and its aside; the columns' mode follows what the aside leaves them. */
+    /* The bar spans the board, its aside and a seat docked at the side; the
+       columns' mode follows what those leave them (#1841). */
     const aside = asideRef.current;
+    const seat = seatSide ? element.querySelector<HTMLElement>(".kb-body > .seat") : null;
     const apply = () => {
       const barWidth = element.getBoundingClientRect().width;
-      setMode(kanbanLayoutMode(barWidth - (aside?.getBoundingClientRect().width ?? 0)));
+      setMode(kanbanLayoutMode(barWidth - (aside?.getBoundingClientRect().width ?? 0) - (seat?.getBoundingClientRect().width ?? 0)));
       setBarWide(barWidth >= BAR_WIDE_MIN);
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
     };
@@ -642,8 +644,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const observer = new ResizeObserver(apply);
     observer.observe(element);
     if (aside) observer.observe(aside);
+    if (seat) observer.observe(seat);
     return () => observer.disconnect();
-  }, [hasAside]);
+  }, [hasAside, seatSide]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
   const flash = useCallback((cardId: string) => {
