@@ -1,8 +1,5 @@
-import fs from "node:fs";
-
-import { agentRegistry, normalizeRegistry, RegistryReadError, type SnapshotTitleConversationProjection } from "@/lib/agent/registry";
+import { agentRegistry, RegistryReadError, type SnapshotTitleConversationProjection } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { statePath } from "@/lib/configDir";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import type { FileEntry } from "@/lib/types";
 
@@ -34,7 +31,6 @@ interface RegistryProjection {
    this cache (issue #798). */
 const snapshotProjectionCache = new WeakMap<RegistrySnapshot, RegistryProjection>();
 const snapshotIdentityProjectionCache = new WeakMap<RegistrySnapshot, RegistryProjection>();
-let readOnlyRegistryProjectionCache: RegistryProjection | null = null;
 
 function canonicalConversationId(snapshot: RegistrySnapshot, alias: string): string {
   let current = alias;
@@ -161,23 +157,19 @@ function registryProjection(registry: Registry, surfaceUnexpectedError = false):
   return registryProjectionForSnapshot(snapshot);
 }
 
+/** The resource path's registry view. It reads the process-wide registry's
+    shared read-only snapshot, one object per SQLite revision, so the
+    projection cache above keys on the revision; the registry is never parsed
+    from agent-registry.json (#1870). A registry that cannot open yields no
+    projection, as an unreadable one does. */
 function readOnlyRegistryProjection(): RegistryProjection | null {
-  const filename = statePath("agent-registry.json");
-  let signature: string;
+  let registry: Registry;
   try {
-    const stat = fs.statSync(filename, { bigint: true });
-    signature = `${filename}:${stat.mtimeNs}:${stat.size}`;
+    registry = agentRegistry();
   } catch {
     return null;
   }
-  if (readOnlyRegistryProjectionCache?.signature === signature) return readOnlyRegistryProjectionCache;
-  try {
-    const snapshot = normalizeRegistry(JSON.parse(fs.readFileSync(filename, "utf8")));
-    readOnlyRegistryProjectionCache = projectRegistrySnapshot(snapshot, signature);
-    return readOnlyRegistryProjectionCache;
-  } catch {
-    return null;
-  }
+  return registryProjection(registry);
 }
 
 /**

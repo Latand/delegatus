@@ -132,6 +132,22 @@ test("the resource projection applies identity and titles without transcript-hea
   }
 });
 
+test("the resource projection reads a SQLite-only registry, with no JSON file beside it (#1870)", () => {
+  const pathname = `/home/user/.codex/sessions/2026/07/17/rollout-${UUID}.jsonl`;
+  const filename = path.join(stateDir, "agent-registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const conversation = registry.ensureConversation("codex", pathname, null);
+  setAgentRegistryForTests(registry);
+  writeSessionTitle([`conversation:${conversation.id}`], `conversation:${conversation.id}`, "Stored in SQLite", undefined, "t1");
+  expect(fs.existsSync(filename)).toBe(false);
+
+  const file = entry({ path: pathname, root: "codex-sessions", engine: "codex", fmt: "codex", size: 1024 });
+  overlayResourceSessionTitles([file]);
+
+  expect(file.conversationId).toBe(conversation.id);
+  expect(file.title).toBe("Stored in SQLite");
+});
+
 test("issue 798: the title overlay consumes the threaded snapshot without re-reading the registry", () => {
   const registry = new AgentRegistry(path.join(registryRoot, "registry.json"));
   const conversation = registry.ensureConversation("claude", SESSION_PATH, null);

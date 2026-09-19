@@ -146,7 +146,8 @@ test("deployment capability requires the candidate-owned versioned endpoint", as
   expect(hasViewerDeploymentCapability(200, JSON.stringify({ deployments: [] }))).toBe(false);
   expect(response.status).toBe(200);
   expect(hasViewerDeploymentCapability(response.status, body)).toBe(true);
-  expect(viewerDeploymentRegistryBackendMode(response.status, body)).toBe("off");
+  /* No mode configured: the registry's default is SQLite (#1870). */
+  expect(viewerDeploymentRegistryBackendMode(response.status, body)).toBe("sqlite");
   expect(viewerDeploymentRegistryBackendMode(200, JSON.stringify({
     capability: "viewer-deployments",
     version: 1,

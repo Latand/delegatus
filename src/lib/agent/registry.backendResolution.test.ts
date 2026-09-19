@@ -136,21 +136,24 @@ test("a caller whose ancestry matches no recorded host stays unidentified", () =
   expect(authority).toEqual({ kind: "unidentified" });
 });
 
-test("a reader refuses to start when a store exists but no identity was published", () => {
+test("a reader refuses to start when an imported store and the JSON exist but no identity was published", () => {
   const root = stateRoot();
   const filename = path.join(root, "agent-registry.json");
+  new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
   fs.writeFileSync(filename, JSON.stringify({ version: 2, entries: {}, receipts: {} }));
-  fs.writeFileSync(path.join(root, "agent-registry.sqlite"), "");
 
   expect(() => withoutBackendEnv(() => new AgentRegistry(filename, undefined, undefined, { resolveBackendIdentity: true }))).toThrow(RegistryBackendIdentityError);
 });
 
-test("a JSON-only deployment still constructs without a descriptor", () => {
+test("a JSON-only deployment without a descriptor migrates to SQLite on its first open", () => {
   const root = stateRoot();
   const filename = path.join(root, "agent-registry.json");
-  fs.writeFileSync(filename, JSON.stringify({ version: 2, entries: {}, receipts: {} }));
+  const transcript = path.join(root, "live-session.jsonl");
+  fs.writeFileSync(filename, JSON.stringify(authoritativeFile(transcript)));
 
   const reader = withoutBackendEnv(() => new AgentRegistry(filename, undefined, undefined, { resolveBackendIdentity: true }));
 
-  expect(reader.readOnlySnapshot().entries).toEqual({});
+  expect(reader.storageDiagnostics().backendMode).toBe("sqlite");
+  expect(hostPidsFor(reader)).toEqual([HOST_PID]);
+  expect(fs.existsSync(filename)).toBe(false);
 });

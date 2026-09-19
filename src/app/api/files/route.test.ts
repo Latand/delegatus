@@ -422,7 +422,7 @@ test("repeated files reads reuse the pure read snapshot and retain ETag behavior
   expect(first.headers.get("server-timing")).toMatch(/files-role-titles;dur=\d+(?:\.\d+)?/);
 });
 
-test("SQLite health exposes authoritative and mirror revisions without conditional-response churn", async () => {
+test("SQLite health exposes the authoritative revision and no mirror, without conditional-response churn", async () => {
   scannedFiles = [];
   const registry = new AgentRegistry(path.join(registryRoot, "sqlite-health.json"), undefined, undefined, {
     sqliteMode: "sqlite",
@@ -431,7 +431,7 @@ test("SQLite health exposes authoritative and mirror revisions without condition
 
   const first = await GET(new Request("http://127.0.0.1/api/files"));
   const body = await first.json() as {
-    systemHealth: { registry: { revision: number; mirrorRevision: number } };
+    systemHealth: { registry: { revision: number; mirrorRevision: number | null } };
   };
   const etag = first.headers.get("etag");
   const second = await GET(new Request("http://127.0.0.1/api/files", {
@@ -439,7 +439,8 @@ test("SQLite health exposes authoritative and mirror revisions without condition
   }));
 
   expect(body.systemHealth.registry.revision).toBe(registry.storageDiagnostics().revision!);
-  expect(body.systemHealth.registry.mirrorRevision).toBe(body.systemHealth.registry.revision);
+  /* SQLite is the only store: there is no JSON mirror to report (#1870). */
+  expect(body.systemHealth.registry.mirrorRevision).toBeNull();
   expect(second.status).toBe(304);
   expect(second.headers.get("x-llv-files-projection-cache")).toBe("hit");
 });

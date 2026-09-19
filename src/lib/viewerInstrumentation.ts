@@ -835,8 +835,6 @@ export async function registerViewerRuntime(): Promise<void> {
       await quiesceStartup();
       await releaseHosts();
       const revisions = await checkpointHotStateRollbackMirrorsForDemotion();
-      const { agentRegistry } = await import("@/lib/agent/registry");
-      agentRegistry().checkpointRollbackMirrorForDemotion();
       acknowledgeHotStateFence(hotStateDirectory, request, revisions);
     },
     /* A cancelled deployment restores this release's authority but leaves the
@@ -858,9 +856,7 @@ export async function registerViewerRuntime(): Promise<void> {
         if (!activatedReleaseRevision
           || authority?.releaseRevision !== activatedReleaseRevision
           || (authority.mode !== "sqlite" && authority.mode !== "fencing")) return;
-        const { agentRegistry } = await import("@/lib/agent/registry");
         await checkpointHotStateRollbackMirrorsForDemotion();
-        agentRegistry().checkpointRollbackMirrorForDemotion();
       }, undefined, undefined, releaseHosts);
     },
   });

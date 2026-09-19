@@ -39,8 +39,10 @@ export interface ViewerCandidateContainerOverrides {
 export const AGENT_REGISTRY_SQLITE_ENV = "LLV_AGENT_REGISTRY_SQLITE";
 export type AgentRegistryBackendMode = "off" | "dual-write" | "read" | "sqlite";
 
+/** The registry mode a Viewer service runs. Unset is SQLite, the registry's
+    only default store (#1870); the JSON modes must be named explicitly. */
 export function viewerRegistryBackendMode(service: Pick<ViewerComposeService, "environment">): AgentRegistryBackendMode {
-  const configured = service.environment[AGENT_REGISTRY_SQLITE_ENV] ?? "off";
+  const configured = service.environment[AGENT_REGISTRY_SQLITE_ENV] ?? "sqlite";
   if (configured === "off" || configured === "dual-write" || configured === "read" || configured === "sqlite") {
     return configured;
   }
