@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { newestDeploymentsFirst } from "@/lib/mcp/compactAnswers";
 import { isCanonicalBranchRef } from "@/lib/runtime/canonicalRevision";
 import { RuntimeHostUnavailableError, runtimeHostClient, runtimeHostRequestHealth } from "@/lib/runtime/client";
 import { DeploymentRuntimeUnavailableError, requestViewerDeployment } from "@/lib/runtime/deploymentRuntime";
@@ -37,8 +38,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
   const limit = deploymentListLimit(request);
   try {
-    const ledger = (await client.snapshot()).deployments;
-    const deployments = limit === null ? ledger : ledger.slice(-limit);
+    /* Newest first (#1845 defect C). The snapshot orders deployments by id,
+       a random UUID, so the "last `limit`" of it was an arbitrary window that
+       could leave out the day's deploys entirely. */
+    const ledger = newestDeploymentsFirst((await client.snapshot()).deployments);
+    const deployments = limit === null ? ledger : ledger.slice(0, limit);
     return NextResponse.json({
       count: deployments.length,
       deployments,

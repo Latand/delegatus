@@ -1686,6 +1686,7 @@ describe("MCP tool service", () => {
         "rotate_orchestrator",
         "seat_tick_settings",
         "account_project_binding",
+        "account_limits",
       ]);
       for (const tool of listed.tools) {
         expect(tool.inputSchema.required).toContain("clientRequestId");
