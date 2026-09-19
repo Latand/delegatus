@@ -211,10 +211,16 @@ export function OrchestratorPanel({
      already carries the timestamp. */
   const lastReplyAt = file?.lastAssistantMessageAt ?? null;
   const seenReplyAt = useRef<number | null>(lastReplyAt);
+  /* On a fresh tab the seat read has not answered yet, so the FIRST render of a
+     folded seat carries no timestamp. Whatever timestamp arrives first is the
+     baseline, folded or not — otherwise yesterday's reply would be marked on
+     every page load. Only a reply that moves past a baseline already in hand is
+     unread. */
+  if (seenReplyAt.current === null) seenReplyAt.current = lastReplyAt;
   useEffect(() => {
     if (!collapsed) seenReplyAt.current = lastReplyAt;
   }, [collapsed, lastReplyAt]);
-  const unreadReply = collapsed && lastReplyAt !== null && (seenReplyAt.current === null || lastReplyAt > seenReplyAt.current);
+  const unreadReply = collapsed && lastReplyAt !== null && seenReplyAt.current !== null && lastReplyAt > seenReplyAt.current;
 
   /* How long this seat has gone unbound, so «opening…» can be BOUNDED. */
   const bindPending = seated && seatBindPending(file, surface);

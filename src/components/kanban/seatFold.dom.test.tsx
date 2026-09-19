@@ -245,3 +245,36 @@ test("a draft typed into the seat's composer survives a fold and an unfold", asy
   expect(after).toBe(composer);
   expect(after.value).toBe("half a thought");
 });
+
+test("a folded seat whose read lands after the first render marks nothing until a reply actually moves", async () => {
+  /* Production's path, which the cases above skip: the seat-read cache is empty
+     after a reload, so the FIRST render of an already-folded seat has no status
+     and no file — and therefore no reply timestamp. Whatever lands next is
+     yesterday's reply, already read, and must not light the marker. */
+  dom.localStorage.setItem(SEAT_STORAGE_KEY, JSON.stringify({ collapsed: { [PROJECT]: true } }));
+  const pendingRead = { status: null, failed: false, refresh: async () => undefined } as never;
+
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  const render = (read: never, files: readonly FileEntry[]) => flushSync(() => root.render(
+    <KanbanSeat project={PROJECT} projectName="Atlas" projectCwd="/repos/atlas" files={files} boardId="board" seatRead={read} />,
+  ));
+
+  render(pendingRead, [seatFile]);
+  await settle();
+  const marker = () => (host as unknown as HTMLElement).querySelector("[data-seat-unread]");
+  expect(section(host as unknown as HTMLElement).getAttribute("data-collapsed")).toBe("1");
+  expect(marker()).toBeNull();
+
+  /* The read answers a turn later; the seat is still folded. */
+  render(seatRead, [seatFile]);
+  await settle();
+  expect(marker()).toBeNull();
+
+  /* Only now does a reply land — that one is unread. */
+  render(seatRead, [{ ...seatFile, lastAssistantMessageAt: LAST_REPLY + 60, mtime: LAST_REPLY + 60 } as FileEntry]);
+  await settle();
+  expect(marker()?.textContent).toContain(translate("en", "orchPanel.seatUnreadReply"));
+});
