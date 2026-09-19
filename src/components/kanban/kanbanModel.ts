@@ -81,6 +81,10 @@ export interface KanbanPipeline {
 export interface KanbanCard {
   /** The band id: `task:<id>` for a recorded task, otherwise the derived origin. */
   id: string;
+  /** The project this card belongs to. One project's board draws one value;
+      the cross-project Overview (#1820) draws the label from it and a status
+      move writes with it. */
+  project: string;
   task: BoardTask | null;
   origin: TaskBand["origin"];
   status: TaskStatus;
@@ -165,6 +169,11 @@ export interface KanbanModelInput {
   flows?: readonly Flow[];
   /** Optimistic statuses of tasks with a write in flight. */
   statusOverrides?: ReadonlyMap<string, TaskStatus>;
+  /** A second narrowing beside `query`, applied where search is applied: a
+      card it rejects leaves `shown`/`unlinkedShown` and nothing else. Every
+      count is still taken over the whole inventory, exactly as with search.
+      The Overview passes `cardHasLiveWork` (#1820). */
+  cardFilter?: (card: KanbanCard) => boolean;
   /** The project's orchestrator seat as the board last read it; null or absent
       while it is unknown. */
   seat?: SeatRefs | null;
@@ -174,6 +183,9 @@ export interface KanbanModelInput {
 }
 
 const ACTIVE_PIPELINE_STATES = new Set(["provisioning", "running", "needs_decision", "paused"]);
+/** A stage with an attempt in flight right now. `pending` is not started,
+    `passed`/`failed`/`skipped` are over. */
+const IN_FLIGHT_STAGES: ReadonlySet<StageChipState> = new Set(["running", "reviewing", "committing"]);
 const NEEDS_STATES: ReadonlySet<MobileRowStateKey> = new Set(["waiting", "stalled", "limit"]);
 const WORKING_STATES: ReadonlySet<MobileRowStateKey> = new Set(["working", "held"]);
 
@@ -279,8 +291,28 @@ export function cardMatches(card: KanbanCard, query: string): boolean {
   return !needle || card.searchText.includes(needle);
 }
 
+/**
+ * A card with a worker working right now (#1820).
+ *
+ * It reads the evidence the board's own counters read and nothing else:
+ * `working` is the number the column's «N working» shows (a member
+ * conversation whose row state is working or held), `needsYou` is the one its
+ * «N need you» shows, and a stage chip in flight is the running stage the
+ * graph already draws. There is no second definition of working here, so a
+ * finished Claude conversation is as absent from this predicate as it is from
+ * those counters.
+ *
+ * A card waiting on the operator counts: the work is live, it is the operator
+ * who is holding it.
+ */
+export function cardHasLiveWork(card: KanbanCard): boolean {
+  return card.working > 0
+    || card.needsYou
+    || card.pipelines.some((summary) => summary.chips.some((chip) => IN_FLIGHT_STAGES.has(chip.state)));
+}
+
 export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
-  const { bands, tasks, pipelines, projection, statusOverrides, now } = input;
+  const { bands, tasks, pipelines, projection, statusOverrides, cardFilter, now } = input;
   const knownConversations = new Set<string>();
   const workByIdentity = new Map<string, number>();
   for (const file of input.files ?? []) {
@@ -412,6 +444,16 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const drafts = band.members.flatMap((member) => (member.kind === "draft" ? [member.key.slice("draft::".length)] : []));
     return {
       id: band.id,
+      /* One project's board answers `project` for every card alike; the
+         cross-project Overview needs each card's own. A recorded task names
+         it; a band without one takes it from the container or the first
+         conversation it carries, which is where the board got the band. */
+      project: task?.project
+        || band.pipeline?.project
+        || band.flow?.project
+        || members[0]?.file.project
+        || mirrors[0]?.file.project
+        || "other",
       task,
       origin: band.origin,
       status,
@@ -445,6 +487,10 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     };
   });
 
+  /* Search and the Overview's predicate narrow the same way and in the same
+     place: what they reject leaves `shown`, and every count above is already
+     taken over the whole inventory. */
+  const keeps = (card: KanbanCard) => cardMatches(card, query) && (!cardFilter || cardFilter(card));
   const hiddenGroups = cards
     .filter((card) => card.task && card.hide.hidden)
     .sort((a, b) => (b.hide.hidden ? Date.parse(b.hide.since) || 0 : 0) - (a.hide.hidden ? Date.parse(a.hide.since) || 0 : 0));
@@ -456,7 +502,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     return [status, {
       status,
       cards: inColumn,
-      shown: inColumn.filter((card) => cardMatches(card, query)),
+      shown: inColumn.filter((card) => keeps(card)),
       working: inColumn.reduce((sum, card) => sum + card.working, 0),
       needsYou: inColumn.filter((card) => card.needsYou).length,
     } satisfies KanbanColumn];
@@ -467,7 +513,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   return {
     columns,
     unlinked,
-    unlinkedShown: unlinked.filter((card) => cardMatches(card, query)),
+    unlinkedShown: unlinked.filter((card) => keeps(card)),
     offBoard,
     hiddenGroups,
     resurfaced,

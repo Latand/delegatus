@@ -8,6 +8,12 @@ import { epochSeconds, epochSecondsFromMs, type EpochSeconds } from "@/lib/types
     inside one tick, and every subscriber shares the one timer below. */
 const DEFAULT_TICK_MS = 15_000;
 
+/** Cadence of the boards' wall clocks — the idle windows they drive are
+    minutes wide. Every surface that draws a whole board reads this one, a
+    project's and the cross-project Overview's alike, so the clock behind them
+    is literally shared (`clockFor` keys on the cadence). */
+export const BOARD_CLOCK_MS = 30_000;
+
 interface Clock {
   now: EpochSeconds;
   listeners: Set<() => void>;

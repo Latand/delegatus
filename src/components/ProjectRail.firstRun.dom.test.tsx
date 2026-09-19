@@ -219,7 +219,6 @@ test("the first-run overview's own button opens the form on the rail beside it",
     archivedProjects={new Set()}
     now={2_000}
     onSelectProject={() => {}}
-    onSelectFile={() => {}}
   />);
   expect(form(host)).toBeNull();
   const overviewCreate = host.querySelector('[data-testid="overview-create-project"]') as unknown as HTMLElement;
@@ -265,7 +264,6 @@ test("on a phone one tap on the overview's button reaches the open form", () => 
       archivedProjects={new Set()}
       now={2_000}
       onSelectProject={() => {}}
-      onSelectFile={() => {}}
       mobileShell={host}
     />,
   ));

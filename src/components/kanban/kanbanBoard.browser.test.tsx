@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type LaunchOptions, type Page } from "playwright-core";
 
+import { en } from "@/lib/i18n/en";
+
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 
@@ -4235,6 +4237,215 @@ describe("#1802 folding the rail footer and the orchestrator seat", () => {
   }, 300_000);
 });
 
+describe("#1820 the Overview is the project board over every project", () => {
+  /*
+   * Rendered evidence for #1820: the real Viewer on its Overview, over
+   * `issue1695Evidence.fixture.tsx?scenario=issue1820` — three invented
+   * projects, each with a card a worker is working on and a card nobody is —
+   * with the production stylesheet, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=$(which google-chrome-stable) \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx
+   *
+   * What only a browser settles, and is gated here, at a desktop and a phone
+   * viewport:
+   *   - the Overview draws the kanban board's own columns, not a grid of
+   *     project cards and not a column per project;
+   *   - the cards in them come from three projects at once, each carrying its
+   *     own project's display name, and no canonical project key is drawn;
+   *   - a card with nobody working on it is absent from every column, and the
+   *     column head says how many of its cards are shown;
+   *   - what needs one project to write into — «+ Task», «+ Agent», the
+   *     orchestrator seat — is drawn nowhere;
+   *   - `?scenario=issue1820-quiet` — projects and tasks, nobody working —
+   *     keeps the board and says why it is empty in the operator's words: the
+   *     Overview's own filter, never advice about a search nobody typed;
+   *   - `?scenario=issue1820-empty` still draws the first-run panel and no
+   *     board at all.
+   *
+   * Measurements go to `evidence/issue-1820/overview.json`; frames to
+   * `.artifacts/issue-1820/`, which is not committed.
+   */
+
+  const OUT = path.resolve(".artifacts/issue-1820");
+  const EVIDENCE = path.resolve("evidence/issue-1820");
+  const VIEWPORTS = [
+    { label: "desktop-1440", width: 1440, height: 900 },
+    { label: "phone-390", width: 390, height: 844 },
+  ] as const;
+  /* The three projects the fixture seeds, and the cards each is expected to
+     contribute. A quiet card of each project must be drawn nowhere. */
+  const WORKING = ["task:t-ledger", "task:t-mesh"] as const;
+  const QUIET = ["task:t-ledger-quiet", "task:t-mesh-quiet"] as const;
+  const PROJECT_LABELS = ["acme-ledger", "river-mesh", "atlas"] as const;
+  const KEYS = ["acme-ledger", "river-mesh"] as const;
+  /* Drawn when the Overview's own filter empties a column, and never drawn
+     there: the search's own no-match copy. */
+  const QUIET_TITLE = en["overview.noneWorking"];
+  const QUIET_BODY = en["overview.noneWorkingHint"];
+  const SEARCH_COPY = [en["kanban.noMatch"], en["kanban.noMatchHint"]] as const;
+
+  interface OverviewMeasure {
+    boards: number;
+    columns: string[];
+    columnCounts: Array<{ status: string; count: string }>;
+    cards: Array<{ id: string; status: string; project: string }>;
+    projectsOnCards: string[];
+    singleProjectControls: { newTask: number; newAgent: number; seat: number; addAgent: number };
+    firstRun: boolean;
+    headerLine: string;
+    emptyStates: Array<{ status: string; text: string }>;
+  }
+
+  const measure = (page: Page) => page.evaluate((): OverviewMeasure => {
+    const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
+    const cards = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .card")].map((card) => ({
+      id: card.dataset.id ?? "",
+      status: (card.closest("section.column") as HTMLElement | null)?.dataset.status ?? "",
+      project: text(card.querySelector("[data-project-chip]")),
+    }));
+    return {
+      boards: document.querySelectorAll("[data-kanban-board]").length,
+      columns: [...document.querySelectorAll<HTMLElement>("[data-kanban-board] section.column")].map((column) => column.dataset.status ?? ""),
+      columnCounts: [...document.querySelectorAll<HTMLElement>("[data-kanban-board] section.column")].map((column) => ({
+        status: column.dataset.status ?? "",
+        count: text(column.querySelector(".col-head .n")),
+      })),
+      cards,
+      projectsOnCards: [...new Set(cards.map((card) => card.project).filter(Boolean))].sort(),
+      singleProjectControls: {
+        newTask: document.querySelectorAll("[data-new-task]").length,
+        newAgent: document.querySelectorAll("[data-new-agent]").length,
+        seat: document.querySelectorAll("[data-kanban-seat]").length,
+        addAgent: document.querySelectorAll(".card [data-add-agent]").length,
+      },
+      firstRun: Boolean(document.querySelector('[data-testid="overview-first-run"]')),
+      headerLine: text(document.querySelector("h1")?.parentElement),
+      emptyStates: [...document.querySelectorAll<HTMLElement>("[data-kanban-board] section.column")].map((column) => ({
+        status: column.dataset.status ?? "",
+        text: text(column.querySelector(".empty")),
+      })),
+    };
+  });
+
+  browserTest("#1820: the Overview draws one board of working cards from three projects, each labelled with its own", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+
+    const board = async (viewport: (typeof VIEWPORTS)[number]) => {
+      const label = viewport.label;
+      const opened = await openFixture(browser, `${server.base}?scenario=issue1820`, { width: viewport.width, height: viewport.height }, "light");
+      try {
+        await opened.page.waitForSelector("[data-kanban-board] .card", { state: "attached", timeout: 30_000 });
+        await opened.page.waitForTimeout(700);
+        const measured = await measure(opened.page);
+        await opened.page.screenshot({ path: path.join(OUT, `issue-1820-${label}.png`), fullPage: true });
+        frames[label] = { viewport, measured };
+
+        if (measured.boards !== 1) failures.push(`${label}: ${measured.boards} boards drawn, expected exactly one`);
+        if (measured.columns.join() !== "inbox,assigned,blocked,done") failures.push(`${label}: columns ${measured.columns.join()}`);
+        /* Three projects share those four columns. */
+        for (const name of PROJECT_LABELS) {
+          if (!measured.projectsOnCards.includes(name)) failures.push(`${label}: no card labelled ${name}; labels ${JSON.stringify(measured.projectsOnCards)}`);
+        }
+        const drawn = new Set(measured.cards.map((card) => card.id));
+        for (const id of WORKING) if (!drawn.has(id)) failures.push(`${label}: the working card ${id} is not drawn`);
+        for (const id of QUIET) if (drawn.has(id)) failures.push(`${label}: the quiet card ${id} is drawn`);
+        /* Every drawn card names its project; none of them names the key. */
+        for (const card of measured.cards) {
+          if (!card.project) failures.push(`${label}: ${card.id} carries no project label`);
+        }
+        const body = await opened.page.evaluate(() => document.body.textContent ?? "");
+        for (const key of KEYS) {
+          if (body.includes(`-${key}`)) failures.push(`${label}: a canonical project key is drawn as text`);
+        }
+        /* Narrowed, and each column head says so. */
+        for (const column of measured.columnCounts) {
+          if (!/^\d+ of \d+$/.test(column.count)) failures.push(`${label}: ${column.status} head reads ${JSON.stringify(column.count)}`);
+        }
+        const controls = measured.singleProjectControls;
+        for (const [name, count] of Object.entries(controls)) {
+          if (count) failures.push(`${label}: ${name} is drawn ${count} time(s) on a board with no single project`);
+        }
+        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    /* Projects, tasks, and nobody working: the board stays and every column
+       names the Overview's own filter (#696 — a filtered-out board and a
+       fruitless search must not render the same screen). */
+    const quiet = async (viewport: (typeof VIEWPORTS)[number]) => {
+      const label = `${viewport.label}-quiet`;
+      const opened = await openFixture(browser, `${server.base}?scenario=issue1820-quiet`, { width: viewport.width, height: viewport.height }, "light");
+      try {
+        await opened.page.waitForSelector("[data-kanban-board] section.column .empty", { state: "attached", timeout: 30_000 });
+        await opened.page.waitForTimeout(700);
+        const measured = await measure(opened.page);
+        await opened.page.screenshot({ path: path.join(OUT, `issue-1820-${label}.png`), fullPage: true });
+        frames[label] = { viewport, measured };
+
+        if (measured.boards !== 1) failures.push(`${label}: ${measured.boards} boards drawn on an installation with projects but no work`);
+        if (measured.firstRun) failures.push(`${label}: the first-run panel is drawn over an installation that has projects`);
+        if (measured.cards.length) failures.push(`${label}: ${measured.cards.length} card(s) drawn while nobody is working`);
+        for (const column of measured.emptyStates) {
+          if (!column.text.includes(QUIET_TITLE)) failures.push(`${label}: ${column.status} empty state reads ${JSON.stringify(column.text)}`);
+          if (!column.text.includes(QUIET_BODY)) failures.push(`${label}: ${column.status} empty state carries no word about the filter`);
+          if (SEARCH_COPY.some((copy) => column.text.includes(copy))) failures.push(`${label}: ${column.status} offers advice about a search nobody typed`);
+        }
+        /* The counts still read «0 of N»: the inventory is there, narrowed. */
+        for (const column of measured.columnCounts) {
+          if (!/^0 of \d+$/.test(column.count)) failures.push(`${label}: ${column.status} head reads ${JSON.stringify(column.count)}`);
+        }
+        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    const empty = async (viewport: (typeof VIEWPORTS)[number]) => {
+      const label = `${viewport.label}-empty`;
+      const opened = await openFixture(browser, `${server.base}?scenario=issue1820-empty`, { width: viewport.width, height: viewport.height }, "light");
+      try {
+        await opened.page.waitForSelector('[data-testid="overview-first-run"]', { state: "attached", timeout: 30_000 });
+        await opened.page.waitForTimeout(500);
+        const measured = await measure(opened.page);
+        await opened.page.screenshot({ path: path.join(OUT, `issue-1820-${label}.png`), fullPage: true });
+        frames[label] = { viewport, measured };
+        if (!measured.firstRun) failures.push(`${label}: the first-run panel is absent`);
+        if (measured.boards !== 0) failures.push(`${label}: a board is drawn on an installation with no projects`);
+        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    try {
+      for (const viewport of VIEWPORTS) {
+        await board(viewport);
+        await quiet(viewport);
+        await empty(viewport);
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+
+    fs.writeFileSync(path.join(EVIDENCE, "overview.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+});
 
 describe("#1796 per-model limits", () => {
   browserTest("Fable and Opus lines survive the footer fold and render on desktop and phone", async () => {
@@ -4289,6 +4500,63 @@ describe("#1796 per-model limits", () => {
       }
       fs.mkdirSync("evidence/issue-1796", { recursive: true });
       fs.writeFileSync("evidence/issue-1796/limits.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});
+
+describe("#1839 a tier the provider files under a codename", () => {
+  browserTest("the provider's label names the row, on desktop and phone, and the codename never reaches the operator", async () => {
+    const out = path.resolve(".artifacts/issue-1839/browser");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      fixture: "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=tier-codename",
+      values: "invented",
+    };
+    const readRows = (page: Page, selector: string) => page.locator(selector).evaluate((root) => ({
+      rows: [...root.querySelectorAll<HTMLElement>("[data-limit-row]")].map((row) => ({
+        key: row.dataset.limitRow, text: row.textContent?.replace(/\s+/g, " ").trim(),
+        width: Math.round(row.getBoundingClientRect().width),
+      })),
+      overflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+    }));
+    try {
+      for (const [name, viewport] of [["desktop", { width: 1440, height: 1000 }], ["phone", { width: 390, height: 844 }]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base + "?scenario=tier-codename", viewport, "light", "en");
+        try {
+          let selector: string;
+          if (name === "desktop") {
+            await page.waitForFunction(() => document.querySelector("[data-rail-footer]")?.textContent?.includes("Fable · Week"));
+            const footerText = await page.locator("[data-rail-footer]").innerText();
+            expect(footerText).toContain("Cedar Ember · Week");
+            expect(footerText).not.toContain("Nimbus");
+            evidence.footer = { text: footerText };
+            await page.screenshot({ path: path.join(out, "desktop-footer.png") });
+            await page.click('button[aria-label="Claude accounts — switch or add"]');
+            selector = '[role="dialog"][aria-label="Claude accounts"]';
+          } else {
+            await page.waitForSelector('[data-mobile2-screen="board"]');
+            await page.click('[data-mobile2-open="menu"]');
+            await page.click('[data-mobile2-go="accounts"]');
+            selector = '[data-mobile2-screen="accounts"]';
+          }
+          await page.waitForSelector(selector + ' [data-limit-row="tier:nimbus_quill"]');
+          const facts = await readRows(page, selector);
+          /* The row is still keyed by the bucket the window arrived in — that is
+             what the gate matches on — while what it reads is the label. */
+          expect(facts.rows.some((row) => row.key === "tier:nimbus_quill" && row.text?.includes("Fable · Week") && row.text.includes("12%"))).toBe(true);
+          expect(facts.rows.some((row) => row.key === "tier:cedar_ember" && row.text?.includes("Cedar Ember · Week") && row.text.includes("37%"))).toBe(true);
+          expect(facts.rows.every((row) => !row.text?.includes("nimbus"))).toBe(true);
+          expect(facts.overflow).toBe(0);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${name}-accounts.png`), fullPage: true });
+          evidence[name] = { viewport, ...facts, pageErrors };
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/issue-1839", { recursive: true });
+      fs.writeFileSync("evidence/issue-1839/limits.json", JSON.stringify(evidence, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 90_000);
 });

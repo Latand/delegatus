@@ -83,3 +83,15 @@ test("a provider tier bucket names its row by the tier, capitalised when unknown
   expect(claudeTierDisplayName("sonnet")).toBe("Sonnet");
   expect(claudeTierDisplayName("nova")).toBe("Nova");
 });
+
+test("the provider's own label names the row, and a codenamed bucket is never shown raw (#1839)", () => {
+  // Several metered buckets arrive under codenames. The label the provider
+  // sends is what the operator reads; without one the codename is spelled out
+  // as words rather than handed over as a key.
+  expect(claudeTierDisplayName("nimbus_quill", "Fable")).toBe("Fable");
+  expect(claudeTierDisplayName("nimbus_quill")).toBe("Nimbus Quill");
+  expect(claudeTierDisplayName("iguana_necktie")).toBe("Iguana Necktie");
+  // An empty or blank label is no label: the tier key still names the row.
+  expect(claudeTierDisplayName("opus", "   ")).toBe("Opus");
+  expect(claudeTierDisplayName("opus", null)).toBe("Opus");
+});

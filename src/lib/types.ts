@@ -616,12 +616,16 @@ export interface LimitWindow {
 }
 
 /** A weekly window the provider meters separately for one model tier (issues
-    #1358, #1796): Anthropic's OAuth usage payload carries a seven-day bucket
-    per metered tier beside the general week. `tier` is the bucket's tier name
-    as the provider spelled it (`opus` for `seven_day_opus`), so the label the
-    row carries is the provider's, never a guess. */
+    #1358, #1796, #1839): Anthropic's OAuth usage payload carries a seven-day
+    bucket per metered tier beside the general week. `tier` is the key the
+    provider filed the bucket under — a tier name (`opus` for `seven_day_opus`)
+    or, for a bucket the provider has not named in the open, a codename
+    (`nimbus_quill`). `label` is the provider's own human label for the window
+    when it supplies one, which is what the operator reads: a codename is never
+    shown raw while a label exists (issue #1839). */
 export interface TierLimitWindow extends LimitWindow {
   tier: string;
+  label?: string | null;
 }
 
 /** The quota window that bound an effective-remaining minimum. A `tier:<name>`

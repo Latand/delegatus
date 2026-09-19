@@ -1983,6 +1983,9 @@ export const en = {
   "overview.firstRunBody": "Sessions from ~/.claude/projects and ~/.codex/sessions appear here as they happen",
   "overview.firstRunCreate": "Create a project",
   "overview.firstRunElsewhere": "…or run any claude / codex session inside a repo.",
+  "overview.workingOnly": "Only what is working right now",
+  "overview.noneWorking": "No agent is working in any project right now.",
+  "overview.noneWorkingHint": "Only cards someone is working on appear here; a project's own board holds the rest.",
 
   // Catalog fetch failure (issue #696) — never the idle empty-state copy
   "catalog.unreachable": "catalog unavailable",
@@ -2876,6 +2879,7 @@ export const en = {
   "kanban.empty.done.body": "Finished tasks keep their history here.",
   "kanban.noMatch": "No match here",
   "kanban.noMatchHint": "Try a shorter search.",
+  "kanban.openProjectBoard": "Open {project}",
   "kanban.summaryWorking": { one: "{count} agent working", other: "{count} agents working" },
   "kanban.summaryNeeds": { one: "{count} needs you", other: "{count} need you" },
   "kanban.summaryTasks": { one: "{count} task on the board", other: "{count} tasks on the board" },

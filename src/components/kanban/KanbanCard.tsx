@@ -180,6 +180,13 @@ export interface KanbanCardProps {
   onStagePanelMenu: (panelKey: string, anchor: HTMLElement) => void;
   /** «+ Agent» in the footer: a draft on this card, seeded with the task's text (K9a). */
   onAddAgent?: (card: KanbanCardModel) => void;
+  /** Cross-project Overview (#1820): display name per project key. Cards from
+      several projects share the columns there, so each one says which project
+      it belongs to. Absent on a project's own board, where every card on
+      screen is already that project's. */
+  projectNames?: Readonly<Record<string, string>> | null;
+  /** The card's project label opens that project's own board. */
+  onOpenProject?: (project: string) => void;
 }
 
 function ageLabel(t: TFunction, updatedAtMs: number, nowMs: number): string {
@@ -251,6 +258,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       onMenu={(pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
     />
   );
+  const projectName = props.projectNames?.[card.project] ?? null;
   const hex = card.color ? TASK_COLOR_HEX[card.color] : null;
   const style = hex ? ({ "--label": hex, "--label-strong": hex } as React.CSSProperties) : undefined;
   return (
@@ -270,6 +278,20 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
     >
       <span className="label" aria-hidden="true" />
       <span className="saving" aria-hidden="true" />
+      {projectName ? (
+        /* #699's lesson holds: the card itself is inert, so this is one
+           explicit target with its own bounds and nothing nests inside it. */
+        <button
+          type="button"
+          className="project-chip"
+          data-project-chip={card.project}
+          aria-label={t("kanban.openProjectBoard", { project: projectName })}
+          title={t("kanban.openProjectBoard", { project: projectName })}
+          onClick={() => props.onOpenProject?.(card.project)}
+        >
+          <span className="clamp">{projectName}</span>
+        </button>
+      ) : null}
       <div className="head">
         {editing?.field === "title" ? (
           <CardInlineText
