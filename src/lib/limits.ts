@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { accountForSpawn, type CodexAccount } from "@/lib/accounts/codex";
-import { claudeAccountForSpawn } from "@/lib/accounts/claude";
+import { claudeAccountForSpawn, type ClaudeAccount } from "@/lib/accounts/claude";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
@@ -31,6 +31,11 @@ const MAX_FILES = 12;
     active long-running sessions whose start bucket has aged past this bound. */
 const MAX_RECENT_SESSION_DAYS = 8;
 const CACHE_MS = 30_000;
+/** One Claude usage read per account per window, whichever path asks first —
+    the footer's poll or the quota controller's minute tick (issue #1849). It is
+    shorter than the controller's 60-second cadence, so each tick still reads
+    unless a footer poll already did inside the window. */
+const CLAUDE_REFRESH_WINDOW_MS = 50_000;
 const FAILURE_COOLDOWN_MS = 60_000;
 const MAX_RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
 const CODEX_INITIALIZE_TIMEOUT_REASON = "app-server-initialize-timeout";
@@ -51,6 +56,10 @@ type EngineCacheEntry = {
   consecutiveInitializeTimeouts?: number;
   /** The parser generation that produced `data`; absent on older entries. */
   parser?: number;
+  /** When the provider answered with `data` (ms). `at` moves at every failed
+      retry, so it cannot order two snapshots of one account; this can. Absent
+      on entries written before issue #1849. */
+  observedAt?: number;
 };
 type LimitsCache = { version: 2; engines: Record<EngineName, Record<string, EngineCacheEntry>> };
 
@@ -78,6 +87,8 @@ export type CodexLiveLimitsReader = (account: Pick<CodexAccount, "id" | "kind" |
 
 const globalStore = globalThis as unknown as {
   __llvLimitsCache?: LimitsCache | null;
+  /** The disk file's mtime when `of` was loaded from it or written to it. */
+  __llvLimitsCacheDisk?: { of: LimitsCache; mtimeMs: number };
   __llvLimitsInflight?: Map<string, Promise<ResolvedRead>>;
 };
 
@@ -158,9 +169,23 @@ function readDiskCache(): LimitsCache {
   return emptyCache();
 }
 
+function diskMtime(): number {
+  try { return fs.statSync(limitsCacheFile()).mtimeMs; } catch { return -1; }
+}
+
+/** The quota controller's periodic tick runs in the inventory sidecar, a
+    separate OS process from the Viewer that serves `/api/limits`. Both read and
+    write this one file, so a copy loaded from disk is reloaded once the other
+    process has written it (issue #1849). A cache seeded in memory, never loaded
+    from disk, stays as it is. */
 function cache(): LimitsCache {
-  if (!globalStore.__llvLimitsCache) globalStore.__llvLimitsCache = readDiskCache();
-  return globalStore.__llvLimitsCache;
+  const current = globalStore.__llvLimitsCache;
+  const disk = globalStore.__llvLimitsCacheDisk;
+  if (current && (disk?.of !== current || disk.mtimeMs === diskMtime())) return current;
+  const loaded = readDiskCache();
+  globalStore.__llvLimitsCache = loaded;
+  globalStore.__llvLimitsCacheDisk = { of: loaded, mtimeMs: diskMtime() };
+  return loaded;
 }
 
 function writeDiskCache(value: LimitsCache): void {
@@ -185,7 +210,14 @@ function writeDiskCache(value: LimitsCache): void {
         staleSince: claude?.[1].provenance.staleSince ?? codex[1].provenance.staleSince,
       },
     } : {};
-    fs.writeFileSync(limitsCacheFile(), JSON.stringify({ ...value, ...projection }, null, 2) + "\n", "utf8");
+    // Written whole and renamed into place: the other process may read it at
+    // any moment, and a torn read would be a cache miss for every account.
+    const temporary = `${limitsCacheFile()}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify({ ...value, ...projection }, null, 2) + "\n", "utf8");
+    fs.renameSync(temporary, limitsCacheFile());
+    if (globalStore.__llvLimitsCacheDisk?.of === value || globalStore.__llvLimitsCache === value) {
+      globalStore.__llvLimitsCacheDisk = { of: value, mtimeMs: diskMtime() };
+    }
   } catch (err) {
     console.warn("[limits] failed to persist cache", err);
   }
@@ -196,9 +228,10 @@ function lastCache(engine: EngineName, accountId: string): EngineCacheEntry | nu
 }
 
 /** Drop one account's short-lived cache entry so the next `/api/limits` read
-    goes to the provider. An operator-triggered re-read or a redeemed reset
-    credit (issues #1418, #1373) has just produced a newer truth than the
-    30-second cache holds; serving the cache would show the old window. */
+    goes to the provider. A redeemed Codex reset credit (issue #1373) has just
+    produced a newer truth than the 30-second cache holds; serving the cache
+    would show the old window. A Claude re-read needs none of this: it goes
+    through the same snapshot the footer answers from (issue #1849). */
 export function forgetCachedLimits(engine: EngineName, accountId: string): void {
   const entries = cache().engines[engine];
   if (!(accountId in entries)) return;
@@ -218,6 +251,8 @@ export function cachedLimitsProvenance(
 
 type ResolvedRead = {
   data: EngineLimits | null;
+  /** When the provider answered with `data` (ms), or null when unknown. */
+  observedAt: number | null;
   /** What the cache should keep when it differs from what this read serves. */
   baseData?: EngineLimits | null;
   meta: LimitsProvenance;
@@ -236,6 +271,7 @@ function remember(engine: EngineName, accountId: string, resolved: ResolvedRead,
     consecutive429s: resolved.consecutive429s,
     consecutiveInitializeTimeouts: resolved.consecutiveInitializeTimeouts,
     ...(engine === "claude" ? { parser: CLAUDE_PARSER_VERSION } : {}),
+    ...(resolved.observedAt !== null ? { observedAt: resolved.observedAt } : {}),
   };
   writeDiskCache(cache());
   if (!resolved.data || (resolved.meta.source !== "live" && resolved.meta.source !== "transcript")) return;
@@ -263,6 +299,7 @@ function resolveRead(read: LimitRead, cached: EngineCacheEntry | null, staleSinc
     const retryAt = initializeTimedOut ? now + initializeBackoffMs : null;
     return {
       data: read.data,
+      observedAt: now,
       ...(read.baseData ? { baseData: read.baseData } : {}),
       meta: { source: read.source, reason: read.reason, staleSince: read.reason ? staleSince : null, retryAt: retryAt ? new Date(retryAt).toISOString() : null },
       retryAt,
@@ -288,6 +325,7 @@ function resolveRead(read: LimitRead, cached: EngineCacheEntry | null, staleSinc
   if (cachedRejection && exhaustionRunning(cachedRejection, now / 1000)) {
     return {
       data: cachedRejection,
+      observedAt: cached ? snapshotObservedAt(cached) : null,
       meta: { source: "transcript", reason: read.reason, staleSince: null, retryAt: new Date(retryAt).toISOString() },
       retryAt,
       consecutive429s,
@@ -301,12 +339,23 @@ function resolveRead(read: LimitRead, cached: EngineCacheEntry | null, staleSinc
     staleSince: cached?.provenance.staleSince ?? staleSince,
     retryAt: new Date(retryAt).toISOString(),
   };
-  return { data: base, meta, retryAt, consecutive429s, consecutiveInitializeTimeouts };
+  return { data: base, observedAt: base && cached ? snapshotObservedAt(cached) : null, meta, retryAt, consecutive429s, consecutiveInitializeTimeouts };
+}
+
+/** When the provider answered with the entry's numbers. An entry written
+    before issue #1849 has no such field: a live one was written when it was
+    read, and a carried one went stale no earlier than it was read. */
+function snapshotObservedAt(entry: EngineCacheEntry): number | null {
+  if (!entry.data) return null;
+  if (entry.observedAt !== undefined) return entry.observedAt;
+  const staleSince = entry.provenance.staleSince ? Date.parse(entry.provenance.staleSince) : NaN;
+  return entry.provenance.source === "cache" && Number.isFinite(staleSince) ? staleSince : entry.at;
 }
 
 function cachedRead(entry: EngineCacheEntry): ResolvedRead {
   return {
     data: entry.data,
+    observedAt: snapshotObservedAt(entry),
     meta: entry.provenance,
     retryAt: entry.retryAt ?? null,
     consecutive429s: entry.consecutive429s ?? 0,
@@ -314,10 +363,10 @@ function cachedRead(entry: EngineCacheEntry): ResolvedRead {
   };
 }
 
-function cacheIsFresh(entry: EngineCacheEntry | null, now: number): boolean {
+function cacheIsFresh(entry: EngineCacheEntry | null, now: number, windowMs: number): boolean {
   if (!entry) return false;
   if (entry.retryAt) return now < entry.retryAt;
-  return now - entry.at < CACHE_MS;
+  return now - entry.at < windowMs;
 }
 
 function inflightReads(): Map<string, Promise<ResolvedRead>> {
@@ -331,9 +380,16 @@ function logFallbackReasons(entries: ReadonlyArray<readonly [EngineName, LimitsP
   }
 }
 
-function resolveEngineRead(engine: EngineName, accountId: string, now: number, clock: () => number, reader: () => Promise<LimitRead>): Promise<ResolvedRead> {
+type EngineReadOptions = {
+  windowMs?: number;
+  /** Skip the fresh-cache and backoff rests: an operator asked for a read now. */
+  force?: boolean;
+};
+
+function resolveEngineRead(engine: EngineName, accountId: string, now: number, clock: () => number, reader: () => Promise<LimitRead>, options: EngineReadOptions = {}): Promise<ResolvedRead> {
+  const windowMs = options.windowMs ?? CACHE_MS;
   const cached = lastCache(engine, accountId);
-  if (cacheIsFresh(cached, now)) return Promise.resolve(cachedRead(cached!));
+  if (!options.force && cacheIsFresh(cached, now, windowMs)) return Promise.resolve(cachedRead(cached!));
 
   const key = `${engine}:${accountId}`;
   const reads = inflightReads();
@@ -342,7 +398,7 @@ function resolveEngineRead(engine: EngineName, accountId: string, now: number, c
 
   const pending = (async () => {
     const latest = lastCache(engine, accountId);
-    if (cacheIsFresh(latest, now)) return cachedRead(latest!);
+    if (!options.force && cacheIsFresh(latest, now, windowMs)) return cachedRead(latest!);
     const read = await reader();
     const resolvedAt = clock();
     const resolved = resolveRead(read, latest, new Date(resolvedAt).toISOString(), resolvedAt);
@@ -365,7 +421,7 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
   const claudeAccount = claudeAccountForSpawn();
   const codexAccount = accountForSpawn();
   const [resolvedClaude, resolvedCodex] = await Promise.all([
-    resolveEngineRead("claude", claudeAccount.id, now, clock, () => fetchClaudeLimits(path.join(claudeAccount.home, ".credentials.json"), clock)),
+    resolveClaudeRead(claudeAccount, now, clock),
     resolveEngineRead("codex", codexAccount.id, now, clock, () => readCodexLimits({ account: codexAccount, liveReader: options.codexLiveReader, now: clock })),
   ]);
   return {
@@ -379,6 +435,64 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
 }
 
 /* ------------------------------- Claude ------------------------------- */
+
+function resolveClaudeRead(account: Pick<ClaudeAccount, "id" | "home">, now: number, clock: () => number, force = false): Promise<ResolvedRead> {
+  return resolveEngineRead("claude", account.id, now, clock,
+    () => fetchClaudeLimits(path.join(account.home, ".credentials.json"), clock),
+    { windowMs: CLAUDE_REFRESH_WINDOW_MS, force });
+}
+
+export type ClaudeAccountLimits = {
+  data: EngineLimits | null;
+  provenance: LimitsProvenance;
+  /** When the provider answered with `data` (ms), or null when unknown. */
+  observedAt: number | null;
+};
+
+/**
+ * One account's Claude usage through the snapshot `/api/limits` answers from
+ * (issue #1849). The quota controller and the operator's re-read call this
+ * rather than the provider, so every path shares one read per account per
+ * window, one in-flight request, and one backoff after a 429 — and whichever
+ * path reads, the footer shows the result.
+ */
+export async function readClaudeAccountLimits(
+  account: Pick<ClaudeAccount, "id" | "home">,
+  options: { now?: () => number; force?: boolean } = {},
+): Promise<ClaudeAccountLimits> {
+  const clock = options.now ?? Date.now;
+  const resolved = await resolveClaudeRead(account, clock(), clock, options.force);
+  return { data: resolved.data, provenance: resolved.meta, observedAt: resolved.observedAt };
+}
+
+/**
+ * Offers a snapshot another path holds — the registry's durable observation —
+ * to the shared one. It lands only when the provider answered it later than
+ * the shared snapshot's own numbers, so an older snapshot, and in particular
+ * an older one with no tiers, never replaces a newer one (issue #1849). The
+ * shared backoff is kept: adopting numbers is not a provider read.
+ */
+export function adoptClaudeLimitsSnapshot(accountId: string, data: EngineLimits, observedAt: number, now: number = Date.now()): boolean {
+  const entry = lastCache("claude", accountId);
+  const held = entry ? snapshotObservedAt(entry) : null;
+  if (!Number.isFinite(observedAt) || (held !== null && held >= observedAt)) return false;
+  const throttled = Boolean(entry?.retryAt && now < entry.retryAt);
+  cache().engines.claude[accountId] = {
+    at: observedAt,
+    data,
+    baseData: data,
+    provenance: throttled
+      ? { source: "cache", reason: entry!.provenance.reason, staleSince: new Date(observedAt).toISOString(), retryAt: entry!.provenance.retryAt ?? null }
+      : { source: "live", reason: null, staleSince: null, retryAt: null },
+    retryAt: throttled ? entry!.retryAt : null,
+    consecutive429s: throttled ? entry!.consecutive429s ?? 0 : 0,
+    consecutiveInitializeTimeouts: 0,
+    parser: CLAUDE_PARSER_VERSION,
+    observedAt,
+  };
+  writeDiskCache(cache());
+  return true;
+}
 
 interface OauthWindow {
   utilization?: unknown;

@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 
 import { activeClaudeAccountId, listClaudeAccounts, type ClaudeAccount } from "@/lib/accounts/claude";
 import { realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
@@ -9,7 +8,7 @@ import { managedCodexRuntime, type CodexQuotaProbe } from "@/lib/accounts/codexR
 import type { AppServerResetCredits } from "@/lib/accounts/codexAppServer";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { logQuotaEvent } from "@/lib/events";
-import { fetchClaudeLimits, readCodexLimits } from "@/lib/limits";
+import { adoptClaudeLimitsSnapshot, readClaudeAccountLimits, readCodexLimits } from "@/lib/limits";
 
 import type { DurableQuotaObservation, MigrationEngine } from "./contracts";
 import type { QuotaObservation, QuotaResetCredits } from "./quotaPolicy";
@@ -17,7 +16,13 @@ import type { QuotaObservation, QuotaResetCredits } from "./quotaPolicy";
 export interface QuotaProbePort {
   list(engine: MigrationEngine): Array<ClaudeAccount | CodexAccount>;
   active(engine: MigrationEngine): string;
-  probe(engine: MigrationEngine, account: ClaudeAccount | CodexAccount, now: number): Promise<QuotaObservation>;
+  probe(engine: MigrationEngine, account: ClaudeAccount | CodexAccount, now: number, options?: QuotaProbeOptions): Promise<QuotaObservation>;
+}
+
+export interface QuotaProbeOptions {
+  /** An operator asked for this read (#1418): skip the shared snapshot's
+      fresh-read and backoff rests. */
+  force?: boolean;
 }
 
 /** The durable projection of a reset-credit summary (issue #1373): the count
@@ -73,30 +78,53 @@ export function durableQuotaObservation(observation: QuotaObservation, bootId: s
   };
 }
 
+/**
+ * One Claude account's observation. The usage numbers come from the snapshot
+ * `/api/limits` answers from, never straight from the provider (issue #1849):
+ * a read the footer took inside the window serves this one, a 429 either path
+ * met holds both back, and the read this takes is what the footer shows next.
+ * `observedAt` is when the provider answered, which a served snapshot can
+ * predate.
+ */
+export async function claudeQuotaObservation(
+  account: Pick<ClaudeAccount, "id" | "home">,
+  now: number,
+  options: QuotaProbeOptions & { authStatus?: (home: string) => Promise<{ loggedIn: boolean; indeterminate?: boolean }> } = {},
+): Promise<QuotaObservation> {
+  const status = options.authStatus ?? realClaudeLoginPorts.status;
+  const auth = await status(account.home).catch(() => ({ loggedIn: false, indeterminate: true }));
+  /* An indeterminate status read observed nothing about the account —
+     throwing routes it to the carry-forward path instead of recording a
+     sign-out that never happened. */
+  if (auth.indeterminate) throw new Error("quota-auth-indeterminate");
+  if (!auth.loggedIn) {
+    return {
+      engine: "claude",
+      accountId: account.id,
+      authenticated: false,
+      authCheckedAt: now,
+      limits: null,
+      provenance: { source: "unavailable", reason: "live authentication check failed", staleSince: null },
+      observedAt: now,
+    };
+  }
+  const limits = await readClaudeAccountLimits(account, { now: () => now, force: options.force });
+  return {
+    engine: "claude",
+    accountId: account.id,
+    authenticated: true,
+    authCheckedAt: now,
+    limits: limits.data,
+    provenance: { source: limits.provenance.source, reason: limits.provenance.reason, staleSince: limits.provenance.staleSince },
+    observedAt: limits.observedAt ?? now,
+  };
+}
+
 const productionProbe: QuotaProbePort = {
   list: (engine) => engine === "claude" ? listClaudeAccounts() : listCodexAccounts(),
   active: (engine) => engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId(),
-  async probe(engine, account, now) {
-    if (engine === "claude") {
-      const candidate = account as ClaudeAccount;
-      const auth = await realClaudeLoginPorts.status(candidate.home).catch(() => ({ loggedIn: false, indeterminate: true }));
-      /* An indeterminate status read observed nothing about the account —
-         throwing routes it to the carry-forward path instead of recording a
-         sign-out that never happened. */
-      if (auth.indeterminate) throw new Error("quota-auth-indeterminate");
-      const limits = auth.loggedIn
-        ? await fetchClaudeLimits(path.join(candidate.home, ".credentials.json"))
-        : { data: null, source: "unavailable" as const, reason: "live authentication check failed" };
-      return {
-        engine,
-        accountId: candidate.id,
-        authenticated: auth.loggedIn,
-        authCheckedAt: now,
-        limits: limits.data,
-        provenance: { source: limits.source, reason: limits.reason, staleSince: null },
-        observedAt: now,
-      };
-    }
+  async probe(engine, account, now, options) {
+    if (engine === "claude") return await claudeQuotaObservation(account as ClaudeAccount, now, options);
     const candidate = account as CodexAccount;
     try {
       const probe = await managedCodexRuntime().probeQuota(candidate);
@@ -200,6 +228,14 @@ export class QuotaController {
         if (observation.authenticated && !observation.limits) {
           return this.carryForward(engine, account.id, observation.provenance.reason ?? "quota-probe-empty", now);
         }
+        /* The freshest snapshot wins (issue #1849): numbers the provider
+           answered earlier than the ones already recorded — a snapshot served
+           from the shared cache under a backoff — never replace them, so an
+           older reading with no tiers cannot hide a newer one with a tier. */
+        const previous = this.registry.readOnlySnapshot().quotaObservations[engine][account.id];
+        if (observation.authenticated && previous?.limits && Date.parse(previous.observedAt) > observation.observedAt) {
+          return this.carryForward(engine, account.id, observation.provenance.reason ?? "quota-probe-older", now);
+        }
         return observation;
       } catch (error) {
         const reason = error instanceof Error && error.message === "quota-probe-timeout" ? "quota-probe-timeout" : "quota-probe-failed";
@@ -218,6 +254,14 @@ export class QuotaController {
         reasonCode: observation.provenance.reason,
       });
     });
+    /* Whatever the registry now holds for a Claude account is offered to the
+       snapshot `/api/limits` answers from; it lands only where it is newer, so
+       the footer never shows an older reading than the accounts dialog. */
+    if (engine === "claude") {
+      for (const observation of observations) {
+        if (observation.limits) adoptClaudeLimitsSnapshot(observation.accountId, observation.limits, observation.observedAt, now);
+      }
+    }
     const recorded: DurableQuotaObservation[] = observations.map((observation) => durableQuotaObservation({ ...observation, engine }, this.bootId));
     this.registry.recordQuotaEvaluation({
       engine,
