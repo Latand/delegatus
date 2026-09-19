@@ -137,6 +137,7 @@ export const en = {
   "dash.viewScheme": "scheme",
   "dash.viewList": "Conversations",
   "dash.create": "Create",
+  "dash.searchShort": "Search",
   "dash.more": "More actions",
   "dash.viewSchemeMenu": "View: scheme",
   "dash.viewListMenu": "View: conversations",

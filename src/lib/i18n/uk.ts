@@ -129,6 +129,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "dash.viewScheme": "схема",
   "dash.viewList": "Розмови",
   "dash.create": "Створити",
+  "dash.searchShort": "Пошук",
   "dash.more": "Більше дій",
   "dash.viewSchemeMenu": "Вигляд: схема",
   "dash.viewListMenu": "Вигляд: розмови",

@@ -1362,6 +1362,7 @@ async function headerMain(): Promise<void> {
       must(/[1-9]/.test(reading.islandText), `${tag}: the island reads «${reading.islandText}», nothing waiting`);
       must(reading.toast === null || (reading.bar !== null && reading.toast.y >= reading.bar.y + reading.bar.h + 4), `${tag}: the toast starts at y ${reading.toast?.y}, on the bar`);
       must(reading.hidden !== null && /[1-9]/.test(reading.hidden), `${tag}: Hidden reads «${reading.hidden}»`);
+      must(wide || (reading.hidden !== null && /^\d+$/.test(reading.hidden)), `${tag}: narrow, Hidden reads «${reading.hidden}», not its icon and count`);
       must(reading.pressedFill !== null && reading.pressedFill !== reading.otherFill, `${tag}: the pressed view segment paints ${reading.pressedFill}, the other ${reading.otherFill}`);
       for (const [selector, ok] of Object.entries(reading.hit)) must(ok, `${tag}: ${selector} is covered at its centre`);
       must(reading.plus.length > 0 && reading.plus.every((item) => item.svg && item.iconColor === item.textColor), `${tag}: a + is not an icon in its control's colour`);
@@ -1423,6 +1424,8 @@ async function headerMain(): Promise<void> {
 
       if (!wide) {
         await page.click("[data-bar-create]");
+        const createIcons = await page.evaluate(() => [...document.querySelectorAll('.menu[role="menu"] [role="menuitem"]')].every((item) => item.querySelector("svg") !== null));
+        must(createIcons, `${tag}: a + menu row has no icon`);
         const create = await page.evaluate(() => [...document.querySelectorAll('.menu[role="menu"] [role="menuitem"]')].map((item) => item.textContent?.trim() ?? ""));
         await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-create.png`), clip: { x: 0, y: 0, width, height: 200 } });
         must(create.length === 2, `${tag}: the + menu offers ${create.length} rows`);
@@ -1438,6 +1441,17 @@ async function headerMain(): Promise<void> {
       const list = await page.evaluate(readHeader);
       await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-conversations.png`), clip: { x: 0, y: 0, width, height: 120 } });
       must(list.bars === 1 && list.bar !== null && near(list.bar.h, 48, 0.5), `${tag}: the Conversations bar is ${list.bar?.h}px tall`);
+      /* Narrow, only the project name may truncate on Conversations: a short search label, the live count alone. */
+      const listTexts = await page.evaluate(() => {
+        const truncated = (element: Element | null) => Boolean(element && element.scrollWidth > element.clientWidth + 0.5);
+        const find = document.querySelector('[data-project-bar] [data-testid="dash-search"] span');
+        const status = document.querySelector('[data-project-bar] [data-bar-group="status"]');
+        return { find: find?.textContent ?? "", findTruncated: truncated(find), status: status?.textContent ?? "", statusTruncated: truncated(status) };
+      });
+      if (!wide) {
+        must(!listTexts.findTruncated && !listTexts.statusTruncated, `${tag}: Conversations truncates ${JSON.stringify(listTexts)}`);
+        must(!/\(\/\)/.test(listTexts.find), `${tag}: the narrow search label is the full «${listTexts.find}»`);
+      }
       must(reading.switchRect !== null && list.switchRect !== null && near(reading.switchRect.x, list.switchRect.x, 0.5), `${tag}: the view switch moves from x ${reading.switchRect?.x} to ${list.switchRect?.x}`);
       const listClearance = lastControlClear(`${tag} conversations`, list, must);
       await page.click('button[data-view-tab="kanban"]');
@@ -1468,7 +1482,7 @@ async function headerMain(): Promise<void> {
       must((taskPanel?.hit.length ?? 0) >= 3, `${tag} tasks open: the panel header shows ${taskPanel?.hit.length ?? 0} controls`);
       for (const [selector, ok] of Object.entries(open.hit)) must(ok, `${tag} tasks open: ${selector} is covered at its centre`);
       await page.click("[data-task-panel-toggle]");
-      report[tag] = { ...reading, gaps, islandClearance, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, islandClearance: listClearance }, tasksOpen: { bar: open.bar, wrap: open.wrap, overflow: open.overflow, islandClearance: openClearance, toast: open.toast, panelUnderToast: underToast, panel: taskPanel } };
+      report[tag] = { ...reading, gaps, islandClearance, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, name: list.name, find: listTexts, islandClearance: listClearance }, tasksOpen: { bar: open.bar, wrap: open.wrap, overflow: open.overflow, islandClearance: openClearance, toast: open.toast, panelUnderToast: underToast, panel: taskPanel } };
       await context.close();
 
       /* The quiet project's ⋯: nothing runs there, so Archive and Delete show beside the rest. */

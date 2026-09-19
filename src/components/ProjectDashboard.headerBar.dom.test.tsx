@@ -568,3 +568,54 @@ test("uk: the switch and the working count read in Ukrainian", () => {
   expect("kanban.summaryNeeds" in uk || "kanban.summaryNeeds" in en).toBe(false);
   expect("kanban.summaryTasks" in uk || "kanban.summaryTasks" in en).toBe(false);
 });
+
+test("narrow, Hidden is its icon and count, the shape Tasks has; wide, it keeps its label", async () => {
+  barWidth = 1032;
+  const narrow = mount();
+  expect(await waitFor(() => narrow.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  const pill = bar(narrow).querySelector("[data-hidden-pill]") as HTMLElement;
+  expect(pill.querySelector("svg")).not.toBeNull();
+  expect(text(pill)).not.toContain(en["kanban.hidden"]);
+  expect(pill.getAttribute("title")).toBe(pill.getAttribute("aria-label"));
+  expect(pill.querySelector(".count")).not.toBeNull();
+  for (const root of roots) flushSync(() => root.unmount());
+  roots = [];
+  dom.document.body.replaceChildren();
+
+  barWidth = 2292;
+  const wide = mount();
+  expect(await waitFor(() => wide.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  expect(text(bar(wide).querySelector("[data-hidden-pill]"))).toContain(en["kanban.hidden"]);
+});
+
+test("narrow, the create menu's two rows carry icons, like the ⋯ rows", async () => {
+  barWidth = 1032;
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  click(bar(host).querySelector("[data-bar-create]"));
+  const items = Array.from(host.querySelectorAll('.menu[role="menu"] [role="menuitem"]'));
+  expect(items).toHaveLength(2);
+  for (const item of items) expect(item.querySelector("svg.ico")).not.toBeNull();
+});
+
+test("narrow Conversations: a short search label and only the live count, so only the name truncates", async () => {
+  barWidth = 1032;
+  const host = mount([running(), betaOf()]);
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  click(host.querySelector('button[data-view-tab="list"]'));
+  expect(await waitFor(() => host.querySelector("[data-project-bar]") !== null)).toBe(true);
+  await settle();
+  const find = host.querySelector('[data-project-bar] [data-testid="dash-search"]') as HTMLElement;
+  expect(text(find).trim()).toBe(en["dash.searchShort"]);
+  /* The full wording and its «/» hint stay as the name and the tooltip. */
+  expect(find.getAttribute("aria-label")).toBe(en["search.open"]);
+  expect(find.getAttribute("title")).toBe(en["search.open"]);
+  const status = text(host.querySelector('[data-project-bar] [data-bar-group="status"]'));
+  expect(status).toMatch(/running/);
+  expect(status).not.toMatch(/tree/);
+  expect(uk["dash.searchShort"]).toBe("Пошук");
+});

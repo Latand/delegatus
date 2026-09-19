@@ -1,5 +1,6 @@
 "use client";
 
+import { ListPlus, MessageSquarePlus } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
@@ -1079,10 +1080,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const open = menu.open;
     if (!open) return null;
     if (open.value.kind === "create") {
-      const items: KanbanMenuItem[] = [{ type: "item", label: t("dash.newTask"), onSelect: () => openNewTask() }];
+      const items: KanbanMenuItem[] = [{ type: "item", label: t("dash.newTask"), icon: <ListPlus className="ico" aria-hidden />, onSelect: () => openNewTask() }];
       if (props.onNewAgent) {
         const onNewAgent = props.onNewAgent;
-        items.push({ type: "item", label: t("dash.newConvo"), disabled: !loaded, onSelect: () => onNewAgent() });
+        items.push({ type: "item", label: t("dash.newConvo"), icon: <MessageSquarePlus className="ico" aria-hidden />, disabled: !loaded, onSelect: () => onNewAgent() });
       }
       return { label: t("dash.create"), items };
     }
@@ -2181,10 +2182,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
             data-count={hiddenCount}
             data-hidden-pill=""
             aria-label={t("kanban.hiddenAria", { count: hiddenCount })}
+            title={t("kanban.hiddenAria", { count: hiddenCount })}
             onClick={(event) => menu.setOpen({ anchor: event.currentTarget, value: { kind: "tray" } })}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18" /><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 4.2A10.9 10.9 0 0 1 12 4c6 0 10 8 10 8a17.7 17.7 0 0 1-3.2 4.1" /><path d="M6.6 6.6C3.9 8.5 2 12 2 12s4 8 10 8a10.9 10.9 0 0 0 4.4-.9" /></svg>
-            {t("kanban.hidden")} <span className="count num">{hiddenCount}</span>
+            {/* Narrow, icon and count, the shape Tasks has (#1801). */}
+            {barWide ? <>{t("kanban.hidden")} </> : null}<span className="count num">{hiddenCount}</span>
           </button>
           {viewSwitch ? <span className="bar-slot view-switch">{viewSwitch}</span> : null}
         </div>

@@ -454,6 +454,7 @@
   animation: kb-menu-in var(--motion-base) var(--ease-standard);
 }
 @keyframes kb-menu-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+.kb .menu .ico { width: 15px; height: 15px; flex-shrink: 0; }
 .kb .menu [role="menuitem"], .kb .menu [role="menuitemradio"] {
   display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 0 10px; border-radius: var(--radius-control);
   font-size: var(--text-ui); text-align: left; color: var(--color-primary);

@@ -22,7 +22,7 @@ Prior work: `search_transcripts` ("board header toolbar top bar redesign", "kanb
 | 2 | what is happening | `● N working` (green dot), or the existing red `catalog.unreachable` / `kanban.filesFailed` text | plain text |
 | — | one elastic spacer | | the only empty stretch in the bar |
 | 3 | find | task search field, 240 px, grows to 420 px max; min 160 px | |
-| 4 | view | `Hidden N` (hidden at 0, as today) · board / conversations switch | |
+| 4 | view | `Hidden N` (hidden at 0, as today) · board / conversations switch | `Hidden` is icon + count below 1700 px, the shape `Tasks` has |
 | 5 | create | `+ Task`, `+ Agent` | one `+` button with a two-row menu below 1700 px; on Conversations the same group is drawn invisible and inert, so groups 4–7 keep their x when the view changes |
 | 6 | panels | `Orchestrator` toggle · `Tasks N` toggle | icon only (+ count) below 1700 px; the Tasks panel opens under the bar, which spans it |
 | 7 | more | `⋯` menu | §4 |
@@ -48,7 +48,7 @@ Groups, top to bottom, each drawn only when it has a row, with one rule between 
 3. Mute sound / Sound levels (existing labels).
 4. Archive project or Restore from archive · Delete project (danger row, existing confirm). Both stand down while anything in the project runs, as before; the group then draws nothing.
 
-**Undo and Redo are gone** from the bar, this menu, the phone's menu rows and the Ctrl+Z / Ctrl+Shift+Z shortcut (operator amendment on #1801). They only reversed conversation-card closes; a proper kanban undo/redo is #1856, which can start from the kept history model in `src/lib/board/history.ts`.
+**Undo and Redo are gone** from the bar, this menu, the phone's menu rows and the Ctrl+Z / Ctrl+Shift+Z shortcut (operator amendment on #1801). They only reversed conversation-card closes; a proper kanban undo/redo is #1856, which builds its own history; the close-only model in `src/lib/board/history.ts` had no importer left and is deleted.
 
 Trigger label: More actions — Більше дій (`mobile2.bar.more` wording reused under a desktop key).
 
@@ -61,6 +61,7 @@ Trigger label: More actions — Більше дій (`mobile2.bar.more` wording 
 | `dash.viewList` | `Conversations` | `Розмови` |
 | new `dash.create` (narrow `+` button aria/tooltip) | `Create` | `Створити` |
 | new `dash.more` | `More actions` | `Більше дій` |
+| new `dash.searchShort` (narrow Conversations find label; the full wording stays as name and tooltip) | `Search` | `Пошук` |
 
 Deleted keys once unused: `kanban.summaryNeeds`, `kanban.summaryTasks`, and the seven `board.undo*` / `board.redo*` / `board.historyGroup` strings. Unchanged: `Find a task` / `Знайти задачу`, `Hidden` / `Приховані`, `Task` / `Задача`, `Agent` / `Агент`, `Orchestrator` / `Оркестратор`, `Tasks` / `Задачі`.
 
@@ -121,3 +122,13 @@ The render critique of the first fix round found two states the 6-letter fixture
 
 - **A real-length name ran the row under the island at 1280.** The lead group's automatic minimum is its whole unwrapped name, so it never shrank and the row ran 25 px (en) to 60 px (uk) past the reserve; in uk `⋯` lay fully under the island. Narrow, the lead now has an explicit 48 px floor (`.kb .bar[data-bar-tier="narrow"] .bar-lead`, `min-w-12` on the other leaves' bar), so after the search reaches 160 px the name truncates down to that floor. On Conversations the branches/trees line also truncates (64 px floor). The capture now uses a 21-character project name and measures the last control's right edge against the island's left edge (16 px clear).
 - **The Tasks panel pushed the bar back to two rows.** The panel sat beside the board, so the bar lost 280 px, the board's tabbed mode wrapped it, and the 236 px reserve guarded nothing because the island sat over the panel's own header. The Board now draws the panel itself, under its bar (`KanbanBoard`'s `aside` slot): the bar spans the board and the panel, keeps one 48 px row at every width, and the island lands on the bar, clear of the panel's scope switch and close button. The columns' mode follows the width the panel leaves them; the bar wraps only when the bar itself is under 768 px. Conversations already drew its bar across the panel's row.
+
+## Build correction: in the narrow tier only the name truncates
+
+The fourth critique read 1280 px with the long project name. On Conversations three texts truncated side by side (name, status, message-search label), and on the Board in uk the name kept 68 px while `Hidden` kept its full 118 px label. Below 1700 px of bar:
+
+- `Hidden` is its icon and count, like `Tasks`; the full phrase stays as its accessible name and tooltip.
+- On Conversations the find slot reads `Search` / `Пошук`; "Search your messages (/)" stays as its accessible name and tooltip. The status keeps only the live count ("N branches running"); "· N trees" and the quiet line are dropped from the bar, since the list under it shows them.
+- The narrow `+` menu's two rows carry icons (new task, new conversation), like the `⋯` rows.
+
+The attention toast, the island's own dismissable card, still floats over the Tasks panel's header while it shows. It lives in the fenced attention code and is left as a follow-up.

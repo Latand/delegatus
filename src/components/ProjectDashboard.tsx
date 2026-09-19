@@ -1569,6 +1569,9 @@ function ProjectDashboardView({
   };
 
   const statusBits: string[] = [];
+  /* Narrow, the bar keeps only the live count: «· N trees» and the quiet line are what the
+     Conversations list below already shows, and the name is the one text that truncates (#1801). */
+  const narrowStatus = liveCount ? t("dash.branchesLive", { count: liveCount }) : null;
   if (liveCount) {
     statusBits.push(
       `${t("dash.branchesLive", { count: liveCount })} · ${t("dash.trees", { count: treeGroups })}`,
@@ -2060,17 +2063,17 @@ function ProjectDashboardView({
       {isMobile || (boardReady && kanbanLeaf) ? null : (
         <DashboardBar
           lead={barLead}
-          status={
+          status={(wide) => (
             /* Issue #696: the header borrows the affirmative idle line only
                when the catalog is actually known. Under a failing fetch it
                names the failure, exactly as the overview board does. */
             <span data-bar-group="status" className={`min-w-16 shrink truncate whitespace-nowrap text-[12px] ${catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
               {catalogFailures > 0
                 ? t("catalog.unreachable")
-                : statusBits.length ? statusBits.join(" · ") : t("common.nothingRunning")}
+                : (wide ? (statusBits.length ? statusBits.join(" · ") : null) : narrowStatus) ?? (statusBits[0] ?? t("common.nothingRunning"))}
             </span>
-          }
-          find={onOpenSearch ? (
+          )}
+          find={(wide) => onOpenSearch ? (
             <button
               type="button"
               data-testid="dash-search"
@@ -2082,7 +2085,7 @@ function ProjectDashboardView({
               className="inline-flex h-8 min-w-[160px] max-w-[420px] flex-[1_8_240px] items-center gap-2 rounded-control border border-border bg-sunken px-2.5 text-left text-[12px] text-muted hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <Search className="h-[15px] w-[15px] shrink-0" aria-hidden />
-              <span className="min-w-0 truncate">{t("search.open")}</span>
+              <span className="min-w-0 truncate">{wide ? t("search.open") : t("dash.searchShort")}</span>
             </button>
           ) : null}
           view={(wide) => (boardReady && listAvailable

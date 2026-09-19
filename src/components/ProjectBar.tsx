@@ -235,8 +235,8 @@ export function BarMenuGroup({ name, children }: { name: string; children: React
  */
 export function DashboardBar({ lead, status, find, view, create, trail }: {
   lead: (wide: boolean) => ReactNode;
-  status: ReactNode;
-  find: ReactNode;
+  status: (wide: boolean) => ReactNode;
+  find: (wide: boolean) => ReactNode;
   view: (wide: boolean) => ReactNode;
   create: (wide: boolean) => ReactNode;
   trail: (wide: boolean) => ReactNode;
@@ -251,9 +251,9 @@ export function DashboardBar({ lead, status, find, view, create, trail }: {
       className="flex h-12 shrink-0 items-center gap-4 border-b border-border bg-card pl-4 pr-[236px]"
     >
       <div className={`flex shrink items-center gap-2 ${wide ? "" : "min-w-12"}`} data-bar-group="where">{lead(wide)}</div>
-      {status}
+      {status(wide)}
       <span aria-hidden className="min-w-0 flex-1" />
-      {find}
+      {find(wide)}
       <div className="flex shrink-0 items-center gap-2 empty:hidden" data-bar-group="view">{view(wide)}</div>
       {create(wide)}
       <div className="flex shrink-0 items-center gap-4" data-bar-group="trail">{trail(wide)}</div>
