@@ -2,6 +2,7 @@ import { currentConversationFile } from "@/lib/accounts/identity";
 import type { MessageKey } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
+import type { SeatRefs } from "@/lib/tasks/groupHide";
 import type { FileEntry } from "@/lib/types";
 
 import type { StripSurface } from "../agentCapabilities";
@@ -41,6 +42,24 @@ export interface OrchestratorSeatStatus {
   /** Whether Claude resolves an operator-authored Viewer MCP definition for
       the project cwd. Structured spawns can supply their own definition. */
   viewerMcpRegistered: boolean;
+  /** Seats that held the project before this one, newest first (#1841). Absent
+      from an answer written before the route carried them. */
+  previous?: PreviousSeat[];
+  /** The task that keeps the current seat's notes, when one names it. */
+  currentTaskId?: string | null;
+}
+
+/** A seat that held the project and was revoked, as the route reports it. */
+export interface PreviousSeat {
+  conversationId: string;
+  path: string | null;
+  title: string | null;
+  engine: string | null;
+  /** When it took the project; null on a revocation recorded before that was kept. */
+  heldFrom: string | null;
+  heldTo: string;
+  /** The task that keeps its notes. */
+  taskId: string | null;
 }
 
 /** One terminalized designation attempt, as the panel reads it. */
@@ -61,6 +80,8 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     lastFailure?: unknown;
     exists?: unknown;
     viewerMcpRegistered?: unknown;
+    previous?: unknown;
+    currentTaskId?: unknown;
   } | null;
   return {
     seat: seatOf(raw?.seat),
@@ -68,6 +89,53 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     lastFailure: failureOf(raw?.lastFailure),
     exists: raw?.exists !== false,
     viewerMcpRegistered: raw?.viewerMcpRegistered === true,
+    previous: Array.isArray(raw?.previous) ? raw.previous.flatMap((entry) => previousSeatOf(entry) ?? []) : [],
+    currentTaskId: typeof raw?.currentTaskId === "string" && raw.currentTaskId ? raw.currentTaskId : null,
+  };
+}
+
+const text = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
+
+function previousSeatOf(value: unknown): PreviousSeat | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const conversationId = text(row.conversationId);
+  const heldTo = text(row.heldTo);
+  if (!conversationId || !heldTo) return null;
+  return {
+    conversationId,
+    path: text(row.path),
+    title: text(row.title),
+    engine: text(row.engine),
+    heldFrom: text(row.heldFrom),
+    heldTo,
+    taskId: text(row.taskId),
+  };
+}
+
+/**
+ * Every conversation the project's seat record names (#1841): the active seat,
+ * a pending intent, and the seats it revoked. The board draws none of them as
+ * a task band. Null while the read has not answered, so nothing is hidden on a
+ * guess.
+ */
+export function seatRefsOf(status: OrchestratorSeatStatus | null, failed = false): SeatRefs | null {
+  if (!status) return null;
+  const seats = [status.seat, status.pending];
+  const current = {
+    conversationIds: seats.flatMap((seat) => (seat?.conversationId ? [seat.conversationId] : [])),
+    paths: seats.flatMap((seat) => (seat?.path ? [seat.path] : [])),
+  };
+  /* A failed re-read keeps the last good answer, which may be stale: the
+     bands then draw as they did before, seat included. */
+  if (failed) return current;
+  const previous = status.previous ?? [];
+  return {
+    ...current,
+    previous: {
+      conversationIds: previous.map((seat) => seat.conversationId),
+      paths: previous.flatMap((seat) => (seat.path ? [seat.path] : [])),
+    },
   };
 }
 

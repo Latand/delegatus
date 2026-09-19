@@ -6,7 +6,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { viewerMcpRegistered } from "@/lib/agent/spawnPolicy";
 import { executeOrchestratorSeatRequest } from "@/lib/orchestrator/seatCommand";
-import { orchestratorSeatFor, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { orchestratorSeatFor, previousOrchestratorSeats, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat } from "@/lib/orchestrator/seats";
+import { loadTasks } from "@/lib/tasks/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -31,6 +32,16 @@ interface SeatStatus {
       resume or a replacement from the same draft surface. */
   exists: boolean;
   viewerMcpRegistered: boolean;
+  /** The seats that held the project before this one, newest first (#1841),
+      each with the task that keeps its notes. */
+  previous: PreviousSeatRow[];
+  /** The task that keeps the current seat's notes, when one names it. */
+  currentTaskId: string | null;
+}
+
+interface PreviousSeatRow extends PreviousOrchestratorSeat {
+  title: string | null;
+  taskId: string | null;
 }
 
 interface SeatFailure {
@@ -49,6 +60,17 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | A
   const home = process.env.HOME?.trim() || os.homedir();
   const { active, pending, history } = orchestratorSeatFor(project);
   const failed = [...history].reverse().find((entry) => entry.seat.intent.error !== null);
+  const retired = previousOrchestratorSeats(project);
+  /* The task store is read only when there is a seat to find notes for. A
+     failed read leaves the rows without notes; the seat answer still stands. */
+  let tasks: ReturnType<typeof loadTasks> = [];
+  if (retired.length || active) {
+    try { tasks = loadTasks(); } catch { tasks = []; }
+  }
+  const previous: PreviousSeatRow[] = retired.map((seat) => {
+    const task = seatTaskOf(tasks, project, seat);
+    return { ...seat, title: task?.title ?? null, taskId: task?.taskId ?? null };
+  });
   return NextResponse.json({
     seat: active,
     pending,
@@ -64,6 +86,8 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | A
       : null,
     exists: active !== null && (active.path === null || fs.existsSync(active.path)),
     viewerMcpRegistered: viewerMcpRegistered(home, cwd),
+    previous,
+    currentTaskId: active ? seatTaskOf(tasks, project, active)?.taskId ?? null : null,
   });
 }
 

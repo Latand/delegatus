@@ -6,6 +6,7 @@ import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { IdentityWavePathRekey } from "@/lib/agent/identityWaveMigration";
+import type { BoardTask } from "@/lib/tasks/types";
 
 /* Operator-selected PER-PROJECT orchestrator seats.
  *
@@ -143,6 +144,24 @@ export interface OrchestratorRevocation {
   /** Who triggered the rotation that ended this seat (#1402), copied from the
       successor's intent so the lineage entry answers "who did this" on its own. */
   triggeredBy?: OrchestratorSeatTrigger | null;
+  /** When the ended seat took the project (#1841), copied from the seat as the
+      revocation is written, so the board can say how long it held it. Absent
+      on revocations written before this existed. */
+  activatedAt?: string | null;
+  /** The ended seat's transcript path and engine, copied the same way. */
+  path?: string | null;
+  engine?: string | null;
+}
+
+/** The span fields of a stored revocation (#1841), carried only when it has
+    them, so a revocation written before they existed reads back unchanged. */
+function seatSpanOf(revocation: Partial<OrchestratorRevocation>): Pick<OrchestratorRevocation, "activatedAt" | "path" | "engine"> {
+  const span: Pick<OrchestratorRevocation, "activatedAt" | "path" | "engine"> = {};
+  for (const key of ["activatedAt", "path", "engine"] as const) {
+    const value = revocation[key];
+    if (typeof value === "string" && value) span[key] = value;
+  }
+  return span;
 }
 
 interface OrchestratorSeatFile {
@@ -320,6 +339,7 @@ function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
           revokedAt: revocation.revokedAt,
           successorConversationId: typeof revocation.successorConversationId === "string" ? revocation.successorConversationId : null,
           triggeredBy: normalizeSeatTrigger(revocation.triggeredBy),
+          ...seatSpanOf(revocation),
         });
       }
     }
@@ -449,6 +469,7 @@ function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvide
       /* Carried through the migration: this reader's whole point is that a
          rewrite publishes everything it read. */
       triggeredBy: normalizeSeatTrigger(revocation.triggeredBy),
+      ...seatSpanOf(revocation),
     });
   }
   for (const candidate of arrayEvidence(raw.history, "history")) {
@@ -486,6 +507,78 @@ export function orchestratorSeatFor(project: string): {
     pending: file.pending[canonical] ?? null,
     history: file.history.filter((entry) => entry.seat.project === canonical),
   };
+}
+
+/** How many previous seats a project's status read carries. */
+export const PREVIOUS_SEATS_LIMIT = 20;
+
+/** A seat that held the project and was revoked, as the board lists it (#1841). */
+export interface PreviousOrchestratorSeat {
+  conversationId: string;
+  path: string | null;
+  engine: string | null;
+  /** When it took the project; null on a revocation written before that was
+      recorded. */
+  heldFrom: string | null;
+  /** When it was revoked. */
+  heldTo: string;
+}
+
+/**
+ * The seats that held a project before its current one, newest revocation
+ * first, at most `limit`. A conversation revoked more than once (a stillborn
+ * successor's rollback restores it, a later rotation ends it again) is listed
+ * once, at its newest revocation, and the conversation holding the seat now is
+ * never listed.
+ */
+export function previousOrchestratorSeats(project: string, limit = PREVIOUS_SEATS_LIMIT): PreviousOrchestratorSeat[] {
+  const file = readOrchestratorSeatFile();
+  const canonical = canonicalOrchestratorProject(project);
+  const current = file.seats[canonical]?.conversationId ?? null;
+  const seen = new Set<string>();
+  const out: PreviousOrchestratorSeat[] = [];
+  const ordered = file.revocations
+    .map((revocation, index) => ({ revocation, index }))
+    .filter(({ revocation }) => revocation.project === canonical)
+    .sort((a, b) => b.revocation.revokedAt.localeCompare(a.revocation.revokedAt) || b.index - a.index);
+  for (const { revocation } of ordered) {
+    if (out.length >= limit) break;
+    if (revocation.conversationId === current || seen.has(revocation.conversationId)) continue;
+    seen.add(revocation.conversationId);
+    out.push({
+      conversationId: revocation.conversationId,
+      path: revocation.path ?? null,
+      engine: revocation.engine ?? null,
+      heldFrom: revocation.activatedAt ?? null,
+      heldTo: revocation.revokedAt,
+    });
+  }
+  return out;
+}
+
+/**
+ * The task a seat conversation is assigned to, by conversation id or path: the
+ * one seat launch minted, where the seat keeps its notes (`details`). The
+ * newest such task wins when more than one names it. Pure: the caller hands in
+ * the project's tasks.
+ */
+export function seatTaskOf(
+  tasks: readonly Pick<BoardTask, "id" | "project" | "text" | "updatedAt" | "assignments" | "origin">[],
+  project: string,
+  seat: { conversationId: string | null; path: string | null },
+): { taskId: string; title: string | null } | null {
+  const canonical = canonicalOrchestratorProject(project);
+  let best: (typeof tasks)[number] | null = null;
+  for (const task of tasks) {
+    if (task.project !== project && task.project !== canonical && canonicalOrchestratorProject(task.project) !== canonical) continue;
+    const names = task.assignments.some((assignment) =>
+      (seat.conversationId !== null && assignment.conversationId === seat.conversationId)
+      || (seat.path !== null && assignment.path === seat.path));
+    if (names && (!best || task.updatedAt > best.updatedAt)) best = task;
+  }
+  if (!best) return null;
+  const title = best.origin?.refinement === "pending" ? "" : best.text.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  return { taskId: best.id, title: title || null };
 }
 
 export type BeginSeatIntentResult =
@@ -633,6 +726,9 @@ export function completeOrchestratorSeatIntent(input: {
            its request returned — an accepted spawn activates from the
            reconciler, which has no request to ask. */
         triggeredBy: pending.triggeredBy ?? null,
+        activatedAt: active.activatedAt,
+        path: active.path,
+        engine: active.engine ?? null,
       };
       file.revocations.push(revoked);
     }
@@ -825,6 +921,9 @@ export function abandonStillbornOrchestratorSeat(input: {
       revokedAt: now,
       successorConversationId: restored?.conversationId ?? null,
       triggeredBy: active.triggeredBy ?? null,
+      activatedAt: active.activatedAt,
+      path: active.path,
+      engine: active.engine ?? null,
     });
     delete file.rollbacks[project];
     /* WHY the project ends undesignated, on the row the operator reads. A bare

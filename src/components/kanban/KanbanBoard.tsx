@@ -22,6 +22,7 @@ import { updateTask } from "@/components/tasks/taskApi";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { useOrchestratorSeat, type OrchestratorSeatRead } from "@/components/orchestrator/useOrchestratorSeat";
+import { seatRefsOf } from "@/components/orchestrator/seatState";
 import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
@@ -394,18 +395,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
      the page's one read of the seat: the orchestrator panel above the columns
      is handed the same read and polls nothing of its own. */
   const seatRead = useOrchestratorSeat(props.seatRefs === undefined ? project : null, props.projectCwd);
+  /* Every conversation the seat record names leaves the bands (#1841). A
+     failed read draws them as before, current seat included: hiding work on
+     a record the board could not read would be worse than a seat card. */
+  const ownSeatRefs = props.seatRefs === undefined ? seatRefsOf(seatRead.status, seatRead.failed) : null;
   const seatKey = props.seatRefs !== undefined
     ? (props.seatRefs ? JSON.stringify(props.seatRefs) : "")
-    : (seatRead.status ? JSON.stringify([seatRead.status.seat, seatRead.status.pending].map((seat) => [seat?.conversationId ?? null, seat?.path ?? null])) : "");
+    : (ownSeatRefs ? JSON.stringify(ownSeatRefs) : "");
   const seatRefs = useMemo<SeatRefs | null>(() => {
     if (props.seatRefs !== undefined) return props.seatRefs;
-    const status = seatRead.status;
-    if (!status) return null;
-    const seats = [status.seat, status.pending];
-    return {
-      conversationIds: seats.flatMap((seat) => (seat?.conversationId ? [seat.conversationId] : [])),
-      paths: seats.flatMap((seat) => (seat?.path ? [seat.path] : [])),
-    };
+    return ownSeatRefs;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by what the seat names
   }, [seatKey]);
   /* The model's own clock moves in 15 s steps: it only phrases ages and

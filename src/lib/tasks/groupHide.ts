@@ -40,6 +40,44 @@ export type GroupHideState =
 export interface SeatRefs {
   conversationIds: readonly string[];
   paths: readonly string[];
+  /** The seats the project revoked (#1841). Present means the seat record was
+      read whole, and every conversation it names, current or previous, is kept
+      out of the task bands. Absent (a failed read, a caller that knows only
+      the current seat) draws the bands as they were, seat included. */
+  previous?: {
+    conversationIds: readonly string[];
+    paths: readonly string[];
+  };
+}
+
+/**
+ * Whether a conversation is one the project's seat record names, current,
+ * pending or previous. False whenever `seat.previous` is absent: an unreadable
+ * record hides nothing.
+ */
+export function isSeatConversation(seat: SeatRefs | null | undefined, ref: { conversationId?: string | null; path?: string | null }): boolean {
+  if (!seat?.previous) return false;
+  const { conversationId, path } = ref;
+  if (conversationId && (seat.conversationIds.includes(conversationId) || seat.previous.conversationIds.includes(conversationId))) return true;
+  return Boolean(path && (seat.paths.includes(path) || seat.previous.paths.includes(path)));
+}
+
+/**
+ * A task that exists only because a seat launch minted it (#1841): every live
+ * assignment names a seat conversation and no pipeline runs under it. The
+ * board draws no band for it and the Tasks panel lists no row; the task stays
+ * in the store, where the seat keeps its notes. A task that also carries real
+ * work is not seat-only and keeps its card.
+ */
+export function seatOnlyTask(
+  task: Pick<BoardTask, "id" | "assignments">,
+  seat: SeatRefs | null | undefined,
+  pipelines: readonly Pick<Pipeline, "taskIds">[] = [],
+): boolean {
+  if (!seat?.previous) return false;
+  const live = task.assignments.filter((assignment) => assignment.state !== "failed");
+  if (!live.length || !live.every((assignment) => isSeatConversation(seat, assignment))) return false;
+  return !pipelines.some((pipeline) => pipeline.taskIds.includes(task.id));
 }
 
 const parse = (stamp: string | null | undefined): number => (stamp ? Date.parse(stamp) : Number.NaN);

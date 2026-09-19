@@ -23,11 +23,12 @@ import type { Workflow } from "@/lib/workflows/types";
 
 import { createFocusEdgeGate } from "./focusRequestEdge";
 import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
-import { deriveOrchestratorPanelState, resolveSeatFile } from "./orchestrator/seatState";
+import { deriveOrchestratorPanelState, resolveSeatFile, seatRefsOf } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
 import { DesktopConversations } from "./DesktopConversations";
 import { clearDraftStorage, draftBand, draftCwd, draftParentConversationId, draftSrc, resolveSystemDraftCwd, setDraftBand, setDraftCwd, setDraftSrc, setDraftText } from "./DraftAgentPane";
-import { useOrchestratorSeat } from "./orchestrator/useOrchestratorSeat";
+import { useOrchestratorSeat, useOrchestratorSeatAnswer } from "./orchestrator/useOrchestratorSeat";
+import { seatOnlyTask, type SeatRefs } from "@/lib/tasks/groupHide";
 import { useOrchestratorIncumbent } from "./orchestrator/useOrchestratorIncumbent";
 import { planBoardConvergence, planClose } from "./projectBoardMutations";
 import { reviewerCloseMutations } from "./reviewerAutoClose";
@@ -1683,12 +1684,24 @@ function ProjectDashboardView({
   /* A lane whose close is on its way is gone from the board already (#1671);
      the Viewer's badge reads the same closes. */
   const closingPipelines = useClosingPipelines();
+  /* Seats the project retired are the seat sheet's to list (#1841), never
+     rows beside product work. A failed read hides nothing extra. */
+  const retiredSeatPaths = useMemo(() => {
+    const previous = seatRead.failed ? [] : seatRead.status?.previous ?? [];
+    if (!previous.length) return null;
+    const byConversation = new Map(files.flatMap((file) => (file.conversationId ? [[file.conversationId, file.path] as const] : [])));
+    return previous.flatMap((seat) => {
+      const path = seat.path ?? byConversation.get(seat.conversationId);
+      return path ? [path] : [];
+    });
+  }, [files, seatRead.failed, seatRead.status?.previous]);
+  const mobileHidden = useMemo(() => (retiredSeatPaths?.length ? new Set([...hiddenSet, ...retiredSeatPaths]) : hiddenSet), [hiddenSet, retiredSeatPaths]);
   const mobileBoardProps = {
     files,
     pipelines: activePipelines,
     project,
     seatPath,
-    hidden: hiddenSet,
+    hidden: mobileHidden,
     crowned: crownedPaths,
     closing: closingPipelines,
     now: nowSeconds,
@@ -1956,7 +1969,18 @@ function ProjectDashboardView({
      switches (#1331). Trail: the two panel toggles and the ⋯ menu, which holds message search
      (on the Board, whose find field filters cards), sound, archive, delete and, when narrow, one
      row per account switch. Undo and redo left the header (#1801; a kanban undo is #1856). */
-  const openTaskCount = projectTasks.filter((task) => task.status !== "done").length;
+  /* Tasks that exist only for the orchestrator seat are the seat panel's to
+     list (#1841): the Tasks panel and its count leave them out, reading the
+     seat answer the board's own poll keeps. */
+  const boardSeatAnswer = useOrchestratorSeatAnswer(kanbanLeaf ? project : null, projectCwd);
+  const boardSeatRefs = boardSeatAnswer ? seatRefsOf(boardSeatAnswer.status, boardSeatAnswer.failed) : null;
+  const boardSeatKey = boardSeatRefs ? JSON.stringify(boardSeatRefs) : "";
+  const seatTaskIds = useMemo(() => {
+    const refs = boardSeatKey ? (JSON.parse(boardSeatKey) as SeatRefs) : null;
+    return new Set(projectTasks.filter((task) => seatOnlyTask(task, refs, pipelines)).map((task) => task.id));
+  }, [boardSeatKey, projectTasks, pipelines]);
+  const panelTasks = useMemo(() => (seatTaskIds.size ? tasks.filter((task) => !seatTaskIds.has(task.id)) : tasks), [seatTaskIds, tasks]);
+  const openTaskCount = projectTasks.filter((task) => task.status !== "done" && !seatTaskIds.has(task.id)).length;
   const barLead = (wide: boolean) => (
     <>
       <h1 className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" title={projectName}>{projectName}</h1>
@@ -2012,7 +2036,7 @@ function ProjectDashboardView({
      spans the row the panel sits in. */
   const taskPanel = taskPanelOpen ? (
     <TaskPanel
-      tasks={tasks}
+      tasks={panelTasks}
       project={project}
       boardMembers={boardMemberKeys}
       favorites={favoriteRows}
