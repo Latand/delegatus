@@ -1147,7 +1147,9 @@ export function retireLaunchOutboxOnAdoption(
  * Neither half alone would do. A launch reseeded into a conversation that
  * already had a transcript (board task 226e7bb5 / issue #641) is exactly the
  * opposite case — its message may still be queued behind a running turn — and
- * it is fenced out here by the transcript predating the admission.
+ * it is fenced out here by the transcript predating the admission. A launch
+ * that FAILED keeps its own word too: its error and its retry are the point of
+ * the row, and no transcript reading may take them away.
  */
 export function retireLaunchOutboxOnTranscriptTurn(
   cardId: string,
@@ -1155,6 +1157,7 @@ export function retireLaunchOutboxOnTranscriptTurn(
 ): void {
   if (!Number.isFinite(evidence.startedAt) || !Number.isFinite(evidence.assistantTurnAt)) return;
   const launch = readOutbox(cardId).find((entry) => entry.launchOwned
+    && entry.state !== "failed"
     && entry.adoptedAt === undefined
     && entry.retiredEchoId === undefined
     && entry.responseStartedAt === undefined

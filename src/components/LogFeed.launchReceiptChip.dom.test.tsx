@@ -454,3 +454,25 @@ test("issue 1793: a launch reseeded into a conversation that already had a trans
   expect(readOutbox(cardId)[0]?.adoptedAt).toBeUndefined();
   expect(visibleOutbox(readOutbox(cardId), new Map(), admittedAtForReseed + 2_000, owner)).toHaveLength(1);
 });
+
+test("issue 1793: a failed launch keeps its error and its retry whatever the transcript shows", () => {
+  const { retireLaunchOutboxOnTranscriptTurn, seedLaunchOutbox, readOutbox, visibleOutbox } = outbox;
+  const cardId = "conversation_failed_1793";
+  const owner = { conversationId: cardId, generation: 1 } as const;
+  seedLaunchOutbox(cardId, {
+    id: "launch_failed_1793",
+    text: "Take the seat and report.",
+    images: 0,
+    at: admittedAtForReseed,
+    owner,
+    state: "failed",
+    error: "structured initial message was refused",
+  });
+  retireLaunchOutboxOnTranscriptTurn(cardId, {
+    owner,
+    startedAt: admittedAtForReseed + 1_000,
+    assistantTurnAt: admittedAtForReseed + 2_000,
+  });
+  expect(readOutbox(cardId)[0]?.adoptedAt).toBeUndefined();
+  expect(visibleOutbox(readOutbox(cardId), new Map(), admittedAtForReseed + 3_000, owner)).toHaveLength(1);
+});
