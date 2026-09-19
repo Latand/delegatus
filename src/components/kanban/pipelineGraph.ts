@@ -379,15 +379,22 @@ export interface PastAttempt {
   conversation: { path: string | null; conversationId: string | null };
 }
 
-/** Work still under way: the stage is not done with it. */
-const ACTIVE_ATTEMPT = (state: string) => LIVE_ATTEMPT_STATES.has(state as never) || state === "needs_decision";
+/** Work still under way: the stage is not done with it. A needs_decision whose
+    findings the engine routed along the fail edge (#1785) is settled — the same
+    `decisionRequested` mark `stageChipState` reads — so it belongs in what the
+    card has finished, with its open button and its verdict line. A genuinely
+    parked decision carries no mark and is still the stage's live work. */
+const ACTIVE_ATTEMPT = (attempt: PipelineStageAttempt) =>
+  LIVE_ATTEMPT_STATES.has(attempt.state as never)
+  || (attempt.state === "needs_decision" && !attempt.decisionRequested);
 
 /**
  * What a card's pipelines have finished, newest first: every attempt that ended
  * (the latest one too, once it ended), every review round that reached a
  * verdict or belongs to an attempt that ended, and the helper conversations
  * stage agents brought in. Work under way is left out: the latest attempt while
- * it runs or waits on a decision, and its open round. Nothing is listed twice.
+ * it runs or waits on a decision nobody has routed, and its open round. Nothing
+ * is listed twice.
  */
 export function pastAttempts(pipelines: readonly Pipeline[], flowsById: ReadonlyMap<string, Flow>): PastAttempt[] {
   const rows: PastAttempt[] = [];
@@ -403,7 +410,7 @@ export function pastAttempts(pipelines: readonly Pipeline[], flowsById: Readonly
         ? own.filter((attempt) => attempt.flowId && (flowsById.get(attempt.flowId)?.rounds.length ?? 0) > 0)
         : [];
       for (const attempt of own) {
-        const active = attempt === latest && ACTIVE_ATTEMPT(attempt.state);
+        const active = attempt === latest && ACTIVE_ATTEMPT(attempt);
         if (!active) {
           rows.push({
             key: `${pipeline.id}:${stage.id}:attempt:${attempt.n}`,

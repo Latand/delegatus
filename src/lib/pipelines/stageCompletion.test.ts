@@ -19,6 +19,7 @@ type Pipeline = import("./types").Pipeline;
 /* The board projection the operator reads, over the record the engine wrote:
    the card's own summarize + progress path, not a hand-built fixture (#1785). */
 const { summarizePipeline } = await import("@/components/kanban/kanbanModel");
+const { pastAttempts } = await import("@/components/kanban/pipelineGraph");
 const { pipelineProgress, stageDisplayName } = await import("@/components/kanban/PipelineSection");
 const { translate } = await import("@/lib/i18n");
 type TFunction = import("@/lib/i18n").TFunction;
@@ -584,6 +585,15 @@ test("a routed needs_decision leaves no chip claiming the operator is needed, wh
   expect(running.chips.find((chip) => chip.id === "build")!.state).toBe("running");
   expect(running.progress).toContain("Build");
   expect(running.progress).not.toBe(t("kanban.progress.needs", { stage: "Verify" }));
+  /* The settled reviewer attempt is also in what the card has finished, so its
+     verdict line and its open button are there while the fix stage runs. */
+  const past = pastAttempts([current()], new Map());
+  expect(past.map((row) => [row.stageId, row.n, row.state, row.verdict])).toEqual([
+    ["verify", 1, "needs_decision", "needs_decision"],
+    ["build", 1, "passed", "pass"],
+  ]);
+  expect(past.find((row) => row.stageId === "verify")!.conversation)
+    .toEqual({ path: "/codex/stage-2.jsonl", conversationId: "conversation_stage_2" });
 
   /* Same verdict with nothing to route: the pipeline parks and the card asks. */
   const parked = harness();
@@ -595,4 +605,7 @@ test("a routed needs_decision leaves no chip claiming the operator is needed, wh
   expect(current().state).toBe("needs_decision");
   expect(waiting.chips.find((chip) => chip.id === "verify")!.state).toBe("needs_decision");
   expect(waiting.progress).toBe(t("kanban.progress.needs", { stage: "Verify" }));
+  /* The parked decision is the stage's current work, listed nowhere as past. */
+  expect(pastAttempts([current()], new Map()).map((row) => [row.stageId, row.n, row.state]))
+    .toEqual([["build", 1, "passed"]]);
 });
