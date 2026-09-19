@@ -6,6 +6,7 @@ import { CODEX_LUNA_MODEL } from "@/lib/agent/models";
 import { statePath } from "@/lib/configDir";
 import type { HeadlessCodexRunRequest, HeadlessRunResult } from "@/lib/flows/exec";
 import { resolveSpawnRole } from "@/lib/roles/registry";
+import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { hardenedRedact } from "@/lib/view/compactText";
 
@@ -314,7 +315,7 @@ export type MandatePreflight =
  */
 export function mandatePreflight(mandate: string, mode: "spawn" | "existing", roleParams: unknown): MandatePreflight {
   const overhead = launchOverheadBytes(mode, roleParams);
-  const bytes = byteLength(orchestratorMandateForDelivery(mandate));
+  const bytes = byteLength(orchestratorMandateForDelivery(mandate, loadRoleDefinitionsOrDefaults()));
   const excess = bytes + overhead - MAX_STRUCTURED_TEXT_BYTES;
   return excess > 0
     ? { ok: false, bytes, overhead, bound: MAX_STRUCTURED_TEXT_BYTES, excess }

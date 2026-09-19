@@ -57,9 +57,6 @@ export function configuredReviewerFallback(): FlowPreset["reviewer"] {
   return flowRole(loadRoleDefinitionsOrDefaults(), "architect");
 }
 
-/** Compatibility export for consumers that render the initial seed list. */
-export const SEEDED_PRESETS: FlowPreset[] = seededPresetsFromRoles();
-
 export const FLOWS_SCHEMA_VERSION = 3;
 
 type FlowFile = { schemaVersion?: unknown; flows?: unknown };

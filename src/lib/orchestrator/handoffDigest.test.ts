@@ -444,19 +444,22 @@ test("the delivered default mandate fits the delivery bound with room for a rota
     const remaining = MAX_STRUCTURED_TEXT_BYTES - preflight.bytes - preflight.overhead;
     expect(remaining).toBeGreaterThan(HISTORY_BUDGET_BYTES);
   }
-  /* Delivery appends nothing to the current default, so the mandate a fresh
-     seat is spawned with is the text measured above. */
-  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  /* Delivery appends only the role table (#1880) to the current default, and
+     preflight measured the delivered text, table included. */
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toStartWith(`${ORCHESTRATOR_SYSTEM_PROMPT}\n\n## Role table`);
 });
 
 /* What delivery appends is a fixed cost every bespoke mandate pays, so it is
    the number worth pinning: a mandate is only deliverable in the room left
    after it. This ceiling is the budget the delivered directives are allowed to
-   occupy — a quarter of the envelope — and a directive that grows past it
+   occupy — under two fifths of the envelope — and a directive that grows past it
    fails HERE, naming the budget, rather than as a 413 on a live seat's
    adoption or rotation. Raising it is a deliberate edit with the remaining
-   headroom in view. */
-const DELIVERED_DIRECTIVE_BUDGET_BYTES = 8_000;
+   headroom in view. Raised to 12 000 for the role table (#1880), about 2 KB
+   for eight one-line roles; the directives alone already measured 8 990. The
+   20 000 bytes left still hold two history budgets, which the second
+   assertion below pins. */
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 12_000;
 
 test("what delivery appends stays inside its share of the envelope", () => {
   const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));

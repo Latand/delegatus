@@ -237,6 +237,40 @@ test("a rollback fence checkpoints before demotion and suppresses the later mirr
   expect(demotions).toEqual([true]);
 });
 
+test("a withdrawn fence the release acknowledged hands authority back once", async () => {
+  let fence: { schemaVersion: 1; epoch: number; mode: "fencing"; releaseRevision: string; updatedAt: string } | null = {
+    schemaVersion: 1,
+    epoch: 5,
+    mode: "fencing",
+    releaseRevision: "b".repeat(40),
+    updatedAt: "2026-09-19T00:00:00.000Z",
+  };
+  let withdrawn = 0;
+  const scheduled: Array<() => void> = [];
+  await activateViewerRuntimeWhenCurrent(
+    async () => undefined,
+    () => true,
+    {
+      pollMs: 1,
+      schedule: (callback) => { scheduled.push(callback); return { unref() {} }; },
+      fenceRequest: () => fence,
+      onFenceRequested: async () => undefined,
+      onFenceWithdrawn: async () => { withdrawn += 1; },
+    },
+  );
+  scheduled.shift()!();
+  await Bun.sleep(0);
+  expect(withdrawn).toBe(0);
+  // The deployment was cancelled: the adapter restored this release's authority.
+  fence = null;
+  scheduled.shift()!();
+  await Bun.sleep(0);
+  expect(withdrawn).toBe(1);
+  scheduled.shift()!();
+  await Bun.sleep(0);
+  expect(withdrawn).toBe(1);
+});
+
 test("a current release monitors rollback fences while activation is still pending", async () => {
   const scheduled: Array<() => void> = [];
   let rejectActivation!: (error: Error) => void;

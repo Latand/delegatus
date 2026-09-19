@@ -89,11 +89,14 @@ describe("task store", () => {
     expect(loadTasks(filePath)).toEqual(tasks);
   });
 
-  test("only a missing file establishes an empty store", () => {
+  test("a missing file establishes an empty store; invalid task state refuses", () => {
     const filePath = tmpFile();
     expect(loadTasks(filePath)).toEqual([]);
-    fs.writeFileSync(filePath, "{", "utf8");
-    expect(() => loadTasks(filePath)).toThrow();
+    // #1870: the legacy path becomes a tombstone once the store is in SQLite.
+    expect(fs.statSync(filePath).isDirectory()).toBe(true);
+    const invalid = tmpFile();
+    fs.writeFileSync(invalid, JSON.stringify({ tasks: "not a list" }), "utf8");
+    expect(() => loadTasks(invalid)).toThrow();
   });
 
   test("runtime validation refuses malformed task state", () => {
