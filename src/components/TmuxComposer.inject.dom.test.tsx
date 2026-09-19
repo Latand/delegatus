@@ -202,7 +202,11 @@ beforeEach(() => {
     useRuntimeReceiptsForArtifact: (() => durableReceipts) as never,
     sendRuntimeMessage: (async (options: Record<string, unknown>) => {
       sends.push(options);
-      return { ok: true, status: 202, receipt: { status: "queued" }, operationId: "send-1" };
+      return { ok: true, status: 202, operationId: "send-1", receipt: {
+        operationId: "send-1", conversationId: options.conversationId,
+        idempotencyKey: options.idempotencyKey, kind: "send", status: "queued",
+        text: options.text, at: new Date().toISOString(), revision: 1,
+      } };
     }) as never,
     injectRuntimeContext: (async (options: Record<string, unknown>) => {
       injections.push(options);
