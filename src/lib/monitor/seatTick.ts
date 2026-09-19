@@ -23,6 +23,8 @@ import {
   type SeatTickSeatInput,
   type SeatTickSourceGap,
   type SeatTickTaskInput,
+  type SeatTickTranscriptGap,
+  type SeatTickUnreadableChild,
   type SeatTickVerdict,
   type SeatTickWakeCommit,
   type SeatTickWakeReason,
@@ -101,6 +103,27 @@ const MINUTE_MS = 60_000;
  * number, and every project was, before anyone chose otherwise.
  */
 export const SEAT_TICK_WAKE_INTERVAL_MS = 60 * MINUTE_MS;
+
+/**
+ * The bound while the seat's own spawned children are moving (#1881).
+ *
+ * The hour is the bound for a board where nothing is moving. A seat that
+ * spawned workers and ended its turn to wait for them is not that board: it is
+ * waiting on exactly one thing, and an hour-long bound turned "your reviewers
+ * finished" into an hour of silence — the seat's user wrote to it by hand, and
+ * the seat set its own tick to two minutes to get the wake at all.
+ *
+ * A child that settled, or stalled, since the last wake is due at the next
+ * check. While children are only running, the interval wake comes after a
+ * quarter of an hour, so a settle the registry could not see still reaches the
+ * seat in minutes. Neither costs anything the ADR's argument rests on: the
+ * pre-check stays a read of durable state with no model call and no
+ * transcript scan, a wake still needs a reason, and the retry guard still
+ * stops a reason that changes nothing. A project whose own settings wake it
+ * more often keeps its own interval, and one with ticking off stays off.
+ */
+export const SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS = 5 * MINUTE_MS;
+export const SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS = 15 * MINUTE_MS;
 
 export const DEFAULT_SEAT_TICK_POLICY: SeatTickPolicy = {
   checkIntervalMs: 5 * MINUTE_MS,
@@ -388,7 +411,14 @@ function isHarvestable(child: SeatTickChildInput): boolean {
 function childOwnInstant(child: SeatTickChildInput): number {
   const terminalAt = child.terminalAt ? Date.parse(child.terminalAt) : Number.NaN;
   if (Number.isFinite(terminalAt)) return terminalAt;
-  return child.lastRecordAt ? Date.parse(child.lastRecordAt) : Number.NaN;
+  const recordAt = child.lastRecordAt ? Date.parse(child.lastRecordAt) : Number.NaN;
+  if (Number.isFinite(recordAt)) return recordAt;
+  /* The spawn's own instant, last (#1881): written once when the seat spawned
+     the child, and the only clock a child with no terminal instant and no
+     readable transcript has. It is never later than anything the child did,
+     so it can only call a child older than it is — the safe side of an age
+     test whose failure is a predecessor's worker reaching this seat. */
+  return child.spawnedAt ? Date.parse(child.spawnedAt) : Number.NaN;
 }
 
 /**
@@ -542,9 +572,15 @@ function childSkipReason(
  * says work is open.
  */
 function childFactsSkipReason(child: SeatTickChildInput, seat: SeatTickSeatInput): SeatTickChildSkip | null {
-  if (!isHarvestable(child)) return "unreadable";
-  if (!Number.isFinite(childOwnInstant(child))) return "unreadable";
+  /* A child that SETTLED is owed to the seat whether or not its transcript can
+     be read (#1881): the registry's turn state is what says it ended, and the
+     line that lists it says the transcript is unreadable and why. Skipping it
+     was a finished worker the seat was never told about. A running or stalled
+     child the seat cannot read is still not listed as work — it is named once
+     beside the agenda, with its reason — because nothing about it is owed. */
   if (isStaleChild(child, seat)) return "stale";
+  if (!isHarvestable(child) && child.status !== "terminal") return "unreadable";
+  if (!Number.isFinite(childOwnInstant(child))) return "unreadable";
   return null;
 }
 
@@ -553,7 +589,7 @@ function childFactsSkipReason(child: SeatTickChildInput, seat: SeatTickSeatInput
     designation to measure an age against and nothing to be stale relative to,
     so only the readable half is left. */
 function isActionableChild(child: SeatTickChildInput, seat: SeatTickSeatInput | null): boolean {
-  return seat ? childFactsSkipReason(child, seat) === null : isHarvestable(child);
+  return seat ? childFactsSkipReason(child, seat) === null : isHarvestable(child) || child.status === "terminal";
 }
 
 /**
@@ -1024,10 +1060,16 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   for (const child of [...harvest.map((entry) => entry.child), ...offeredChildStalls.map((entry) => entry.child), ...runningChildren]) {
     skipped.delete(child.conversationId);
   }
+  /* The unreadable children are named, each once, with the reason (#1881). A
+     count of them said nothing anyone could act on: fourteen of them stood on
+     every wake of the seat the issue was filed from, and which ones they were
+     and why took a read of the registry to find out. A child already named
+     under the same reason is counted as unchanged. */
+  const unreadable = unreadableChildren(input.children, skipped, shown);
   const skippedChildren = {
     stale: countSkipped(skipped, "stale"),
-    unreadable: countSkipped(skipped, "unreadable"),
-    unchanged: countSkipped(skipped, "unchanged"),
+    unreadable: countSkipped(skipped, "unreadable") - unreadable.named.length - unreadable.unchanged,
+    unchanged: countSkipped(skipped, "unchanged") + unreadable.unchanged,
   };
   /* A stall is only reported once it survived a second check, so a lane between
      two attempts is never called stuck. */
@@ -1037,7 +1079,15 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const unstarted = input.tasks.filter((task) => isUnstarted(task, input.now, input.policy.backlogAfterMs));
   const backlog = input.tasks.filter((task) => task.status === "assigned" && !task.owned).length - unstarted.length;
   const openWork = hasOpenWork(input);
-  const wakeDue = seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs);
+  /* The bound shortens while the seat's own children are moving (#1881): a
+     child that settled or stalled since the last wake is due at the next
+     check, and running children bring the interval wake to a quarter of an
+     hour. With neither, the project's own interval stands. */
+  const childrenSettled = harvest.length > 0 || offeredChildStalls.length > 0;
+  const childInterval = childrenSettled
+    ? SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS
+    : runningChildren.length > 0 ? SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS : Number.POSITIVE_INFINITY;
+  const wakeDue = seatTickWakeDue(input.state.lastWakeAt, input.now, Math.min(input.settings.wakeIntervalMs, childInterval));
 
   const observed: SeatTickProjectState = { ...base, stalledSeen: stalledNow };
 
@@ -1202,6 +1252,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
         items: all.slice(0, input.policy.itemsPerWake),
         deferred: Math.max(0, all.length - input.policy.itemsPerWake),
         skippedChildren,
+        unreadableChildren: unreadable.named,
         gaps,
       },
       state,
@@ -1265,6 +1316,47 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
 
 function quiet(state: SeatTickProjectState, at: string): SeatTickProjectState {
   return { ...state, quietSince: state.quietSince ?? at };
+}
+
+/** What a wake says about why a child's transcript cannot be read (#1881). */
+export function seatTickTranscriptGapClause(reason: SeatTickTranscriptGap | undefined): string {
+  switch (reason) {
+    case "no-transcript": return "the registry holds no transcript for it";
+    case "outside-roots": return "its transcript path is outside every folder this Viewer scans";
+    case "missing": return "the transcript file is no longer on disk";
+    default: return "the Viewer cannot resolve its transcript";
+  }
+}
+
+/** The most unreadable children one wake names; the rest stay counted and are
+    named by a later wake. */
+const UNREADABLE_NAMED_LIMIT = 5;
+
+function unreadableToken(child: SeatTickChildInput): string {
+  return `${child.conversationId}@unreadable:${child.transcriptReason ?? "unknown"}`;
+}
+
+/**
+ * The children skipped as unreadable, split into the ones this wake names and
+ * the ones an earlier landed wake already named under the same reason (#1881).
+ */
+function unreadableChildren(
+  children: readonly SeatTickChildInput[],
+  skipped: ReadonlyMap<string, SeatTickChildSkip>,
+  shown: ReadonlySet<string>,
+): { named: SeatTickUnreadableChild[]; unchanged: number } {
+  const named: SeatTickUnreadableChild[] = [];
+  const seen = new Set<string>();
+  let unchanged = 0;
+  for (const child of children) {
+    if (skipped.get(child.conversationId) !== "unreadable" || seen.has(child.conversationId)) continue;
+    seen.add(child.conversationId);
+    const token = unreadableToken(child);
+    if (shown.has(token)) { unchanged += 1; continue; }
+    if (named.length >= UNREADABLE_NAMED_LIMIT) continue;
+    named.push({ conversationId: child.conversationId, title: child.title, reason: seatTickTranscriptGapClause(child.transcriptReason), stateToken: token });
+  }
+  return { named, unchanged };
 }
 
 /**
@@ -1331,14 +1423,23 @@ function wakeItems(context: {
      that fit are recorded as harvested when the wake lands; the rest stay owed. */
   for (const entry of context.harvest) {
     /* One line per child, with its latest state and every owed outcome behind
-       it (#1783). */
+       it (#1783). A child whose transcript cannot be read is listed all the
+       same, with why (#1881); one that can carries where its final message is,
+       for the controller to attach. */
+    const { child } = entry;
+    const readable = isHarvestable(child);
     items.push({
       kind: "child",
-      id: entry.child.conversationId,
-      outcomeId: entry.child.outcomeId,
+      id: child.conversationId,
+      outcomeId: child.outcomeId,
       outcomeIds: entry.outcomeIds,
-      stateTokens: [childStateToken(entry.child, entry.child.outcomeId ?? null), childStateToken(entry.child, null)],
-      label: `${entry.child.title} — spawned child ${entry.child.outcome ?? "finished"}, outcome unharvested`,
+      /* A line that said why the transcript is unreadable has named that too,
+         so a dead host's open turn does not name the child again (#1881). */
+      stateTokens: [childStateToken(child, child.outcomeId ?? null), childStateToken(child, null), ...(readable ? [] : [unreadableToken(child)])],
+      label: readable
+        ? `${child.title} — spawned child ${child.outcome ?? "finished"}, outcome unharvested`
+        : `${child.title} — spawned child ${child.outcome ?? "finished"}, transcript not readable: ${seatTickTranscriptGapClause(child.transcriptReason)}`,
+      ...(readable && child.transcriptPath ? { finalMessageFrom: { path: child.transcriptPath, engine: child.engine ?? null } } : {}),
     });
   }
   /* A lane parked on a decision is open, so it can be BOTH the seat's own
@@ -1410,7 +1511,12 @@ export function seatTickWakeCommitPlan(
   /* What each child line SHOWS, for the clause that asks whether anything has
      moved since (#1783 round two). It is recorded by the landing and by
      nothing else: a wake the layer never delivered showed the seat nothing. */
-  const shownChildren = [...new Set(verdict.items.flatMap((item) => item.stateTokens ?? []))];
+  const shownChildren = [...new Set([
+    ...verdict.items.flatMap((item) => item.stateTokens ?? []),
+    /* A child named as unreadable was shown its reason (#1881), and is not
+       named again until the reason changes. */
+    ...(verdict.unreadableChildren ?? []).map((child) => child.stateToken),
+  ])];
   /* Every outcome the line stood for, not just the one that described it
      (#1783): a child the wake showed once with its latest state was shown all
      of what it was owed on, so a landing acknowledges all of it. Leaving the

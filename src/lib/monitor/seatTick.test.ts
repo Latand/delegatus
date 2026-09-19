@@ -4,6 +4,8 @@ import { evaluateLiveness } from "@/lib/lifecycle/liveness";
 
 import {
   DEFAULT_SEAT_TICK_POLICY,
+  SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS,
+  SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS,
   SEAT_TICK_WAKE_INTERVAL_MS,
   seatTickDecision,
   seatTickPolicy,
@@ -1234,10 +1236,56 @@ test("a failed launch is a terminal child too, and the reason says so (#1465)", 
   expect(decision.verdict).toMatchObject({ reasons: [{ kind: "child-terminal", detail: "a spawned child failed and its outcome is unharvested" }] });
 });
 
-test("a terminal child waits out the wake interval like every other reason (#1465)", () => {
-  const finished = child({ status: "terminal", outcome: "finished", terminalAt: new Date(NOW - 20 * MINUTE).toISOString() });
-  const decision = seatTickDecision(input({ children: [finished], state: stateWith({ lastWakeAt: new Date(NOW - 5 * MINUTE).toISOString() }) }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+test("a settled child is due one check interval after the last wake, not the hour (#1465, #1881)", () => {
+  const finished = child({ status: "terminal", outcome: "finished", terminalAt: new Date(NOW - 2 * MINUTE).toISOString() });
+  const at = (minutes: number) => stateWith({ lastWakeAt: new Date(NOW - minutes * MINUTE).toISOString() });
+  /* Inside the settled-child bound the wake still waits: two wakes minutes
+     apart are the storm the bound exists to stop. */
+  expect(seatTickDecision(input({ children: [finished], state: at(4) })).verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(seatTickDecision(input({ children: [finished], state: at(SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS / MINUTE) })).verdict)
+    .toMatchObject({ kind: "wake", reasons: [{ kind: "child-terminal" }] });
+});
+
+test("running children bring the interval wake to a quarter of an hour, and a still board keeps the hour (#1881)", () => {
+  const running = child({ status: "running", outcome: null, terminalAt: null, lastRecordAt: new Date(NOW - 2 * MINUTE).toISOString() });
+  const at = (minutes: number) => stateWith({ lastWakeAt: new Date(NOW - minutes * MINUTE).toISOString() });
+  const quarter = SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS / MINUTE;
+  expect(seatTickDecision(input({ pipelines: [], children: [running], state: at(quarter - 1) })).verdict.kind).toBe("quiet");
+  expect(seatTickDecision(input({ pipelines: [], children: [running], state: at(quarter) })).verdict)
+    .toMatchObject({ kind: "wake", reasons: [{ kind: "interval" }] });
+  /* An open lane and no child: the project's own hour, unchanged. */
+  expect(seatTickDecision(input({ pipelines: [lane()], children: [], state: at(quarter) })).verdict.kind).toBe("quiet");
+  expect(seatTickDecision(input({ pipelines: [lane()], children: [], state: at(60) })).verdict).toMatchObject({ kind: "wake", reasons: [{ kind: "interval" }] });
+});
+
+test("an unreadable settled child is listed with its reason, and an unreadable running one is named once (#1881)", () => {
+  const settled = child({ status: "terminal", outcome: "finished", terminalAt: null, lastRecordAt: null, transcript: "unresolvable", transcriptReason: "missing", spawnedAt: new Date(NOW - 30 * MINUTE).toISOString() });
+  const running = child({ conversationId: SECOND_CHILD, title: "silent worker", status: "running", outcome: null, terminalAt: null, lastRecordAt: null, transcript: "unresolvable", transcriptReason: "outside-roots", spawnedAt: new Date(NOW - 30 * MINUTE).toISOString() });
+  const first = seatTickDecision(input({ children: [settled, running], state: stateWith(OVERDUE_STATE) }));
+  expect(first.verdict.kind).toBe("wake");
+  const verdict = first.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
+  expect(verdict.items.find((item) => item.id === settled.conversationId)?.label)
+    .toContain("spawned child finished, transcript not readable: the transcript file is no longer on disk");
+  expect(verdict.unreadableChildren).toEqual([expect.objectContaining({ conversationId: SECOND_CHILD, title: "silent worker", reason: "its transcript path is outside every folder this Viewer scans" })]);
+  expect(verdict.skippedChildren.unreadable).toBe(0);
+  /* Landed, the running child's reason is not named again while it stands. */
+  const plan = seatTickWakeCommitPlan(first.verdict, { fingerprint: "fp-2", eventsThrough: 0, terminalChildren: [settled.conversationId] })!;
+  const landed = seatTickWakeCommit(stateWith(OVERDUE_STATE), plan, NOW);
+  /* An open lane gives the next check a wake to carry the line on; an
+     unreadable child never raises one by itself. */
+  const next = seatTickDecision(input({ pipelines: [lane()], children: [running], state: { ...landed, lastWakeAt: new Date(NOW - 2 * 60 * MINUTE).toISOString() } }));
+  const again = next.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
+  expect(again.unreadableChildren ?? []).toEqual([]);
+  expect(again.skippedChildren).toMatchObject({ unreadable: 0, unchanged: 1 });
+});
+
+test("an unreadable child spawned long before the seat was designated is a predecessor's (#1881)", () => {
+  const designatedAt = new Date(NOW - 60 * MINUTE).toISOString();
+  const old = child({ status: "running", outcome: null, terminalAt: null, lastRecordAt: null, transcript: "unresolvable", transcriptReason: "missing", spawnedAt: new Date(NOW - 30 * 24 * 60 * MINUTE).toISOString() });
+  const decision = seatTickDecision(input({ seat: seat({ designatedAt }), pipelines: [lane()], children: [old], state: stateWith(OVERDUE_STATE) }));
+  const verdict = decision.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
+  expect(verdict.unreadableChildren ?? []).toEqual([]);
+  expect(verdict.skippedChildren).toMatchObject({ stale: 1, unreadable: 0 });
 });
 
 test("terminal children are named oldest outcome first, and the plan records only the ones the wake carries (#1465)", () => {
