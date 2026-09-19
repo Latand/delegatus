@@ -45,12 +45,11 @@ export type TranscriptEventKind =
   | "other";
 
 export interface TranscriptLivenessEvidence {
-  /** Wall clock of the newest record, or null when the tail is unreadable. */
+  /** Wall clock of the newest agent event, or null when it has no readable clock. */
   lastEventAt: number | null;
   kind: TranscriptEventKind | null;
-  /** When the artifact was last written, whether or not its tail could be
-      parsed. A host appending to a transcript is working even when the newest
-      record carries no clock this reader understands. */
+  /** Artifact mtime, used to delimit CPU observations. Sidecar writes advance
+      it too, so it cannot establish that the agent worked after launch. */
   lastWriteAt: number | null;
   /** The turn axis that tail leaves behind. */
   turn: "busy" | "terminal" | "unknown";
@@ -296,7 +295,7 @@ function codexEventKind(record: RecordLike): TranscriptEventKind {
   return "other";
 }
 
-/** The newest record's clock, its kind, and the turn axis its tail leaves. */
+/** The newest agent event's clock and kind, and the turn axis its tail leaves. */
 export function transcriptEvidenceFromRecords(
   records: RecordLike[],
   engine: "claude" | "codex",
@@ -304,11 +303,14 @@ export function transcriptEvidenceFromRecords(
 ): TranscriptLivenessEvidence {
   const turn = turnStateFromRecords(records, engine).state;
   const axis = turn === "busy" ? "busy" as const : turn === "terminal" ? "terminal" as const : "unknown" as const;
-  const last = records.at(-1) ?? null;
+  // Resume bookkeeping (mode, last-prompt, turn_context) is not an agent event.
+  const last = records.findLast((record) => engine === "claude"
+    ? record.type === "user" || record.type === "assistant" || record.type === "result"
+    : typeof recordValue(record.payload)?.type === "string") ?? null;
   if (!last) return { lastEventAt: null, kind: null, lastWriteAt, turn: axis };
   const stamped = Date.parse(String(last.timestamp ?? ""));
   return {
-    lastEventAt: Number.isFinite(stamped) ? stamped : lastWriteAt,
+    lastEventAt: Number.isFinite(stamped) ? stamped : null,
     kind: engine === "codex" ? codexEventKind(last) : claudeEventKind(last),
     lastWriteAt,
     turn: axis,
@@ -331,8 +333,7 @@ export async function readTranscriptEvidence(
   if (!transcriptPath) return { lastEventAt: null, kind: null, lastWriteAt: null, turn: "unknown" };
   const lastWriteAt = transcriptMtimeMs(transcriptPath);
   const tail = await read(transcriptPath);
-  /* An unparseable tail is not silence: the file's own clock still says whether
-     this host has written since it launched. */
+  /* An unparseable tail supplies no turn evidence; retain mtime for diagnostics. */
   if (tail.integrity !== "complete") return { lastEventAt: null, kind: null, lastWriteAt, turn: "unknown" };
   return transcriptEvidenceFromRecords(tail.records, engine, lastWriteAt);
 }
@@ -443,7 +444,7 @@ export function decideTurnLiveness(evidence: TurnLivenessEvidence): TurnLiveness
       since: null,
     };
   }
-  const wroteAt = Math.max(transcript.lastEventAt ?? 0, transcript.lastWriteAt ?? 0) || null;
+  const wroteAt = transcript.lastEventAt;
   if (wroteAt !== null && wroteAt >= host.launchedAt) {
     /* However long the gap. A ten-minute tool call is a host that wrote its
        tool call and is waiting for it, so the gap is the work itself. */

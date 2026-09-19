@@ -14,7 +14,10 @@ function b64ToBytes(value: string): ArrayBuffer {
   return out.buffer.slice(0);
 }
 
-export function PushBell() {
+/** Told when the bell learns its own state, so a surface that LABELS the bell
+    (the rail's menu, issue #1819) can say "on" or "off" without a second copy
+    of the subscription logic. */
+export function PushBell({ onStatus }: { onStatus?: (status: { supported: boolean; enabled: boolean }) => void } = {}) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const [enabled, setEnabled] = useState(false);
@@ -55,6 +58,10 @@ export function PushBell() {
     });
     setEnabled(true);
   };
+
+  useEffect(() => {
+    onStatus?.({ supported, enabled });
+  }, [onStatus, supported, enabled]);
 
   return (
     <button
