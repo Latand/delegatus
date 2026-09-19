@@ -44,6 +44,7 @@ import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import type { MobileShellHost } from "./mobile/MobileShell";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
 import { OverviewBoard } from "./OverviewBoard";
+import { BarIslandProvider } from "./ProjectBar";
 import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
 import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { isChildConversation, OVERVIEW, projectKey } from "./projectModel";
@@ -1095,11 +1096,17 @@ export function Viewer() {
             toast appears, so a new toast visually docks into it (D7). On the
             phone the badge lives in the board header and the toast docks in flow
             below (see the mobile banner), so this fixed anchor is desktop-only. */}
-        {isMobile ? null : (
-          /* top-12 clears the 40px board header row: the island renders in the
-             zero state too now, so parking it at top-4 would permanently cover
-             the header's own right-side buttons (Orchestrator, board views). */
-          <div className="pointer-events-none fixed right-4 top-12 z-50 flex flex-col items-end gap-2">
+        <BarIslandProvider island={isMobile ? null : (
+          /* On a project, top-[10px] centres the 28px island in the board's one
+             48px header bar (#1801), whose right 236px are reserved for it. The
+             Overview keeps its 40px title row above its board bar, so there
+             top-12 parks it in that bar's reserve instead, clear of the row.
+             On a project the 16px gap drops the toast to y 54, clear of the
+             bar's bottom border at 48. On a project the island is portaled into
+             the bar's last slot, after ⋯, so Tab reaches it where it is drawn;
+             the text size and leading are the page's, which the board's own
+             font would otherwise replace there. */
+          <div className={`pointer-events-none fixed right-4 ${project === OVERVIEW ? "top-12 gap-2" : "top-[10px] gap-4"} z-50 flex flex-col items-end text-[15px] leading-normal`}>
             {attentionBadge}
             {toastFile ? (
               <AttentionToast
@@ -1113,7 +1120,7 @@ export function Viewer() {
               />
             ) : null}
           </div>
-        )}
+        )}>
         {project === OVERVIEW ? (
           <OverviewBoard
             files={files}
@@ -1169,6 +1176,7 @@ export function Viewer() {
             onCloseFile={releaseCatalogFile}
           />
         )}
+        </BarIslandProvider>
       </main>
       {/* Runtime connection pill — mounts the tab-wide bus and shows live /
           reconnecting / degraded / offline. Renders nothing while slice-one is

@@ -186,6 +186,22 @@ export function projectIdentityFromRemote(remote: string, root: string): Reposit
   return canonical ? repositoryProjectIdentity(canonical) : null;
 }
 
+/** The identity a repository at `root` holds while it has no `origin` — the
+    one {@link projectIdentityFromRepositoryRoot} mints from its local path.
+    Exported so a caller can recognise that id after an origin was added and the
+    same checkout started resolving to the remote's identity (#1874). */
+export function localRepositoryProjectId(root: string): string | null {
+  return repositoryProjectIdentity(`local:${realRoot(root)}`)?.project ?? null;
+}
+
+function realRoot(root: string): string {
+  try {
+    return fs.realpathSync.native(root);
+  } catch {
+    return path.resolve(root);
+  }
+}
+
 export function projectIdentityFromRepositoryRoot(root: string): RepositoryProjectIdentity | null {
   const directory = gitDirectory(root);
   if (!directory) return null;
@@ -196,13 +212,6 @@ export function projectIdentityFromRepositoryRoot(root: string): RepositoryProje
     return null;
   }
   const remote = originRemote(config);
-  const localRoot = (() => {
-    try {
-      return fs.realpathSync.native(root);
-    } catch {
-      return path.resolve(root);
-    }
-  })();
-  const canonical = remote ? canonicalRemote(remote, root) : `local:${localRoot}`;
+  const canonical = remote ? canonicalRemote(remote, root) : `local:${realRoot(root)}`;
   return canonical ? repositoryProjectIdentity(canonical) : null;
 }

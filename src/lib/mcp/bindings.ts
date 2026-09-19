@@ -80,7 +80,9 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTickFence";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
+import { projectSuccessionFor } from "@/lib/projects/succession";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
@@ -2933,7 +2935,11 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
     ...allowedSeatFields(args, ["conversationId", "cwd", "engine", "model", "effort", "accountId"]),
   }, callerCapabilityHeaders());
   return redactPayload({
-    project,
+    /* The key the seat was designated under, which the route resolves after
+       any identity succession its checkout owes (#1874). */
+    project: typeof (result.seat as { project?: unknown } | undefined)?.project === "string"
+      ? (result.seat as { project: string }).project
+      : project,
     conversationId: result.conversationId ?? null,
     transcriptPath: result.path ?? null,
     seat: result.seat ?? null,
@@ -4086,7 +4092,9 @@ async function requestAttention(
   if (zoom && zoom !== "inspect" && zoom !== "situate") throw new Error("zoom must be inspect or situate");
   const reason = required(args, "reason");
   const contextLabel = text(args.contextLabel);
-  const project = await focusTargetProject(target, text(args.project), dependencies);
+  /* Canonical, as every seat is: a target named by a key that has since moved
+     resolves to the key its seat is read under (#1874). */
+  const project = canonicalOrchestratorProject(await focusTargetProject(target, text(args.project), dependencies));
 
   /* The project half of the same gate: an orchestrator directs its OWN
      project's screen estate. A seat naming a different project is refused
@@ -4292,7 +4300,9 @@ function suggestReplies(args: McpToolArgs, dependencies: ViewerMcpDomainDependen
 function productionManagerAuthoritySources(): ManagerAuthoritySources {
   const registry = agentRegistry();
   return {
-    activeSeats: activeOrchestratorSeats,
+    /* Each seat under the project it serves now (#1874), so a seat keyed by
+       its folder's old identity directs the project its lanes are written to. */
+    activeSeats: () => activeSeatsByCurrentProject(),
     revocations: orchestratorRevocations,
     conversationFacts: (conversationId) => {
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
@@ -4300,7 +4310,13 @@ function productionManagerAuthoritySources(): ManagerAuthoritySources {
       return {
         superseded: conversation.supersededBy !== null,
         hasGeneration: conversation.generations.length > 0,
-        project: conversation.projectOwnership?.project ?? null,
+        /* Read the way the seat's own project is (#1874): canonical, and moved
+           with its folder, so an ownership recorded under the folder's old
+           identity does not read as a cross-project designation. */
+        project: conversation.projectOwnership?.project
+          ? canonicalOrchestratorProject(projectSuccessionFor(conversation.projectOwnership.project, seatLaunchCwd(conversationId))?.target
+            ?? conversation.projectOwnership.project)
+          : null,
       };
     },
     resolveAlias: (conversationId) => registry.conversation(conversationId as `conversation_${string}`)?.id ?? conversationId,
