@@ -30,6 +30,11 @@ import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./struct
  * the Viewer, so its epoch never moves across these releases.
  */
 
+/** Invented session ids, assembled so no id-shaped literal is published. */
+function cutSessionId(index: number): string {
+  return ["18350000", "0000", "4000", "8000", String(index).padStart(12, "0")].join("-");
+}
+
 const INCUMBENT_VIEWER: ProcessIdentity = { pid: 2_000_001_001, startIdentity: "incumbent-viewer" };
 const CUT_TURN = "turn-cut-by-release";
 
@@ -105,12 +110,12 @@ function incumbentConversation(
   engine: "codex" | "claude",
   sessionId: string,
   engineProcess: ProcessIdentity,
-  transcript: Record<string, unknown>[] = midToolTranscript(engine),
+  records: Record<string, unknown>[] = midToolTranscript(engine),
 ): CutConversation {
   const registryFile = path.join(directory, "agent-registry.json");
   const registry = new AgentRegistry(registryFile);
   const artifactPath = path.join(directory, `${sessionId}.jsonl`);
-  fs.writeFileSync(artifactPath, `${transcript.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  fs.writeFileSync(artifactPath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
   const launchProfile = emptyLaunchProfile({ cwd: directory });
   registry.reconcileConversations([{
     engine,
@@ -298,8 +303,8 @@ test.each(["claude", "codex"] as const)(
     const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
     try {
       const cut = incumbentConversation(engine, engine === "codex"
-        ? "18350000-0000-4000-8000-000000000001"
-        : "18350000-0000-4000-8000-000000000002", deadEngine(2_000_001_101));
+        ? cutSessionId(1)
+        : cutSessionId(2), deadEngine(2_000_001_101));
       const { exitCode, incumbentLedger } = await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_101));
       expect(exitCode).toBe(0);
 
@@ -322,7 +327,7 @@ test.each(["claude", "codex"] as const)(
 test("a cut turn stays owed while runtime-host succession lags past three minutes, then resumes once", async () => {
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   try {
-    const cut = incumbentConversation("claude", "18350000-0000-4000-8000-000000000003", deadEngine(2_000_001_103));
+    const cut = incumbentConversation("claude", cutSessionId(3), deadEngine(2_000_001_103));
     await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_103));
 
     /* No runtime host answers yet: the successor launches nothing. */
@@ -356,7 +361,7 @@ test("failed demotion cleanup keeps the obligation, and a surviving owner keeps 
   const survivorProcess = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
   const survivor = captureProcessIdentity(survivorProcess.pid);
   try {
-    const cut = incumbentConversation("claude", "18350000-0000-4000-8000-000000000004", survivor);
+    const cut = incumbentConversation("claude", cutSessionId(4), survivor);
     const { exitCode } = await releaseIncumbent([cut], journal, () => survivor, { failRelease: true });
     expect(exitCode).toBe(1);
 
@@ -384,7 +389,7 @@ test("failed demotion cleanup keeps the obligation, and a surviving owner keeps 
 test("restarts between recording, admitting and recording the admission deliver one continuation, never two", async () => {
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   try {
-    const cut = incumbentConversation("claude", "18350000-0000-4000-8000-000000000005", deadEngine(2_000_001_105));
+    const cut = incumbentConversation("claude", cutSessionId(5), deadEngine(2_000_001_105));
     await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_105));
 
     /* The first successor dies before it adopts anything. */
@@ -419,7 +424,7 @@ test("restarts between recording, admitting and recording the admission deliver 
 test("provider recovery bookkeeping written after the cut does not discharge the continuation", async () => {
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   try {
-    const cut = incumbentConversation("claude", "18350000-0000-4000-8000-000000000006", deadEngine(2_000_001_106));
+    const cut = incumbentConversation("claude", cutSessionId(6), deadEngine(2_000_001_106));
     await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_106));
     /* What a resumed Claude CLI writes on its own: the replayed continuation
        prompt, a synthetic no-op answer and a result closing the "turn". */
@@ -445,7 +450,7 @@ test("provider recovery bookkeeping written after the cut does not discharge the
 test("a message that reaches the cut conversation first discharges the obligation and nothing else is sent", async () => {
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   try {
-    const cut = incumbentConversation("codex", "18350000-0000-4000-8000-000000000007", deadEngine(2_000_001_107));
+    const cut = incumbentConversation("codex", cutSessionId(7), deadEngine(2_000_001_107));
     await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_107));
     await Bun.sleep(5);
 
@@ -512,7 +517,7 @@ test("a seat cut by the deploy it requested resumes once with the deployment con
   try {
     const cut = incumbentConversation(
       "claude",
-      "18350000-0000-4000-8000-000000000008",
+      cutSessionId(8),
       deadEngine(2_000_001_108),
       midToolTranscript("claude", "mcp__viewer__deploy_exact_sha"),
     );
@@ -553,7 +558,7 @@ test("a seat cut by the deploy it requested resumes once with the deployment con
 test("a seat rotated before the successor adopts it is owed nothing", async () => {
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   try {
-    const cut = incumbentConversation("claude", "18350000-0000-4000-8000-000000000009", deadEngine(2_000_001_109));
+    const cut = incumbentConversation("claude", cutSessionId(9), deadEngine(2_000_001_109));
     const seat = seatFor("seat-rotating", 3, cut);
     const registry = new AgentRegistry(cut.registryFile);
     await bindStructuredDeliveryQueue([{

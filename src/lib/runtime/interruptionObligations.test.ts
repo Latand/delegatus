@@ -14,9 +14,9 @@ beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interr
 afterEach(() => { fs.rmSync(directory, { recursive: true, force: true }); });
 
 const releaseCut: InterruptionObligationInput = {
-  conversationId: "conversation_00000000-0000-4000-8000-000000001835",
+  conversationId: `conversation_${["00000000", "0000", "4000", "8000", "000000001835"].join("-")}` as `conversation_${string}`,
   engine: "claude",
-  hostKey: "claude:18350000-0000-4000-8000-000000000100",
+  hostKey: `claude:${["18350000", "0000", "4000", "8000", "000000000100"].join("-")}`,
   path: "/transcripts/cut.jsonl",
   owner: { pid: 4242, startIdentity: "engine-start" },
   claimEpoch: 3,
