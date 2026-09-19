@@ -15,9 +15,13 @@ import { statePath } from "@/lib/configDir";
  * reach someone who ran `claude` before they ever opened the Viewer.
  */
 
-export const ONBOARDING_STEP_IDS = ["engines", "agents"] as const;
+export const ONBOARDING_STEP_IDS = ["engines", "agents", "check"] as const;
 export type OnboardingStepId = typeof ONBOARDING_STEP_IDS[number];
 export type OnboardingStepState = "done" | "skipped" | null;
+
+/** The last health check this install ran (#1876, design §6), written by the
+    check itself; a failed one marks the "Setup guide" menu row. */
+export type OnboardingLastHealth = { at: string; result: "passed" | "failed" | "stopped" | "running"; failedCode: string | null };
 
 export type OnboardingMarker = {
   schemaVersion: 1;
@@ -25,12 +29,22 @@ export type OnboardingMarker = {
   dismissedAt: string | null;
   reason: "existing-install" | null;
   steps: Record<OnboardingStepId, OnboardingStepState>;
+  lastHealth: OnboardingLastHealth | null;
 };
 
 const markerFile = () => statePath("onboarding.json");
 
 function emptySteps(): Record<OnboardingStepId, OnboardingStepState> {
-  return { engines: null, agents: null };
+  return { engines: null, agents: null, check: null };
+}
+
+function parseLastHealth(raw: unknown): OnboardingLastHealth | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const result = record.result;
+  if (typeof record.at !== "string" || !Number.isFinite(Date.parse(record.at))) return null;
+  if (result !== "passed" && result !== "failed" && result !== "stopped" && result !== "running") return null;
+  return { at: record.at, result, failedCode: typeof record.failedCode === "string" ? record.failedCode : null };
 }
 
 function parseMarker(raw: unknown): OnboardingMarker | null {
@@ -50,6 +64,7 @@ function parseMarker(raw: unknown): OnboardingMarker | null {
     dismissedAt: time(record.dismissedAt),
     reason: record.reason === "existing-install" ? "existing-install" : null,
     steps,
+    lastHealth: parseLastHealth(record.lastHealth),
   };
 }
 
@@ -78,7 +93,7 @@ export function writeOnboardingMarker(marker: OnboardingMarker, file = markerFil
 }
 
 export function freshMarker(): OnboardingMarker {
-  return { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: emptySteps() };
+  return { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: emptySteps(), lastHealth: null };
 }
 
 /** Whether the install already holds state the Viewer wrote: a seat (active,
@@ -144,5 +159,13 @@ export function applyOnboardingPatch(current: OnboardingMarker | null, patch: On
   if (patch.steps) Object.assign(next.steps, patch.steps);
   if (patch.dismissed) next.dismissedAt = now;
   if (patch.completed) next.completedAt = now;
+  return next;
+}
+
+/** Record the health check's result. It creates the marker if needed, which a
+    check can only have been run from inside the guide anyway. */
+export function writeLastHealth(lastHealth: OnboardingLastHealth, file = markerFile()): OnboardingMarker {
+  const next: OnboardingMarker = { ...(readOnboardingMarker(file) ?? freshMarker()), lastHealth };
+  writeOnboardingMarker(next, file);
   return next;
 }

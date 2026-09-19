@@ -518,7 +518,7 @@ const overlaps = (a: Rect, b: Rect, slack = 0) => a.x + slack < b.x + b.w && b.x
 /* ------------------------------------------------------------------------- */
 
 /* ------------------------------------------------------------------------- */
-/* Case: the first-run setup guide (#1876, slice 1)                          */
+/* Case: the first-run setup guide (#1876, slices 1 and 2)                   */
 /* ------------------------------------------------------------------------- */
 
 /*
@@ -535,7 +535,10 @@ const overlaps = (a: Rect, b: Rect, slack = 0) => a.x + slack < b.x + b.w && b.x
  * with the refusal banner and the very-heavy nudge, the move to Claude and its
  * undo, Codex installed and signed out with the sign-in open, neither engine
  * connected, the menu rows, the mapping opened alone, and a dismissal that
- * keeps the guide shut on reload. Each capture is measured in the live DOM:
+ * keeps the guide shut on reload. Slice 2 adds the Check step: before a run,
+ * running, passed, stopped, and each of the eleven failures at its row, with
+ * the machine detail opened on the last one, the check's answers served from
+ * records so no agent is spawned. Each capture is measured in the live DOM:
  * the dialog inside the viewport, no horizontal overflow, no clipped role
  * label (the two longest Ukrainian ones by name) or footer button, and 44 px
  * targets on the phone.
@@ -641,6 +644,66 @@ function measureOnboarding(phone: boolean) {
     selectedSegmentRing: Array.from(dialog.querySelectorAll<HTMLElement>("[role=radio][aria-checked=true]")).slice(0, 1).map((el) => getComputedStyle(el).boxShadow)[0] ?? null,
     enginesStepMark: dialog.querySelector<HTMLElement>('[data-onboarding-step="engines"] [data-step-mark]')?.dataset.stepMark ?? null,
     signInHint: dialog.querySelector("[data-onboarding-sign-in-hint]")?.textContent ?? null,
+    /* The Check step (slice 2): row states, the open failure and its block. */
+    health: dialog.querySelector("[data-health-check]") ? {
+      state: dialog.querySelector<HTMLElement>("[data-health-check]")!.dataset.healthCheck ?? null,
+      rows: Array.from(dialog.querySelectorAll<HTMLElement>("[data-health-row]")).map((el) => `${el.dataset.healthRow}=${el.dataset.healthState}`),
+      failure: dialog.querySelector<HTMLElement>("[data-health-failure]")?.dataset.healthFailure ?? null,
+      failureText: dialog.querySelector("[data-health-failure] p")?.textContent ?? null,
+      action: dialog.querySelector<HTMLElement>("[data-health-action]")?.dataset.healthAction ?? null,
+      summary: dialog.querySelector<HTMLElement>("[data-health-summary]")?.dataset.healthSummary ?? null,
+      lead: dialog.querySelector("[data-health-lead]")?.textContent ?? null,
+      detailsOpen: dialog.querySelector("[data-health-details]") !== null,
+      /* Anything inside the failure block wider than the block itself. */
+      failureOverflow: (() => {
+        const block = dialog.querySelector<HTMLElement>("[data-health-failure]");
+        if (!block) return 0;
+        const edge = block.getBoundingClientRect().right;
+        return Math.max(0, ...Array.from(block.querySelectorAll<HTMLElement>("*")).map((el) => Math.round(el.getBoundingClientRect().right - edge)));
+      })(),
+      rowLabelsClipped: Array.from(dialog.querySelectorAll<HTMLElement>("[data-health-row] span.flex-1")).filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent ?? ""),
+    } : null,
+  };
+}
+
+/* The Check step's states for the capture (#1876 slice 2). The server's
+   health check spawns real agents, so the capture serves its answers from
+   these records instead: each state renders exactly as a real run's record
+   would, and no quota is spent. */
+const HEALTH_RUNTIME = { engine: "claude", model: "haiku", effort: "low" };
+const HEALTH_ROW_IDS = ["spawn", "delivery", "report", "wake", "filing"] as const;
+const HEALTH_FAILURES: readonly { code: string; row: typeof HEALTH_ROW_IDS[number]; params?: Record<string, string>; agentPath?: string; accountId?: string }[] = [
+  { code: "CLI_MISSING", row: "spawn", params: { engine: "Claude", bin: "claude" } },
+  { code: "ENGINE_NOT_CONNECTED", row: "spawn", params: { engine: "Claude", bin: "claude" } },
+  { code: "ACCOUNT_EXHAUSTED", row: "spawn", params: { engine: "Claude", bin: "claude", time: "2100-01-02T15:00:00.000Z" }, accountId: "account-a" },
+  { code: "SPAWN_TIMEOUT", row: "spawn", params: { engine: "Claude", bin: "claude" } },
+  { code: "DELIVERY_FAILED", row: "delivery" },
+  { code: "MCP_UNREACHABLE", row: "report" },
+  { code: "REPORT_TIMEOUT", row: "report", agentPath: "/var/tmp/health-stage.jsonl" },
+  { code: "TICK_OFF", row: "wake" },
+  { code: "WAKE_NOT_OWED", row: "wake" },
+  { code: "WAKE_UNDELIVERED", row: "wake" },
+  { code: "SEAT_MISFILED", row: "filing", params: { project: "harbor" } },
+];
+
+function healthAnswer(state: "idle" | "running" | "passed" | "stopped" | { failed: typeof HEALTH_FAILURES[number] }): unknown {
+  if (state === "idle") return { runtime: HEALTH_RUNTIME, run: null };
+  const at = (seconds: number) => new Date(Date.parse("2100-01-02T10:00:00.000Z") + seconds * 1000).toISOString();
+  const failedAt = typeof state === "object" ? HEALTH_ROW_IDS.indexOf(state.failed.row) : -1;
+  const rows = HEALTH_ROW_IDS.map((id, index) => {
+    const rowState = state === "passed" ? "passed"
+      : state === "running" ? (index < 2 ? "passed" : index === 2 ? "running" : "waiting")
+        : state === "stopped" ? (index < 1 ? "passed" : "waiting")
+          : index < failedAt ? "passed" : index === failedAt ? "failed" : "waiting";
+    const failure = rowState === "failed" && typeof state === "object"
+      ? { code: state.failed.code, params: state.failed.params ?? {}, detail: `${state.failed.code.toLowerCase()}: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone`, agentPath: state.failed.agentPath ?? null, accountId: state.failed.accountId ?? null }
+      : null;
+    return { id, state: rowState, startedAt: rowState === "waiting" ? null : at(index * 9), finishedAt: rowState === "passed" || rowState === "failed" ? at(index * 9 + 8) : null, failure, note: null };
+  });
+  const runState = typeof state === "object" ? "failed" : state;
+  return {
+    runtime: HEALTH_RUNTIME,
+    run: { id: "capture1", state: runState, startedAt: at(0), finishedAt: runState === "running" ? null : at(50), runtime: HEALTH_RUNTIME, rows, cleanup: { done: runState !== "running", problems: [] }, version: "0.0.0" },
   };
 }
 
@@ -882,13 +945,66 @@ async function captureOnboarding(): Promise<void> {
             await page.click("[data-rail-menu-setup-guide]");
           }
           await page.waitForSelector('[data-onboarding-dialog="guide"]');
-          /* The guide reopens on the first step not yet done; from Engines, Continue once. */
-          await page.waitForSelector("[data-onboarding-engine], [data-agent-mapping]");
-          if (await page.$("[data-onboarding-engine]") !== null) await page.click("[data-onboarding-primary]");
+          /* The guide reopens on the first step not yet done; go to Agents by the step list. */
+          const openStep = async (id: string) => {
+            if (viewport.phone) await page.click("[data-onboarding-step-list-toggle]");
+            await page.click(`[data-onboarding-step="${id}"]`);
+          };
+          await openStep("agents");
           await page.waitForSelector("[data-agent-mapping] [data-mapping-row]");
           await shot("finish", () => {});
+
+          /* 9. The Check step, one frame per state its run can be in. */
+          let health: unknown = healthAnswer("idle");
+          await page.route("**/api/onboarding/health*", (route) => route.fulfill({ json: health }));
+          await page.click("[data-onboarding-primary]");
+          const checkFrame = async (name: string, answer: unknown, expectState: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void) => {
+            health = answer;
+            await openStep("agents");
+            await page.waitForSelector("[data-agent-mapping]");
+            await openStep("check");
+            await page.waitForSelector(`[data-health-check="${expectState}"]`, { timeout: 30_000 });
+            await shot(name, (r) => {
+              must(r.health !== null && r.health.rows.length === 5, `${tag} ${name}: the check shows ${r.health?.rows.length ?? 0} rows`);
+              must((r.health?.failureOverflow ?? 0) <= 0, `${tag} ${name}: the failure block overflows by ${r.health?.failureOverflow}px`);
+              must((r.health?.rowLabelsClipped.length ?? 0) === 0, `${tag} ${name}: clipped row labels ${r.health?.rowLabelsClipped.join(", ")}`);
+              check(r);
+            });
+          };
+          await checkFrame("check-idle", healthAnswer("idle"), "idle", (r) => {
+            must(Boolean(r.health?.lead?.includes("Haiku")), `${tag}: the check's lead does not name the model: ${r.health?.lead}`);
+          });
+          await checkFrame("check-running", healthAnswer("running"), "running", (r) => {
+            must(r.health?.rows.join(" ") === "spawn=passed delivery=passed report=running wake=waiting filing=waiting", `${tag}: running rows ${r.health?.rows.join(" ")}`);
+          });
+          await checkFrame("check-passed", healthAnswer("passed"), "passed", (r) => {
+            must(r.health?.summary === "passed", `${tag}: a passed run shows summary ${r.health?.summary}`);
+          });
+          await checkFrame("check-stopped", healthAnswer("stopped"), "stopped", (r) => {
+            must(r.health?.summary === "stopped", `${tag}: a stopped run shows summary ${r.health?.summary}`);
+          });
+          for (const failed of HEALTH_FAILURES) {
+            await checkFrame(`check-${failed.code.toLowerCase().replace(/_/g, "-")}`, healthAnswer({ failed }), "failed", (r) => {
+              must(r.health?.failure === failed.code, `${tag}: expected failure ${failed.code}, the step shows ${r.health?.failure}`);
+              must(Boolean(r.health?.failureText) && !r.health!.failureText!.includes("{"), `${tag} ${failed.code}: unfilled sentence "${r.health?.failureText}"`);
+              const index = HEALTH_ROW_IDS.indexOf(failed.row);
+              must(r.health!.rows.slice(index + 1).every((entry) => entry.endsWith("=waiting")), `${tag} ${failed.code}: rows after the failure are not waiting: ${r.health?.rows.join(" ")}`);
+              must(r.health?.summary === "failed", `${tag} ${failed.code}: no failed footer line`);
+            });
+          }
+          /* The machine detail, opened, on the longest sentence pair. */
+          await page.click("[data-health-failure] button[aria-expanded]");
+          await page.waitForSelector("[data-health-details]");
+          await shot("check-details", (r) => {
+            must(Boolean(r.health?.detailsOpen), `${tag}: Show details did not open`);
+          });
+          health = healthAnswer("idle");
+          await openStep("agents");
+          await openStep("check");
+          await page.waitForSelector('[data-health-check="idle"]');
           await page.click("[data-onboarding-primary]");
           await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
+          await page.unroute("**/api/onboarding/health*");
           const finished = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: { completedAt: string | null } | null };
           must(Boolean(finished.marker?.completedAt), `${tag}: Open the board did not record a completed guide`);
 

@@ -11,11 +11,12 @@ import type { OnboardingMarker, OnboardingStepId } from "@/lib/onboarding/marker
 import type { RoleEngine } from "@/lib/roles/types";
 
 import { AgentMappingTable, type EngineStatus } from "./AgentMappingTable";
+import { CheckStep } from "./CheckStep";
 import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./EnginesStep";
 import { putOnboarding, useOnboarding, type OnboardingMode } from "./useOnboarding";
 
 /**
- * The setup guide (#1876, design §2–§3), slice 1: Engines and Agents. One
+ * The setup guide (#1876, design §2–§3): Engines, Agents and Check. One
  * dialog, one job per step, no welcome or finish screen. Nothing is gated:
  * steps are freely navigable, every step closes by Escape, ✕ or "Close,
  * finish later", and nothing in the app waits on it — the launch refusal works
@@ -23,21 +24,25 @@ import { putOnboarding, useOnboarding, type OnboardingMode } from "./useOnboardi
  * table alone in the same shell.
  */
 
-const STEPS: readonly OnboardingStepId[] = ["engines", "agents"];
+const STEPS: readonly OnboardingStepId[] = ["engines", "agents", "check"];
 
 const STEP_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   engines: "onboarding.step.engines",
   agents: "onboarding.step.agents",
+  check: "onboarding.step.check",
 };
 
 const HEADING_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   engines: "onboarding.engines.heading",
   agents: "onboarding.agents.heading",
+  check: "onboarding.check.heading",
 };
 
-const LEAD_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
+/* The Check step writes its own lead: it names the model the run will use. */
+const LEAD_KEY: Record<OnboardingStepId, Parameters<TFunction>[0] | null> = {
   engines: "onboarding.engines.lead",
   agents: "onboarding.agents.lead",
+  check: null,
 };
 
 /** `/api/accounts` also says whether each engine's command resolves; the
@@ -90,7 +95,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
   const now = useNow();
   const [view, setView] = useState<OnboardingMode>(mode);
   const [step, setStep] = useState(() => mode === "mapping" ? 1 : firstOpenStep(marker));
-  const [steps, setSteps] = useState<Record<OnboardingStepId, "done" | "skipped" | null>>(() => marker?.steps ?? { engines: null, agents: null });
+  const [steps, setSteps] = useState<Record<OnboardingStepId, "done" | "skipped" | null>>(() => marker?.steps ?? { engines: null, agents: null, check: null });
   const [stepListOpen, setStepListOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -174,13 +179,17 @@ export function OnboardingDialog({ mode, marker, onClose }: {
     goTo(0);
   };
   const dismiss = () => onClose("dismissed");
+  const skipCheck = () => {
+    setSteps((value) => ({ ...value, check: "skipped" }));
+    void putOnboarding({ steps: { check: "skipped" } }).then(() => onClose("completed"));
+  };
   useEffect(() => { dismissRef.current = dismiss; });
 
   const title = view === "mapping" ? t("onboarding.mappingTitle") : t("onboarding.title");
   const heading = view === "mapping" ? null : (
     <>
       <h2 className="text-title font-bold text-primary">{t(HEADING_KEY[current])}</h2>
-      <p className="mt-2 text-body leading-[1.45] text-secondary">{t(LEAD_KEY[current])}</p>
+      {LEAD_KEY[current] ? <p className="mt-2 text-body leading-[1.45] text-secondary">{t(LEAD_KEY[current]!)}</p> : null}
     </>
   );
   const content = view === "mapping" || current === "agents" ? (
@@ -188,6 +197,8 @@ export function OnboardingDialog({ mode, marker, onClose }: {
       {view === "mapping" ? <p className="mb-4 text-body leading-[1.45] text-secondary">{t("onboarding.agents.leadStandalone")}</p> : null}
       <AgentMappingTable statuses={statuses} layout={isMobile ? "card" : "table"} onConnect={onConnect} />
     </>
+  ) : current === "check" ? (
+    <CheckStep noEngine={noEngine} onGoEngines={() => goTo(0)} onLeave={dismiss} onSkip={skipCheck} />
   ) : (
     <EnginesStep claude={claude} codex={codex} cli={cli} now={now} onRecheck={recheckAll} />
   );
@@ -255,7 +266,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
               </button>
             ) : <span className="w-3 shrink-0" />}
             {view === "guide" ? (
-              <button type="button" aria-expanded={stepListOpen} onClick={() => setStepListOpen((value) => !value)} className="flex min-h-11 min-w-0 flex-1 items-center truncate text-left text-body font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <button type="button" data-onboarding-step-list-toggle="" aria-expanded={stepListOpen} onClick={() => setStepListOpen((value) => !value)} className="flex min-h-11 min-w-0 flex-1 items-center truncate text-left text-body font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 <span className="truncate">{counter} · {t(STEP_KEY[current])}</span>
               </button>
             ) : (
