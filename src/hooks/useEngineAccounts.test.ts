@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { claudeLoginErrKey, createEngineAccountsStore, NONTERMINAL_CLAUDE_LOGIN_PHASES, parseAccountLimits, parseClaudeLogin, parseResetCredits, type ClaudeLoginPhase } from "./useEngineAccounts";
+import { claudeLoginErrKey, createEngineAccountsStore, NONTERMINAL_CLAUDE_LOGIN_PHASES, parseAccountLimits, parseClaudeLogin, parseResetCredits, type AccountRefusalReason, type ClaudeLoginPhase } from "./useEngineAccounts";
 
 const advance = async () => {
   for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
@@ -531,129 +531,166 @@ test("a non-202 claude add keeps the add retry action with the draft label (C12g
   unsub();
 });
 
-test("managed account removal never offers a force retry for safety blockers", async () => {
-  const { calls, fetcher } = scripted((url, body) => {
+/* ---- Removal answers (#1857 slice 2) ---- */
+
+/** A store whose `work` account answers the DELETE with `answer`; the list
+    drops `work` once a removal succeeds. */
+async function removalStore(answer: (body: { id?: string; cleanupOrphans?: boolean }) => unknown) {
+  let removed = false;
+  const calls: Call[] = [];
+  const fetcher = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    calls.push({ url, method: init?.method ?? "GET", body });
     if (url === "/api/accounts") {
-      return {
-        claude: {
-          active: "main",
-          accounts: [
-            claudeMain,
-            claudeAcct({ id: "work", label: "Work", login: null }),
-          ],
-        },
-      };
+      return new Response(JSON.stringify(claudePayload({ accounts: [claudePayload().claude.accounts[0], ...(removed ? [] : [claudePayload().claude.accounts[1]])] })));
     }
-    if (url === "/api/accounts/claude" && (body as { id?: string }).id === "work") {
-      return new Response(JSON.stringify({ code: "account_removal_blocked", blockers: ["live_sessions"] }), { status: 409 });
-    }
-    return new Response(null, { status: 204 });
-  });
+    if (url !== "/api/accounts/claude") return new Response(null, { status: 204 });
+    const value = await answer(body as { id?: string; cleanupOrphans?: boolean });
+    const response = value instanceof Response ? value : new Response(JSON.stringify(value));
+    if (response.ok && (body as { id?: string }).id === "work") removed = true;
+    return response;
+  };
   const store = createEngineAccountsStore("claude", { fetcher });
   const unsub = store.subscribe(() => {});
   await advance();
+  return { store, unsub, calls };
+}
 
-  expect(await store.remove("work")).toBeFalse();
-  expect(store.notice?.action).toBeNull();
-  expect(calls.filter((call) => call.url === "/api/accounts/claude").map((call) => call.body)).toEqual([
-    { id: "work", force: false },
-  ]);
-  expect(store.accounts.some((account) => account.id === "work")).toBeTrue();
+const refused = (status: number, body: Record<string, unknown>) => () => new Response(JSON.stringify(body), { status });
+
+test("each refusal answer maps to its own reason and keeps archive and errno", async () => {
+  const cases: Array<[() => unknown, { reasons: AccountRefusalReason[]; archive?: string; errno?: string }]> = [
+    [refused(409, { code: "account_removal_blocked", blockers: ["live_sessions"] }), { reasons: ["live_sessions"] }],
+    [refused(409, { code: "account_removal_blocked", blockers: ["login_pending"] }), { reasons: ["login_pending"] }],
+    [refused(409, { code: "account_removal_blocked", blockers: ["queued_pin"] }), { reasons: ["queued_pin"] }],
+    [refused(409, { code: "account_removal_blocked", blockers: ["current_conversations"] }), { reasons: ["current_conversations"] }],
+    [refused(409, { code: "unsafe_home" }), { reasons: ["unsafe_home"] }],
+    [refused(409, { code: "archive_unavailable", archive: "/var/tmp/llv/shared/claude/retired/work" }), { reasons: ["archive_unavailable"], archive: "/var/tmp/llv/shared/claude/retired/work" }],
+    [refused(409, { code: "accounts_locked" }), { reasons: ["accounts_locked"] }],
+    [refused(404, { code: "unknown_account" }), { reasons: ["unknown_account"] }],
+    [refused(500, { code: "removal_failed", errno: "EACCES" }), { reasons: ["removal_failed"], errno: "EACCES" }],
+    [() => { throw new TypeError("network down"); }, { reasons: ["no_answer"] }],
+  ];
+  for (const [answer, expected] of cases) {
+    const { store, unsub, calls } = await removalStore(answer);
+    expect(await store.remove("work")).toBeFalse();
+    expect(store.removal).toEqual({ kind: "refused", refusal: { accountId: "work", label: "Work", ...expected } });
+    expect(store.removing).toBeNull();
+    expect(store.notice).toBeNull();
+    // No force flag goes out: nothing bypasses a blocker.
+    expect(calls.filter((call) => call.url === "/api/accounts/claude").map((call) => call.body)).toEqual([{ id: "work" }]);
+    unsub();
+  }
+});
+
+test("several blockers draw as several lines, at most three, and unknown ones fall back to a failed removal", async () => {
+  const many = await removalStore(refused(409, { code: "account_removal_blocked", blockers: ["live_sessions", "current_conversations", "login_pending", "queued_pin"] }));
+  await many.store.remove("work");
+  expect(many.store.removal).toMatchObject({ kind: "refused", refusal: { reasons: ["live_sessions", "current_conversations", "login_pending"] } });
+  many.unsub();
+
+  const unknown = await removalStore(refused(409, { code: "account_removal_blocked", blockers: ["filesystem_history"] }));
+  await unknown.store.remove("work");
+  expect(unknown.store.removal).toMatchObject({ kind: "refused", refusal: { reasons: ["removal_failed"] } });
+  unknown.unsub();
+});
+
+test("the next attempt takes the refusal's place, and the removing account is named while in flight", async () => {
+  let release: (value: Response) => void = () => {};
+  let attempt = 0;
+  const { store, unsub } = await removalStore(() => {
+    attempt += 1;
+    if (attempt === 1) return new Response(JSON.stringify({ code: "account_removal_blocked", blockers: ["live_sessions"] }), { status: 409 });
+    return new Promise<Response>((resolve) => { release = resolve; });
+  });
+  await store.remove("work");
+  expect(store.removal?.kind).toBe("refused");
+
+  const second = store.remove("work");
+  await advance();
+  expect(store.removal).toBeNull();
+  expect(store.removing).toBe("work");
+  expect(store.mutation).toBe("remove");
+  release(new Response(JSON.stringify({ removed: { id: "work" }, cleanupPending: false, moved: { archive: null, files: 0, bytes: 0 } })));
+  expect(await second).toBeTrue();
+  expect(store.removing).toBeNull();
   unsub();
 });
 
-test("managed account removal surfaces pending local cleanup with a recovery action", async () => {
-  let removed = false;
-  const { calls, fetcher } = scripted((url, body) => {
-    if (url === "/api/accounts") {
-      return { claude: { active: "main", accounts: [claudeMain, ...(removed ? [] : [claudeAcct({ id: "work", label: "Work", login: null })])] } };
-    }
-    if (url === "/api/accounts/claude" && (body as { cleanupOrphans?: boolean }).cleanupOrphans === true) {
-      return new Response(JSON.stringify({ removed: ["work"] }));
-    }
-    if (url === "/api/accounts/claude") {
-      removed = true;
-      return new Response(JSON.stringify({ removed: { id: "work" }, cleanupPending: true }));
-    }
-    return new Response(null, { status: 204 });
-  });
-  const store = createEngineAccountsStore("claude", { fetcher });
-  const unsub = store.subscribe(() => {});
-  await advance();
-
+test("a 200 with counts yields the summary; missing and zero counts read as zero", async () => {
+  const { store, unsub } = await removalStore(() => ({
+    removed: { id: "work" },
+    cleanupPending: false,
+    moved: { archive: "/var/tmp/llv/shared/claude/retired/work", files: 1284, bytes: 2_100_000_000 },
+    conversationsRewritten: 37,
+    pinsCleared: 0,
+    deliveriesDropped: 1,
+  }));
   expect(await store.remove("work")).toBeTrue();
-  expect(store.notice).toMatchObject({
-    messageKey: "accounts.cleanupPending",
-    target: "Work",
-    action: { type: "retry", kind: "cleanupOrphans" },
+  expect(store.removal).toEqual({
+    kind: "removed",
+    summary: {
+      accountId: "work", label: "Work",
+      archive: "/var/tmp/llv/shared/claude/retired/work", files: 1284, bytes: 2_100_000_000,
+      conversations: 37, pins: 0, deliveries: 1, migrations: 0,
+      credential: "clean",
+    },
   });
-  expect(await store.retryNotice()).toBeTrue();
+  expect(store.accounts.map((account) => account.id)).toEqual(["main"]);
+  store.dismissRemoval();
+  expect(store.removal).toBeNull();
+  unsub();
+});
+
+test("cleanupPending adds the sign-in line, and its clean-up turns it over without replacing the summary", async () => {
+  let stuck = true;
+  const { store, unsub, calls } = await removalStore((body) => body.cleanupOrphans
+    ? { removed: [], unresolved: stuck ? ["work"] : [] }
+    : { removed: { id: "work" }, cleanupPending: true, moved: { archive: "/var/tmp/llv/shared/claude/retired/work", files: 3, bytes: 812_000 } });
+  expect(await store.remove("work")).toBeTrue();
+  expect(store.removal).toMatchObject({ kind: "removed", summary: { credential: "pending" } });
+
+  // Still stuck: the line stays a warning; the summary stays.
+  expect(await store.cleanupOrphans()).toBeTrue();
+  expect(store.removal).toMatchObject({ kind: "removed", summary: { credential: "pending", files: 3 } });
+
+  stuck = false;
+  expect(await store.cleanupOrphans()).toBeTrue();
+  expect(store.removal).toMatchObject({ kind: "removed", summary: { credential: "deleted", files: 3 } });
   expect(calls.filter((call) => call.url === "/api/accounts/claude").map((call) => call.body)).toEqual([
-    { id: "work", force: false },
+    { id: "work" },
+    { cleanupOrphans: true },
     { cleanupOrphans: true },
   ]);
   unsub();
 });
 
-test("orphan cleanup keeps manual guidance when unsafe local data remains", async () => {
-  const { fetcher } = scripted((url) => {
-    if (url === "/api/accounts") return { claude: { active: "main", accounts: [claudeMain] } };
-    if (url === "/api/accounts/claude") {
-      return new Response(JSON.stringify({ removed: [], unresolved: ["unsafe-orphan"] }));
-    }
-    return new Response(null, { status: 204 });
+test("the clean-up reports what it deleted, archived and left, and a failure says so", async () => {
+  const done = await removalStore(() => ({ removed: ["claude-a", "claude-b"], unresolved: ["claude-r2.lock"], archived: [{ id: "old", files: 412, bytes: 96_000_000 }, { id: 7 }] }));
+  expect(await done.store.cleanupOrphans()).toBeTrue();
+  expect(done.store.removal).toEqual({
+    kind: "cleanup",
+    report: { removed: ["claude-a", "claude-b"], unresolved: ["claude-r2.lock"], archived: [{ id: "old", files: 412, bytes: 96_000_000 }] },
   });
-  const store = createEngineAccountsStore("claude", { fetcher });
-  const unsub = store.subscribe(() => {});
-  await advance();
+  expect(done.store.mutation).toBeNull();
+  done.unsub();
 
-  expect(await store.cleanupOrphans()).toBeTrue();
-  expect(store.notice).toMatchObject({ messageKey: "accounts.cleanupManual", action: null });
-  unsub();
+  const failed = await removalStore(() => new Response(JSON.stringify({ code: "cleanup_failed" }), { status: 500 }));
+  expect(await failed.store.cleanupOrphans()).toBeFalse();
+  expect(failed.store.removal).toEqual({ kind: "cleanupFailed" });
+  failed.unsub();
 });
 
-test("current conversation blockers provide migration guidance without a force loop", async () => {
-  const { fetcher } = scripted((url) => {
-    if (url === "/api/accounts") return { claude: { active: "main", accounts: [claudeMain, claudeAcct({ id: "work", label: "Work", login: null })] } };
-    if (url === "/api/accounts/claude") return new Response(JSON.stringify({ code: "account_removal_blocked", blockers: ["current_conversations"] }), { status: 409 });
-    return new Response(null, { status: 204 });
-  });
-  const store = createEngineAccountsStore("claude", { fetcher });
-  const unsub = store.subscribe(() => {});
-  await advance();
-  expect(await store.remove("work")).toBeFalse();
-  expect(store.notice).toMatchObject({ messageKey: "accounts.removeHistoryBlocked", action: null });
-  unsub();
-});
-
-test("filesystem history blockers provide preservation guidance without a force loop", async () => {
-  const { fetcher } = scripted((url) => {
-    if (url === "/api/accounts") return { claude: { active: "main", accounts: [claudeMain, claudeAcct({ id: "work", label: "Work", login: null })] } };
-    if (url === "/api/accounts/claude") return new Response(JSON.stringify({ code: "account_removal_blocked", blockers: ["filesystem_history"] }), { status: 409 });
-    return new Response(null, { status: 204 });
-  });
-  const store = createEngineAccountsStore("claude", { fetcher });
-  const unsub = store.subscribe(() => {});
-  await advance();
-
-  expect(await store.remove("work")).toBeFalse();
-  expect(store.notice).toMatchObject({ messageKey: "accounts.removeHistoryBlocked", action: null });
-  unsub();
-});
-
-test("a blocked removal notice stays non-bypassable when the follow-up refresh fails", async () => {
+test("a refused removal stays when the follow-up refresh fails", async () => {
   let accountsCalls = 0;
   const { fetcher } = scripted((url) => {
     if (url === "/api/accounts") {
       accountsCalls += 1;
-      // First read succeeds so the store hydrates; the refresh triggered by
-      // the blocked removal below fails transiently.
       if (accountsCalls > 1) return new Response(null, { status: 500 });
-      return { claude: { active: "main", accounts: [claudeMain, claudeAcct({ id: "work", label: "Work", login: null })] } };
+      return claudePayload();
     }
-    if (url === "/api/accounts/claude") {
-      return new Response(JSON.stringify({ code: "account_removal_blocked", blockers: ["live_sessions"] }), { status: 409 });
-    }
+    if (url === "/api/accounts/claude") return new Response(JSON.stringify({ code: "account_removal_blocked", blockers: ["live_sessions"] }), { status: 409 });
     return new Response(null, { status: 204 });
   });
   const store = createEngineAccountsStore("claude", { fetcher });
@@ -661,7 +698,7 @@ test("a blocked removal notice stays non-bypassable when the follow-up refresh f
   await advance();
 
   expect(await store.remove("work")).toBeFalse();
-  expect(store.notice?.action).toBeNull();
+  expect(store.removal).toMatchObject({ kind: "refused", refusal: { reasons: ["live_sessions"] } });
   unsub();
 });
 

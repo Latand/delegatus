@@ -26,6 +26,17 @@
  * uk, light and dark, under a 21-character project name — and the phone's 52 px
  * bar in the same four.
  *
+ * With BOARD_CAPTURE_CASE=account-removal it drives the accounts dialog's
+ * removal answers (#1857) on the same seeded accounts, with every DELETE
+ * answered by a stub at the network layer so no account is removed anywhere:
+ * the armed row, the row in flight, the longest refusal, `archive_unavailable`
+ * with its path, the summary with all six lines, the summary with a sign-in
+ * file left behind, and the clean-up result with names that need a look — at
+ * 1440 and 1280 in en and uk, light and dark — and the phone at 390 × 844 for
+ * the refusal and the summary. Nothing is clamped or clipped, the path keeps
+ * its account id visible, the blocks stay inside the panel, and the phone's
+ * targets are 44 px.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -1603,6 +1614,329 @@ async function headerMain(): Promise<void> {
   }
 }
 
-/* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801) instead of the camera probes. */
+/* ------------------------------------------------------------------------- */
+/* The account removal dialog's answers (#1857, docs/design/ui-batch-2026-09 §5) */
+/* ------------------------------------------------------------------------- */
+
+/** A free port: bound on 0 here, read back, released for the server. */
+function freePort(): number {
+  const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response(null) });
+  const port = probe.port!;
+  probe.stop(true);
+  return port;
+}
+
+interface RemovalReading {
+  found: boolean;
+  rect: Rect | null;
+  panel: Rect | null;
+  text: string;
+  /** Text boxes that cut their content: a clamp, an ellipsis or hidden overflow that bites. */
+  clipped: string[];
+  /** The archive path's account id, and whether its whole box is painted inside the block. */
+  pathId: { text: string; visible: boolean } | null;
+  /** The displayed path, home folded to `~`. */
+  pathShown: string | null;
+  /** Buttons inside the block, for the phone's 44 px rule. */
+  targets: { name: string; w: number; h: number }[];
+}
+
+/** Runs inside the page: one removal block (row line, refusal or card) against its surface. */
+function readRemoval(selector: string): RemovalReading {
+  const box = (element: Element | null): Rect | null => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  };
+  const element = document.querySelector(selector);
+  const surface = element?.closest('[role="dialog"]') ?? element?.closest("[data-mobile2-accounts]") ?? null;
+  if (!element) return { found: false, rect: null, panel: box(surface), text: "", clipped: [], pathId: null, pathShown: null, targets: [] };
+  const clipped: string[] = [];
+  for (const node of [element, ...element.querySelectorAll("*")]) {
+    if (!(node instanceof HTMLElement) || node.closest("[data-archive-path]") && !node.hasAttribute("data-archive-path-id")) continue;
+    if (!node.textContent?.trim()) continue;
+    const style = getComputedStyle(node);
+    const hides = style.overflowX !== "visible" || style.overflowY !== "visible";
+    const clamp = style.getPropertyValue("-webkit-line-clamp");
+    if (clamp && clamp !== "none") clipped.push(`${node.tagName}: line-clamp ${clamp}`);
+    if (style.textOverflow === "ellipsis" && node.scrollWidth > node.clientWidth + 1) clipped.push(`${node.tagName}: ellipsis «${node.textContent.trim().slice(0, 40)}»`);
+    if (hides && (node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1)) clipped.push(`${node.tagName}: overflow «${node.textContent.trim().slice(0, 40)}»`);
+  }
+  const id = element.querySelector("[data-archive-path-id]");
+  const idBox = id?.getBoundingClientRect();
+  const blockBox = element.getBoundingClientRect();
+  const pathId = id && idBox ? { text: id.textContent ?? "", visible: idBox.width > 0 && idBox.left >= blockBox.left - 0.5 && idBox.right <= blockBox.right + 0.5 && (id as HTMLElement).scrollWidth <= (id as HTMLElement).clientWidth + 1 } : null;
+  const shown = element.querySelector("[data-archive-path] > span[title]");
+  return {
+    found: true,
+    rect: box(element),
+    panel: box(surface),
+    text: element.textContent?.replace(/\s+/g, " ").trim() ?? "",
+    clipped,
+    pathId,
+    pathShown: shown?.textContent ?? null,
+    targets: [...element.querySelectorAll("button")].map((button) => {
+      const r = button.getBoundingClientRect();
+      return { name: button.getAttribute("aria-label") || button.textContent?.trim() || "", w: r.width, h: r.height };
+    }),
+  };
+}
+
+/** Composed rather than written out: an archive path under an invented home, so the `~` fold is exercised. */
+const inventedArchive = (id: string) => ["", "home", "demo", ".config", "agent-log-viewer", "shared", "claude", "retired", id].join("/");
+
+type Answer = { status: number; body: unknown };
+
+async function accountRemovalMain(): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit() };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    const { project } = await waitForBoard(baseUrl, false);
+    await stop(server);
+    server = null;
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    seedState(project, tasks, reviewers);
+    await seedAccounts(project);
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, true);
+    await Bun.sleep(3_000);
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+
+    /* Every DELETE is answered here and never reaches the server; the list read drops what a
+       stubbed success removed, the way the real one would. */
+    const stubbed = async (context: Awaited<ReturnType<Browser["newContext"]>>) => {
+      const gone = new Set<string>();
+      let next: Answer | null = null;
+      let hold: Promise<void> | null = null;
+      const deletes: unknown[] = [];
+      await context.route("**/api/accounts", async (route) => {
+        const response = await route.fetch();
+        const body = await response.json() as { claude?: { accounts?: { id: string }[] } };
+        if (body.claude?.accounts) body.claude.accounts = body.claude.accounts.filter((account) => !gone.has(account.id));
+        await route.fulfill({ response, json: body });
+      });
+      await context.route("**/api/accounts/claude", async (route) => {
+        if (route.request().method() !== "DELETE") return route.continue();
+        const request = route.request().postDataJSON() as { id?: string };
+        deletes.push(request);
+        if (hold) await hold;
+        const answer = next ?? { status: 500, body: { code: "removal_failed" } };
+        if (answer.status === 200 && request.id) gone.add(request.id);
+        await route.fulfill({ status: answer.status, contentType: "application/json", body: JSON.stringify(answer.body) });
+      });
+      return {
+        deletes,
+        answer(value: Answer) { next = value; },
+        holdNext(): () => void {
+          let release: () => void = () => {};
+          hold = new Promise<void>((resolve) => { release = () => { hold = null; resolve(); }; });
+          return () => release();
+        },
+      };
+    };
+    const rowIdOf = (page: Page, label: string) => page.evaluate((name: string) => [...document.querySelectorAll("[data-account-row]")].find((row) => row.querySelector("button[aria-current], button")?.textContent?.includes(name))?.getAttribute("data-account-row") ?? null, label);
+    const openPanel = async (page: Page) => {
+      await page.click("[data-bar-more]");
+      await page.waitForSelector("[data-bar-more-menu]");
+      await page.click('[data-bar-more-menu] [data-account-switch-engine="claude"] > button');
+      await page.waitForSelector('[role="dialog"] [data-account-row]');
+      await page.waitForTimeout(400);
+    };
+    const shoot = async (page: Page, name: string) => {
+      const panel = await page.evaluate(() => {
+        const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) => /Claude/.test(element.getAttribute("aria-label") ?? ""));
+        const r = dialog?.getBoundingClientRect();
+        return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null;
+      });
+      if (panel) await page.screenshot({ path: path.join(OUT_DIR, `removal-${name}.png`), clip: { x: Math.max(0, panel.x - 8), y: Math.max(0, panel.y - 8), width: panel.w + 16, height: panel.h + 16 } });
+    };
+    const check = (tag: string, state: string, reading: RemovalReading, expect: { text?: string[]; phone?: boolean }) => {
+      must(reading.found, `${tag} ${state}: the block is missing`);
+      if (!reading.found || !reading.rect) return;
+      for (const text of expect.text ?? []) must(reading.text.includes(text), `${tag} ${state}: «${text}» is not in «${reading.text.slice(0, 160)}»`);
+      must(reading.clipped.length === 0, `${tag} ${state}: text is cut: ${reading.clipped.join("; ")}`);
+      if (reading.panel) must(reading.rect.x >= reading.panel.x - 0.5 && reading.rect.x + reading.rect.w <= reading.panel.x + reading.panel.w + 0.5, `${tag} ${state}: the block runs outside the panel (${JSON.stringify(reading.rect)} in ${JSON.stringify(reading.panel)})`);
+      if (expect.phone) for (const target of reading.targets) must(target.w >= 44 && target.h >= 44, `${tag} ${state}: «${target.name}» is ${target.w}×${target.h}`);
+    };
+
+    const cases = [1440, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
+    for (const { width, lang, colorScheme } of cases) {
+      const tag = `${width}-${lang}-${colorScheme}`;
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      const stub = await stubbed(context);
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 120_000 });
+      await page.waitForTimeout(1_500);
+      await openPanel(page);
+      const idB = await rowIdOf(page, "Account B");
+      const idC = await rowIdOf(page, "Account C");
+      must(idB !== null && idC !== null, `${tag}: the seeded rows are missing`);
+      if (!idB || !idC) { await context.close(); continue; }
+      const readings: Record<string, RemovalReading> = {};
+      const arm = async (id: string) => {
+        await page.click(`[data-account-remove="${id}"]`);
+        await page.waitForSelector(`[data-account-remove-armed="${id}"]`);
+      };
+      const confirm = (id: string) => page.click(`[data-account-remove-confirm="${id}"]`);
+
+      /* Armed, then in flight behind a held answer that turns out to be the longest refusal. */
+      await arm(idB);
+      readings.armed = await page.evaluate(readRemoval, `[data-account-remove-armed="${idB}"]`);
+      check(tag, "armed", readings.armed, { text: [lang === "uk" ? "спільного архіву" : "shared archive"] });
+      await shoot(page, `${tag}-armed`);
+      const release = stub.holdNext();
+      stub.answer({ status: 409, body: { code: "account_removal_blocked", blockers: ["current_conversations"] } });
+      await confirm(idB);
+      await page.waitForSelector(`[data-account-row="${idB}"][aria-busy="true"]`);
+      readings.inFlight = await page.evaluate(readRemoval, `[data-account-row="${idB}"]`);
+      check(tag, "in flight", readings.inFlight, { text: [lang === "uk" ? "Видалення…" : "Removing…"] });
+      const dimmed = await page.evaluate((id: string) => getComputedStyle(document.querySelector(`[data-account-row="${id}"]`)!).opacity, idB);
+      must(Number(dimmed) < 0.7, `${tag} in flight: the row's opacity is ${dimmed}`);
+      await shoot(page, `${tag}-in-flight`);
+      release();
+      await page.waitForSelector(`[data-account-row="${idB}"] [data-account-refusal="${idB}"]`);
+      await page.waitForTimeout(300);
+      readings.refusal = await page.evaluate(readRemoval, `[data-account-refusal="${idB}"]`);
+      check(tag, "longest refusal", readings.refusal, { text: [lang === "uk" ? "Нічого не змінено." : "Nothing was changed."] });
+      await shoot(page, `${tag}-refusal`);
+
+      /* archive_unavailable, with its path. */
+      stub.answer({ status: 409, body: { code: "archive_unavailable", archive: inventedArchive(idB) } });
+      await arm(idB);
+      await confirm(idB);
+      await page.waitForSelector(`[data-account-refusal="${idB}"] [data-archive-path]`);
+      await page.waitForTimeout(300);
+      readings.archive = await page.evaluate(readRemoval, `[data-account-refusal="${idB}"]`);
+      check(tag, "archive_unavailable", readings.archive, {});
+      must(readings.archive.pathId?.text === idB && readings.archive.pathId.visible, `${tag} archive_unavailable: the path's account id is ${JSON.stringify(readings.archive.pathId)}`);
+      must(readings.archive.pathShown?.startsWith("~/") ?? false, `${tag} archive_unavailable: the path reads «${readings.archive.pathShown}»`);
+      await shoot(page, `${tag}-archive`);
+
+      /* The full summary: every line above zero. */
+      stub.answer({ status: 200, body: { removed: { id: idB }, cleanupPending: false, moved: { archive: inventedArchive(idB), files: 1284, bytes: 2_100_000_000 }, conversationsRewritten: 37, pinsCleared: 2, deliveriesDropped: 1, migrationsSettled: 1 } });
+      await arm(idB);
+      await confirm(idB);
+      await page.waitForSelector('[data-account-removal-card="removed"]');
+      await page.waitForTimeout(600);
+      readings.summary = await page.evaluate(readRemoval, '[data-account-removal-card="removed"]');
+      check(tag, "summary", readings.summary, {});
+      must((await page.evaluate(() => document.querySelectorAll('[data-account-removal-card="removed"] dt').length)) === 6, `${tag} summary: not six lines`);
+      must(readings.summary.pathId?.text === idB && readings.summary.pathId.visible, `${tag} summary: the path's account id is ${JSON.stringify(readings.summary.pathId)}`);
+      must(await page.evaluate((id: string) => document.querySelector(`[data-account-row="${id}"]`) === null, idB), `${tag} summary: the removed row is still listed`);
+      await shoot(page, `${tag}-summary`);
+
+      /* A sign-in file left in the archive, and its clean-up. */
+      stub.answer({ status: 200, body: { removed: { id: idC }, cleanupPending: true, moved: { archive: inventedArchive(idC), files: 3, bytes: 812_000 }, conversationsRewritten: 0, pinsCleared: 0, deliveriesDropped: 0, migrationsSettled: 0 } });
+      await arm(idC);
+      await confirm(idC);
+      await page.waitForSelector('[data-account-removal-credential="pending"]');
+      await page.waitForTimeout(300);
+      readings.pending = await page.evaluate(readRemoval, '[data-account-removal-card="removed"]');
+      check(tag, "cleanupPending", readings.pending, {});
+      must((await page.evaluate(() => document.querySelectorAll('[data-account-removal-card="removed"] dt').length)) === 2, `${tag} cleanupPending: a clean removal draws more than its two lines`);
+      await shoot(page, `${tag}-pending`);
+      stub.answer({ status: 200, body: { removed: [], unresolved: [] } });
+      await page.click('[data-account-removal-credential="pending"] button');
+      await page.waitForSelector('[data-account-removal-credential="deleted"]');
+
+      /* The clean-up result, with names that need a look. */
+      stub.answer({ status: 200, body: { removed: ["claude-f1", "claude-f2", "claude-f3"], archived: [{ id: "claude-r1", files: 300, bytes: 60_000_000 }, { id: "claude-r3", files: 112, bytes: 36_000_000 }], unresolved: ["claude-r2.lock", "claude-x1", "claude-x2", "claude-x3", "claude-x4", "claude-x5", "claude-x6"] } });
+      await page.click("[data-account-cleanup]");
+      await page.waitForSelector('[data-account-removal-card="cleanup"]');
+      await page.waitForTimeout(300);
+      readings.cleanup = await page.evaluate(readRemoval, '[data-account-removal-card="cleanup"]');
+      check(tag, "clean-up", readings.cleanup, { text: ["claude-r2.lock", "+2"] });
+      await shoot(page, `${tag}-cleanup`);
+      must(stub.deletes.every((body) => !(body as { force?: unknown }).force), `${tag}: a DELETE carried a force flag`);
+      report[tag] = { readings, deletes: stub.deletes.length };
+      await context.close();
+    }
+
+    /* The phone has no footer slot and no remove control of its own: the removal starts at desktop
+       width behind a held answer, the window narrows to the phone, and the answer lands on the
+       phone's accounts screen. */
+    for (const lang of ["en", "uk"] as const) for (const colorScheme of ["light", "dark"] as const) {
+      for (const kind of ["refusal", "summary"] as const) {
+        const tag = `390-${lang}-${colorScheme}-${kind}`;
+        const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, hasTouch: true, colorScheme, reducedMotion: "reduce" });
+        await context.addInitScript(seedInit);
+        await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+        const stub = await stubbed(context);
+        const page = await context.newPage();
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 120_000 });
+        await page.waitForTimeout(1_500);
+        await openPanel(page);
+        const id = await rowIdOf(page, "Account B");
+        if (!id) { must(false, `${tag}: the seeded row is missing`); await context.close(); continue; }
+        stub.answer(kind === "refusal"
+          ? { status: 409, body: { code: "account_removal_blocked", blockers: ["current_conversations"] } }
+          : { status: 200, body: { removed: { id }, cleanupPending: true, moved: { archive: inventedArchive(id), files: 1284, bytes: 2_100_000_000 }, conversationsRewritten: 37, pinsCleared: 2, deliveriesDropped: 1, migrationsSettled: 1 } });
+        const release = stub.holdNext();
+        await page.click(`[data-account-remove="${id}"]`);
+        await page.click(`[data-account-remove-confirm="${id}"]`);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.waitForSelector("[data-mobile2-bar]", { timeout: 60_000 });
+        await page.click('[data-mobile2-bar] [data-mobile2-open="menu"]');
+        await page.click('[data-mobile2-menu-row="accounts"]');
+        await page.waitForSelector("[data-mobile2-accounts]");
+        release();
+        const selector = kind === "refusal" ? `[data-mobile2-account="${id}"] [data-account-refusal="${id}"]` : '[data-mobile2-accounts-engine="claude"] [data-account-removal-card="removed"]';
+        await page.waitForSelector(selector, { timeout: 30_000 });
+        await page.waitForTimeout(400);
+        const reading = await page.evaluate(readRemoval, selector);
+        check(tag, kind, reading, { phone: true });
+        if (kind === "summary") {
+          must(reading.pathId?.text === id && reading.pathId.visible, `${tag}: the path's account id is ${JSON.stringify(reading.pathId)}`);
+          const leads = await page.evaluate(() => {
+            const section = document.querySelector('[data-mobile2-accounts-engine="claude"]');
+            const card = section?.querySelector('[data-account-removal-card="removed"]');
+            const first = section?.querySelector("[data-mobile2-account]");
+            return Boolean(card && first && card.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING);
+          });
+          must(leads, `${tag}: the summary does not lead the engine section`);
+        } else {
+          const inside = await page.evaluate((account: string) => {
+            const card = document.querySelector(`[data-mobile2-account="${account}"]`)!.getBoundingClientRect();
+            const block = document.querySelector(`[data-account-refusal="${account}"]`)!.getBoundingClientRect();
+            return block.left >= card.left - 0.5 && block.right <= card.right + 0.5 && block.top >= card.top - 0.5 && block.bottom <= card.bottom + 0.5;
+          }, id);
+          must(inside, `${tag}: the refusal is not inside the account's card`);
+        }
+        await page.screenshot({ path: path.join(OUT_DIR, `removal-${tag}.png`), fullPage: false });
+        report[tag] = reading;
+        await context.close();
+      }
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "account-removal.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(`account removal measurements: ${path.join(OUT_DIR, "account-removal.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`account removal acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("account removal acceptance passed at 1440 and 1280 (en, uk; light, dark) and 390 × 844 (en, uk; light, dark).");
+  }
+}
+
+/* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
+else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
 else await main();
