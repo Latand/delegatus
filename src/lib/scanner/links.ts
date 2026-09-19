@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
-import crypto from "node:crypto";
 
 import { statePath } from "@/lib/configDir";
+import { writeJsonDurably } from "@/lib/state/durableJson";
 
 import {
   handoffParentForChild,
@@ -126,22 +126,12 @@ function loadCompactChains(): void {
 }
 
 function writeStateFile(filename: string, value: unknown): boolean {
-  let temporary: string | null = null;
   try {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     fs.chmodSync(path.dirname(filename), 0o700);
-    temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-    fs.writeFileSync(temporary, JSON.stringify(value) + "\n", { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(temporary, filename);
+    writeJsonDurably(filename, value, { space: 0 });
     return true;
   } catch {
-    if (temporary) {
-      try {
-        fs.unlinkSync(temporary);
-      } catch {
-        // The temporary file may be absent when directory creation failed.
-      }
-    }
     return false;
   }
 }
@@ -589,8 +579,8 @@ function persistLineage(): void {
   if (!lineageDirty) return;
   lineageDirty = false;
   try {
-    fs.mkdirSync(path.dirname(LINEAGE_FILE), { recursive: true });
-    fs.writeFileSync(LINEAGE_FILE, JSON.stringify(Object.fromEntries(lineageCache)));
+    /* Durable (#1870): the in-place write this replaced tore on a crash. */
+    writeJsonDurably(LINEAGE_FILE, Object.fromEntries(lineageCache), { space: 0 });
   } catch {
     /* best-effort: a missing cache only costs a re-resolve while live */
   }

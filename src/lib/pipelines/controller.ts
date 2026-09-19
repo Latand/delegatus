@@ -1,8 +1,8 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import { tickFlows } from "@/lib/flows/engine";
 import { completedFileScan } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
@@ -77,9 +77,7 @@ export function writeFlowPipelineControllerHeartbeat(
   filename = statePath(HEARTBEAT_FILE),
 ): void {
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-  const temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(temporary, `${JSON.stringify(heartbeat, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(temporary, filename);
+  writeJsonDurably(filename, heartbeat);
 }
 
 export async function controllerFileScan(): Promise<{ files: FileEntry[]; complete: boolean }> {

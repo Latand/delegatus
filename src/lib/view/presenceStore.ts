@@ -1,8 +1,7 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { canonicalProject } from "@/lib/projects/aliases";
 
 import { VIEW_SCHEMA_VERSION, type PresencePayloadV1, type StoredViewSession, type ViewFreshness, type ViewSessionSummary } from "./types";
@@ -172,15 +171,9 @@ function isStoredSession(value: unknown, now: number): value is StoredViewSessio
     to "this process knows only what it was told" rather than throwing into a
     heartbeat or a snapshot. */
 function readMirror(now: number): StoredViewSession[] {
-  let text: string;
   try {
-    text = fs.readFileSync(presenceFile(), "utf8");
-  } catch {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(text) as Partial<PresenceFileV1>;
-    if (parsed.schemaVersion !== PRESENCE_SCHEMA_VERSION || !Array.isArray(parsed.sessions)) return [];
+    const parsed = readJsonCache(presenceFile()) as Partial<PresenceFileV1> | undefined;
+    if (!parsed || parsed.schemaVersion !== PRESENCE_SCHEMA_VERSION || !Array.isArray(parsed.sessions)) return [];
     return parsed.sessions
       .filter((session): session is StoredViewSession => isStoredSession(session, now))
       .map((session) => ({
@@ -198,17 +191,12 @@ function writeMirror(sessions: Iterable<StoredViewSession>, now: number): void {
     updatedAt: new Date(now).toISOString(),
     sessions: [...sessions],
   };
-  const target = presenceFile();
-  const temp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${crypto.randomUUID()}.tmp`);
   try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(temp, JSON.stringify(file, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(temp, target);
+    writeJsonDurably(presenceFile(), file);
   } catch {
     /* A presence mirror that cannot be written must never fail the heartbeat
        the operator's browser is sending, nor the snapshot someone is reading.
        The in-memory map is still correct for this process. */
-    fs.rmSync(temp, { force: true });
   }
 }
 
