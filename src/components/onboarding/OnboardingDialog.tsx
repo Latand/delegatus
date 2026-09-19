@@ -97,6 +97,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
   const [step, setStep] = useState(() => mode === "mapping" ? 1 : firstOpenStep(marker));
   const [steps, setSteps] = useState<Record<OnboardingStepId, "done" | "skipped" | null>>(() => marker?.steps ?? { engines: null, agents: null, check: null });
   const [stepListOpen, setStepListOpen] = useState(false);
+  const [checkOwnsPrimary, setCheckOwnsPrimary] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -198,7 +199,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
       <AgentMappingTable statuses={statuses} layout={isMobile ? "card" : "table"} onConnect={onConnect} />
     </>
   ) : current === "check" ? (
-    <CheckStep noEngine={noEngine} onGoEngines={() => goTo(0)} onLeave={dismiss} onSkip={skipCheck} />
+    <CheckStep noEngine={noEngine} onGoEngines={() => goTo(0)} onLeave={dismiss} onSkip={skipCheck} onOwnsPrimary={setCheckOwnsPrimary} />
   ) : (
     <EnginesStep claude={claude} codex={codex} cli={cli} now={now} onRecheck={recheckAll} />
   );
@@ -243,7 +244,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
           {t("onboarding.back")}
         </button>
       ) : null}
-      <button type="button" data-onboarding-primary="" onClick={next} className="inline-flex h-8 items-center justify-center rounded-[8px] bg-accent px-4 text-ui font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2]">
+      <button type="button" data-onboarding-primary="" onClick={next} className={`inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2] ${current === "check" && checkOwnsPrimary ? "border border-border bg-card text-primary hover:bg-sunken" : "bg-accent text-white hover:opacity-90"}`}>
         {last ? t("onboarding.finish") : t("onboarding.continue")}
       </button>
     </>

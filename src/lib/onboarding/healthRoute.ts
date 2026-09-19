@@ -6,6 +6,7 @@ import {
   productionHealthCheckPorts,
   startHealthCheck,
   stopHealthCheck,
+  sweepOrphanedHealthRuns,
   type HealthCheckPorts,
   type HealthRun,
   type HealthRuntime,
@@ -29,14 +30,24 @@ function runtimeNow(): HealthRuntime | null {
   return cheapestHealthRuntime({ claude: readinessOf("claude"), codex: readinessOf("codex") });
 }
 
+/** A check a restarted Viewer lost track of is cleaned up on the next read or
+    start: nothing else would ever close its pipeline or stop its hosts. */
+async function sweepLeftovers(ports?: HealthCheckPorts): Promise<void> {
+  if (currentHealthRun()?.state === "running") return;
+  await sweepOrphanedHealthRuns(ports ?? await portsFactory());
+}
+
 export async function onboardingHealthGet(runId: string | null): Promise<RouteResult> {
+  await sweepLeftovers();
   const run = currentHealthRun(runId);
   if (runId && !run) return { status: 404, body: { error: "no such health check run" } };
   return { status: 200, body: { runtime: runtimeNow(), run } };
 }
 
 export async function onboardingHealthStart(): Promise<RouteResult> {
-  const run = startHealthCheck(await portsFactory());
+  const ports = await portsFactory();
+  await sweepLeftovers(ports);
+  const run = startHealthCheck(ports);
   if (!run) return { status: 409, body: { error: "Connect an engine first: no engine can start an agent on this machine.", code: "NO_ENGINE" } };
   return { status: 202, body: { runtime: run.runtime, run } };
 }

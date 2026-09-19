@@ -202,7 +202,7 @@ function FailureBlock({ run, row, onGoEngines, onLeave }: { run: HealthRun; row:
   );
 }
 
-export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip }: {
+export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip, onOwnsPrimary }: {
   /** No engine connected, as the Engines step reads it. */
   noEngine: boolean;
   onGoEngines: () => void;
@@ -210,6 +210,9 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip }: {
   onLeave: () => void;
   /** "Skip the check": the step is marked skipped and the guide finishes. */
   onSkip: () => void;
+  /** Whether the step's own button is the screen's one accent action, so the
+      footer's "Open the board" steps back to a bordered button. */
+  onOwnsPrimary?: (owns: boolean) => void;
 }) {
   const { t } = useLocale();
   const { answer, loaded, error, start, stop } = useHealthCheck();
@@ -231,13 +234,18 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip }: {
   useEffect(() => { if (failedAt) controls.current?.scrollIntoView?.({ block: "nearest" }); }, [failedAt]);
 
   const runtime = run?.runtime ?? answer?.runtime ?? null;
+  const noEngineShown = loaded && !runtime && !run && noEngine;
+  /* One accent per screen: Run the check / Run it again holds it until the check passes. */
+  const ownsPrimary = !noEngineShown && !running && run?.state !== "passed";
+  useEffect(() => { onOwnsPrimary?.(ownsPrimary); }, [ownsPrimary, onOwnsPrimary]);
+  useEffect(() => () => onOwnsPrimary?.(false), [onOwnsPrimary]);
   const lead = runtime
     ? t("onboarding.check.lead", { model: modelLabel(runtime), effort: effortTierLabel(t, runtime.effort) })
     : null;
   const primary = "inline-flex h-8 items-center justify-center rounded-[8px] bg-accent px-4 text-ui font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 max-sm:h-11 max-sm:flex-1";
   const secondary = "inline-flex h-8 items-center justify-center rounded-[8px] border border-border bg-card px-3.5 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 max-sm:h-11 max-sm:flex-1";
 
-  if (loaded && !runtime && !run && noEngine) {
+  if (noEngineShown) {
     return (
       <div data-health-check="no-engine">
         <p className="text-body leading-[1.45] text-secondary">{t("onboarding.check.noEngine")}</p>
@@ -281,7 +289,7 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip }: {
         <div ref={controls} className="flex flex-wrap gap-2">
           {running
             ? <button type="button" data-health-stop="" onClick={() => void stop()} className={secondary}>{t("onboarding.check.stop")}</button>
-            : <button type="button" data-health-start="" disabled={cleaning || !loaded} onClick={() => void start()} className={run?.state === "passed" ? secondary : primary}>{run ? t("onboarding.check.again") : t("onboarding.check.start")}</button>}
+            : <button type="button" data-health-start="" disabled={cleaning || !loaded} onClick={() => void start()} className={ownsPrimary ? primary : secondary}>{run ? t("onboarding.check.again") : t("onboarding.check.start")}</button>}
           {!run ? <button type="button" data-health-skip="" onClick={onSkip} className="inline-flex h-8 items-center justify-center rounded-[8px] px-3 text-ui font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-1">{t("onboarding.check.skip")}</button> : null}
         </div>
       </div>

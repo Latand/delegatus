@@ -16,12 +16,15 @@ import {
   currentHealthRun,
   filingVerdict,
   prepareHealthRepo,
+  readHealthRunFiles,
   resetHealthCheckForTests,
   settleHealthCheckForTests,
   startHealthCheck,
   stopHealthCheck,
+  sweepOrphanedHealthRuns,
   timedOutAgentPath,
   wakeVerdict,
+  writeHealthRunFile,
   type HealthCheckPorts,
   type HealthRun,
 } from "./healthCheck";
@@ -137,6 +140,9 @@ function fakePorts(script: Script, log: string[] = []): HealthCheckPorts {
     runTick: async () => (script.tick ?? (() => ({ record: record({}), outcome: { ok: true, outcome: "delivered" } })))() as never,
     seatFilings: () => script.filings === undefined ? [{ project: PROJECT, displayName: "harbor", misfiledTo: null }] : script.filings,
     cleanup: async (input) => { log.push(`cleanup ${input.pipelineId ?? "-"} ${input.seatConversationId ?? "-"}`); return []; },
+    recordLeftovers: () => {},
+    runFiles: () => [],
+    dropRunFile: () => {},
     recordResult: (run) => log.push(`result ${run.state}`),
     redact: (text) => text,
   };
@@ -245,27 +251,89 @@ test("no connected engine starts nothing", () => {
   expect(currentHealthRun()).toBeNull();
 });
 
+type CleanupCalls = { closed: string[]; stopped: string[]; archived: string[]; hidden: string[] };
+
+function cleanupPorts(over: Partial<Parameters<typeof cleanupHealthRun>[1]> = {}): { calls: CleanupCalls; ports: Parameters<typeof cleanupHealthRun>[1] } {
+  const calls: CleanupCalls = { closed: [], stopped: [], archived: [], hidden: [] };
+  return {
+    calls,
+    ports: {
+      closePipeline: async (id) => { calls.closed.push(id); return null; },
+      pipeline: () => null,
+      conversationPath: (id) => id === SEAT ? "/seat.jsonl" : null,
+      stopConversation: async (id) => { calls.stopped.push(id); return null; },
+      projectFor: () => PROJECT,
+      archive: async (project, paths) => { calls.archived.push(`${project} ${paths.join(",")}`); return null; },
+      hideTaskCards: async (project) => { calls.hidden.push(project); },
+      statePath: (...segments) => path.join(sandbox, "state", ...segments),
+      ...over,
+    },
+  };
+}
+
 test("cleanup removes the stage worktree and its branch from the scratch repository", async () => {
   const repo = path.join(sandbox, "viewer-health-check");
   const { baseRef } = prepareHealthRepo(repo);
   expect(prepareHealthRepo(repo).baseRef).toBe(baseRef);
   const worktree = path.join(sandbox, "viewer-health-check-pipeline-health01");
   execFileSync("git", ["worktree", "add", "-b", "pipeline/health01", worktree], { cwd: repo, stdio: "ignore" });
-  const closed: string[] = [];
-  const problems = await cleanupHealthRun(
-    { pipelineId: "health01", seatConversationId: null, stateDir: "health-runs/run00001", repoDir: repo },
-    {
-      closePipeline: async (id) => { closed.push(id); return null; },
-      /* A project-less record keeps this test off the board and task stores. */
-      pipeline: () => ({ id: "health01", state: "completed", project: "", worktreeDir: worktree, branch: "pipeline/health01", runs: [] }) as unknown as Pipeline,
-      conversationPath: () => null,
-      statePath: (...segments) => path.join(sandbox, "state", ...segments),
-    },
-  );
+  const { calls, ports } = cleanupPorts({
+    pipeline: () => ({ id: "health01", state: "completed", project: PROJECT, worktreeDir: worktree, branch: "pipeline/health01", runs: [{ stageId: "check", attempts: [attempt("passed")] }] }) as unknown as Pipeline,
+  });
+  const problems = await cleanupHealthRun({ pipelineId: "health01", seatConversationId: SEAT, project: PROJECT, stateDir: "health-runs/run00001", repoDir: repo }, ports);
   expect(problems).toEqual([]);
-  expect(closed).toEqual(["health01"]);
+  expect(calls).toEqual({ closed: ["health01"], stopped: [SEAT], archived: [`${PROJECT} /stage.jsonl,/seat.jsonl`], hidden: [PROJECT] });
   expect(fs.existsSync(worktree)).toBe(false);
   expect(execFileSync("git", ["branch", "--list", "pipeline/health01"], { cwd: repo, encoding: "utf8" }).trim()).toBe("");
+});
+
+test("a run that ends before its pipeline exists still archives the seat and hides its task card", async () => {
+  /* The seat's project, as the run recorded it once its transcript appeared. */
+  const recorded = cleanupPorts({ projectFor: () => null });
+  expect(await cleanupHealthRun({ pipelineId: null, seatConversationId: SEAT, project: PROJECT, stateDir: "health-runs/run00001", repoDir: "/scratch" }, recorded.ports)).toEqual([]);
+  expect(recorded.calls).toEqual({ closed: [], stopped: [SEAT], archived: [`${PROJECT} /seat.jsonl`], hidden: [PROJECT] });
+  /* The seat's transcript never appeared inside its bound: the scratch folder names the project. */
+  const unrecorded = cleanupPorts();
+  await cleanupHealthRun({ pipelineId: null, seatConversationId: SEAT, project: null, stateDir: "health-runs/run00001", repoDir: "/scratch" }, unrecorded.ports);
+  expect(unrecorded.calls.archived).toEqual([`${PROJECT} /seat.jsonl`]);
+  expect(unrecorded.calls.hidden).toEqual([PROJECT]);
+});
+
+test("a failed seat transcript records the scratch project for cleanup even without a pipeline", async () => {
+  const inputs: unknown[] = [];
+  startHealthCheck({ ...fakePorts({ seatAppears: false }), cleanup: async (input) => { inputs.push(input); return []; } });
+  await settleHealthCheckForTests();
+  expect(inputs).toEqual([{ repoDir: "/scratch", seatConversationId: SEAT, project: null, pipelineId: null, stateDir: path.join("health-runs", "run00001") }]);
+});
+
+test("run files round-trip through disk, and a folder without one still answers", () => {
+  const root = path.join(sandbox, "run-files");
+  writeHealthRunFile(root, path.join("health-runs", "run00007"), { repoDir: "/scratch", seatConversationId: SEAT, project: PROJECT, pipelineId: "health07" });
+  fs.mkdirSync(path.join(root, "health-runs", "run00008"), { recursive: true });
+  expect(readHealthRunFiles(root).sort((a, b) => a.stateDir.localeCompare(b.stateDir))).toEqual([
+    { stateDir: path.join("health-runs", "run00007"), repoDir: "/scratch", seatConversationId: SEAT, project: PROJECT, pipelineId: "health07" },
+    { stateDir: path.join("health-runs", "run00008"), repoDir: null, seatConversationId: null, project: null, pipelineId: null },
+  ]);
+  expect(readHealthRunFiles(path.join(sandbox, "absent"))).toEqual([]);
+});
+
+test("a sweep leaves the run this process is running alone", async () => {
+  const files = new Map<string, unknown>();
+  const cleaned: string[] = [];
+  const ports: HealthCheckPorts = {
+    ...fakePorts({ pipeline: () => pipelineWith("running", "running") }),
+    sleep: () => new Promise(() => {}),
+    recordLeftovers: (stateDir, leftovers) => { files.set(stateDir, { ...leftovers }); },
+    runFiles: () => [...files.entries()].map(([stateDir, leftovers]) => ({ ...(leftovers as object), stateDir }) as never),
+    dropRunFile: (stateDir) => { files.delete(stateDir); },
+    cleanup: async (input) => { cleaned.push(input.stateDir); return []; },
+  };
+  startHealthCheck(ports);
+  await Promise.resolve();
+  files.set(path.join("health-runs", "old00001"), { repoDir: "/scratch", seatConversationId: null, project: null, pipelineId: null });
+  await sweepOrphanedHealthRuns(ports);
+  expect(cleaned).toEqual([path.join("health-runs", "old00001")]);
+  expect([...files.keys()]).toEqual([path.join("health-runs", "run00001")]);
 });
 
 test("a spawn timeout names an agent only when its transcript exists, since only that one has a card", () => {

@@ -278,6 +278,14 @@ export const HEALTH_PIPELINE_TASK = "Viewer health check";
 
 export type HealthSeat = { conversationId: string; path: string; cwd: string; project: string };
 
+/**
+ * What a run has made so far, written to its run file the moment each thing
+ * exists: a Viewer that restarts mid-check loses the run's memory, and the
+ * next read of the check cleans up from this record instead.
+ */
+export type HealthLeftovers = { repoDir: string | null; seatConversationId: string | null; project: string | null; pipelineId: string | null };
+export type HealthCleanupInput = HealthLeftovers & { stateDir: string };
+
 /** Everything the runner touches, so a test drives each row to each outcome. */
 export interface HealthCheckPorts {
   now(): number;
@@ -300,7 +308,13 @@ export interface HealthCheckPorts {
   viewerMcpRegistered(engine: RoleEngine, cwd: string): boolean | null;
   runTick(seat: HealthSeat, stateDir: string): Promise<{ record: SeatTickRunRecord | null; outcome: DeliveryOutcome | null }>;
   seatFilings(): SeatFiling[] | null;
-  cleanup(input: { pipelineId: string | null; seatConversationId: string | null; stateDir: string; repoDir: string | null }): Promise<string[]>;
+  cleanup(input: HealthCleanupInput): Promise<string[]>;
+  /** Write the run file under the run's state folder. */
+  recordLeftovers(stateDir: string, leftovers: HealthLeftovers): void;
+  /** Every run file on disk. */
+  runFiles(): HealthCleanupInput[];
+  /** Remove a run's state folder, run file included. */
+  dropRunFile(stateDir: string): void;
   recordResult(run: HealthRun): void;
   redact(text: string): string;
 }
@@ -316,11 +330,52 @@ function freshRows(): HealthRow[] {
 class RunStopped extends Error {}
 
 type ActiveRun = { run: HealthRun; stop: () => void; stopped: boolean; done: Promise<void> };
+type HealthStore = { active: ActiveRun | null; last: HealthRun | null; sweeping: Promise<void> | null };
 
-const registry = globalThis as typeof globalThis & { __llvHealthCheck?: { active: ActiveRun | null; last: HealthRun | null } };
-function store(): { active: ActiveRun | null; last: HealthRun | null } {
-  registry.__llvHealthCheck ??= { active: null, last: null };
+const registry = globalThis as typeof globalThis & { __llvHealthCheck?: HealthStore };
+function store(): HealthStore {
+  registry.__llvHealthCheck ??= { active: null, last: null, sweeping: null };
   return registry.__llvHealthCheck;
+}
+
+export function healthStateDir(runId: string): string {
+  return path.join("health-runs", runId);
+}
+
+/**
+ * Clean up after every run this process is not running: a run file on disk
+ * with no live run behind it was left by a Viewer that stopped mid-check.
+ * Each is undone from what its file names, then its file is removed.
+ * Concurrent callers share one sweep.
+ */
+export function sweepOrphanedHealthRuns(ports: Pick<HealthCheckPorts, "cleanup" | "runFiles" | "dropRunFile">): Promise<void> {
+  const state = store();
+  if (state.sweeping) return state.sweeping;
+  const sweep = (async () => {
+    let files: HealthCleanupInput[];
+    try {
+      files = ports.runFiles();
+    } catch {
+      return;
+    }
+    for (const file of files) {
+      const active = store().active;
+      if (active && healthStateDir(active.run.id) === file.stateDir) continue;
+      try {
+        await ports.cleanup(file);
+      } catch {
+        /* Each step already answers its own failure; the file goes regardless,
+           so one step that can never succeed does not repeat on every read. */
+      }
+      try {
+        ports.dropRunFile(file.stateDir);
+      } catch {
+        /* Tried again on the next read. */
+      }
+    }
+  })().finally(() => { state.sweeping = null; });
+  state.sweeping = sweep;
+  return sweep;
 }
 
 /** Copies, so a caller never holds the live record the runner mutates. */
@@ -377,11 +432,13 @@ export function stopHealthCheck(id: string): HealthRun | null {
 
 /** Test seam: wait for the run in progress to finish, cleanup included. */
 export async function settleHealthCheckForTests(): Promise<void> {
+  await store().sweeping;
   await store().active?.done;
 }
 
+/** Also what a Viewer restart does to a run in progress: the process forgets it. */
 export function resetHealthCheckForTests(): void {
-  registry.__llvHealthCheck = { active: null, last: null };
+  registry.__llvHealthCheck = { active: null, last: null, sweeping: null };
 }
 
 async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopped: Promise<never>): Promise<void> {
@@ -414,11 +471,14 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
     }
   };
 
-  const stateDir = path.join("health-runs", run.id);
-  let pipelineId: string | null = null;
-  let seatConversationId: string | null = null;
-  let repoDir: string | null = null;
+  const stateDir = healthStateDir(run.id);
+  const made: HealthLeftovers = { repoDir: null, seatConversationId: null, project: null, pipelineId: null };
+  const record = (patch: Partial<HealthLeftovers>) => {
+    Object.assign(made, patch);
+    ports.recordLeftovers(stateDir, made);
+  };
   try {
+    record({});
     const { runtime } = run;
     const agentParams = { engine: runtime.engine === "claude" ? "Claude" : "Codex", bin: ENGINE_BIN[runtime.engine] };
 
@@ -427,16 +487,17 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
     const ready = readinessFailure(runtime, ports.readiness(runtime.engine));
     if (ready) fail("spawn", ready);
     const repo = ports.prepareRepo();
-    repoDir = repo.repoDir;
+    record({ repoDir: repo.repoDir });
     const spawned = await ports.spawnSeat({ runtime, cwd: repo.repoDir, clientAttemptId: `health-seat-${run.id}` });
     if ("error" in spawned) {
       const refused = spawned.reason && spawned.reason !== "connected" ? readinessFailure(runtime, spawned.reason) : null;
       fail("spawn", refused ?? failure("SPAWN_TIMEOUT", `the test orchestrator's launch was refused: ${spawned.error}`, { params: agentParams }));
       return;
     }
-    seatConversationId = spawned.conversationId;
+    record({ seatConversationId: spawned.conversationId });
     const seat = await until(HEALTH_ROW_BOUND_MS.spawn, () => ports.seatMaterialized(spawned.conversationId));
-    if (!seat) fail("spawn", failure("SPAWN_TIMEOUT", "the test orchestrator's transcript did not appear within 60 seconds", { params: agentParams }));
+    if (seat) record({ project: seat.project });
+    else fail("spawn", failure("SPAWN_TIMEOUT", "the test orchestrator's transcript did not appear within 60 seconds", { params: agentParams }));
     const created = await ports.createPipeline({
       task: HEALTH_PIPELINE_TASK,
       repoDir: repo.repoDir,
@@ -453,9 +514,10 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
       fail("spawn", refused ?? failure("SPAWN_TIMEOUT", `the pipeline was refused: ${created.error ?? "no reason"}`, { params: agentParams }));
       return;
     }
-    pipelineId = created.pipeline.id;
+    const pipelineId = created.pipeline.id;
+    record({ pipelineId });
     const started = await until(HEALTH_ROW_BOUND_MS.spawn, () => {
-      const verdict = stageSpawnVerdict(ports.pipeline(pipelineId!), runtime, ports.transcriptExists);
+      const verdict = stageSpawnVerdict(ports.pipeline(pipelineId), runtime, ports.transcriptExists);
       return verdict.kind === "pending" ? null : verdict;
     });
     if (!started) fail("spawn", failure("SPAWN_TIMEOUT", `the stage agent did not start within 60 seconds${ports.pipeline(pipelineId)?.stateDetail ? `: ${ports.pipeline(pipelineId)!.stateDetail}` : ""}`, { params: agentParams, agentPath: timedOutAgentPath(healthAttempt(ports.pipeline(pipelineId)), ports.transcriptExists) }));
@@ -464,7 +526,7 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
 
     /* 2. The stage's prompt was delivered into its live host. */
     begin("delivery");
-    const stageAgent = () => healthAttempt(ports.pipeline(pipelineId!));
+    const stageAgent = () => healthAttempt(ports.pipeline(pipelineId));
     const delivered = await until(HEALTH_ROW_BOUND_MS.delivery, () => {
       const launchId = stageAgent()?.launchId;
       const verdict = deliveryVerdict(launchId ? ports.receipt(launchId) : null);
@@ -477,7 +539,7 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
     /* 3. The stage reported and settled. */
     begin("report");
     const reported = await until(HEALTH_ROW_BOUND_MS.report, () => {
-      const verdict = reportVerdict(ports.pipeline(pipelineId!));
+      const verdict = reportVerdict(ports.pipeline(pipelineId));
       return verdict.kind === "pending" ? null : verdict;
     });
     if (!reported || reported.kind === "failed") {
@@ -535,9 +597,14 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
     }
   } finally {
     try {
-      run.cleanup.problems = (await ports.cleanup({ pipelineId, seatConversationId, stateDir, repoDir })).map((problem) => ports.redact(problem));
+      run.cleanup.problems = (await ports.cleanup({ ...made, stateDir })).map((problem) => ports.redact(problem));
     } catch (error) {
       run.cleanup.problems = [ports.redact(error instanceof Error ? error.message : String(error))];
+    }
+    try {
+      ports.dropRunFile(stateDir);
+    } catch {
+      /* A run file left behind is swept on the next read, and its cleanup is idempotent. */
     }
     run.cleanup.done = true;
     run.finishedAt = iso(ports.now());
@@ -710,8 +777,42 @@ export async function productionHealthCheckPorts(): Promise<HealthCheckPorts> {
       },
       pipeline: (id) => getPipeline(id),
       conversationPath: (id) => conversation(id)?.generations.at(-1)?.path ?? null,
+      stopConversation: async (id, transcriptPath) => {
+        const { applyConversationAction } = await import("@/lib/conversation/actions");
+        const result = await applyConversationAction({ conversationId: id, transcriptPath: transcriptPath ?? "", action: "kill" });
+        const body = result.body as { ok?: boolean; error?: string };
+        /* A host already gone is the state this step wants. */
+        return result.status >= 400 && result.status !== 404 && result.status !== 409 ? body.error ?? `HTTP ${result.status}` : null;
+      },
+      projectFor: (repoDir) => projectForCwd(repoDir),
+      archive: async (project, paths) => {
+        const [{ applyBoardCommand }, { boardFor }] = await Promise.all([import("@/lib/board/command"), import("@/lib/board/store")]);
+        const board = boardFor(project);
+        const pending = paths.filter((file) => !board.prefs.hidden.includes(file));
+        if (!pending.length) return null;
+        const result = applyBoardCommand({ schemaVersion: 1, project, baseRevision: board.revision, patch: { hidden: pending } });
+        return result.ok ? null : "the board refused the archive";
+      },
+      hideTaskCards: async (project) => {
+        const [{ mutateTasks }, { patchTask }, { taskRevision }] = await Promise.all([
+          import("@/lib/tasks/store"),
+          import("@/lib/tasks/commands"),
+          import("@/lib/tasks/revision"),
+        ]);
+        mutateTasks((tasks) => {
+          let next = tasks;
+          for (const task of tasks.filter((candidate) => candidate.project === project && !candidate.groupHidden)) {
+            const outcome = patchTask(next, task.id, { status: "done", hide: true, expectedProject: task.project, expectedRevision: taskRevision(task) }, undefined, { actor: "operator", seatHolding: () => "free" });
+            if (outcome.ok) next = outcome.tasks;
+          }
+          return { tasks: next === tasks ? undefined : next, result: null };
+        });
+      },
       statePath,
     }),
+    recordLeftovers: (stateDir, leftovers) => writeHealthRunFile(statePath("onboarding"), stateDir, leftovers),
+    runFiles: () => readHealthRunFiles(statePath("onboarding")),
+    dropRunFile: (stateDir) => fs.rmSync(statePath("onboarding", stateDir), { recursive: true, force: true }),
     recordResult: (run) => {
       const failed = run.rows.find((entry) => entry.state === "failed");
       writeLastHealth({ at: run.finishedAt ?? new Date().toISOString(), result: run.state, failedCode: failed?.failure?.code ?? null });
@@ -745,17 +846,24 @@ type CleanupPorts = {
   closePipeline(id: string): Promise<string | null>;
   pipeline(id: string): Pipeline | null;
   conversationPath(id: string): string | null;
+  /** Stop a conversation's host; a host already gone answers null. */
+  stopConversation(id: string, transcriptPath: string | null): Promise<string | null>;
+  /** The scratch folder's project, for a run that ended before its seat's transcript appeared. */
+  projectFor(repoDir: string): string | null;
+  /** Hide these transcripts from the project's board. */
+  archive(project: string, paths: string[]): Promise<string | null>;
+  /** Mark every visible task card of the project done and hidden. */
+  hideTaskCards(project: string): Promise<void>;
   statePath(...segments: string[]): string;
 };
 
 /**
  * Undo everything the run made, each step on its own so one that fails does
  * not keep the others from running. Answers the steps that could not be done.
+ * Every step is safe to repeat: a restart sweep may run it over a run that
+ * had already cleaned up part of what it made.
  */
-export async function cleanupHealthRun(
-  input: { pipelineId: string | null; seatConversationId: string | null; stateDir: string; repoDir: string | null },
-  ports: CleanupPorts,
-): Promise<string[]> {
+export async function cleanupHealthRun(input: HealthCleanupInput, ports: CleanupPorts): Promise<string[]> {
   const problems: string[] = [];
   const step = async (label: string, action: () => unknown | Promise<unknown>) => {
     try {
@@ -770,15 +878,7 @@ export async function cleanupHealthRun(
   const seatPath = input.seatConversationId ? ports.conversationPath(input.seatConversationId) : null;
   /* Closing stops the stage host; the test orchestrator's is stopped here. */
   if (pipeline && pipeline.state !== "closed") await step("close the pipeline", () => ports.closePipeline(pipeline.id));
-  if (input.seatConversationId) {
-    await step("stop the test orchestrator", async () => {
-      const { applyConversationAction } = await import("@/lib/conversation/actions");
-      const result = await applyConversationAction({ conversationId: input.seatConversationId!, transcriptPath: seatPath ?? "", action: "kill" });
-      const body = result.body as { ok?: boolean; error?: string };
-      /* A host already gone is the state this step wants. */
-      return result.status >= 400 && result.status !== 404 && result.status !== 409 ? body.error ?? `HTTP ${result.status}` : null;
-    });
-  }
+  if (input.seatConversationId) await step("stop the test orchestrator", () => ports.stopConversation(input.seatConversationId!, seatPath));
   if (pipeline && input.repoDir) {
     const repoDir = input.repoDir;
     await step("remove the worktree", () => {
@@ -787,35 +887,57 @@ export async function cleanupHealthRun(
       if (pipeline.branch && git(repoDir, "branch", "--list", pipeline.branch)) git(repoDir, "branch", "-D", pipeline.branch);
     });
   }
-  const project = pipeline?.project ?? null;
+  /* The pipeline names its project; before one exists the seat's does, and
+     before the seat's transcript appeared the scratch folder's. */
+  const project = pipeline?.project || input.project || (input.repoDir ? ports.projectFor(input.repoDir) : null);
   const paths = [...stagePaths, ...(seatPath ? [seatPath] : [])];
-  if (project && paths.length) {
-    await step("archive the conversations", async () => {
-      const [{ applyBoardCommand }, { boardFor }] = await Promise.all([import("@/lib/board/command"), import("@/lib/board/store")]);
-      const board = boardFor(project);
-      const pending = paths.filter((file) => !board.prefs.hidden.includes(file));
-      if (!pending.length) return null;
-      const result = applyBoardCommand({ schemaVersion: 1, project, baseRevision: board.revision, patch: { hidden: pending } });
-      return result.ok ? null : "the board refused the archive";
-    });
-  }
-  if (project) {
-    await step("hide the task cards", async () => {
-      const [{ mutateTasks }, { patchTask }, { taskRevision }] = await Promise.all([
-        import("@/lib/tasks/store"),
-        import("@/lib/tasks/commands"),
-        import("@/lib/tasks/revision"),
-      ]);
-      mutateTasks((tasks) => {
-        let next = tasks;
-        for (const task of tasks.filter((candidate) => candidate.project === project && !candidate.groupHidden)) {
-          const outcome = patchTask(next, task.id, { status: "done", hide: true, expectedProject: task.project, expectedRevision: taskRevision(task) }, undefined, { actor: "operator", seatHolding: () => "free" });
-          if (outcome.ok) next = outcome.tasks;
-        }
-        return { tasks: next === tasks ? undefined : next, result: null };
-      });
-    });
-  }
+  if (project && paths.length) await step("archive the conversations", () => ports.archive(project, paths));
+  if (project) await step("hide the task cards", () => ports.hideTaskCards(project));
   await step("remove the run's tick row", () => fs.rmSync(ports.statePath("onboarding", input.stateDir), { recursive: true, force: true }));
   return problems;
+}
+
+/* ── Run files ────────────────────────────────────────────────────────── */
+
+const RUN_FILE = "run.json";
+
+/** Write a run's leftovers under `<root>/<stateDir>/run.json`, whole or not at all. */
+export function writeHealthRunFile(root: string, stateDir: string, leftovers: HealthLeftovers): void {
+  const file = path.join(root, stateDir, RUN_FILE);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(leftovers)}\n`, "utf8");
+  fs.renameSync(temporary, file);
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+/** Every run folder under `<root>/health-runs`. A folder whose run file is
+    missing or unreadable still answers, with nothing named: its folder goes. */
+export function readHealthRunFiles(root: string): HealthCleanupInput[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(path.join(root, "health-runs"));
+  } catch {
+    return [];
+  }
+  return names.filter((name) => /^[A-Za-z0-9_-]+$/.test(name)).map((name) => {
+    const stateDir = healthStateDir(name);
+    let parsed: Record<string, unknown> = {};
+    try {
+      const value: unknown = JSON.parse(fs.readFileSync(path.join(root, stateDir, RUN_FILE), "utf8"));
+      if (value && typeof value === "object") parsed = value as Record<string, unknown>;
+    } catch {
+      /* Nothing named. */
+    }
+    return {
+      stateDir,
+      repoDir: stringOrNull(parsed.repoDir),
+      seatConversationId: stringOrNull(parsed.seatConversationId),
+      project: stringOrNull(parsed.project),
+      pipelineId: stringOrNull(parsed.pipelineId),
+    };
+  });
 }

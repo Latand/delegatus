@@ -710,6 +710,15 @@ the rail names it after the folder. No project archive exists, so the project
 stays in the rail with its two conversations archived off its board and its
 task cards hidden.
 
+Cleanup survives a Viewer restart. As each thing comes into existence (the
+scratch folder, the test orchestrator, its project, the pipeline), the run
+writes it to `state/onboarding/health-runs/<run>/run.json`. A restart forgets
+the run in progress, so the next read or start of the check cleans up every
+run file that no live run in this process owns, from what that file names,
+and then removes it. A run that ends before its pipeline exists archives the
+seat off the board of the seat's project, or of the scratch folder's project
+when the seat's transcript never appeared.
+
 Row by row, what is observed (each row is a durable fact the Viewer already
 records, never the agent's own claim):
 
@@ -743,7 +752,7 @@ detail), a sentence of what happened and a sentence of what to do.
 | 2 | `DELIVERY_FAILED` | The agent started, and the first message did not reach it. / Агент запустився, але перше повідомлення до нього не дійшло. | This is a Viewer fault on this machine. Copy the details into a bug report. / Це несправність Viewer на цьому комп'ютері. Скопіюйте подробиці в повідомлення про помилку. | Copy details |
 | 3 | `MCP_UNREACHABLE` | The agent ran and could not reach the Viewer's tools, so it could not report. / Агент працював, але не зміг звернутися до інструментів Viewer і тому не звітував. | The agent's session has no `viewer` MCP server. Restart the Viewer; if it repeats, copy the details into a bug report. / У сесії агента немає MCP-сервера `viewer`. Перезапустіть Viewer; якщо повториться, скопіюйте подробиці в повідомлення про помилку. | Copy details |
 | 3 | `REPORT_TIMEOUT` | The agent finished its turn without reporting the stage. / Агент завершив хід і не відзвітував про етап. | Open the agent to read what it said. A model that ignores the instruction is rare on this prompt; running again usually passes. / Відкрийте агента й прочитайте його відповідь. Модель рідко ігнорує цю інструкцію; повторний запуск зазвичай проходить. | Open the agent |
-| 4 | `TICK_OFF` | The seat tick is turned off on this machine (`LLV_SEAT_TICK_CHECK_MINUTES=0`). / Пробудження оркестратора вимкнено на цьому комп'ютері (`LLV_SEAT_TICK_CHECK_MINUTES=0`). | Remove that setting and restart. With it, an orchestrator sleeps until you message it. / Приберіть це налаштування й перезапустіть. З ним оркестратор спить, доки ви йому не напишете. | none |
+| 4 | `TICK_OFF` | The seat tick is turned off on this machine (`LLV_SEAT_TICK_CHECK_MINUTES=0`). / Пробудження оркестратора вимкнено на цьому комп'ютері (`LLV_SEAT_TICK_CHECK_MINUTES=0`). | Remove that setting and restart the Viewer. With it, an orchestrator sleeps until you message it. / Приберіть це налаштування й перезапустіть Viewer. З ним оркестратор спить, доки ви йому не напишете. | none |
 | 4 | `WAKE_NOT_OWED` | The stage finished, and the wake check found nothing to tell the orchestrator. The finished lane and the seat are filed under different projects. / Етап завершився, але перевірка не знайшла, про що повідомити оркестратора. Завершений конвеєр і оркестратор записані в різних проєктах. | This is the fault that leaves an orchestrator waiting for ever. Copy the details into a bug report; until it is fixed, message your orchestrator after each stage. / Саме через цю несправність оркестратор чекає без кінця. Скопіюйте подробиці в повідомлення про помилку; поки її не виправлено, пишіть оркестратору після кожного етапу. | Copy details |
 | 4 | `WAKE_UNDELIVERED` | The wake was sent and did not reach the orchestrator. / Пробудження надіслано, але воно не дійшло до оркестратора. | Copy the details into a bug report. / Скопіюйте подробиці в повідомлення про помилку. | Copy details |
 | 5 | `SEAT_MISFILED` | The orchestrator of "{project}" is filed under another key than its pipelines, so it will not be woken. / Оркестратор проєкту «{project}» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть. | The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report. / Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку. | Copy details |

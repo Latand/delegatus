@@ -38,12 +38,15 @@ const fail = (code: string, extra: Record<string, unknown> = {}) => ({ code, par
 
 afterAll(() => { void dom.happyDOM.close(); });
 
+let ownsPrimary: boolean | null = null;
+
 async function render(): Promise<HTMLElement> {
+  ownsPrimary = null;
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(<CheckStep noEngine={false} onGoEngines={() => {}} onLeave={() => {}} onSkip={() => {}} />);
+    root.render(<CheckStep noEngine={false} onGoEngines={() => {}} onLeave={() => {}} onSkip={() => {}} onOwnsPrimary={(owns) => { ownsPrimary = owns; }} />);
   });
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
   return host;
@@ -128,6 +131,14 @@ test("after a pass, running it again is the secondary action", async () => {
   answer = runOf("passed", ["spawn", "delivery", "report", "wake", "filing"].map((id) => row(id, "passed"))).answer;
   const host = await render();
   expect(host.querySelector<HTMLElement>("[data-health-start]")?.className).not.toContain("bg-accent");
+  expect(ownsPrimary).toBe(false);
+});
+
+test("after a failure, running it again is the one accent action and the footer steps back", async () => {
+  answer = runOf("failed", [row("spawn", "passed"), row("delivery", "passed"), row("report", "passed"), row("wake", "failed", fail("TICK_OFF")), row("filing", "waiting")]).answer;
+  const host = await render();
+  expect(host.querySelector<HTMLElement>("[data-health-start]")?.className).toContain("bg-accent");
+  expect(ownsPrimary).toBe(true);
 });
 
 test("the reset time follows the interface language, date and hour:minute", () => {

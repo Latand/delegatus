@@ -3732,7 +3732,7 @@ export const en = {
   "onboarding.check.code.REPORT_TIMEOUT.todo": "Open the agent to read what it said. A model that ignores the instruction is rare on this prompt; running again usually passes.",
   "onboarding.check.code.REPORT_TIMEOUT.todoNoAgent": "A model that ignores the instruction is rare on this prompt; running again usually passes. If it repeats, copy the details into a bug report.",
   "onboarding.check.code.TICK_OFF.happened": "The seat tick is turned off on this machine (`LLV_SEAT_TICK_CHECK_MINUTES=0`).",
-  "onboarding.check.code.TICK_OFF.todo": "Remove that setting and restart. With it, an orchestrator sleeps until you message it.",
+  "onboarding.check.code.TICK_OFF.todo": "Remove that setting and restart the Viewer. With it, an orchestrator sleeps until you message it.",
   "onboarding.check.code.WAKE_NOT_OWED.happened": "The stage finished, and the wake check found nothing to tell the orchestrator that launched it. The finished lane and the orchestrator are filed under different projects.",
   "onboarding.check.code.WAKE_NOT_OWED.todo": "This is the fault that leaves an orchestrator waiting for ever. Copy the details into a bug report; until it is fixed, message your orchestrator after each stage.",
   "onboarding.check.code.WAKE_UNDELIVERED.happened": "The wake was sent and did not reach the orchestrator.",
