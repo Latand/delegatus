@@ -221,6 +221,10 @@ test("the desktop popover says where the next message goes, and its Account pane
   const rows = [...document.querySelectorAll('[data-runtime-row="account"]')] as HTMLButtonElement[];
   expect(rows.map((item) => [item.getAttribute("data-runtime-value"), item.getAttribute("aria-checked")]))
     .toEqual([["account-acct-a", "false"], ["account-acct-b", "true"]]);
+  /* The way back says what it does, as an action, and nothing else competes with the account's name. */
+  const wayBack = rows[0]!.querySelector('[data-runtime-row-detail="action"]')!;
+  expect(wayBack.textContent).toBe("cancel switch");
+  expect(wayBack.className).toContain("text-accent");
   act(() => { rows[0]!.click(); });
   expect(calls.filter((call) => call.url === "/api/tmux").map((call) => call.body)).toMatchObject([{ action: "reconfigure", accountId: "acct-a" }]);
   await act(async () => root.unmount());
@@ -239,7 +243,7 @@ test("a move that failed at engagement holds the message with its reason and the
   expect(host.querySelector("[data-runtime-switch-hold-keep]")!.className).toContain("min-h-11");
   expect(host.querySelector("[data-runtime-switch-hold-pick]")!.className).toContain("min-h-11");
   expect(notice.getAttribute("role")).toBe("alert");
-  expect(notice.textContent).toContain("Not sent: moving to acct-b failed — claude account requires authentication");
+  expect(notice.textContent).toContain("Not sent: moving to acct-b failed — the account is signed out");
   expect(notice.textContent).toContain("Send on acct-a");
   expect(notice.textContent).toContain("Pick another account");
 
@@ -302,4 +306,15 @@ test("an account pick the session projects writes no pending phase for a later p
   expect(again.host.querySelector("[data-runtime-switch-pending]")).toBeNull();
   expect(host.isConnected).toBe(true);
   await act(async () => again.root.unmount());
+});
+
+test("a held message names the known causes of a failed move in the operator's language", async () => {
+  const { switchHoldReason } = await import("./RuntimePill");
+  const { translate } = await import("@/lib/i18n");
+  const uk = (key: string, vars?: Record<string, string | number>) => translate("uk", key as never, vars);
+  expect(switchHoldReason(uk as never, "the account is signed out")).toBe("з акаунта виконано вихід");
+  expect(switchHoldReason(uk as never, "You have reached your usage limit.")).toBe("акаунт вичерпав ліміт використання");
+  expect(switchHoldReason(uk as never, "the migration was refused")).toBe("акаунт відмовив");
+  /* Anything else is the server's own words, as they came. */
+  expect(switchHoldReason(uk as never, "structured host delivery failed")).toBe("structured host delivery failed");
 });

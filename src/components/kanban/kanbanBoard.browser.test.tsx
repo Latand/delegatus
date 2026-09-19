@@ -2899,6 +2899,128 @@ describe("#1695 K6a account chips and pickers", () => {
   }, 900_000);
 });
 
+describe("#1846 one account pick, every surface in the same frame", () => {
+  /*
+   * Rendered evidence for the account pick's shared store (#1846, critique P1): the running verify
+   * conversation on a structured host (`&runtime=structured` answers one runtime session), so the reader's
+   * composer draws its runtime pill beside the board's account chip. A pick made in either one must show in
+   * the other in the frame of the click, before any answer or projection: the fixture's runtime snapshot
+   * never projects the pick, so whatever shows came from the page's own store.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "#1846"
+   *
+   * Measurements go to `evidence/issue-1846/shared-pick.json`; frames to `.artifacts/issue-1846/`.
+   */
+  const OUT = path.resolve(".artifacts/issue-1846");
+  const EVIDENCE = path.resolve("evidence/issue-1846");
+  const READER = '[data-reader-path="/repo/search-ver-2.jsonl"]';
+  const CHIP = '[data-kanban-board] [data-account-trigger="conversation_search-ver-2"]';
+
+  /** Clicks inside the page and reads every surface one animation frame later. */
+  const clickAndRead = (page: Page, selector: string) => page.evaluate(async ([target, chip]) => {
+    const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    const element = document.querySelector<HTMLElement>(target);
+    if (!element) return { error: `no ${target}` };
+    const started = performance.now();
+    element.click();
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    return {
+      ms: Math.round((performance.now() - started) * 10) / 10,
+      chip: [...(document.querySelector(chip)?.querySelectorAll(".cur, .arrow, .to, .when") ?? [])].map(text).join(" "),
+      pillHead: text(document.querySelector("[data-runtime-popover-account]")),
+      pickerPending: text(document.querySelector(".popover.acct-pop [data-account-pending] .v")),
+    };
+  }, [selector, CHIP] as const);
+
+  browserTest("#1846: a pick in the runtime pill shows on the board chip, and a pick on the board shows in the pill, in one frame", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const record: Record<string, unknown> = {};
+    try {
+      const opened = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured`, VIEWPORT, "light");
+      const { page } = opened;
+      try {
+        await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+        await page.waitForTimeout(700);
+        await page.locator(`${card("t-search")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.click(`${card("t-search")} .psummary [data-stage="verify"]`);
+        await page.waitForSelector(CHIP, { timeout: 10_000 });
+        await page.waitForSelector(`${READER} [data-runtime-pill]`, { state: "attached", timeout: 10_000 });
+        await page.waitForTimeout(500);
+        record.before = await page.evaluate((chip) => document.querySelector(chip)?.textContent?.replace(/\s+/g, " ").trim() ?? "", CHIP);
+
+        /* 1. The pill's Account panel picks Account C. */
+        await page.locator(`${READER} [data-runtime-pill]`).evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
+        await page.waitForSelector('[data-runtime-row="submenu"][data-runtime-value="account"]', { timeout: 5_000 });
+        await page.click('[data-runtime-row="submenu"][data-runtime-value="account"]');
+        await page.waitForSelector('[data-runtime-row="account"][data-runtime-value="account-account-c"]', { timeout: 5_000 });
+        const pillPick = await clickAndRead(page, '[data-runtime-row="account"][data-runtime-value="account-account-c"]');
+        record.pillPick = pillPick;
+        await page.screenshot({ path: path.join(OUT, "pill-pick-chip.png") });
+        if (!("chip" in pillPick) || pillPick.chip !== "Account A → Account C with the next message") failures.push(`pill pick: chip ${JSON.stringify(pillPick)}`);
+
+        /* 2. The board picker, opened now, says the same thing. */
+        await page.click(CHIP);
+        await page.waitForSelector(".popover.acct-pop .acct-row", { timeout: 5_000 });
+        const picker = await page.evaluate(() => ({
+          pending: document.querySelector(".popover.acct-pop [data-account-pending] .v")?.textContent?.trim() ?? null,
+          source: document.querySelector(".popover.acct-pop [data-account-pending]")?.getAttribute("data-account-source") ?? null,
+          checked: [...document.querySelectorAll('.popover.acct-pop .acct-row[aria-checked="true"]')].map((row) => (row as HTMLElement).dataset.account),
+        }));
+        record.pickerAfterPillPick = picker;
+        await page.screenshot({ path: path.join(OUT, "pill-pick-picker.png") });
+        if (picker.pending !== "Account C · moves with the next message" || picker.source !== "pick" || JSON.stringify(picker.checked) !== JSON.stringify(["account-c"])) failures.push(`board picker after the pill's pick: ${JSON.stringify(picker)}`);
+
+        /* 3. The board picker takes it back: the pill's line follows in the same frame. */
+        const boardBack = await clickAndRead(page, '.popover.acct-pop [data-account-cancel]');
+        record.boardTakeBack = boardBack;
+        await page.locator(`${READER} [data-runtime-pill]`).evaluate((element) => (element as HTMLElement).click());
+        await page.waitForSelector("[data-runtime-popover-account]", { timeout: 5_000 });
+        const pillAfterBack = await page.evaluate(() => document.querySelector("[data-runtime-popover-account]")?.textContent?.trim() ?? "");
+        record.pillAfterBoardTakeBack = pillAfterBack;
+        if (!("chip" in boardBack) || boardBack.chip !== "Account A" || pillAfterBack !== "runs on default") failures.push(`board take-back: ${JSON.stringify({ boardBack, pillAfterBack })}`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(200);
+
+        /* 4. A pick in the board picker, with the pill's popover open on its Account panel. */
+        await page.locator(`${READER} [data-runtime-pill]`).evaluate((element) => (element as HTMLElement).click());
+        await page.waitForSelector("[data-runtime-popover-account]", { timeout: 5_000 });
+        const pillHeadBefore = await page.evaluate(() => document.querySelector("[data-runtime-popover-account]")?.textContent?.trim() ?? "");
+        await page.keyboard.press("Escape");
+        await page.click(CHIP);
+        await page.waitForSelector(".popover.acct-pop .acct-row", { timeout: 5_000 });
+        const boardPick = await clickAndRead(page, '.popover.acct-pop .acct-row[data-account="account-c"]');
+        record.boardPick = boardPick;
+        await page.locator(`${READER} [data-runtime-pill]`).evaluate((element) => (element as HTMLElement).click());
+        await page.waitForSelector("[data-runtime-popover-account]", { timeout: 5_000 });
+        const pillHeadAfter = await page.evaluate(() => document.querySelector("[data-runtime-popover-account]")?.textContent?.trim() ?? "");
+        record.pillHead = { before: pillHeadBefore, after: pillHeadAfter };
+        await page.screenshot({ path: path.join(OUT, "board-pick-pill.png") });
+        if (pillHeadBefore !== "runs on default" || pillHeadAfter !== "runs on default · next on account-c") failures.push(`pill after the board's pick: ${JSON.stringify(record.pillHead)}`);
+        if (!("chip" in boardPick) || boardPick.chip !== "Account A → Account C with the next message") failures.push(`board pick: chip ${JSON.stringify(boardPick)}`);
+
+        record.requests = await page.evaluate(() => {
+          const evidence = (window as unknown as { evidence: { pillRequests: Array<Record<string, unknown>>; accountRequests: Array<Record<string, unknown>>; migrationRequests: unknown[] } }).evidence;
+          return { pill: evidence.pillRequests.map((body) => body.accountId), board: evidence.accountRequests.map((body) => body.accountId), migrations: evidence.migrationRequests.length };
+        });
+        const requests = record.requests as { pill: unknown[]; board: unknown[]; migrations: number };
+        if (JSON.stringify(requests.pill) !== JSON.stringify(["account-c"]) || JSON.stringify(requests.board) !== JSON.stringify(["default", "account-c"]) || requests.migrations !== 0) failures.push(`requests: ${JSON.stringify(requests)}`);
+        if (opened.pageErrors.length) failures.push(`page errors ${opened.pageErrors.join(" | ")}`);
+      } finally {
+        await opened.context.close();
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "shared-pick.json"), `${JSON.stringify({ viewport: VIEWPORT, record, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 300_000);
+});
+
 describe("#1712 the window of a conversation no card holds", () => {
   /*
    * Rendered evidence for review round 2 of #1712: the reader of a conversation

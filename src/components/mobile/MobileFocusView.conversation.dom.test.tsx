@@ -251,7 +251,7 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   /* Beside the title, which is the elastic cell there. */
   expect(accountCell.previousElementSibling?.hasAttribute("data-mobile2-title-text")).toBe(true);
   expect(accountCell.className).toContain("shrink-0");
-  expect(accountCell.className).toContain("truncate");
+  expect(accountCell.querySelector("[data-mobile2-chat-account-runs]")!.className).toContain("truncate");
   expect(dom.document.querySelector("[data-mobile2-chat-stage]")?.textContent).toBe("stage 2/2");
   /* The engine rides the line as a MARK, never as a word (§3.2): spelling it
      out is what made the strip read "Claude · Claude · Claude", and the model
@@ -318,6 +318,15 @@ test("the title line says where the next message goes the moment an account is p
   expect(account().textContent).toBe("@ spare→ relief");
   expect(account().getAttribute("data-mobile2-chat-account-next")).toBe("relief");
   expect(account().getAttribute("title")).toBe("runs on spare · next on relief");
+  /* #1846 critique P2: with two long ids the running account keeps a floor — up to 60% of the tag, never
+     squeezed to nothing by the next one, which takes the rest and truncates first. */
+  expect(account().className).toContain("max-w-[55%]");
+  const runs = account().querySelector("[data-mobile2-chat-account-runs]") as unknown as HTMLElement;
+  const to = account().querySelector("[data-mobile2-chat-account-to]") as unknown as HTMLElement;
+  expect(runs.className).toContain("max-w-[60%]");
+  expect(runs.className).toContain("shrink-0");
+  expect(to.className).toContain("min-w-0");
+  expect(to.className).not.toContain("shrink-0");
   /* Taken back: the header returns to the one account. */
   flushSync(() => { setPickedAccount("conv-picked", null); });
   expect(account().textContent).toBe("@ spare");

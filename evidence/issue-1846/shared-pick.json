@@ -1,0 +1,50 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "record": {
+    "before": "Account A",
+    "pillPick": {
+      "ms": 19.2,
+      "chip": "Account A → Account C with the next message",
+      "pillHead": "",
+      "pickerPending": ""
+    },
+    "pickerAfterPillPick": {
+      "pending": "Account C · moves with the next message",
+      "source": "pick",
+      "checked": [
+        "account-c"
+      ]
+    },
+    "boardTakeBack": {
+      "ms": 36.8,
+      "chip": "Account A",
+      "pillHead": "",
+      "pickerPending": ""
+    },
+    "pillAfterBoardTakeBack": "runs on default",
+    "boardPick": {
+      "ms": 22.7,
+      "chip": "Account A → Account C with the next message",
+      "pillHead": "",
+      "pickerPending": ""
+    },
+    "pillHead": {
+      "before": "runs on default",
+      "after": "runs on default · next on account-c"
+    },
+    "requests": {
+      "pill": [
+        "account-c"
+      ],
+      "board": [
+        "default",
+        "account-c"
+      ],
+      "migrations": 0
+    }
+  },
+  "failures": []
+}

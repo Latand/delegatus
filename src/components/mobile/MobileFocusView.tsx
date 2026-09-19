@@ -793,11 +793,13 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
     <span
       data-mobile2-chat-account
       data-mobile2-chat-account-next={moving ? next : undefined}
-      className={`${moving ? "max-w-[60%]" : "max-w-[45%]"} flex min-w-0 shrink-0 items-baseline gap-1 truncate text-label font-medium leading-tight text-muted`}
+      className={`${moving ? "max-w-[55%]" : "max-w-[45%]"} flex min-w-0 shrink-0 items-baseline gap-1 text-label font-medium leading-tight text-muted`}
       title={moving ? t("mobile2.composer.accountRunsOnNext", { account, next }) : account}
     >
-      <span className="min-w-0 truncate">@ {account}</span>
-      {moving ? <span className="min-w-0 shrink-0 truncate text-accent">→ {next}</span> : null}
+      {/* The running account keeps its whole id up to 60% of the tag and the next one takes the rest, so two
+          long ids both stay legible and the header never reads «@ → B». */}
+      <span data-mobile2-chat-account-runs className={`${moving ? "max-w-[60%] shrink-0" : "min-w-0"} truncate`}>@ {account}</span>
+      {moving ? <span data-mobile2-chat-account-to className="min-w-0 truncate text-accent">→ {next}</span> : null}
     </span>
   );
 }

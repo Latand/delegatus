@@ -727,7 +727,7 @@ export function RuntimeSwitchHold({ file }: { file: FileEntry }) {
   return (
     <div className="flex w-full basis-full flex-col gap-1.5 rounded-control bg-danger-soft px-2.5 py-2 text-label" role="alert" data-runtime-switch-hold>
       <p className="leading-snug text-danger">
-        {t("runtimeConfig.switchHeld", { account: hold.targetAccountId, reason: hold.reason })}
+        {t("runtimeConfig.switchHeld", { account: hold.targetAccountId, reason: switchHoldReason(t, hold.reason) })}
       </p>
       <div className="flex flex-wrap gap-2">
         <button type="button" data-runtime-switch-hold-keep onClick={() => void keepCurrent()} className={action}>
@@ -739,6 +739,17 @@ export function RuntimeSwitchHold({ file }: { file: FileEntry }) {
       </div>
     </div>
   );
+}
+
+/**
+ * The reason a held message gives, in the operator's language for the causes a move is known to fail on; any
+ * other reason is the server's own text, shown as it came.
+ */
+export function switchHoldReason(t: TFunction, reason: string): string {
+  if (/signed[ _-]?out|not (?:signed|logged) in|requires authentication|authentication required|unauthori[sz]ed|\b401\b/i.test(reason)) return t("runtimeConfig.switchReasonSignedOut");
+  if (/usage limit|rate[ _-]?limit|limit reached|\b429\b/i.test(reason)) return t("runtimeConfig.switchReasonLimit");
+  if (/refused|rejected|forbidden|\b403\b/i.test(reason)) return t("runtimeConfig.switchReasonRefused");
+  return reason;
 }
 
 // ---------------------------------------------------------------------------
@@ -931,6 +942,8 @@ interface Row {
       "Back — Model", so it never collides with the submenu row's name). */
   ariaLabel?: string;
   detail?: string;
+  /** The detail names what the row does (take a waiting pick back), in the accent colour. */
+  detailAction?: boolean;
   checked: boolean;
   enabled: boolean;
   reason?: string;
@@ -1001,11 +1014,13 @@ function buildRows({
         key: `account-${option.id}`,
         kind: "account",
         label: option.label,
-        detail: option.id !== accountChoice.runsOn
-          ? undefined
+        /* While a pick waits, the running account is the way back, and says so as the action it is: the head
+           above already names it as the one the conversation runs on (#1846 critique). */
+        ...(option.id !== accountChoice.runsOn
+          ? {}
           : accountChoice.next !== accountChoice.runsOn
-            ? `${t("mobile2.composer.accountCurrent")} · ${t("mobile2.composer.accountCancelSwitch")}`
-            : t("mobile2.composer.accountCurrent"),
+            ? { detail: t("mobile2.composer.accountCancelSwitch"), detailAction: true }
+            : { detail: t("mobile2.composer.accountCurrent") }),
         checked: option.id === accountChoice.next,
         enabled: true,
         role: "menuitemradio",
@@ -1103,7 +1118,9 @@ function MenuRow({
       }`}
     >
       <span className="min-w-0 flex-1 truncate">{row.label}</span>
-      {row.detail ? <span className="shrink-0 text-caption text-muted">{row.detail}</span> : null}
+      {row.detail ? (
+        <span className={`shrink-0 text-caption ${row.detailAction ? "font-semibold text-accent" : "text-muted"}`} data-runtime-row-detail={row.detailAction ? "action" : undefined}>{row.detail}</span>
+      ) : null}
       {row.checked ? <Check className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden /> : null}
       {isSubmenu ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : null}
     </button>
