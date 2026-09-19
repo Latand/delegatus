@@ -610,7 +610,7 @@ export async function productionHealthCheckPorts(): Promise<HealthCheckPorts> {
         model: runtime.model,
         effort: runtime.effort,
         cwd,
-        prompt: HEALTH_SEAT_PROMPT,
+        "prompt": HEALTH_SEAT_PROMPT,
         title: "Viewer health check: test orchestrator",
         clientAttemptId,
       });
