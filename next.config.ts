@@ -22,6 +22,7 @@ const nextConfig: NextConfig = {
       ".next/server/resource-collector-worker.js",
       ".next/server/account-migration-controller-worker.js",
       ".next/server/wakatime-sync-worker.js",
+      ".next/server/state-backup-worker.js",
       ".next/server/chunks/**",
     ],
   },
@@ -35,6 +36,7 @@ const nextConfig: NextConfig = {
         "resource-collector-worker": "./src/lib/resourceCollector.worker.ts",
         "account-migration-controller-worker": "./src/lib/accountMigrationController.worker.ts",
         "wakatime-sync-worker": "./src/lib/wakatimeSync.worker.ts",
+        "state-backup-worker": "./src/lib/stateBackup.worker.ts",
       });
     }
     return config;

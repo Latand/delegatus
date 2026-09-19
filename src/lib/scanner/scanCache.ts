@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { fsyncPath, readJsonCache } from "@/lib/state/durableJson";
 import { listFilesWithProjectCatalog } from "@/lib/scanner";
 import { primeTranscriptTurnEvidence } from "@/lib/scanner/activity";
 import { globalCache } from "@/lib/scanner/caches";
@@ -252,7 +253,7 @@ function primePersistedFileDerivations(snapshot: FileScanSnapshot): void {
 
 function readPersistedFileScanSnapshot(): FileScanSnapshot | undefined {
   try {
-    const value = JSON.parse(fs.readFileSync(statePath(FILE_SCAN_SNAPSHOT_FILE), "utf8")) as unknown;
+    const value = readJsonCache(statePath(FILE_SCAN_SNAPSHOT_FILE));
     // The persisted snapshot carries the cache schema: a snapshot written by a
     // build with different derivation semantics (pre-#406 lastTurn boundaries
     // opened by meta records) must not warm-start this one — the first cold
@@ -305,9 +306,11 @@ function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot): void {
       encoding: "utf8",
       mode: 0o600,
     });
+    fsyncPath(temporary);
     operation = "rename temporary snapshot";
     target = filename;
     fs.renameSync(temporary, filename);
+    fsyncPath(path.dirname(filename));
   } catch (error) {
     if (temporary !== undefined) {
       try {

@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { readSession, type SessionRecord } from "@/lib/session/reader";
 import type { FileEntry } from "@/lib/types";
 import { autoTaskPosition } from "./lattice";
@@ -37,7 +36,7 @@ export function taskInboxEnabled(): boolean {
 
 function readScanState(filePath = SCAN_STATE_FILE): { lastRunAt: string | null; seen: string[] } {
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as ScanState;
+    const parsed = (readJsonCache(filePath) ?? {}) as ScanState;
     return {
       lastRunAt: typeof parsed.lastRunAt === "string" ? parsed.lastRunAt : null,
       seen: Array.isArray(parsed.seen) ? parsed.seen.filter((item): item is string => typeof item === "string") : [],
@@ -48,10 +47,7 @@ function readScanState(filePath = SCAN_STATE_FILE): { lastRunAt: string | null; 
 }
 
 function writeScanState(state: { lastRunAt: string; seen: string[] }, filePath = SCAN_STATE_FILE): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify({ lastRunAt: state.lastRunAt, seen: state.seen.slice(-MAX_SEEN) }, null, 2) + "\n", "utf8");
-  fs.renameSync(tmp, filePath);
+  writeJsonDurably(filePath, { lastRunAt: state.lastRunAt, seen: state.seen.slice(-MAX_SEEN) });
 }
 
 function hash(parts: string[]): string {

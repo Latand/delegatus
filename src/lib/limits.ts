@@ -9,6 +9,7 @@ import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
 import { statePath } from "@/lib/configDir";
+import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { WINDOW_SECONDS, clampPercent, mergeSamples, type WindowKey } from "@/lib/burndown";
 import { relabelCachedWindows, routeWindowsByHorizon, SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES } from "@/lib/limitWindows";
 import { historySamples, historySince, recordLimitSample, RETENTION_S } from "@/lib/limitsHistoryStore";
@@ -140,7 +141,7 @@ function withCurrentParser(entry: EngineCacheEntry): EngineCacheEntry {
 
 function readDiskCache(): LimitsCache {
   try {
-    const raw = JSON.parse(fs.readFileSync(limitsCacheFile(), "utf8")) as Partial<LimitsCache> & { at?: unknown; accountId?: unknown; data?: LimitsPayload };
+    const raw = (readJsonCache(limitsCacheFile()) ?? {}) as Partial<LimitsCache> & { at?: unknown; accountId?: unknown; data?: LimitsPayload };
     if (raw.version === 2 && raw.engines && typeof raw.engines === "object") {
       const cache = emptyCache();
       for (const engine of ["claude", "codex"] as const) {
@@ -212,9 +213,7 @@ function writeDiskCache(value: LimitsCache): void {
     } : {};
     // Written whole and renamed into place: the other process may read it at
     // any moment, and a torn read would be a cache miss for every account.
-    const temporary = `${limitsCacheFile()}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, JSON.stringify({ ...value, ...projection }, null, 2) + "\n", "utf8");
-    fs.renameSync(temporary, limitsCacheFile());
+    writeJsonDurably(limitsCacheFile(), { ...value, ...projection });
     if (globalStore.__llvLimitsCacheDisk?.of === value || globalStore.__llvLimitsCache === value) {
       globalStore.__llvLimitsCacheDisk = { of: value, mtimeMs: diskMtime() };
     }

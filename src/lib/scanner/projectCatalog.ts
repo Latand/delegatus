@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { migrateBoardProjects } from "@/lib/board/store";
 import { statePath } from "@/lib/configDir";
+import { fsyncPath, readJsonCache } from "@/lib/state/durableJson";
 import { forEachCooperatively, mapCooperatively } from "@/lib/cooperative";
 import {
   durableProjectAliasCandidates,
@@ -113,8 +114,8 @@ function catalogPath(): string {
 
 function readState(): ProjectCatalogState {
   try {
-    const raw = JSON.parse(fs.readFileSync(catalogPath(), "utf8")) as Partial<Omit<ProjectCatalogState, "version">> & { version?: number };
-    if ((raw.version !== 1 && raw.version !== 2) || !raw.files || typeof raw.files !== "object" || Array.isArray(raw.files)) {
+    const raw = readJsonCache(catalogPath()) as Partial<Omit<ProjectCatalogState, "version">> & { version?: number } | undefined;
+    if (!raw || (raw.version !== 1 && raw.version !== 2) || !raw.files || typeof raw.files !== "object" || Array.isArray(raw.files)) {
       return { version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: {} };
     }
     const files: Record<string, CachedProjectFile> = {};
@@ -220,9 +221,11 @@ function writeState(state: ProjectCatalogState): void {
     operation = "write temporary index";
     target = temporary;
     fs.writeFileSync(temporary, JSON.stringify(state) + "\n", { encoding: "utf8", mode: 0o600 });
+    fsyncPath(temporary);
     operation = "rename temporary index";
     target = filePath;
     fs.renameSync(temporary, filePath);
+    fsyncPath(path.dirname(filePath));
   } catch (error) {
     if (temporary !== undefined) {
       try {
