@@ -1,11 +1,11 @@
 {
   "generatedBy": "scripts/capture-layering.ts",
-  "head": "ea8511ed0d6f00fa75ee5c8bdd2310cdebcdd761",
+  "head": "3b3b35cf416a0ffb0bb25013fdd28c35c1c0c13a",
   "viewports": [
     "1440x900",
     "390x844"
   ],
-  "passed": 14,
+  "passed": 18,
   "failed": 0,
   "results": [
     {
@@ -80,6 +80,82 @@
       "after": {
         "closed": true,
         "keptOpen": true
+      }
+    },
+    {
+      "id": "mic-menu-keyboard-orchestrator",
+      "viewport": "1440x900",
+      "ok": true,
+      "steps": [
+        "focused Dictate on the orchestrator seat above the board",
+        "pressed Shift+F10",
+        "pressed Tab once",
+        "pressed Escape once to close the microphone's menu"
+      ],
+      "coverage": {
+        "overlay": "div.fixed.z-[72].w-[300px].overflow-y-auto[role=\"menu\"][aria-label=\"Transcription method\"][data-mic-backend-menu=\"true\"]",
+        "rect": {
+          "x": 1010,
+          "y": 86,
+          "w": 300,
+          "h": 233
+        },
+        "context": "div.fixed.z-[72].w-[300px].overflow-y-auto[role=\"menu\"][aria-label=\"Transcription method\"][data-mic-backend-menu=\"true\"]",
+        "contextZ": "72",
+        "points": 81,
+        "covered": 0,
+        "coverers": []
+      },
+      "after": {
+        "closed": true,
+        "keptOpen": true,
+        "keyboard": {
+          "afterOpen": "button[role=\"menuitemradio\"] \"Faster WhisperFree, fully local — audio \"",
+          "afterOpenInside": true,
+          "afterTab": "button[role=\"menuitemradio\"] \"ChatGPT VoiceCovered by your ChatGPT sub\"",
+          "afterTabInside": true,
+          "afterEscape": "button \"Dictate\"",
+          "returnedToDictate": true
+        }
+      }
+    },
+    {
+      "id": "mic-menu-keyboard-in-expanded-conversation",
+      "viewport": "1440x900",
+      "ok": true,
+      "steps": [
+        "clicked the orchestrator's tile on its board card",
+        "opened the reader as a full pane (the expanded conversation modal)",
+        "focused Dictate on the expanded conversation",
+        "pressed Shift+F10",
+        "pressed Tab once",
+        "pressed Escape once to close the microphone's menu"
+      ],
+      "coverage": {
+        "overlay": "div.fixed.z-[72].w-[300px].overflow-y-auto[role=\"menu\"][aria-label=\"Transcription method\"][data-mic-backend-menu=\"true\"]",
+        "rect": {
+          "x": 904,
+          "y": 543,
+          "w": 300,
+          "h": 233
+        },
+        "context": "div.fixed.z-[72].w-[300px].overflow-y-auto[role=\"menu\"][aria-label=\"Transcription method\"][data-mic-backend-menu=\"true\"]",
+        "contextZ": "72",
+        "points": 81,
+        "covered": 0,
+        "coverers": []
+      },
+      "after": {
+        "closed": true,
+        "keptOpen": true,
+        "keyboard": {
+          "afterOpen": "button[role=\"menuitemradio\"] \"Faster WhisperFree, fully local — audio \"",
+          "afterOpenInside": true,
+          "afterTab": "button[role=\"menuitemradio\"] \"ChatGPT VoiceCovered by your ChatGPT sub\"",
+          "afterTabInside": true,
+          "afterEscape": "button \"Dictate\"",
+          "returnedToDictate": true
+        }
       }
     },
     {
@@ -266,6 +342,82 @@
       "after": {
         "closed": true,
         "keptOpen": true
+      }
+    },
+    {
+      "id": "mic-menu-keyboard-orchestrator",
+      "viewport": "390x844",
+      "ok": true,
+      "steps": [
+        "tapped the orchestrator's conversation",
+        "focused Dictate on the orchestrator's conversation",
+        "pressed Shift+F10",
+        "pressed Tab once",
+        "pressed Escape once to close the microphone's menu"
+      ],
+      "coverage": {
+        "overlay": "div.fixed.z-[72].w-[300px].overflow-y-auto[role=\"menu\"][aria-label=\"Transcription method\"][data-mic-backend-menu=\"true\"]",
+        "rect": {
+          "x": 8,
+          "y": 551,
+          "w": 300,
+          "h": 233
+        },
+        "context": "div.fixed.z-[72].w-[300px].overflow-y-auto[role=\"menu\"][aria-label=\"Transcription method\"][data-mic-backend-menu=\"true\"]",
+        "contextZ": "72",
+        "points": 81,
+        "covered": 0,
+        "coverers": []
+      },
+      "after": {
+        "closed": true,
+        "keptOpen": true,
+        "keyboard": {
+          "afterOpen": "button[role=\"menuitemradio\"] \"Faster WhisperFree, fully local — audio \"",
+          "afterOpenInside": true,
+          "afterTab": "button[role=\"menuitemradio\"] \"ChatGPT VoiceCovered by your ChatGPT sub\"",
+          "afterTabInside": true,
+          "afterEscape": "button \"Dictate\"",
+          "returnedToDictate": true
+        }
+      }
+    },
+    {
+      "id": "mic-menu-keyboard-in-expanded-conversation",
+      "viewport": "390x844",
+      "ok": true,
+      "steps": [
+        "tapped the orchestrator's conversation (full screen on a phone)",
+        "focused Dictate on the full-screen conversation",
+        "pressed Shift+F10",
+        "pressed Tab once",
+        "pressed Escape once to close the microphone's menu"
+      ],
+      "coverage": {
+        "overlay": "div.fixed.z-[72].w-[300px].overflow-y-auto[role=\"menu\"][aria-label=\"Transcription method\"][data-mic-backend-menu=\"true\"]",
+        "rect": {
+          "x": 8,
+          "y": 551,
+          "w": 300,
+          "h": 233
+        },
+        "context": "div.fixed.z-[72].w-[300px].overflow-y-auto[role=\"menu\"][aria-label=\"Transcription method\"][data-mic-backend-menu=\"true\"]",
+        "contextZ": "72",
+        "points": 81,
+        "covered": 0,
+        "coverers": []
+      },
+      "after": {
+        "closed": true,
+        "keptOpen": true,
+        "keyboard": {
+          "afterOpen": "button[role=\"menuitemradio\"] \"Faster WhisperFree, fully local — audio \"",
+          "afterOpenInside": true,
+          "afterTab": "button[role=\"menuitemradio\"] \"ChatGPT VoiceCovered by your ChatGPT sub\"",
+          "afterTabInside": true,
+          "afterEscape": "button \"Dictate\"",
+          "returnedToDictate": true
+        }
       }
     },
     {
