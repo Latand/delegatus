@@ -96,7 +96,7 @@ import type {
   PipelineUnconfirmedHost,
   PipelineUnresolvedTermination,
 } from "./types";
-import { MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
+import { fencedBlocks, MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
 
 export type PipelineStageSpawn = {
   launchId: string;
@@ -1269,12 +1269,11 @@ function normalizeVerdictFinding(value: unknown): unknown {
     still owns fence selection and all verdict validation; this adapter changes
     only recognized finding objects in its final JSON candidate. */
 function normalizeVerdictFindingObjects(text: string): string {
-  const matches = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
-  const candidate = matches.at(-1);
-  if (!candidate || candidate.index === undefined) return text;
+  const candidate = fencedBlocks(text).at(-1);
+  if (!candidate) return text;
   let value: unknown;
   try {
-    value = JSON.parse(candidate[1] ?? "");
+    value = JSON.parse(candidate.payload);
   } catch {
     return text;
   }
@@ -1284,11 +1283,7 @@ function normalizeVerdictFindingObjects(text: string): string {
     return text;
   }
   const normalized = { ...record, findings: record.findings.map(normalizeVerdictFinding) };
-  const fullCandidate = candidate[0];
-  const rawCandidate = candidate[1] ?? "";
-  const rawOffset = fullCandidate.indexOf(rawCandidate);
-  const payloadStart = candidate.index + rawOffset;
-  return `${text.slice(0, payloadStart)}${JSON.stringify(normalized)}${text.slice(payloadStart + rawCandidate.length)}`;
+  return `${text.slice(0, candidate.payloadStart)}${JSON.stringify(normalized)}${text.slice(candidate.payloadEnd)}`;
 }
 
 function parsePipelineStageVerdict(text: string) {
@@ -2504,6 +2499,82 @@ async function reconcileSeveredStageTurn(
   return "handled";
 }
 
+/**
+ * The one message a finished stage gets before its lane parks (#1756).
+ *
+ * Production lane d0cf20f0 ended a turn with a progress line while it waited on
+ * CI — no verdict, because there was nothing to report yet. Three spaced
+ * evaluations later the lane was parked, while the agent was sitting there
+ * holding the whole context and would have answered in one line. The verdict is
+ * the one thing the controller cannot reconstruct and the agent can, so it asks
+ * for it once.
+ *
+ * Never into a live turn: this runs only on native end-of-turn evidence
+ * (`durable.turn === "terminal"`), only for a pane-less structured attempt that
+ * has a delivery seam, and only when no delivery for that conversation is
+ * already outstanding. Everything the request cannot cover is bounded by
+ * `firstMissAt`: a delivery surface that keeps refusing, a queue that never
+ * drains and an agent that never answers all fall back through the ordinary
+ * recovery checks, which park the lane exactly as they did before.
+ */
+const VERDICT_REQUEST_ANSWER_WAIT_MS = 3 * 60_000;
+const VERDICT_REQUEST_DETAIL = "stage turn ended with no readable verdict; the controller asked for it once";
+const VERDICT_REQUEST_TEXT =
+  "Your turn ended and the pipeline controller could not read a verdict from your final message."
+  + " Nothing else about the stage is in question — the worktree, the branch and its checks are read by the server."
+  + " Answer with your stage verdict as the last block of a short message: one fenced json block holding"
+  + ' {"status":"pass"}, {"status":"fail"} or {"status":"needs_decision"}, with its findings when it has any,'
+  + " and no text after it. This is the only message you get; the stage parks for the operator without it.";
+
+async function requestStageVerdictOnce(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  ports: PipelinePorts,
+  messageTs: number,
+  structuredActive: boolean | null,
+  persist: () => void,
+): Promise<"asked" | "park"> {
+  const conversationId = attempt.conversationId;
+  /* A pane-hosted stage has no structured delivery seam, and neither has a
+     controller wired without one: there is nobody to ask. */
+  if (attempt.paneId || !conversationId || !attempt.agentPath || !ports.resumeSeveredTurn) return "park";
+  /* The turn evidence says the turn ended; the runtime ledger saying a turn is
+     running is the one reading that may not be talked over. */
+  if (structuredActive === true) return "park";
+  const now = ports.now();
+  const existing = attempt.verdictRequest;
+  /* The agent answered and its answer still carries no readable verdict. That
+     is the second silence, and it parks. */
+  if (existing && messageTs > existing.messageTs) return "park";
+  if (!existing) {
+    attempt.verdictRequest = { firstMissAt: now, messageTs };
+    persist();
+  }
+  const request = attempt.verdictRequest!;
+  if (unixMs(now) - unixMs(request.firstMissAt) >= VERDICT_REQUEST_ANSWER_WAIT_MS) return "park";
+  /* Asked already: wait for the answer inside the bound. */
+  if (request.requestedAt) return "asked";
+  /* Somebody's prompt is already on its way to this conversation. */
+  if (ports.conversationDeliveryOutstanding?.(conversationId) === true) return "asked";
+  /* Stable across ticks and processes, so a replay cannot mint a second ask. */
+  const clientMessageId = `stage-verdict-request-${pipeline.id}-${stage.id}-${attempt.n}-${messageTs}`;
+  const delivered = await ports.resumeSeveredTurn({
+    conversationId,
+    transcriptPath: attempt.agentPath,
+    clientMessageId,
+    text: VERDICT_REQUEST_TEXT,
+  });
+  /* A refused admission leaves the request owed; the next tick asks again under
+     the same identity, until the bound above runs out. */
+  if (delivered !== true) return "asked";
+  request.requestedAt = now;
+  request.clientMessageId = clientMessageId;
+  pipeline.stateDetail = VERDICT_REQUEST_DETAIL;
+  persist();
+  return "asked";
+}
+
 async function tickRunStage(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -2756,6 +2827,7 @@ async function tickRunStage(
       const hostEpoch = await ports.runtimeHostEpoch?.() ?? null;
       if (hostEpoch !== null) attempt.hostEpoch = hostEpoch;
       delete attempt.severedTurn;
+      delete attempt.verdictRequest;
       delete attempt.controllerWait;
       attempt.launchId = spawned.launchId;
       attempt.conversationId = spawned.conversationId;
@@ -2912,6 +2984,10 @@ async function tickRunStage(
       return;
     }
     if (!hostUnavailablePastGrace) {
+      /* The turn ended and its verdict cannot be read. Before the recovery
+         checks start spending, ask the agent that is still holding the context
+         for the one thing only it can produce (#1756). */
+      if (await requestStageVerdictOnce(pipeline, stage, attempt, ports, durable.message!.ts, structuredActive, persist) === "asked") return;
       if (!canSpendRecoveryCheck()) return;
       recordVerdictRecoveryMiss(
         pipeline,
@@ -4949,21 +5025,51 @@ async function orphanAgentPane(
   return { error: `stage agent may still be running in pane ${attempt.paneId}; wait for it to exit or kill the pane first`, status: 409 };
 }
 
-function verdictRecoveryResetRefusal(
+/** What a parked stage's reset may do with a worktree that has moved past the
+    last-passed commit: nothing to decide, adopt the head as the stage's result,
+    or refuse and keep the work. */
+type VerdictRecoveryReset =
+  | { kind: "clear" }
+  | { kind: "adopt"; sha: string }
+  | { kind: "refuse"; error: string; status: number };
+
+/**
+ * A park without a readable verdict says nothing about what the stage did, so
+ * an action that resets the worktree under committed work is refused — unless
+ * the work is published at exactly that head (#1756).
+ *
+ * A pushed branch whose tip IS the worktree HEAD is a finished stage by
+ * evidence: nothing is lost by moving on, because everything the stage produced
+ * is on the remote. `skip-stage` therefore adopts that commit as the stage's
+ * result and the lane goes on to its review, which is what production lane
+ * d0cf20f0 needed and could only get by starting a successor pipeline. Work
+ * that was never pushed is still refused, and `retry-stage` is refused
+ * throughout: it would run the stage again over the head it was told to keep.
+ */
+function verdictRecoveryStageReset(
   pipeline: Pipeline,
   attempt: PipelineStageAttempt | null,
   ports: PipelinePorts,
-): { error: string; status: number } | null {
-  if (attempt?.verdictRecovery?.state !== "exhausted") return null;
-  const refusal = (reason: string) => ({
-    error: `automatic verdict recovery exhausted; retry-stage and skip-stage require a reset-safe worktree: ${reason}. Preserve the work or use close`,
-    status: 409 as const,
+  action: "retry-stage" | "skip-stage",
+): VerdictRecoveryReset {
+  if (attempt?.verdictRecovery?.state !== "exhausted") return { kind: "clear" };
+  const refusal = (reason: string, remedy = "Preserve the work or use close"): VerdictRecoveryReset => ({
+    kind: "refuse",
+    error: `automatic verdict recovery exhausted; retry-stage and skip-stage require a reset-safe worktree: ${reason}. ${remedy}`,
+    status: 409,
   });
   if (!pipeline.lastPassedCommit) return refusal("the pipeline has no passed-stage commit");
   const local = currentPipelineBranchHead(pipeline, ports.exec);
   if (!local.ok) return refusal(local.error);
-  if (local.sha === pipeline.lastPassedCommit) return null;
-  return refusal(`the worktree HEAD ${local.sha} differs from the last-passed commit ${pipeline.lastPassedCommit}`);
+  if (local.sha === pipeline.lastPassedCommit) return { kind: "clear" };
+  if (action === "skip-stage") {
+    const remote = currentPipelineRemoteBranchHead(pipeline, ports.exec);
+    if (remote.ok && remote.sha === local.sha) return { kind: "adopt", sha: local.sha };
+  }
+  return refusal(
+    `the worktree HEAD ${local.sha} differs from the last-passed commit ${pipeline.lastPassedCommit}`,
+    "Push the branch at that HEAD and skip-stage adopts it as the stage's result, or preserve the work and use close",
+  );
 }
 
 /** One line of the provider's own words, for the close report and the board. */
@@ -5468,8 +5574,8 @@ export async function patchPipeline(
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
-      const recoveryRefusal = verdictRecoveryResetRefusal(pipeline, attempt, ports);
-      if (recoveryRefusal) return recoveryRefusal;
+      const recoveryReset = verdictRecoveryStageReset(pipeline, attempt, ports, "retry-stage");
+      if (recoveryReset.kind === "refuse") return { error: recoveryReset.error, status: recoveryReset.status };
       const explicitReceiptRetry = req.stageId !== undefined || req.launchId !== undefined;
       if (explicitReceiptRetry && (typeof req.stageId !== "string" || typeof req.launchId !== "string")) {
         return { error: "receipt retry requires both stageId and launchId", status: 400 };
@@ -5589,8 +5695,8 @@ export async function patchPipeline(
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
       if (pipeline.state !== "needs_decision" || !stage) return { error: "pipeline does not have a stage awaiting a decision", status: 409 };
-      const recoveryRefusal = verdictRecoveryResetRefusal(pipeline, attempt, ports);
-      if (recoveryRefusal) return recoveryRefusal;
+      const recoveryReset = verdictRecoveryStageReset(pipeline, attempt, ports, "skip-stage");
+      if (recoveryReset.kind === "refuse") return { error: recoveryReset.error, status: recoveryReset.status };
       const orphan = await orphanAgentPane(attempt, ports);
       if (orphan) return orphan;
       if (flow && flow.state !== "closed") {
@@ -5602,12 +5708,17 @@ export async function patchPipeline(
         }
       }
       if (!pipeline.lastPassedCommit) return { error: "pipeline worktree has not been provisioned", status: 409 };
+      /* The stage's own published head becomes what the lane carries forward,
+         so the reset below holds it and the next stage reviews it (#1756). */
+      if (recoveryReset.kind === "adopt") pipeline.lastPassedCommit = recoveryReset.sha;
       const reset = resetPipelineStage(pipeline, ports.exec);
       if (!reset.ok) return { error: reset.error, status: 409 };
       if (attempt) {
         attempt.state = "skipped";
         attempt.completedAt = ports.now();
-        attempt.output = "Skipped by operator.";
+        attempt.output = recoveryReset.kind === "adopt"
+          ? `Skipped by operator; the stage's pushed head ${recoveryReset.sha} was adopted as its result.`
+          : "Skipped by operator.";
       }
       advancePipeline(pipeline, stage, ports, attempt);
     } else if (req.action === "override-stage") {

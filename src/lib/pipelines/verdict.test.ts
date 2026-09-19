@@ -57,6 +57,101 @@ test("the last well-formed fenced JSON verdict survives a trailing non-verdict f
   });
 });
 
+/* #1756 lane 42490aea, the exact final message that parked production: the
+   builder quoted a fence inside an inline code span while describing the fix it
+   had just made, and the reader paired those stray ticks with the opening fence
+   of the real verdict. The verdict block was never a candidate, and the lane
+   parked reporting malformed JSON over this. */
+test("a fence quoted inside an inline code span leaves the final verdict readable (#1756)", () => {
+  const backticks = "`".repeat(3);
+  const quoted = "`".repeat(4);
+  const message = [
+    "Both findings are fixed on the PR branch.",
+    "",
+    `**Finding 2 — the strip.** It blanks fenced blocks (${quoted} ${backticks} ${quoted} and \`~~~\`, with the`,
+    "info-string rule) out before it measures heading levels, and repeats until the",
+    "heading names nothing left in the text.",
+    "",
+    "REVIEW_READY: a published branch",
+    "",
+    "```json",
+    '{"status":"pass","findings":[],"confidence":0.9}',
+    "```",
+  ].join("\n");
+
+  expect(parseStageVerdict(message)).toEqual({
+    verdict: { status: "pass", findings: [], confidence: 0.9 },
+    output: message.slice(0, message.indexOf("```json")).trim(),
+  });
+});
+
+test("an earlier fenced block that is not a verdict never decides the verdict (#1756)", () => {
+  /* Tolerant of an earlier fence and of text after the verdict, which is the
+     whole contract: the LAST fenced JSON object of the message decides. */
+  expect(parseStageVerdict([
+    "The prompt I was given quotes this placeholder:",
+    "",
+    "```json",
+    '{"status":"pass","findings":[],"confidence":n}',
+    "```",
+    "",
+    "```json",
+    '{"status":"pass","findings":[],"confidence":0.9}',
+    "```",
+    "",
+    "Head SHA: an exact commit",
+  ].join("\n"))).toMatchObject({ verdict: { status: "pass", findings: [], confidence: 0.9 } });
+});
+
+test("a finding string carrying escaped quotes and backslashes parses (#1756)", () => {
+  expect(parseStageVerdict([
+    "VERDICT: REQUEST_CHANGES",
+    "",
+    "```json",
+    JSON.stringify({
+      status: "fail",
+      findings: ['P1 — the path C:\\Users\\x and the literal "quoted" name are both dropped'],
+    }),
+    "```",
+  ].join("\n"))).toEqual({
+    verdict: {
+      status: "fail",
+      findings: ['P1 — the path C:\\Users\\x and the literal "quoted" name are both dropped'],
+      rankedFindings: [{ severity: "P1", text: 'the path C:\\Users\\x and the literal "quoted" name are both dropped' }],
+    },
+    output: "VERDICT: REQUEST_CHANGES",
+  });
+});
+
+test("a rejection names the fenced block it was read from (#1756)", () => {
+  const message = [
+    "Summary line.",
+    "",
+    "```json",
+    "{ not json at all }",
+    "```",
+  ].join("\n");
+  expect(parseStageVerdict(message)).toBeNull();
+  expect(stageVerdictRejectionReason(message)).toBe(
+    "canonical completed assistant turn has malformed JSON in the fenced verdict, at the fenced block on line 3",
+  );
+  expect(stageVerdictRejectionReason(["```json", '{"status":"approved"}', "```"].join("\n"))).toBe(
+    "canonical completed assistant turn is missing a valid status, findings, or confidence field, at the fenced block on line 1",
+  );
+});
+
+test("a final fenced verdict whose closing fence is missing still decides (#1756)", () => {
+  expect(parseStageVerdict([
+    "Done.",
+    "",
+    "```json",
+    '{"status":"pass","confidence":0.5}',
+  ].join("\n"))).toEqual({
+    verdict: { status: "pass", confidence: 0.5 },
+    output: "Done.",
+  });
+});
+
 test("the fa6aa690 production shape accepts stage-specific completion metadata", () => {
   expect(parseStageVerdict([
     "Completed every requested gate.",
