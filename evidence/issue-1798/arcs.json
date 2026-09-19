@@ -50,7 +50,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -107,7 +108,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -165,7 +167,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -222,7 +225,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -288,7 +292,8 @@
                 "onPath": 30,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -324,7 +329,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -383,7 +389,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -440,7 +447,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -498,7 +506,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -555,7 +564,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -621,7 +631,8 @@
                 "onPath": 30,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -657,7 +668,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -869,7 +881,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -926,7 +939,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -984,7 +998,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1041,7 +1056,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1107,7 +1123,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -1143,7 +1160,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1202,7 +1220,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1259,7 +1278,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1317,7 +1337,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1374,7 +1395,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1440,7 +1462,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -1476,7 +1499,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1688,7 +1712,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1745,7 +1770,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1823,7 +1849,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1916,7 +1943,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -1973,7 +2001,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2051,7 +2080,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2215,7 +2245,8 @@
                 "onPath": 0,
                 "offAnswered": 0,
                 "offPath": 0,
-                "ownsHead": false
+                "ownsHead": false,
+                "clearsPills": true
               },
               "box": {
                 "x": 0,
@@ -2324,7 +2355,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2381,7 +2413,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2439,7 +2472,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2496,7 +2530,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2562,7 +2597,8 @@
                 "onPath": 30,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -2598,7 +2634,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2657,7 +2694,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2714,7 +2752,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2772,7 +2811,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2829,7 +2869,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -2895,7 +2936,8 @@
                 "onPath": 30,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -2931,7 +2973,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3143,7 +3186,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3200,7 +3244,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3258,7 +3303,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3315,7 +3361,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3381,7 +3428,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -3417,7 +3465,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3476,7 +3525,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3533,7 +3583,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3591,7 +3642,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3648,7 +3700,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3714,7 +3767,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -3750,7 +3804,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -3962,7 +4017,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4019,7 +4075,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4097,7 +4154,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4190,7 +4248,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4247,7 +4306,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4325,7 +4385,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4489,7 +4550,8 @@
                 "onPath": 0,
                 "offAnswered": 0,
                 "offPath": 0,
-                "ownsHead": false
+                "ownsHead": false,
+                "clearsPills": true
               },
               "box": {
                 "x": 0,
@@ -4607,7 +4669,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4664,7 +4727,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4722,7 +4786,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4779,7 +4844,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4845,7 +4911,8 @@
                 "onPath": 30,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -4881,7 +4948,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4940,7 +5008,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -4997,7 +5066,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5055,7 +5125,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5112,7 +5183,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5178,7 +5250,8 @@
                 "onPath": 30,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -5214,7 +5287,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5426,7 +5500,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5483,7 +5558,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5541,7 +5617,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5598,7 +5675,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5664,7 +5742,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -5700,7 +5779,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5759,7 +5839,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5816,7 +5897,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5874,7 +5956,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5931,7 +6014,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -5997,7 +6081,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -6033,7 +6118,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -6245,7 +6331,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -6302,7 +6389,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -6380,7 +6468,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -6473,7 +6562,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -6530,7 +6620,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -6608,7 +6699,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -6772,7 +6864,8 @@
                 "onPath": 0,
                 "offAnswered": 0,
                 "offPath": 0,
-                "ownsHead": false
+                "ownsHead": false,
+                "clearsPills": true
               },
               "box": {
                 "x": 0,
@@ -6881,7 +6974,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -6938,7 +7032,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -6996,7 +7091,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7053,7 +7149,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7119,7 +7216,8 @@
                 "onPath": 30,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -7155,7 +7253,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7214,7 +7313,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7271,7 +7371,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7329,7 +7430,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7386,7 +7488,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7452,7 +7555,8 @@
                 "onPath": 30,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -7488,7 +7592,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7700,7 +7805,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7757,7 +7863,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7815,7 +7922,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7872,7 +7980,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -7938,7 +8047,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -7974,7 +8084,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8033,7 +8144,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8090,7 +8202,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8148,7 +8261,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8205,7 +8319,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8271,7 +8386,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 30,
@@ -8307,7 +8423,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8519,7 +8636,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8576,7 +8694,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8654,7 +8773,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8747,7 +8867,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8804,7 +8925,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -8882,7 +9004,8 @@
                 "onPath": 33,
                 "offAnswered": 33,
                 "offPath": 33,
-                "ownsHead": true
+                "ownsHead": true,
+                "clearsPills": true
               },
               "box": {
                 "x": 41,
@@ -9046,7 +9169,8 @@
                 "onPath": 0,
                 "offAnswered": 0,
                 "offPath": 0,
-                "ownsHead": false
+                "ownsHead": false,
+                "clearsPills": true
               },
               "box": {
                 "x": 0,

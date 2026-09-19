@@ -412,10 +412,10 @@ function measureArcs(row: HTMLElement, chips: ReadonlyMap<string, HTMLElement>, 
   const heads = new Map<string, number>();
   const byTarget = new Map<string, typeof ranked>();
   for (const entry of ranked) {
-    const group = byTarget.get(entry.target) ?? [];
+    const group = byTarget.get(entry.target) ?? byTarget.set(entry.target, []).get(entry.target)!;
     const toward = Math.sign(entry.from.cx - entry.to.cx) || 1;
     heads.set(entry.id, entry.to.cx - group.length * ARC_FAN * toward);
-    byTarget.set(entry.target, [...group, entry]);
+    group.push(entry);
   }
   /* A fan wider than the pill it lands on slides back onto it as one piece, so
      the clear air between two tips survives a narrow target. */

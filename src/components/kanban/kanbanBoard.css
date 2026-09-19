@@ -368,8 +368,11 @@
 /* What the pointer actually meets. The drawn arc is 1.5 px of dashes, and the
    dash gaps are not the arc at all, so aiming at the drawing means aiming at
    nothing: a stroke wide enough to hit opens the sentence anywhere along the
-   curve, and a tap on it writes the sentence out where a title cannot. */
-.kb .parc-hit { fill: none; stroke: transparent; stroke-width: 11; stroke-linecap: round; pointer-events: stroke; cursor: help; }
+   curve, and a tap on it writes the sentence out where a title cannot. The cap
+   is butt on purpose: both ends of the curve leave their pill straight down, so
+   a round cap would put half a hit stroke back up inside the pill and take the
+   last pixels of a control the operator is aiming at. */
+.kb .parc-hit { fill: none; stroke: transparent; stroke-width: 11; stroke-linecap: butt; pointer-events: stroke; cursor: help; }
 .kb [data-arc-state="fired"] .parc { stroke: var(--color-warning); stroke-dasharray: none; }
 .kb [data-arc-state="fired"] .parc-head { fill: var(--color-warning); }
 .kb [data-arc-state="exhausted"] .parc { stroke: var(--color-danger); stroke-width: 2; stroke-dasharray: none; }

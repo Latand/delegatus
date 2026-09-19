@@ -4313,8 +4313,11 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
         nested arcs converge into their shared pill the shallower one answers
         for both, so that number is a share rather than all of them. `offPath`
         and `offAnswered` are the same two readings 4 px off the curve, and
-        `ownsHead` is whether the arc answers at its own arrowhead. */
-    hit: { strokeWidth: string; samples: number; answered: number; onPath: number; offAnswered: number; offPath: number; ownsHead: boolean };
+        `ownsHead` is whether the arc answers at its own arrowhead, and
+        `clearsPills` whether the stroke stays out of the pill the arc leaves —
+        a hit target that reaches back up into a pill takes the last pixels of
+        a control the operator is aiming at. */
+    hit: { strokeWidth: string; samples: number; answered: number; onPath: number; offAnswered: number; offPath: number; ownsHead: boolean; clearsPills: boolean };
     /** The arc's painted box, relative to the row's own box. */
     box: { x: number; y: number; right: number; bottom: number } | null;
     /** Pixels by which the arc reaches ABOVE the pills' bottom edge: anything
@@ -4448,6 +4451,10 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
             offPath: inside.filter((point) => mine(point.x, point.y + 4)).length,
             /* The curve is drawn from its arrowhead back to the failing pill. */
             ownsHead: samples.length ? mine(samples[0]!.x, samples[0]!.y) : false,
+            /* One pixel inside the bottom of the pill the arc leaves. */
+            clearsPills: samples.length
+              ? owner(samples[samples.length - 1]!.x, rowBox.top + pillsBottom - 1) === null
+              : true,
           },
           box,
           intoPills: absolute ? round(Math.max(0, (rowBox.top + pillsBottom) - absolute.top)) : 0,
@@ -4555,6 +4562,7 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
                nested arcs converge into one pill the shallower one answers for
                both, which is the only reading a reader could have given them. */
             if (!arc.hit.ownsHead) failures.push(`${label}: ${row.pipeline} ${arc.edge} does not answer at its own arrowhead`);
+            if (!arc.hit.clearsPills) failures.push(`${label}: ${row.pipeline} ${arc.edge} reaches back up into the pill it leaves`);
             if (arc.hit.onPath * 3 < arc.hit.samples * 2) failures.push(`${label}: ${row.pipeline} ${arc.edge} answers for only ${arc.hit.onPath} of its own ${arc.hit.samples} points`);
           }
           /* The halo is cut out of the ground the section paints, or every
