@@ -250,6 +250,10 @@ export interface ReasoningMember {
   availability: "available" | "unavailable";
 }
 
+/** What ended the turn, as far as the record says: an expired or rejected
+    sign-in the operator can act on, or any other provider failure. */
+export type TurnErrorReason = "auth" | "other";
+
 export type Item =
   | { kind: "prose"; ts: unknown; text: string; engine: "codex" | "claude" | "openclaw"; sourceId?: string }
   | { kind: "user"; ts: unknown; text: string; selectedContext?: SelectedContextRef }
@@ -257,6 +261,15 @@ export type Item =
   | VoiceTurnItem
   | { kind: "svc"; text: string }
   | { kind: "note"; text: string }
+  /* The turn ended on a provider failure instead of an answer (#1846
+     recurrence). Codex closes both with the same `task_complete` record, and
+     the completion note dropped its `error`, so a first turn that never ran
+     read as "Task completed" with nothing under it.
+     Nothing here is the provider's own text. `reason` chooses which
+     Viewer-authored explanation the row shows, `code` is null unless the
+     record's error code is one the Viewer recognizes by name, and `withheld`
+     records that the failure carried a message the row did not print. */
+  | { kind: "turn-error"; ts: unknown; reason: TurnErrorReason; code: string | null; withheld: boolean }
   | ToolEvent
   | CmdGroupItem
   | ReviewCardItem
@@ -463,6 +476,86 @@ function base64DecodedLength(base64: string): number {
   if (!base64.length) return 0;
   const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
   return Math.floor((base64.length * 3) / 4) - padding;
+}
+
+/**
+ * Error codes this row knows by name. Two things hang off recognition, and
+ * only recognized codes get either: which explanation the row shows, and
+ * whether the code itself is printed — the printed string is the constant
+ * below, never the bytes out of the record, so no payload glued behind a code
+ * can ride onto the screen inside it.
+ */
+const AUTH_TURN_ERROR_CODES = new Set([
+  "unauthorized",
+  "unauthenticated",
+  "auth_error",
+  "authentication_error",
+  "authentication_failed",
+  "invalid_credentials",
+  "token_expired",
+  "refresh_token_expired",
+  "login_required",
+]);
+/** Recognized and explicitly NOT a sign-in problem. An auth SERVICE being down
+    is the clearest of them: the operator's credentials are fine, and telling
+    them to sign in again would send them after the wrong thing. */
+const OTHER_TURN_ERROR_CODES = new Set([
+  "auth_service_unavailable",
+  "service_unavailable",
+  "usage_limit",
+  "usage_limit_exceeded",
+  "rate_limited",
+  "stream_error",
+  "server_error",
+  "internal_error",
+  "network_error",
+  "timeout",
+  "context_length_exceeded",
+  "cancelled",
+]);
+/** Prose that names an expired sign-in, read ONLY when the record carries no
+    code at all. A code that exists is the provider's own classification and
+    outranks anything its prose happens to mention. */
+const AUTH_MESSAGE_RE = /\b(?:unauthorized|refresh token has expired|sign ?in again|log ?out and sign in)\b/i;
+
+function turnErrorCodeKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+/**
+ * The provider failure a Codex turn-end record carries, or null when the turn
+ * simply ended. A clean completion has no `error` and no `codex_error_info` at
+ * all, so anything read here is a real failure — including the observed
+ * `unauthorized` first turn, which returned no assistant message whatsoever.
+ *
+ * **Nothing the provider wrote is returned for display.** A provider's error
+ * message is arbitrary prose that can quote the request it rejected — a JSON
+ * body, a header, a token in single quotes, escaped, or nested three levels
+ * down — and no set of patterns over arbitrary text can be trusted to have
+ * found every credential in it. So the row is keyed on values this parser
+ * RECOGNIZES and rendered from strings the Viewer itself authored. What the
+ * record said is still in the transcript record rows, under the same bounded,
+ * key-aware redaction every other raw record gets.
+ *
+ * `withheld` says a message existed and was not printed, so the row can be
+ * honest about the choice rather than silently dropping it.
+ */
+function codexTurnFailure(payload: Record<string, unknown>): Omit<Extract<Item, { kind: "turn-error" }>, "kind" | "ts"> | null {
+  const error = rec(payload.error);
+  const info = (textPart(payload.codex_error_info) || textPart(error.codex_error_info)).trim();
+  const message = (textPart(error.message) || textPart(payload.error) || (info ? textPart(payload.message) : "")).trim();
+  if (!info && !message) return null;
+  const key = turnErrorCodeKey(info);
+  /* A code the Viewer knows decides on its own. An unrecognized code may still
+     LEAD with a known one ("unauthorized <payload>"), which classifies the
+     failure without being printed. With no code at all, the prose is all there
+     is to go on. */
+  const leading = turnErrorCodeKey(info.split(/[\s,;(]/, 1)[0] ?? "");
+  const auth = AUTH_TURN_ERROR_CODES.has(key)
+    || (!OTHER_TURN_ERROR_CODES.has(key) && AUTH_TURN_ERROR_CODES.has(leading))
+    || (!info && AUTH_MESSAGE_RE.test(message));
+  const recognized = AUTH_TURN_ERROR_CODES.has(key) || OTHER_TURN_ERROR_CODES.has(key);
+  return { reason: auth ? "auth" : "other", code: recognized ? key : null, withheld: Boolean(message || info) };
 }
 
 function codexImageFromDataUrl(value: string): Extract<Item, { kind: "image" }> | null {
@@ -1939,6 +2032,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const addNote = (text: string) => {
     push({ kind: "note", text });
   };
+  const addTurnError = (ts: unknown, failure: Omit<Extract<Item, { kind: "turn-error" }>, "kind" | "ts">) => {
+    push({ kind: "turn-error", ts, ...failure });
+  };
   const addThink = (text: string, sourceId?: string) => {
     const normalized = text.trim();
     if (sourceId) {
@@ -2509,7 +2605,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         return addCodexAssistant("event-agent", ts, textPart(p.message));
       }
       if (p.type === "task_started") return addSvc(textPart(p.type));
-      if (p.type === "task_complete") return addNote(tr("render.taskComplete") + (ts ? " · " + hhmm(ts) : ""));
+      if (p.type === "task_complete") {
+        /* A turn that died on the provider says so here and nowhere else: the
+           record that closed it is the only evidence in the transcript. */
+        const failure = codexTurnFailure(p);
+        if (failure) return addTurnError(ts, failure);
+        return addNote(tr("render.taskComplete") + (ts ? " · " + hhmm(ts) : ""));
+      }
       if (p.type === "context_compacted") {
         if (codexCompacted) return void (codexCompacted = null);
         return addCompact(ts);

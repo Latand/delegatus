@@ -145,3 +145,126 @@ describe("#1793 launch-prompt bubble", () => {
     }
   }, 180_000);
 });
+
+describe("#1846 recurrence: the first turn that died unauthorized", () => {
+  /*
+   * Rendered evidence for the auth-terminal presentation fix. The engine wrote
+   * one turn-end record and no answer, so what this frame shows IS the whole
+   * of what the operator gets: either a failed terminal that names the
+   * failure, quotes the provider and says what to do, or — the control case —
+   * the quiet completion note a turn that really completed still gets.
+   *
+   * Both cases at a phone and a desktop viewport, in both languages. Geometry
+   * goes to `evidence/issue-1846-auth-terminal/terminal.json`; frames to
+   * `.artifacts/issue-1846-auth-terminal/`, which is not committed.
+   */
+
+  const OUT = path.resolve(".artifacts/issue-1846-auth-terminal");
+  const EVIDENCE = path.resolve("evidence/issue-1846-auth-terminal");
+  const VIEWPORTS = [
+    { name: "phone-390", width: 390, height: 844 },
+    { name: "desktop-1280", width: 1280, height: 900 },
+  ] as const;
+  const CASES = ["auth-terminal", "clean-terminal"] as const;
+  /* The fixture's failing record quotes this in a JSON body; assembled from
+     parts so no credential-shaped literal is committed. */
+  const SENTINEL = ["sk", "live", "9f4c2ab77d31e05c86f0"].join("_");
+  const LANGS = ["en", "uk"] as const;
+
+  interface TerminalGeometry {
+    /** The failed terminal's own reason, as the row publishes it. */
+    turnError: string | null;
+    /** The words the operator reads on the row. */
+    rowText: string | null;
+    /** A completion note beside a failure would be the old lie returning. */
+    completionNotes: number;
+    /** The row is painted in the danger hue rather than muted grey. */
+    danger: boolean;
+    /** Nothing credential-shaped survived redaction onto the screen. */
+    leaks: number;
+    /** The row's painted box, so a frame proves it is actually visible. */
+    box: { width: number; height: number } | null;
+    overflowX: number;
+    viewportWidth: number;
+  }
+
+  browserTest("the failed terminal is readable at both widths, and a real completion stays quiet", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const geometry: Record<string, TerminalGeometry> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const viewport of VIEWPORTS) {
+        for (const id of CASES) {
+          for (const lang of LANGS) {
+            const url = `${served.base}?case=${id}&lang=${lang}`;
+            const { context, page, pageErrors } = await openFixture(
+              browser,
+              url,
+              { width: viewport.width, height: viewport.height },
+              "dark",
+              lang,
+            );
+            try {
+              await page.waitForSelector(`[data-evidence-case="${id}"]`);
+              const reading = await page.evaluate(() => {
+                const row = document.querySelector("[data-turn-error]");
+                const rect = row?.getBoundingClientRect();
+                const painted = row ? getComputedStyle(row) : null;
+                const body = document.body.textContent ?? "";
+                return {
+                  turnError: row?.getAttribute("data-turn-error") ?? null,
+                  rowText: row?.textContent?.trim() ?? null,
+                  completionNotes: [...document.querySelectorAll("div")]
+                    .filter((node) => node.children.length === 0 && /Task completed|Задачу завершено/.test(node.textContent ?? ""))
+                    .length,
+                  danger: painted ? painted.borderTopColor !== painted.backgroundColor : false,
+                  leaks: (body.match(/[A-Za-z0-9]{24,}/g) ?? []).length,
+                  box: rect ? { width: Math.round(rect.width), height: Math.round(rect.height) } : null,
+                  overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+                  viewportWidth: window.innerWidth,
+                };
+              });
+              expect(pageErrors).toEqual([]);
+              geometry[`${id}-${viewport.name}-${lang}`] = reading;
+              await page.screenshot({ path: path.join(OUT, `${id}-${viewport.name}-${lang}.png`), fullPage: true });
+
+              /* Neither case pushes the page sideways, and no credential-shaped
+                 run of characters is ever on screen. */
+              expect(reading.overflowX).toBe(0);
+              expect(reading.leaks).toBe(0);
+              if (id === "auth-terminal") {
+                /* The failure is on screen, painted, and says all three things:
+                   what failed, what the provider said, what to do next. */
+                expect(reading.turnError).toBe("auth");
+                expect(reading.danger).toBe(true);
+                expect(reading.box!.width).toBeGreaterThan(200);
+                expect(reading.box!.height).toBeGreaterThan(40);
+                expect(reading.completionNotes).toBe(0);
+                expect(reading.rowText).toContain(lang === "uk" ? "Помилка авторизації" : "Authorization failed");
+                /* The Viewer's own explanation, and never the provider's
+                   sentence, which the fixture's record carries verbatim. */
+                expect(reading.rowText).toContain(lang === "uk" ? "вхід цього акаунта більше не дійсний" : "sign-in is no longer valid");
+                expect(reading.rowText).toContain(lang === "uk" ? "Увійдіть" : "Sign in to it again");
+                expect(reading.rowText).not.toContain("refresh token has expired");
+                expect(reading.rowText).not.toContain(SENTINEL);
+              } else {
+                /* A turn that really completed keeps the quiet note it had. */
+                expect(reading.turnError).toBeNull();
+                expect(reading.completionNotes).toBe(1);
+              }
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "terminal.json"), `${JSON.stringify(geometry, null, 2)}\n`);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 180_000);
+});
