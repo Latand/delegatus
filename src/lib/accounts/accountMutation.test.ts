@@ -477,3 +477,23 @@ test("credential fingerprints include Keychain contents without exposing them", 
   expect(fingerprint("before")).toMatch(/^[a-f0-9]{64}$/);
   expect(claudeProbeCredentialIdentity("/fixture/home", () => ({ state: "unknown" }))).toBeNull();
 });
+
+
+test("probe catalog readers run without a mutation lease", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(sandbox, "catalog-probe");
+  const { accountProbeSnapshot } = await import("./accountMutation");
+  try {
+    let reads = 0;
+    const snapshot = await accountProbeSnapshot(() => {
+      reads += 1;
+      expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "account-selection.lock"))).toBeFalse();
+      return { home: path.join(sandbox, "catalog-home") };
+    }, { holder: "catalog snapshot test" });
+    expect(snapshot.account.home).toBe(path.join(sandbox, "catalog-home"));
+    expect(reads).toBe(1);
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
+});

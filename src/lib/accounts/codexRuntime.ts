@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { listCodexAccounts, UnknownAccountError, type CodexAccount } from "./codex";
-import { accountProbeIdentity, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "./accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "./accountMutation";
 import { statePath } from "../configDir";
-import { CODEX_ACCOUNTS_SOURCE, CODEX_LOGIN_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
+import { accountsCollectionRevision, CODEX_ACCOUNTS_SOURCE, CODEX_LOGIN_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import {
   CodexAppServerClient,
   type AppServerAccountRead,
@@ -278,22 +278,19 @@ export class ManagedCodexRuntime {
   }
 
   async loginSnapshot(account: CodexAccount): Promise<ManagedLoginSnapshot> {
-    const snapshot = await withAccountMutationLockAsync(() => {
-      const current = currentCodexAccount(account);
-      const home = canonicalHome(current.home);
-      return { account: current, home, identity: accountProbeIdentity(current),
-        active: this.active.get(home), stored: readStoredAttempts(this.stateFile).get(home) };
-    }, { holder: "Codex login snapshot" });
+    const snapshot = await accountProbeSnapshot(() => currentCodexAccount(account), { holder: "Codex login snapshot" });
+    const home = canonicalHome(snapshot.account.home);
+    const activeBefore = this.active.get(home);
+    const storedBefore = readStoredAttempts(this.stateFile).get(home);
     if (snapshot.account.kind !== "managed") return { state: snapshot.account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
-    const status = await this.readAccount(snapshot.active?.client ?? null, snapshot.account.home)
+    const status = await this.readAccount(activeBefore?.client ?? null, snapshot.account.home)
       .then((value) => ({ value, failed: false as const }), () => ({ value: null, failed: true as const }));
     return await withAccountMutationLockAsync(() => {
-      const current = currentCodexAccount(snapshot.account);
-      const active = this.active.get(snapshot.home);
-      const stored = readStoredAttempts(this.stateFile).get(snapshot.home);
-      if (accountProbeIdentity(current) !== snapshot.identity
-        || active !== snapshot.active || JSON.stringify(stored) !== JSON.stringify(snapshot.stored)) return this.peekLogin(current);
-      return this.commitLoginSnapshot(snapshot.home, active, stored, status);
+      const active = this.active.get(home);
+      const stored = readStoredAttempts(this.stateFile).get(home);
+      if (accountsCollectionRevision() !== snapshot.revision || accountProbeIdentity(snapshot.account) !== snapshot.identity
+        || active !== activeBefore || JSON.stringify(stored) !== JSON.stringify(storedBefore)) return this.peekLogin(snapshot.account);
+      return this.commitLoginSnapshot(home, active, stored, status);
     }, { holder: "Codex login commit" });
   }
 
@@ -364,13 +361,10 @@ export class ManagedCodexRuntime {
 
   /** Performs the two read-only account calls on one app-server client. */
   async probeQuota(account: CodexAccount): Promise<CodexQuotaProbe> {
-    const snapshot = await withAccountMutationLockAsync(() => {
-      const current = currentCodexAccount(account);
-      return { account: current, identity: accountProbeIdentity(current) };
-    }, { holder: "Codex quota snapshot" });
+    const snapshot = await accountProbeSnapshot(() => currentCodexAccount(account), { holder: "Codex quota snapshot" });
     const result = await this.probeQuotaUnlocked(snapshot.account);
     await withAccountMutationLockAsync(() => {
-      if (accountProbeIdentity(currentCodexAccount(snapshot.account)) !== snapshot.identity) throw new Error("Codex account changed during quota probe");
+      if (accountsCollectionRevision() !== snapshot.revision || accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new Error("Codex account changed during quota probe");
     }, { holder: "Codex quota recheck" });
     return result;
   }
@@ -401,12 +395,9 @@ export class ManagedCodexRuntime {
       shows zero available credits refuses locally and sends nothing — the
       backend is only asked to spend when the account is known to hold one. */
   async redeemResetCredit(account: CodexAccount, idempotencyKey: string): Promise<CodexResetCreditRedemption> {
-    const snapshot = await withAccountMutationLockAsync(() => {
-      const current = currentCodexAccount(account);
-      return { account: current, identity: accountProbeIdentity(current) };
-    }, { holder: "Codex credit admission" });
+    const snapshot = await accountProbeSnapshot(() => currentCodexAccount(account), { holder: "Codex credit admission" });
     const recheck = () => withAccountMutationLockAsync(() => {
-      if (accountProbeIdentity(currentCodexAccount(snapshot.account)) !== snapshot.identity) throw new Error("Codex account changed during credit redemption");
+      if (accountsCollectionRevision() !== snapshot.revision || accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new Error("Codex account changed during credit redemption");
     }, { holder: "Codex credit recheck" });
     const result = await this.redeemResetCreditUnlocked(snapshot.account, idempotencyKey, recheck);
     await recheck();

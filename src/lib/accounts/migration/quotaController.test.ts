@@ -386,7 +386,8 @@ test("an eleven-second provider wait never becomes an account mutation lease", a
     throw new Error("oauth-rate-limited fixture");
   } });
   const controller = new QuotaController(registry, {
-    list: () => [account], active: () => account.id,
+    list: () => { expect(fs.existsSync(lock)).toBeFalse(); return [account]; },
+    active: () => { expect(fs.existsSync(lock)).toBeFalse(); return account.id; },
     probe: async () => { await runtime.probeQuota(account); throw new Error("fixture has no response"); },
   });
   const lock = path.join(process.env.LLV_STATE_DIR!, "account-selection.lock");

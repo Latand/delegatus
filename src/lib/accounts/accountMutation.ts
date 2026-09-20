@@ -388,3 +388,33 @@ export function claudeProbeCredentialIdentity(home: string, read = readClaudeCre
   if (credential.state === "unknown" || credential.state === "unsafe") return null;
   return crypto.createHash("sha256").update(JSON.stringify(credential)).digest("hex");
 }
+
+/** Catalog readers can perform startup recovery or query Keychain. Run them
+    before the lease, then admit only the revision/credential identity read.
+    A concurrent catalog write gets a fresh read outside the lease. */
+export async function accountProbeSnapshot<T extends { home: string }>(
+  read: () => T,
+  options: AccountMutationOptions,
+): Promise<{ account: T; identity: string; revision: number }> {
+  const deadline = performance.now() + (options.waitMs ?? (options.caller ? ACCOUNT_MUTATION_ADMISSION_WAIT_MS : ACCOUNT_MUTATION_WAIT_MS));
+  const remaining = () => ({ ...options, waitMs: Math.max(0, deadline - performance.now()) });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const revision = accountsCollectionRevision();
+    let account: T;
+    try { account = read(); }
+    catch (error) {
+      if (!(error instanceof AccountMutationBusyError)) throw error;
+      // Startup recovery in a catalog reader can itself require admission.
+      // Let its holder finish, then retry the reader outside our lease.
+      await withAccountMutationLockAsync(() => undefined, remaining());
+      continue;
+    }
+    const identity = accountProbeIdentity(account);
+    const snapshot = await withAccountMutationLockAsync(() => {
+      if (revision !== accountsCollectionRevision() || identity !== accountProbeIdentity(account)) return null;
+      return { account, identity, revision };
+    }, remaining());
+    if (snapshot) return snapshot;
+  }
+  throw new Error("account metadata changed repeatedly during probe admission; retry shortly");
+}

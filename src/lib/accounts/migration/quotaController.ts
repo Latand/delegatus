@@ -216,16 +216,17 @@ export class QuotaController {
   }
 
   async tick(engine: MigrationEngine): Promise<void> {
-    // Snapshot only bounded account metadata under the lease. Provider calls,
-    // child startup and transcript fallback reads belong outside it.
-    const snapshot = await withAccountMutationLockAsync(() => ({
-      accounts: this.probe.list(engine).map((account) => ({
-        account, identity: accountProbeIdentity(account),
-      })),
-      revision: accountsCollectionRevision(),
-      routing: this.registry.engineRouting(engine).revision,
-      active: this.probe.active(engine),
-    }), { holder: "quota snapshot" });
+    // Catalog listing may run recovery or query Keychain. Read it before
+    // the lease, then validate the revision it came from inside the lease.
+    const revision = accountsCollectionRevision();
+    const accountsBefore = this.probe.list(engine).map((account) => ({ account, identity: accountProbeIdentity(account) }));
+    const activeBefore = this.probe.active(engine);
+    const snapshot = await withAccountMutationLockAsync(() => {
+      if (revision !== accountsCollectionRevision()) return null;
+      return { accounts: accountsBefore, revision,
+        routing: this.registry.engineRouting(engine).revision, active: activeBefore };
+    }, { holder: "quota snapshot" });
+    if (!snapshot) return; // The next tick reads the catalog that won.
     const now = this.now();
     const results = await Promise.all(snapshot.accounts.map(async ({ account }) => {
       const credentialIdentity = this.probe.credentialIdentity?.(engine, account);
@@ -249,13 +250,15 @@ export class QuotaController {
     // login during admission is also fenced by the collection revision below.
     const credentialsUnchanged = results.map(({ account, credentialIdentity }) => credentialIdentity !== null
       && credentialIdentity === this.probe.credentialIdentity?.(engine, account));
+    const currentRevision = accountsCollectionRevision();
+    const current = new Map(this.probe.list(engine).map((account) => [account.id, account]));
+    const active = this.probe.active(engine);
     const accepted = await withAccountMutationLockAsync(() => {
       // A switch (including switch-away-and-back), removal or login mutation
       // invalidates the read. Never let an old probe restore retired state.
-      if (snapshot.revision !== accountsCollectionRevision()
+      if (currentRevision !== accountsCollectionRevision() || snapshot.revision !== currentRevision
         || snapshot.routing !== this.registry.engineRouting(engine).revision
-        || snapshot.active !== this.probe.active(engine)) return [];
-      const current = new Map(this.probe.list(engine).map((account) => [account.id, account]));
+        || snapshot.active !== active) return [];
       const observations: QuotaObservation[] = [];
       for (const [index, result] of results.entries()) {
         const account = current.get(result.account.id);
@@ -266,7 +269,7 @@ export class QuotaController {
         const observation = result.observation;
         if (!observation || (observation.authenticated && (!observation.limits
           || (previous?.limits && Date.parse(previous.observedAt) > observation.observedAt)))) {
-          observations.push(this.carryForward(engine, account.id, result.reason ?? observation?.provenance.reason ?? "quota-probe-empty", now));
+          observations.push(this.carryForward(engine, account.id, result.reason ?? observation?.provenance.reason ?? (observation?.limits ? "quota-probe-older" : "quota-probe-empty"), now));
         } else {
           observations.push(observation);
         }
