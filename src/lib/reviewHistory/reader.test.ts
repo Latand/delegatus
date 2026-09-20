@@ -139,11 +139,15 @@ test("private export preserves extension data and available logs while redacting
   }
 });
 
-test("HTTP export redacts structured artifact credentials while preserving raw provenance and SQL revisions", async () => {
+test.each([
+  { shape: "scalar", credential: 'synthetic ordinary value, with spaces and "quotes"' },
+  { shape: "object", credential: { value: 'synthetic ordinary value with "quotes", } and ]', nested: [{ value: "synthetic ordinary nested value" }] } },
+  { shape: "array", credential: ["synthetic ordinary value", { nested: ["synthetic ordinary nested value", null, true, 42] }] },
+])("HTTP export redacts $shape artifact credentials while preserving raw provenance and SQL revisions", async ({ credential }) => {
   const flow = row();
-  const credential = "synthetic ordinary value, with spaces and \"quotes\"";
-  const fields = ["password", "passwd", "pwd", "api_key", "api-key", "apiKey", "cookie", "authorization"];
-  const payload = JSON.stringify({ retained: "ordinary history", ...Object.fromEntries(fields.map(key => [key, credential])) });
+  const fields = ["password", "passwd", "pwd", "api_key", "api-key", "apiKey", "cookie", "authorization", "credentials", "private_key", "token", "secret"];
+  const payload = JSON.stringify({ retained: "ordinary history", ...Object.fromEntries(fields.map(key => [key, credential])) })
+    .replace('"credentials"', '"creden\\u0074ials"');
   const artifactTexts = {
     findings: `${findings}\n\n${payload}`,
     output: JSON.stringify({ retained: "ordinary history", nested: { pwd: credential } }, null, 2),
@@ -170,12 +174,15 @@ test("HTTP export redacts structured artifact credentials while preserving raw p
   expect(response.status).toBe(200);
   const body = await response.json();
   expect(body.private).toBe(true); expect(body.redacted).toBe(true);
+  expect(JSON.stringify(body)).not.toContain("synthetic ordinary");
   for (const kind of Object.keys(paths) as (keyof typeof paths)[]) {
     const artifact = body.artifacts[0].artifacts[kind];
     expect(artifact.status).toBe("available");
     expect(artifact.text).not.toContain("synthetic ordinary");
     expect(artifact.text).toContain("ordinary history");
-    expect(artifact.text).toBe(artifactTexts[kind].split(JSON.stringify(credential)).join(JSON.stringify("[redacted]")));
+    const serialized = JSON.stringify(credential);
+    const indented = JSON.stringify(credential, null, 2).replaceAll("\n", "\n    ");
+    expect(artifact.text).toBe(artifactTexts[kind].split(serialized).join(JSON.stringify("[redacted]")).split(indented).join(JSON.stringify("[redacted]")));
     expect(fs.readFileSync(paths[kind], "utf8")).toBe(artifactTexts[kind]);
   }
   expect(body.row.extension).toEqual({ retained: true, nested: [{ pwd: "[redacted]", passwd: "[redacted]" }], receiptId: "archive-receipt" });
@@ -186,6 +193,21 @@ test("HTTP export redacts structured artifact credentials while preserving raw p
     deliveredAt: "2026-08-10T03:00:00Z", origin: "agent", senderRole: "reviewer",
     clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round),
   }]);
+  expect(snapshot()).toBe(before);
+});
+
+test.each([
+  '{"credentials":{"value":"synthetic ordinary secret"',
+  '{"password":["synthetic ordinary secret"}',
+])("HTTP export refuses incomplete sensitive compound values: %s", async text => {
+  const artifactPath = row().rounds[0]!.findingsPath;
+  fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+  fs.writeFileSync(artifactPath, text);
+  const before = snapshot();
+  const response = await exported(request(), context());
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
+  expect(fs.readFileSync(artifactPath, "utf8")).toBe(text);
   expect(snapshot()).toBe(before);
 });
 
