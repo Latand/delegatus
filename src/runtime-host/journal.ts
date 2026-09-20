@@ -1353,6 +1353,10 @@ export class RuntimeJournal {
   }
 
   claimHostEpoch(): number {
+    // Main claims the epoch before constructing RuntimeHost. A legacy journal
+    // has no orchestration cursor yet: establish its durable hold before epoch
+    // reconciliation can append and compact. Existing checkpoints stay intact.
+    this.registerConsumer("orchestration");
     const epoch = this.claimHostEpochInTransaction();
     /* Outside the epoch transaction on purpose: the sweep opens transactions of
        its own, and a claimed epoch must never be undone by a failure to settle

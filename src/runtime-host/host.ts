@@ -32,7 +32,7 @@ export class RuntimeHost {
     private readonly mcpHealthProbeAdmissions?: McpHealthProbeAdmissions,
     private readonly runtimeHostHealth?: () => RuntimeHostReadyEvidence,
   ) {
-    if (consumers) journal.registerConsumer("orchestration");
+    if (consumers && journal.isWritable()) journal.registerConsumer("orchestration");
   }
 
   async recoverConsumers(): Promise<number> {

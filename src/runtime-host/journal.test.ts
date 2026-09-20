@@ -24,6 +24,7 @@ import {
   RUNTIME_SNAPSHOT_TERMINAL_DEPLOYMENT_LIMIT,
 } from "./journal";
 import { serveRuntimeHost } from "./socket";
+import { probeRuntimeHostSuccessor, RUNTIME_HOST_STARTUP_PHASES, RuntimeHostStartupStore } from "./runtimeHostStartup";
 
 function sandbox(name: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `llv-runtime-${name}-`));
@@ -2275,6 +2276,96 @@ test.each([20_000, 2])("acknowledged engine events survive a crash with a %i-eve
   }
 });
 
+test("first upgrade retains legacy pending events through epoch claim, crash and ordered recovery", async () => {
+  const filename = path.join(sandbox("legacy-consumer-upgrade"), "events.sqlite");
+  const legacy = new RuntimeJournal(filename, { maxEvents: 4, structuredHosts: true });
+  legacy.append({ scope: "session:worker", kind: "session-status", payload: {
+    conversationId: "worker", sessionKey: { engine: "codex", sessionId: "thread-one" },
+    hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured",
+  } });
+  legacy.executeOperation({ kind: "compact", operationId: "compact-one", idempotencyKey: "compact-one", conversationId: "worker",
+    sessionKey: { engine: "codex", sessionId: "thread-one" } });
+  legacy.transitionOperation("compact-one", "delivering");
+  const retained = [0, 1, 2].map((stage) => legacy.append({
+    scope: "workflow:upgrade", kind: "workflow.stage.completed", payload: { workflowId: "upgrade", stage },
+  }));
+  retained.push(legacy.append({ scope: "session:worker", kind: "delta", payload: { text: "retained output" } }));
+  expect(legacy.replay(legacy.snapshot().retentionFloorSeq).events).toEqual(retained);
+  legacy.close();
+  // The previous version stored individual completion checkpoints and had no
+  // consumer_cursors table. Keep a completed hole between two pending stages.
+  const database = new Database(filename);
+  database.query("INSERT INTO consumer_checkpoints(event_id, consumer, completed_at) VALUES (?, 'orchestration', 100)")
+    .run(retained[1]!.eventId);
+  database.exec("DROP TABLE consumer_cursors");
+  database.close();
+
+  // Match main: claim the epoch (which settles the in-flight compact operation)
+  // before constructing the host. Crash that first upgraded process before any
+  // consumer recovery, so its retention hold must survive independently.
+  const child = Bun.spawn([process.execPath, "--eval", `
+    import { RuntimeJournal } from "./src/runtime-host/journal.ts";
+    import { RuntimeHost } from "./src/runtime-host/host.ts";
+    const journal = new RuntimeJournal(process.env.TEST_JOURNAL, { maxEvents: 4, structuredHosts: true });
+    journal.claimHostEpoch();
+    const host = new RuntimeHost(journal, {
+      flowReady: () => undefined, workflowStageCompleted: () => undefined, taskDeliveryAcknowledged: () => undefined,
+    });
+    console.log(JSON.stringify({ status: journal.operationResult("compact-one").receipt.status }));
+    setInterval(() => {}, 1000);
+  `], { cwd: process.cwd(), env: { ...process.env, TEST_JOURNAL: filename }, stdout: "pipe", stderr: "pipe" });
+  const reader = child.stdout.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const chunk = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("upgraded host did not start")), 2000); }),
+    ]);
+    expect(JSON.parse(new TextDecoder().decode(chunk.value))).toEqual({ status: "uncertain" });
+  } finally {
+    clearTimeout(timer);
+    child.kill("SIGKILL");
+    await child.exited;
+    reader.releaseLock();
+  }
+
+  const journal = new RuntimeJournal(filename, { maxEvents: 4, structuredHosts: true });
+  journal.claimHostEpoch();
+  const calls: number[] = [];
+  const host = new RuntimeHost(journal, {
+    flowReady: () => undefined,
+    workflowStageCompleted: (_workflow, stage) => { calls.push(stage); },
+    taskDeliveryAcknowledged: () => undefined,
+  });
+  const checkpoints: string[] = [];
+  const markCompleted = journal.markConsumerCompleted.bind(journal);
+  const checkpoint = spyOn(journal, "markConsumerCompleted").mockImplementation((id, consumer) => {
+    checkpoints.push(id); markCompleted(id, consumer);
+  });
+  try {
+    const pending = journal.unconsumedEvents("orchestration");
+    expect(pending.slice(0, 3)).toEqual([retained[0], retained[2], retained[3]]);
+    expect(pending).toHaveLength(4); // The fourth event settles the compact operation.
+    expect(journal.consumerCompleted(retained[1]!.eventId, "orchestration")).toBe(true);
+    expect(await host.recoverConsumers()).toBe(pending.length);
+    expect(await host.recoverConsumers()).toBe(0);
+    expect(checkpoints).toEqual(pending.map((event) => event.eventId));
+    expect(calls).toEqual([0, 2]);
+    journal.compact();
+  } finally { checkpoint.mockRestore(); journal.close(); }
+  const reopened = new RuntimeJournal(filename, { maxEvents: 4 });
+  try {
+    reopened.claimHostEpoch();
+    const host = new RuntimeHost(reopened, {
+      flowReady: () => undefined,
+      workflowStageCompleted: (_workflow, stage) => { calls.push(stage); },
+      taskDeliveryAcknowledged: () => undefined,
+    });
+    expect(await host.recoverConsumers()).toBe(0);
+    expect(calls).toEqual([0, 2]);
+  } finally { reopened.close(); }
+});
+
 test("a blocked consumer B retains every event while A advances, including across a process crash", async () => {
   const filename = path.join(sandbox("consumer-retention-crash"), "events.sqlite");
   const child = Bun.spawn([process.execPath, "--eval", `
@@ -2859,7 +2950,7 @@ test("rejected appends leave sequence, scope revisions, and projections unchange
   journal.close();
 });
 
-test("journal detects a modified hash chain and fails closed", () => {
+test("journal detects a modified hash chain and serves read-only host diagnostics", async () => {
   const dir = sandbox("fault");
   const filename = path.join(dir, "events.sqlite");
   const journal = new RuntimeJournal(filename);
@@ -2869,9 +2960,39 @@ test("journal detects a modified hash chain and fails closed", () => {
   database.exec("UPDATE events SET producer_kind = 'tampered' WHERE seq = 1");
   database.close();
   const corrupted = new RuntimeJournal(filename);
-  expect(corrupted.snapshot().runtime.health).toBe("read_only_fault");
-  expect(() => corrupted.append({ scope: runtimeScope("session", "one"), kind: "turn.completed", payload: {} })).toThrow(RuntimeJournalFault);
-  corrupted.close();
+  const startup = new RuntimeHostStartupStore(path.join(dir, "startup.json"), {
+    generation: { image: "test-image", revision: "test-revision", container: "test-container" },
+    pid: process.pid, startIdentity: "test-start",
+  });
+  startup.begin();
+  startup.bindHostEpoch(corrupted.snapshot().runtime.hostEpoch);
+  for (const phase of RUNTIME_HOST_STARTUP_PHASES) startup.record(phase);
+  const host = new RuntimeHost(corrupted, {
+    flowReady: () => { throw new Error("faulted journal must not consume"); },
+    workflowStageCompleted: () => { throw new Error("faulted journal must not consume"); },
+    taskDeliveryAcknowledged: () => { throw new Error("faulted journal must not consume"); },
+  }, undefined, true, undefined, undefined, () => startup.readyEvidence());
+  const socketPath = path.join(dir, "runtime.sock");
+  const server = serveRuntimeHost(socketPath, host);
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const client = new UnixRuntimeHostClient(socketPath);
+    expect((await client.snapshot()).runtime.health).toBe("read_only_fault");
+    expect(await probeRuntimeHostSuccessor(socketPath, startup.readyEvidence().generation))
+      .toMatchObject(startup.readyEvidence());
+    const event = { scope: runtimeScope("session", "one"), kind: "turn.completed", payload: {} };
+    expect(() => corrupted.append(event)).toThrow(RuntimeJournalFault);
+    await expect(client.append(event)).rejects.toThrow("hash");
+    expect(() => corrupted.registerConsumer("orchestration")).toThrow(RuntimeJournalFault);
+    expect(() => corrupted.markConsumerCompleted("event-one", "orchestration")).toThrow(RuntimeJournalFault);
+    expect(() => corrupted.claimHostEpoch()).toThrow(RuntimeJournalFault);
+    expect(() => corrupted.compact(0)).toThrow(RuntimeJournalFault);
+    await expect(host.recoverConsumers()).rejects.toThrow(RuntimeJournalFault);
+    expect((await client.snapshot()).runtime.health).toBe("read_only_fault");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    corrupted.close();
+  }
 });
 
 test("Unix socket host isolates a singleton writer and serves a fake Viewer client", async () => {
