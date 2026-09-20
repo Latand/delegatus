@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
@@ -102,6 +102,84 @@ export function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPort): P
     if (probe.code !== 0 || probe.stdout.trim() !== pipeline.branch) return failure("git worktree add", add);
   }
   const base = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+  if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
+  if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
+  return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
+}
+
+/** Provisioning alone uses this asynchronous port; stage Git keeps ExecPort. */
+export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<ExecResult>;
+
+/** Bound every child, including checkout and revision probes. A private process
+ * group lets cancellation end Git's transport children as well as Git itself.
+ * Settlement waits for close, so a replacement cannot overlap a dying child. */
+export const realProvisionExec: ProvisionExecPort = (command, args, cwd, signal) => new Promise((resolve) => {
+  if (signal?.aborted) { resolve({ code: null, stdout: "", stderr: "pipeline provisioning cancelled" }); return; }
+  let stdout = "";
+  let stderr = "";
+  let stopped: string | null = null;
+  const child = spawn(command, args, {
+    cwd, detached: true, stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  const stop = (reason: string) => {
+    if (stopped) return;
+    stopped = reason;
+    if (child.pid) {
+      try { process.kill(-child.pid, "SIGKILL"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") stderr += String(error); }
+    }
+  };
+  const abort = () => stop("pipeline provisioning cancelled");
+  const timer = setTimeout(() => stop("git command timed out after 60s"), 60_000);
+  signal?.addEventListener("abort", abort, { once: true });
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+  child.on("error", (error) => { stderr += error.message; });
+  child.on("close", (code, childSignal) => {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+    resolve({ code, stdout, stderr: stopped ?? stderr, signal: childSignal });
+  });
+  if (signal?.aborted) abort();
+});
+
+export async function resolvePipelineBaseAsync(
+  repoDir: string,
+  input: { baseBranch?: string; baseRef?: string },
+  exec: ProvisionExecPort,
+  signal?: AbortSignal,
+): Promise<PipelineBaseResult> {
+  const baseBranch = input.baseBranch?.trim() || DEFAULT_PIPELINE_BASE_BRANCH;
+  if (!validBaseBranch(baseBranch)) return { ok: false, error: INVALID_BASE_BRANCH };
+  const requestedRef = input.baseRef?.trim();
+  if (!requestedRef) {
+    const fetch = await exec("timeout",
+      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], repoDir, signal);
+    if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+    if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
+    if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
+  }
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const ref = requestedRef || `origin/${baseBranch}`;
+  const resolved = await exec("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], repoDir, signal);
+  if (resolved.code !== 0) return failure(`resolving pipeline base ${ref}`, resolved);
+  const baseRef = resolved.stdout.trim();
+  if (!/^[0-9a-f]{40}$/i.test(baseRef)) return { ok: false, error: `resolving pipeline base ${ref}: expected an exact commit SHA` };
+  return { ok: true, baseBranch, baseRef };
+}
+
+export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
+  if (!pipeline.baseBranch || !/^[0-9a-f]{40}$/i.test(pipeline.baseRef)) return { ok: false, error: "the pipeline base is unresolved" };
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const add = await exec("git", ["worktree", "add", "-b", pipeline.branch, pipeline.worktreeDir, pipeline.baseRef], pipeline.repoDir, signal);
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  if (add.code !== 0) {
+    const probe = await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], pipeline.worktreeDir, signal);
+    if (probe.code !== 0 || probe.stdout.trim() !== pipeline.branch) return failure("git worktree add", add);
+  }
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const base = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };

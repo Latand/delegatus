@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 
-import { commitPipelineStage, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
@@ -87,6 +87,76 @@ test("a real stale dirty checkout provisions from the freshly fetched origin/mai
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("async provisioning preserves the synchronous base and adoption decisions", async () => {
+  const sha = "a".repeat(40);
+  for (const input of [{}, { baseBranch: "release" }, { baseBranch: "release", baseRef: sha }, { baseBranch: "../bad" }]) {
+    for (const fetchCode of [0, 1, 124, 137]) {
+      const commands: string[] = [];
+      const exec: ExecPort = (command, args) => {
+        commands.push([command, ...args].join(" "));
+        return args.includes("fetch") ? { code: fetchCode, stdout: "", stderr: "fetch error" }
+          : { code: 0, stdout: sha, stderr: "" };
+      };
+      const expected = resolvePipelineBase("/repo", input, exec);
+      const expectedCommands = commands.splice(0);
+      expect(await resolvePipelineBaseAsync("/repo", input, async (command, args, cwd) => exec(command, args, cwd))).toEqual(expected);
+      expect(commands).toEqual(expectedCommands);
+    }
+  }
+  const subject = { ...pipeline(), baseBranch: "main", baseRef: sha };
+  for (const addCode of [0, 1]) {
+    for (const head of [sha, "b".repeat(40)]) {
+      const exec: ExecPort = (_command, args) => args[0] === "worktree" ? { code: addCode, stdout: "", stderr: "exists" }
+        : { code: 0, stdout: args.includes("--abbrev-ref") ? subject.branch : head, stderr: "" };
+      expect(await provisionPipelineWorktreeAsync(subject, async (command, args, cwd) => exec(command, args, cwd)))
+        .toEqual(provisionPipelineWorktree(subject, exec));
+    }
+  }
+});
+
+test("async Git fetch and checkout pin a real advanced remote and adopt only that head", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-async-base-"));
+  try {
+    const origin = path.join(root, "origin.git");
+    const source = path.join(root, "source");
+    git(root, "init", "--bare", "--initial-branch=main", origin);
+    git(root, "clone", origin, source);
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "base");
+    git(source, "push", "origin", "main");
+    const previous = git(source, "rev-parse", "HEAD");
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "advance");
+    git(source, "push", "origin", "main");
+    const current = git(source, "rev-parse", "HEAD");
+    git(source, "checkout", "--detach", previous);
+    fs.writeFileSync(path.join(source, "dirty.txt"), "preserve");
+    const base = await resolvePipelineBaseAsync(source, {}, realProvisionExec);
+    expect(base).toEqual({ ok: true, baseBranch: "main", baseRef: current });
+    const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(root, "lane"), baseBranch: "main", baseRef: current };
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: current, baseBranch: "main" });
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: current, baseBranch: "main" });
+    expect((await provisionPipelineWorktreeAsync({ ...subject, baseRef: previous }, realProvisionExec)).ok).toBe(false);
+    expect(git(source, "rev-parse", "HEAD")).toBe(previous);
+    expect(fs.readFileSync(path.join(source, "dirty.txt"), "utf8")).toBe("preserve");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("async exec reports launch errors, pre-abort, and a killed timeout without continuing", async () => {
+  expect((await realProvisionExec("missing-provision-command", [], publicationState)).code).not.toBe(0);
+  const abort = new AbortController();
+  abort.abort();
+  const marker = path.join(publicationState, "must-not-exist");
+  const result = await realProvisionExec("touch", [marker], publicationState, abort.signal);
+  expect(result.stderr).toBe("pipeline provisioning cancelled");
+  expect(fs.existsSync(marker)).toBe(false);
+  const calls: string[] = [];
+  const base = await resolvePipelineBaseAsync(publicationState, {}, async (command, args, cwd) => {
+    calls.push(args.join(" "));
+    return realProvisionExec(command, [args[0]!, "0.05s", process.execPath, "-e", "setTimeout(() => {}, 5000)"], cwd);
+  });
+  expect(base).toEqual({ ok: false, error: "fetching origin/main: git fetch timed out after 60s" });
+  expect(calls).toHaveLength(1);
 });
 
 test("default base fetches and resolves origin/main without inspecting a dirty stale checkout", () => {
