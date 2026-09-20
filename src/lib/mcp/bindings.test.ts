@@ -2239,7 +2239,8 @@ test("project-scoped agent_activity selects from the binding's cached catalog an
       registrySnapshot: () => ({ entries: {}, conversations: {} }),
       pipelines: () => [],
       describeTranscript: async () => null,
-      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: Date.parse("2026-08-22T08:40:00.000Z") }),
+      // Keep this unhosted launch inside the starting grace; expired launches are excluded by liveOnly.
+      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: now - 60_000 }),
       listFiles: async () => { freshSweeps += 1; return files; },
     }),
     refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),

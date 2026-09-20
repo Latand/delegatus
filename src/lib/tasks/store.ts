@@ -456,6 +456,19 @@ export function loadTasksFile(filePath = TASKS_FILE): TasksFileState {
   return stateFromBody(bodyFromRows(collection.snapshot()));
 }
 
+/** Prepare the bounded MCP selection reader without loading the collection. */
+export function taskSelectionSource(filePath = TASKS_FILE) {
+  const collection = taskCollection(filePath, "read");
+  if (!collection) return null;
+  return {
+    filename: legacyDatabasePath(filePath),
+    read: (id: string) => {
+      const row = collection.get(`t:${id}`);
+      return row ? coerceTask(row) : null;
+    },
+  };
+}
+
 const listSnapshots = new WeakMap<object, { aliases: string; tasks: readonly BoardTask[] }>();
 const listRows = new WeakMap<object, { aliases: string; task: BoardTask }>();
 /** Immutable list source. SQLite refreshes changed rows by revision; a repeated

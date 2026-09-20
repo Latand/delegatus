@@ -17,8 +17,8 @@ afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 const bindingModule = process.env.MCP_SIZE_BINDINGS ?? "./bindings";
 const { viewerMcpBindings } = await import(bindingModule);
 const { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES } = await import("./server");
-const { saveTasks, loadTasks, loadTasksForList, mutateTasks } = await import("@/lib/tasks/store");
-const { savePipelines } = await import("@/lib/pipelines/store");
+const { saveTasks, loadTasks, loadTasksForList, taskSelectionSource, mutateTasks } = await import("@/lib/tasks/store");
+const { savePipelines, pipelineSelectionSource } = await import("@/lib/pipelines/store");
 const { pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
 const { defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
 type Args = Record<string, unknown>;
@@ -33,7 +33,7 @@ test("measure every tool through the MCP service and budget common board answers
     pipeline.taskIds = [`task-${i}`];
     pipeline.srcConversationId = `conversation-${i}`;
   }
-  savePipelines([pipelines[0]!]);
+  savePipelines(pipelines.map(pipeline => pipeline.state === "completed" ? { ...pipeline, cursor: null } : pipeline));
   saveTasks(Array.from({ length: 240 }, (_, i) => ({
     id: `task-${i}`, project: "size-board", text: `Board work ${i}\n${"Outcome and acceptance. ".repeat(25)}`,
     details: "Implementation context. ".repeat(300), status: i % 3 === 0 ? "assigned" : "done",
@@ -49,6 +49,7 @@ test("measure every tool through the MCP service and budget common board answers
   }));
   let settings = { ...defaultSeatTickSettings("size-board"), monitorPrompt: "Monitor open work. ".repeat(200) };
   const domain = {
+    taskSelectionSource, pipelineSelectionSource,
     loadTasks, listTaskRecords: loadTasksForList, getPipelines: () => ({ pipelines }), listPipelineRecords: () => pipelines,
     getFlowsWithPresets: () => ({ flows: [], presets: [] }),
     callerAttribution: () => ({ kind: "unidentified", conversationId: null }),
@@ -288,3 +289,162 @@ test("acknowledgements name created and refined fields; a missing keyed pipeline
   const repeated = await bindings.update_task({ clientRequestId: "refine-again", taskId: "task-refine", refine: { text: "Name the owned task" } }) as any;
   expect(repeated.changedFields).toEqual([]);
 });
+
+
+test("expired unhosted busy transcripts leave liveOnly while starting launches stay", async () => {
+  const now = Date.now();
+  const files = Array.from({ length: 102 }, (_, i) => ({
+    path: `/fixtures/orphan-${i}.jsonl`, conversationId: `orphan-${i}`, project: "orphan-board",
+    engine: "codex", title: `Worker ${i}`, kind: "session", root: "codex", name: `orphan-${i}`,
+    fmt: "jsonl", parent: null, mtime: (i < 100 ? now - 86400000 : now) / 1000,
+    size: 100, activity: "live", proc: null, pid: null,
+  }));
+  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
+    livenessSources: () => ({
+      now: () => now,
+      probe: { now: () => now, pidAlive: () => true, processIdentity: () => "live-identity" },
+      registrySnapshot: () => ({ entries: { starting: {
+        key: { engine: "codex", accountId: null, sessionId: "starting-session" }, artifactPath: files[100]!.path,
+        status: "starting", host: null, accountId: null, structuredHost: null, updatedAt: new Date(now).toISOString(),
+      }, live: {
+        key: { engine: "codex", accountId: null, sessionId: "live-session" }, artifactPath: files[101]!.path,
+        status: "live", host: null, accountId: null,
+        structuredHost: { process: { pid: 1234, startIdentity: "live-identity" } }, updatedAt: new Date(now).toISOString(),
+      } }, conversations: {} }), pipelines: () => [],
+      listFiles: async () => files, describeTranscript: async () => null,
+      transcriptEvidence: async (_engine: string, file: string) => ({ turn: "busy", lastRecordTs: file.includes("orphan-10") && /orphan-10[01]/.test(file) ? now : now - 86400000, providerProgressAt: null }),
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never), new MemoryMcpReceiptStore());
+  const live = await service.callTool("agent_activity", { clientRequestId: "orphans-live", liveOnly: true, limit: 200, full: true }) as any;
+  expect(live.count).toBe(2);
+  expect(live.excludedGoneCount).toBe(100);
+  expect(live.conversations.some((row: any) => row.host.state === "alive")).toBe(true);
+  const all = await service.callTool("agent_activity", { clientRequestId: "orphans-all", liveOnly: true, includeGone: true, limit: 200, full: true }) as any;
+  expect(all.count).toBe(102);
+});
+
+test("multibyte titles and paths obey service byte budgets and paginate without loss", async () => {
+  const now = Date.now();
+  const files = Array.from({ length: 100 }, (_, i) => ({
+    path: `/fixtures/${"довгий-шлях/".repeat(10)}worker-${i}.jsonl`, conversationId: `unicode-${i}`, project: "unicode-board",
+    engine: "codex", title: `Перевірити відновлення розмови та продовження роботи після оновлення ${i} `.repeat(4), kind: "session", root: "codex", name: `worker-${i}`,
+    fmt: "jsonl", parent: null, mtime: now / 1000, size: 100, activity: "live", proc: null, pid: null,
+  }));
+  const service = createMcpToolService(viewerMcpBindings(undefined, {
+    get: async (url: string) => {
+      const params = new URL(url, "http://fixture").searchParams;
+      const offset = Number(params.get("cursor") || 0), limit = Number(params.get("limit") || 50);
+      return { items: files.slice(offset, offset + limit), total: files.length, nextCursor: offset + limit < files.length ? String(offset + limit) : null };
+    },
+  } as never, {
+    livenessSources: () => ({
+      now: () => now, probe: { now: () => now, pidAlive: () => false, processIdentity: () => null },
+      registrySnapshot: () => ({ entries: {}, conversations: {} }), pipelines: () => [],
+      listFiles: async () => files, describeTranscript: async () => null,
+      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: now, providerProgressAt: null }),
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never), new MemoryMcpReceiptStore());
+  for (const [tool, budget] of [["list_conversations", 12000], ["agent_activity", 24000]] as const) {
+    let cursor: string | null = null;
+    const ids: string[] = [];
+    for (let page = 0; page < 20; page++) {
+      const answer = await service.callTool(tool, { clientRequestId: `unicode-${tool}-${page}`, ...(cursor ? { cursor } : {}) }) as any;
+      expect(answer.ok).toBe(true);
+      console.log(`${tool} multibyte page ${page}: ${Buffer.byteLength(JSON.stringify(answer))} bytes`);
+      if (process.env.MCP_SIZE_BASELINE) break;
+      expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(budget);
+      ids.push(...answer.conversations.map((row: any) => row.conversationId));
+      cursor = answer.nextCursor;
+      if (!cursor) break;
+    }
+    if (process.env.MCP_SIZE_BASELINE) continue;
+    expect(cursor).toBeNull();
+    expect(ids.length).toBe(100);
+    expect(new Set(ids).size).toBe(100);
+    const full = await service.callTool(tool, { clientRequestId: `unicode-full-${tool}`, full: true }) as any;
+    expect(full.conversations[0].title).toBe(files[0]!.title);
+  }
+});
+
+
+test("real service uses keyed reads and replays only changed selection rows on a 10000-card board", async () => {
+  const { taskSelectionSource } = await import("@/lib/tasks/store");
+  const { pipelineSelectionSource, buildPipeline, pipelineIdentity } = await import("@/lib/pipelines/store");
+  const { boardSelection } = await import("./boardSelection");
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(sandbox, "indexed-state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const taskFile = path.join(process.env.LLV_STATE_DIR, "tasks.json");
+  try {
+  const count = 10_000;
+  const tasks = Array.from({ length: count }, (_, i) => ({
+    id: `indexed-task-${i}`, project: "indexed-board", text: `Work item ${i}`,
+    details: "Stored context", status: "inbox", placement: "unplaced", board: "hidden", assignments: [],
+    createdAt: new Date(1700000000000 + i * 1000).toISOString(), updatedAt: new Date(1700000000000 + i * 1000).toISOString(),
+  }));
+  const pipelines = tasks.map((task, i) => buildPipeline({
+    id: `indexed-pipeline-${i}`, project: task.project, task: task.text, repoDir: "/repo", stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null, effectiveRole: { roleId: "builder", engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write", promptScaffold: "Build work" } }],
+    srcPath: null, srcConversationId: null, now: task.createdAt,
+  }));
+  for (const [i, pipeline] of pipelines.entries()) pipeline.taskIds = [tasks[i]!.id];
+  tasks[60]!.placement = "pinned"; // Supported legacy row without a usable position.
+  tasks[60]!.text = "Legacy placement regression";
+  saveTasks(tasks as never, taskFile); savePipelines(pipelines);
+  const taskSource = taskSelectionSource(taskFile)!, pipelineSource = pipelineSelectionSource();
+  let taskReads = 0, pipelineReads = 0;
+  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
+    taskSelectionSource: () => ({ ...taskSource, read: (id: string) => { taskReads++; return taskSource.read(id); } }),
+    pipelineSelectionSource: () => ({ ...pipelineSource, read: (id: string) => { pipelineReads++; return pipelineSource.read(id); } }),
+    listTaskRecords: () => { throw new Error("whole task collection read"); },
+    loadTasks: () => { throw new Error("whole task collection read"); },
+    listPipelineRecords: () => { throw new Error("whole pipeline collection read"); },
+    getPipelines: () => { throw new Error("whole pipeline collection read"); },
+  } as never), new MemoryMcpReceiptStore());
+  let sequence = 0;
+  const call = (tool: "list_tasks" | "list_pipelines" | "get_task", args: Args) => service.callTool(tool, { clientRequestId: `indexed-${++sequence}`, ...args }) as Promise<any>;
+  const taskIndex = boardSelection(taskSource.filename, "tasks"), pipelineIndex = boardSelection(pipelineSource.filename, "pipelines");
+  const cold = await call("list_pipelines", { ids: [pipelines[10]!.id], limit: 1 });
+  expect(cold.ok).toBe(true); expect(cold.count).toBe(1);
+  expect(pipelineIndex.work.metadataRows).toBe(0);
+  expect(pipelineReads).toBe(1);
+  const first = await call("list_tasks", { ids: [tasks[10]!.id], limit: 1 });
+  expect(first.ok).toBe(true); expect(first.count).toBe(1);
+  expect(taskReads).toBe(1); expect(taskIndex.work.metadataRows).toBe(0);
+  expect(first.tasks[0].pipelineIds).toEqual([pipelines[10]!.id]);
+  const taskMetadata = taskIndex.work.metadataRows, pipelineMetadata = pipelineIndex.work.metadataRows;
+  await call("list_tasks", { ids: [tasks[20]!.id], limit: 1 });
+  await call("list_pipelines", { ids: [pipelines[20]!.id], limit: 1 });
+  expect(taskReads).toBe(2); expect(pipelineReads).toBe(2);
+  expect(taskIndex.work.metadataRows).toBe(taskMetadata); expect(pipelineIndex.work.metadataRows).toBe(pipelineMetadata);
+  const newest = await call("list_tasks", { project: "indexed-board", limit: 1 });
+  expect(newest.tasks[0].id).toBe(tasks[count - 1]!.id);
+  expect(newest.total).toBe(count);
+  const legacyPlacement = await call("list_tasks", { project: "indexed-board", placement: "unplaced", query: "Legacy placement regression", limit: 200 });
+  expect(legacyPlacement.tasks.some((task: any) => task.id === tasks[60]!.id)).toBe(true);
+  const pinned = await call("list_tasks", { project: "indexed-board", placement: "pinned", limit: 1 });
+  expect(pinned.total).toBe(0);
+  const beforeTasks = taskIndex.work.metadataRows, beforePipelines = pipelineIndex.work.metadataRows;
+  tasks[50]!.text = "Updated unrelated record";
+  pipelines[50]!.task = "Updated unrelated pipeline";
+  Object.assign(pipelines[50]!, pipelineIdentity(pipelines[50]!.id, pipelines[50]!.task, "/repo"));
+  pipelines[50]!.taskIds = [tasks[20]!.id];
+  mutateTasks(current => {
+    current.find(task => task.id === tasks[50]!.id)!.text = tasks[50]!.text;
+    return { tasks: current, result: undefined };
+  }, taskFile);
+  savePipelines(pipelines);
+  const changed = await call("list_tasks", { project: "indexed-board", query: "unrelated", limit: 1 });
+  expect(changed.tasks[0].id).toBe(tasks[50]!.id);
+  const changedPipeline = await call("list_pipelines", { project: "indexed-board", query: "unrelated", limit: 1 });
+  expect(changedPipeline.pipelines[0].id).toBe(pipelines[50]!.id);
+  expect(taskIndex.work.metadataRows - beforeTasks).toBe(1);
+  expect(pipelineIndex.work.metadataRows - beforePipelines).toBe(1);
+  const linked = await call("get_task", { taskId: tasks[20]!.id });
+  expect(new Set(linked.task.pipelineIds)).toEqual(new Set([pipelines[20]!.id, pipelines[50]!.id]));
+  const keyedReads = taskReads;
+  await call("list_tasks", { ids: [tasks[30]!.id], limit: 1 });
+  expect(taskReads - keyedReads).toBe(1);
+  expect(taskIndex.work.metadataRows - beforeTasks).toBe(1);
+  console.log(`Indexed 10000-card service: changed-ID reads=1, single task update metadata=1, single pipeline update metadata=1`);
+  } finally { process.env.LLV_STATE_DIR = previousState; }
+}, 30_000);

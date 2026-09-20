@@ -1152,6 +1152,12 @@ export async function checkpointPipelineRollbackMirrorsForDemotionAsync(): Promi
   return { pipelines, pipelinesArchive };
 }
 
+/** Active collection source for the bounded MCP selection projection. */
+export function pipelineSelectionSource() {
+  const collection = pipelineStore();
+  return { filename: stateDatabaseFile(), read: (id: string) => collection.get(id) };
+}
+
 /** Full-record read by id: the hot registry first, then the archive. */
 export function findPipelineRecord(pipelineId: string): Pipeline | null {
   return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);

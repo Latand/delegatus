@@ -1,3 +1,5 @@
+import { boardSelection } from "./boardSelection";
+import { budgetPage } from "./budgetPage";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -92,7 +94,7 @@ import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, pipelineListRow } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
-import { loadPipelinesForList, pipelineDeliveryLookup } from "@/lib/pipelines/store";
+import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
@@ -140,7 +142,7 @@ import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
-import { loadTasks, loadTasksForList, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasks, loadTasksForList, taskSelectionSource, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { collectSnapshot } from "@/lib/view/collect";
@@ -612,11 +614,13 @@ export interface ViewerMcpDomainDependencies {
       scalars and keeps nothing. Optional so partial test harnesses that stub
       only `getPipelines` still project from it. */
   listPipelineRecords?(): readonly Pipeline[];
+  pipelineSelectionSource?: typeof pipelineSelectionSource;
   patchPipeline: typeof patchPipeline;
   readPipelineRecord?: typeof getPipelineRecord;
   reportStageCompletion: typeof reportStageCompletion;
   loadTasks: typeof loadTasks;
   listTaskRecords?(): readonly import("@/lib/tasks/types").BoardTask[];
+  taskSelectionSource?: typeof taskSelectionSource;
   collectSnapshot: typeof collectSnapshot;
   readResources: typeof readResources;
   readResourcesWithDiagnostic?: typeof readResourcesWithDiagnostic;
@@ -1040,6 +1044,8 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   closeFlow,
   getPipelines,
   listPipelineRecords: loadPipelinesForList,
+  pipelineSelectionSource,
+  taskSelectionSource,
   listTaskRecords: loadTasksForList,
   patchPipeline,
   readPipelineRecord: getPipelineRecord,
@@ -3257,8 +3263,11 @@ async function listPipelines(
   const states = stringSet(args.state, ["open", "draft", "provisioning", "running", "paused", "needs_decision", "completed", "closed"]);
   const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(), updatedSince: sinceTime(args.updatedSince) };
-  const records = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines;
-  const page = await listPageAsync(records, {
+  const source = dependencies.pipelineSelectionSource?.();
+  const project = (pipeline: Pipeline) => args.full === true ? pipeline : args.compact === false ? pipelineListRow(pipeline) : pipelineCompactRow(pipeline);
+  const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
+    Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
+    : await listPageAsync(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))),
     identity: pipeline => ({ id: pipeline.id, time: pipeline.createdAt ?? "" }),
     matches: pipeline => (!scope.project || pipeline.project === scope.project)
@@ -3274,6 +3283,13 @@ async function listPipelines(
   return redactPayload({ ...pagination, pipelines, compact: !fullAnswer(args),
     omittedRecordCount: args.full === true ? 0 : pipelines.length,
     readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true or get_pipeline reads complete records; compact:false returns the previous board-card projection." });
+}
+
+function taskWithLinks(task: import("@/lib/tasks/types").BoardTask, dependencies: ViewerMcpDomainDependencies): TaskPipelineReadModel {
+  const source = dependencies.pipelineSelectionSource?.();
+  const pipelineIds = source ? boardSelection(source.filename, "pipelines").links(task.id)
+    : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).filter(pipeline => pipeline.taskIds?.includes(task.id)).map(pipeline => pipeline.id);
+  return { ...task, pipelineIds };
 }
 
 const taskById = new WeakMap<object, Map<string, TaskPipelineReadModel>>();
@@ -3309,7 +3325,11 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
   const statuses = stringSet(args.statuses ?? args.status, ["inbox", "assigned", "blocked", "done"]);
   const scope = { project: text(args.project), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
     openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase() };
-  const page = listPage(taskReadModel(dependencies), {
+  const source = dependencies.taskSelectionSource?.();
+  const project = (task: TaskPipelineReadModel) => args.full === true ? task : args.compact === false ? listTaskRow(task) : compactTask(task);
+  const page = source ? boardSelection(source.filename, "tasks").page(source, scope, args.cursor,
+    Math.max(1, Math.min(200, integer(args.limit, 100))), task => project(taskWithLinks(task, dependencies)))
+    : listPage(taskReadModel(dependencies), {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, 100))),
     identity: task => ({ id: task.id, time: task.updatedAt ?? "" }),
     matches: task => (!scope.project || task.project === scope.project)
@@ -3328,8 +3348,10 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
 
 function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const taskId = required(args, "taskId");
-  const model = taskReadModel(dependencies);
-  const task = taskById.get(model)!.get(taskId);
+  const source = dependencies.taskSelectionSource?.();
+  const stored = source?.read(taskId);
+  const task = source ? (stored ? taskWithLinks(stored, dependencies) : null)
+    : taskById.get(taskReadModel(dependencies))!.get(taskId);
   if (!task) throw new Error("task not found");
   return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : task,
     ...(args.compact === true ? { omittedRecordCount: 1, readMore: "get_task without compact reads the full task." } : {}) });
@@ -3980,7 +4002,7 @@ async function agentActivity(
     }, sources);
     const journal = dependencies.refreshLifecycleJournal({ liveness: snapshot.conversations });
     const liveOnly = args.liveOnly === true && args.includeGone !== true;
-    const conversations = liveOnly ? snapshot.conversations.filter(row => row.lifecycle !== "gone" && row.host.state !== "gone") : snapshot.conversations;
+    const conversations = liveOnly ? snapshot.conversations.filter(row => row.lifecycle !== "gone" && row.host.state !== "gone" && row.reason !== "launch_unproven_expired") : snapshot.conversations;
     const excludedGoneCount = snapshot.conversations.length - conversations.length;
     const filtered = { ...snapshot, conversations, count: conversations.length,
       stalledCount: conversations.filter(row => row.lifecycle === "stalled").length,
@@ -4818,6 +4840,13 @@ export function viewerMcpBindings(
   controlDependencies: ViewerControlDependencies = productionViewerControlDependencies(),
   domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
 ): McpToolBindings {
+  const pageOwner = {};
+  const budgeted = (tool: string, args: McpToolArgs, budget: number, load: (cursor: string | null) => Promise<McpToolPayload>) =>
+    budgetPage(pageOwner, tool, args, budget, async cursor => {
+      const payload = await load(cursor);
+      const { conversations, nextCursor, ...meta } = payload;
+      return { rows: (conversations ?? []) as Record<string, unknown>[], meta, upstream: typeof nextCursor === "string" ? nextCursor : null };
+    }, fullAnswer(args));
   return {
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
@@ -4828,7 +4857,7 @@ export function viewerMcpBindings(
     pipeline_action: (args) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
     stage_report: (args) => stageReport(args, domainDependencies),
     link_task_to_pipeline: (args) => unadmittedOnStoreBusy(() => linkTaskToPipeline(args, linkTaskDependencies)),
-    list_conversations: (args, context) => listConversations(args, viewerControlForCall(controlDependencies, context)),
+    list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
@@ -4847,7 +4876,7 @@ export function viewerMcpBindings(
     resources: (args) => resources(args, domainDependencies),
     conversation_action: (args, context) => conversationAction(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     conversation_migration: (args, context) => conversationMigration(args, viewerControlForCall(controlDependencies, context)),
-    agent_activity: (args, context) => agentActivity(args, domainDependencies, context),
+    agent_activity: (args, context) => budgeted("agent_activity", args, 24_000, () => agentActivity(args, domainDependencies, context)),
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     suggest_replies: (args) => Promise.resolve(suggestReplies(args, domainDependencies)),
