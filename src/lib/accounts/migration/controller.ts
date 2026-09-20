@@ -57,6 +57,8 @@ export async function reconcileAccountMigrationCycle(
   }
 }
 
+// Compatibility routing reads persisted membership only. Neither getter nor
+// setter may resolve a provider catalog or credentials inside this lease.
 export function syncCompatibilityRouting(registry: AgentRegistry): void {
   const current = registry.readOnlySnapshot().engineRouting;
   const claudeNeedsSync = (() => {

@@ -266,6 +266,83 @@ test("an occupied Codex archive destination answers archive_unavailable", async 
   expect(fs.existsSync(account.home)).toBe(true);
 });
 
+
+for (const action of ["start", "retry", "cancel"] as const) {
+  test(`${action} login releases the lease while RPC is pending`, async () => {
+    const { measureContention } = await import("@/lib/accounts/accountMutation.contention.fixture");
+    const account = action === "start" ? null : createManagedCodexAccount(`Contention ${action}`);
+    const runtime = new ManagedCodexRuntime();
+    await measureContention(`codex-${action}`, async (pause) => {
+      const challenge = { accountId: account?.id ?? "contention-start", loginId: "fixture", verificationUrl: "https://example.com/device", userCode: "fixture", startedAt: Date.now() };
+      runtime.startLogin = async () => { await pause(); return challenge; };
+      runtime.retryLogin = async () => { await pause(); return challenge; };
+      runtime.cancelLogin = async () => { await pause(); return true; };
+      setManagedCodexRuntimeForTests(runtime);
+      const response = await POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
+        method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+        body: JSON.stringify(action === "start" ? { label: "Contention start" } : { action, id: account!.id }),
+      }));
+      expect(response.status).toBe(200);
+    });
+  });
+}
+
+test("a delayed real login blocks removal and competing login, then releases its reservation", async () => {
+  const account = createManagedCodexAccount("Reserved login");
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const child = new FakeChild();
+  setManagedCodexRuntimeForTests(new ManagedCodexRuntime({ startClient: async (home) => {
+    entered(); await held;
+    return CodexAppServerClient.start({ home, spawn: () => child as never });
+  } }));
+  const request = (action: string) => new NextRequest("http://127.0.0.1/api/accounts/codex", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action, id: account.id }),
+  });
+  const login = POST(request("retry"));
+  await ready;
+  try {
+    const removed = await remove(deleteRequest({ id: account.id, force: true }));
+    expect(removed.status).toBe(409);
+    expect(await removed.json()).toMatchObject({ blockers: ["login_pending"] });
+    expect((await POST(request("retry"))).status).toBe(409);
+    expect((await POST(request("cancel"))).status).toBe(409);
+    expect(fs.existsSync(account.home)).toBe(true);
+  } finally { release(); }
+  expect((await login).status).toBe(200);
+  expect((await POST(request("cancel"))).status).toBe(200);
+  expect((await remove(deleteRequest({ id: account.id }))).status).toBe(200);
+});
+
+test("cancel keeps removal fenced after the runtime marks its attempt canceled", async () => {
+  const account = createManagedCodexAccount("Cancel reservation");
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const child = new FakeChild();
+  const originalWrite = child.onWrite.bind(child);
+  child.onWrite = (message) => {
+    if (message.method !== "account/login/cancel") { originalWrite(message); return; }
+    entered(); void held.then(() => child.respond(message.id as number, { status: "canceled" }));
+  };
+  const runtime = new ManagedCodexRuntime({ startClient: (home) => CodexAppServerClient.start({ home, spawn: () => child as never }) });
+  setManagedCodexRuntimeForTests(runtime);
+  await runtime.startLogin(account);
+  const cancel = POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", id: account.id }),
+  }));
+  await ready;
+  try {
+    expect(runtime.peekLogin(account).attemptState).toBe("cancelled");
+    const removed = await remove(deleteRequest({ id: account.id, force: true }));
+    expect(removed.status).toBe(409);
+    expect(await removed.json()).toMatchObject({ blockers: ["login_pending"] });
+  } finally { release(); }
+  expect((await cancel).status).toBe(200);
+  expect((await remove(deleteRequest({ id: account.id }))).status).toBe(200);
+});
+
 test("managed Codex removal reports a corrupt registry as locked", async () => {
   /* A record the store cannot turn into an account list; since #1870 that is a
      row it refuses on rather than bytes that will not parse. */
