@@ -102,7 +102,7 @@ function snapshot(root: string): Record<string, string> {
 
 async function loadModules(
   root: string,
-  options: { buildPhase: boolean; activated: boolean },
+  options: { buildPhase: boolean; activated: boolean; mode?: string },
 ): Promise<{ exit: number; out: string; error: string }> {
   const env: Record<string, string> = { ...process.env as Record<string, string>, XDG_CONFIG_HOME: root };
   delete env.LLV_STATE_DIR;
@@ -110,7 +110,7 @@ async function loadModules(
   if (options.buildPhase) env.NEXT_PHASE = "phase-production-build";
   env.NEXT_RUNTIME = "nodejs";
   const proc = Bun.spawn({
-    cmd: [process.execPath, CHILD, options.activated ? "activated" : "module-load"],
+    cmd: [process.execPath, CHILD, options.mode ?? (options.activated ? "activated" : "module-load")],
     cwd: path.join(import.meta.dir, "..", "..", ".."),
     stdout: "pipe",
     stderr: "pipe",
@@ -164,6 +164,21 @@ describe("a build-phase module load never mutates state (#1905)", () => {
     expect(run.exit).toBe(0);
     expect(snapshot(root)).toEqual(before);
     expect(fs.existsSync(path.join(state, "state.sqlite"))).toBe(false);
+  }, 30_000);
+});
+
+describe("a process that owns the release fence without serving traffic", () => {
+  test("the deployment adapter's rollback mirrors are refused outside its own scope and written inside it", async () => {
+    const { root, state } = seededRoot();
+    const run = await loadModules(root, { buildPhase: false, activated: false, mode: "adapter-checkpoint" });
+    expect(run.exit).toBe(0);
+    expect(JSON.parse(run.out.trim()) as unknown).toEqual({
+      refused: "StateMutationRefusedError",
+      gateLeftOpen: false,
+    });
+    /* The rollback release finds its files where it left them. */
+    expect(fs.lstatSync(path.join(state, "claude-accounts.json")).isFile()).toBe(true);
+    expect(fs.lstatSync(path.join(state, "account-project-bindings.json")).isFile()).toBe(true);
   }, 30_000);
 });
 

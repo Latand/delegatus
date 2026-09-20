@@ -10,7 +10,31 @@
  */
 const [mode] = process.argv.slice(2);
 
+/** The deployment adapter's step: it owns the release fence for a Viewer it
+    has established is dead, in a process that never activated and never named
+    a state directory of its own. */
+async function adapterCheckpoint(): Promise<void> {
+  const barrier = await import("./stateMutationBarrier");
+  const { checkpointLegacyCollectionMirrorsForDemotion, ensureLegacyCollectionsImported } =
+    await import("./legacyCollections");
+  barrier.openStateMutationActivation();
+  await ensureLegacyCollectionsImported();
+  barrier.closeStateMutationActivationForTests();
+
+  let refused: string | null = null;
+  try {
+    await checkpointLegacyCollectionMirrorsForDemotion();
+  } catch (error) {
+    refused = error instanceof Error ? error.name : String(error);
+  }
+  await barrier.withStateMutationActivation(checkpointLegacyCollectionMirrorsForDemotion);
+  /* The scope closes behind the step: the process is under the barrier again. */
+  const stillRefused = barrier.stateMutationActivationOpen();
+  console.log(JSON.stringify({ refused, gateLeftOpen: stillRefused }));
+}
+
 async function main(): Promise<void> {
+  if (mode === "adapter-checkpoint") return adapterCheckpoint();
   if (mode === "activated") {
     const { openStateMutationActivation } = await import("./stateMutationBarrier");
     openStateMutationActivation();

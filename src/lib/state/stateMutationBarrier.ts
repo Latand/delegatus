@@ -44,6 +44,23 @@ export function openStateMutationActivation(): void {
   gate.__llvStateMutationActivated = true;
 }
 
+/**
+ * Open the gate for one step in a process that owns the release fence without
+ * serving traffic: the deployment adapter checkpointing the rollback mirrors
+ * for a Viewer it has established is dead. Scoped, so the rest of that
+ * process stays under the barrier.
+ */
+export async function withStateMutationActivation<T>(step: () => Promise<T>): Promise<T> {
+  const previous = gate.__llvStateMutationActivated;
+  gate.__llvStateMutationActivated = true;
+  try {
+    return await step();
+  } finally {
+    if (previous === undefined) delete gate.__llvStateMutationActivated;
+    else gate.__llvStateMutationActivated = previous;
+  }
+}
+
 /** Test seam: the activation gate is process-wide and survives a test file. */
 export function closeStateMutationActivationForTests(): void {
   delete gate.__llvStateMutationActivated;

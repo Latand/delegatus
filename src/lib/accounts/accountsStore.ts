@@ -1021,6 +1021,8 @@ function mergeRows(
 export function checkpointAccountRollbackMirrorsForDemotion(directory = accountsStateDirectory()): void {
   const database = accountsDatabasePath(directory);
   if (!readStateImport(database, ACCOUNTS_COLLECTION)) return;
+  /* Before the sibling locks, which are themselves writes (#1905). */
+  assertStateMutationAllowed(directory);
   ensureStateDirectory(directory);
   withSiblingLocks(directory, () => {
     const collection = openAccountCollection(database);
