@@ -518,7 +518,7 @@ async function spawnPipelineAgent(
   const creatorConversationId = input.creatorConversationId?.startsWith("conversation_")
     ? registry.canonicalConversationId(input.creatorConversationId as ViewerConversationId)
     : null;
-  const begun = registry.beginSpawnRequest({
+  const begun = await registry.beginSpawnRequestAsync({
     engine: input.role.engine,
     cwd: input.cwd,
     transport: "structured",
