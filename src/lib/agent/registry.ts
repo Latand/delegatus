@@ -8134,13 +8134,13 @@ export class AgentRegistry {
         reason: "this conversation's delivery evidence has been compacted, so nothing under this key is not proof that nothing was sent",
       };
     }
-    /* A history carried across the upgrade, including one whose conversation
-       record is gone: its notes were never written, so its silence is not an
-       answer. */
+    /* A history carried across the upgrade — and a conversation with no record
+       at all, which cannot show a stamp either. Neither one's notes were ever
+       written, so neither one's silence is an answer. */
     if (!snapshot.conversations[canonicalId]?.deliveryEvidenceTracked) {
       return {
         outcome: "unknown",
-        reason: "this conversation predates the record of what delivery evidence was dropped, so nothing under this key is not proof that nothing was sent",
+        reason: "this conversation's history is not known to be complete, so nothing under this key is not proof that nothing was sent",
       };
     }
     return { outcome: "not-executed" };
