@@ -5,6 +5,7 @@ import { normalizeRegistry } from "@/lib/agent/registry";
 import { defaultRegistrySqliteFilename, resolveRegistryBackend } from "@/lib/agent/registryBackendIdentity";
 import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { statePath } from "@/lib/configDir";
+import { canonicalProject } from "@/lib/projects/aliases";
 
 const REPORT_BYTES = 1024 * 1024;
 export const RETIREMENT_SCAN_LIMIT = 100;
@@ -22,7 +23,8 @@ export type RetirementStatusSources = {
 function subjectProject(subject: Subject): string | null {
   // Legacy cwd resolution can persist worktree mappings. An observation does
   // not run that writer or infer project authority from a launch hint.
-  return subject.conversation?.projectOwnership?.project ?? null;
+  const project = subject.conversation?.projectOwnership?.project;
+  return project ? canonicalProject(project) : null;
 }
 
 function readReport(): Buffer {
@@ -58,6 +60,7 @@ function parseReport(bytes: Buffer): Report {
     A report's session key survives, but it records no operation or PID/start
     identity. Current registry facts are deliberately a separate observation. */
 export function projectRetirementStatus(request: RetirementStatusRequest, sources: RetirementStatusSources) {
+  request = { ...request, project: canonicalProject(request.project) };
   const requestedAt = new Date(sources.now()).toISOString();
   const limit = Math.max(1, Math.min(100, Number.isFinite(request.limit) ? Math.trunc(request.limit!) : 25));
   const base = { kind: "host-retirement" as const, project: request.project, requestedAt, limit,
@@ -145,10 +148,19 @@ export function projectRetirementStatus(request: RetirementStatusRequest, source
     history: "earlier individual refusals are not retained; absence does not prove completion" };
 }
 
-export function readRetirementStatus(request: RetirementStatusRequest, authentication: { launchId: string; capability: string }) {
+/** Attributed identities are accepted only from the authenticated MCP control
+    hop. Seat authority was checked against the same designation as seat tools;
+    worker authority still requires a keyed receipt belonging to that session. */
+export type RetirementReadAuthentication =
+  | { launchId: string; capability: string }
+  | { conversationId: string; launchId: string }
+  | { conversationId: string; seatProject: string };
+
+export function readRetirementStatus(request: RetirementStatusRequest, authentication: RetirementReadAuthentication) {
+  request = { ...request, project: canonicalProject(request.project) };
   let store: SqliteAgentRegistryStore | null = null;
   try {
-    if (!/^[A-Za-z0-9_-]{43}$/.test(authentication.capability)) throw new Error("retirement observation requires a Viewer spawn capability");
+    if ("capability" in authentication && !/^[A-Za-z0-9_-]{43}$/.test(authentication.capability)) throw new Error("retirement observation requires a Viewer spawn capability");
     const filename = statePath("agent-registry.json");
     const backend = resolveRegistryBackend(filename, process.env);
     if ((backend.mode !== "sqlite" && backend.mode !== "read") || backend.pendingJsonImport) {
@@ -158,9 +170,14 @@ export function readRetirementStatus(request: RetirementStatusRequest, authentic
     if (!fs.existsSync(sqlite)) throw new Error("retirement registry is unavailable");
     store = new SqliteAgentRegistryStore(sqlite, { readOnly: true, normalize: normalizeRegistry,
       initialSnapshot: () => { throw new Error("retirement observation never imports state"); } });
-    const digest = crypto.createHash("sha256").update(authentication.capability).digest("hex");
-    const callerId = store.retirementCaller(authentication.launchId, digest);
-    if (!callerId || subjectProject(store.retirementSubject(callerId, "")) !== request.project) {
+    const callerId = "seatProject" in authentication ? authentication.conversationId
+      : store.retirementCaller(authentication.launchId, "capability" in authentication
+        ? crypto.createHash("sha256").update(authentication.capability).digest("hex")
+        : { conversationId: authentication.conversationId });
+    const caller = callerId ? store.retirementSubject(callerId, "").conversation : null;
+    const ownProject = caller?.projectOwnership?.project ? canonicalProject(caller.projectOwnership.project) : null;
+    const project = "seatProject" in authentication ? canonicalProject(authentication.seatProject) : ownProject;
+    if (!caller || project !== request.project || (ownProject && ownProject !== request.project)) {
       throw new Error("retirement observation requires the authenticated caller's project and spawn receipt");
     }
     const reader = store;

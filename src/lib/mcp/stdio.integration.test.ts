@@ -121,6 +121,13 @@ test("the packaged stdio host publishes and invokes the expanded read surface", 
     const tools = await session.client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toContain("board_snapshot");
     expect(tools.tools.map((tool) => tool.name)).toContain("conversation_migration");
+    const retirement = tools.tools.find(tool => tool.name === "deployment_status")!;
+    expect(Object.keys(retirement.inputSchema.properties ?? {})).toEqual(expect.arrayContaining([
+      "kind", "project", "callerLaunchId", "limit", "cursor",
+    ]));
+    expect(retirement.description).toContain("designated seat");
+    expect((retirement.inputSchema.properties?.callerLaunchId as { description: string }).description).toContain("Optional");
+    expect(retirement.inputSchema.required).not.toContain("callerLaunchId");
 
     const first = await session.client.callTool({
       name: "list_flows",
