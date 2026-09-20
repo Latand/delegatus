@@ -40,6 +40,14 @@ test("roles route returns all merged role definitions with scaffold previews and
   expect(builder.shipped.variants).toEqual(builder.variants);
 });
 
+test("GET marks a malformed registry degraded while showing the shipped catalog", async () => {
+  fs.writeFileSync(file, "{");
+  const body = await (await GET()).json() as Catalog & { revision: string; health: { state: string; reason?: string } };
+  expect(body.health).toEqual({ state: "degraded", reason: "preset unavailable" });
+  expect(body.revision).toMatch(/^roles-1-/);
+  expect(body.roles.find((role) => role.id === "builder")?.variants?.frontend).toEqual({ engine: "claude", model: "opus", effort: "high" });
+});
+
 test("PUT maps a role and a builder variant, keeps a scaffold override, and answers the merged catalog", async () => {
   fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, overrides: { reviewer: { promptScaffold: "Custom reviewer scaffold" } } }));
   const response = await put({ overrides: {
@@ -64,6 +72,28 @@ test("PUT maps a role and a builder variant, keeps a scaffold override, and answ
   const reset = await put({ overrides: { builder: { variants: { "apply-fixes": null } }, reviewer: { config: null } } });
   expect(reset.status).toBe(200);
   expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ schemaVersion: 1, overrides: { reviewer: { promptScaffold: "Custom reviewer scaffold" } } });
+});
+
+test("PUT refuses a stale catalog revision before it writes a newer mapping", async () => {
+  const initial = await (await GET()).json() as Catalog & { revision: string };
+  const first = await put({
+    expectedRevision: initial.revision,
+    overrides: { builder: { variants: { frontend: { engine: "claude", model: "sonnet", effort: "high" } } } },
+  });
+  expect(first.status).toBe(200);
+  const current = await first.json() as Catalog & { revision: string };
+  expect(current.revision).not.toBe(initial.revision);
+
+  const stale = await put({
+    expectedRevision: initial.revision,
+    overrides: { reviewer: { config: { engine: "claude", model: "opus", effort: "xhigh" } } },
+  });
+  expect(stale.status).toBe(409);
+  expect((await stale.json() as { revision: string }).revision).toBe(current.revision);
+  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+    schemaVersion: 2,
+    overrides: { builder: { variants: { frontend: { engine: "claude", model: "sonnet", effort: "high" } } } },
+  });
 });
 
 test("PUT refuses a malformed body and an invalid runtime, and changes nothing", async () => {

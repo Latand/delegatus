@@ -84,6 +84,8 @@ const { resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
 import type { SeatCommandDependencies } from "./seatCommand";
 
 const { setSeatCommandDependenciesForTests } = await import("./seatCommand");
+const { BINDINGS_SOURCE, resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
+const { clearAccountFixture, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
 const {
   beginOrchestratorSeatIntent,
   completeOrchestratorSeatIntent,
@@ -161,10 +163,10 @@ beforeEach(() => {
   registry.setEngineRouting("codex", bound);
   setAgentRegistryForTests(registry);
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{ engine: "codex", accountId: bound, project: PROJECT, createdAt: AT }],
-  }), "utf8");
+  });
 });
 
 afterEach(() => {
@@ -295,7 +297,7 @@ test("a refused rotation leaves the incumbent seated and the refusal readable, w
      successor: a designation that failed must not read as one that landed. */
   seatIncumbent();
   const { resolved } = dependencies();
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 
   const answer = await rotate({ clientRequestId: "rotate-damaged-record-1" });
 

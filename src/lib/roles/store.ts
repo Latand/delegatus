@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
@@ -7,11 +8,12 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 
 import { ROLE_DEFAULTS } from "./defaults";
 import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "./paramConfig";
-import { BUILDER_VARIANT_IDS, ROLE_IDS, type BuilderVariantId, type RoleConfig, type RoleDefinition, type RoleId, type RoleOverride, type RoleOverridesFile } from "./types";
+import { BUILDER_VARIANT_IDS, ROLE_IDS, type BuilderVariantId, type RegistryRoleDefinitions, type RoleConfig, type RoleDefinition, type RoleId, type RoleOverride, type RoleOverridesFile, type RoleRegistryHealth, type RoleRegistrySnapshot } from "./types";
 
 /** The newest schema this build reads and writes. A file without builder
     variants is still written as 1 (see RoleOverridesFile). */
 export const ROLE_OVERRIDES_SCHEMA_VERSION = 2;
+const ROLE_REGISTRY_REVISION_VERSION = 1;
 const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2];
 
 /** Shipped runtime of each builder variant; a saved variant mapping merges over it. */
@@ -239,15 +241,54 @@ export function loadRoleDefinitions(): RoleDefinition[] {
   return mergeRoleDefinitions(loadRoleOverrides().overrides);
 }
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function registryRevision(overrides: Partial<Record<RoleId, RoleOverride>>): string {
+  const content = {
+    revisionVersion: ROLE_REGISTRY_REVISION_VERSION,
+    overrides,
+    shipped: ROLE_DEFAULTS.map(({ id, config }) => ({ id, config })),
+    shippedBuilderVariants: BUILDER_VARIANT_DEFAULTS,
+  };
+  return `roles-${ROLE_REGISTRY_REVISION_VERSION}-${createHash("sha256").update(canonicalJson(content)).digest("hex").slice(0, 20)}`;
+}
+
+function registrySnapshot(overrides: Partial<Record<RoleId, RoleOverride>>, health: RoleRegistryHealth): RoleRegistrySnapshot {
+  return { roles: mergeRoleDefinitions(overrides), revision: registryRevision(overrides), health };
+}
+
+export function loadRoleRegistrySnapshot(): RoleRegistrySnapshot {
+  const { overrides } = loadRoleOverrides();
+  return registrySnapshot(overrides, { state: "healthy" });
+}
+
+export function loadRoleRegistrySnapshotOrDefaults(): RoleRegistrySnapshot {
+  try {
+    return loadRoleRegistrySnapshot();
+  } catch (error) {
+    console.warn("[roles] override registry unreadable; falling back to built-in defaults", error);
+    return registrySnapshot({}, { state: "degraded", reason: "preset unavailable" });
+  }
+}
+
 /** Seed catalogs must stay renderable when the overrides file fails closed
     (hand edit, or schema skew between viewer versions sharing one config
     dir) — they degrade to the built-in role defaults instead of taking the
     importing module down with them. */
-export function loadRoleDefinitionsOrDefaults(): RoleDefinition[] {
-  try {
-    return loadRoleDefinitions();
-  } catch (error) {
-    console.warn("[roles] override registry unreadable; falling back to built-in defaults", error);
-    return mergeRoleDefinitions({});
-  }
+export function loadRoleDefinitionsOrDefaults(): RegistryRoleDefinitions {
+  const snapshot = loadRoleRegistrySnapshotOrDefaults();
+  const roles = snapshot.roles as RegistryRoleDefinitions;
+  Object.defineProperty(roles, "registry", {
+    value: { revision: snapshot.revision, health: snapshot.health },
+    enumerable: false,
+  });
+  return roles;
 }
