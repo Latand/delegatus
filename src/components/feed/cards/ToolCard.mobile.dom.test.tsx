@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } from "@/lib/attention/eligibility";
 import { diffFromApplyPatch } from "../diff";
 import { execFailure, toolEvent } from "../__fixtures__/readableTools";
 import type { ToolEvent } from "../parse";
@@ -17,11 +18,19 @@ import { ToolCard } from "./ToolCard";
  * desktop keeps the parser's `open`.
  */
 
-let narrowViewport = false;
+const VIEWPORTS = {
+  narrowPhone: { width: 390, height: 844 },
+  desktop: { width: 1280, height: 800 },
+  shortLandscape: { width: 844, height: 390 },
+} as const;
+type ViewportName = keyof typeof VIEWPORTS;
+let viewport: { width: number; height: number } = VIEWPORTS.desktop;
+
+const setViewport = (name: ViewportName) => { viewport = VIEWPORTS[name]; };
 
 const normalize = (query: string) => String(query).replace(/\s+/g, "");
 const matchMediaStub = (query: string) => ({
-  matches: normalize(query) === "(max-width:767px)" ? narrowViewport : false,
+  matches: normalize(query) === normalize(MOBILE_LAYOUT_QUERY) ? mobileLayoutViewport(viewport) : false,
   media: String(query),
   onchange: null,
   addEventListener() {},
@@ -50,7 +59,7 @@ let root: Root | null = null;
 afterEach(() => {
   if (root) flushSync(() => root!.unmount());
   root = null;
-  narrowViewport = false;
+  setViewport("desktop");
   dom.document.body.replaceChildren();
 });
 
@@ -90,7 +99,7 @@ function runningEdit(): ToolEvent {
 }
 
 test("phone: a running edit renders closed with no body until tapped, then opens in place", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<ToolCard event={runningEdit()} />);
   const details = host.querySelector("details")!;
   expect(details.getAttribute("class")).not.toContain("ml-9");
@@ -112,7 +121,7 @@ test("phone: a running edit renders closed with no body until tapped, then opens
 });
 
 test("phone: a lone failed exec renders closed with no body until tapped", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<ToolCard event={execFailure} />);
   const details = host.querySelector("details")!;
   expect(isOpen(details)).toBe(false);
@@ -129,7 +138,7 @@ test("phone: a lone failed exec renders closed with no body until tapped", () =>
 });
 
 test("desktop: the parser's open stays — the edit's diff and the failure's output are mounted from the start", () => {
-  narrowViewport = false;
+  setViewport("desktop");
   const host = mount(
     <>
       <ToolCard event={runningEdit()} />
@@ -146,4 +155,12 @@ test("desktop: the parser's open stays — the edit's diff and the failure's out
   expect(host.textContent).toContain("stale");
   expect(host.textContent).toContain("expected true to be false");
   expect(host.querySelector("[data-mobile-tool-line]")).toBeNull();
+});
+
+test("short landscape: the height side of the production query selects the phone card", () => {
+  setViewport("shortLandscape");
+  const host = mount(<ToolCard event={runningEdit()} />);
+  const details = host.querySelector("details")!;
+  expect(details.getAttribute("class")).not.toContain("ml-9");
+  expect(isOpen(details)).toBe(false);
 });

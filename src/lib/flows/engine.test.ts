@@ -23,6 +23,8 @@ let releaseRelayDeliveries: Array<() => void> = [];
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-engine-test-"));
 const { captureReviewHead, newRound, tickFlow, tickFlows, persistTickFlows, flowTickBase, reviewerLaunchPersisted, abandonLaunch, adoptSyntheticLaunchTakeover, recordHeadlessLaunch, relayFixOrPark, reserveReviewerSpawn, sendToImplementer, setRelayDeliveryForTest } = await import("./engine");
 const { loadFlows, outputPathFor, saveFlows, stderrPathFor, stdoutPathFor } = await import("./store");
+const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+const { clearAccountFixture, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
 const tasksStore = await import("@/lib/tasks/store");
 
 afterAll(() => {
@@ -2848,10 +2850,6 @@ test("a conversation with no structured host falls through to the legacy transcr
  * a launch: an account the pool forbids, and a record that cannot say what the
  * pool is. Account and project names are invented.
  */
-function bindingRecordPath(): string {
-  return path.join(process.env.LLV_STATE_DIR!, "account-project-bindings.json");
-}
-
 function reviewerBindingFlow(id: string, accountId: string): Flow {
   return raceFlow({
     id,
@@ -2874,7 +2872,7 @@ function reviewerBindingFlow(id: string, accountId: string): Flow {
 test("#1279: a reviewer account the project's pool forbids parks the flow instead of launching", async () => {
   const flow = reviewerBindingFlow("flow-reviewer-forbidden", "acct-outsider");
   saveFlows([flow]);
-  fs.writeFileSync(bindingRecordPath(), JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{
       engine: "codex",
@@ -2882,7 +2880,7 @@ test("#1279: a reviewer account the project's pool forbids parks the flow instea
       project: "project-atlas",
       createdAt: "2026-08-30T00:00:00.000Z",
     }],
-  }), "utf8");
+  });
 
   try {
     await tickFlows([{ path: flow.implementerPath } as FileEntry]);
@@ -2897,14 +2895,14 @@ test("#1279: a reviewer account the project's pool forbids parks the flow instea
     expect(after.rounds[0]!.spawnStartedAt ?? null).toBeNull();
     expect(after.rounds[0]!.reviewerPane ?? null).toBeNull();
   } finally {
-    fs.rmSync(bindingRecordPath(), { force: true });
+    clearAccountFixture(BINDINGS_SOURCE);
   }
 });
 
 test("#1279: a binding record the reviewer launch cannot read parks the flow rather than picking freely", async () => {
   const flow = reviewerBindingFlow("flow-reviewer-unreadable", "default");
   saveFlows([flow]);
-  fs.writeFileSync(bindingRecordPath(), '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 
   try {
     await tickFlows([{ path: flow.implementerPath } as FileEntry]);
@@ -2913,7 +2911,7 @@ test("#1279: a binding record the reviewer launch cannot read parks the flow rat
     expect(after.stateDetail).toContain("account-project-bindings.json");
     expect(after.rounds[0]!.spawnStartedAt ?? null).toBeNull();
   } finally {
-    fs.rmSync(bindingRecordPath(), { force: true });
+    clearAccountFixture(BINDINGS_SOURCE);
   }
 });
 

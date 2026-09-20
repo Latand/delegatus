@@ -1,8 +1,8 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { FENCES_SOURCE, mutateAccountSource, readAccountSource } from "@/lib/accounts/accountsStore";
 import { statePath } from "@/lib/configDir";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -121,7 +121,24 @@ function normalizeSpawnAdmissionFence(value: unknown, key: string): SpawnAdmissi
   };
 }
 
+/* The fences are the `accounts` collection of state.sqlite (#1870, slice 7).
+   The rows hold what `spawn-admission-fences.json` held, so every refusal
+   below is the one it always was. */
 function readSpawnAdmissionFenceFile(requestedClientAttemptId?: string): SpawnAdmissionFenceFile {
+  const read = readAccountSource(FENCES_SOURCE);
+  if (read.kind === "collection") {
+    return read.body === undefined
+      ? emptySpawnAdmissionFenceFile()
+      : normalizeSpawnAdmissionFenceFile(read.body, requestedClientAttemptId);
+  }
+  /* A recorded gap is the fence store's contents never having been recovered.
+     Reading the path instead would open the tombstone the import left and
+     answer EISDIR, which says nothing; the recorded reason and the file that
+     was kept aside say what happened and what to look at. */
+  if (read.kind === "gap") {
+    throw new Error(`spawn admission fence store could not be read: ${read.reason}`
+      + (read.preservedAs ? `; kept as ${path.basename(read.preservedAs)}` : ""));
+  }
   let raw: string;
   try {
     raw = fs.readFileSync(spawnAdmissionFencePath(), "utf8");
@@ -135,6 +152,10 @@ function readSpawnAdmissionFenceFile(requestedClientAttemptId?: string): SpawnAd
   } catch (error) {
     throw new Error("spawn admission fence store could not be read", { cause: error });
   }
+  return normalizeSpawnAdmissionFenceFile(parsed, requestedClientAttemptId);
+}
+
+function normalizeSpawnAdmissionFenceFile(parsed: unknown, requestedClientAttemptId?: string): SpawnAdmissionFenceFile {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
     || (parsed as { version?: unknown }).version !== 1
     || !((parsed as { fences?: unknown }).fences)
@@ -155,14 +176,6 @@ function readSpawnAdmissionFenceFile(requestedClientAttemptId?: string): SpawnAd
     }
   }
   return { version: 1, fences };
-}
-
-function writeSpawnAdmissionFenceFile(file: SpawnAdmissionFenceFile): void {
-  const filename = spawnAdmissionFencePath();
-  fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-  const temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(temporary, JSON.stringify(file, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(temporary, filename);
 }
 
 /** Read one durable fence. An unreadable store throws so recovery keeps the
@@ -190,25 +203,36 @@ export function recordSpawnAdmissionRejection(input: {
   return withAccountMutationLock(() => {
     const existingReceipt = currentReceipt();
     if (existingReceipt) return { kind: "existing-receipt", receipt: existingReceipt };
-    const file = readSpawnAdmissionFenceFile(input.clientAttemptId);
-    const existing = file.fences[input.clientAttemptId];
     const requestDigest = input.requestDigest.toLowerCase();
-    if (existing) {
-      return existing.requestDigest === requestDigest
-        ? { kind: "fenced", fence: existing }
-        : { kind: "conflict" };
-    }
-    const fence: SpawnAdmissionFence = {
-      version: 1,
-      clientAttemptId: input.clientAttemptId,
-      requestDigest,
-      status: input.status,
-      error,
-      rejectedAt: input.rejectedAt ?? new Date().toISOString(),
-    };
-    file.fences[input.clientAttemptId] = fence;
-    writeSpawnAdmissionFenceFile(file);
-    return { kind: "fenced", fence };
+    let outcome: SpawnAdmissionFenceResult | null = null;
+    /* Read and write inside one transaction. The account mutation lock already
+       serializes callers, and the collection lease keeps this true for a
+       caller that reached here another way: a fence read outside the
+       transaction is a fence another writer can erase. */
+    mutateAccountSource(FENCES_SOURCE, (body) => {
+      const file = normalizeSpawnAdmissionFenceFile(body ?? emptySpawnAdmissionFenceFile(), input.clientAttemptId);
+      const existing = file.fences[input.clientAttemptId];
+      if (existing) {
+        outcome = existing.requestDigest === requestDigest
+          ? { kind: "fenced", fence: existing }
+          : { kind: "conflict" };
+        return undefined;
+      }
+      const fence: SpawnAdmissionFence = {
+        version: 1,
+        clientAttemptId: input.clientAttemptId,
+        requestDigest,
+        status: input.status,
+        error,
+        rejectedAt: input.rejectedAt ?? new Date().toISOString(),
+      };
+      file.fences[input.clientAttemptId] = fence;
+      outcome = { kind: "fenced", fence };
+      /* The normalized file drops entries no lookup can use, which is what
+         clears a damaged one; every usable fence is carried through. */
+      return file;
+    });
+    return outcome!;
   });
 }
 

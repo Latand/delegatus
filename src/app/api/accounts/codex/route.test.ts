@@ -14,6 +14,9 @@ process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy");
 
 const { DELETE: remove, POST } = await import("./route");
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+const { resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
+const { seedAccountRegistry } = await import("@/lib/accounts/accountsStoreFixture");
+const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
 const { CodexAppServerClient } = await import("@/lib/accounts/codexAppServer");
 const { ManagedCodexRuntime, setManagedCodexRuntimeForTests } = await import("@/lib/accounts/codexRuntime");
 const { agentRegistry } = await import("@/lib/agent/registry");
@@ -225,17 +228,18 @@ test("managed Codex removal restores routing and the home when the accounts regi
   const registry = agentRegistry();
   registry.setEngineRouting("codex", account.id);
   const before = registry.snapshot();
-  const accountsRegistry = path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json");
-  const originalRename = fs.renameSync;
+  /* Since #1870 the accounts registry commit is one SQLite transaction, so the
+     write that can fail is that commit. */
+  const originalPatch = SqliteStateCollection.prototype.patchSync;
   let retired = false;
   setAccountRemovalCheckpointForTests((reached) => { if (reached === "registry-retired") retired = true; });
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    if (retired && path.resolve(String(destination)) === path.resolve(accountsRegistry)) {
+  SqliteStateCollection.prototype.patchSync = function patchSync(this: { signature(): string }, ...args: unknown[]) {
+    if (retired && this.signature().includes(":accounts:")) {
       retired = false;
       throw Object.assign(new Error("registry write denied"), { code: "EACCES" });
     }
-    return originalRename(source, destination);
-  }) as typeof fs.renameSync;
+    return (originalPatch as (...rest: unknown[]) => void).apply(this, args);
+  } as typeof SqliteStateCollection.prototype.patchSync;
 
   try {
     const response = await remove(deleteRequest({ id: account.id }));
@@ -245,7 +249,7 @@ test("managed Codex removal restores routing and the home when the accounts regi
     expect(fs.existsSync(account.home)).toBe(true);
     expect(fs.existsSync(retiredAccountArchive("codex", account.id))).toBe(false);
   } finally {
-    fs.renameSync = originalRename;
+    SqliteStateCollection.prototype.patchSync = originalPatch;
     setAccountRemovalCheckpointForTests(null);
   }
 });
@@ -263,9 +267,9 @@ test("an occupied Codex archive destination answers archive_unavailable", async 
 });
 
 test("managed Codex removal reports a corrupt registry as locked", async () => {
-  const file = path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, "{ corrupt");
+  /* A record the store cannot turn into an account list; since #1870 that is a
+     row it refuses on rather than bytes that will not parse. */
+  seedAccountRegistry("codex", { version: 1, active: "default", accounts: [{ id: "../escape", label: "Escape", kind: "managed", createdAt: 1 }] });
 
   const response = await remove(new NextRequest("http://127.0.0.1/api/accounts/codex", {
     method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id: "missing" }),
