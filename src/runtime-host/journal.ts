@@ -10,6 +10,8 @@ import { Database } from "bun:sqlite";
 
 import {
   RUNTIME_SCHEMA_VERSION,
+  compactViewerDeploymentError, parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit,
+  type ViewerDeploymentList, type ViewerDeploymentListOptions,
   RUNTIME_DELIVERY_DISCARDED_REASON,
   assertRuntimeEvent,
   normalizeRuntimeEventInput,
@@ -87,6 +89,10 @@ export const RUNTIME_PENDING_EFFECT_STALE_MS = 60 * 60 * 1_000;
  * realistic outstanding set: production carries single digits of unprojected
  * terminal receipts at a time, and each row is a receipt, not a transcript. */
 export const RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT = 512;
+
+// This expression is shared by the index and both keyset query forms. SQLite
+// maintains it for old-host writes too, so a rollback needs no metadata repair.
+export const DEPLOYMENT_LIST_STARTED_AT = "COALESCE(CAST(round(unixepoch(json_extract(state_json, '$.createdAt'), 'subsec') * 1000) AS INTEGER), CAST(round(unixepoch(json_extract(state_json, '$.updatedAt'), 'subsec') * 1000) AS INTEGER), -8640000000000000)";
 
 export type RuntimeRegistryConversationRetentionState = "current" | "dead" | "superseded";
 
@@ -397,6 +403,7 @@ export class RuntimeJournal {
     this.migrateOperationProjectionPending();
     this.migrateLegacyEvents();
     this.migrateEntityUpdatedAt();
+    this.db.exec(`CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`);
     for (const row of this.db.query<EventRow, []>("SELECT * FROM events WHERE producer_key IS NOT NULL").all()) {
       this.db.query("INSERT INTO producer_receipts(producer_kind, producer_key, event_json) VALUES (?, ?, ?) ON CONFLICT(producer_kind, producer_key) DO NOTHING")
         .run(row.producer_kind, row.producer_key, stableJson(toEvent(row)));
@@ -1181,6 +1188,37 @@ export class RuntimeJournal {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
     }
+  }
+
+  /** Read only the requested deployment page; never materialize a runtime snapshot. */
+  listViewerDeployments(options: ViewerDeploymentListOptions = {}): ViewerDeploymentList {
+    const limit = viewerDeploymentListLimit(options.limit);
+    const cursor = parseViewerDeploymentListCursor(options.cursor);
+    const projection = options.compact ? `json_object(
+      'deploymentId', json_extract(state_json, '$.deploymentId'),
+      'phase', json_extract(state_json, '$.phase'),
+      'sha', json_extract(state_json, '$.revision'),
+      'terminal', json(CASE WHEN json_extract(state_json, '$.terminal') THEN 'true' ELSE 'false' END),
+      'startedAt', json_extract(state_json, '$.createdAt'),
+      'finishedAt', CASE WHEN json_extract(state_json, '$.terminal') THEN json_extract(state_json, '$.updatedAt') ELSE NULL END,
+      'error', substr(json_extract(state_json, '$.error'), 1, 301)
+    )` : "state_json";
+    const rows = this.db.query<{ id: string; started_at: number; value: string }, [number, number, string, number] | [number]>(`
+      SELECT id, ${DEPLOYMENT_LIST_STARTED_AT} AS started_at, ${projection} AS value
+      FROM entities INDEXED BY deployment_list_recent WHERE kind = 'deployment'
+      ${cursor ? `AND ${DEPLOYMENT_LIST_STARTED_AT} <= ? AND (${DEPLOYMENT_LIST_STARTED_AT}, id) < (?, ?)` : ""}
+      ORDER BY ${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC LIMIT ?
+    `).all(...(cursor ? [cursor[0], cursor[0], cursor[1], limit + 1] as [number, number, string, number] : [limit + 1] as [number]));
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return { deployments: page.map(row => {
+      const value = JSON.parse(row.value);
+      // SQL bounds code points; presentation bounds UTF-16 units, including emoji.
+      if (options.compact) value.error = compactViewerDeploymentError(value.error);
+      return value;
+    }), hasMore,
+      nextCursor: hasMore && last ? viewerDeploymentListCursor(last.started_at, last.id) : null };
   }
 
   viewerDeployment(deploymentId: string): ViewerDeploymentStatus | null {

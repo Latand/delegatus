@@ -879,3 +879,27 @@ test("a configured key holding a space is carried, because the Viewer accepts it
   expect(await gatedControlRead("control plane gate key", "deployment-gated-spaced-read"))
     .toEqual({ read: { count: 1, deployments: [GATED_DEPLOYMENT] }, refusals: [] });
 });
+
+
+test("deployment_status forwards compact and cursor to the bounded HTTP list and preserves pagination", async () => {
+  const gets: string[] = [];
+  const rows = [{ deploymentId: "deployment-summary", phase: "succeeded", sha: "a".repeat(40), terminal: true,
+    startedAt: "2026-09-20T12:00:00Z", finishedAt: "2026-09-20T12:01:00Z", error: null }];
+  const control: ViewerControlDependencies = {
+    async get(pathname) { gets.push(pathname); return { count: 1, deployments: rows, hasMore: true, nextCursor: "next-page" }; },
+    async post() { throw new Error("unexpected write"); },
+  };
+  expect(await viewerMcpBindings(undefined, control).deployment_status({
+    clientRequestId: "bounded-compact", compact: true, limit: 2, cursor: "previous-page",
+  })).toEqual({ count: 1, deployments: rows, hasMore: true, nextCursor: "next-page" });
+  expect(gets).toEqual(["/api/runtime/deployments?limit=2&compact=true&cursor=previous-page"]);
+});
+
+test("deployment_status rejects a cursor ignored by an older Viewer instead of repeating page one", async () => {
+  const control: ViewerControlDependencies = {
+    async get() { return { count: 0, deployments: [] }; },
+    async post() { throw new Error("unexpected write"); },
+  };
+  await expect(viewerMcpBindings(undefined, control).deployment_status({ clientRequestId: "old-list-cursor", cursor: "opaque" }))
+    .rejects.toThrow("pagination is unavailable");
+});
