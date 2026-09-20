@@ -6598,8 +6598,25 @@ describe("live turn rows on a phone", () => {
           titleText: (title.textContent || "").trim(),
         };
       });
+      /* The canonical McpCallCard the live row hands over to, measured in the
+         same units. Recorded, not asserted: that card is another lane's file,
+         and a live row that reads better than the card it becomes is a gap
+         worth a number rather than a silent one. */
+      const canonicalMcp = transcript
+        ? [...transcript.querySelectorAll("[data-testid=mcp-call-card]")].map(card => {
+          const title = card.querySelector("summary > span.flex-1");
+          const summary = card.querySelector("summary");
+          if (!title || !summary) return null;
+          return {
+            rowWidth: Math.round(summary.getBoundingClientRect().width),
+            titleWidth: Math.round(title.getBoundingClientRect().width * 100) / 100,
+            chips: card.querySelectorAll("[data-testid^=mcp-link-]").length,
+          };
+        }).filter(Boolean)
+        : [];
       return {
         mcp,
+        canonicalMcp,
         rows: rows.length,
         height: Math.round(box.height),
         toolRows: rows.filter(row => row.hasAttribute("data-live-tool")).length,

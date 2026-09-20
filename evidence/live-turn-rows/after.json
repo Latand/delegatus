@@ -29,6 +29,7 @@
               "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
             }
           ],
+          "canonicalMcp": [],
           "rows": 8,
           "height": 221,
           "toolRows": 8,
@@ -55,6 +56,68 @@
         },
         "current": {
           "mcp": [],
+          "canonicalMcp": [
+            {
+              "rowWidth": 330,
+              "titleWidth": 129.53,
+              "chips": 0
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 39.36,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 20.5,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 1.27,
+              "chips": 2
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 129.53,
+              "chips": 0
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 20.5,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 42.31,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 129.53,
+              "chips": 0
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 129.53,
+              "chips": 0
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 39.36,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 20.5,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 1.27,
+              "chips": 2
+            }
+          ],
           "rows": 0,
           "height": 0,
           "toolRows": 0,
@@ -130,6 +193,7 @@
               "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
             }
           ],
+          "canonicalMcp": [],
           "rows": 4,
           "height": 192,
           "toolRows": 4,
@@ -170,6 +234,7 @@
               "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
             }
           ],
+          "canonicalMcp": [],
           "rows": 8,
           "height": 221,
           "toolRows": 8,
@@ -196,6 +261,68 @@
         },
         "current": {
           "mcp": [],
+          "canonicalMcp": [
+            {
+              "rowWidth": 330,
+              "titleWidth": 128,
+              "chips": 0
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 37.83,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 18.97,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 1.27,
+              "chips": 2
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 128,
+              "chips": 0
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 18.97,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 40.78,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 128,
+              "chips": 0
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 128,
+              "chips": 0
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 37.83,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 18.97,
+              "chips": 1
+            },
+            {
+              "rowWidth": 330,
+              "titleWidth": 1.27,
+              "chips": 2
+            }
+          ],
           "rows": 0,
           "height": 0,
           "toolRows": 0,
@@ -271,6 +398,7 @@
               "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
             }
           ],
+          "canonicalMcp": [],
           "rows": 4,
           "height": 192,
           "toolRows": 4,
