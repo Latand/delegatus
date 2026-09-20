@@ -1,4 +1,4 @@
-import type { Round } from "@/lib/flows/types";
+import type { Round } from "@/lib/reviewHistory/types";
 
 import type { Workflow } from "./types";
 

@@ -1,4 +1,4 @@
-import type { RoleConfig } from "@/lib/flows/types";
+import type { RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 
 // Shared contract for agent workflows (docs/design/agent-workflows.md).
 // This file is the seam between the server engine (src/lib/workflows/*) and

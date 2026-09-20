@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { lastAssistantMessageFromRecords } from "@/lib/flows/findings";
+import { lastAssistantMessageFromRecords } from "@/lib/scanner/lastAssistantMessage";
 import { tailRecords } from "@/lib/scanner/activity";
 
 import { redactBounded } from "./redact";
