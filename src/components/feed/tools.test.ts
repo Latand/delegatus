@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { familyLabelKey, summarizeTool, TOOL_FAMILIES, type ToolFamily } from "./tools";
+import { cleanShellCommand, familyLabelKey, summarizeTool, TOOL_FAMILIES, type ToolFamily } from "./tools";
 
 function sum(tool: string, args: Record<string, unknown>, engine: "claude" | "codex" = "claude") {
   return summarizeTool(tool, args, engine);
@@ -215,10 +215,54 @@ describe("a one-line label leads with the real command", () => {
     expect(label("python3 - <<'PY'\nimport json\nprint(json.dumps({}))\nPY")).toBe("python3 - «heredoc»");
   });
 
+  test("folds a value that carries a substitution or an expansion", () => {
+    // The space inside `$(mktemp -d)` is not a word boundary: reading it as one
+    // used to leave `-d) bun test` as the label.
+    expect(label("env REVIEW_TMP=$(mktemp -d) bun test src/demo.test.ts")).toBe("bun test src/demo.test.ts");
+    expect(label("env OUT=$(printf '%s' one) NOTE='two words' bun run build")).toBe("bun run build");
+    expect(label("env TMP_DIR=${DEMO_WORKSPACE:-/workspace demo} bun test src/demo.test.ts")).toBe("bun test src/demo.test.ts");
+    expect(label('env NOTE=a"b c"d bun run build')).toBe("bun run build");
+  });
+
+  test("keeps the whole command when a value uses syntax the fold will not guess at", () => {
+    const escaped = "env DEMO_NOTE=one\\ two bun run build";
+    expect(label(escaped)).toBe(escaped);
+    const backquoted = "DEMO_TMP=`mktemp -d` bun test src/demo.test.ts";
+    expect(label(backquoted)).toBe(backquoted);
+    const unterminated = "env DEMO_NOTE='two words bun run build";
+    expect(label(unterminated)).toBe(unterminated);
+  });
+
   test("the fold is bounded: a pathological wrapper chain still returns", () => {
     const nested = `${"sh -c '".repeat(200)}bun test${"'".repeat(200)}`;
     const started = Date.now();
     expect(label(nested).length).toBeGreaterThan(0);
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  test("a long flat assignment chain spends a fixed budget, then keeps the rest verbatim", () => {
+    // Every pass strips one assignment, so an uncapped fold is quadratic in the
+    // number of them; the caller hands this raw command in before any display
+    // limit applies. 100 000 assignments in front of the program.
+    const chain = `${"DEMO_A=x ".repeat(100_000)}echo ok`;
+    const started = Date.now();
+    const folded = cleanShellCommand(chain);
+    expect(Date.now() - started).toBeLessThan(250);
+    // The budget is spent on a bounded number of assignments and the fold then
+    // stops: what is left is the untouched tail, not a command cut in half.
+    expect(folded.endsWith("echo ok")).toBe(true);
+    expect(folded.startsWith("DEMO_A=x ")).toBe(true);
+    const stripped = (chain.match(/DEMO_A=x /g) ?? []).length - (folded.match(/DEMO_A=x /g) ?? []).length;
+    expect(stripped).toBeGreaterThan(0);
+    expect(stripped).toBeLessThanOrEqual(64);
+    // A chain short enough to fit the budget folds away completely.
+    expect(cleanShellCommand(`${"DEMO_A=x ".repeat(8)}echo ok`)).toBe("echo ok");
+  });
+
+  test("a single enormous value is refused rather than scanned to its end", () => {
+    const giant = `env DEMO_NOTE=${"x".repeat(200_000)} echo ok`;
+    const started = Date.now();
+    expect(cleanShellCommand(giant)).toBe(giant);
+    expect(Date.now() - started).toBeLessThan(250);
   });
 });

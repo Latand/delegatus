@@ -36,78 +36,78 @@
   ],
   "frames": {
     "390-dark-en-collapsed": {
-      "rows": 30,
+      "rows": 32,
       "overlaps": [
         {
-          "a": 9,
-          "b": 10,
+          "a": 10,
+          "b": 11,
           "aText": "git status --short21:50 · 200ms",
           "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 12,
-          "b": 13,
-          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
-          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
           "a": 13,
           "b": 14,
-          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
-          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
-        },
-        {
-          "a": 24,
-          "b": 25,
-          "aText": "git status --short21:50 · 200ms",
-          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 27,
-          "b": 28,
           "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
           "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
-          "a": 28,
-          "b": 29,
+          "a": 14,
+          "b": 15,
+          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
+          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
+        },
+        {
+          "a": 26,
+          "b": 27,
+          "aText": "git status --short21:50 · 200ms",
+          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
+        },
+        {
+          "a": 29,
+          "b": 30,
+          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
+          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
+        },
+        {
+          "a": 30,
+          "b": 31,
           "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
         }
       ],
       "escapes": [
         {
-          "row": 10,
+          "row": 11,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 13,
+          "row": 14,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 14,
+          "row": 15,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 25,
+          "row": 27,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 28,
+          "row": 30,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 29,
+          "row": 31,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
@@ -124,6 +124,10 @@
         },
         {
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
+          "height": 76
+        },
+        {
+          "text": "env DEMO_TMP=$(mktemp -d) DEMO_LOCALE=uk bun test src/compon",
           "height": 76
         },
         {
@@ -166,90 +170,90 @@
       "scrollWidth": 390
     },
     "390-dark-en-expanded": {
-      "rows": 46,
+      "rows": 48,
       "overlaps": [
         {
-          "a": 11,
-          "b": 12,
+          "a": 12,
+          "b": 13,
           "aText": "git status --short21:50 · 200ms",
           "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 14,
-          "b": 15,
-          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
-          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
           "a": 15,
           "b": 16,
-          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
-          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
-        },
-        {
-          "a": 16,
-          "b": 17,
-          "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
-          "bText": "1.git status --shortexit 0200ms"
-        },
-        {
-          "a": 34,
-          "b": 35,
-          "aText": "git status --short21:50 · 200ms",
-          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 37,
-          "b": 38,
           "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
           "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
-          "a": 38,
-          "b": 39,
+          "a": 16,
+          "b": 17,
           "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
         },
         {
+          "a": 17,
+          "b": 18,
+          "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
+          "bText": "1.git status --shortexit 0200ms"
+        },
+        {
+          "a": 36,
+          "b": 37,
+          "aText": "git status --short21:50 · 200ms",
+          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
+        },
+        {
           "a": 39,
           "b": 40,
+          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
+          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
+        },
+        {
+          "a": 40,
+          "b": 41,
+          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
+          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
+        },
+        {
+          "a": 41,
+          "b": 42,
           "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "bText": "1.git status --short200ms"
         }
       ],
       "escapes": [
         {
-          "row": 12,
+          "row": 13,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 15,
+          "row": 16,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 16,
+          "row": 17,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 35,
+          "row": 37,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 38,
+          "row": 40,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 39,
+          "row": 41,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
@@ -266,6 +270,10 @@
         },
         {
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
+          "height": 76
+        },
+        {
+          "text": "env DEMO_TMP=$(mktemp -d) DEMO_LOCALE=uk bun test src/compon",
           "height": 76
         },
         {
@@ -332,78 +340,78 @@
       "scrollWidth": 390
     },
     "390-dark-uk-collapsed": {
-      "rows": 30,
+      "rows": 32,
       "overlaps": [
         {
-          "a": 9,
-          "b": 10,
+          "a": 10,
+          "b": 11,
           "aText": "git status --short21:50 · 200 мс",
           "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 12,
-          "b": 13,
-          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
-          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
           "a": 13,
           "b": 14,
-          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
-          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
-        },
-        {
-          "a": 24,
-          "b": 25,
-          "aText": "git status --short21:50 · 200 мс",
-          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 27,
-          "b": 28,
           "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
           "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
-          "a": 28,
-          "b": 29,
+          "a": 14,
+          "b": 15,
+          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
+          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
+        },
+        {
+          "a": 26,
+          "b": 27,
+          "aText": "git status --short21:50 · 200 мс",
+          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
+        },
+        {
+          "a": 29,
+          "b": 30,
+          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
+          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
+        },
+        {
+          "a": 30,
+          "b": 31,
           "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
         }
       ],
       "escapes": [
         {
-          "row": 10,
+          "row": 11,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 35,
           "overflowX": 0
         },
         {
-          "row": 13,
+          "row": 14,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 14,
+          "row": 15,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 25,
+          "row": 27,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 35,
           "overflowX": 0
         },
         {
-          "row": 28,
+          "row": 30,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 29,
+          "row": 31,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
@@ -421,6 +429,10 @@
         {
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "height": 94
+        },
+        {
+          "text": "env DEMO_TMP=$(mktemp -d) DEMO_LOCALE=uk bun test src/compon",
+          "height": 76
         },
         {
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
@@ -462,90 +474,90 @@
       "scrollWidth": 390
     },
     "390-dark-uk-expanded": {
-      "rows": 46,
+      "rows": 48,
       "overlaps": [
         {
-          "a": 11,
-          "b": 12,
+          "a": 12,
+          "b": 13,
           "aText": "git status --short21:50 · 200 мс",
           "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 14,
-          "b": 15,
-          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
-          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
           "a": 15,
           "b": 16,
-          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
-          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
-        },
-        {
-          "a": 16,
-          "b": 17,
-          "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
-          "bText": "1.git status --shortкод виходу 0200 мс"
-        },
-        {
-          "a": 34,
-          "b": 35,
-          "aText": "git status --short21:50 · 200 мс",
-          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 37,
-          "b": 38,
           "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
           "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
-          "a": 38,
-          "b": 39,
+          "a": 16,
+          "b": 17,
           "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
         },
         {
+          "a": 17,
+          "b": 18,
+          "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
+          "bText": "1.git status --shortкод виходу 0200 мс"
+        },
+        {
+          "a": 36,
+          "b": 37,
+          "aText": "git status --short21:50 · 200 мс",
+          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
+        },
+        {
           "a": 39,
           "b": 40,
+          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
+          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
+        },
+        {
+          "a": 40,
+          "b": 41,
+          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
+          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
+        },
+        {
+          "a": 41,
+          "b": 42,
           "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "bText": "1.git status --short200 мс"
         }
       ],
       "escapes": [
         {
-          "row": 12,
+          "row": 13,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 35,
           "overflowX": 0
         },
         {
-          "row": 15,
+          "row": 16,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 16,
+          "row": 17,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 35,
+          "row": 37,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 35,
           "overflowX": 0
         },
         {
-          "row": 38,
+          "row": 40,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 39,
+          "row": 41,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
@@ -563,6 +575,10 @@
         {
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "height": 94
+        },
+        {
+          "text": "env DEMO_TMP=$(mktemp -d) DEMO_LOCALE=uk bun test src/compon",
+          "height": 76
         },
         {
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
@@ -628,78 +644,78 @@
       "scrollWidth": 390
     },
     "390-light-en-collapsed": {
-      "rows": 30,
+      "rows": 32,
       "overlaps": [
         {
-          "a": 9,
-          "b": 10,
+          "a": 10,
+          "b": 11,
           "aText": "git status --short21:50 · 200ms",
           "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 12,
-          "b": 13,
-          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
-          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
           "a": 13,
           "b": 14,
-          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
-          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
-        },
-        {
-          "a": 24,
-          "b": 25,
-          "aText": "git status --short21:50 · 200ms",
-          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 27,
-          "b": 28,
           "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
           "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
-          "a": 28,
-          "b": 29,
+          "a": 14,
+          "b": 15,
+          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
+          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
+        },
+        {
+          "a": 26,
+          "b": 27,
+          "aText": "git status --short21:50 · 200ms",
+          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
+        },
+        {
+          "a": 29,
+          "b": 30,
+          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
+          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
+        },
+        {
+          "a": 30,
+          "b": 31,
           "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
         }
       ],
       "escapes": [
         {
-          "row": 10,
+          "row": 11,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 13,
+          "row": 14,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 14,
+          "row": 15,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 25,
+          "row": 27,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 28,
+          "row": 30,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 29,
+          "row": 31,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
@@ -716,6 +732,10 @@
         },
         {
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
+          "height": 76
+        },
+        {
+          "text": "env DEMO_TMP=$(mktemp -d) DEMO_LOCALE=uk bun test src/compon",
           "height": 76
         },
         {
@@ -758,90 +778,90 @@
       "scrollWidth": 390
     },
     "390-light-en-expanded": {
-      "rows": 46,
+      "rows": 48,
       "overlaps": [
         {
-          "a": 11,
-          "b": 12,
+          "a": 12,
+          "b": 13,
           "aText": "git status --short21:50 · 200ms",
           "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 14,
-          "b": 15,
-          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
-          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
           "a": 15,
           "b": 16,
-          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
-          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
-        },
-        {
-          "a": 16,
-          "b": 17,
-          "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
-          "bText": "1.git status --shortexit 0200ms"
-        },
-        {
-          "a": 34,
-          "b": 35,
-          "aText": "git status --short21:50 · 200ms",
-          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 37,
-          "b": 38,
           "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
           "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
-          "a": 38,
-          "b": 39,
+          "a": 16,
+          "b": 17,
           "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
         },
         {
+          "a": 17,
+          "b": 18,
+          "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
+          "bText": "1.git status --shortexit 0200ms"
+        },
+        {
+          "a": 36,
+          "b": 37,
+          "aText": "git status --short21:50 · 200ms",
+          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
+        },
+        {
           "a": 39,
           "b": 40,
+          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
+          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
+        },
+        {
+          "a": 40,
+          "b": 41,
+          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
+          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
+        },
+        {
+          "a": 41,
+          "b": 42,
           "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "bText": "1.git status --short200ms"
         }
       ],
       "escapes": [
         {
-          "row": 12,
+          "row": 13,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 15,
+          "row": 16,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 16,
+          "row": 17,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 35,
+          "row": 37,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 38,
+          "row": 40,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 39,
+          "row": 41,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
@@ -858,6 +878,10 @@
         },
         {
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
+          "height": 76
+        },
+        {
+          "text": "env DEMO_TMP=$(mktemp -d) DEMO_LOCALE=uk bun test src/compon",
           "height": 76
         },
         {
@@ -924,78 +948,78 @@
       "scrollWidth": 390
     },
     "390-light-uk-collapsed": {
-      "rows": 30,
+      "rows": 32,
       "overlaps": [
         {
-          "a": 9,
-          "b": 10,
+          "a": 10,
+          "b": 11,
           "aText": "git status --short21:50 · 200 мс",
           "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 12,
-          "b": 13,
-          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
-          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
           "a": 13,
           "b": 14,
-          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
-          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
-        },
-        {
-          "a": 24,
-          "b": 25,
-          "aText": "git status --short21:50 · 200 мс",
-          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 27,
-          "b": 28,
           "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
           "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
-          "a": 28,
-          "b": 29,
+          "a": 14,
+          "b": 15,
+          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
+          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
+        },
+        {
+          "a": 26,
+          "b": 27,
+          "aText": "git status --short21:50 · 200 мс",
+          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
+        },
+        {
+          "a": 29,
+          "b": 30,
+          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
+          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
+        },
+        {
+          "a": 30,
+          "b": 31,
           "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
         }
       ],
       "escapes": [
         {
-          "row": 10,
+          "row": 11,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 35,
           "overflowX": 0
         },
         {
-          "row": 13,
+          "row": 14,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 14,
+          "row": 15,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 25,
+          "row": 27,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 35,
           "overflowX": 0
         },
         {
-          "row": 28,
+          "row": 30,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 29,
+          "row": 31,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
@@ -1013,6 +1037,10 @@
         {
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "height": 94
+        },
+        {
+          "text": "env DEMO_TMP=$(mktemp -d) DEMO_LOCALE=uk bun test src/compon",
+          "height": 76
         },
         {
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
@@ -1054,90 +1082,90 @@
       "scrollWidth": 390
     },
     "390-light-uk-expanded": {
-      "rows": 46,
+      "rows": 48,
       "overlaps": [
         {
-          "a": 11,
-          "b": 12,
+          "a": 12,
+          "b": 13,
           "aText": "git status --short21:50 · 200 мс",
           "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 14,
-          "b": 15,
-          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
-          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
           "a": 15,
           "b": 16,
-          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
-          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
-        },
-        {
-          "a": 16,
-          "b": 17,
-          "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
-          "bText": "1.git status --shortкод виходу 0200 мс"
-        },
-        {
-          "a": 34,
-          "b": 35,
-          "aText": "git status --short21:50 · 200 мс",
-          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
-        },
-        {
-          "a": 37,
-          "b": 38,
           "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
           "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
         },
         {
-          "a": 38,
-          "b": 39,
+          "a": 16,
+          "b": 17,
           "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
         },
         {
+          "a": 17,
+          "b": 18,
+          "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
+          "bText": "1.git status --shortкод виходу 0200 мс"
+        },
+        {
+          "a": 36,
+          "b": 37,
+          "aText": "git status --short21:50 · 200 мс",
+          "bText": "bun test src/components/feed/rows.test.ts --reporter=verbose"
+        },
+        {
           "a": 39,
           "b": 40,
+          "aText": "sandboxctl proxy sh -c 'cd /workspace/demo && bun run script",
+          "bText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/"
+        },
+        {
+          "a": 40,
+          "b": 41,
+          "aText": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
+          "bText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num"
+        },
+        {
+          "a": 41,
+          "b": 42,
           "aText": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "bText": "1.git status --short200 мс"
         }
       ],
       "escapes": [
         {
-          "row": 12,
+          "row": 13,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 35,
           "overflowX": 0
         },
         {
-          "row": 15,
+          "row": 16,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 16,
+          "row": 17,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
         },
         {
-          "row": 35,
+          "row": 37,
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
           "overflowY": 35,
           "overflowX": 0
         },
         {
-          "row": 38,
+          "row": 40,
           "text": "env DEMO_CONFIG_HOME=/workspace/demo/config DEMO_STATE_DIR=/",
           "overflowY": 26,
           "overflowX": 0
         },
         {
-          "row": 39,
+          "row": 41,
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "overflowY": 17,
           "overflowX": 0
@@ -1155,6 +1183,10 @@
         {
           "text": "rg --hidden --glob '!node_modules' --glob '!.git' --line-num",
           "height": 94
+        },
+        {
+          "text": "env DEMO_TMP=$(mktemp -d) DEMO_LOCALE=uk bun test src/compon",
+          "height": 76
         },
         {
           "text": "bun test src/components/feed/rows.test.ts --reporter=verbose",
@@ -1220,56 +1252,56 @@
       "scrollWidth": 390
     },
     "1280-dark-en-collapsed": {
-      "rows": 32,
+      "rows": 34,
       "overlaps": [],
       "escapes": [],
       "tall": [],
       "scrollWidth": 1280
     },
     "1280-dark-en-expanded": {
-      "rows": 36,
+      "rows": 38,
       "overlaps": [],
       "escapes": [],
       "tall": [],
       "scrollWidth": 1280
     },
     "1280-dark-uk-collapsed": {
-      "rows": 32,
+      "rows": 34,
       "overlaps": [],
       "escapes": [],
       "tall": [],
       "scrollWidth": 1280
     },
     "1280-dark-uk-expanded": {
-      "rows": 36,
+      "rows": 38,
       "overlaps": [],
       "escapes": [],
       "tall": [],
       "scrollWidth": 1280
     },
     "1280-light-en-collapsed": {
-      "rows": 32,
+      "rows": 34,
       "overlaps": [],
       "escapes": [],
       "tall": [],
       "scrollWidth": 1280
     },
     "1280-light-en-expanded": {
-      "rows": 36,
+      "rows": 38,
       "overlaps": [],
       "escapes": [],
       "tall": [],
       "scrollWidth": 1280
     },
     "1280-light-uk-collapsed": {
-      "rows": 32,
+      "rows": 34,
       "overlaps": [],
       "escapes": [],
       "tall": [],
       "scrollWidth": 1280
     },
     "1280-light-uk-expanded": {
-      "rows": 36,
+      "rows": 38,
       "overlaps": [],
       "escapes": [],
       "tall": [],

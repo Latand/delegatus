@@ -13,6 +13,7 @@ import {
   claudePhoneRowLines,
   codexPhoneRowLines,
   ENV_PREFIXED_COMMAND,
+  SUBSTITUTION_COMMAND,
   WRAPPED_COMMAND,
 } from "../__fixtures__/codexPhoneRows";
 
@@ -166,6 +167,25 @@ test("phone: the label leads with the real command, and the wrapper survives in 
     .find((details) => details.textContent?.includes("toolRow.dom.test.tsx"))!;
   click(envLine.querySelector("summary")!);
   expect(envLine.textContent).toContain(ENV_PREFIXED_COMMAND.replace(/\s+/g, " "));
+});
+
+test("phone: an assignment carrying a substitution folds whole, and the expanded block keeps it", () => {
+  narrowViewport = true;
+  const host = feed("codex");
+  const rows = [...host.querySelectorAll("[data-tool-row]")];
+  const folded = rows.map((row) => (labelOf(row)?.textContent ?? "").trim());
+  /* Reading the space inside `$(mktemp -d)` as a word boundary left `-d) bun
+     test …` on the row; the label now leads with the program either way. */
+  expect(folded).toContain("bun test src/components/feed/cards/toolRow.dom.test.tsx");
+  for (const label of folded) {
+    expect(label).not.toContain("-d)");
+    expect(label).not.toContain("DEMO_TMP");
+  }
+  const line = [...host.querySelectorAll("details")]
+    .filter((details) => details.textContent?.includes("toolRow.dom.test.tsx"))
+    .at(-1)!;
+  click(line.querySelector("summary")!);
+  expect(line.textContent).toContain(SUBSTITUTION_COMMAND);
 });
 
 test("both engines read the same eight rows with the same labels", () => {

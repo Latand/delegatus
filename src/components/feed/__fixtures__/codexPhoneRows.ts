@@ -1,7 +1,7 @@
 /* Hand-assembled tool records for the phone-width row evidence (#1938).
 
    Every value is invented: no real path, host, secret or command from a live
-   transcript appears here. The same eight cases are emitted for both engines so
+   transcript appears here. The same nine cases are emitted for both engines so
    a capture shows Codex rows beside Claude rows at the same width and the two
    can be compared line for line:
 
@@ -12,7 +12,10 @@
      5. a command behind leading `env` assignments,
      6. a very long single-line command,
      7. an MCP call,
-     8. a still-running command.
+     8. a still-running command,
+     9. a command whose leading assignment carries a substitution — the shape
+        that a fold reading the space inside `$(mktemp -d)` as a word boundary
+        cuts in half.
 
    Cases 1–6 also appear once as a grouped run that carries a failure, which is
    the shape that overlapped on the phone: a list of fixed-height rows whose
@@ -50,6 +53,9 @@ export const LONG_COMMAND =
 
 export const RUNNING_COMMAND = "bun run build";
 
+export const SUBSTITUTION_COMMAND =
+  "env DEMO_TMP=$(mktemp -d) DEMO_LOCALE=uk bun test src/components/feed/cards/toolRow.dom.test.tsx";
+
 export const FAILING_OUTPUT =
   "bun test v1.3.3\nsrc/components/feed/rows.test.ts:\n 12 pass\n 2 fail\n"
   + "error: expected the row box to contain its own label\n"
@@ -83,7 +89,7 @@ const claudeCall = (
   isError = false,
 ): string[] => [claudeUse(id, "Bash", { command }, ts), claudeResult(id, output, endTs, isError)];
 
-/** The Claude half of the comparison: the same eight cases, separated by short
+/** The Claude half of the comparison: the same nine cases, separated by short
     assistant lines so each one renders as its own standalone row. */
 export function claudePhoneRowLines(): string[] {
   return [
@@ -106,6 +112,8 @@ export function claudePhoneRowLines(): string[] {
     ],
     claudeText("Building now.", "2026-09-20T18:50:19Z"),
     claudeUse("c-run", "Bash", { command: RUNNING_COMMAND }, "2026-09-20T18:50:20Z"),
+    claudeText("Re-running the file under a scratch directory.", "2026-09-20T18:50:21Z"),
+    ...claudeCall("c-subst", SUBSTITUTION_COMMAND, "2026-09-20T18:50:22Z", "2026-09-20T18:50:23.500Z", "6 pass"),
     claudeText("A clean run of two commands folds to one line.", "2026-09-20T18:50:25Z"),
     ...claudeCall("c-c1", SHORT_COMMAND, "2026-09-20T18:50:26Z", "2026-09-20T18:50:26.200Z", " M src/demo.ts"),
     ...claudeCall("c-c2", WRAPPED_COMMAND, "2026-09-20T18:50:27Z", "2026-09-20T18:50:28.020Z", "wrote rows.json"),
@@ -156,7 +164,7 @@ const codexExec = (
 const codexText = (id: string, text: string, ts: string) =>
   codexItem({ type: "AgentMessage", id, text }, 0, 0, ts);
 
-/** The Codex half of the comparison: the same eight cases in the CLI's typed
+/** The Codex half of the comparison: the same nine cases in the CLI's typed
     `item_completed` envelopes, separated by short agent lines. */
 export function codexPhoneRowLines(): string[] {
   const t = (seconds: number) => 1789066200000 + seconds * 1000;
@@ -185,6 +193,8 @@ export function codexPhoneRowLines(): string[] {
     codexText("x-8", "Building now.", at(19)),
     codexItem({ type: "CommandExecution", id: "exec-run", command: ["sh", "-c", RUNNING_COMMAND], cwd: "/workspace/demo", status: "in_progress" },
       t(20), t(20), at(20), "item_started"),
+    codexText("x-11", "Re-running the file under a scratch directory.", at(21)),
+    codexExec("exec-subst", SUBSTITUTION_COMMAND, t(22), t(22) + 1500, at(22), { stdout: "6 pass" }),
     codexText("x-10", "A clean run of two commands folds to one line.", at(25)),
     codexExec("exec-c1", SHORT_COMMAND, t(26), t(26) + 200, at(26), { stdout: " M src/demo.ts" }),
     codexExec("exec-c2", WRAPPED_COMMAND, t(27), t(27) + 1020, at(27), { stdout: "wrote rows.json" }),
