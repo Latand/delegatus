@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
-import { reconcileMigrations } from "@/lib/accounts/migration/coordinator";
+import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import type { RuntimeHostClient } from "./client";
@@ -2699,7 +2699,7 @@ test("held delivery fences a missing runtime client without startup failure evid
   })).toBe("delivery-uncertain");
 });
 
-test("held delivery keeps a persisted structured owner fenced when startup failed", async () => {
+test("held delivery keeps a persisted structured owner queued when no dispatch was possible", async () => {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);
 
@@ -2714,7 +2714,64 @@ test("held delivery keeps a persisted structured owner fenced when startup faile
     client: () => null,
     registry: () => registry,
     startupFailed: () => true,
-  })).toBe("delivery-uncertain");
+  })).toBe("held");
+});
+
+test("an unsupported session read before dispatch retains the original held message and image for one later delivery", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const imageStore = new RuntimeImageStore(path.join(sandbox, "pre-dispatch-images"));
+  const images = imageStore.putMany([{ base64: PNG_BASE64, mime: "image/png" }]);
+  const held = registry.holdDelivery(conversation.id, "original message with image", "pre-dispatch-key", "runtime-images", images, null);
+  let ready = false;
+  const commands: unknown[] = [];
+  const client = {
+    readSession: sessionReader(async () => {
+      if (!ready) throw new Error("runtime request method is unsupported");
+      return snapshot(conversation.id, "codex", true);
+    }),
+    command: async (command: unknown) => { commands.push(command); return { operationId: held.command.operationId, receipt: { status: "delivered" } }; },
+    operationStatus: async () => ({ operationId: held.command.operationId, receipt: { status: "delivered" } }),
+  } as unknown as RuntimeHostClient;
+  const drain = () => drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId,
+      text: delivery.text, imageRefs: delivery.runtimeImages, command: delivery.command,
+    }, { enabled: () => true, client: () => client, registry: () => registry, kick: async () => {} }) ?? "delivery-uncertain",
+  }, registry);
+  await drain();
+  expect(commands).toHaveLength(0);
+  expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({
+    state: "assigned", clientMessageId: held.clientMessageId, command: held.command,
+    text: held.text, runtimeImages: images,
+  });
+  ready = true;
+  await drain();
+  await drain();
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toMatchObject({ operationId: held.command.operationId, idempotencyKey: held.clientMessageId, text: held.text, images });
+  expect(registry.snapshot().heldDeliveries[held.id]!.state).toBe("delivered");
+  registry.close();
+});
+
+test("a failed session read while reconciling an uncertain send does not authorize another attempt", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const held = registry.holdDelivery(conversation.id, "possibly already sent", "uncertain-read-key");
+  registry.beginDeliveryAttempt(held.id, conversation.generations.at(-1)!.id);
+  const before = registry.snapshot().heldDeliveries[held.id];
+  await drainHeldDeliveries(conversation.id, {
+    deliver: async () => { throw new Error("uncertain sends must only be reconciled"); },
+    reconcileUncertain: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId, text: delivery.text,
+    }, {
+      enabled: () => true, registry: () => registry,
+      client: () => ({ readSession: async () => { throw new Error("runtime request method is unsupported"); },
+        command: async () => { throw new Error("no command may be dispatched"); } }) as unknown as RuntimeHostClient,
+    }) ?? "delivery-uncertain",
+  }, registry);
+  expect(registry.snapshot().heldDeliveries[held.id]).toEqual(before);
+  registry.close();
 });
 
 test("held delivery authorizes legacy fallback from persisted tmux ownership", async () => {

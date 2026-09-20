@@ -58,13 +58,33 @@ test("indexed selections observe in-transaction inserts, changes and deletions",
   } finally { store.close(); }
 });
 
+test("conversation upserts retain overlapping generation and continuity paths", () => {
+  const { registry, conversation, delivery } = seed("overlapping-paths");
+  const state = registry.snapshot();
+  const row = state.conversations[conversation.id]!;
+  row.continuityPaths.push(row.generations[0]!.path);
+  row.generations.push({ ...row.generations[0]!, id: "repeated-path-generation" });
+  const filename = path.join(root, "overlapping-paths.sqlite");
+  let store = new SqliteAgentRegistryStore(filename, { initialSnapshot: state, normalize: normalizeRegistry });
+  try {
+    store.mutate(file => {
+      file.conversations[conversation.id]!.continuityPaths.push("/sessions/extra.jsonl");
+    }, false);
+    expect(store.read(file => registryConversationsForPath(file, "/sessions/target.jsonl").map(row => row.id))).toEqual([conversation.id]);
+    expect(store.snapshot().file.heldDeliveries[delivery.id]).toEqual(state.heldDeliveries[delivery.id]);
+    store.close();
+    store = new SqliteAgentRegistryStore(filename, { initialSnapshot: state, normalize: normalizeRegistry });
+    expect(store.read(file => registryConversationsForPath(file, "/sessions/extra.jsonl").map(row => row.id))).toEqual([conversation.id]);
+  } finally { store.close(); registry.close(); }
+});
+
 test("a pre-index SQLite registry backfills historical paths and old ownerless reservations", () => {
   const { registry, conversation, delivery } = seed("upgrade");
   const filename = path.join(root, "upgrade.sqlite");
   let store = new SqliteAgentRegistryStore(filename, { initialSnapshot: registry.snapshot(), normalize: normalizeRegistry });
   store.close();
   const legacy = new Database(filename);
-  legacy.exec("DROP TRIGGER registry_paths_insert; DROP TRIGGER registry_paths_update; DROP TRIGGER registry_paths_delete; DROP TABLE registry_conversation_paths; DELETE FROM registry_meta WHERE key='conversation_paths_ready'; DELETE FROM registry_rows WHERE collection='deliveryOperationOwners'");
+  legacy.exec("DROP TRIGGER registry_paths_insert; DROP TRIGGER registry_paths_update; DROP TRIGGER registry_paths_delete; DROP TABLE registry_conversation_paths; DELETE FROM registry_meta WHERE key IN ('conversation_paths_ready', 'conversation_paths_trigger_version'); DELETE FROM registry_rows WHERE collection='deliveryOperationOwners'");
   const before = legacy.query("SELECT value_json FROM registry_rows WHERE collection='conversations'").all();
   legacy.close();
   store = new SqliteAgentRegistryStore(filename, { initialSnapshot: registry.snapshot(), normalize: normalizeRegistry });
@@ -75,5 +95,35 @@ test("a pre-index SQLite registry backfills historical paths and old ownerless r
     const db = new Database(filename, { readonly: true });
     expect(db.query("SELECT value_json FROM registry_rows WHERE collection='conversations'").all()).toEqual(before);
     db.close();
+    store.mutate(file => { file.conversations[conversation.id]!.continuityPaths.push("/sessions/after-backfill.jsonl"); }, false);
+    expect(store.read(file => registryConversationsForPath(file, "/sessions/after-backfill.jsonl").map(row => row.id))).toEqual([conversation.id]);
   } finally { store.close(); }
+});
+
+test("opening an existing path index upgrades triggers for already connected upsert writers", () => {
+  const { registry, conversation } = seed("trigger-upgrade");
+  const state = registry.snapshot();
+  state.conversations[conversation.id]!.continuityPaths.push("/sessions/target.jsonl");
+  const filename = path.join(root, "trigger-upgrade.sqlite");
+  let store = new SqliteAgentRegistryStore(filename, { initialSnapshot: state, normalize: normalizeRegistry });
+  store.close();
+  const writer = new Database(filename);
+  writer.exec(`DROP TRIGGER registry_paths_update;
+    CREATE TRIGGER registry_paths_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
+      DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
+      INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL;
+      INSERT OR IGNORE INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths');
+    END;
+    DELETE FROM registry_meta WHERE key = 'conversation_paths_trigger_version';`);
+  const before = writer.query("SELECT * FROM registry_rows ORDER BY collection, row_key").all();
+  store = new SqliteAgentRegistryStore(filename, { initialSnapshot: state, normalize: normalizeRegistry });
+  try {
+    expect(writer.query("SELECT * FROM registry_rows ORDER BY collection, row_key").all()).toEqual(before);
+    const row = structuredClone(state.conversations[conversation.id]!);
+    row.continuityPaths.push("/sessions/upgraded.jsonl");
+    writer.query(`INSERT INTO registry_rows(collection, row_key, value_json, row_order) VALUES ('conversations', ?, ?, 0)
+      ON CONFLICT(collection, row_key) DO UPDATE SET value_json = excluded.value_json`).run(conversation.id, JSON.stringify(row));
+    expect(store.read(file => registryConversationsForPath(file, "/sessions/upgraded.jsonl").map(row => row.id))).toEqual([conversation.id]);
+    expect(store.read(file => registryConversationsForPath(file, "/sessions/target.jsonl").map(row => row.id))).toEqual([conversation.id]);
+  } finally { writer.close(); store.close(); registry.close(); }
 });
