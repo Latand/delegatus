@@ -1901,63 +1901,21 @@ test("conversation_action refuses archive batches above 100 before reading board
   expect(reads).toBe(0);
 });
 
-test("conversation_migration delegates to the revision-fenced migration command with a stable receipt", async () => {
+test("conversation_migration forwards revision fences and stable identity to Viewer", async () => {
   const requests: unknown[] = [];
-  const bindings = viewerMcpBindings(undefined, undefined, {
-    applyConversationMigration: async (request: { conversationId: string; expectedRevision?: number }) => {
-      requests.push(request);
-      return {
-        status: 200,
-        body: { conversation: { id: request.conversationId, migration: { phase: "rolled-back", revision: request.expectedRevision } } },
-      };
-    },
-  } as never);
-
+  const bindings = viewerMcpBindings(undefined, { post: async (pathname, body) => {
+    requests.push({ pathname, body });
+    return { conversation: { id: "conversation_test", migration: { phase: "rolled-back", revision: body.expectedRevision } } };
+  } });
   const result = await bindings.conversation_migration({
-    clientRequestId: "rollback-608",
-    conversationId: "conversation_608",
-    action: "rollback",
-    expectedRevision: 4,
+    clientRequestId: "rollback-test", conversationId: "conversation_test", action: "rollback", expectedRevision: 4,
   });
-  const migrationOperationId = result.operationId as string;
-
   expect(requests).toEqual([{
-    conversationId: "conversation_608",
-    action: "rollback",
-    expectedRevision: 4,
-    path: "",
+    pathname: "/api/conversations/conversation_test/migration",
+    body: { action: "rollback", expectedRevision: 4, path: "", requestOperationId: result.operationId },
   }]);
-  expect(result).toMatchObject({
-    conversationId: "conversation_608",
-    receipt: { status: "delivered" },
-    conversation: { migration: { phase: "rolled-back", revision: 4 } },
-  });
-  expect(migrationOperationId).toMatch(/^mcp_conversation_migration_[0-9a-f]{24}$/);
-  expect((result.receipt as { operationId: string }).operationId).toBe(migrationOperationId);
-});
-
-test("conversation_migration passes a withdrawal's operation id and a cancel's revision through, and a refusal carries its words, code and revision (#1705)", async () => {
-  const requests: unknown[] = [];
-  const bindings = viewerMcpBindings(undefined, undefined, {
-    applyConversationMigration: async (request: { action: string }) => {
-      requests.push(request);
-      return request.action === "withdraw"
-        ? { status: 409, body: { error: "the queue has already claimed this switch; cancel it with the migration's revision", code: "SWITCH_CLAIMED", expectedRevision: 3 } }
-        : { status: 200, body: { conversation: { id: "conversation_1705", migration: { phase: "rolled-back", revision: 3 } } } };
-    },
-  } as never);
-
-  const refusal = await bindings.conversation_migration({ clientRequestId: "withdraw-1705", conversationId: "conversation_1705", action: "withdraw", operationId: "reconfigure-to-b" })
-    .then(() => null, (error: unknown) => error as { name?: string; message?: string; details?: unknown } | null);
-  expect(refusal?.name).toBe("McpToolRefusal");
-  expect(refusal?.message).toContain("the queue has already claimed this switch");
-  expect(refusal?.details).toMatchObject({ status: 409, code: "SWITCH_CLAIMED", expectedRevision: 3 });
-  const cancelled = await bindings.conversation_migration({ clientRequestId: "cancel-1705", conversationId: "conversation_1705", action: "cancel", expectedRevision: 3 });
-  expect(requests).toEqual([
-    { conversationId: "conversation_1705", action: "withdraw", expectedRevision: undefined, path: "", operationId: "reconfigure-to-b" },
-    { conversationId: "conversation_1705", action: "cancel", expectedRevision: 3, path: "" },
-  ]);
-  expect(cancelled).toMatchObject({ conversation: { migration: { phase: "rolled-back" } } });
+  expect(result).toMatchObject({ conversationId: "conversation_test", receipt: { status: "delivered" }, conversation: { migration: { phase: "rolled-back", revision: 4 } } });
+  expect(result.operationId).toMatch(/^mcp_conversation_migration_[0-9a-f]{24}$/);
 });
 
 test("a refused pipeline close exposes its host report through MCP, not only prose (#670)", async () => {

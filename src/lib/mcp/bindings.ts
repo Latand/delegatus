@@ -25,7 +25,6 @@ import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { applyConversationMigration } from "@/lib/accounts/migration/conversationCommand";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
@@ -526,6 +525,7 @@ async function dispatchViewerControl(
     throw new McpDispatchVerdictError(message, {
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
+      ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
     });
   }
   return result;
@@ -613,7 +613,6 @@ export interface ViewerMcpDomainDependencies {
   loadTasks: typeof loadTasks;
   collectSnapshot: typeof collectSnapshot;
   readResources: typeof readResources;
-  applyConversationMigration: typeof applyConversationMigration;
   /** Sources for the liveness read. The catalog seam travels in (#860) so a
       project-scoped `agent_activity` consumes the SAME completed generation
       `board_snapshot` reads instead of forcing a private whole-corpus sweep.
@@ -1038,7 +1037,6 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   loadTasks,
   collectSnapshot,
   readResources,
-  applyConversationMigration,
   livenessSources: productionLivenessSources,
   queryLifecycleEvents,
   pollLifecycleDigest,
@@ -3797,33 +3795,38 @@ async function conversationAction(
   });
 }
 
-async function conversationMigration(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function conversationMigration(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   const conversationId = required(args, "conversationId");
   const operationId = mcpOperationId("conversation_migration", requestId(args));
-  const result = await dependencies.applyConversationMigration({
-    conversationId,
+  // The Viewer owns the runtime connection. Keep the request's identity separate
+  // from operationId, which names the existing switch for a withdrawal.
+  const body = await dispatchControl(control)(`/api/conversations/${encodeURIComponent(conversationId)}/migration`, {
+    requestOperationId: operationId,
     action: required(args, "action"),
     expectedRevision: typeof args.expectedRevision === "number" ? args.expectedRevision : undefined,
     path: text(args.transcriptPath) || text(args.path),
     ...(typeof args.operationId === "string" ? { operationId: args.operationId } : {}),
+    ...(args.accountId !== undefined ? { accountId: args.accountId } : {}),
+    ...(args.targetAccountId !== undefined ? { targetAccountId: args.targetAccountId } : {}),
+  }, callerCapabilityHeaders()).catch((error: unknown) => {
+    if (error instanceof McpDispatchUncertainError) {
+      throw new McpDispatchUncertainError(error.message, { operationId });
+    }
+    // A server error may follow runtime admission. Only these two codes prove
+    // that the migration owner refused before issuing any command.
+    if (error instanceof McpDispatchVerdictError && Number(error.details.status) >= 500
+      && error.details.code !== "runtime-host-unavailable" && error.details.code !== "RUNTIME_UNREADABLE") {
+      throw new McpDispatchUncertainError(error.message, { operationId });
+    }
+    throw error;
   });
-  if ("error" in result.body && typeof result.body.error === "string") {
-    /* #1705: a refusal carries what to do next, the claimed switch's code and the revision to cancel it by. */
-    const body = result.body as { error: string; code?: unknown; expectedRevision?: unknown };
-    throw new McpToolRefusal(body.error, {
-      error: body.error,
-      status: result.status,
-      ...(typeof body.code === "string" ? { code: body.code } : {}),
-      ...(typeof body.expectedRevision === "number" || body.expectedRevision === null ? { expectedRevision: body.expectedRevision } : {}),
-    });
-  }
-  const conversation = result.body.conversation
-    ?? (typeof result.body.id === "string" && result.body.id.startsWith("conversation_") ? result.body : undefined);
+  const conversation = body.conversation
+    ?? (typeof body.id === "string" && body.id.startsWith("conversation_") ? body : undefined);
   return redactPayload({
     conversationId,
-    ...result.body,
+    ...body,
     ...(conversation ? { conversation } : {}),
-    ...mutationReceipt(operationId),
+    ...(body.receipt ? {} : mutationReceipt(operationId)),
   });
 }
 
@@ -4718,7 +4721,7 @@ export function viewerMcpBindings(
     deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context)),
     resources: (args) => resources(args, domainDependencies),
     conversation_action: (args, context) => conversationAction(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
-    conversation_migration: (args) => conversationMigration(args, domainDependencies),
+    conversation_migration: (args, context) => conversationMigration(args, viewerControlForCall(controlDependencies, context)),
     agent_activity: (args, context) => agentActivity(args, domainDependencies, context),
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
