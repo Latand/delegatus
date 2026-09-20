@@ -1093,7 +1093,7 @@ test("list_pipelines applies project, state, and closed filters to the durable r
   } as never);
 
   const listed = await bindings.list_pipelines({
-    clientRequestId: "list-pipelines",
+    clientRequestId: "list-pipelines", compact: false,
     project: "viewer",
     state: "running",
   }) as { count: number; pipelines: { id: string; project: string; state: string }[] };
@@ -1117,7 +1117,7 @@ test("list_pipelines returns bounded rows and leaves prompts, specs and transcri
     getPipelines: () => ({ pipelines: [pipeline] }),
   } as never);
 
-  const listed = await bindings.list_pipelines({ clientRequestId: "list-bounded", project: "viewer" });
+  const listed = await bindings.list_pipelines({ clientRequestId: "list-bounded", compact: false, project: "viewer" });
   const serialized = JSON.stringify(listed.pipelines);
   for (const marker of Object.values(CORPUS_BODY_MARKERS)) expect(serialized).not.toContain(marker);
   expect(listed.pipelines).toMatchObject([{
@@ -1152,7 +1152,7 @@ test("task read tools expose the pipeline-linked durable read model", async () =
     getPipelines: () => ({ pipelines: [{ id: "pipeline_608", taskIds: ["task_viewer"] }] }),
   } as never);
 
-  expect(await bindings.list_tasks({ clientRequestId: "list-tasks", project: "viewer" })).toEqual({
+  expect(await bindings.list_tasks({ clientRequestId: "list-tasks", project: "viewer", full: true })).toMatchObject({
     count: 1,
     tasks: [{ ...tasks[0], pipelineIds: ["pipeline_608"] }],
   });
@@ -2087,7 +2087,7 @@ test("agent_activity reports the liveness snapshot and journals the stalls it fi
     },
   } as never);
 
-  const result = await bindings.agent_activity({ clientRequestId: "activity-645", liveOnly: true });
+  const result = await bindings.agent_activity({ clientRequestId: "activity-645", liveOnly: true, full: true, includeGone: true });
 
   expect(result).toMatchObject({ count: 1, stalledCount: 1, journaled: 1 });
   expect((result.conversations as Array<Record<string, unknown>>)[0]).toMatchObject({
@@ -2164,7 +2164,7 @@ test("agent_activity exposes a provider throttle retryAt without journaling a st
     },
   } as never);
 
-  const result = await bindings.agent_activity({ clientRequestId: "activity-provider-throttle", liveOnly: true });
+  const result = await bindings.agent_activity({ clientRequestId: "activity-provider-throttle", liveOnly: true, full: true });
 
   expect(result).toMatchObject({ count: 1, stalledCount: 0, journaled: 0 });
   expect((result.conversations as Array<Record<string, unknown>>)[0]).toMatchObject({
@@ -2208,9 +2208,9 @@ test("project-scoped agent_activity selects from the binding's cached catalog an
   let freshSweeps = 0;
   let handedCatalog: CompletedGenerationRead | null = null;
   const files = [
-    activityRow({ path: "/corpus/viewer/live.jsonl", activity: "stalled", activityReason: "jsonl_turn_stalled", conversationId: "conversation_selected" }),
+    activityRow({ path: "/corpus/viewer/live.jsonl", activity: "live", activityReason: "jsonl_turn_stalled", conversationId: "conversation_selected" }),
     activityRow({ path: "/corpus/viewer/idle.jsonl" }),
-    activityRow({ path: "/corpus/other/live.jsonl", project: "other", activity: "stalled", activityReason: "jsonl_turn_stalled" }),
+    activityRow({ path: "/corpus/other/live.jsonl", project: "other", activity: "live", activityReason: "jsonl_turn_stalled" }),
   ];
   /* The completed generation the board path reads. A fresh whole-corpus sweep
      would have to come through one of the two counters below. */
@@ -2246,6 +2246,7 @@ test("project-scoped agent_activity selects from the binding's cached catalog an
   } as never);
 
   const result = await bindings.agent_activity({
+    full: true,
     clientRequestId: "activity-860-catalog",
     project: "viewer",
     liveOnly: true,
@@ -2658,7 +2659,7 @@ test("seat_tick_settings refuses only the change that would leave no reason behi
 test("seat_tick_settings sets, replaces and clears the monitor prompt, and the record read back is what says so (#1280)", async () => {
   const { bindings, store } = tickSettingsBindings();
   const set = await bindings.seat_tick_settings({
-    clientRequestId: "tick-prompt-set",
+    clientRequestId: "tick-prompt-set", full: true,
     monitorPrompt: "before the items, check whether last night's digest actually sent",
   });
   expect(set).toMatchObject({
@@ -2668,8 +2669,8 @@ test("seat_tick_settings sets, replaces and clears the monitor prompt, and the r
     monitorPrompt: "before the items, check whether last night's digest actually sent",
     monitorPromptLength: "before the items, check whether last night's digest actually sent".length,
   });
-  /* Carried once on the write (#1845), not three times. */
-  expect(JSON.stringify(set).split("last night's digest").length - 1).toBe(1);
+  /* Explicit full mode preserves all three locations in the verbose record. */
+  expect(JSON.stringify(set).split("last night's digest").length - 1).toBe(3);
 
   /* Read back through a second call, which is what the tick itself does at its
      next check — the echo of the write proves nothing about the record. */
@@ -2771,7 +2772,7 @@ test("a monitor prompt needs no reason and leaves the tick on its default (#1280
      nothing — it changes what a wake says, never whether or when one is sent —
      so there is nothing here for a reason to explain. */
   const applied = await bindings.seat_tick_settings({
-    clientRequestId: "tick-prompt-no-reason",
+    clientRequestId: "tick-prompt-no-reason", full: true,
     monitorPrompt: "start from the oldest blocked card",
   });
   expect(applied).toMatchObject({

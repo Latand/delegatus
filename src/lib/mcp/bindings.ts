@@ -89,8 +89,8 @@ import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { createPipelineFromRequest, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
-import { projectTaskPipelineIds, type TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
-import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, projectPipelineCompactRows, projectPipelineListRows } from "@/lib/pipelines/listProjection";
+import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
+import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, pipelineListRow } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList, pipelineDeliveryLookup } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction } from "@/lib/pipelines/types";
@@ -140,7 +140,7 @@ import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
-import { loadTasks, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasks, loadTasksForList, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { collectSnapshot } from "@/lib/view/collect";
@@ -179,6 +179,8 @@ import {
   stageReportAcknowledgement,
   type AccountLimitsInput,
 } from "./compactAnswers";
+import { changedFieldNames, fieldValues, compactTask, firstLine, fullAnswer, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
+
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import {
   productionSelectedContextDependencies,
@@ -611,8 +613,10 @@ export interface ViewerMcpDomainDependencies {
       only `getPipelines` still project from it. */
   listPipelineRecords?(): readonly Pipeline[];
   patchPipeline: typeof patchPipeline;
+  readPipelineRecord?: typeof getPipelineRecord;
   reportStageCompletion: typeof reportStageCompletion;
   loadTasks: typeof loadTasks;
+  listTaskRecords?(): readonly import("@/lib/tasks/types").BoardTask[];
   collectSnapshot: typeof collectSnapshot;
   readResources: typeof readResources;
   readResourcesWithDiagnostic?: typeof readResourcesWithDiagnostic;
@@ -1036,7 +1040,9 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   closeFlow,
   getPipelines,
   listPipelineRecords: loadPipelinesForList,
+  listTaskRecords: loadTasksForList,
   patchPipeline,
+  readPipelineRecord: getPipelineRecord,
   reportStageCompletion,
   loadTasks,
   collectSnapshot,
@@ -1355,7 +1361,7 @@ async function createBoardTask(args: McpToolArgs): Promise<McpToolPayload> {
     };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
-  return { taskId: result.task.id, task: result.task, replay: result.replay };
+  return { ...taskAcknowledgement(result.task, args, result.replay ? [] : Object.keys(result.task)), replay: result.replay };
 }
 
 /**
@@ -1373,25 +1379,37 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     throw new McpToolRefusal("refine needs an identified calling conversation; the Viewer MCP session carries it", { code: "TASK_INVALID_FIELD", field: "refine", status: 403 });
   }
   const taskId = typeof args.taskId === "string" && args.taskId.trim() ? args.taskId.trim() : null;
+  const changes: Record<string, string[]> = {};
   const result = mutateTasks((tasks) => {
+    const before = new Map(tasks.map(task => [task.id, fieldValues(task)]));
     const outcome = refineTask(tasks, { callerConversationId: caller.conversationId!, taskId, text });
+    if (outcome.ok) for (const entry of outcome.refined) {
+      const task = outcome.tasks.find(task => task.id === entry.taskId)!;
+      changes[entry.taskId] = changedFieldNames(before.get(entry.taskId) ?? new Map(), task);
+    }
     return { tasks: outcome.ok && outcome.refined.some((entry) => entry.result === "applied") ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD", field: "refine", status: result.status });
   const byId = new Map(result.tasks.map((task) => [task.id, task] as const));
-  return { refined: result.refined, tasks: result.refined.map((entry) => byId.get(entry.taskId)).filter(Boolean) };
+  return { refined: result.refined, changedFields: [...new Set(Object.values(changes).flat())], changedFieldsByTask: changes, tasks: result.refined.map((entry) => {
+    const task = byId.get(entry.taskId)!;
+    return fullAnswer(args) ? task : compactTask(task);
+  }), omittedRecordCount: fullAnswer(args) ? 0 : result.refined.length, readMore: "get_task(taskId) or update_task with full:true returns the full task." };
 }
 
 async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   if (args.refine !== undefined) return refineBoardTask(args, dependencies);
   const taskId = required(args, "taskId");
-  const patch = withoutKeys(args, ["taskId", "clientRequestId"]);
+  const patch = withoutKeys(args, ["taskId", "clientRequestId", "full", "compact"]);
+  let changedFields: string[] = [];
   const result = mutateTasks((tasks) => {
+    const before = fieldValues(tasks.find(task => task.id === taskId));
     const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding });
+    if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
-  return { taskId, task: result.task };
+  return taskAcknowledgement(result.task, args, changedFields);
 }
 
 /**
@@ -1454,7 +1472,11 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): 
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
-  const request = withoutKeys(args, ["pipelineId", "clientRequestId"]);
+  const request = withoutKeys(args, ["pipelineId", "clientRequestId", "full", "compact"]);
+  const before = dependencies.readPipelineRecord
+    ? dependencies.readPipelineRecord(pipelineId)
+    : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
+  const beforeFields = fieldValues(before);
   /* Pause, resume and graph edits carry the calling agent as their actor. */
   const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
@@ -1473,6 +1495,11 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
      pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
   return redactPayload({
     ...pipelineActionAcknowledgement(result.pipeline),
+    revision: recordRevision(result.pipeline),
+    changedFields: changedFieldNames(beforeFields, result.pipeline),
+    taskIds: result.pipeline.taskIds,
+    ...(fullAnswer(args) ? { pipeline: result.pipeline } : { omittedRecordCount: 1 }),
+    readMore: "get_pipeline(pipelineId) or pipeline_action with full:true returns the full record.",
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
@@ -1521,10 +1548,12 @@ async function linkTaskToPipeline(args: McpToolArgs, dependencies: LinkTaskToPip
   const conversationId = member?.conversationId ?? pipeline.srcConversationId;
   if (!transcriptPath && !conversationId) throw new Error("pipeline has no conversation to link");
   const at = dependencies.isoNow();
+  let changedFields: string[] = [];
   /* The task lock is taken before the callback runs, so a busy refusal here
      proves the assignment was never written (#1766). */
   const result = await refuseBusyBeforeAdmission((admitted) => dependencies.mutateTasks((tasks) => {
     admitted();
+    const before = fieldValues(tasks.find(task => task.id === taskId));
     const outcome = applyAssignmentPatches(tasks, taskId, [{
       path: transcriptPath,
       conversationId,
@@ -1533,10 +1562,11 @@ async function linkTaskToPipeline(args: McpToolArgs, dependencies: LinkTaskToPip
       error: null,
       at,
     }], at);
+    if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   }));
   if (!result.ok) throw new Error(result.error);
-  return { taskId, pipelineId, task: result.task, conversationId, transcriptPath };
+  return { ...taskAcknowledgement(result.task, args, changedFields), pipelineId, conversationId, transcriptPath };
 }
 
 function throwIfCallEnded(context: McpToolCallContext): void {
@@ -1892,6 +1922,7 @@ async function listConversations(
   if (project) params.set("project", project);
   if (query) params.set("q", query);
   params.set("limit", String(limit));
+  if (text(args.cursor)) params.set("cursor", text(args.cursor));
   /* The Viewer's conversation endpoint projects the uncapped catalog published
      by the scanner worker. Its scheme feed can omit projects beyond the board's
      recent-project window even while their catalog rows remain current. */
@@ -1929,11 +1960,14 @@ async function listConversations(
       conversationId: entry.conversationId ?? null,
       transcriptPath: entry.path,
       project: entry.project,
-      title: entry.title,
+      title: fullAnswer(args) ? entry.title : firstLine(entry.title ?? ""),
       engine: entry.engine,
       activity: entry.activity,
     }));
-  return redactPayload({ count: rows.length, conversations: rows });
+  return redactPayload({ count: rows.length, total: source.total, conversations: rows,
+    nextCursor: source.nextCursor ?? null, hasMore: Boolean(source.nextCursor),
+    omittedCount: Math.max(0, source.total - rows.length), omittedRecordCount: fullAnswer(args) ? 0 : rows.length,
+    readMore: "Pass nextCursor as cursor with the same filters. compact:false retains the full title; get_conversation reads one conversation." });
 }
 
 async function searchTranscripts(
@@ -2742,10 +2776,10 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
   /* #1845: the note is the one large field here, and a seat changing its
      cadence was reading its own note back three times on every call. It is
-     carried once on the call that writes it and on a `verbose` read; every
-     other answer carries its length, which is how a caller sees it is there. */
-  const verbose = args.verbose === true;
-  const echoPrompt = verbose || change.monitorPrompt !== undefined;
+     carried only on an explicit full/verbose read; every
+     default answer carries its length, which is how a caller sees it is there. */
+  const verbose = args.verbose === true || args.full === true;
+  const echoPrompt = verbose || args.full === true;
   const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
   /* The same rule for the other repeats: the stored reason is carried once,
      under `effective`, unless an expiry has already set the two apart, and the
@@ -2761,11 +2795,14 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     callerProject: own,
     scope: own === project ? "own-project" : "other-project",
     settings: verbose ? settings : compactSettings,
-    /* The stored note in full and its length (#1450), so a seat can check what
-       persisted against what it sent without reading the file. The wake shows
+    /* The stored note is an explicit read; its length acknowledges a write. The wake shows
        only a marked preview of a long note; this is the whole of it. */
     ...(echoPrompt ? { monitorPrompt: storedPrompt } : {}),
     monitorPromptLength: storedPrompt?.length ?? 0,
+    revision: recordRevision(settings),
+    changedFields: Object.keys(change),
+    omittedFieldCount: echoPrompt ? 0 : 1,
+    readMore: "seat_tick_settings with verbose:true or full:true reads the complete stored note and settings.",
     effective: {
       enabled: effective.enabled,
       wakeIntervalMinutes: Math.round(effective.wakeIntervalMs / 60_000),
@@ -3086,6 +3123,7 @@ async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
     return redactPayload({
       pipelineId,
       ...pipelineCompactRow(pipeline),
+      taskIds: pipeline.taskIds,
       stageDigests: stageDigests(pipeline.stages),
       graphDigest: graphDigest(pipeline.stages),
     });
@@ -3209,68 +3247,92 @@ async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   return redactPayload({ flowId, flow: result.flow, ...mutationReceipt(operationId) });
 }
 
-/** #863: bounded board-card rows, never whole `Pipeline` records. The filters,
-    ordering and `limit` bound are unchanged — only what a surviving row carries
-    is, and `get_pipeline` remains the full-detail read. `context` reaches the
-    projection so a caller's deadline can abandon the call. */
+/** Lists reuse the store's immutable generation and materialize one page. */
 async function listPipelines(
   args: McpToolArgs,
   dependencies: ViewerMcpDomainDependencies,
   context: McpToolCallContext = {},
 ): Promise<McpToolPayload> {
-  const filter = {
-    project: text(args.project),
-    state: text(args.state),
-    includeClosed: args.includeClosed === true,
-    limit: integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT),
-  };
-  const options = {
-    checkpoint: () => throwIfCallEnded(context),
-    source: dependencies.listPipelineRecords ?? (() => dependencies.getPipelines().pipelines),
-  };
-  const pipelines = args.compact === true
-    ? await projectPipelineCompactRows(filter, options)
-    : await projectPipelineListRows(filter, options);
-  return redactPayload({ count: pipelines.length, pipelines });
+  throwIfCallEnded(context);
+  const states = stringSet(args.state, ["open", "draft", "provisioning", "running", "paused", "needs_decision", "completed", "closed"]);
+  const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
+    ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(), updatedSince: sinceTime(args.updatedSince) };
+  const records = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines;
+  const page = await listPageAsync(records, {
+    scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))),
+    identity: pipeline => ({ id: pipeline.id, time: pipeline.createdAt ?? "" }),
+    matches: pipeline => (!scope.project || pipeline.project === scope.project)
+      && (!states.length || states.includes(pipeline.state) || (states.includes("open") && !["completed", "closed"].includes(pipeline.state)))
+      && (scope.includeClosed || (pipeline.state !== "closed" && !pipeline.hiddenAt))
+      && (!scope.ids.length || scope.ids.includes(pipeline.id))
+      && (!scope.query || pipeline.task.toLowerCase().includes(scope.query))
+      && (!scope.updatedSince || pipeline.createdAt >= scope.updatedSince),
+    project: pipeline => args.full === true ? pipeline : args.compact === false ? pipelineListRow(pipeline) : pipelineCompactRow(pipeline),
+  }, () => throwIfCallEnded(context));
+  throwIfCallEnded(context);
+  const { rows: pipelines, ...pagination } = page;
+  return redactPayload({ ...pagination, pipelines, compact: !fullAnswer(args),
+    omittedRecordCount: args.full === true ? 0 : pipelines.length,
+    readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true or get_pipeline reads complete records; compact:false returns the previous board-card projection." });
 }
 
+const taskById = new WeakMap<object, Map<string, TaskPipelineReadModel>>();
+const taskModels = new WeakMap<object, WeakMap<object, TaskPipelineReadModel[]>>();
 function taskReadModel(dependencies: ViewerMcpDomainDependencies) {
-  return projectTaskPipelineIds(dependencies.loadTasks(), dependencies.getPipelines().pipelines);
+  const tasks = dependencies.listTaskRecords?.() ?? dependencies.loadTasks();
+  const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines;
+  let byPipelines = taskModels.get(tasks);
+  if (!byPipelines) { byPipelines = new WeakMap(); taskModels.set(tasks, byPipelines); }
+  let model = byPipelines.get(pipelines);
+  if (!model) {
+    const links = new Map<string, string[]>();
+    for (const pipeline of pipelines) for (const id of pipeline.taskIds ?? []) {
+      const ids = links.get(id) ?? [];
+      ids.push(pipeline.id); links.set(id, ids);
+    }
+    model = tasks.map(task => ({ ...task, pipelineIds: links.get(task.id) ?? [] }));
+    byPipelines.set(pipelines, model);
+    taskById.set(model, new Map(model.map(task => [task.id, task])));
+  }
+  return model;
 }
 
-/** How much agent-facing `details` one `list_tasks` row carries (#1834). The
-    list already answers with up to 200 whole tasks, and details has a far
-    larger cap than text, so a page of full details would be the biggest answer
-    the server gives. A cut row says so and names `get_task` as where the whole
-    field is read. */
+/** Kept for callers explicitly requesting the previous list projection. */
 export const LIST_TASKS_DETAILS_CHARS = 400;
-
-/** A list row with its details bounded; every other field is untouched. */
-function listTaskRow(task: TaskPipelineReadModel): TaskPipelineReadModel | (TaskPipelineReadModel & { detailsTruncated: true }) {
+function listTaskRow(task: TaskPipelineReadModel) {
   const details = task.details;
-  if (typeof details !== "string" || details.length <= LIST_TASKS_DETAILS_CHARS) return task;
-  return { ...task, details: details.slice(0, LIST_TASKS_DETAILS_CHARS), detailsTruncated: true };
+  return typeof details === "string" && details.length > LIST_TASKS_DETAILS_CHARS
+    ? { ...task, details: details.slice(0, LIST_TASKS_DETAILS_CHARS), detailsTruncated: true } : task;
 }
 
 function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  const project = text(args.project);
-  const status = text(args.status);
-  const placement = text(args.placement);
-  const limit = Math.max(1, Math.min(200, integer(args.limit, 100)));
-  const tasks = taskReadModel(dependencies)
-    .filter((task) => !project || task.project === project)
-    .filter((task) => !status || task.status === status)
-    .filter((task) => !placement || task.placement === placement)
-    .slice(0, limit)
-    .map(listTaskRow);
-  return redactPayload({ count: tasks.length, tasks });
+  const statuses = stringSet(args.statuses ?? args.status, ["inbox", "assigned", "blocked", "done"]);
+  const scope = { project: text(args.project), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
+    openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase() };
+  const page = listPage(taskReadModel(dependencies), {
+    scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, 100))),
+    identity: task => ({ id: task.id, time: task.updatedAt ?? "" }),
+    matches: task => (!scope.project || task.project === scope.project)
+      && (!statuses.length || statuses.includes(task.status)) && (!scope.openOnly || task.status !== "done")
+      && (!scope.placement || task.placement === scope.placement)
+      && (!scope.updatedSince || task.updatedAt >= scope.updatedSince)
+      && (!scope.ids.length || scope.ids.includes(task.id))
+      && (!scope.query || task.text.toLowerCase().includes(scope.query)),
+    project: task => args.full === true ? task : args.compact === false ? listTaskRow(task) : compactTask(task),
+  });
+  const { rows: tasks, ...pagination } = page;
+  return redactPayload({ ...pagination, tasks, compact: !fullAnswer(args),
+    omittedRecordCount: args.full === true ? 0 : tasks.length,
+    readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. get_task(taskId) or full:true reads complete records; compact:false returns the previous truncated-details projection. Never write a truncated value back." });
 }
 
 function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const taskId = required(args, "taskId");
-  const task = taskReadModel(dependencies).find((candidate) => candidate.id === taskId);
+  const model = taskReadModel(dependencies);
+  const task = taskById.get(model)!.get(taskId);
   if (!task) throw new Error("task not found");
-  return redactPayload({ taskId, task });
+  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : task,
+    ...(args.compact === true ? { omittedRecordCount: 1, readMore: "get_task without compact reads the full task." } : {}) });
 }
 
 async function operatorSnapshot(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
@@ -3905,7 +3967,7 @@ async function agentActivity(
       conversationId: text(args.conversationId) || undefined,
       transcriptPath: (text(args.transcriptPath) || text(args.path)) || undefined,
       project: text(args.project) || undefined,
-      liveOnly: args.liveOnly === true,
+      liveOnly: args.liveOnly === true && args.includeGone !== true,
       stallAfterMs: typeof args.stallAfterMs === "number" ? args.stallAfterMs : undefined,
       limit: typeof args.limit === "number" ? args.limit : undefined,
       signal: deadline.signal,
@@ -3917,9 +3979,16 @@ async function agentActivity(
         : {}),
     }, sources);
     const journal = dependencies.refreshLifecycleJournal({ liveness: snapshot.conversations });
-    return redactPayload(args.compact === true
-      ? { ...compactLiveness(snapshot), journaled: journal.appended }
-      : { ...snapshot, journaled: journal.appended });
+    const liveOnly = args.liveOnly === true && args.includeGone !== true;
+    const conversations = liveOnly ? snapshot.conversations.filter(row => row.lifecycle !== "gone" && row.host.state !== "gone") : snapshot.conversations;
+    const excludedGoneCount = snapshot.conversations.length - conversations.length;
+    const filtered = { ...snapshot, conversations, count: conversations.length,
+      stalledCount: conversations.filter(row => row.lifecycle === "stalled").length,
+      stalledConfirmedCount: conversations.filter(row => row.lifecycle === "stalled" && row.evidenceSource === "transcript").length };
+    return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(filtered)), journaled: journal.appended,
+      excludedGoneCount, omittedRecordCount: fullAnswer(args) ? 0 : conversations.length,
+      unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
+      readMore: "includeGone:true includes dead hosts; compact:false or full:true returns evidence fields. Narrow by conversationId or project when unselectedCount is positive." });
   } finally {
     deadline.release();
   }
