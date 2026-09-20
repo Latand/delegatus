@@ -124,15 +124,15 @@ function listable(item: RuntimeLiveTurnItem): boolean {
 /** How many steps of the turn one item stands for: the items an explicit
     omission descriptor already folded, plus itself when it carries a call or a
     written line.
- *
- * Two empty-text descriptors have to be told apart here. The window's 64 KiB
- * text bound trims prose from the START, so an older message can be left with
- * `text: ""` and its whole length in `omittedChars` — a step that happened and
- * that the transcript carries, which `listable` rightly keeps out of the list
- * and which must still be counted. A streaming placeholder no character has
- * arrived in yet has neither, and stands for nothing. An aggregate omission
- * descriptor stands for exactly the items it folded — its own `omittedChars`
- * are theirs, so it never adds one for itself. */
+
+    Two empty-text descriptors have to be told apart here. The window's 64 KiB
+    text bound trims prose from the START, so an older message can be left with
+    `text: ""` and its whole length in `omittedChars` — a step that happened and
+    that the transcript carries, which `listable` rightly keeps out of the list
+    and which must still be counted. A streaming placeholder no character has
+    arrived in yet has neither, and stands for nothing. An aggregate omission
+    descriptor stands for exactly the items it folded — its own `omittedChars`
+    are theirs, so it never adds one for itself. */
 function steps(item: RuntimeLiveTurnItem): number {
   const folded = item.omittedItems ?? 0;
   if (item.tool || item.text.trim()) return folded + 1;
