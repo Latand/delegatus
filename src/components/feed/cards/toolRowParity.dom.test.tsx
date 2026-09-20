@@ -181,14 +181,19 @@ test("phone: an assignment carrying a substitution folds whole, and the expanded
     expect(label).not.toContain("-d)");
     expect(label).not.toContain("DEMO_TMP");
   }
-  const line = [...host.querySelectorAll("details")]
-    .filter((details) => details.textContent?.includes("toolRow.dom.test.tsx"))
-    .at(-1)!;
-  click(line.querySelector("summary")!);
-  expect(line.textContent).toContain(SUBSTITUTION_COMMAND);
+  /* The env-prefixed row and this one fold to the same label, which is the
+     point: two different commands, one program, one line. They are told apart
+     by what each one opens into. */
+  const folds = [...host.querySelectorAll("details")]
+    .filter((details) => labelOf(details)?.textContent?.trim() === "bun test src/components/feed/cards/toolRow.dom.test.tsx");
+  expect(folds.length).toBeGreaterThanOrEqual(2);
+  for (const fold of folds) click(fold.querySelector("summary")!);
+  const opened = folds.map((fold) => fold.textContent ?? "");
+  expect(opened.filter((text) => text.includes(SUBSTITUTION_COMMAND))).toHaveLength(1);
+  expect(opened.filter((text) => text.includes(ENV_PREFIXED_COMMAND.replace(/\s+/g, " ")))).toHaveLength(1);
 });
 
-test("both engines read the same eight rows with the same labels", () => {
+test("both engines read the same nine rows with the same labels", () => {
   narrowViewport = true;
   const read = (engine: "codex" | "claude") => {
     const host = feed(engine);
