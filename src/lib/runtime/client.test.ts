@@ -233,3 +233,19 @@ for (const failure of ["deployment list cursor is invalid", "viewer deployments 
     expect(methods).toEqual(["viewer-deployment-list"]);
   });
 }
+
+
+test("a keyed session frame preserves UTF-8 characters split across socket chunks", async () => {
+  const text = "before\u{1f642}after";
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    expect(request.method).toBe("session-read");
+    expect(request.params).toEqual({ conversationId: "conversation_utf8" });
+    const reply = Buffer.from(JSON.stringify({ id: request.id, ok: true, result: { conversationId: "conversation_utf8", liveTurn: { text } } }) + "\n");
+    const split = reply.indexOf(Buffer.from("\u{1f642}")) + 2;
+    socket.write(reply.subarray(0, split));
+    setTimeout(() => socket.end(reply.subarray(split)), 10);
+  });
+  const client = new UnixRuntimeHostClient(socketPath);
+  expect(await client.readSession({ conversationId: "conversation_utf8" })).toMatchObject({ liveTurn: { text } });
+});

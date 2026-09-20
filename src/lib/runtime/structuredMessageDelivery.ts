@@ -20,7 +20,7 @@ import {
 } from "@/lib/conversation/deliverability";
 
 import type { MessageOrigin } from "./messageOrigin";
-import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
+import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
 import {
   RUNTIME_IDEMPOTENCY_KEY_LIMIT,
   runtimeIdempotencyKeyAdmissible,
@@ -259,7 +259,7 @@ function persistedCurrentOwner(
     : registry.conversationForPath(request.path);
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) return null;
-  const snapshot = registry.readOnlySnapshot();
+  const snapshot = registry.conversationDeliverySnapshot(request);
   const entry = snapshot.entries[`${conversation.engine}:${generation.id}`];
   if (!entry || entry.artifactPath !== generation.path) return null;
   const deliverability = conversationDeliverabilityFromRecord(snapshot, {
@@ -322,7 +322,7 @@ async function holdDuringRuntimeSynchronization(
     && activeAccountId !== null
     && unresolvedGeneration.accountId !== activeAccountId;
   if (!owner && !accountReseatWithoutOwner && !allowReclaimed) {
-    const deliverability = conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
+    const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
@@ -487,10 +487,10 @@ function synchronizationImageAdmission(
 }
 
 function recordStructuredRuntimeRecovery(
-  snapshot: Awaited<ReturnType<RuntimeHostClient["snapshot"]>>,
+  session: RuntimeSession | null,
   recovered: () => void,
 ): void {
-  if (snapshot.sessions.some((session) => session.hostKind === "codex-app-server" || session.hostKind === "claude-broker")) {
+  if (session && (session.hostKind === "codex-app-server" || session.hostKind === "claude-broker")) {
     recovered();
   }
 }
@@ -502,11 +502,9 @@ async function refreshRepublishedSession(
 ): Promise<{ session: RuntimeSession; republished: boolean }> {
   if (session.host !== "dead" && session.host !== "unhosted") return { session, republished: false };
   if (!await republish(session.sessionKey)) return { session, republished: false };
-  const refreshed = await client.snapshot();
+  const refreshed = await readRuntimeSession(client, { conversationId: session.conversationId, artifactPath: session.artifactPath ?? undefined });
   return {
-    session: refreshed.sessions.find((candidate) => candidate.conversationId === session.conversationId)
-      ?? refreshed.sessions.find((candidate) => candidate.artifactPath === session.artifactPath)
-      ?? session,
+    session: refreshed ?? session,
     republished: true,
   };
 }
@@ -520,7 +518,7 @@ function requiresDeadConversationRecovery(
   if (session.host !== "registering" || session.artifactPath !== null) return false;
   const generation = conversation.generations.at(-1);
   if (!generation) return false;
-  const entry = registry.readOnlySnapshot().entries[`${conversation.engine}:${generation.id}`];
+  const entry = registry.conversationDeliverySnapshot({ conversationId: conversation.id }).entries[`${conversation.engine}:${generation.id}`];
   /* Production #389 retained a pre-artifact runtime placeholder after the
      durable current generation had already lost its host and process. */
   return entry?.status === "dead"
@@ -546,10 +544,8 @@ async function sessionAfterSwitch(
 ): Promise<RuntimeSession | null> {
   const current = conversation.generations.at(-1);
   try {
-    const refreshed = await client.snapshot();
-    return refreshed.sessions.find((candidate) => candidate.conversationId === conversation.id
-      && (!current || candidate.artifactPath === current.path))
-      ?? null;
+    const refreshed = await readRuntimeSession(client, { conversationId: conversation.id });
+    return refreshed && (!current || refreshed.artifactPath === current.path) ? refreshed : null;
   } catch {
     return null;
   }
@@ -642,7 +638,7 @@ async function recoverReclaimedMessage(
   );
   if (!admitted) return ownershipUnavailable("unknown");
   if (!admitted.ok || admitted.outcome === "delivered") return admitted;
-  const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)
+  const reservation = Object.values(registry.deliverySnapshotForOperation(admitted.operationId).heldDeliveries)
     .find((candidate) => candidate.command.operationId === admitted.operationId);
   if (reservation?.state === "delivery-uncertain") {
     return uncertainReservationFailure(reservation);
@@ -700,22 +696,20 @@ export async function deliverHeldStructuredMessage(
   if (!client) {
     return heldOutcomeDuringRuntimeSynchronization(request, registry);
   }
-  let snapshot: Awaited<ReturnType<RuntimeHostClient["snapshot"]>>;
+  let session: RuntimeSession | null;
   try {
-    snapshot = await client.snapshot();
+    session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
-    console.error("[structured delivery] runtime snapshot failed", error);
+    console.error("[structured delivery] runtime session read failed", error);
     return heldOutcomeDuringRuntimeSynchronization(request, registry);
   }
-  recordStructuredRuntimeRecovery(snapshot, dependencies.startupRecovered ?? markStructuredHostStartupReady);
-  let session = snapshot.sessions.find((candidate) => candidate.conversationId === request.conversationId)
-    ?? snapshot.sessions.find((candidate) => candidate.artifactPath === request.path);
+  recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredHostStartupReady);
   if (!session) {
     const owner = persistedCurrentOwner(request, registry);
     if (owner?.kind === "legacy") {
       return heldOutcomeDuringRuntimeSynchronization(request, registry);
     }
-    const deliverability = conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
+    const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
@@ -822,11 +816,11 @@ export async function enqueueStructuredMessage(
       synchronizationImageAdmission(dependencies, rawImages),
     );
   }
-  let snapshot: Awaited<ReturnType<RuntimeHostClient["snapshot"]>>;
+  let session: RuntimeSession | null;
   try {
-    snapshot = await client.snapshot();
+    session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
-    console.error("[structured delivery] runtime snapshot failed", error);
+    console.error("[structured delivery] runtime session read failed", error);
     return holdDuringRuntimeSynchronization(
       request,
       registry,
@@ -835,13 +829,9 @@ export async function enqueueStructuredMessage(
       synchronizationImageAdmission(dependencies, rawImages),
     );
   }
-  recordStructuredRuntimeRecovery(snapshot, dependencies.startupRecovered ?? markStructuredHostStartupReady);
-  let session = (request.conversationId
-    ? snapshot.sessions.find((candidate) => candidate.conversationId === request.conversationId)
-    : undefined)
-    ?? snapshot.sessions.find((candidate) => candidate.artifactPath === request.path);
+  recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredHostStartupReady);
   if (!session) {
-    const deliverability = conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
+    const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
@@ -858,7 +848,7 @@ export async function enqueueStructuredMessage(
   }
   if (session.hostKind === "tmux-legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
   if (session.hostKind !== "codex-app-server" && session.hostKind !== "claude-broker") {
-    const deliverability = conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
+    const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
@@ -1125,10 +1115,7 @@ export async function enqueueStructuredMessage(
     }
     recoveredHost = recovered.spawned;
     try {
-      const refreshed = await client.snapshot();
-      activeSession = refreshed.sessions.find((candidate) => candidate.conversationId === session.conversationId)
-        ?? refreshed.sessions.find((candidate) => candidate.artifactPath === session.artifactPath)
-        ?? session;
+      activeSession = await readRuntimeSession(client, { conversationId: session.conversationId, artifactPath: session.artifactPath ?? undefined }) ?? session;
     } catch {
       /* The pre-recovery projection remains the conservative capability source. */
     }
