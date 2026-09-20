@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { isStagingMode, STAGING_STATE_DIRNAME } from "@/lib/staging";
 import { admitOperatorDirectory, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { stateMutationRefusal } from "@/lib/state/stateMutationBarrier";
 
 /** App dir that matches the npm package name; new installs land here. */
 const APP_DIR = "agent-log-viewer";
@@ -76,6 +77,12 @@ export function migrateLegacyDir(target: string, legacy: string): void {
      honest answer, never a refusal that would take a reader down with it. */
   if (!mayRunStateStartupMutation(target)) return;
   if (migrated.has(target)) return;
+  /* A copy-once move of live state is a startup step, and this one is reached
+     from a module scope (`INBOX_DIR`) and from every `statePath()` call. A
+     `next build` worker loading route modules therefore ran it against the
+     operator's config dir (#1905). It is not memoized when refused: the
+     serving Viewer's activation performs it. */
+  if (stateMutationRefusal(target) !== null) return;
   const sentinel = path.join(target, MIGRATED_SENTINEL);
   const stamp = () => `${new Date().toISOString()} ${legacy}\n`;
   try {
