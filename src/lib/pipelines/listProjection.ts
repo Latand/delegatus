@@ -19,7 +19,7 @@
  * exactly the ones the previous implementation applied, so MCP stays at parity
  * with `GET /api/pipelines` filtered the same way.
  */
-import type { FlowEngine } from "@/lib/flows/types";
+import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 
 import { latestOperationalStageAttempt } from "./attemptSelection";
 import { failEdgeExhaustion } from "./failEdgeBudget";

@@ -1,6 +1,6 @@
 import { canonicalizeConversationId, currentConversationFile, withoutArchivedPredecessors } from "@/lib/accounts/identity";
-import { groupDirectReviewers, taskOwnerResolver } from "@/lib/flows/directReviewGrouping";
-import type { Flow } from "@/lib/flows/types";
+import { groupDirectReviewers, taskOwnerResolver } from "@/lib/review/directReviewGrouping";
+import type { Flow } from "@/lib/reviewHistory/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import { shortTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
