@@ -1,0 +1,101 @@
+{
+  "baseline": "75abc565f6e8dbbf76664ced6dacc5bd5cca078b",
+  "observedCliVersion": "0.155.1",
+  "fixtures": "hand-assembled; no rollout content copied",
+  "negativeControl": {
+    "parseTests": {
+      "passed": 3,
+      "failed": 10
+    },
+    "emptyReasoningDom": "failed before renderer change",
+    "largePatchCorrelation": "failed with the display-sized budget, passed with bounded 128 KiB correlation"
+  },
+  "visualInspection": {
+    "widths": [
+      390,
+      1280
+    ],
+    "locales": [
+      "en",
+      "uk"
+    ],
+    "states": [
+      "collapsed",
+      "expanded"
+    ],
+    "observations": [
+      "Before: wrapper and command duplicate, opaque Extension, request identifier in MCP summary, missing task and loose lifecycle headings.",
+      "After: readable command with exit and duration; files and signed counts; named web operation and results; MCP query; agent task with outcome.",
+      "Phone task text wraps, collapsed groups summarize meaning, no horizontal document overflow.",
+      "Empty reasoning has no visible disclosure; source anchors remain for delayed live text."
+    ]
+  },
+  "selfReview": {
+    "result": "no unresolved findings",
+    "checked": [
+      "overlapping and incomplete wrappers preserve evidence",
+      "source-only legacy calls remain visible",
+      "incremental append and sliding-window parity",
+      "argument redaction before chips and summaries",
+      "delayed live reasoning retains its source slot",
+      "same Claude card anatomy for both engines"
+    ]
+  },
+  "gates": {
+    "focusedTests": "pass; one file per invocation",
+    "typescript": {
+      "command": "bunx tsc --noEmit",
+      "exitCode": 0
+    },
+    "build": {
+      "command": "bun run build",
+      "heapLimitMiB": 8192,
+      "exitCode": 0
+    },
+    "privacyPublication": "pass",
+    "stateIsolation": "dedicated configuration and state roots; ephemeral probe ports"
+  },
+  "reviewFix": {
+    "baseline": "92db8083212aac5c34260d53b35cab3fbe1746dd",
+    "beforeEvidence": "redaction-before.json",
+    "afterEvidence": "after.json",
+    "negativeControl": {
+      "failed": 35,
+      "passed": 0,
+      "coverage": "hand-assembled summaries, parser events, ToolChips HTML, collapsed and expanded ToolCard HTML including title attributes"
+    },
+    "credentialRegressions": {
+      "passed": 37,
+      "failed": 0,
+      "engines": [
+        "codex function_call",
+        "codex McpToolCall",
+        "claude tool_use"
+      ]
+    },
+    "focusedTests": {
+      "passed": 394,
+      "skipped": 1,
+      "failed": 0,
+      "files": 14,
+      "execution": "one file per invocation with isolated configuration and state"
+    },
+    "independentReview": "no findings in redaction and final shared chip layout",
+    "visualInspection": {
+      "widths": [
+        390,
+        1280
+      ],
+      "locales": [
+        "en",
+        "uk"
+      ],
+      "observations": [
+        "Before: authorization leaves the invented credential visible; nested objects and arrays expose it in both engines.",
+        "After: complete sensitive values replaced with [redacted]; queries, public headers and format arguments remain readable.",
+        "Long nested chips wrap on phone; short argument labels remain intact. No horizontal document or chip clipping.",
+        "Existing browser driver now pins summary nodes during clicks and requires every disclosure to be expanded before capture."
+      ]
+    }
+  }
+}

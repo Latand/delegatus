@@ -1068,8 +1068,9 @@ export async function enqueueStructuredMessage(
         commandInput(request),
       );
     };
-    if (rawImages.length === 0) return admit();
-    return (dependencies.withImageAdmissionLock ?? withAccountMutationLockAsync)(async () => admit());
+    if (rawImages.length === 0) return withAccountMutationLockAsync(admit, { holder: "send admission", caller: "send admission" });
+    return (dependencies.withImageAdmissionLock
+      ?? ((operation) => withAccountMutationLockAsync(operation, { holder: "image send admission", caller: "send" })))(async () => admit());
   });
   let recoveryReservation: HeldDelivery | null = null;
   if (recoveryRequired) {

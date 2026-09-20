@@ -488,3 +488,39 @@ test("an unknown credit count is not a refusal: the backend answers, and its ans
   expect(redemption).toMatchObject({ outcome: "noCredit", refusedLocally: false });
   expect(child.methods.filter((method) => method === "account/rateLimitResetCredit/consume")).toHaveLength(1);
 });
+
+
+test("a login observation cannot settle credentials replaced during the read", async () => {
+  const home = path.join(RUNTIME_SANDBOX, "login-read-race");
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, "auth.json"), "before");
+  const child = new FakeChild(); child.authenticated = true;
+  const runtime = new ManagedCodexRuntime({ stateFile: path.join(home, "attempts.json"), startClient: async () => {
+    fs.writeFileSync(path.join(home, "auth.json"), "after-reauthentication");
+    return CodexAppServerClient.start({ home, spawn: () => child as never });
+  } });
+  expect(await runtime.loginSnapshot(account("login-read", home))).toMatchObject({ state: "idle" });
+  expect(persistedAttemptStates(path.join(home, "attempts.json"))).toEqual([]);
+});
+
+for (const phase of ["before-consume", "after-consume"] as const) {
+  test(`credit redemption rejects a stale observation ${phase}`, async () => {
+    const home = path.join(RUNTIME_SANDBOX, `credit-race-${phase}`);
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, "auth.json"), "before");
+    const child = new RedeemChild(); child.authenticated = true;
+    const onWrite = child.onWrite.bind(child);
+    child.onWrite = (message) => {
+      if (phase === "after-consume" && message.method === "account/rateLimitResetCredit/consume") {
+        fs.writeFileSync(path.join(home, "auth.json"), "after-reauthentication");
+      }
+      onWrite(message);
+    };
+    const runtime = new ManagedCodexRuntime({ startClient: async () => {
+      if (phase === "before-consume") fs.writeFileSync(path.join(home, "auth.json"), "after-reauthentication");
+      return CodexAppServerClient.start({ home, spawn: () => child as never });
+    } });
+    await expect(runtime.redeemResetCredit(account("credit-race", home), "preserved-attempt-key")).rejects.toThrow("account changed during credit redemption");
+    expect(child.methods.filter((method) => method === "account/rateLimitResetCredit/consume")).toHaveLength(phase === "before-consume" ? 0 : 1);
+  });
+}

@@ -37,10 +37,18 @@ export async function POST(req: NextRequest): Promise<NextResponse<TranscribeRes
   if (file.size > MAX_AUDIO_BYTES) {
     return NextResponse.json({ error: "audio is too large (16 MB limit)" }, { status: 413 });
   }
-  const mime = file.type && file.type.startsWith("audio/") ? file.type.split(";")[0] : "audio/webm";
-  if (file.type && !file.type.startsWith("audio/")) {
+  // Audio-only recordings can carry a video container MIME. In particular,
+  // Bun infers video/webm from dictation.webm when parsing multipart uploads.
+  const type = file.type.split(";")[0].trim().toLowerCase();
+  const containerAudioType = new Map([
+    ["video/webm", "audio/webm"],
+    ["video/ogg", "audio/ogg"],
+    ["video/mp4", "audio/mp4"],
+  ]).get(type);
+  if (type && !type.startsWith("audio/") && !containerAudioType) {
     return NextResponse.json({ error: "expected audio" }, { status: 415 });
   }
+  const mime = containerAudioType || type || "audio/webm";
   const rawLanguage = form.get("language");
   const language = typeof rawLanguage === "string" && LANGUAGE_RE.test(rawLanguage) ? rawLanguage : "";
   const backend = resolveTranscribeBackend();

@@ -200,7 +200,7 @@ test("canonical readback includes the persisted generation and placement preserv
     type StoredRow = Record<string, unknown> & { id: string; revision: string };
     const before = persistedTaskRows(TASKS_FILE) as StoredRow[];
     const current = before.find((t) => t.id === task.id)!;
-    const result = (await p.client.callTool({ name: "update_task", arguments: { clientRequestId: "preserve-move", taskId: task.id, expectedProject: task.project, expectedRevision: current.revision, pos: { x: -5.25, y: 0 } } })).structuredContent as { task: Record<string, unknown> };
+    const result = (await p.client.callTool({ name: "update_task", arguments: { clientRequestId: "preserve-move", full: true, taskId: task.id, expectedProject: task.project, expectedRevision: current.revision, pos: { x: -5.25, y: 0 } } })).structuredContent as { task: Record<string, unknown> };
     expect(result).toMatchObject({ ok: true });
     const after = persistedTaskRows(TASKS_FILE) as StoredRow[];
     expect(after.find((t) => t.id === task.id) as Record<string, unknown> | undefined).toEqual(result.task);

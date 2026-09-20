@@ -1943,7 +1943,7 @@ describe("Codex 0.151 thread items", () => {
   });
 
   test("maps every remaining 0.151 ThreadItem kind onto a semantic feed card", () => {
-    const expected: Item["kind"][] = [
+    const expected: (Item["kind"] | undefined)[] = [
       "user",
       "sysmsg",
       "prose",
@@ -1953,7 +1953,7 @@ describe("Codex 0.151 thread items", () => {
       "tool",
       "tool",
       "tool",
-      "note",
+      undefined,
       "tool",
       "tool",
       "note",
@@ -1963,7 +1963,7 @@ describe("Codex 0.151 thread items", () => {
       "compact",
     ];
 
-    expect(fixture.slice(3).map((line) => buildFeed(codexFile, [line], false, "").items[0]?.kind)).toEqual(expected);
+    expect(fixture.slice(3).map<Item["kind"] | undefined>((line) => buildFeed(codexFile, [line], false, "").items[0]?.kind)).toEqual(expected);
   });
 
   test("summarizes an invented future item in one bounded fallback line", () => {
@@ -2113,7 +2113,7 @@ describe("Codex item_completed envelope generation", () => {
     expect(items[1]).toMatchObject({ kind: "user", text: "Envelope request.", ts: new Date(1_700_000_005_000).toISOString() });
     expect(items[2]).toMatchObject({
       kind: "tool",
-      tool: "Extension",
+      tool: "workspace",
       summary: "workspace · search · widget",
       outputPreview: expect.stringContaining("Widget result"),
     });
@@ -2125,7 +2125,7 @@ describe("Codex item_completed envelope generation", () => {
 
     expect(feed.items.flatMap((item) => item.kind === "prose" ? [item.text] : [])).toEqual(["Envelope answer.", "Legacy answer."]);
     expect(feed.items.flatMap((item) => item.kind === "user" ? [item.text] : [])).toEqual(["Envelope request."]);
-    expect(tools.map((item) => item.tool)).toEqual(["exec_command", "mcp__sample__lookup", "Extension"]);
+    expect(tools.map((item) => item.tool)).toEqual(["exec_command", "mcp__sample__lookup", "workspace"]);
     expect(feed.items.some((item) => ["raw", "record", "note"].includes(item.kind))).toBe(false);
   });
 
@@ -2659,7 +2659,7 @@ describe("compact identified reasoning (#1534)", () => {
     const live = parser.feed(lines, 0, true);
     expect(live.items.map(({ item }) => item.kind)).toEqual(["tool", "think", "think"]);
     expect(live.items[0].key).toBe(before.items[0].key);
-    expect(live.items[0].item).toMatchObject({ kind: "tool", id: "extension-a", tool: "Extension", status: "ok", outputPreview: '"done"' });
+    expect(live.items[0].item).toMatchObject({ kind: "tool", id: "extension-a", tool: "search", status: "ok", outputPreview: "done" });
     expect(live.items.slice(1).map(({ item }) => item.kind === "think" ? item.members : [])).toEqual([
       [{ sourceId: "before", anchorKey: "row:1:0", text: "", availability: "unavailable" }],
       [{ sourceId: "after", anchorKey: "row:3:0", text: "", availability: "unavailable" }],

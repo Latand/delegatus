@@ -279,7 +279,7 @@ async function recoverCandidate(
     );
     let begun: SpawnBeginResult;
     try {
-      begun = registry.beginSpawnRequest({
+      begun = await registry.beginSpawnRequestAsync({
         engine: current.engine,
         cwd: current.spec.cwd,
         transport: "structured",

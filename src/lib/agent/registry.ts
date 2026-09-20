@@ -14,7 +14,7 @@ import {
   type ProcessIdentity,
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
-import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
@@ -4762,6 +4762,14 @@ export class AgentRegistry {
       Throws SpawnAdmissionError (#393) after durably persisting a typed
       terminal rejection receipt when the initiating origin is a denied role
       or the child would exceed the nesting-depth ceiling. */
+  /** Bounded, non-blocking admission for request and controller paths. */
+  async beginSpawnRequestAsync(input: SpawnRequest): Promise<SpawnBeginResult> {
+    return await withAccountMutationLockAsync(() => this.beginSpawnRequest(input), {
+      holder: input.purpose === "resume-successor" ? "resume admission" : "spawn admission",
+      caller: input.purpose === "resume-successor" ? "resume" : "spawn",
+    });
+  }
+
   beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
     const result = withAccountMutationLock(() => {
       if ((input.engine === "claude" || input.engine === "codex") && input.accountId && input.accountId !== "default") {

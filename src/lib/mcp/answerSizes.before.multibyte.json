@@ -1,0 +1,16 @@
+{
+  "head": "41025fbc4e8afda4c49c5d38e8eb8e6d9dc176da",
+  "fixture": "100 conversations with long Ukrainian titles and paths; default arguments",
+  "rows": [
+    {
+      "tool": "list_conversations",
+      "bytes": 33666,
+      "budget": 12000
+    },
+    {
+      "tool": "agent_activity",
+      "bytes": 29368,
+      "budget": 24000
+    }
+  ]
+}

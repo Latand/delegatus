@@ -1633,3 +1633,40 @@ test("a registered legacy Codex transcript bridges into the structured app serve
   expect(spawnCalls).toBe(1);
   expect(drainRequests).toBe(1);
 });
+
+
+test("resume waits for a short account mutation and starts one successor", async () => {
+  const { withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `contended-${sessionId}`);
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"));
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  registry.upsert({ key: { engine: "codex", sessionId }, artifactPath, cwd, accountId: "default",
+    launchProfile: emptyLaunchProfile({ cwd, title: "Resume after short mutation" }), status: "dead", host: null,
+    structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  let entered!: () => void;
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const holder = withAccountMutationLockAsync(async () => { entered(); await new Promise<void>((resolve) => { release = resolve; }); }, { holder: "short mutation" });
+  await ready;
+  let spawns = 0;
+  const recovery = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+    registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+    resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+    spawn: async (input) => {
+      spawns += 1;
+      return { ok: true, target: null, path: artifactPath, launchId: input.receipt.launchId, conversationId: conversation.id,
+        launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+    }, requestDeliveryDrain: () => {},
+  });
+  try {
+    await Bun.sleep(30);
+    expect(spawns).toBe(0);
+    release(); await holder;
+    expect(await recovery).toMatchObject({ spawned: true, conversationId: conversation.id });
+    expect(spawns).toBe(1);
+  } finally { release(); await holder; await recovery.catch(() => {}); }
+});

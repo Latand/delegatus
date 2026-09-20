@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { meaningfulToolGroup } from "../toolMeaning";
 import { useCollapsedTools } from "../toolDisclosure";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -67,14 +68,6 @@ function ReadableBlocks({ calls }: { calls: readonly ToolEvent[] }) {
    failed one carrying its detail; the block is the target and expands in place
    into the readable blocks. The live `active` flag does not force the phone
    open: the operator's tap does. */
-function mobileToolSummary(calls: readonly ToolEvent[]): string {
-  const counts = new Map<string, number>();
-  for (const call of calls) {
-    const tool = call.tool || call.family;
-    counts.set(tool, (counts.get(tool) ?? 0) + 1);
-  }
-  return [...counts].map(([tool, count]) => (count > 1 ? `${tool} ×${count}` : tool)).join(" · ");
-}
 
 function MobileCmdGroup({ item }: { item: CmdGroupItem }) {
   const [open, setOpen] = useState(false);
@@ -112,7 +105,7 @@ function MobileCmdGroup({ item }: { item: CmdGroupItem }) {
   const t0 = mobileClock(first?.ts);
   const t1 = mobileClock(lastDone?.endTs ?? lastDone?.ts);
   const range = t0 && t1 && t0 !== t1 ? `${t0}–${t1}` : t0 || t1;
-  const tools = mobileToolSummary(done);
+  const tools = meaningfulToolGroup(done);
   return (
     <div data-mobile-run={trailingRun ? "running" : "done"} className="w-full">
       {done.length >= 2 ? (
@@ -130,9 +123,8 @@ function MobileCmdGroup({ item }: { item: CmdGroupItem }) {
             ) : (
               <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
             )}
-            <span className="min-w-0 flex-1 truncate text-secondary">
-              {tr("render.actions", { count: done.length })}
-              {tools ? " · " + tools : ""}
+            <span className="min-w-0 flex-1 whitespace-normal break-words text-secondary">
+              {tools}
             </span>
             {range ? <span className="shrink-0 text-caption tabular-nums">{range}</span> : null}
           </button>
@@ -195,9 +187,7 @@ function DesktopCmdGroup({ item }: { item: CmdGroupItem }) {
      its live-open and settled-error defaults. */
   const open = collapsed ? (manualOpen ?? false) : active ? true : (manualOpen ?? item.hasErr);
 
-  const tools = Object.entries(item.byTool)
-    .map(([tool, count]) => `${tool} ×${count}`)
-    .join(" · ");
+  const tools = meaningfulToolGroup(item.calls);
   const t0 = hhmm(item.t0);
   const t1 = hhmm(item.t1);
   const range = t0 && t1 && t0 !== t1 ? `${t0}–${t1}` : t0 || t1;
@@ -226,9 +216,8 @@ function DesktopCmdGroup({ item }: { item: CmdGroupItem }) {
       >
         <ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform motion-reduce:transition-none group-open/grp:rotate-90" aria-hidden />
         {collapsed && item.calls.some(call => call.status === "run") ? <StatusIcon status="run" className="h-3.5 w-3.5 shrink-0" /> : null}
-        <span className="flex min-w-0 flex-1 items-center gap-1 truncate text-secondary">
-          {tr("render.actions", { count: item.calls.length })}
-          {tools ? " · " + tools : ""}
+        <span className="flex min-w-0 flex-1 items-center gap-1 whitespace-normal break-words text-secondary">
+          {tools}
           {item.errCount ? (
             <span className="ml-1 inline-flex items-center gap-0.5 font-semibold text-danger">
               <StatusIcon status="err" className="h-3 w-3" />

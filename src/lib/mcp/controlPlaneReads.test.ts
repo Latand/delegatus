@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { targetedConversationAtPath, viewerMcpBindings, type TargetedConversationDependencies, type ViewerControlDependencies } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
+import { setAgentRegistryForTests } from "@/lib/agent/registry";
 
 /**
  * The control-plane reads consume ONE completed scan and ONE projection (#845).
@@ -44,6 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setAgentRegistryForTests(null);
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDir;
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
@@ -294,7 +296,7 @@ test("list_conversations keeps an empty query result distinct from an unknown pr
     query: "missing",
   });
 
-  expect(result).toEqual({ count: 0, conversations: [] });
+  expect(result).toMatchObject({ count: 0, conversations: [], total: 0, hasMore: false, nextCursor: null });
   expect(controlReads).toEqual([
     "/api/conversations?project=repo-fixture&q=missing&limit=50",
     "/api/conversations?project=repo-fixture&limit=1",

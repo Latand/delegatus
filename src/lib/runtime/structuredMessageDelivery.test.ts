@@ -3380,3 +3380,36 @@ for (const projection of ["missing-session", "unhosted-projection"] as const) {
     expect(commands[0]!.images).toEqual([imageRef]);
   });
 }
+
+for (const withImage of [false, true]) {
+  test(`send admission waits for a short account mutation (${withImage ? "image" : "text"})`, async () => {
+    const { withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
+    const { registry, conversation } = registryWithConversation("default", "claude");
+    const imageRef: StructuredImageRef = { sha256: "b".repeat(64), mime: "image/png", bytes: 67 };
+    let commands = 0;
+    const client = {
+      snapshot: async () => snapshot(conversation.id, "claude", true),
+      command: async () => {
+        commands += 1;
+        return { operationId: "wait-send", replayed: false, receipt: { operationId: "wait-send", idempotencyKey: "wait-send-key", conversationId: conversation.id,
+          kind: "send", status: "queued", text: "hello", imageCount: withImage ? 1 : 0, at: new Date().toISOString(), revision: 1 } };
+      },
+    } as unknown as RuntimeHostClient;
+    let entered!: () => void;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const holder = withAccountMutationLockAsync(async () => { entered(); await new Promise<void>((resolve) => { release = resolve; }); }, { holder: "short mutation" });
+    await ready;
+    const send = enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id, clientMessageId: "wait-send-key", text: "hello",
+      ...(withImage ? { images: [{ base64: PNG_BASE64, mime: "image/png" }] } : {}) }, {
+      enabled: () => true, client: () => client, registry: () => registry, storeImages: () => [imageRef], previewImageRefs: () => [imageRef], kick: () => {},
+    });
+    try {
+      await Bun.sleep(30);
+      expect(commands).toBe(0);
+      release(); await holder;
+      expect(await send).toMatchObject({ ok: true, outcome: "queued" });
+      expect(commands).toBe(1);
+    } finally { release(); await holder; await send.catch(() => {}); }
+  });
+}
