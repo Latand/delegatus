@@ -11,6 +11,80 @@ import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
 const CHILD = path.join(import.meta.dir, "registry.sqliteChild.ts");
 
+test("compaction preserves unverified delivery evidence and blocks exact-key replay after reopen", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-owner-compaction-"));
+  const filename = path.join(directory, "registry.json");
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const conversation = registry.ensureConversation("codex", "/sessions/owner-compaction.jsonl", "default");
+    const original = registry.holdDelivery(conversation.id, "retain uncertain input", "uncertain-input");
+    registry.recordDeliveryOutcome(original.id, "failed", "unconfirmed result", "unverified");
+    const owner = registry.snapshot().deliveryOperationOwners[original.command.operationId]!;
+    expect(owner.terminalDisposition).toBe("unverified");
+    expect(owner.settledAt).toEqual(expect.any(String));
+    registry.compactDeliveryReservations();
+    expect(registry.snapshot().deliveryOperationOwners[original.command.operationId]).toEqual(owner);
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+    expect(registry.snapshot().deliveryOperationOwners[original.command.operationId]).toEqual(owner);
+    const before = registry.snapshot().heldDeliveries;
+    const replay = registry.holdDelivery(conversation.id, original.text, original.clientMessageId,
+      "text", [], null, original.command);
+    expect(replay).toMatchObject({ id: original.id, state: "failed", command: original.command });
+    expect(registry.beginDeliveryAttempt(replay.id, original.generationId!)).toBeNull();
+    expect(registry.snapshot().heldDeliveries).toEqual(before);
+  } finally {
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("lazy owner enumeration retains loaded, modified, inserted and deleted transaction rows", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-owner-enumeration-"));
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = seed.ensureConversation("codex", "/sessions/owner-enumeration.jsonl", "default");
+  const deliveries = ["loaded", "modified", "deleted", "unloaded"].map(key => {
+    const delivery = seed.holdDelivery(conversation.id, key, key);
+    seed.recordDeliveryOutcome(delivery.id, "failed", "unconfirmed result", "unverified");
+    return delivery;
+  });
+  const initial = seed.snapshot();
+  seed.close();
+  const store = new SqliteAgentRegistryStore(path.join(directory, "registry.sqlite"), {
+    initialSnapshot: initial, normalize: normalizeRegistry,
+  });
+  const [loaded, modified, deleted, unloaded] = deliveries.map(delivery => delivery.command.operationId);
+  try {
+    store.mutate(file => {
+      const loadedOwner = file.deliveryOperationOwners[loaded!]!;
+      const modifiedOwner = file.deliveryOperationOwners[modified!]!;
+      modifiedOwner.terminalReason = "updated during transaction";
+      modifiedOwner.settledAt = "2026-09-20T12:00:00.000Z";
+      delete file.deliveryOperationOwners[deleted!];
+      file.deliveryOperationOwners["inserted-owner"] = { ...loadedOwner,
+        command: { ...loadedOwner.command, operationId: "inserted-owner" } };
+      const keys = Object.keys(file.deliveryOperationOwners);
+      expect(keys).not.toContain(deleted!);
+      expect(keys).toContain("inserted-owner");
+      expect(file.deliveryOperationOwners[deleted!]).toBeUndefined();
+      expect(file.deliveryOperationOwners[loaded!]).toBe(loadedOwner);
+      expect(file.deliveryOperationOwners[modified!]).toBe(modifiedOwner);
+      expect(file.deliveryOperationOwners[modified!]!.terminalReason).toBe("updated during transaction");
+      expect(file.deliveryOperationOwners[unloaded!]).toEqual(initial.deliveryOperationOwners[unloaded!]);
+      // Remove the associated reservation too, so reopening cannot synthesize it again.
+      delete file.heldDeliveries[deliveries[2]!.id];
+    }, false);
+    expect(store.snapshot().file.deliveryOperationOwners[modified!]).toMatchObject({
+      terminalReason: "updated during transaction", settledAt: "2026-09-20T12:00:00.000Z",
+      terminalDisposition: "unverified",
+    });
+    expect(store.snapshot().file.deliveryOperationOwners[deleted!]).toBeUndefined();
+  } finally {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 function beginTestSpawn(registry: AgentRegistry, cwd: string) {
   return registry.beginSpawn("codex", cwd, { title: `Exercise registry storage ${path.basename(cwd)}` });
 }

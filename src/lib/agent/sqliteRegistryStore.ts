@@ -1039,7 +1039,12 @@ export class SqliteAgentRegistryStore {
             input[collection] = unloaded;
             if (collection === "deliveryOperationOwners") input.heldDeliveries = file.heldDeliveries;
             const normalized = this.normalize(input)[collection] as Record<string, unknown>;
-            for (const [key, row] of Object.entries(normalized)) rows[key] = row;
+            for (const [key, row] of Object.entries(normalized)) {
+              // Owner normalization can synthesize rows from held deliveries.
+              // Those defaults must preserve the transaction's loaded evidence
+              // and must never resurrect a row deleted in this transaction.
+              if (!Object.hasOwn(rows, key) && !deleted.has(key)) rows[key] = row;
+            }
             allRowsLoaded = true;
           };
           const keys = (): string[] => {
