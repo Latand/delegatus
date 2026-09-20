@@ -1,0 +1,21 @@
+{
+  "datasetVersion": "pilot.v2",
+  "status": "pending-root-trials",
+  "realCandidateTrials": 0,
+  "requiredCandidateTrials": 9,
+  "realPlannerTrials": 0,
+  "requiredPlannerTrials": 3,
+  "realBriefAssessments": 0,
+  "requiredBriefAssessments": 3,
+  "realSeededReviews": 0,
+  "requiredSeededReviews": 6,
+  "realCalibrationCycles": 0,
+  "requiredCalibrationCycles": 1,
+  "cost": {
+    "status": "unknown"
+  },
+  "localChecks": "Behavioral controls and fake transport checks are harness validation only.",
+  "nextOwner": "Root: exact-head review, trial confinement and model admission, then sequential visible Viewer pilot.",
+  "maximumWorkerRequests": 50,
+  "routingDefaultsChanged": false
+}

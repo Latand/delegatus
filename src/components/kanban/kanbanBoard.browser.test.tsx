@@ -6282,3 +6282,12 @@ describe("#1834 the card's collapsed Details row", () => {
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+
+describe("role evaluation mounted candidate", () => {
+  const candidateTest = process.env.LLV_KANBAN_BROWSER_TEST === "1" && process.env.ROLE_EVAL_CANDIDATE ? test : test.skip;
+  candidateTest("executes final-row rejection, reorder, touch and keyboard retry", async () => {
+    const { gradeRendered } = await import("../../../evals/roles/graders/rendered");
+    await gradeRendered(path.resolve(process.env.ROLE_EVAL_CANDIDATE!), path.resolve(process.env.ROLE_EVAL_OUTPUT!));
+  }, 180_000);
+});

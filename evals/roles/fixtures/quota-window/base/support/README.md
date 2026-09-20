@@ -1,0 +1,1 @@
+Pinned dependency closure; provenance.json records source and adapted export hashes. Only imports/type-only dependencies and the standalone locale adapter differ from upstream. Candidate changes to this directory are forbidden.
