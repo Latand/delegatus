@@ -41,7 +41,7 @@ import {
   type StructuredHostTerminationDependencies,
 } from "@/lib/runtime/structuredHostControl";
 import { redactBounded } from "@/lib/monitor/redact";
-import { processIdentityStatus } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { parseReview, type ReviewFinding } from "@/lib/review";
 import { spawnStructuredConversation, stagedLaunchRecovery, recoverStagedStructuredLaunch, STAGED_RECOVERY_MAX_CHECKS, STAGED_RECOVERY_BUDGET_MS, type StagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
@@ -224,7 +224,7 @@ export interface PipelinePorts {
     /** Prior-attempt conversation this stage retry terminally supersedes
         (issue #383); attempt chains become round chains automatically. */
     supersedes?: string | null;
-  }, onReserved: (reservation: PipelineStageLaunchReservation) => void): Promise<PipelineStageSpawn>;
+  }, onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>): Promise<PipelineStageSpawn>;
   spawnReceipt(launchId: string): PipelineSpawnReceipt | null;
   recoverStagedLaunch?(launchId: string, eligible: () => boolean): Promise<void>;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict";
@@ -451,7 +451,7 @@ function parentIdentity(parentPath: string | null): {
 
 async function spawnPipelineAgent(
   input: Parameters<PipelinePorts["spawnAgent"]>[0],
-  onReserved: (reservation: PipelineStageLaunchReservation) => void,
+  onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>,
 ): Promise<PipelineStageSpawn> {
   /* #1279's seam. An unbound project takes the same branch it always took —
      the active account — so nothing changes for a project nobody configured.
@@ -547,11 +547,19 @@ async function spawnPipelineAgent(
     supersedesReason: "stage-retry",
   });
   if (begun.kind === "conflict") throw new Error("pipeline spawn attempt conflicts with its original request");
-  onReserved({
-    launchId: begun.receipt.launchId,
-    conversationId: begun.receipt.conversationId,
-    accountId: begun.receipt.accountId ?? account.accountId,
-  });
+  try {
+    await onReserved({
+      launchId: begun.receipt.launchId,
+      conversationId: begun.receipt.conversationId,
+      accountId: begun.receipt.accountId ?? account.accountId,
+    });
+  } catch (error) {
+    if (error instanceof ActivationSuperseded && begun.kind !== "replay") {
+      // This adapter has not dispatched; only its own fresh reservation is safe to cancel.
+      registry.failStructuredSpawn(begun.receipt.launchId, "stage activation cancelled before dispatch");
+    }
+    throw error;
+  }
   if (begun.kind === "replay") {
     const identityPublished = identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(begun.receipt);
     return {
@@ -2790,6 +2798,305 @@ function holdForBackgroundTasks(
   return "waiting";
 }
 
+class ActivationSuperseded extends Error {
+  constructor() { super("stage activation changed before dispatch or settlement"); }
+}
+
+/** Controls and graph edits fence actuation, including a pause followed by resume. */
+function activationFence(pipeline: Pipeline): string {
+  return JSON.stringify([pipeline.state, pipeline.cursor?.stageId, pipeline.stages,
+    pipeline.graphEdits, pipeline.pausedAt, pipeline.resumedAt, pipeline.closedAt]);
+}
+
+/** Each reservation has one process owner. Unknown owner liveness never grants
+ * takeover; a dead owner recovers only the stored downstream key. */
+const activationExecutors = globalThis as unknown as { __llvActivationExecutors?: Set<string> };
+const activeActivations = activationExecutors.__llvActivationExecutors ??= new Set<string>();
+
+export async function drainStageActivations(ports: PipelinePorts): Promise<void> {
+  if ((ports.structuredDeliveryPublication?.() ?? "ready") !== "ready") return;
+  const owner = captureProcessIdentity(process.pid);
+  for (const snapshot of loadPipelines()) {
+    for (const run of snapshot.runs) for (const original of run.attempts) {
+      const reservation = original.activation;
+      if (!reservation || activeActivations.has(reservation.id)) continue;
+      const sameProcess = owner.startIdentity !== null && !!owner.bootEpoch && reservation.owner?.pid === owner.pid
+        && reservation.owner?.startIdentity === owner.startIdentity && reservation.owner?.bootEpoch === owner.bootEpoch;
+      if (reservation.owner && !sameProcess && processIdentityStatus(reservation.owner) !== "dead") continue;
+      activeActivations.add(reservation.id);
+      try {
+        const claimed = await withPipelineMutation((pipelines, persist) => {
+          const pipeline = pipelines.find((item) => item.id === snapshot.id);
+          const attempt = pipeline && runFor(pipeline, run.stageId)?.attempts.find((item) => item.n === original.n);
+          if (!pipeline || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
+          attempt.activation.owner = owner;
+          if (reservation.phase !== "reserved") attempt.activation.replay = true;
+          persist([pipeline]);
+          return structuredClone(pipeline);
+        });
+        if (!claimed) continue;
+        const stage = claimed.stages.find((item) => item.id === run.stageId);
+        const attempt = runFor(claimed, run.stageId)!.attempts.find((item) => item.n === original.n)!;
+        const activation = attempt.activation!;
+        let expectedAttempt = JSON.stringify(attempt);
+        let dispatched = activation.phase === "dispatching" || activation.phase === "settled";
+        const checkpoint = async () => {
+          await withPipelineMutation((pipelines, persist) => {
+            const live = pipelines.find((item) => item.id === claimed.id);
+            const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
+            if (!live || !current || activationFence(live) !== activation.fence
+              || JSON.stringify(current) !== expectedAttempt) throw new ActivationSuperseded();
+            live.state = claimed.state;
+            live.stateDetail = claimed.stateDetail;
+            live.cursor = structuredClone(claimed.cursor);
+            activation.fence = activationFence(live);
+            for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
+            Object.assign(current, structuredClone(attempt));
+            adoptPipelineFallbackTask(live, tasksForBinding());
+            persist([live]);
+            expectedAttempt = JSON.stringify(current);
+            if (activation.phase === "dispatching") dispatched = true;
+          });
+        };
+        let finished = false;
+        try {
+          if (activation.phase === "settled") {
+            finished = true;
+          } else if (activation.phase === "dispatching") {
+            // A crash after the dispatch permit can never authorize a second call.
+            const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
+            if (!receipt || !["completed", "failed", "conflicted", "path-pending"].includes(receipt.state)) continue;
+            Object.assign(attempt, { sessionId: receipt.sessionId, agentPath: receipt.transcript,
+              paneId: receipt.paneId, conversationId: receipt.conversationId });
+            attempt.state = receipt.state === "completed" ? "running" : "spawning";
+            if (claimed.cursor?.stageId === run.stageId) claimed.cursor.state = attempt.state;
+            finished = true;
+          } else {
+            if (!stage || activation.cancelRequested || activationFence(claimed) !== activation.fence) throw new ActivationSuperseded();
+            spawnsThisProcess.add(attemptKey(claimed, stage, attempt));
+            await spawnRunStage(claimed, stage, attempt, activation.input, activation.startedAt, ports, checkpoint);
+            finished = true;
+          }
+        } catch (error) {
+          if (!(error instanceof ActivationSuperseded)) throw error;
+          // The callback has not granted a permit when its fresh-state CAS fails.
+          finished = true;
+        } finally {
+          let close = false;
+          await withPipelineMutation((pipelines, persist) => {
+            const live = pipelines.find((item) => item.id === claimed.id);
+            const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
+            if (!live || current?.activation?.id !== activation.id) return;
+            if (!finished) {
+              // Leave uncertain dispatch in custody, readable by every generation.
+              delete current.activation.owner;
+              persist([live]);
+              return;
+            }
+            close = current.activation.closeRequested === true;
+            if (close) live.activationCloseRequested = true;
+            const unchanged = activationFence(live) === activation.fence && JSON.stringify(current) === expectedAttempt;
+            if (unchanged) {
+              for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
+              Object.assign(current, structuredClone(attempt));
+              live.state = claimed.state;
+              live.stateDetail = claimed.stateDetail;
+              live.cursor = structuredClone(claimed.cursor);
+            } else if (dispatched) {
+              // Evidence belongs to this attempt even when control or graph state moved.
+              // Do not restore a borrowed cursor, verdict, graph or pipeline state.
+              Object.assign(current, { launchId: attempt.launchId, conversationId: attempt.conversationId,
+                sessionId: attempt.sessionId, agentPath: attempt.agentPath, paneId: attempt.paneId,
+                accountId: attempt.accountId });
+              if (!current.completedAt && !current.verdict) current.state = attempt.state;
+            } else {
+              current.state = "pending";
+              current.startedAt = null;
+              current.definition = null;
+              if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+            }
+            delete current.activation;
+            persist([live]);
+          });
+        }
+      } finally { activeActivations.delete(reservation.id); }
+    }
+  }
+  for (const pipeline of loadPipelines()) {
+    if (pipeline.activationCloseRequested && !pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.activation))) {
+      await patchPipeline(pipeline.id, { action: "close" }, ports);
+    }
+  }
+}
+
+async function spawnRunStage(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  spawnInput: Parameters<PipelinePorts["spawnAgent"]>[0], activationNow: string,
+  ports: PipelinePorts, persist: () => void | Promise<void>,
+): Promise<void> {
+  const recoveringReservation = attempt.activation?.replay === true;
+  try {
+    let spawned: PipelineStageSpawn | null = null;
+    let spawnAttempt = 0;
+    /* Set when the spawn reached host publication and found no controller.
+       The activation leaves the loop for the wall-clock wait below rather
+       than sleeping here, so it costs the pipelines phase nothing. */
+    let controllerFailure: string | null = null;
+    /* The failed receipt behind `controllerFailure` when the spawn had
+       already reserved a launch; retired once a further round is booked. */
+    let failedReceipt: PipelineSpawnReceipt | null = null;
+    while (true) {
+      spawnAttempt += 1;
+      /* Every spawn call of this attempt consumes one client attempt id,
+         the immediate handshake retries inside one tick and the rounds of
+         a wait that spans ticks alike (#1056, review round 2), so the retry
+         index counts spawn calls. The count is persisted before the call:
+         a restart that interrupts the call still finds it counted, so the
+         retry that follows the interrupted launch's retirement cannot
+         replay its id. An attempt persisted before the count existed starts
+         past every id the earlier engine could have spent. */
+      const retryIndex = Math.max(
+        attempt.spawnCalls ?? uncountedSpawnCallFloor(attempt),
+        attempt.retiredLaunches?.length ?? 0,
+      );
+      const replay = attempt.activation?.replay === true;
+      if (!replay) attempt.spawnCalls = retryIndex + 1;
+      const callId = replay ? attempt.activation!.clientAttemptId
+        : retryIndex === 0 ? spawnInput.clientAttemptId
+        : `handshake_retry_${retryIndex}_${spawnInput.clientAttemptId}`.slice(0, 128);
+      if (attempt.activation) {
+        attempt.activation.clientAttemptId = callId;
+        attempt.activation.phase = "reserving";
+        delete attempt.activation.replay;
+      }
+      await persist();
+      try {
+        spawned = await ports.spawnAgent({
+          ...spawnInput,
+          clientAttemptId: callId,
+        }, async (reservation) => {
+          if (attempt.activation) attempt.activation.phase = "dispatching";
+          attempt.launchId = reservation.launchId;
+          attempt.conversationId = reservation.conversationId;
+          attempt.accountId = reservation.accountId ?? attempt.accountId ?? null;
+          /* The reservation committed this stage's membership (#1586); a
+             fallback task it minted is the pipeline's task from here on,
+             recorded before the agent is actuated. */
+          adoptPipelineFallbackTask(pipeline, tasksForBinding());
+          await persist();
+        });
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!isTransientStructuredSpawnFailure(message)) throw error;
+        /* An unavailable controller is a publication this process is between,
+           not a rejected launch, so it gets the wall-clock wait budget; every
+           other transient keeps the two immediate handshake retries (#1056),
+           which stay well inside the controller's phase deadline. */
+        const accountMutationContention = isAccountMutationContention(message);
+        const hostUnavailable = isRuntimeHostUnavailableSpawnFailure(message);
+        /* #1750: an unverified delivery must never take the immediate
+           handshake retries below — those re-dispatch the prompt on sight.
+           It joins the receipt-gated route, where the transcript decides. */
+        const unverifiedDelivery = isUnverifiedDeliverySpawnFailure(message);
+        /* A busy account or an unreachable runtime host is retryable before
+           the registry publishes a launch claim. Once a callback supplied an
+           id, the receipt alone knows the launch's fate (#1678): `failed` is
+           the spawn layer's own retry-safe verdict and the launch is retired
+           below; anything else parks, and the existing receipt recovery
+           adopts a launch that settles after all. */
+        if ((accountMutationContention || hostUnavailable || unverifiedDelivery) && attempt.launchId !== null) {
+          const receipt = ports.spawnReceipt(attempt.launchId);
+          if (receipt?.state !== "failed" || receipt.launchId !== attempt.launchId) throw error;
+          failedReceipt = receipt;
+        }
+        if (isStructuredDeliveryControllerFailure(message) || accountMutationContention || hostUnavailable || unverifiedDelivery) {
+          controllerFailure = message;
+          break;
+        }
+        if (spawnAttempt >= SPAWN_HANDSHAKE_MAX_ATTEMPTS) {
+          throw new Error(`stage spawn failed after ${spawnAttempt - 1} retries: ${message}`);
+        }
+        const sleep = ports.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+        await sleep(SPAWN_HANDSHAKE_RETRY_DELAY_MS);
+      }
+    }
+    if (controllerFailure !== null) {
+      /* Wall-clock from the first sighting, so the time this attempt already
+         spent inside spawnAgent counts against the budget rather than being
+         invisible to it. */
+      const failedAt = ports.now();
+      if (failedReceipt) {
+        /* Claimed under the identity retry-stage uses, so a later manual
+           retry of the same launch is idempotent; a claim that finds the
+           receipt settled after all parks, and the completed-receipt
+           reconcile adopts the launch on the next tick. */
+        const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, failedReceipt, activationNow, failedAt, ports);
+        if (deferred === "exhausted") throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
+        if (deferred === "unsafe") throw new Error(stagedLaunchRetryRefusal(controllerFailure));
+        if (deferred === "delivered") throw new Error(unverifiedLaunchRetryRefusal(controllerFailure));
+        if (deferred === "settled") throw new Error(controllerFailure);
+        if (attempt.activation) attempt.activation.phase = "settled";
+        await persist();
+        return;
+      }
+      /* #1750: a busy account lock and an unreachable runtime host are the
+         same succession seen from two sides, and thirty seconds cannot
+         outlast a deploy — production spent the whole budget inside three
+         spawn calls. Both ride the host budget here, exactly as a retired
+         launch already does. */
+      if (bookControllerWaitRound(attempt, activationNow, failedAt, ports, spawnWaitBudget(controllerFailure)) === "exhausted") {
+        throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
+      }
+      attempt.state = "pending";
+      setCursorState(pipeline, stage.id, "pending");
+      syncControllerWaitStateDetail(pipeline, attempt, controllerFailure);
+      if (attempt.activation) attempt.activation.phase = "settled";
+      await persist();
+      return;
+    }
+    if (!spawned) throw new Error("stage spawn failed without a result");
+    const recovery = stagedLaunchRecovery(ports.spawnReceipt(spawned.launchId));
+    if (recovery) {
+      waitForStagedLaunch(pipeline, stage, attempt, recovery, ports);
+      if (attempt.activation) attempt.activation.phase = "settled";
+      await persist();
+      return;
+    }
+
+    if (recoveringReservation && ports.spawnReceipt(spawned.launchId)?.state !== "completed") {
+      park(pipeline, "stage spawn is unresolved; inspect the original receipt before retrying", attempt);
+      return;
+    }
+
+    /* The generation that hosts this launch (#1747). A later tick that finds
+       a different one is looking at a succession, which is the only thing
+       that cuts a running turn while leaving its host alive and idle. */
+    const hostEpoch = await ports.runtimeHostEpoch?.() ?? null;
+    if (hostEpoch !== null) attempt.hostEpoch = hostEpoch;
+    delete attempt.severedTurn;
+    delete attempt.verdictRequest;
+    delete attempt.backgroundWait;
+    delete attempt.controllerWait;
+    attempt.launchId = spawned.launchId;
+    attempt.conversationId = spawned.conversationId;
+    attempt.sessionId = spawned.sessionId;
+    attempt.agentPath = spawned.transcript;
+    attempt.paneId = spawned.paneId;
+    attempt.accountId = spawned.accountId ?? attempt.accountId ?? null;
+    attempt.state = "running";
+    setCursorState(pipeline, stage.id, "running");
+    if (pipeline.stateDetail?.startsWith("rate limited until ")
+      || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
+  } catch (error) {
+    if (error instanceof ActivationSuperseded) throw error;
+    park(pipeline, error instanceof Error ? error.message : String(error), attempt);
+  } finally {
+    /* The key only means "this spawn is in flight in this process". */
+    spawnsThisProcess.delete(attemptKey(pipeline, stage, attempt));
+  }
+}
+
 async function tickRunStage(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -2803,7 +3110,7 @@ async function tickRunStage(
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
     ? newAttempt(pipeline, stage)
     : prior ?? newAttempt(pipeline, stage);
-  if (!attempt || pipeline.state === "needs_decision") return;
+  if (!attempt || pipeline.state === "needs_decision" || attempt.activation) return;
   if (attempt.launchId && attempt.state === "spawning") {
     const receipt = ports.spawnReceipt(attempt.launchId);
     const recovery = receipt?.state === "path-pending" ? stagedLaunchRecovery(receipt) : null;
@@ -2946,148 +3253,21 @@ async function tickRunStage(
           parentConversationId: null,
         },
       };
-      let spawned: PipelineStageSpawn | null = null;
-      let spawnAttempt = 0;
-      /* Set when the spawn reached host publication and found no controller.
-         The activation leaves the loop for the wall-clock wait below rather
-         than sleeping here, so it costs the pipelines phase nothing. */
-      let controllerFailure: string | null = null;
-      /* The failed receipt behind `controllerFailure` when the spawn had
-         already reserved a launch; retired once a further round is booked. */
-      let failedReceipt: PipelineSpawnReceipt | null = null;
-      while (true) {
-        spawnAttempt += 1;
-        /* Every spawn call of this attempt consumes one client attempt id,
-           the immediate handshake retries inside one tick and the rounds of
-           a wait that spans ticks alike (#1056, review round 2), so the retry
-           index counts spawn calls. The count is persisted before the call:
-           a restart that interrupts the call still finds it counted, so the
-           retry that follows the interrupted launch's retirement cannot
-           replay its id. An attempt persisted before the count existed starts
-           past every id the earlier engine could have spent. */
-        const retryIndex = Math.max(
-          attempt.spawnCalls ?? uncountedSpawnCallFloor(attempt),
-          attempt.retiredLaunches?.length ?? 0,
-        );
-        attempt.spawnCalls = retryIndex + 1;
-        persist();
-        try {
-          spawned = await ports.spawnAgent({
-            ...spawnInput,
-            clientAttemptId: retryIndex === 0
-              ? spawnInput.clientAttemptId
-              : `handshake_retry_${retryIndex}_${spawnInput.clientAttemptId}`.slice(0, 128),
-          }, (reservation) => {
-            attempt.launchId = reservation.launchId;
-            attempt.conversationId = reservation.conversationId;
-            attempt.accountId = reservation.accountId ?? attempt.accountId ?? null;
-            /* The reservation committed this stage's membership (#1586); a
-               fallback task it minted is the pipeline's task from here on,
-               recorded before the agent is actuated. */
-            adoptPipelineFallbackTask(pipeline, tasksForBinding());
-            persist();
-          });
-          break;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!isTransientStructuredSpawnFailure(message)) throw error;
-          /* An unavailable controller is a publication this process is between,
-             not a rejected launch, so it gets the wall-clock wait budget; every
-             other transient keeps the two immediate handshake retries (#1056),
-             which stay well inside the controller's phase deadline. */
-          const accountMutationContention = isAccountMutationContention(message);
-          const hostUnavailable = isRuntimeHostUnavailableSpawnFailure(message);
-          /* #1750: an unverified delivery must never take the immediate
-             handshake retries below — those re-dispatch the prompt on sight.
-             It joins the receipt-gated route, where the transcript decides. */
-          const unverifiedDelivery = isUnverifiedDeliverySpawnFailure(message);
-          /* A busy account or an unreachable runtime host is retryable before
-             the registry publishes a launch claim. Once a callback supplied an
-             id, the receipt alone knows the launch's fate (#1678): `failed` is
-             the spawn layer's own retry-safe verdict and the launch is retired
-             below; anything else parks, and the existing receipt recovery
-             adopts a launch that settles after all. */
-          if ((accountMutationContention || hostUnavailable || unverifiedDelivery) && attempt.launchId !== null) {
-            const receipt = ports.spawnReceipt(attempt.launchId);
-            if (receipt?.state !== "failed" || receipt.launchId !== attempt.launchId) throw error;
-            failedReceipt = receipt;
-          }
-          if (isStructuredDeliveryControllerFailure(message) || accountMutationContention || hostUnavailable || unverifiedDelivery) {
-            controllerFailure = message;
-            break;
-          }
-          if (spawnAttempt >= SPAWN_HANDSHAKE_MAX_ATTEMPTS) {
-            throw new Error(`stage spawn failed after ${spawnAttempt - 1} retries: ${message}`);
-          }
-          const sleep = ports.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
-          await sleep(SPAWN_HANDSHAKE_RETRY_DELAY_MS);
-        }
-      }
-      if (controllerFailure !== null) {
-        /* Wall-clock from the first sighting, so the time this attempt already
-           spent inside spawnAgent counts against the budget rather than being
-           invisible to it. */
-        const failedAt = ports.now();
-        if (failedReceipt) {
-          /* Claimed under the identity retry-stage uses, so a later manual
-             retry of the same launch is idempotent; a claim that finds the
-             receipt settled after all parks, and the completed-receipt
-             reconcile adopts the launch on the next tick. */
-          const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, failedReceipt, activationNow, failedAt, ports);
-          if (deferred === "exhausted") throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
-          if (deferred === "unsafe") throw new Error(stagedLaunchRetryRefusal(controllerFailure));
-          if (deferred === "delivered") throw new Error(unverifiedLaunchRetryRefusal(controllerFailure));
-          if (deferred === "settled") throw new Error(controllerFailure);
-          persist();
-          return;
-        }
-        /* #1750: a busy account lock and an unreachable runtime host are the
-           same succession seen from two sides, and thirty seconds cannot
-           outlast a deploy — production spent the whole budget inside three
-           spawn calls. Both ride the host budget here, exactly as a retired
-           launch already does. */
-        if (bookControllerWaitRound(attempt, activationNow, failedAt, ports, spawnWaitBudget(controllerFailure)) === "exhausted") {
-          throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
-        }
-        attempt.state = "pending";
-        setCursorState(pipeline, stage.id, "pending");
-        syncControllerWaitStateDetail(pipeline, attempt, controllerFailure);
+      if (process.env.LLV_PIPELINE_ACTIVATION_DRAIN === "1") {
+        attempt.activation = {
+          id: crypto.randomUUID(), phase: "reserved", input: spawnInput,
+          clientAttemptId: spawnInput.clientAttemptId, startedAt: activationNow,
+          fence: activationFence(pipeline),
+        };
+        spawnsThisProcess.delete(attemptKey(pipeline, stage, attempt));
         persist();
         return;
       }
-      if (!spawned) throw new Error("stage spawn failed without a result");
-      const recovery = stagedLaunchRecovery(ports.spawnReceipt(spawned.launchId));
-      if (recovery) {
-        waitForStagedLaunch(pipeline, stage, attempt, recovery, ports);
-        persist();
-        return;
-      }
-
-      /* The generation that hosts this launch (#1747). A later tick that finds
-         a different one is looking at a succession, which is the only thing
-         that cuts a running turn while leaving its host alive and idle. */
-      const hostEpoch = await ports.runtimeHostEpoch?.() ?? null;
-      if (hostEpoch !== null) attempt.hostEpoch = hostEpoch;
-      delete attempt.severedTurn;
-      delete attempt.verdictRequest;
-      delete attempt.backgroundWait;
-      delete attempt.controllerWait;
-      attempt.launchId = spawned.launchId;
-      attempt.conversationId = spawned.conversationId;
-      attempt.sessionId = spawned.sessionId;
-      attempt.agentPath = spawned.transcript;
-      attempt.paneId = spawned.paneId;
-      attempt.accountId = spawned.accountId ?? attempt.accountId ?? null;
-      attempt.state = "running";
-      setCursorState(pipeline, stage.id, "running");
-      if (pipeline.stateDetail?.startsWith("rate limited until ")
-        || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
+      await spawnRunStage(pipeline, stage, attempt, spawnInput, activationNow, ports, persist);
     } catch (error) {
       park(pipeline, error instanceof Error ? error.message : String(error), attempt);
-    } finally {
-      /* The key only means "this spawn is in flight in this process". */
-      spawnsThisProcess.delete(attemptKey(pipeline, stage, attempt));
     }
+
     return;
   }
 
@@ -4096,7 +4276,7 @@ async function recoverWaitingStageLaunches(ports: PipelinePorts): Promise<Map<st
   for (const pipeline of loadPipelines()) {
     const stage = currentStage(pipeline);
     const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
-    if (!stage || stage.kind !== "run" || !attempt?.launchId || attempt.completedAt || attempt.verdict
+    if (!stage || stage.kind !== "run" || !attempt?.launchId || attempt.activation || attempt.completedAt || attempt.verdict
       || !["running", "needs_decision"].includes(pipeline.state) || pipelineSurvivorRefusal(pipeline)) continue;
     if (pipeline.state === "needs_decision" && !isStructuredSpawnPark(pipeline, attempt)) continue;
     const receipt = ports.spawnReceipt(attempt.launchId);
@@ -4653,6 +4833,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         await reconcilePipelinePublication(pipeline.id, delivery.epoch, ports.exec, null);
       }
     }
+    await drainStageActivations(ports);
     const recoveredLaunches = await recoverWaitingStageLaunches(ports);
     const result = await withPipelineControllerMutation(async (pipelines, persist) => {
       let changed = reconcilePipelineFallbackTasks(pipelines, persist);
@@ -4700,6 +4881,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           persistPipeline();
           changed = true;
         }
+        if (pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.activation))) return;
         let pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, ports);
         pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, ports) || pipelineChanged;
         pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, ports) || pipelineChanged;
@@ -4733,6 +4915,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       }, { batchSize: 4, timeBudgetMs: 16 });
       return { pipelines, changed };
     });
+    await drainStageActivations(ports);
+    result.pipelines = loadPipelines();
     /* A pass that ends on a pending cursor (a stage just passed and advanced,
        or provisioning finished) must not wait for an unrelated wake-up to
        materialize the next attempt (#337). */
@@ -6189,6 +6373,9 @@ export async function patchPipeline(
     } else if (req.action === "pause") {
       if (pipeline.state === "draft") return { error: "draft pipelines can only be started, edited, or deleted", status: 409 };
       if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused") {
+        for (const run of pipeline.runs) for (const attempt of run.attempts) {
+          if (attempt.activation) attempt.activation.cancelRequested = true;
+        }
         pipeline.pausedState = pipeline.state;
         pipeline.state = "paused";
         pipeline.pausedAt = ports.now();
@@ -6203,6 +6390,9 @@ export async function patchPipeline(
       pipeline.stateDetail = pauseResumeDetail("resumed", actor);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);
     } else if (req.action === "retry-stage") {
+      if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
+        return { error: "the original stage activation is still reconciling", status: 409 };
+      }
       const expectation = expectedStageRefusal(pipeline, req);
       if (expectation) return expectation;
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
@@ -6324,6 +6514,9 @@ export async function patchPipeline(
       pipeline.pausedState = null;
       pipeline.stateDetail = null;
     } else if (req.action === "skip-stage") {
+      if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
+        return { error: "the original stage activation is still reconciling", status: 409 };
+      }
       const expectation = expectedStageRefusal(pipeline, req);
       if (expectation) return expectation;
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
@@ -6500,6 +6693,15 @@ export async function patchPipeline(
       persist();
       return { pipeline };
     } else if (req.action === "close") {
+      const activations = pipeline.runs.flatMap((run) => run.attempts).filter((item) => item.activation);
+      if (activations.length) {
+        for (const item of activations) item.activation!.closeRequested = true;
+        pipeline.pausedState = pipeline.state === "paused" || pipeline.state === "draft" ? pipeline.pausedState : pipeline.state;
+        pipeline.state = "paused";
+        pipeline.stateDetail = "close is waiting for the original stage launch to reconcile";
+        persist();
+        return { pipeline, error: pipeline.stateDetail, status: 409 };
+      }
       if (pipeline.state === "draft") {
         /* Closing a draft is the same act as discarding it, and it settles the
            record the same way — the two verbs differed only in which button
@@ -6643,6 +6845,7 @@ export async function patchPipeline(
       if (stage && (!attempt || (pipeline.cursor?.state === "pending" && TERMINAL_ATTEMPT_STATES.has(attempt.state)))) {
         newAttempt(pipeline, stage);
       }
+      delete pipeline.activationCloseRequested;
       pipeline.state = "closed";
       pipeline.cursor = null;
       pipeline.pausedState = null;
