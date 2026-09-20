@@ -720,14 +720,21 @@ export async function agentLivenessSnapshot(
       throw new Error("liveness needs an inventory source: install selectInventory");
     }
 
-    /* Hosts the generation has not caught up with yet. Newest-first ordering is
-       restored only when recovery actually found something, so the ordinary
-       path returns the generation's own order untouched. */
+    /* Recovery and the completed generation share the same verified-owner
+       priority. Order by freshness within each group before the final limit,
+       so newer scan-only history cannot displace a recovered owner. */
     const recovery = await recoverHostedTranscripts(hostedPaths, hostedSeen, request.project, sources.describeTranscript);
     const known = new Set(entries.map((entry) => entry.path));
-    const added = recovery.entries.filter((entry) => !known.has(entry.path));
+    const added = recovery.entries.filter((entry) => {
+      if (known.has(entry.path)) return false;
+      known.add(entry.path);
+      return true;
+    });
     if (added.length > 0 || recovery.truncated) {
-      if (added.length > 0) entries = [...entries, ...added].sort(byNewest).slice(0, limit);
+      if (added.length > 0) entries = [...entries, ...added].sort((left, right) =>
+        Number(hostedPaths.has(right.path)) - Number(hostedPaths.has(left.path))
+        || byNewest(left, right),
+      ).slice(0, limit);
       selection = {
         ...selection,
         matched: selection.matched + added.length,
