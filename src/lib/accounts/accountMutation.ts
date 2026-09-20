@@ -6,6 +6,8 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
 
+import { accountsCollectionRevision } from "./accountsStore";
+
 const ASYNC_LOCK_ATTEMPTS = 2_000;
 const LOCK_WAIT_MS = 5;
 const LOCK_STALE_MS = 30_000;
@@ -15,10 +17,9 @@ const LOCK_STALE_MS = 30_000;
    a dead owner look alive. */
 const TICKET_MAX_AGE_MS = 600_000;
 const HEARTBEAT_MS = 10_000;
-const REVISION_VERSION = 1;
 
 type LockOwner = { pid: number; startIdentity: string | null; ns: string | null; token: string };
-type TransactionContext = { active: boolean; revision: number };
+type TransactionContext = { active: boolean };
 type PendingLock = { lock: string; queue: string; owner: LockOwner; ticket: string };
 type AcquiredLock = { context: TransactionContext; release(): void };
 
@@ -117,33 +118,6 @@ function removeIfOwned(filename: string, token: string): void {
   } catch { /* ownership already moved */ }
 }
 
-function readRevision(): number {
-  try {
-    const value = JSON.parse(fs.readFileSync(statePath("account-mutation-revision.json"), "utf8")) as { version?: unknown; revision?: unknown };
-    return value.version === REVISION_VERSION && Number.isSafeInteger(value.revision) && (value.revision as number) >= 0
-      ? value.revision as number
-      : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function advanceRevision(expected: number): void {
-  const filename = statePath("account-mutation-revision.json");
-  const current = readRevision();
-  if (current !== expected) throw new Error("account mutation revision fence changed while locked");
-  const temporary = `${filename}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-  try {
-    fs.writeFileSync(temporary, JSON.stringify({ version: REVISION_VERSION, revision: expected + 1 }) + "\n", { mode: 0o600 });
-    const descriptor = fs.openSync(temporary, "r");
-    try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-    fs.renameSync(temporary, filename);
-  } finally {
-    fs.rmSync(temporary, { force: true });
-  }
-}
-
 function createPendingLock(): PendingLock {
   const lock = statePath("account-selection.lock");
   const queue = `${lock}.queue`;
@@ -203,7 +177,7 @@ function tryAcquireFile(pending: PendingLock): AcquiredLock | null {
     fs.rmSync(pending.lock, { force: true });
     throw error;
   }
-  const context = { active: true, revision: readRevision() };
+  const context = { active: true };
   const heartbeat = setInterval(() => touchOwnerFile(pending.lock), HEARTBEAT_MS);
   heartbeat.unref?.();
   return {
@@ -268,18 +242,23 @@ async function acquireAsync(): Promise<AcquiredLock> {
   }
 }
 
-function admitTransaction(context: TransactionContext): void {
-  // Revision admission completes before any durable business write can commit.
-  advanceRevision(context.revision);
-  context.revision += 1;
-}
-
+/*
+ * Transaction admission no longer writes a fence of its own (#1870, slice 7).
+ * `account-mutation-revision.json` used to be advanced here, durably, before
+ * the business write — two files, and a crash between them left a fence that
+ * had moved without the write it admitted. Every account store is now one
+ * collection of `state.sqlite`, and its revision IS the mutation revision: a
+ * write takes the collection lease, commits under BEGIN IMMEDIATE and advances
+ * the revision in that same transaction. A second writer that somehow reached
+ * a durable write without this lock is refused by the lease rather than
+ * detected after the fact, and a mutation that changes nothing advances
+ * nothing, which is what an aligned compatibility sync always wanted to say.
+ */
 export function withAccountMutationLock<T>(operation: () => T): T {
   const inherited = transactionContext.getStore();
   if (inherited?.active) return operation();
   const transaction = acquire();
   try {
-    admitTransaction(transaction.context);
     return transactionContext.run(transaction.context, operation);
   } finally {
     transaction.release();
@@ -291,14 +270,14 @@ export async function withAccountMutationLockAsync<T>(operation: () => Promise<T
   if (inherited?.active) return operation();
   const transaction = await acquireAsync();
   try {
-    admitTransaction(transaction.context);
     return await transactionContext.run(transaction.context, operation);
   } finally {
     transaction.release();
   }
 }
 
-/** Exposes durable transaction admission progress to interprocess tests. */
+/** Durable account mutation progress, for interprocess tests: the `accounts`
+    collection revision, which every account write advances with itself. */
 export function accountMutationRevisionForTests(): number {
-  return readRevision();
+  return accountsCollectionRevision();
 }

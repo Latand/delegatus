@@ -19,6 +19,9 @@ import { dispatchStructuredControl } from "./structuredControls";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { applyConversationMigration } from "@/lib/accounts/migration/conversationCommand";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { BINDINGS_SOURCE, OVERRIDES_SOURCE, resetAccountCollectionsForTests } from "@/lib/accounts/accountsStore";
+import { clearAccountFixture, seedAccountSource } from "@/lib/accounts/accountsStoreFixture";
+import { accountProjectBindings } from "@/lib/accounts/projectBindings";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-controls-"));
 
@@ -27,14 +30,14 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-controls-"
    re-pointed before each test, so nothing here reads — or is decided by — the
    operator's live state. */
 const STATE = path.join(sandbox, "state");
-const RECORD = path.join(STATE, "account-project-bindings.json");
 const ORIGINAL_STATE_DIR = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = STATE;
 
 beforeEach(() => {
   process.env.LLV_STATE_DIR = STATE;
-  fs.rmSync(RECORD, { force: true });
-  fs.rmSync(path.join(STATE, "account-project-overrides.json"), { force: true });
+  resetAccountCollectionsForTests();
+  clearAccountFixture(BINDINGS_SOURCE);
+  clearAccountFixture(OVERRIDES_SOURCE);
 });
 
 afterAll(() => {
@@ -899,7 +902,7 @@ test("a switch inside the allowed set is unchanged, and attributes nothing", asy
 
 test("an unbound project switches exactly as it always did", async () => {
   const fixture = structuredConversation();
-  expect(fs.existsSync(RECORD)).toBe(false);
+  expect(accountProjectBindings()).toEqual([]);
 
   const commands: unknown[] = [];
   const result = await switchAccount(fixture, OUTSIDE_ACCOUNT, commands);
@@ -913,7 +916,7 @@ test("an unbound project switches exactly as it always did", async () => {
 test("a binding record this process cannot read does not veto a named choice, and is recorded as unreadable", async () => {
   const fixture = structuredConversation();
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 
   const commands: unknown[] = [];
   const result = await switchAccount(fixture, OUTSIDE_ACCOUNT, commands);
@@ -970,7 +973,7 @@ test("a reconfigure that names no account never consults the binding record", as
   /* A record damaged badly enough that any read of it refuses: a model change
      still behaves exactly as it does today, because it places this
      conversation's work on no new account. */
-  fs.writeFileSync(RECORD, "{ not json", "utf8");
+  seedAccountSource(BINDINGS_SOURCE, "{ not json");
 
   const commands: unknown[] = [];
   const result = await dispatchStructuredControl({

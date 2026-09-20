@@ -188,6 +188,8 @@ export interface McpToolCallContext {
       a recoverable mutation's single dispatch; the binding reads its downstream
       idempotency key from here rather than deriving one of its own. */
   binding?: McpRequestBinding;
+  /** Persist a newly created orchestrator recipient before its first send. */
+  bindCreatedTarget?: (identity: string) => Promise<void>;
   /** #1490: written by the transport the moment the request may be on the
       wire. A failure raised while this still says `false` happened before any
       dispatch, which is the only way an error without an id proves that the
@@ -561,6 +563,8 @@ export interface McpRecoveryReceiptStore extends McpReceiptStore {
   /** `claimed` → `dispatching`. False means the attempt was closed by someone
       else first, and the caller must not dispatch. */
   markDispatching(key: string, digest: string): boolean | Promise<boolean>;
+  /** Fill an absent orchestrator recipient once, under the original claim owner. */
+  bindCreatedTarget?(key: string, digest: string, binding: McpRequestBinding, identity: string): boolean | Promise<boolean>;
   /** `claimed` → `not-executed`, writing the terminal result. False means the
       row is no longer merely claimed (it was dispatched, or already closed). */
   fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean | Promise<boolean>;
@@ -657,6 +661,14 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     return true;
   }
 
+  bindCreatedTarget(key: string, digest: string, binding: McpRequestBinding, identity: string): boolean {
+    const receipt = this.receipts.get(key);
+    const next = receipt?.digest === digest ? withCreatedTarget(receipt, binding, identity) : null;
+    if (!next) return false;
+    this.receipts.set(key, next);
+    return true;
+  }
+
   fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean {
     const receipt = this.receipts.get(key);
     if (!receipt || receipt.digest !== digest || receipt.stage !== "claimed" || receipt.result) return false;
@@ -672,6 +684,17 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     return settled.result;
   }
 
+}
+
+/** Only the original dispatch owner may fill the absent recipient. A later
+    seat rotation cannot replace a recipient already held by the receipt. */
+function withCreatedTarget(receipt: Receipt | undefined, binding: McpRequestBinding, identity: string): Receipt | null {
+  const held = receipt?.binding;
+  if (!receipt || receipt.stage !== "dispatching" || receipt.result || receipt.recoveryResult
+    || !held || held.toolName !== "send_message_to_orchestrator"
+    || held.target.identity !== null || !/^conversation_[A-Za-z0-9_-]{1,128}$/.test(identity)
+    || JSON.stringify(held) !== JSON.stringify(binding)) return null;
+  return { ...receipt, binding: { ...held, target: { ...held.target, identity } } };
 }
 
 type ReceiptFile = {
@@ -1446,6 +1469,10 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
       receipt && receipt.stage === "claimed" && !receipt.result ? { ...receipt, stage: "dispatching" } : null);
   }
 
+  bindCreatedTarget(key: string, digest: string, binding: McpRequestBinding, identity: string): Promise<boolean> {
+    return this.transition(key, digest, (receipt) => withCreatedTarget(receipt, binding, identity));
+  }
+
   fenceUndispatched(key: string, digest: string, result: McpToolResult): Promise<boolean> {
     return this.transition(key, digest, (receipt) =>
       receipt && receipt.stage === "claimed" && !receipt.result ? { ...receipt, result, stage: "not-executed" } : null);
@@ -1616,6 +1643,28 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       SET stage = 'dispatching'
       WHERE receipt_key = ? AND digest = ? AND stage = 'claimed' AND result_json IS NULL
     `).run(key, digest).changes === 1;
+  }
+
+  bindCreatedTarget(key: string, digest: string, binding: McpRequestBinding, identity: string): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.selectRow(key);
+      const record = row ? this.recordOfRow(key, row) : null;
+      const next = record?.digest === digest ? withCreatedTarget({
+        digest, binding: record.binding ?? undefined, stage: record.stage ?? undefined,
+        result: record.result ?? undefined, recoveryResult: record.recoveryResult ?? undefined,
+      }, binding, identity) : null;
+      if (next) {
+        const bindingJson = JSON.stringify(next.binding);
+        this.db.query(`UPDATE mcp_receipts SET binding_json = ?, storage_bytes = ? WHERE receipt_key = ?`)
+          .run(bindingJson, this.storageBytes(key, digest, null, bindingJson), key);
+      }
+      this.db.exec("COMMIT");
+      return next !== null;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
   }
 
   fenceUndispatched(key: string, digest: string, result: McpToolResult): boolean {
@@ -2396,8 +2445,8 @@ export function createMcpToolService(
               recovered: true, outcome: "settled", evidence: "mcp-receipt", nextAction: "follow-disposition",
               ...(!previous.recovered ? {
                 original: previous,
-                state: typedTool === "send_message" ? "delivered" : "completed",
-                ...(typedTool === "send_message" ? { resend: "not-needed", duplicateRisk: false } : {}),
+                state: typedTool === "spawn_agent" ? "completed" : "delivered",
+                ...(["send_message", "send_message_to_orchestrator"].includes(typedTool) ? { resend: "not-needed", duplicateRisk: false } : {}),
               } : {}),
             } : {}),
             replayed: true,
@@ -2581,7 +2630,14 @@ export function createMcpToolService(
         let settled: McpToolResult;
         const dispatch: McpDispatchTracker = { attempted: false };
         try {
-          const payload = await bindings[typedTool](effectiveArgs, { ...context, binding, dispatch });
+          const payload = await bindings[typedTool](effectiveArgs, { ...context, binding, dispatch,
+            bindCreatedTarget: async (identity) => {
+              if (!store.bindCreatedTarget || !await store.bindCreatedTarget(key, digest, binding, identity)) {
+                throw new McpDispatchUncertainError("the created orchestrator recipient could not be durably bound; no message was dispatched");
+              }
+              binding.target = { ...binding.target, identity };
+            },
+          });
           settled = {
             ...payload,
             ...(normalized.clamped ? { clamped: normalized.clamped } : {}),
@@ -2838,7 +2894,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   stage_report: [
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Three fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], and a one-or-two-sentence summary.",
-    "Findings are returned and shown most severe first; pass cannot carry findings.",
+    "A successful acknowledgement carries the completion metadata and a bounded severity count; use get_pipeline with pipelineId and stageId to read the stored findings and summary. Pass cannot carry findings.",
     "A fixable defect is fail, however partial your confidence in the call is; needs_decision is for a choice only a human can make, and a needs_decision that carries findings on a stage with a fail edge is routed to that stage as a fail anyway.",
     "The server resolves the calling conversation to its own live attempt, so stageId is needed only when one conversation holds more than one live stage, and a conversation that holds no live attempt is refused.",
     "A review-loop stage is refused: its completion is the outcome of its review flow, which the server reads itself.",
@@ -2866,7 +2922,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
   deployment_status: "Read Viewer deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project and callerLaunchId (your existing task-assignment spawn receipt, verified against the server-provided capability) reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
   resources: "Read system and Viewer-owned agent resource usage. freshness reports requestedAt, system capturedAt, ageMs, cache source and refreshSucceeded from the existing collector diagnostic. A failed refresh can serve an older capture; null means no refresh outcome was established.",
-  conversation_migration: "Reseat, retry, roll back or cancel a conversation account migration, withdraw an account switch the queue has not claimed yet, or send messages a failed switch held on the current account.",
+  conversation_migration: "Select an explicit account for a structured conversation, automatically reseat by quota, retry, roll back or cancel a migration, withdraw an unclaimed account switch, or send messages a failed switch held on the current account. Explicit selection uses the browser account picker's semantics and never substitutes another account.",
   agent_activity: "Read agent liveness: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline} and drops the transcript paths, host detail and the selection and timing reports.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
@@ -2885,7 +2941,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   bridge_directive: "Relay the user's intent to the designated manager. The recipient and the delivery id are derived server-side, so a retry of the same root turn is one instruction, never two.",
   get_orchestrator: "Read a project's designated orchestrator: designation, health and activity, model and prompt version, transcript size, message/tool/compaction counts, context usage against its model's configured window (clearly labelled when estimated), predecessor lineage, and a bounded rotation recommendation — STRONGLY_RECOMMEND_ROTATION once usage reaches the configured threshold. Words only: it never rotates, creates, or interrupts anything itself.",
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
-  send_message_to_orchestrator: "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first and then delivered to. Idempotent by clientRequestId. Like send_message, the answer reports acceptance rather than arrival: ask message_receipt what became of the operationId.",
+  send_message_to_orchestrator: [
+    "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. The recipient is frozen before the message dispatch; a later seat rotation never redirects recovery. The answer reports acceptance: ask message_receipt what became of the operationId.",
+    RECOVERY_CONTRACT_DESCRIPTION,
+  ].join(" "),
   seat_tick_settings: [
     "Read — and change — one project's seat tick: whether the Viewer wakes that project's seat at all, how often, and what your own monitor prompt tells the wake to look at.",
     "Called with no change fields it is a read. `project` defaults to your own, and naming another project's is allowed rather than refused; the answer says which of the two you did, and the record, the board card and the tick's journal all carry who changed whose tick.",
@@ -3368,7 +3427,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   conversation_migration: z.object({
     clientRequestId: clientRequestIdSchema,
     conversationId: z.string().min(1),
-    action: z.enum(["reseat", "retry", "rollback", "cancel", "withdraw", "keep-current"]).describe("reseat: on a structured conversation, records the chosen account as the conversation's intended account (reseat: intended); it moves there when it is next engaged. keep-current: messages held by a failed account switch go out on the account the conversation runs on. cancel: a claimed switch still waiting for its turn, by expectedRevision; the migration is rolled back and the reconfigure that owned it never applies, and the same cancel again answers cancel: replayed. withdraw: a queued switch the queue has not claimed, by operationId; a claimed one is refused with code SWITCH_CLAIMED and expectedRevision, the revision to cancel it by once its migration exists (null before)."),
+    action: z.enum(["reseat", "select-account", "retry", "rollback", "cancel", "withdraw", "keep-current"]).describe("select-account: explicit browser account choice, requires accountId; preserves the current model and effort and records an out-of-pool choice with caller attribution. reseat: on a structured conversation, records the chosen account as the conversation's intended account (reseat: intended); it moves there when it is next engaged. keep-current: messages held by a failed account switch go out on the account the conversation runs on. cancel: a claimed switch still waiting for its turn, by expectedRevision; the migration is rolled back and the reconfigure that owned it never applies, and the same cancel again answers cancel: replayed. withdraw: a queued switch the queue has not claimed, by operationId; a claimed one is refused with code SWITCH_CLAIMED and expectedRevision, the revision to cancel it by once its migration exists (null before)."),
+    accountId: z.string().trim().min(1).optional().describe("select-account only: exact account to select. Never substituted. reseat remains automatic and refuses account fields."),
     expectedRevision: z.number().int().min(0).optional().describe("The migration's revision: required by retry, rollback and cancel."),
     operationId: z.string().min(1).optional().describe("withdraw: the queued reconfigure operation."),
     transcriptPath: z.string().optional(),
@@ -3447,6 +3507,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   send_message_to_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
+    recoveryOnly: recoveryOnlySchema,
     project: z.string().min(1).describe("Project whose selected orchestrator receives the message."),
     text: z.string().min(1).describe("The message. The recipient is resolved server-side; a dead session is resumed, a missing one created first."),
   }).passthrough(),

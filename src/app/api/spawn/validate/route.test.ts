@@ -8,6 +8,8 @@ import { NextRequest } from "next/server";
 import { AGENT_SPAWN_LINEAGE_ERROR } from "@/app/api/spawn/admission";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { FENCES_SOURCE } from "@/lib/accounts/accountsStore";
+import { seedAccountSource } from "@/lib/accounts/accountsStoreFixture";
 import { readSpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
@@ -194,11 +196,7 @@ test("a malformed unrelated fence entry does not block a new refusal fence", asy
   const cwd = path.join(sandbox, "malformed-entry-dir");
   fs.mkdirSync(cwd, { recursive: true });
   const store = new AgentRegistry(path.join(sandbox, `registry-${crypto.randomUUID()}.json`), undefined, undefined, { sqliteMode: "off" });
-  const fenceFile = path.join(process.env.LLV_STATE_DIR!, "spawn-admission-fences.json");
-  fs.mkdirSync(path.dirname(fenceFile), { recursive: true });
-  fs.writeFileSync(fenceFile, JSON.stringify({ version: 1, fences: {
-    spawn_admission_malformed_1: null,
-  } }) + "\n");
+  seedAccountSource(FENCES_SOURCE, { version: 1, fences: { spawn_admission_malformed_1: null } });
   expect(() => readSpawnAdmissionFence("spawn_admission_malformed_1")).toThrow("invalid spawn admission fence");
   const body = {
     title: "Refusal beside damaged history",
