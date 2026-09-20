@@ -53,6 +53,8 @@ const { saveTasks } = await import("@/lib/tasks/store");
 const { projectInfoFromCwd } = await import("@/lib/scanner/describe");
 const { resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
 const { listClaudeAccounts } = await import("@/lib/accounts/claude");
+const { BINDINGS_SOURCE, resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
+const { clearAccountFixture, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
 
 /** The board task's project, and the accounts nobody on this machine has. */
 const ATLAS = "project-atlas";
@@ -70,7 +72,8 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = STATE;
   process.env.HOME = HOME;
   process.env.LLV_CLAUDE_HOME = CLAUDE_HOME;
-  fs.rmSync(RECORD, { force: true });
+  resetAccountCollectionsForTests();
+  clearAccountFixture(BINDINGS_SOURCE);
   resetProjectAliasesForTests();
 });
 
@@ -174,10 +177,10 @@ async function launch(
 
 function bind(engine: "claude" | "codex", accountId: string, project: string): void {
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{ engine, accountId, project, createdAt: "2026-08-30T12:00:00.000Z" }],
-  }), "utf8");
+  });
 }
 
 test("a project bound to an account this machine does not have refuses the launch instead of using the active one", async () => {
@@ -200,7 +203,7 @@ test("a project bound to an account this machine does not have refuses the launc
 test("a binding record that cannot be read refuses the launch rather than reading as unbound", async () => {
   const cwd = fs.mkdtempSync(path.join(SANDBOX, "atlas-damaged-"));
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"claude"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude" }] });
 
   const attempt = await launch("10410101-89c5-0064-9118-51661c4f1041", cwd);
 

@@ -13,6 +13,24 @@ const mod = await import("./claude");
 const { AccountArchiveUnavailableError, AccountRemovalBlockedError, retiredAccountArchive, setAccountRemovalCheckpointForTests } = await import("./removal");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+const { resetAccountCollectionsForTests } = await import("./accountsStore");
+const { persistedAccountRegistry, persistedAccountState, seedAccountRegistry } = await import("./accountsStoreFixture");
+const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+
+/** Refuse the NEXT durable state write, so the caller's recovery path runs
+    against a commit that did not land. */
+function denyNextStateWrite(): () => void {
+  const original = SqliteStateCollection.prototype.patchSync;
+  let pending = true;
+  SqliteStateCollection.prototype.patchSync = function patchSync(this: unknown, ...args: unknown[]) {
+    if (pending) {
+      pending = false;
+      throw Object.assign(new Error("registry write denied"), { code: "EACCES" });
+    }
+    return (original as (...rest: unknown[]) => void).apply(this, args);
+  } as typeof SqliteStateCollection.prototype.patchSync;
+  return () => { SqliteStateCollection.prototype.patchSync = original; };
+}
 
 beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
@@ -57,11 +75,17 @@ test("unsafe modes and corrupt registries reject sensitive mutation while read m
   const account = mod.createManagedClaudeAccount("Unsafe");
   fs.chmodSync(account.home, 0o755);
   expect(() => mod.claudeAccountForSpawn(account.id)).toThrow();
+  /* Since #1870 the registry is rows, so a registry that cannot be turned into
+     an account list is a row the store refuses on rather than bytes that will
+     not parse. A damaged store is still read-only: Main is served, every
+     mutation refuses, and nothing is written over the damage. */
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
-  const registry = mod.claudeRegistryPath(); fs.mkdirSync(path.dirname(registry), { recursive: true }); fs.writeFileSync(registry, "{ corrupt registry");
+  resetAccountCollectionsForTests();
+  seedAccountRegistry("claude", { version: 1, active: "default", accounts: [{ id: "phantom", label: "Phantom", kind: "managed" }], retired: [], removals: [] });
+  const damaged = persistedAccountState();
   expect(mod.listClaudeAccounts().map((item) => item.id)).toEqual(["default"]);
   expect(() => mod.createManagedClaudeAccount("Other")).toThrow(mod.CorruptClaudeAccountsError);
-  expect(fs.readFileSync(registry, "utf8")).toBe("{ corrupt registry");
+  expect(persistedAccountState()).toBe(damaged);
 });
 
 test("managed credentials reject symlinks and broad modes before an agent can spawn", () => {
@@ -362,7 +386,7 @@ const LEFTOVERS: Record<string, string> = {
 };
 
 function readRegistryJson(): { accounts: Array<{ id: string }>; retired: Array<{ id: string; archived?: boolean }>; removals?: unknown[] } {
-  return JSON.parse(fs.readFileSync(mod.claudeRegistryPath(), "utf8"));
+  return persistedAccountRegistry("claude");
 }
 
 /** A home shaped like the operator's Claude B: `projects` links into the
@@ -513,18 +537,13 @@ test("a conversation that turns live inside the registry mutation puts the home 
 
 test("an accounts-registry write failure restores the agent registry and the home", () => {
   const fixture = usedClaudeHome("Invented Commit");
-  const originalRename = fs.renameSync;
-  let retired = false;
-  setAccountRemovalCheckpointForTests((reached) => { if (reached === "registry-retired") retired = true; });
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    if (retired && path.resolve(String(destination)) === path.resolve(mod.claudeRegistryPath())) {
-      retired = false;
-      throw Object.assign(new Error("registry write denied"), { code: "EACCES" });
-    }
-    return originalRename(source, destination);
-  }) as typeof fs.renameSync;
+  /* The accounts registry is rows in state.sqlite since #1870: the write that
+     can fail is the commit, and a store that refuses it is one nothing may
+     write to. */
+  let restoreWrites = () => undefined as void;
+  setAccountRemovalCheckpointForTests((reached) => { if (reached === "registry-retired") restoreWrites = denyNextStateWrite(); });
   try { expect(() => mod.removeManagedClaudeAccount(fixture.account.id)).toThrow("registry write denied"); }
-  finally { fs.renameSync = originalRename; setAccountRemovalCheckpointForTests(null); }
+  finally { restoreWrites(); setAccountRemovalCheckpointForTests(null); }
 
   expectHomeUntouched(fixture);
   expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(fixture.homeAddressed);
