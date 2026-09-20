@@ -196,6 +196,60 @@ test("get_pipeline with stageId answers one stage's conclusion without prompts o
   expect(compact).toMatchObject({ pipelineId: pipeline.id, stages: [{ id: "build", latestAttempt: { n: 6, state: "failed", verdict: "fail" } }, { id: "review" }] });
 });
 
+test("get_pipeline reads an accepted report before settlement, after replacement, reopen, explicit selection, and settlement (#1919)", async () => {
+  const pipeline = reviewedPipeline();
+  const selected = pipeline.runs[0]!.attempts.at(-1)!;
+  const firstVerdict = {
+    status: "fail" as const,
+    findings: ["P0 — first critical finding", "P1 — first important finding", "P3 — first minor finding"],
+  };
+  selected.state = "running";
+  selected.verdict = null;
+  selected.report = { ...selected.report!, verdict: firstVerdict, summary: "First accepted report." };
+  savePipelines([pipeline]);
+
+  const first = await viewerMcpBindings().get_pipeline({
+    clientRequestId: "accepted-before-settlement", pipelineId: pipeline.id, stageId: "build", attempt: selected.n,
+  });
+  expect(first).toMatchObject({
+    attempt: { n: selected.n, state: "running", verdict: "fail", findings: firstVerdict.findings, summary: "First accepted report." },
+  });
+
+  const replacementVerdict = {
+    status: "needs_decision" as const,
+    findings: ["P1 — replacement finding", "P2 — replacement follow-up"],
+  };
+  const accepted = selected.report;
+  if (!accepted) throw new Error("fixture needs an accepted report");
+  selected.report = { ...accepted, seq: 2, calls: 2, verdict: replacementVerdict, summary: "Replacement accepted report." };
+  savePipelines([pipeline]);
+
+  /* A fresh binding reads the persisted replacement, the same path after a
+     process reopen; the attempt remains running until its turn settles. */
+  const reopened = await viewerMcpBindings().get_pipeline({
+    clientRequestId: "accepted-replacement-reopen", pipelineId: pipeline.id, stageId: "build", attempt: selected.n,
+  });
+  expect(reopened).toMatchObject({
+    attempt: {
+      n: selected.n,
+      state: "running",
+      verdict: "needs_decision",
+      findings: replacementVerdict.findings,
+      summary: "Replacement accepted report.",
+    },
+  });
+
+  selected.state = "failed";
+  selected.verdict = replacementVerdict;
+  savePipelines([pipeline]);
+  const settled = await viewerMcpBindings().get_pipeline({
+    clientRequestId: "accepted-after-settlement", pipelineId: pipeline.id, stageId: "build", attempt: selected.n,
+  });
+  expect(settled).toMatchObject({
+    attempt: { n: selected.n, state: "failed", verdict: "needs_decision", findings: replacementVerdict.findings },
+  });
+});
+
 test("list_pipelines state open and compact answer small rows for the lanes that can still move (#1845)", async () => {
   const corpus = pipelineCorpus(24);
   corpus[1]!.state = "needs_decision";

@@ -124,6 +124,11 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
   const selected = attemptFor(pipeline, stageId, attempt);
   const attempts = (pipeline.runs ?? []).find((run) => run.stageId === stageId)?.attempts ?? [];
   const role = stage.effectiveRole;
+  /* A stage report is accepted before the reporting turn settles. During that
+     interval the attempt stays running and has no settled verdict yet, while
+     its report is already the authoritative completion record. */
+  const reportedVerdict = selected?.report?.verdict;
+  const verdict = selected?.verdict ?? reportedVerdict;
   return {
     pipelineId: pipeline.id,
     state: pipeline.state,
@@ -143,8 +148,8 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
     attempt: selected ? {
       n: selected.n,
       state: selected.state,
-      verdict: selected.verdict?.status ?? null,
-      findings: selected.verdict?.findings ?? [],
+      verdict: verdict?.status ?? null,
+      findings: verdict?.findings ?? [],
       summary: clampChars(selected.report?.summary ?? null, SUMMARY_CHARS),
       decisionRequested: selected.decisionRequested === true,
       /* Findings handed to the fix stage after the budget was spent and never
