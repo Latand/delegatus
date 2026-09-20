@@ -168,7 +168,7 @@ describe("a build-phase module load never mutates state (#1905)", () => {
 });
 
 describe("the barrier's own rules", () => {
-  const configRoot = "/home/nobody/.config";
+  const configRoot = "/home/user/.config";
   const stateDirectory = path.join(configRoot, "agent-log-viewer", "state");
   const env = (extra: Record<string, string | undefined> = {}) => ({ XDG_CONFIG_HOME: configRoot, ...extra });
 
