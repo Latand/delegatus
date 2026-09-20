@@ -324,6 +324,11 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
   }
   if (item.kind === "think") {
     const available = item.availability === "available" || Boolean(item.text.trim());
+    // Keep source identities for delayed live reasoning and prepend anchors;
+    // an empty provider record has no visible row of its own.
+    if (!available) return <span hidden data-empty-reasoning aria-hidden>
+      {item.members?.map(member => <span key={member.sourceId} data-feed-key={member.anchorKey} data-feed-source-id={member.sourceId} />)}
+    </span>;
     const count = item.members?.length ?? 1;
     return (
       <details className={`group relative my-0.5 ${indent}text-label text-muted`} data-reasoning-availability={available ? "available" : "unavailable"}>

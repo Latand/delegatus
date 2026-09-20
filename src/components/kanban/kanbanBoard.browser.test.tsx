@@ -6291,3 +6291,53 @@ describe("role evaluation mounted candidate", () => {
     await gradeRendered(path.resolve(process.env.ROLE_EVAL_CANDIDATE!), path.resolve(process.env.ROLE_EVAL_OUTPUT!));
   }, 180_000);
 });
+
+
+describe("readable tool rows", () => {
+  browserTest("Codex feed at phone and desktop widths", async () => {
+    const phase = process.env.TOOL_CAPTURE_PHASE === "before" ? "before" : "after";
+    const out = path.resolve(`.artifacts/readable-tools/${phase}`);
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/feed/__fixtures__/readableTools.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const readings: object[] = [];
+    try {
+      for (const width of [390, 1280]) for (const lang of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 1000 }, "dark", lang);
+        await page.locator("[data-readable-tools]").waitFor();
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-closed.png`), fullPage: true });
+        // Open the existing tool/group disclosures with real pointer input.
+        for (let round = 0; round < 4; round++) {
+          const details = page.locator("details:not([open]) > summary");
+          while (await details.count()) {
+            await details.first().click();
+            await page.waitForTimeout(60);
+          }
+          const folds = page.locator("[data-mobile-run-fold][aria-expanded=false]");
+          if (await folds.count()) {
+            await folds.first().click();
+            await page.waitForTimeout(60);
+          }
+        }
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-open.png`), fullPage: true });
+        const reading = await page.locator("[data-readable-tools]").evaluate(el => ({
+          text: el.textContent, scrollWidth: document.documentElement.scrollWidth,
+          viewport: innerWidth, rows: el.querySelectorAll("details").length,
+        }));
+        expect(pageErrors).toEqual([]);
+        expect(reading.scrollWidth).toBeLessThanOrEqual(width);
+        if (phase === "after") {
+          expect(reading.text).toContain("git status --short");
+          expect(reading.text).toContain("Check retry behaviour");
+          expect(reading.text).toContain("+1");
+          expect(reading.text).not.toContain("Text absent");
+          expect(reading.text).not.toContain("Extension");
+        }
+        readings.push({ width, lang, ...reading });
+        await context.close();
+      }
+      fs.mkdirSync("evidence/readable-tools", { recursive: true });
+      fs.writeFileSync(`evidence/readable-tools/${phase}.json`, JSON.stringify({ phase, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});

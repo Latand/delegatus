@@ -87,7 +87,7 @@ function ToolMeta({ event }: { event: ToolEvent }) {
       {span ? <span className="tabular-nums">{span}</span> : null}
       {event.cwd ? (
         <span className="inline-flex min-w-0 max-w-full items-center gap-1">
-          <code className="min-w-0 truncate font-mono text-[11px] text-secondary" title={event.cwd}>
+          <code className="min-w-0 break-all font-mono text-[11px] text-secondary" title={event.cwd}>
             {event.cwd}
           </code>
           <CopyButton text={event.cwd} label={tr("tools.copyCwd")} className="shrink-0 p-0.5" />
@@ -242,9 +242,10 @@ export function ToolBlockRow({ event, index, nested = false }: { event: ToolEven
         ) : null}
         {nested ? <span className="shrink-0 select-none text-muted" aria-hidden>↳</span> : null}
         <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
-        <span className={`min-w-0 flex-1 truncate ${isErr ? "font-semibold" : "text-secondary"}`} title={event.summary}>
+        <span className={`min-w-0 flex-1 whitespace-normal break-words ${isErr ? "font-semibold" : "text-secondary"}`} title={event.summary}>
           {event.summary}
         </span>
+        {event.exitCode !== undefined ? <span className="shrink-0 text-caption text-muted">{exitLabel(event)}</span> : null}
         {event.status !== "ok" ? (
           <span className={`inline-flex shrink-0 items-center gap-1 text-caption font-semibold ${statusClass(event.status)}`}>
             <StatusIcon status={event.status} className="h-3 w-3" />
@@ -330,12 +331,13 @@ export function ToolLine({
         ) : (
           <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
         )}
-        <span className={`min-w-0 flex-1 truncate ${isErr ? "font-semibold" : "text-secondary"}`} title={event.summary}>
+        <span className={`min-w-0 flex-1 whitespace-normal break-words ${isErr ? "font-semibold" : "text-secondary"}`} title={event.summary}>
           {isMobile && running ? tr("mobile2.feed.running", { summary: event.summary }) : event.summary}
         </span>
         {/* On the phone a running line already said "running …" with its
             spinner, so the status chip (a second spinner, "executing…") stays
             off it; the duration is the trailing word. */}
+        {event.exitCode !== undefined ? <span className="shrink-0 text-caption text-muted">{exitLabel(event)}</span> : null}
         {event.status !== "ok" && !(isMobile && running) ? (
           <span className={`inline-flex shrink-0 items-center gap-1 text-caption font-semibold ${statusClass(event.status)}`}>
             <StatusIcon status={event.status} className="h-3 w-3" />
@@ -399,7 +401,7 @@ export function MobileRunRow({ event }: { event: ToolEvent }) {
         ) : (
           <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
         )}
-        <span className="min-w-0 flex-1 truncate" title={event.summary}>
+        <span className="min-w-0 flex-1 whitespace-normal break-words" title={event.summary}>
           {running ? tr("mobile2.feed.running", { summary: event.summary }) : event.summary}
         </span>
         {meta ? <span className={`shrink-0 text-caption tabular-nums ${isErr ? "text-danger" : "text-muted"}`}>{meta}</span> : null}

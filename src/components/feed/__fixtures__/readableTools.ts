@@ -307,3 +307,23 @@ export function claudeExecFailLines(): string[] {
     JSON.stringify({ type: "user", timestamp: "2026-07-10T10:00:02Z", message: { content: [{ type: "tool_result", tool_use_id: "b1", content: [{ type: "text", text: "1 fail\nexited with code 2" }], is_error: true }] } }),
   ];
 }
+
+/** Hand-assembled CLI 0.155 shapes; no values copied from a rollout. */
+export function currentCodexToolLines(): string[] {
+  const response = (payload: object) => JSON.stringify({ type: "response_item", timestamp: "2026-09-20T10:00:00Z", payload });
+  const item = (item: object) => JSON.stringify({ type: "event_msg", payload: { type: "item_completed", turn_id: "turn-demo", item, started_at_ms: 1789898400000, completed_at_ms: 1789898400240 } });
+  return [
+    response({ type: "custom_tool_call", name: "exec", call_id: "wrapper", input: 'text(await tools.exec_command({cmd:"git status --short",workdir:"/workspace/build"})); text(await tools.web__run({search_query:[{q:"release guide"}]}));' }),
+    item({ type: "CommandExecution", id: "exec-shell", command: ["/usr/bin/zsh", "-lc", "git status --short"], cwd: "/workspace/build", stdout: " M src/demo.ts", exit_code: 0, status: "completed", duration: { secs: 0, nanos: 240000000 } }),
+    item({ type: "Extension", id: "exec-web", kind: "web.search", query: "release guide", action: { type: "search", queries: ["release guide"] }, results: [{ title: "Release guide", url: "https://example.org/guide", snippet: "Prepare the release." }] }),
+    response({ type: "custom_tool_call_output", call_id: "wrapper", output: "Script completed\nWall time 0.24 seconds\nOutput:\n M src/demo.ts" }),
+    item({ type: "Reasoning", id: "reason-a", summary_text: [], raw_content: [] }),
+    item({ type: "Reasoning", id: "reason-b", summary_text: [], raw_content: [] }),
+    item({ type: "FileChange", id: "exec-patch", status: "completed", changes: { "src/demo.ts": { type: "update", unified_diff: "@@ -1 +1 @@\n-old\n+new\n" } } }),
+    item({ type: "McpToolCall", id: "exec-mcp", server: "catalog", tool: "lookup", arguments: { clientRequestId: "request-demo", query: "release notes", limit: 3 }, status: "completed", result: { content: [{ type: "text", text: "Found three releases" }] } }),
+    response({ type: "function_call", namespace: "collaboration", name: "followup_task", call_id: "follow", arguments: JSON.stringify({ target: "auditor", message: "Check retry behaviour and report failures" }) }),
+    item({ type: "SubAgentActivity", id: "follow", kind: "interacted", agent_thread_id: "agent-demo", agent_path: "/agents/auditor" }),
+    response({ type: "function_call_output", call_id: "follow", output: "" }),
+    item({ type: "SubAgentActivity", id: "agent-end", kind: "completed", agent_thread_id: "agent-demo", agent_path: "/agents/auditor" }),
+  ];
+}

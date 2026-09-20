@@ -3,6 +3,7 @@ import { redactSecrets } from "@/lib/review";
 import { harnessKind } from "@/lib/wakeup";
 
 import type { GlyphName } from "../icons";
+import { feedCopy, taskText } from "./toolMeaning";
 import { formatStdinKeys } from "./ansi";
 import { normalizeEdit, type DiffModel } from "./diff";
 
@@ -93,7 +94,8 @@ function summaryOf(text: string): string {
 }
 
 function chip(value: string, label?: string): ArgChip {
-  const redacted = cap(redactSecrets(value), CHIP_MAX);
+  const protectedValue = label ? redactSecrets(`${label}=${value}`) : redactSecrets(value);
+  const redacted = cap(label && protectedValue.startsWith(`${label}=`) ? protectedValue.slice(label.length + 1) : protectedValue, CHIP_MAX);
   return label ? { label, value: redacted } : { value: redacted };
 }
 
@@ -123,7 +125,7 @@ const WRITE_TOOLS = new Set(["Write"]);
 const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "NotebookEdit", "apply_patch"]);
 const SEARCH_TOOLS = new Set(["Grep", "Glob"]);
 const WEB_TOOLS = new Set(["WebFetch", "WebSearch"]);
-const SPAWN_TOOLS = new Set(["Task", "Agent", "Workflow", "Skill"]);
+const SPAWN_TOOLS = new Set(["Task", "Agent", "Workflow", "Skill", "spawn_agent", "followup_task", "send_message", "wait_agent", "subagent_activity"]);
 const PLAN_TOOLS = new Set(["TodoWrite", "TaskCreate", "TaskUpdate", "EnterPlanMode", "ExitPlanMode"]);
 
 export function familyOf(tool: string): ToolFamily {
@@ -195,6 +197,17 @@ export function summarizeTool(
   const family = familyOf(tool);
   const icon = FAMILY_ICON[family];
   const build = (summary: string, chips: ArgChip[] = []): ToolSummary => ({ family, icon, summary: summaryOf(summary), chips: chips.slice(0, 4) });
+
+  if (["spawn_agent", "followup_task", "send_message", "subagent_activity", "wait_agent"].includes(tool)) {
+    const target = str(args.target ?? args.task_name ?? args.agent_path ?? args.id);
+    const message = taskText(args.message ?? args.prompt);
+    const action = tool === "followup_task" ? feedCopy("Follow up", "Продовжити завдання")
+      : tool === "spawn_agent" ? feedCopy("Start agent", "Запустити агента")
+      : tool === "send_message" ? feedCopy("Message agent", "Написати агенту")
+      : tool === "wait_agent" ? feedCopy("Wait for agents", "Очікування агентів")
+      : feedCopy("Agent", "Агент");
+    return build([action, target, message].filter(Boolean).join(" · "), target ? [chip(target)] : []);
+  }
 
   /* Codex interactive-shell control tools (issue #141): render as shell-family
      cards. write_stdin shows the actual keys sent; wait shows the session it is
@@ -297,9 +310,12 @@ export function summarizeTool(
       const parts = tool.replace(/^mcp__/, "").split("__");
       const server = parts[0] ?? tool;
       const name = parts.slice(1).join("__") || tool;
-      const key = firstStringArg(args);
+      const meaningful = Object.entries(args).filter(([key, value]) =>
+        !["clientRequestId", "request_id", "call_id"].includes(key) && value !== null && value !== undefined);
+      const key = meaningful.find(([name, value]) => typeof value === "string" && !/token|password|secret|api.?key|authorization/i.test(name))?.[1];
       const summary = `${server} · ${name}${key ? ` · ${key}` : ""}`;
-      return build(summary, key ? [chip(key)] : []);
+      return build(summary, meaningful.slice(0, 4).map(([key, value]) =>
+        chip(typeof value === "string" ? value : JSON.stringify(value), key)));
     }
     default: {
       const first = firstStringArg(args);

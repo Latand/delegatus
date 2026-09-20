@@ -1,0 +1,37 @@
+{
+  "phase": "after",
+  "readings": [
+    {
+      "width": 390,
+      "lang": "en",
+      "text": "ran 1 command · 1 web action13:001.git status --shortexit 0240msexit 013:00:00–13:00:00/workspace/build$ git status --shortM src/demo.ts2.release guide240msrelease guide13:00:00–13:00:00Release guide\nhttps://example.org/guide\nPrepare the release.patched 1 file · 1 MCP call · 1 agent task13:001.Edit demo.ts · +1 −1src/demo.tsupdatesrc/demo.ts+1 −1@@ -1 +1 @@-old+new2.catalog · lookup · release notes240msqueryrelease noteslimit313:00:00–13:00:00Found three releases3.Follow up · auditor · Check retry behaviour and report failures · completed240ms/agents/auditor13:00:00–13:00:00Check retry behaviour and report failures",
+      "scrollWidth": 390,
+      "viewport": 390,
+      "rows": 0
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "text": "команд: 1 · вебдій: 113:001.git status --shortкод виходу 0240 мскод виходу 013:00:00–13:00:00/workspace/build$ git status --shortM src/demo.ts2.release guide240 мсrelease guide13:00:00–13:00:00Release guide\nhttps://example.org/guide\nPrepare the release.змінено файлів: 1 · викликів MCP: 1 · завдань агентам: 113:001.Редагування demo.ts · +1 −1src/demo.tsupdatesrc/demo.ts+1 −1@@ -1 +1 @@-old+new2.catalog · lookup · release notes240 мсqueryrelease noteslimit313:00:00–13:00:00Found three releases3.Продовжити завдання · auditor · Check retry behaviour and report failures · завершено240 мс/agents/auditor13:00:00–13:00:00Check retry behaviour and report failures",
+      "scrollWidth": 390,
+      "viewport": 390,
+      "rows": 0
+    },
+    {
+      "width": 1280,
+      "lang": "en",
+      "text": "ran 1 command · 1 web action240ms13:00:001.git status --shortexit 0240msexit 013:00:00–13:00:00/workspace/build$ git status --shortM src/demo.ts2.release guide240msrelease guide13:00:00–13:00:00Release guide\nhttps://example.org/guide\nPrepare the release.patched 1 file · 1 MCP call · 1 agent task240ms13:00:001.Edit demo.ts · +1 −1src/demo.tsupdatesrc/demo.ts+1 −1@@ -1 +1 @@-old+new2.catalog · lookup · release notes240msqueryrelease noteslimit313:00:00–13:00:00Found three releases3.Follow up · auditor · Check retry behaviour and report failures · completed240ms/agents/auditor13:00:00–13:00:00Check retry behaviour and report failures",
+      "scrollWidth": 1280,
+      "viewport": 1280,
+      "rows": 2
+    },
+    {
+      "width": 1280,
+      "lang": "uk",
+      "text": "команд: 1 · вебдій: 1240 мс13:00:001.git status --shortкод виходу 0240 мскод виходу 013:00:00–13:00:00/workspace/build$ git status --shortM src/demo.ts2.release guide240 мсrelease guide13:00:00–13:00:00Release guide\nhttps://example.org/guide\nPrepare the release.змінено файлів: 1 · викликів MCP: 1 · завдань агентам: 1240 мс13:00:001.Редагування demo.ts · +1 −1src/demo.tsupdatesrc/demo.ts+1 −1@@ -1 +1 @@-old+new2.catalog · lookup · release notes240 мсqueryrelease noteslimit313:00:00–13:00:00Found three releases3.Продовжити завдання · auditor · Check retry behaviour and report failures · завершено240 мс/agents/auditor13:00:00–13:00:00Check retry behaviour and report failures",
+      "scrollWidth": 1280,
+      "viewport": 1280,
+      "rows": 2
+    }
+  ]
+}

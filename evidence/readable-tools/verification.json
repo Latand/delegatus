@@ -1,0 +1,58 @@
+{
+  "baseline": "75abc565f6e8dbbf76664ced6dacc5bd5cca078b",
+  "observedCliVersion": "0.155.1",
+  "fixtures": "hand-assembled; no rollout content copied",
+  "negativeControl": {
+    "parseTests": {
+      "passed": 3,
+      "failed": 10
+    },
+    "emptyReasoningDom": "failed before renderer change",
+    "largePatchCorrelation": "failed with the display-sized budget, passed with bounded 128 KiB correlation"
+  },
+  "visualInspection": {
+    "widths": [
+      390,
+      1280
+    ],
+    "locales": [
+      "en",
+      "uk"
+    ],
+    "states": [
+      "collapsed",
+      "expanded"
+    ],
+    "observations": [
+      "Before: wrapper and command duplicate, opaque Extension, request identifier in MCP summary, missing task and loose lifecycle headings.",
+      "After: readable command with exit and duration; files and signed counts; named web operation and results; MCP query; agent task with outcome.",
+      "Phone task text wraps, collapsed groups summarize meaning, no horizontal document overflow.",
+      "Empty reasoning has no visible disclosure; source anchors remain for delayed live text."
+    ]
+  },
+  "selfReview": {
+    "result": "no unresolved findings",
+    "checked": [
+      "overlapping and incomplete wrappers preserve evidence",
+      "source-only legacy calls remain visible",
+      "incremental append and sliding-window parity",
+      "argument redaction before chips and summaries",
+      "delayed live reasoning retains its source slot",
+      "same Claude card anatomy for both engines"
+    ]
+  },
+  "gates": {
+    "focusedTests": "pass; one file per invocation",
+    "typescript": {
+      "command": "bunx tsc --noEmit",
+      "exitCode": 0
+    },
+    "build": {
+      "command": "bun run build",
+      "heapLimitMiB": 8192,
+      "exitCode": 0
+    },
+    "privacyPublication": "pass",
+    "stateIsolation": "dedicated configuration and state roots; ephemeral probe ports"
+  }
+}
