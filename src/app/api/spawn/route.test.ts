@@ -392,6 +392,10 @@ test("an explicit spawn account is durably pinned while an omitted account uses 
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
+      resolveSpawnAccount: (_engine: "claude" | "codex", id: string | null) => ({
+        engine: "claude" as const, accountId: id ?? "selected", kind: "managed" as const,
+        home: path.join(cwd, id ?? "selected"), transcriptRoot: path.join(cwd, "projects"), env: { NODE_ENV: "test" as const },
+      }),
       resolveHealthySpawnAccount: async (_engine: "claude" | "codex", requested?: string | null) => ({
         engine: "claude" as const,
         accountId: requested ?? "selected",
@@ -1244,6 +1248,10 @@ test("a pinned account without a retry deadline falls back and records the degra
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
+      resolveSpawnAccount: (_engine: "claude" | "codex", id: string | null) => ({
+        engine: "claude" as const, accountId: id ?? "account-b", kind: "managed" as const,
+        home: path.join(cwd, "account-b"), transcriptRoot: path.join(cwd, "account-b", "projects"), env: { NODE_ENV: "test" as const },
+      }),
       resolveHealthySpawnAccount: async () => ({
         engine: "claude" as const,
         accountId: "account-b",
@@ -1404,6 +1412,10 @@ test("a legacy resolver mismatch also degrades the pin to a durable fallback", a
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
+      resolveSpawnAccount: (_engine: "claude" | "codex", id: string | null) => ({
+        engine: "claude" as const, accountId: id ?? "selected-account", kind: "managed" as const,
+        home: path.join(cwd, "selected-account"), transcriptRoot: path.join(cwd, "selected-account", "projects"), env: { NODE_ENV: "test" as const },
+      }),
       resolveHealthySpawnAccount: async () => ({
         engine: "claude" as const,
         accountId: "selected-account",
@@ -3949,7 +3961,11 @@ test("Astra and Sol orchestrator spawns carry top-tier effort and images into th
   const profiles: Array<{ model: string | null; effort: string | null }> = [];
   const deps: SpawnRouteTestDependencies = {
     ...base,
-    resolveHealthySpawnAccount: async () => ({
+    resolveSpawnAccount: (_engine: "claude" | "codex", id: string | null) => ({
+        engine: "codex" as const, accountId: id ?? "codex-test", kind: "managed" as const,
+        home: path.join(cwd, "account"), transcriptRoot: path.join(cwd, "sessions"), env: { NODE_ENV: "test" as const },
+      }),
+      resolveHealthySpawnAccount: async () => ({
       engine: "codex", accountId: "codex-test", kind: "managed",
       home: path.join(cwd, "account"), transcriptRoot: path.join(cwd, "sessions"), env: { NODE_ENV: "test" },
     }),

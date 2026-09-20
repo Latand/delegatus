@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, stepBackgroundWait } from "@/lib/pipelines/backgroundTasks";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { freshSpecFor, resumeSpecFor } from "@/lib/agent/cli";
@@ -44,6 +45,9 @@ import { relayPrompt, reviewerPrompt } from "./prompts";
 import { atomicWriteText, findingsPathFor, loadFlows, loadFlowsForTick, loadPresets, patchFlowRows, saveFlows } from "./store";
 import type { Flow, FlowPreset, FlowState, RelayDeliveryTransport, RoleConfig, Round } from "./types";
 import { chooseHeadlessReviewer, rateLimitStateDetail } from "./reviewerPolicy";
+
+// Temporary compatibility export while flow callers migrate to review history.
+export { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
 
 const TERMINAL_STATES = new Set<FlowState>(["approved", "done_comment", "needs_decision", "closed"]);
 const READY_RE = /^REVIEW_READY:\s*(.*)$/m;
@@ -400,17 +404,6 @@ export interface RelayDeliveryOverrides {
   /** Reports the selected transport before either structured or legacy
       actuation can begin, allowing the caller to checkpoint it. */
   onTransportSelected?: (transport: RelayDeliveryTransport) => void;
-}
-
-/** The durable structured-delivery identity of a round's relay — the current
-    round's by default, or any settled round's when given, so provenance can
-    name the reservation each round's relay settled under (#1117). Exported so
-    a test can address the exact reservation the delivery journal settles. */
-export function relayClientMessageId(flow: Flow, round: Round | undefined = flow.rounds?.at(-1)): string {
-  const deliveryAttempt = round?.relayDeliveryAttempt ?? 0;
-  const identity = `${flow.id}:${round?.n ?? "legacy"}:${round?.reviewerBindingId ?? "legacy"}`
-    + (deliveryAttempt > 0 ? `:retry:${deliveryAttempt}` : "");
-  return `flow_relay_${crypto.createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
 }
 
 export async function sendToImplementer(

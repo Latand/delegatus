@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { CorruptCodexAccountsError, InvalidAccountLabelError, UnknownAccountError, UnsafeCodexHomeError, cleanupOrphanedCodexHomes, codexAccountsMutationLocked, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
+import { CodexLoginBusyError, codexAccountLoginBusy, withManagedCodexLogin, CorruptCodexAccountsError, InvalidAccountLabelError, UnknownAccountError, UnsafeCodexHomeError, cleanupOrphanedCodexHomes, codexAccountsMutationLocked, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
@@ -16,11 +16,11 @@ export async function POST(req: NextRequest) {
   let body: { label?: unknown; id?: unknown; action?: unknown };
   try { body = await req.json() as { label?: unknown; id?: unknown; action?: unknown }; } catch { return NextResponse.json({ error: "invalid JSON" }, { status: 400 }); }
   try {
-    return await withAccountMutationLockAsync(async () => {
-      if (body.action === "retry" || body.action === "cancel") {
-        if (typeof body.id !== "string") return NextResponse.json({ error: "id must be a string" }, { status: 400 });
-        const account = listCodexAccounts().find((candidate) => candidate.id === body.id);
-        if (!account || account.kind !== "managed") throw new UnknownAccountError(body.id);
+    if (body.action === "retry" || body.action === "cancel") {
+      if (typeof body.id !== "string") return NextResponse.json({ error: "id must be a string" }, { status: 400 });
+      const account = listCodexAccounts().find((candidate) => candidate.id === body.id);
+      if (!account || account.kind !== "managed") throw new UnknownAccountError(body.id);
+      return await withManagedCodexLogin(account, async () => {
         if (body.action === "cancel") {
           const cancelled = await managedCodexRuntime().cancelLogin(account.id);
           return NextResponse.json({ account: { id: account.id }, cancelled });
@@ -28,21 +28,21 @@ export async function POST(req: NextRequest) {
         const challenge = await managedCodexRuntime().retryLogin(account);
         return NextResponse.json({
           account: { id: account.id, label: account.label, kind: account.kind, authPresent: account.authPresent, loginPending: true },
-          deviceAuth: { url: challenge.verificationUrl, code: challenge.userCode },
-          target: challenge.verificationUrl,
+          deviceAuth: { url: challenge.verificationUrl, code: challenge.userCode }, target: challenge.verificationUrl,
         });
-      }
-      if (typeof body.label !== "string") return NextResponse.json({ error: "label must be a string" }, { status: 400 });
-      const account = createManagedCodexAccount(body.label);
+      });
+    }
+    if (typeof body.label !== "string") return NextResponse.json({ error: "label must be a string" }, { status: 400 });
+    const account = createManagedCodexAccount(body.label);
+    return await withManagedCodexLogin(account, async () => {
       const challenge = await managedCodexRuntime().startLogin(account);
       return NextResponse.json({
         account: { id: account.id, label: account.label, kind: account.kind, authPresent: account.authPresent, loginPending: true },
-        deviceAuth: { url: challenge.verificationUrl, code: challenge.userCode },
-        // The existing frontend only requires a string target for its success note.
-        target: challenge.verificationUrl,
+        deviceAuth: { url: challenge.verificationUrl, code: challenge.userCode }, target: challenge.verificationUrl,
       });
     });
   } catch (error) {
+    if (error instanceof CodexLoginBusyError) return NextResponse.json({ error: error.message, code: "login_busy" }, { status: 409 });
     if (error instanceof AccountHistoryInventoryBlockedError) {
       return NextResponse.json({ error: "Codex account history inventory blocked cleanup", code: "account_removal_blocked", blockers: ["filesystem_history"], history: error.report }, { status: 409 });
     }
@@ -75,7 +75,7 @@ export async function DELETE(req: NextRequest) {
       const login = managedCodexRuntime().peekLogin(account);
       const blockers = [
         ...accountRemovalBlockers("codex", account.id),
-        ...(login.attemptState === "pending" || account.loginPane !== null ? ["login_pending"] : []),
+        ...(codexAccountLoginBusy(account.id) || login.attemptState === "pending" || account.loginPane !== null ? ["login_pending"] : []),
       ];
       if (blockers.length > 0) {
         return NextResponse.json({ error: "Codex account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers }, { status: 409 });
