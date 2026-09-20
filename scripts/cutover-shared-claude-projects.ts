@@ -14,6 +14,11 @@
  * Old paths keep resolving through the symlinks, so nothing that recorded a
  * pre-cutover absolute path breaks even if it is missed by the rewrite.
  */
+/* FIRST, and before every other import: the claim has to precede the modules
+   below, which resolve the operator's state directory while they load (#1905).
+   See `src/lib/state/owner/tool.ts`. */
+import "../src/lib/state/owner/tool";
+
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import { FOCUS_TARGET_KINDS } from "@/lib/attention/targets";
 import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
-import type { RoleDefinition } from "@/lib/roles/types";
+import type { RegistryRoleDefinitions, RoleDefinition } from "@/lib/roles/types";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import {
@@ -20,6 +20,7 @@ import {
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   ORCHESTRATOR_VIEWER_CLOCK_HEADING,
   orchestratorMandateForDelivery,
+  orchestratorMandateWithRoleTable,
   orchestratorMandateStale,
   orchestratorRoleTable,
 } from "./prompt";
@@ -351,6 +352,35 @@ test("the role table carries the runtime guidance beside it", () => {
   expect(section).toMatch(/low or medium/);
   expect(section).toContain("NEXT attempt");
   expect(section).toContain("create_pipeline");
+});
+
+test("the manager table uses resolved saved builder variants and keeps registry provenance", () => {
+  const roles = ROLE_DEFAULTS.map((role) => role.id === "builder" ? {
+    ...role,
+    variants: {
+      frontend: { engine: "claude" as const, model: "sonnet", effort: "high" },
+      "apply-fixes": { engine: "codex" as const, model: "gpt-5.6-luna", effort: "xhigh" },
+    },
+  } : role) as RegistryRoleDefinitions;
+  Object.defineProperty(roles, "registry", {
+    value: { revision: "roles-1-saved-variant", health: { state: "healthy" } },
+  });
+
+  const table = orchestratorRoleTable(roles);
+  expect(table).toContain("domain=frontend runs claude/sonnet/high");
+  expect(table).toContain("mode=apply-fixes runs codex/gpt-5.6-luna/xhigh");
+  expect(table).toContain("Registry revision: roles-1-saved-variant. Registry health: healthy.");
+  const delivered = orchestratorMandateWithRoleTable("Bespoke mandate", table);
+  expect(orchestratorMandateWithRoleTable(delivered, table)).toBe(delivered);
+  expect(delivered).toContain("Registry revision: roles-1-saved-variant.");
+});
+
+test("the manager table makes a fallback registry visible", () => {
+  const roles = ROLE_DEFAULTS.map((role) => ({ ...role })) as RegistryRoleDefinitions;
+  Object.defineProperty(roles, "registry", {
+    value: { revision: "roles-1-fallback", health: { state: "degraded", reason: "preset unavailable" } },
+  });
+  expect(orchestratorRoleTable(roles)).toContain("Registry health: degraded (preset unavailable; shipped defaults shown).");
 });
 
 test("delivery replaces a role table the mandate already carries, so it is always the live one", () => {

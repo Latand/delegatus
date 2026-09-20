@@ -15,11 +15,14 @@ const { agentRegistry } = await import("@/lib/agent/registry");
 const { pathAllowed } = await import("@/lib/scanner/roots");
 const { recoverInterruptedCodexAccountRemovals } = await import("./codex");
 const { retiredAccountArchive } = await import("./removal");
+const { resetAccountCollectionsForTests } = await import("./accountsStore");
+const { persistedAccountRegistry, persistedAccountState, seedAccountRegistry } = await import("./accountsStoreFixture");
 
 beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   fs.rmSync(path.join(SANDBOX, "accounts"), { recursive: true, force: true });
   fs.rmSync(path.join(SANDBOX, "shared"), { recursive: true, force: true });
+  resetAccountCollectionsForTests();
 });
 
 afterAll(() => {
@@ -58,27 +61,27 @@ test("a managed overlay shares capabilities while identity and OAuth state stay 
   expect(fs.statSync(account.home).mode & 0o777).toBe(0o700);
 });
 
-test("corrupt registry bytes survive rejected mutations", () => {
-  const registry = path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json");
-  fs.mkdirSync(path.dirname(registry), { recursive: true });
-  const corrupt = "{ broken registry remains intact";
-  fs.writeFileSync(registry, corrupt);
+/* Since #1870 the registry is rows in state.sqlite, so a registry that cannot
+   be turned into an account list is a row the store refuses on rather than
+   bytes that will not parse. Both remain read-only, and neither is written
+   over. */
+test("a registry the store cannot read survives rejected mutations", () => {
+  seedAccountRegistry("codex", { version: 2, active: "default", accounts: [] });
+  const corrupt = persistedAccountState();
 
   expect(() => createManagedCodexAccount("Alt")).toThrow(CorruptCodexAccountsError);
   expect(() => setActiveCodexAccount("default")).toThrow(CorruptCodexAccountsError);
-  expect(fs.readFileSync(registry, "utf8")).toBe(corrupt);
+  expect(persistedAccountState()).toBe(corrupt);
   expect(listCodexAccounts().map((account) => account.id)).toEqual(["default"]);
 });
 
 test("a syntactically valid registry with an unsafe account is also read-only", () => {
-  const registry = path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json");
-  fs.mkdirSync(path.dirname(registry), { recursive: true });
-  const unsafe = JSON.stringify({ version: 1, active: "default", accounts: [{ id: "../escape", label: "Escape", kind: "managed", createdAt: 1 }] });
-  fs.writeFileSync(registry, unsafe);
+  seedAccountRegistry("codex", { version: 1, active: "default", accounts: [{ id: "../escape", label: "Escape", kind: "managed", createdAt: 1 }] });
+  const unsafe = persistedAccountState();
 
   expect(() => createManagedCodexAccount("Alt")).toThrow(CorruptCodexAccountsError);
   expect(() => setActiveCodexAccount("default")).toThrow(CorruptCodexAccountsError);
-  expect(fs.readFileSync(registry, "utf8")).toBe(unsafe);
+  expect(persistedAccountState()).toBe(unsafe);
 });
 
 test("account creation preserves an occupied home and chooses a safe suffix", () => {
@@ -199,9 +202,7 @@ test("a pane whose window no longer matches is a different pane and clears immed
 });
 
 test("legacy pane records without a timestamp remain readable", () => {
-  const registry = path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json");
-  fs.mkdirSync(path.dirname(registry), { recursive: true });
-  fs.writeFileSync(registry, JSON.stringify({ version: 1, active: "work", accounts: [{ id: "work", label: "Work", kind: "managed", createdAt: 1, loginPane: { paneId: "%4", windowName: "codex-login" } }] }));
+  seedAccountRegistry("codex", { version: 1, active: "work", accounts: [{ id: "work", label: "Work", kind: "managed", createdAt: 1, loginPane: { paneId: "%4", windowName: "codex-login" } }] });
 
   expect(listCodexAccounts().find((account) => account.id === "work")?.loginPane).toEqual({ paneId: "%4", windowName: "codex-login", startedAt: 0 });
 });
@@ -241,7 +242,7 @@ function usedCodexHome(label: string) {
 }
 
 function codexRegistryJson(): { removals?: unknown[]; retired: Array<{ id: string; archived?: boolean }> } {
-  return JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json"), "utf8"));
+  return persistedAccountRegistry("codex");
 }
 
 test("a used Codex home is removed and every rollout stays readable in the shared archive (#1857)", () => {
