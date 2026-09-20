@@ -12,13 +12,13 @@ import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSan
 test("a spawned agent's environment carries its own config and state root", () => {
   const source: NodeJS.ProcessEnv = {
     NODE_ENV: "production",
-    HOME: "/home/operator",
-    XDG_CONFIG_HOME: "/home/operator/.config",
-    LLV_STATE_DIR: "/home/operator/.config/agent-log-viewer/state",
+    HOME: "/opt/operator-home",
+    XDG_CONFIG_HOME: "/opt/operator-home/.config",
+    LLV_STATE_DIR: "/opt/operator-home/.config/agent-log-viewer/state",
     TMPDIR: "/scratch/tmp",
     [STATE_OWNER_ENV]: "viewer",
   };
-  const env = withAgentConfigSandbox({ ...source }, source, "/home/operator/.config/agent-log-viewer/accounts/claude/lane");
+  const env = withAgentConfigSandbox({ ...source }, source, "/opt/operator-home/.config/agent-log-viewer/accounts/claude/lane");
 
   const sandbox = path.join("/scratch/tmp", "llv-spawn-sandbox", "lane", "config");
   expect(env.XDG_CONFIG_HOME).toBe(sandbox);
@@ -26,19 +26,19 @@ test("a spawned agent's environment carries its own config and state root", () =
   /* The claim the Viewer made for itself stops at the boundary. */
   expect(env[STATE_OWNER_ENV]).toBeUndefined();
   /* `gh` read its configuration out of XDG_CONFIG_HOME, so it is pinned. */
-  expect(env.GH_CONFIG_DIR).toBe("/home/operator/.config/gh");
+  expect(env.GH_CONFIG_DIR).toBe("/opt/operator-home/.config/gh");
 });
 
 test("the sandbox is derived from the temp root, never from the operator's installation", () => {
   const source: NodeJS.ProcessEnv = {
     NODE_ENV: "production",
-    HOME: "/home/operator",
-    XDG_CONFIG_HOME: "/home/operator/.config",
-    LLV_STATE_DIR: "/home/operator/.config/agent-log-viewer/state",
+    HOME: "/opt/operator-home",
+    XDG_CONFIG_HOME: "/opt/operator-home/.config",
+    LLV_STATE_DIR: "/opt/operator-home/.config/agent-log-viewer/state",
   };
-  const root = agentConfigSandboxRoot(source, "/home/operator/.config/agent-log-viewer/accounts/codex/lane");
+  const root = agentConfigSandboxRoot(source, "/opt/operator-home/.config/agent-log-viewer/accounts/codex/lane");
   expect(root).toBe(path.join(os.tmpdir(), "llv-spawn-sandbox", "lane"));
-  expect(root.startsWith("/home/operator")).toBeFalse();
+  expect(root.startsWith("/opt/operator-home")).toBeFalse();
 });
 
 test("an account home with no usable name still gets a root of its own, and a forwarded gh config wins", () => {
