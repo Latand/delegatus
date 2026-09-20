@@ -680,6 +680,9 @@ export interface LimitsProvenance {
   staleSince: string | null;
   /** ISO timestamp for the next provider refresh after a failed read. */
   retryAt?: string | null;
+  /** ISO timestamp of the provider rejection that established `retryAt`.
+      This lets conversation evidence supersede only an older account wait. */
+  throttleAt?: string | null;
 }
 
 export const LIMITS_RATE_LIMITED_REASON = "oauth-rate-limited";

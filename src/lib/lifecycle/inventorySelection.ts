@@ -44,7 +44,7 @@ export type ConversationEngine = "claude" | "codex";
 
 export interface ConversationSelectionRequest {
   project?: string;
-  /** Restrict to rows the scan projects as live/stalled or the runtime hosts. */
+  /** Restrict to rows the scan projects as live or a verified owner hosts. */
   liveOnly?: boolean;
   /** Case-insensitive substring over title, project and path. */
   query?: string;
@@ -66,7 +66,7 @@ export interface ConversationSelectionRequest {
 }
 
 export interface ConversationSelection {
-  /** At most `limit` rows, in the generation's own newest-first order. */
+  /** At most `limit` rows, owners first, preserving generation order per group. */
   entries: FileEntry[];
   /** Rows matching every filter, before the limit truncated them. */
   matched: number;
@@ -100,8 +100,8 @@ function isConversationRow(entry: FileEntry): boolean {
 
 /**
  * Project/liveness/query filters and the row limit, applied to a completed
- * generation's rows. Pure: one walk, collecting at most `limit` rows while it
- * keeps counting matches.
+ * generation's rows. Pure: one walk, retaining at most `limit` rows per priority
+ * group while counting every match.
  *
  * This function copies nothing, but the read that feeds it does:
  * `completedFileScan` hands every caller a `structuredClone` of the snapshot,
@@ -115,7 +115,8 @@ export function selectConversationEntries(
 ): Pick<ConversationSelection, "entries" | "matched" | "scanned" | "hostedSeen"> {
   const limit = Math.max(0, Math.floor(request.limit));
   const query = request.query ? request.query.toLocaleLowerCase() : "";
-  const entries: FileEntry[] = [];
+  const owned: FileEntry[] = [];
+  const scanLive: FileEntry[] = [];
   const hostedSeen = new Set<string>();
   let matched = 0;
   let scanned = 0;
@@ -126,14 +127,17 @@ export function selectConversationEntries(
        different project is still a row the caller need not recover. */
     if (request.hostedPaths?.has(entry.path)) hostedSeen.add(entry.path);
     if (request.project && entry.project !== request.project) continue;
-    if (request.liveOnly
-      && entry.activity !== "live"
-      && entry.activity !== "stalled"
-      && !request.hostedPaths?.has(entry.path)) continue;
+    const currentlyOwned = request.hostedPaths?.has(entry.path) ?? false;
+    if (request.liveOnly && entry.activity !== "live" && !currentlyOwned) continue;
     if (query && !`${entry.title}\n${entry.project}\n${entry.path}`.toLocaleLowerCase().includes(query)) continue;
     matched += 1;
-    if (entries.length < limit) entries.push(entry);
+    /* The completed scan can call a dead transcript `live` until its next
+       refresh. Verified current owners must therefore take the bounded slots
+       first; scan-only activity remains useful after them. */
+    const group = currentlyOwned ? owned : scanLive;
+    if (group.length < limit) group.push(entry);
   }
+  const entries = [...owned, ...scanLive].slice(0, limit);
   return { entries, matched, scanned, hostedSeen };
 }
 

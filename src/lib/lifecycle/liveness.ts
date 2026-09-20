@@ -6,6 +6,8 @@ import { cachedLimitsProvenance } from "@/lib/limits";
 import { providerThrottleRetryAt, PROVIDER_THROTTLE_GRACE_MS } from "@/lib/limitsThrottle";
 import { getPipelines } from "@/lib/pipelines/engine";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
+import { loadFlows } from "@/lib/flows/store";
+import type { Flow } from "@/lib/flows/types";
 import { completedFileScan } from "@/lib/scanner/scanCache";
 import type { Engine, FileEntry, LimitsProvenance } from "@/lib/types";
 
@@ -95,7 +97,7 @@ export interface AgentLivenessRecord {
       when no record carries a timestamp). */
   lastRecordAt: string | null;
   turnState: LifecycleTurnState;
-  host: { state: AgentHostState; kind: "tmux" | "structured" | "none"; pid: number | null };
+  host: { state: AgentHostState; kind: "tmux" | "structured" | "headless" | "none"; pid: number | null };
   /** Shared vocabulary. `stalled` means the turn cannot progress on its own. */
   lifecycle: LifecycleState;
   reason: AgentLivenessReason;
@@ -272,6 +274,9 @@ export interface AgentLivenessSources {
   describeTranscript(transcriptPath: string): Promise<LivenessTranscript | null>;
   registrySnapshot(): Pick<RegistryFile, "entries" | "conversations">;
   pipelines(): Pipeline[];
+  /** Active review-loop ownership, read only to resolve detached reviewers that
+      intentionally have no structured-host registry entry. */
+  flows?(): Flow[];
   /** Turn state and newest-record freshness from ONE tail read. */
   transcriptEvidence(
     engine: "claude" | "codex",
@@ -298,6 +303,7 @@ export function productionLivenessSources(
     describeTranscript: describeTranscriptPath,
     registrySnapshot: () => agentRegistry().readOnlySnapshot(),
     pipelines: () => getPipelines().pipelines,
+    flows: () => loadFlows(),
     transcriptEvidence: readLivenessTranscriptEvidence,
     limitsProvenance: cachedLimitsProvenance,
     probe: livenessProbe(),
@@ -323,7 +329,7 @@ function entryForPath(
 function hostEvidence(
   entry: AgentRegistryEntry | null,
   probe: LivenessProbe,
-): { state: AgentHostState; kind: "tmux" | "structured" | "none"; pid: number | null } {
+): { state: AgentHostState; kind: "tmux" | "structured" | "headless" | "none"; pid: number | null } {
   if (!entry) return { state: "unknown", kind: "none", pid: null };
   const hosted = entry.status === "starting" || entry.status === "live" || entry.status === "idle" || entry.status === "handoff";
   const structured = entry.structuredHost?.process ?? null;
@@ -358,6 +364,37 @@ function hostEvidence(
   return { state: young ? "unknown" : "gone", kind: "none", pid: null };
 }
 
+function headlessHostEvidence(
+  flows: readonly Flow[],
+  transcriptPath: string,
+  conversationId: string | null,
+  probe: LivenessProbe,
+): { state: AgentHostState; kind: "headless"; pid: number } | null {
+  for (const flow of flows) {
+    if (flow.reviewerMode !== "headless" || flow.state !== "reviewing") continue;
+    const round = flow.rounds.at(-1);
+    if (!round || (!round.reviewerPath || round.reviewerPath !== transcriptPath)
+      && (!conversationId || round.reviewerConversationId !== conversationId)) continue;
+    const pid = round.reviewerPid;
+    const identity = round.reviewerIdentity;
+    if (!exactHeadlessIdentityAlive(pid, identity, probe)) continue;
+    return { state: "alive", kind: "headless", pid };
+  }
+  return null;
+}
+
+/** Headless reviewer ownership is an actuation-grade claim. Unlike the shared
+ * liveness helper, both start identities must be present and exactly equal. */
+function exactHeadlessIdentityAlive(
+  pid: number | null | undefined,
+  savedIdentity: string | null | undefined,
+  probe: LivenessProbe,
+): pid is number {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || !savedIdentity || !probe.pidAlive(pid)) return false;
+  const currentIdentity = probe.processIdentity(pid);
+  return Boolean(currentIdentity) && currentIdentity === savedIdentity;
+}
+
 function turnStateFromEvidence(evidence: LivenessTranscriptEvidence | null, entry: LivenessTranscript): LifecycleTurnState {
   if (evidence) return evidence.turn;
   /* No readable durable artifact: fall back to the scan's own projection so a
@@ -389,6 +426,8 @@ export function evaluateLiveness(input: {
   stallAfterMs: number;
   startingGraceMs?: number;
   providerRetryAt?: string | null;
+  providerThrottleAt?: number | null;
+  providerProgressAt?: number | null;
 }): { lifecycle: LifecycleState; reason: AgentLivenessReason; retryAt?: string } {
   const silent = input.silentForMs !== null && input.silentForMs >= input.stallAfterMs;
   if (input.host.state === "gone") {
@@ -407,7 +446,12 @@ export function evaluateLiveness(input: {
       ? { lifecycle: "stalled", reason: "launch_unproven_expired" }
       : { lifecycle: "gone", reason: "launch_unproven_expired" };
   }
-  if (input.turnState === "busy" && input.providerRetryAt) {
+  const progressSupersedesThrottle = input.providerProgressAt !== null
+    && input.providerProgressAt !== undefined
+    && input.providerThrottleAt !== null
+    && input.providerThrottleAt !== undefined
+    && input.providerProgressAt > input.providerThrottleAt;
+  if (input.turnState === "busy" && input.providerRetryAt && !progressSupersedesThrottle) {
     return { lifecycle: "waiting", reason: "provider_throttled", retryAt: input.providerRetryAt };
   }
   if (silent) return { lifecycle: "stalled", reason: "host_alive_transcript_silent" };
@@ -474,13 +518,28 @@ function conversationIdForPath(
     generation can predate a launch by its whole refresh cadence, so liveness
     filtered on the scan projection alone would drop a conversation that started
     a minute ago — the correctness half of not sweeping the corpus (#860). */
-function hostedTranscriptPaths(snapshot: Pick<RegistryFile, "entries">): Set<string> {
+function hostedTranscriptPaths(snapshot: Pick<RegistryFile, "entries">, probe: LivenessProbe): Set<string> {
   const hosted = new Set<string>();
   for (const entry of Object.values(snapshot.entries)) {
-    if (entry.status !== "starting" && entry.status !== "live" && entry.status !== "idle" && entry.status !== "handoff") continue;
-    if (entry.artifactPath) hosted.add(entry.artifactPath);
+    if (entry.artifactPath && hostEvidence(entry, probe).state === "alive") hosted.add(entry.artifactPath);
   }
   return hosted;
+}
+
+function activeHeadlessTranscriptPaths(
+  flows: readonly Flow[],
+  conversations: Pick<RegistryFile, "conversations">["conversations"],
+  probe: LivenessProbe,
+): Set<string> {
+  const paths = new Set<string>();
+  for (const flow of flows) {
+    if (flow.reviewerMode !== "headless" || flow.state !== "reviewing") continue;
+    const round = flow.rounds.at(-1);
+    const path = round?.reviewerPath
+      ?? (round?.reviewerConversationId ? conversations[round.reviewerConversationId]?.generations.at(-1)?.path : null);
+    if (path && exactHeadlessIdentityAlive(round?.reviewerPid, round?.reviewerIdentity, probe)) paths.add(path);
+  }
+  return paths;
 }
 
 /** Ceiling on identity recovery. Bounded by the registry's active hosts in
@@ -577,7 +636,11 @@ export async function agentLivenessSnapshot(
   const projectionStartedAt = performance.now();
   const registry = sources.registrySnapshot();
   const pipelines = pipelineIndex(sources.pipelines());
-  const hostedPaths = hostedTranscriptPaths(registry);
+  const flows = sources.flows?.() ?? [];
+  const hostedPaths = new Set([
+    ...hostedTranscriptPaths(registry, sources.probe),
+    ...activeHeadlessTranscriptPaths(flows, registry.conversations, sources.probe),
+  ]);
   const indexProjectionMs = performance.now() - projectionStartedAt;
 
   /* A conversation id names its current generation's transcript; that is the
@@ -657,14 +720,21 @@ export async function agentLivenessSnapshot(
       throw new Error("liveness needs an inventory source: install selectInventory");
     }
 
-    /* Hosts the generation has not caught up with yet. Newest-first ordering is
-       restored only when recovery actually found something, so the ordinary
-       path returns the generation's own order untouched. */
+    /* Recovery and the completed generation share the same verified-owner
+       priority. Order by freshness within each group before the final limit,
+       so newer scan-only history cannot displace a recovered owner. */
     const recovery = await recoverHostedTranscripts(hostedPaths, hostedSeen, request.project, sources.describeTranscript);
     const known = new Set(entries.map((entry) => entry.path));
-    const added = recovery.entries.filter((entry) => !known.has(entry.path));
+    const added = recovery.entries.filter((entry) => {
+      if (known.has(entry.path)) return false;
+      known.add(entry.path);
+      return true;
+    });
     if (added.length > 0 || recovery.truncated) {
-      if (added.length > 0) entries = [...entries, ...added].sort(byNewest).slice(0, limit);
+      if (added.length > 0) entries = [...entries, ...added].sort((left, right) =>
+        Number(hostedPaths.has(right.path)) - Number(hostedPaths.has(left.path))
+        || byNewest(left, right),
+      ).slice(0, limit);
       selection = {
         ...selection,
         matched: selection.matched + added.length,
@@ -719,20 +789,21 @@ export async function agentLivenessSnapshot(
      per-row registry and lineage lookups across both. */
   const rowProjectionStartedAt = performance.now();
   let unreadable = 0;
-  const providerRetryAtByAccount = {
-    claude: new Map<string, string | null>(),
-    codex: new Map<string, string | null>(),
+  const providerThrottleByAccount = {
+    claude: new Map<string, { retryAt: string | null; throttledAt: number | null }>(),
+    codex: new Map<string, { retryAt: string | null; throttledAt: number | null }>(),
   };
-  const providerRetryAtFor = (engine: "claude" | "codex", accountId: string): string | null => {
-    const engineAccounts = providerRetryAtByAccount[engine];
+  const providerThrottleFor = (engine: "claude" | "codex", accountId: string): { retryAt: string | null; throttledAt: number | null } => {
+    const engineAccounts = providerThrottleByAccount[engine];
     if (!engineAccounts.has(accountId)) {
-      engineAccounts.set(accountId, providerThrottleRetryAt(
-        sources.limitsProvenance?.(engine, accountId),
-        now,
-        PROVIDER_THROTTLE_GRACE_MS,
-      ));
+      const provenance = sources.limitsProvenance?.(engine, accountId);
+      const throttledAt = Date.parse(provenance?.throttleAt ?? "");
+      engineAccounts.set(accountId, {
+        retryAt: providerThrottleRetryAt(provenance, now, PROVIDER_THROTTLE_GRACE_MS),
+        throttledAt: Number.isFinite(throttledAt) ? throttledAt : null,
+      });
     }
-    return engineAccounts.get(accountId) ?? null;
+    return engineAccounts.get(accountId)!;
   };
   const projected = hydratable.map((entry, index) => {
     /* Three outcomes, kept apart: a read that produced evidence, a read that
@@ -749,11 +820,12 @@ export async function agentLivenessSnapshot(
     const lastRecordMs = evidence?.lastRecordTs ?? (Number.isFinite(entry.mtimeMs) ? entry.mtimeMs : null);
     const silentForMs = lastRecordMs !== null ? Math.max(0, now - lastRecordMs) : null;
     const registryEntry = entryForPath(registry, entry.path);
-    const host = hostEvidence(registryEntry, sources.probe);
-    const providerRetryAt = turnState === "busy" && host.state === "alive" && registryEntry?.accountId
-      ? providerRetryAtFor(entry.engine as "claude" | "codex", registryEntry.accountId)
-      : null;
     const conversationId = entry.conversationId ?? conversationIdForPath(registry, entry.path);
+    const host = headlessHostEvidence(flows, entry.path, conversationId, sources.probe)
+      ?? hostEvidence(registryEntry, sources.probe);
+    const providerThrottle = turnState === "busy" && host.state === "alive" && registryEntry?.accountId
+      ? providerThrottleFor(entry.engine as "claude" | "codex", registryEntry.accountId)
+      : { retryAt: null, throttledAt: null };
     return {
       entry,
       conversationId,
@@ -761,7 +833,15 @@ export async function agentLivenessSnapshot(
       lastRecordMs,
       silentForMs,
       host,
-      ...evaluateLiveness({ host, turnState, silentForMs, stallAfterMs, providerRetryAt }),
+      ...evaluateLiveness({
+        host,
+        turnState,
+        silentForMs,
+        stallAfterMs,
+        providerRetryAt: providerThrottle.retryAt,
+        providerThrottleAt: providerThrottle.throttledAt,
+        providerProgressAt: evidence?.providerProgressAt ?? null,
+      }),
       pipeline: (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
         ?? pipelines.byPath.get(entry.path)
         ?? null,
