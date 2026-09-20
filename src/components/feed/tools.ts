@@ -139,15 +139,23 @@ function matchAt(pattern: RegExp, cmd: string, at: number): number {
 }
 
 /** Index just past the quote run opened at `at`, or -1 when it never closes
-    inside the window. */
+    inside the window — or when a backslash inside a double-quoted run makes the
+    next character's meaning an interpretation this scanner will not make. A
+    single-quoted run has no escapes in the shell, so a backslash inside one is
+    an ordinary character and the first `'` still closes it. */
 function quoteRunEnd(cmd: string, at: number, limit: number): number {
   const quote = cmd[at];
-  for (let i = at + 1; i < limit; i += 1) if (cmd[i] === quote) return i + 1;
+  for (let i = at + 1; i < limit; i += 1) {
+    if (quote === '"' && cmd[i] === "\\") return -1;
+    if (cmd[i] === quote) return i + 1;
+  }
   return -1;
 }
 
 /** Index just past a balanced `(…)` or `{…}` opened at `at`, skipping quoted
-    runs, or -1 when it does not close inside the window. */
+    runs, or -1 when it does not close inside the window or holds a backslash
+    escape or a backquote — the same syntax `envAssignmentEnd` refuses outside a
+    substitution, refused inside one too rather than counted as a bracket. */
 function balancedEnd(cmd: string, at: number, limit: number, open: string, close: string): number {
   let depth = 0;
   for (let i = at; i < limit; i += 1) {
@@ -156,7 +164,8 @@ function balancedEnd(cmd: string, at: number, limit: number, open: string, close
     else if (ch === close) {
       depth -= 1;
       if (depth === 0) return i + 1;
-    } else if (ch === "'" || ch === '"') {
+    } else if (ch === "\\" || ch === "`") return -1;
+    else if (ch === "'" || ch === '"') {
       const closed = quoteRunEnd(cmd, i, limit);
       if (closed < 0) return -1;
       i = closed - 1;

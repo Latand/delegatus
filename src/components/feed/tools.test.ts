@@ -231,6 +231,16 @@ describe("a one-line label leads with the real command", () => {
     expect(label(backquoted)).toBe(backquoted);
     const unterminated = "env DEMO_NOTE='two words bun run build";
     expect(label(unterminated)).toBe(unterminated);
+    // An escape hidden inside a quoted value or a substitution is the same
+    // refusal: reading `\"` as the closing quote cut the label at the space
+    // behind it and left `world" bun test` as the command that ran.
+    const escapedQuote = 'env DEMO_NOTE="hello\\" world" bun test src/demo.test.ts';
+    expect(label(escapedQuote)).toBe(escapedQuote);
+    const escapedParen = "env DEMO_OUT=$(printf '%s' a\\) b) bun test src/demo.test.ts";
+    expect(label(escapedParen)).toBe(escapedParen);
+    // A backslash inside single quotes is an ordinary character, so that run
+    // still closes and the fold goes ahead.
+    expect(label("env DEMO_NOTE='a\\b' bun run build")).toBe("bun run build");
   });
 
   test("the fold is bounded: a pathological wrapper chain still returns", () => {
