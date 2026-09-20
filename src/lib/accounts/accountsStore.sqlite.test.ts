@@ -20,6 +20,7 @@ import {
   MUTATION_REVISION_SOURCE,
   OVERRIDES_SOURCE,
   readAccountSource,
+  readRetiredAccountIds,
   resetAccountCollectionsForTests,
   writeAccountSource,
   type AccountSourceName,
@@ -529,4 +530,22 @@ describe("an import record a stray process wrote is not evidence the move happen
     expect(readStateImport(accountsDatabasePath(directory), "accounts")).toEqual(before);
     expect(siblings(directory, `${CLAUDE_ACCOUNTS_SOURCE}.unreadable-`)).toHaveLength(1);
   });
+});
+
+/* The one read outside this module's owners: `AgentRegistry.beginSpawnRequest`
+   refuses a launch on a retired account, so a registry that could not be read
+   must not answer with an empty retired list. */
+test("a registry that could not be read reports that, rather than an empty retired list", () => {
+  const directory = sandbox();
+  seed(directory, CLAUDE_ACCOUNTS_SOURCE, registry("work", ["work"], {
+    retired: [{ id: "gone", label: "gone", retiredAt: "2026-01-01T00:00:00.000Z" }],
+  }));
+  fs.writeFileSync(accountSourcePath(CODEX_ACCOUNTS_SOURCE, directory), Buffer.alloc(1024, 0));
+
+  importLegacyAccounts(directory, { reconcile: true });
+
+  expect(readRetiredAccountIds("claude", directory)).toEqual({ kind: "known", ids: new Set(["gone"]) });
+  const unknown = readRetiredAccountIds("codex", directory);
+  expect(unknown.kind).toBe("unknown");
+  expect(unknown.kind === "unknown" && unknown.reason).toContain(`${CODEX_ACCOUNTS_SOURCE}.unreadable-`);
 });
