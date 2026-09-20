@@ -1,13 +1,13 @@
+/* FIRST, and before every other import: the claim has to precede the modules
+   below, which resolve the operator's state directory while they load (#1905).
+   See `src/lib/state/owner/tool.ts`. */
+import "@/lib/state/owner/tool";
+
 import fs from "node:fs";
 
 import { createLegacyMigration, persistLegacyMigration } from "@/lib/agent/migration";
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
-
-/* This script administers the operator's live state, which is what the `tool`
-   owner is for (#1905). A script that only needs *a* state directory sets
-   LLV_STATE_DIR instead. */
-if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "tool";
 
 function arg(name: string): string | null {
   const index = process.argv.indexOf(name);

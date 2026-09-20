@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { STATE_OWNER_ENV } from "@/lib/stateOwnership";
+import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
 /**
  * The spawn boundary's half of #1905.
@@ -49,8 +49,23 @@ function sandboxKey(value: string | undefined): string {
  * this whole change exists to make impossible.
  */
 export function agentConfigSandboxRoot(source: NodeJS.ProcessEnv, home?: string): string {
-  const temporary = source.TMPDIR?.trim() || os.tmpdir();
-  return path.join(temporary, AGENT_SANDBOX_DIRNAME, sandboxKey(home));
+  return path.join(sandboxTemporaryRoot(source), AGENT_SANDBOX_DIRNAME, sandboxKey(home));
+}
+
+/**
+ * The temp root the sandbox is built under.
+ *
+ * A restricted stage runs with `TMPDIR` pointed at a scratch directory the
+ * Viewer made under `statePath("scratch")`, and that env is the `source` here
+ * — so honouring it put the agent's "isolated" config root inside the
+ * operator's own state directory, which is the one place this module promises
+ * never to build in. Such a `TMPDIR` is ignored in favour of the process temp
+ * root.
+ */
+function sandboxTemporaryRoot(source: NodeJS.ProcessEnv): string {
+  const declared = source.TMPDIR?.trim();
+  if (declared && !underOperatorRoot(declared, source)) return declared;
+  return os.tmpdir();
 }
 
 /**

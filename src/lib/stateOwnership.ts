@@ -62,13 +62,29 @@ export function ownsStateStartupMutation(env: NodeJS.ProcessEnv = process.env): 
   return owner !== null && STARTUP_MUTATION_OWNERS.includes(owner);
 }
 
+/**
+ * Declare this process's owner, unless it already carries one it inherited.
+ *
+ * **Where this runs matters more than what it sets.** An `import` is evaluated
+ * before any statement in the file that wrote it, so a claim in an entry
+ * point's body runs AFTER every module that entry point imports — and a module
+ * that resolves state at module scope (`export const INBOX_DIR = inboxDir()`)
+ * has already been refused by then. An entry point therefore claims through
+ * one of the side-effect modules in `src/lib/state/owner/`, imported first, or
+ * (like `src/runtime-host/main.ts`) claims in its body and reaches everything
+ * else through `await import`.
+ */
+export function claimStateOwner(owner: StateOwner, env: NodeJS.ProcessEnv = process.env): void {
+  if (!env[STATE_OWNER_ENV]) env[STATE_OWNER_ENV] = owner;
+}
+
 function uniqueStrings(values: readonly (string | undefined)[]): string[] {
   return [...new Set(values.filter((value): value is string => !!value && value.trim().length > 0))];
 }
 
-function underTemp(directory: string): boolean {
+function underTemp(directory: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const resolved = path.resolve(directory);
-  return uniqueStrings([os.tmpdir(), process.env.TMPDIR, "/tmp", "/var/tmp"])
+  return uniqueStrings([os.tmpdir(), env.TMPDIR, "/tmp", "/var/tmp"])
     .map((root) => path.resolve(root))
     .some((root) => resolved === root || resolved.startsWith(root + path.sep));
 }
@@ -91,7 +107,7 @@ export function operatorOwnedRoots(env: NodeJS.ProcessEnv = process.env): string
      points under a temp root — that is a sandbox a test or a driver built for
      itself, and treating it as the operator's would substitute a throw-away
      directory for the one the caller deliberately chose. */
-  const homes = uniqueStrings([os.homedir(), env.HOME]).filter((home, index) => index === 0 || !underTemp(home));
+  const homes = uniqueStrings([os.homedir(), env.HOME]).filter((home, index) => index === 0 || !underTemp(home, env));
   for (const home of homes) {
     roots.push(path.join(home, ".config", "agent-log-viewer"));
     roots.push(path.join(home, ".config", "live-log-viewer"));
@@ -99,17 +115,41 @@ export function operatorOwnedRoots(env: NodeJS.ProcessEnv = process.env): string
     roots.push(path.join(home, ".claude", "viewer-inbox"));
   }
   const configHome = env.XDG_CONFIG_HOME?.trim();
-  if (configHome && !underTemp(configHome)) {
+  if (configHome && !underTemp(configHome, env)) {
     roots.push(path.join(configHome, "agent-log-viewer"));
     roots.push(path.join(configHome, "live-log-viewer"));
   }
   return uniqueStrings(roots.map((root) => path.resolve(root)));
 }
 
-/** Whether `directory` is, or sits inside, one of {@link operatorOwnedRoots}. */
-export function isOperatorOwnedDirectory(directory: string, env: NodeJS.ProcessEnv = process.env): boolean {
+/**
+ * Plain containment in {@link operatorOwnedRoots}, before the temp-root
+ * exemption below.
+ *
+ * This is the question the spawn boundary asks about a `TMPDIR` it was handed:
+ * that directory IS the process's scratch root, so the exemption would only
+ * answer itself, while whether it sits inside the operator's installation is
+ * exactly what has to be decided.
+ */
+export function underOperatorRoot(directory: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const resolved = path.resolve(directory);
   return operatorOwnedRoots(env).some((root) => resolved === root || resolved.startsWith(root + path.sep));
+}
+
+/**
+ * Whether `directory` is, or sits inside, one of {@link operatorOwnedRoots}.
+ *
+ * The process temp root wins over the containment test, whatever it points at.
+ * A restricted stage agent runs with `TMPDIR` under `statePath("scratch")`, so
+ * by path alone every directory it `mktemp`s reads as the operator's — and the
+ * suites it runs, which drive imports and backups against their own temp
+ * directories, were refused by {@link assertStateStartupMutation}. A path the
+ * process was told is its scratch root is nobody's durable state, exactly as a
+ * caller-chosen `LLV_STATE_DIR` is admitted untouched.
+ */
+export function isOperatorOwnedDirectory(directory: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (underTemp(directory, env)) return false;
+  return underOperatorRoot(directory, env);
 }
 
 /**
@@ -134,7 +174,14 @@ let throwawayRoot: string | null = null;
  * scattering it across directories.
  */
 export function throwawayStateRoot(): string {
-  if (!throwawayRoot) throwawayRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-unowned-state-"));
+  if (!throwawayRoot) {
+    /* The temp root is created first: a restricted stage agent's `TMPDIR` is
+       deleted with its scratch directory when the stage releases, and a stale
+       one turned a harmless substitution into an ENOENT crash. */
+    const temporary = os.tmpdir();
+    fs.mkdirSync(temporary, { recursive: true });
+    throwawayRoot = fs.mkdtempSync(path.join(temporary, "llv-unowned-state-"));
+  }
   return throwawayRoot;
 }
 

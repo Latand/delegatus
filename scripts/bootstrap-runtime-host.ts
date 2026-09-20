@@ -21,6 +21,11 @@
  * running across all three modes.
  */
 
+/* FIRST, and before every other import: the claim has to precede the modules
+   below, which resolve the operator's state directory while they load (#1905).
+   See `src/lib/state/owner/tool.ts`. */
+import "../src/lib/state/owner/tool";
+
 import fs from "node:fs";
 import path from "node:path";
 
@@ -49,11 +54,6 @@ import {
 import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 
 const USAGE = "usage: bun scripts/bootstrap-runtime-host.ts [origin/main|<40-hex sha>] [--stage|--hand-over]";
-
-/* Bootstrapping administers the operator's live release state, which is what
-   the `tool` owner is for (#1905). A script that only needs *a* state
-   directory sets LLV_STATE_DIR instead of claiming this. */
-if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "tool";
 
 const defaultConfigDir = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "", ".config");
 const stateDir = process.env.LLV_STATE_DIR || path.join(defaultConfigDir, "agent-log-viewer", "state");

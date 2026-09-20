@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
 
-import { STATE_OWNER_ENV } from "@/lib/stateOwnership";
+import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
 import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSandbox";
 
@@ -46,4 +46,22 @@ test("an account home with no usable name still gets a root of its own, and a fo
   const env = withAgentConfigSandbox({ NODE_ENV: "production", GH_CONFIG_DIR: "/forwarded/gh" }, source, undefined);
   expect(env.XDG_CONFIG_HOME).toBe(path.join("/scratch/tmp", "llv-spawn-sandbox", "default", "config"));
   expect(env.GH_CONFIG_DIR).toBe("/forwarded/gh");
+});
+
+test("a TMPDIR inside the operator's state directory is not where the sandbox goes", () => {
+  const source: NodeJS.ProcessEnv = {
+    NODE_ENV: "production",
+    HOME: "/opt/operator-home",
+    XDG_CONFIG_HOME: "/opt/operator-home/.config",
+    /* What a restricted stage is handed: the scratch directory the Viewer
+       made for it under statePath("scratch"). Honouring it put the agent's
+       "isolated" root inside the operator's own state directory, and every
+       directory the agent then mktemped read as the operator's. */
+    TMPDIR: "/opt/operator-home/.config/agent-log-viewer/state/scratch/llv-read-only-stage-a1b2c3/tmp",
+  };
+
+  const root = agentConfigSandboxRoot(source, "/opt/operator-home/.config/agent-log-viewer/accounts/claude/lane");
+
+  expect(root).toBe(path.join(os.tmpdir(), "llv-spawn-sandbox", "lane"));
+  expect(underOperatorRoot(root, source)).toBeFalse();
 });

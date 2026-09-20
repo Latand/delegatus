@@ -245,11 +245,39 @@ resolves to. The mechanism, in `src/lib/stateOwnership.ts`, is three rules:
    at the real installation — the MCP link because `viewerMcpServerEnv()` pins
    the real state directory into the server definition itself, not into the
    agent's environment — and `GH_CONFIG_DIR` is pinned because `gh` used to
-   read `XDG_CONFIG_HOME`.
+   read `XDG_CONFIG_HOME`. A restricted stage is handed a `TMPDIR` under
+   `statePath("scratch")`: the sandbox ignores such a `TMPDIR` and builds under
+   the process temp root instead, and a path under the process temp root is
+   never classified as the operator's, so the suites that agent runs keep
+   driving imports and backups against their own temp directories.
+
+**The claim has to run before the entry point's own imports.** An `import` is
+evaluated before every statement in the file that wrote it, so
+`process.env.LLV_STATE_OWNER = …` in an entry's body runs AFTER its whole
+module graph — and a module that resolves state while it loads (`export const
+INBOX_DIR = inboxDir()`, `const TASKS_FILE = statePath("tasks.json")`) has
+already been refused by then. The first round of this change claimed that way
+in five entry points, and every one of them was dead code: the MCP server threw
+before it could connect, which would have taken the Viewer tools away from every
+spawned agent, and two operator scripts ran only when the variable was already
+in the environment. An entry point claims one of two ways:
+
+- `import "@/lib/state/owner/<kind>";` as its **first** import — one of the
+  side-effect modules beside `stateOwnership.ts` (`mcp`, `tool`,
+  `deployAdapter`), which is what `src/lib/mcp/entry.ts` and the operator
+  scripts do;
+- or a claim in the body followed by `await import(...)` for everything else,
+  which is what `src/runtime-host/main.ts` does.
+
+`bin/cli.mjs` and `src/instrumentation.ts` claim in their bodies and are safe
+for a different reason: neither reaches a module that resolves state until
+after the claim. Check that before copying them.
 
 When you add a process that legitimately owns live state, give it an owner
 token at its entry point (see `bin/cli.mjs`, `src/runtime-host/main.ts`,
 `src/instrumentation.ts`, `src/lib/mcp/entry.ts`, the `runtime` stage of the
-`Dockerfile`, and the `dev`/`start` scripts). When you add a script that only
+`Dockerfile`, and the `dev`/`start` scripts), and add it to
+`stateOwnership.entryPoints.test.ts`, which starts each real entry point under
+an operator-shaped home with nothing preset. When you add a script that only
 needs *a* state directory, set `LLV_STATE_DIR` instead — claiming an owner
 token to silence a refusal is how the seventy minutes come back.

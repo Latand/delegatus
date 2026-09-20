@@ -1,5 +1,11 @@
 #!/usr/bin/env bun-container
 
+/* FIRST, and before every other import: the claim has to precede the modules
+   below, which resolve the operator's state directory while they load (#1905).
+   In production the runtime host has already exported its own owner, and the
+   adapter inherits it; this admits a standalone run. */
+import "../src/lib/state/owner/deployAdapter";
+
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -97,11 +103,6 @@ import {
   type ViewerCandidateContainerState,
 } from "../src/runtime-host/deploymentHealth";
 import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
-
-/* The deploy adapter drives a release against the operator's own state
-   directory, so it is one of the owners #1905 admits there. Inherited from the
-   runtime host when the host started it; claimed here when it was not. */
-if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "deploy-adapter";
 
 const defaultConfigDir = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "/home/user", ".config");
 const stateDir = process.env.LLV_STATE_DIR || path.join(defaultConfigDir, "agent-log-viewer", "state");

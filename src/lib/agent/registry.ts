@@ -3807,7 +3807,17 @@ export class AgentRegistry {
   ): SqliteAgentRegistryStore {
     /* Retiring the JSON registry is a state-mutating startup step: against the
        operator's own directory it belongs to the serving Viewer or the runtime
-       host, never to a build, a test run or a script (#1905). */
+       host, never to a build, a test run or a script (#1905).
+
+       The deliberate consequence: on an install whose agents.json is still
+       authoritative, an MCP server, a launcher or a tool script that opens the
+       registry first now throws where it used to migrate. That is the trade
+       taken on purpose — importing the operator's authoritative registry from a
+       process that holds no release fence is the incident's own shape — and it
+       is reached only when there IS a JSON to retire: `resolveRegistryBackend`
+       reports `pendingJsonImport` for a descriptor that still names the JSON or
+       for a JSON on disk, so a fresh install initialises its empty store here
+       as before. A Viewer boot clears it. */
     assertStateStartupMutation(path.dirname(this.filename), "agent registry import");
     const claim = this.acquireLock(`${this.filename}.write-lock`, captureProcessIdentity(process.pid));
     try {

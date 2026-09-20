@@ -3,11 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { resolveRegistryBackend } from "@/lib/agent/registryBackendIdentity";
+
 import {
   admitOperatorDirectory,
   assertStateStartupMutation,
   isOperatorOwnedDirectory,
   STATE_OWNER_ENV,
+  underOperatorRoot,
 } from "./stateOwnership";
 
 /*
@@ -201,5 +204,59 @@ describe("the operator's state directory", () => {
       path.join(temporary, "home", ".config", "agent-log-viewer", "state"),
       env({ HOME: path.join(temporary, "home") }),
     )).toBeFalse();
+  });
+
+  test("a scratch root inside it is still a scratch root", () => {
+    /* A restricted stage agent is handed `TMPDIR` under `statePath("scratch")`,
+       so by containment alone every directory it mktemps reads as the
+       operator's — and the suites it runs, which drive imports and backups
+       against their own temp directories, were refused. */
+    const scratch = path.join(STATE_DIRECTORY, "scratch", "llv-read-only-stage-a1b2c3", "tmp");
+    const environment = env({ HOME: OPERATOR_HOME, TMPDIR: scratch });
+    const mkdtemped = path.join(scratch, "llv-durability-a1b2c3");
+
+    expect(underOperatorRoot(scratch, environment)).toBeTrue();
+    expect(isOperatorOwnedDirectory(scratch, environment)).toBeFalse();
+    expect(isOperatorOwnedDirectory(mkdtemped, environment)).toBeFalse();
+    expect(() => assertStateStartupMutation(mkdtemped, "state backup pass", environment)).not.toThrow();
+
+    /* The exemption reaches exactly as far as the scratch root: the state
+       directory around it is the operator's, as it was. */
+    expect(isOperatorOwnedDirectory(STATE_DIRECTORY, environment)).toBeTrue();
+    expect(() => assertStateStartupMutation(STATE_DIRECTORY, "state backup pass", environment)).toThrow();
+  });
+
+  test("a build whose temp root was deleted under it still gets a throw-away directory", () => {
+    /* The restricted stage's scratch — and with it the `TMPDIR` every child
+       inherited — is removed when the stage releases. A substitution that
+       cannot create its root would turn a harmless one into an ENOENT crash. */
+    const temporary = temporaryRoot();
+    fs.rmSync(temporary, { recursive: true, force: true });
+
+    const probe = runProbe("resolve", {
+      ...operatorEnvironment(temporary),
+      NEXT_PHASE: "phase-production-build",
+    });
+
+    expect(probe.stderr).not.toContain("ENOENT");
+    expect(probe.status).toBe(0);
+    const resolved = JSON.parse(probe.stdout.trim()) as { stateDirectory: string };
+    expect(resolved.stateDirectory.startsWith(`${temporary}${path.sep}`)).toBeTrue();
+  });
+
+  test("a fresh install's first registry open is no migration at all", () => {
+    /* `AgentRegistry` asserts the startup mutation only on the path that
+       retires an authoritative JSON, and that path is taken only when the
+       backend resolution reports one. The deliberate consequence of the
+       assert is therefore bounded: an install with an authoritative
+       agents.json refuses a non-fence opener (a Viewer boot clears it), while
+       an install with nothing to import initialises as it always did. */
+    const temporary = temporaryRoot();
+    const registry = path.join(temporary, "agent-registry.json");
+
+    expect(resolveRegistryBackend(registry, env()).pendingJsonImport).toBeFalse();
+
+    fs.writeFileSync(registry, JSON.stringify({ conversations: [] }));
+    expect(resolveRegistryBackend(registry, env()).pendingJsonImport).toBeTrue();
   });
 });
