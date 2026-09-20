@@ -602,8 +602,14 @@ export type PipelineCloseReport = {
   worktree: { dir: string; uncommitted: string[]; truncated: boolean; error?: string } | null;
 };
 
+/** Evidence belongs to the recorded host even when a review round replaces it. */
+export type PipelineCloseHostEvidence = Pick<PipelineStageAttempt,
+  "effectiveRole" | "startedAt" | "state" | "error" | "completedAt" | "verdict" | "unresolvedTermination">;
+
 /** Durable close custody, understood regardless of the activation feature flag. */
 export type PipelineCloseTeardown = {
+  /** Optional for obligations written before host evidence was frozen. */
+  hosts?: Array<{ target: PipelineStageHostRef; evidence: PipelineCloseHostEvidence }>;
   id: string;
   phase: "pending" | "running" | "settled";
   owner?: import("@/lib/processIdentity").ProcessIdentity;

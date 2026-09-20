@@ -124,7 +124,7 @@ export type PipelineStageSpawn = {
 
 /** Identity of the agent host a stage attempt owns, as a close reports it. */
 export type { PipelineStageHostRef, PipelineCloseReport } from "./types";
-import type { PipelineStageHostRef, PipelineCloseReport } from "./types";
+import type { PipelineStageHostRef, PipelineCloseReport, PipelineCloseHostEvidence } from "./types";
 
 export type PipelineStageStopResult =
   /** Termination is evidenced: the kill was delivered, or the host is gone.
@@ -906,7 +906,7 @@ function rememberUnresolvedTermination(
  * terminalized by any other evidence; every survivor proven dead by identity
  * clears the record. Never signals anything.
  */
-function unresolvedTerminationRefusal(attempt: PipelineStageAttempt): string | null {
+function unresolvedTerminationRefusal(attempt: Pick<PipelineStageAttempt, "unresolvedTermination">): string | null {
   const record = attempt.unresolvedTermination;
   if (!record) return null;
   const standing: string[] = [];
@@ -925,6 +925,10 @@ function unresolvedTerminationRefusal(attempt: PipelineStageAttempt): string | n
 
 /** Older attempts can retain descendants after a replacement becomes current. */
 function pipelineSurvivorRefusal(pipeline: Pipeline): { error: string; status: number } | null {
+  for (const host of pipeline.closeTeardown?.hosts ?? []) {
+    const error = unresolvedTerminationRefusal(host.evidence);
+    if (error) return { error, status: 409 };
+  }
   for (const run of pipeline.runs) {
     for (const attempt of run.attempts) {
       const error = unresolvedTerminationRefusal(attempt);
@@ -2102,12 +2106,24 @@ export function reconcileEmbeddedReviewFlows(
         changed = true;
       }
     }
+    changed = retainCloseHosts(pipeline) || changed;
     for (const run of pipeline.runs) {
       for (const attempt of run.attempts) {
         const flow = attempt.flowId ? byId.get(attempt.flowId) : null;
+        const priorIdentity = closeHostIdentity(attempt);
         if (flow) changed = synchronizeReviewFlowAttempt(attempt, flow, synchronizedAt) || changed;
+        if (pipeline.closeTeardown && closeHostIdentity(attempt) !== priorIdentity) {
+          // Scanner synchronization can follow a completed stop checkpoint.
+          // Keep those survivors with the prior reviewer when seating the next.
+          const prior = pipeline.closeTeardown.hosts?.find((host) => closeHostIdentity(host.target) === priorIdentity);
+          if (prior && attempt.unresolvedTermination) {
+            prior.evidence.unresolvedTermination = structuredClone(attempt.unresolvedTermination);
+            delete attempt.unresolvedTermination;
+          }
+        }
       }
     }
+    changed = retainCloseHosts(pipeline) || changed;
   }
   return changed;
 }
@@ -5946,7 +5962,7 @@ const closeExecutors = globalThis as unknown as { __llvCloseExecutors?: Set<stri
 const activeCloses = closeExecutors.__llvCloseExecutors ??= new Set<string>();
 
 /** A transcript or pane may rebind while the recorded launch is stopping. */
-function closeHostIdentity(target: PipelineStageHostRef): string {
+function closeHostIdentity(target: Pick<PipelineStageHostRef, "launchId" | "conversationId" | "agentPath" | "paneId">): string {
   return target.launchId || target.conversationId
     ? JSON.stringify([target.launchId ?? null, target.conversationId])
     : JSON.stringify([target.agentPath, target.paneId]);
@@ -5954,13 +5970,32 @@ function closeHostIdentity(target: PipelineStageHostRef): string {
 
 /** Merge newly materialized hosts into custody in the same mutation as their
  * adoption, and again at drain checkpoints before a snapshot can settle it. */
-function retainCloseHosts(pipeline: Pipeline, report = pipeline.closeReport): boolean {
-  const plan = pipeline.closeTeardown;
+function closeHostEvidence(attempt: PipelineStageAttempt): PipelineCloseHostEvidence {
+  const { effectiveRole, startedAt, state, error, completedAt, verdict, unresolvedTermination } = attempt;
+  return structuredClone({ effectiveRole, startedAt, state, error, completedAt, verdict, unresolvedTermination });
+}
+
+function retainCloseHosts(pipeline: Pipeline, report = pipeline.closeReport, plan = pipeline.closeTeardown): boolean {
   if (!plan || !report) return false;
   const recorded = new Set([...report.pending, ...report.stopped, ...report.alreadyStopped,
     ...report.unconfirmed, ...report.stillRunning, ...report.acknowledged].map(closeHostIdentity));
   let added = false;
-  for (const target of [...(pipeline.closeReport?.pending ?? []), ...launchedStageHosts(pipeline).map((item) => item.target)]) {
+  let evidenceAdded = false;
+  const hosts = plan.hosts ??= [];
+  for (const host of pipeline.closeTeardown?.hosts ?? []) {
+    if (!hosts.some((item) => closeHostIdentity(item.target) === closeHostIdentity(host.target))) {
+      hosts.push(structuredClone(host));
+      evidenceAdded = true;
+    }
+  }
+  const candidates = launchedStageHosts(pipeline);
+  for (const candidate of candidates) {
+    if (!hosts.some((item) => closeHostIdentity(item.target) === closeHostIdentity(candidate.target))) {
+      hosts.push({ target: structuredClone(candidate.target), evidence: closeHostEvidence(candidate.attempt) });
+      evidenceAdded = true;
+    }
+  }
+  for (const target of [...(pipeline.closeReport?.pending ?? []), ...candidates.map((item) => item.target)]) {
     const key = closeHostIdentity(target);
     if (recorded.has(key)) continue;
     recorded.add(key);
@@ -5976,7 +6011,7 @@ function retainCloseHosts(pipeline: Pipeline, report = pipeline.closeReport): bo
     pipeline.hiddenAt = null;
     pipeline.stateDetail = "closed; teardown pending";
   }
-  return added;
+  return added || evidenceAdded;
 }
 
 /** Claim and checkpoint under short leases; every host/flow/git operation runs
@@ -6038,21 +6073,20 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
           || JSON.stringify(live.closeTeardown.owner) !== JSON.stringify(owner)) throw new Error("close teardown ownership changed");
         if (candidate) {
           const current = runFor(live, candidate.target.stageId)?.attempts.find((item) => item.n === candidate.target.attempt);
-          if (!current || current.conversationId !== candidate.target.conversationId || current.launchId !== candidate.target.launchId
-            || (!(candidate.target.conversationId || candidate.target.launchId)
-              && (current.agentPath !== candidate.target.agentPath || current.paneId !== candidate.target.paneId))) throw new Error("close target identity changed");
-          // A launch/conversation can materialize or rebind its transcript and
-          // pane during teardown. The stop still names the frozen target; its
-          // result must not replace that newer metadata or lose its checkpoint.
-          // Keep unrelated fields and any later report; only apply close evidence.
-          current.unresolvedTermination = structuredClone(candidate.attempt.unresolvedTermination);
-          if (!current.verdict && !current.completedAt) {
-            current.state = candidate.attempt.state;
-            current.error = candidate.attempt.error;
-            current.completedAt = candidate.attempt.completedAt;
+          const host = plan.hosts?.find((item) => closeHostIdentity(item.target) === closeHostIdentity(candidate.target));
+          if (host) host.evidence = closeHostEvidence(candidate.attempt);
+          // The outcome belongs to the frozen host. A scanner may already have
+          // bound this attempt to the next reviewer while the stop was in flight.
+          if (current && closeHostIdentity(current) === closeHostIdentity(candidate.target)) {
+            current.unresolvedTermination = structuredClone(candidate.attempt.unresolvedTermination);
+            if (!current.verdict && !current.completedAt) {
+              current.state = candidate.attempt.state;
+              current.error = candidate.attempt.error;
+              current.completedAt = candidate.attempt.completedAt;
+            }
           }
         }
-        retainCloseHosts(live, report);
+        retainCloseHosts(live, report, plan);
         if (report.pending.length) {
           report.status = "pending";
           if (plan.phase === "settled") plan.phase = "pending";
@@ -6074,9 +6108,17 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
         if (processed++ > 0 && ports.monotonicNow() >= deadline) break;
         const attempt = runFor(claimed, target.stageId)?.attempts.find((item) => item.n === target.attempt);
         if (!attempt) throw new Error("close target attempt disappeared");
-        const candidate = { target, attempt, turnSettled: Boolean(attempt.verdict || attempt.completedAt) };
+        const host = plan.hosts!.find((item) => closeHostIdentity(item.target) === closeHostIdentity(target));
+        // Older obligations have no snapshot. Keep their recorded address and
+        // only borrow survivor evidence when the current identity still matches.
+        const evidence = host?.evidence ?? { ...closeHostEvidence(attempt),
+          unresolvedTermination: closeHostIdentity(attempt) === closeHostIdentity(target) ? attempt.unresolvedTermination : undefined };
+        if (!host) plan.hosts!.push({ target: structuredClone(target), evidence: structuredClone(evidence) });
+        const frozen = { ...structuredClone(attempt), ...structuredClone(evidence), ...target };
+        const candidate = { target, attempt: frozen, turnSettled: Boolean(frozen.verdict || frozen.completedAt) };
         try { await stopCloseHost(candidate, report, ports); }
         catch (error) { report.unconfirmed.push({ ...target, operationId: null, detail: `close stop could not be confirmed: ${String(error)}` }); }
+        if (closeHostIdentity(attempt) === closeHostIdentity(target)) Object.assign(attempt, closeHostEvidence(frozen));
         report.pending.shift();
         await checkpoint(candidate);
       }
@@ -6085,6 +6127,12 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
         delete plan.owner;
         await checkpoint();
         continue;
+      }
+      for (const host of plan.hosts ?? []) {
+        const error = unresolvedTerminationRefusal(host.evidence);
+        if (error && !report.stillRunning.some((item) => closeHostIdentity(item) === closeHostIdentity(host.target))) {
+          report.stillRunning.push({ ...host.target, error });
+        }
       }
       // Deduplicated hosts can leave another attempt with durable survivors.
       for (const run of claimed.runs) for (const attempt of run.attempts) {
@@ -7009,8 +7057,7 @@ export async function patchPipeline(
             const key = JSON.stringify([target.launchId ?? null, target.conversationId, target.agentPath, target.paneId]);
             if (seen.has(key)) return false;
             seen.add(key);
-            return ![...report.stopped, ...report.alreadyStopped].some((item) => item.stageId === target.stageId && item.attempt === target.attempt)
-              && launchedStageHosts(pipeline).some((item) => item.target.stageId === target.stageId && item.target.attempt === target.attempt);
+            return ![...report.stopped, ...report.alreadyStopped].some((item) => closeHostIdentity(item) === closeHostIdentity(target));
           });
           report.unconfirmed = [];
           report.stillRunning = [];
@@ -7039,6 +7086,7 @@ export async function patchPipeline(
         acknowledgeHosts: req.acknowledgeHosts === true,
         flow: attempt?.flowId && stage ? { id: attempt.flowId, stageId: stage.id, attempt: attempt.n } : null,
       };
+      retainCloseHosts(pipeline);
       if (stage && (!attempt || (pipeline.cursor?.state === "pending" && TERMINAL_ATTEMPT_STATES.has(attempt.state)))) newAttempt(pipeline, stage);
       delete pipeline.activationCloseRequested;
       pipeline.state = "closed";

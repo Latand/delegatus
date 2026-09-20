@@ -12037,3 +12037,101 @@ for (const enabled of [false, true]) {
     }
   });
 }
+
+for (const enabled of [false, true]) {
+  test.each(["before-stop", "during-stop", "crash-resume", "survivor", "survivor-after-checkpoint"] as const)(`reviewer identity advances during close at %s (activation: ${enabled})`, async (seam) => {
+    const h = harness();
+    const pipeline = await create(h.ports, [
+      { id: "build", kind: "run", prompt: "build", next: "review" },
+      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+    ] as never);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    const flow = h.flows.get("flow-1")!;
+    const round = (n: number) => ({ n, launchId: `review-launch-${n}`, reviewerConversationId: `conversation_reviewer_${n}`,
+      reviewerPath: `/codex/reviewer-${n}.jsonl`, startedAt: h.ports.now() });
+    flow.rounds = [round(1) as never];
+    flow.state = "reviewing";
+    const sync = async () => {
+      const { withPipelineMutation } = await import("./store");
+      await withPipelineMutation((pipelines, persist) => {
+        expect(reconcileEmbeddedReviewFlows(pipelines, [flow], h.ports.now())).toBe(true);
+        persist();
+      });
+    };
+    await sync();
+    const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    process.env.LLV_PIPELINE_ACTIVATION_DRAIN = enabled ? "1" : "0";
+    const survivor = seam.startsWith("survivor") ? Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"],
+      { stdout: "ignore", stderr: "ignore" }) : null;
+    const { captureProcessIdentity } = await import("@/lib/processIdentity");
+    const survivorIdentity = survivor ? captureProcessIdentity(survivor.pid) : null;
+    const stops: string[] = [];
+    let closes = 0;
+    h.ports.stopStageAgent = async (target) => {
+      stops.push(target.conversationId!);
+      if (target.conversationId === "conversation_reviewer_1" && (seam === "during-stop" || (seam === "survivor" && stops.length === 2))) {
+        await sync();
+      }
+      if (target.conversationId === "conversation_reviewer_1" && stops.length === 2 && survivorIdentity) {
+        return { outcome: "unresolved", error: "descendant survived", survivors: [survivorIdentity] };
+      }
+      return { outcome: "not-running" };
+    };
+    h.ports.closeFlow = async () => { closes++; flow.state = "closed"; return {}; };
+    try {
+      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+      flow.rounds.push(round(2) as never);
+      if (seam === "before-stop" || seam === "crash-resume") await sync();
+      if (seam === "crash-resume") {
+        const child = Bun.spawn([process.execPath, "-e", `
+          const { defaultPipelinePorts, drainStageActivations } = await import("./src/lib/pipelines/engine.ts");
+          await drainStageActivations({ ...defaultPipelinePorts(), stopStageAgent: async (target) => {
+            if (target.conversationId === "conversation_reviewer_2") process.exit(0);
+            return { outcome: "stopped" };
+          } });
+          process.exit(2);
+        `], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
+        expect(await child.exited).toBe(0);
+        expect(loadPipelines()[0]!.closeReport?.stopped.map((host) => host.conversationId))
+          .toEqual(["conversation_stage_1", "conversation_reviewer_1"]);
+      }
+      if (seam === "survivor-after-checkpoint") {
+        await engineModule.drainStageActivations(h.ports);
+        await sync();
+      }
+      for (let i = 0; i < 3; i++) await engineModule.drainStageActivations(h.ports);
+      if (survivor) {
+        const retained = loadPipelines()[0]!;
+        expect(retained.closeReport?.stillRunning.map((host) => host.conversationId)).toEqual(["conversation_reviewer_1"]);
+        expect(retained.closeTeardown?.hosts?.find((host) => host.target.conversationId === "conversation_reviewer_1")
+          ?.evidence.unresolvedTermination?.survivors).toEqual([survivorIdentity!]);
+        expect(retained.runs[1]!.attempts[0]!.unresolvedTermination).toBeUndefined();
+        expect(closes).toBe(0);
+        expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).status).toBe(409);
+        await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+        await engineModule.drainStageActivations(h.ports);
+        expect(loadPipelines()[0]!.closeReport?.stillRunning).toHaveLength(1);
+        survivor.kill();
+        await survivor.exited;
+      }
+      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      expect(stops).toEqual(seam === "crash-resume" ? ["conversation_reviewer_2"]
+        : ["conversation_stage_1", "conversation_reviewer_1", "conversation_reviewer_2",
+          ...(survivor ? ["conversation_reviewer_1", "conversation_reviewer_1"] : [])]);
+      expect(closes).toBe(1);
+      const closed = loadPipelines()[0]!;
+      expect(closed.closeReport).toMatchObject({ status: "settled", pending: [] });
+      expect(closed.runs[1]!.attempts[0]).toMatchObject({ launchId: "review-launch-2", conversationId: "conversation_reviewer_2" });
+    } finally {
+      if (survivor && survivor.exitCode === null) { survivor.kill(); await survivor.exited; }
+      if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+      else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+    }
+  });
+}

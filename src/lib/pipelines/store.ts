@@ -374,6 +374,11 @@ function isCloseCustody(pipeline: Partial<Pipeline>): boolean {
   };
   const owner = plan.owner;
   return typeof plan.id === "string" && !!plan.id && ["pending", "running", "settled"].includes(plan.phase)
+    && (plan.hosts === undefined || (Array.isArray(plan.hosts) && plan.hosts.every((item) => item && host(item.target)
+      && item.evidence && isEffectiveRole(item.evidence.effectiveRole) && typeof item.evidence.startedAt === "string"
+      && typeof item.evidence.state === "string" && isNullableString(item.evidence.error)
+      && isNullableString(item.evidence.completedAt) && isVerdict(item.evidence.verdict)
+      && isUnresolvedTermination(item.evidence.unresolvedTermination))))
     && typeof plan.waitingForActivation === "boolean" && typeof plan.acknowledgeHosts === "boolean"
     && (owner === undefined || (owner && typeof owner === "object" && Number.isInteger(owner.pid) && owner.pid > 0 && isNullableString(owner.startIdentity) && isNullableString(owner.bootEpoch)))
     && (plan.flow === null || (typeof plan.flow === "object" && typeof plan.flow.id === "string"
