@@ -4,9 +4,10 @@ import path from "node:path";
 
 import { after, NextRequest, NextResponse } from "next/server";
 
+import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { UnknownAccountError } from "@/lib/accounts/codex";
 import { claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
-import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
@@ -812,7 +813,11 @@ export async function executeSpawnRequest(
     const receiptAccountId = pinFallback && typeof body.accountId === "string"
       ? body.accountId
       : account.accountId;
-    const begun = await withAccountMutationLockAsync(async () => {
+    const admissionAccount = existingAttempt ? null : await accountProbeSnapshot(
+      () => dependencies.resolveSpawnAccount(engine, account.accountId),
+      { holder: "spawn catalog snapshot", caller: "spawn" },
+    );
+    const begun = await withAccountMutationLockAsync(() => {
       if (!existingAttempt && clientAttemptId) {
         /* The validation endpoint may have fenced this exact downstream key
            while an older request was between validation and reservation. Both
@@ -827,8 +832,11 @@ export async function executeSpawnRequest(
         }
       }
       if (!existingAttempt) {
-        const current = dependencies.resolveSpawnAccount(engine, account.accountId);
-        if (current.accountId !== account.accountId || current.kind !== account.kind) {
+        const current = admissionAccount!.account;
+        if (accountsCollectionRevision() !== admissionAccount!.revision
+          || accountProbeIdentity(current) !== admissionAccount!.identity
+          || current.accountId !== account.accountId || current.kind !== account.kind
+          || current.home !== account.home || current.transcriptRoot !== account.transcriptRoot) {
           throw new Error("spawn account changed during admission");
         }
       }

@@ -190,10 +190,21 @@ function credentialPresence(home: string): Pick<ClaudeAccount, "authPresent" | "
 function account(stored: StoredAccount): ClaudeAccount { const home = managedHome(stored.id); return { ...stored, home, projectsDir: projectsDirFor(home), ...credentialPresence(home) }; }
 function main(): ClaudeAccount { const home = legacyClaudeHome(); return { id: DEFAULT_ID, label: "Main", kind: "legacy", home, projectsDir: projectsDirFor(home), ...credentialPresence(home), createdAt: 0 }; }
 export function listClaudeAccounts(): ClaudeAccount[] { recoverRemovalsAtStartup(); return [main(), ...readRegistry().registry.accounts.map(account)]; }
-export function activeClaudeAccountId(): string { const active = readRegistry().registry.active; return listClaudeAccounts().some((item) => item.id === active) ? active : DEFAULT_ID; }
+/** Routing needs persisted membership only; credential discovery may spawn Keychain. */
+export function activeClaudeAccountId(): string {
+  const { active, accounts, removals } = readRegistry().registry;
+  return !removals.some((item) => item.id === active) && accounts.some((item) => item.id === active) ? active : DEFAULT_ID;
+}
 export function claudeAccountsMutationLocked(): boolean { return readRegistry().corrupt; }
 export function claudeAccountForSpawn(requested?: string | null): Pick<ClaudeAccount, "id" | "kind" | "home" | "projectsDir"> { const found = listClaudeAccounts().find((item) => item.id === (requested ?? activeClaudeAccountId())); if (!found) throw new UnknownClaudeAccountError(requested ?? ""); if (found.kind === "managed" && (!managedClaudeHomeIsSafe(found.id, true) || !managedClaudeCredentialIsSafe(found.home))) throw new UnsafeClaudeHomeError(); return { id: found.id, kind: found.kind, home: found.home, projectsDir: found.projectsDir }; }
-export function setActiveClaudeAccount(id: string): void { withRegistryLock(() => { const registry = mutable(); if (!listClaudeAccounts().some((item) => item.id === id)) throw new UnknownClaudeAccountError(id); write({ ...registry, active: id }); }); }
+export function setActiveClaudeAccount(id: string): void {
+  withAccountMutationLock(() => {
+    const registry = mutable();
+    if (id !== DEFAULT_ID && !registry.accounts.some((item) => item.id === id)) throw new UnknownClaudeAccountError(id);
+    if (registry.removals.some((item) => item.id === id) || accountRemovalInFlight("claude", id)) throw new UnknownClaudeAccountError(id);
+    write({ ...registry, active: id });
+  });
+}
 /** Transcript trees kept by removed accounts: the shared archive (issue #1857),
     or the home itself for accounts retired in place before it (issue #643). */
 export function retiredClaudeProjectRoots(): string[] { return readRegistry().registry.retired.map((item) => projectsDirFor(item.archived ? retiredAccountArchive("claude", item.id) : managedHome(item.id))); }
