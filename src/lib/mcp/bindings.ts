@@ -197,7 +197,7 @@ import {
 } from "./selectedContextTarget";
 import { mcpCallerIdentity, mcpToolPolicy, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
-const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage"]);
+const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision"]);
 const PIPELINE_GRAPH_EDIT_ACTIONS = new Set<PipelineAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
 
 interface LinkTaskToPipelineDependencies {
@@ -1481,13 +1481,13 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): 
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
-  const request = withoutKeys(args, ["pipelineId", "clientRequestId", "full", "compact"]);
+  const request = withoutKeys(args, ["pipelineId", ...(action === "resolve-decision" ? [] : ["clientRequestId"]), "full", "compact"]);
   const before = dependencies.readPipelineRecord
     ? dependencies.readPipelineRecord(pipelineId)
     : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
   const beforeFields = fieldValues(before);
-  /* Pause, resume and graph edits carry the calling agent as their actor. */
-  const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
+  /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
+  const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || action === "resolve-decision" || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest);
   if (!result.pipeline) {
@@ -1512,6 +1512,13 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
+    ...(result.decisionAnswer ? { decisionAnswer: {
+      clientRequestId: result.decisionAnswer.clientRequestId,
+      stageId: result.decisionAnswer.stageId,
+      attempt: result.decisionAnswer.attempt,
+      nextAttempt: result.decisionAnswer.nextAttempt,
+      at: result.decisionAnswer.at,
+    }, replayed: result.replayed } : {}),
   });
 }
 
@@ -3126,19 +3133,20 @@ async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
   const stageId = text(args.stageId);
   if (stageId) {
     const attempt = typeof args.attempt === "number" ? args.attempt : undefined;
-    return redactPayload(pipelineStageRead(pipeline, stageId, attempt));
+    return redactPayload({ ...pipelineStageRead(pipeline, stageId, attempt), revision: recordRevision(pipeline) });
   }
   if (args.compact === true) {
     return redactPayload({
       pipelineId,
       ...pipelineCompactRow(pipeline),
+      revision: recordRevision(pipeline),
       taskIds: pipeline.taskIds,
       stageDigests: stageDigests(pipeline.stages),
       graphDigest: graphDigest(pipeline.stages),
     });
   }
   /* The digests a guarded graph edit names as expectedStageDigest. */
-  return { ...redactPayload({ pipelineId, pipeline }), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) };
+  return { ...redactPayload({ pipelineId, pipeline }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) };
 }
 
 const SENSITIVE_PAYLOAD_KEY = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|credential|password|passwd|secret)/i;

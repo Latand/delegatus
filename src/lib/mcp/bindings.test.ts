@@ -3592,3 +3592,29 @@ test("task placement bindings require atomic guards and classify field refusals 
   }
   expect(result.unchanged).toBe(true);
 });
+
+
+test("resolve-decision forwards its receipt key and server actor and wakes the controller", async () => {
+  const calls: unknown[] = [];
+  const decisionAnswer = { clientRequestId: "decision-answer", stageId: "build", attempt: 1, nextAttempt: 2, at: "2026-09-20T00:00:00.000Z" };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
+      calls.push({ request, actor });
+      return { pipeline: { id: "pipeline_1", state: "running" }, decisionAnswer, replayed: false };
+    },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_creator", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+  const request = { clientRequestId: "decision-answer", pipelineId: "pipeline_1", action: "resolve-decision", answer: "Use Markdown.", expectedStageId: "build", expectedAttempt: 1, expectedRevision: "a".repeat(64) };
+  const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+  let ticks = 0;
+  const unregister = registerPipelineTick(async () => { ticks += 1; });
+  try {
+    const answer = await service.callTool("pipeline_action", request);
+    expect(answer).toMatchObject({ ok: true, decisionAnswer });
+    await service.callTool("pipeline_action", request);
+    expect(calls).toEqual([{ request: { clientRequestId: request.clientRequestId, action: request.action, answer: request.answer, expectedStageId: request.expectedStageId, expectedAttempt: request.expectedAttempt, expectedRevision: request.expectedRevision }, actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_creator" } }]);
+    await Promise.resolve();
+    expect(ticks).toBe(1);
+  } finally { unregister(); }
+});
