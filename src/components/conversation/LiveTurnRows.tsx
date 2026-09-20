@@ -320,7 +320,9 @@ function LiveCallRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeL
    visibly changes appearance when the echo lands. While the item is still
    streaming, StreamingMd holds the unfinished tail as plain text instead of
    guessing at a construct whose closer has not arrived. Tool rows interleave
-   with prose in response order (issue #1100), each rendered by LiveToolRow. */
+   with prose in response order (issue #1100), each rendered by LiveCallRow.
+   What reaches this component is the whole unclaimed overlay; what it paints is
+   `liveTurnTail` of it. */
 export function LiveTurnRows({ items }: { items: readonly RuntimeLiveTurnItem[] }) {
   const { t } = useLocale();
   const { rows, earlier } = useMemo(() => liveTurnTail(items), [items]);
