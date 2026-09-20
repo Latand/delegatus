@@ -18,6 +18,7 @@ import {
   type HotStateCheckpoint,
 } from "@/lib/state/hotStateAuthority";
 import { initializeStateCollections, markStateSqliteCutoverReady } from "@/lib/state/sqliteStateStore";
+import { openStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { markStructuredHostStartupFailed, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
 import {
@@ -786,6 +787,12 @@ export async function registerViewerRuntime(): Promise<void> {
     await releaseStructuredHostsForViewerDemotion({ boundary: viewerReleaseBoundary() });
   };
   await activateViewerRuntimeWhenCurrent(async () => {
+    /* This callback runs only in the process that owns the release and is
+       about to serve traffic. It is the one place a state-mutating startup
+       step — the #1870 imports, their rollback mirrors, the durability
+       checks — is allowed to run at all; everywhere else the barrier refuses
+       (#1905, a lane's `next build` importing the live account files). */
+    openStateMutationActivation();
     const boundary = await establishHotStateCutoverBoundary(isCurrent);
     activatedReleaseRevision = boundary.authority?.releaseRevision ?? null;
     const durability = await checkStateDatabasesBeforeStores(hotStateDirectory);

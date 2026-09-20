@@ -265,6 +265,27 @@ test("operator mutations and identity-bearing numerics retain exact protocol val
   expect(calls).toEqual([]);
 });
 
+test("migration schema names explicit selection and preserves automatic reseat", async () => {
+  const calls: unknown[] = [];
+  await withProtocolClient(inertBindings({ conversation_migration: async args => { calls.push(args); return {}; } }), async client => {
+    const listed = await client.listTools();
+    const tool = listed.tools.find(tool => tool.name === "conversation_migration")!;
+    expect(JSON.stringify(tool.inputSchema)).toContain("select-account");
+    expect(JSON.stringify(tool.inputSchema)).toContain("accountId");
+    for (const action of ["reseat", "select-account"]) {
+      const result = await client.callTool({ name: "conversation_migration", arguments: {
+        clientRequestId: action, conversationId: "conversation_target", action,
+        ...(action === "select-account" ? { accountId: "account-b" } : {}),
+      } });
+      expect(result.isError).not.toBe(true);
+    }
+    expect((await client.callTool({ name: "conversation_migration", arguments: {
+      clientRequestId: "invalid-account", conversationId: "conversation_target", action: "select-account", accountId: 42,
+    } })).isError).toBe(true);
+  });
+  expect(calls).toHaveLength(2);
+});
+
 test("spawn_agent listTools publishes every registry role exactly once", async () => {
   const roleIds = listRoles().map((role) => role.id);
 
@@ -795,10 +816,10 @@ test("request_attention admits every target shape the attention record accepts",
 
 import { RECOVERY_CONTRACT_DESCRIPTION, type McpRecoverableTool } from "./server";
 
-test("spawn_agent and send_message publish recoveryOnly and the recovery contract, and the flag never enters the digest", async () => {
+test("spawn_agent and both send tools publish recoveryOnly and the recovery contract, and the flag never enters the digest", async () => {
   await withProtocolClient(inertBindings(), async (client) => {
     const listed = await client.listTools();
-    for (const toolName of ["spawn_agent", "send_message"] as const) {
+    for (const toolName of ["spawn_agent", "send_message", "send_message_to_orchestrator"] as const) {
       const tool = listed.tools.find((candidate) => candidate.name === toolName)!;
       const schema = tool.inputSchema as { properties: Record<string, { type?: string; description?: string }>; required?: string[] };
       /* Captured before toMatchObject, which swaps the matched field for its matcher. */

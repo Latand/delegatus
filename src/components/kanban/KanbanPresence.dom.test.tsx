@@ -134,6 +134,8 @@ function mount(tasks: BoardTask[], files: FileEntry[]) {
   flushSync(() => root.render(
     <KanbanBoard
       project="fixture"
+      /* No seat in play here, and known to be none: the board reads none itself. */
+      seatRefs={null}
       groups={[]}
       manual={files}
       files={files}

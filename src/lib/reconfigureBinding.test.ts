@@ -13,6 +13,9 @@ import { resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import type { FileEntry } from "@/lib/types";
 
 import { reconfigureConversation } from "./delivery";
+import { BINDINGS_SOURCE } from "@/lib/accounts/accountsStore";
+import { clearAccountFixture, seedAccountSource } from "@/lib/accounts/accountsStoreFixture";
+import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 
 /**
  * #1279 at the reconfigure seam: switching a live conversation onto another
@@ -157,8 +160,7 @@ test("an agent's out-of-pool switch is recorded under the agent that made it", a
 });
 
 test("a binding record that cannot be read does not veto a named switch, and is recorded as unreadable", async () => {
-  fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
-  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "account-project-bindings.json"), "{ not json", "utf8");
+  seedAccountSource(BINDINGS_SOURCE, "{ not json");
   const { pathname, registry, entry } = scenario("06", FENCED_PROJECT);
   const counters = { resolved: 0, ticks: 0 };
 
@@ -262,15 +264,25 @@ test("a switch that is refused records nothing", async () => {
 test("a switch the journal could not record happens anyway, and the answer says it is not on record", async () => {
   expect(bindAccountToProject("codex", RESERVED, FENCED_PROJECT).ok).toBe(true);
   const { pathname, registry, entry } = scenario("08", FENCED_PROJECT);
-  /* Nothing can be appended at a pathname that is a directory. */
-  fs.mkdirSync(path.join(process.env.LLV_STATE_DIR!, "account-project-overrides.json"), { recursive: true });
+  /* The append is one transaction, and this is a store that will not take it. */
+  const originalPatch = SqliteStateCollection.prototype.patchSync;
+  SqliteStateCollection.prototype.patchSync = function patchSync(this: { signature(): string }, ...args: unknown[]) {
+    if (this.signature().includes(":accounts:")) throw new Error("the journal could not be written");
+    return (originalPatch as (...rest: unknown[]) => void).apply(this, args);
+  } as typeof SqliteStateCollection.prototype.patchSync;
   const counters = { resolved: 0, ticks: 0 };
 
-  const outcome = await reconfigureConversation(
-    pathname,
-    { model: "gpt-5.6-sol", effort: "high", fast: false, accountId: OUTSIDE },
-    overrides(registry, entry, counters),
-  );
+  const outcome = await (async () => {
+    try {
+      return await reconfigureConversation(
+        pathname,
+        { model: "gpt-5.6-sol", effort: "high", fast: false, accountId: OUTSIDE },
+        overrides(registry, entry, counters),
+      );
+    } finally {
+      SqliteStateCollection.prototype.patchSync = originalPatch;
+    }
+  })();
 
   /* The gesture is the operator's and it is carried out. What fails is the
      record, and the answer to the gesture is where that has to arrive: the

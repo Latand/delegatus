@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { stateDir, statePath } from "@/lib/configDir";
+
+import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { isShellCommand } from "@/lib/status";
 import { withAccountMutationLock } from "./accountMutation";
 import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, scrubAccountHomeToRetainedHistory, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
@@ -61,17 +63,11 @@ interface Registry {
   removals: AccountRemovalJournalEntry[];
 }
 
-interface CachedRegistry {
-  key: string;
-  loaded: LoadedRegistry;
-}
-
 interface LoadedRegistry {
   registry: Registry;
   corrupt: boolean;
 }
 
-let cached: CachedRegistry | null = null;
 const reportedStoreErrors = new Set<string>();
 
 export class UnknownAccountError extends Error {
@@ -229,20 +225,33 @@ function normalizeRegistry(value: unknown, sourceKey: string): LoadedRegistry {
   return { registry: { version: REGISTRY_VERSION, active: raw.active, accounts, retired, removals }, corrupt: rejected };
 }
 
+/* The registry is the `accounts` collection of state.sqlite (#1870, slice 7).
+   The rows hold what `codex-accounts.json` held, so every check below is the
+   one it always was, including what counts as corrupt. */
 function readRegistry(): LoadedRegistry {
+  const read = readAccountSource(CODEX_ACCOUNTS_SOURCE);
+  if (read.kind === "legacy") return readLegacyRegistryFile();
+  /* A registry whose record could not be read is corrupt, never empty: the
+     default account is served and every mutation refuses. */
+  if (read.kind === "gap") {
+    reportStoreErrorOnce(`${registryPath()}:gap`, "registry cannot be read; serving the default account");
+    return { registry: defaultRegistry(), corrupt: true };
+  }
+  if (read.body === undefined) return { registry: defaultRegistry(), corrupt: false };
+  return normalizeRegistry(read.body, registryPath());
+}
+
+/** The pre-#1870 read, for a release that is not yet allowed to import. */
+function readLegacyRegistryFile(): LoadedRegistry {
   const file = registryPath();
   const key = `${file}:${storeKey(file)}`;
-  if (cached?.key === key) return cached.loaded;
-  let loaded: LoadedRegistry;
   try {
-    if (!fs.existsSync(file)) loaded = { registry: defaultRegistry(), corrupt: false };
-    else loaded = normalizeRegistry(JSON.parse(fs.readFileSync(file, "utf8")), key);
+    if (!fs.existsSync(file)) return { registry: defaultRegistry(), corrupt: false };
+    return normalizeRegistry(JSON.parse(fs.readFileSync(file, "utf8")), key);
   } catch {
     reportStoreErrorOnce(key, "registry cannot be read; serving the default account");
-    loaded = { registry: defaultRegistry(), corrupt: true };
+    return { registry: defaultRegistry(), corrupt: true };
   }
-  cached = { key, loaded };
-  return loaded;
 }
 
 function mutableRegistry(): Registry {
@@ -314,17 +323,11 @@ export function codexAccountsMutationLocked(): boolean {
   return readRegistry().corrupt;
 }
 
+/** One transaction: the account rows, the retired records and the removal
+    journal step commit together, and the collection revision — the account
+    mutation revision — advances with them (#1870). */
 function writeRegistry(registry: Registry): void {
-  const file = registryPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmp, file);
-    cached = null;
-  } finally {
-    fs.rmSync(tmp, { force: true });
-  }
+  writeAccountSource(CODEX_ACCOUNTS_SOURCE, registry);
 }
 
 function authPresent(home: string): boolean {
@@ -386,7 +389,6 @@ export function isManagedCodexHome(home: string): boolean {
 
 export function setActiveCodexAccount(id: string): void {
   withRegistryLock(() => {
-    cached = null;
     const registry = mutableRegistry();
     if (!listCodexAccounts().some((account) => account.id === id)) throw new UnknownAccountError(id);
     writeRegistry({ ...registry, active: id });
@@ -435,7 +437,6 @@ export function createManagedCodexAccount(label: string): CodexAccount {
   const cleanLabel = label.trim();
   if (!cleanLabel || cleanLabel.length > 80 || /[\u0000-\u001f\u007f]/.test(cleanLabel)) throw new InvalidAccountLabelError();
   return withRegistryLock(() => {
-    cached = null;
     const registry = mutableRegistry();
     const id = accountIdForLabel(cleanLabel, new Set([...listCodexAccounts().map((account) => account.id), ...registry.retired.map((account) => account.id)]));
     const home = managedHome(id);
@@ -470,7 +471,6 @@ function historyFitsRetainedSessions(report: AccountHistoryInventoryReport): boo
 }
 
 function writeJournal(id: string, phase: AccountRemovalJournalPhase | null, rewrites?: readonly AccountPathRewrite[]): void {
-  cached = null;
   const current = mutableRegistry();
   writeRegistry({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
 }
@@ -489,7 +489,6 @@ function withAccountRetired(registry: Registry, id: string): Registry {
 }
 
 function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } {
-  cached = null;
   const registry = mutableRegistry();
   const recovered: string[] = [];
   const unresolved: string[] = [];
@@ -504,7 +503,6 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
         entry,
         listed: registry.accounts.some((account) => account.id === entry.id),
         commitRetired: () => {
-          cached = null;
           writeRegistry(withAccountRetired(mutableRegistry(), entry.id));
         },
         clearJournal: () => writeJournal(entry.id, null),
@@ -552,7 +550,6 @@ function recoverRemovalsAtStartup(): void {
 export function removeManagedCodexAccount(id: string): AccountArchiveRemovalReport {
   return withRegistryLock(() => {
     recoverRemovalsLocked();
-    cached = null;
     const registry = mutableRegistry();
     const existing = registry.accounts.find((account) => account.id === id);
     if (!existing) throw new UnknownAccountError(id);
@@ -585,7 +582,6 @@ export function cleanupOrphanedCodexHomes(): AccountOrphanCleanupReport {
     /* A removal whose archive still holds its sign-in file stays journaled;
        it is named here so the dialog never reports that file deleted. */
     const recovery = recoverRemovalsLocked();
-    cached = null;
     const registry = mutableRegistry();
     const registered = new Set(registry.accounts.map((account) => account.id));
     const retired = new Set(registry.retired.map((account) => account.id));
@@ -647,7 +643,6 @@ export function cleanupOrphanedCodexHomes(): AccountOrphanCleanupReport {
 
 export function setCodexAccountLoginPane(id: string, loginPane: LoginPane | null): void {
   withRegistryLock(() => {
-    cached = null;
     const registry = mutableRegistry();
     const index = registry.accounts.findIndex((account) => account.id === id);
     if (index < 0) throw new UnknownAccountError(id);

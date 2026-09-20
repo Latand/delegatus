@@ -33,6 +33,8 @@ const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts"
 const { accountProjectBindings, AccountProjectBindingsUnreadableError } = await import("@/lib/accounts/projectBindings");
 const { AgentRegistry } = await import("./registry");
 const { resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
+const { BINDINGS_SOURCE, resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
+const { clearAccountFixture, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
 
 type Registry = InstanceType<typeof AgentRegistry>;
 
@@ -102,7 +104,7 @@ function quota(store: Registry, accountId: string, usedPercent: number): void {
 
 function bind(rows: readonly { project: string; accountId: string }[]): void {
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: rows.map((row) => ({
       engine: "codex",
@@ -110,12 +112,12 @@ function bind(rows: readonly { project: string; accountId: string }[]): void {
       project: row.project,
       createdAt: "2026-08-30T00:00:00.000Z",
     })),
-  }), "utf8");
+  });
 }
 
 function damageRecord(): void {
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 }
 
 /** The target each conversation is queued to move to, or null for parked. */
@@ -162,7 +164,8 @@ function unreadableBindingReason(): string {
 
 beforeEach(() => {
   process.env.LLV_STATE_DIR = STATE;
-  fs.rmSync(RECORD, { force: true });
+  resetAccountCollectionsForTests();
+  clearAccountFixture(BINDINGS_SOURCE);
   resetProjectAliasesForTests();
 });
 

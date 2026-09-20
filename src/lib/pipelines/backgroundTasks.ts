@@ -51,19 +51,20 @@ export type BackgroundTaskLedger = {
   /** Tasks that already reported, so a start record written after its own
       notification cannot reopen one. */
   ended: string[];
+  /** TaskStop tool-use ids paired with their requested task ids. An error
+      result contains only text, so this keeps that terminal fact correlated. */
+  taskStops: Record<string, string>;
   wakeup: RunningBackgroundTask | null;
   /** Epoch ms of the newest delivered completion notification or stop: the
       moment the agent last heard that background work ended. */
   lastReportedAt: number | null;
 };
 
-/** A harness expiry is honoured this long after its nominal time, so the
-    notice or the wakeup's own prompt has time to reach the transcript. */
-const EXPIRY_GRACE_MS = 2 * 60_000;
 const MAX_ENDED_IDS = 500;
+const MAX_TASK_STOP_IDS = 500;
 
 export function emptyBackgroundTaskLedger(): BackgroundTaskLedger {
-  return { running: {}, ended: [], wakeup: null, lastReportedAt: null };
+  return { running: {}, ended: [], taskStops: {}, wakeup: null, lastReportedAt: null };
 }
 
 function recordTs(record: RecordLike): number {
@@ -75,16 +76,19 @@ function recordTs(record: RecordLike): number {
     scan marker with this prefix that names no task. */
 const ORPHAN_SUMMARY_PREFIX = "__orphan_summary";
 
-function taskNotifications(text: string): Array<{ id: string; status: string | null }> {
+function taskNotifications(text: string): Array<{ id: string; terminal: boolean }> {
   const trimmed = text.trim();
   if (!trimmed.startsWith("<task-notification")) return [];
-  const found: Array<{ id: string; status: string | null }> = [];
+  const found: Array<{ id: string; terminal: boolean }> = [];
   for (const block of trimmed.matchAll(/<task-notification\b[^>]*>([\s\S]*?)<\/task-notification>/g)) {
     const body = block[1] ?? "";
-    const status = body.match(/<status>\s*([^<]+?)\s*<\/status>/)?.[1] ?? null;
+    /* A Monitor's expiry is terminal for the watch even if the watched
+       stream remains alive. Claude reports that notice without <status>. */
+    const terminal = /<status>\s*[^<]+?\s*<\/status>/.test(body)
+      || /\[Monitor expired after\s+\d+(?:\.\d+)?\s*[smh]\b/i.test(body);
     for (const match of body.matchAll(/<task-id>\s*([^<\s]+)\s*<\/task-id>/g)) {
       const id = match[1]!;
-      if (!id.startsWith(ORPHAN_SUMMARY_PREFIX)) found.push({ id, status });
+      if (!id.startsWith(ORPHAN_SUMMARY_PREFIX)) found.push({ id, terminal });
     }
   }
   return found;
@@ -93,6 +97,17 @@ function taskNotifications(text: string): Array<{ id: string; status: string | n
 function contentParts(record: RecordLike): RecordLike[] {
   const content = recordValue(record.message)?.content;
   return Array.isArray(content) ? content.map((part) => recordValue(part) ?? {}) : [];
+}
+
+function toolResultText(record: RecordLike): string {
+  return contentParts(record)
+    .filter((part) => part.type === "tool_result")
+    .map((part) => stringValue(part.content) ?? stringValue(part.text) ?? "")
+    .join("\n");
+}
+
+function noTaskFoundId(text: string): string | null {
+  return text.match(/\bNo task found with ID:\s*([^<\s]+)/i)?.[1] ?? null;
 }
 
 function end(ledger: BackgroundTaskLedger, id: string, ts: number): void {
@@ -104,11 +119,20 @@ function end(ledger: BackgroundTaskLedger, id: string, ts: number): void {
 /** Apply one Claude transcript record to the ledger. Pure over its inputs:
     the ledger passed in is copied, never mutated. */
 export function foldBackgroundTaskRecord(ledger: BackgroundTaskLedger, record: RecordLike): BackgroundTaskLedger {
-  const next: BackgroundTaskLedger = { ...ledger, running: { ...ledger.running } };
+  const next: BackgroundTaskLedger = { ...ledger, running: { ...ledger.running }, taskStops: { ...ledger.taskStops } };
   const ts = recordTs(record);
   if (record.type === "assistant") {
     for (const part of contentParts(record)) {
       if (part.type === "tool_use" && part.name === "ScheduleWakeup") next.wakeup = null;
+      if (part.type === "tool_use" && part.name === "TaskStop") {
+        const callId = stringValue(part.id);
+        const taskId = stringValue(recordValue(part.input)?.task_id);
+        if (callId && taskId) {
+          next.taskStops[callId] = taskId;
+          const oldest = Object.keys(next.taskStops).slice(0, -MAX_TASK_STOP_IDS);
+          for (const id of oldest) delete next.taskStops[id];
+        }
+      }
     }
     return next;
   }
@@ -116,7 +140,7 @@ export function foldBackgroundTaskRecord(ledger: BackgroundTaskLedger, record: R
     const attachment = recordValue(record.attachment);
     if (attachment?.type !== "queued_command") return next;
     for (const notice of taskNotifications(stringValue(attachment.prompt) ?? "")) {
-      if (notice.status) end(next, notice.id, ts);
+      if (notice.terminal) end(next, notice.id, ts);
     }
     return next;
   }
@@ -124,7 +148,16 @@ export function foldBackgroundTaskRecord(ledger: BackgroundTaskLedger, record: R
   const parts = contentParts(record);
   if (parts.some((part) => part.type === "tool_result")) {
     const result = recordValue(record.toolUseResult);
-    if (!result) return next;
+    const toolResult = parts.find((part) => part.type === "tool_result");
+    const stopCallId = stringValue(toolResult?.tool_use_id);
+    const requestedStopId = stopCallId ? next.taskStops[stopCallId] ?? null : null;
+    if (stopCallId) delete next.taskStops[stopCallId];
+    const noTaskId = noTaskFoundId(toolResultText(record));
+    const missingTask = requestedStopId === noTaskId ? noTaskId : null;
+    if (!result) {
+      if (missingTask) end(next, missingTask, ts);
+      return next;
+    }
     const backgroundId = stringValue(result.backgroundTaskId);
     const monitorId = stringValue(result.taskId);
     const stoppedId = stringValue(result.task_id);
@@ -144,10 +177,11 @@ export function foldBackgroundTaskRecord(ledger: BackgroundTaskLedger, record: R
     } else if (scheduledFor !== null) {
       next.wakeup = { id: `wakeup@${new Date(scheduledFor).toISOString()}`, kind: "wakeup", startedAt: ts, expiresAt: scheduledFor };
     }
+    if (missingTask) end(next, missingTask, ts);
     return next;
   }
   for (const notice of taskNotifications(claudeUserText(recordValue(record.message)?.content))) {
-    if (notice.status) end(next, notice.id, ts);
+    if (notice.terminal) end(next, notice.id, ts);
   }
   return next;
 }
@@ -165,7 +199,7 @@ export function heldBackgroundTasks(ledger: BackgroundTaskLedger): RunningBackgr
 
 /** The held tasks the harness has not itself ended by `nowMs`. */
 export function liveBackgroundTasks(tasks: readonly RunningBackgroundTask[], nowMs: number): RunningBackgroundTask[] {
-  return tasks.filter((task) => task.expiresAt === null || task.expiresAt + EXPIRY_GRACE_MS > nowMs);
+  return tasks.filter((task) => task.expiresAt === null || task.expiresAt > nowMs);
 }
 
 /** What the ledger still holds at `nowMs`, oldest first. */
@@ -255,7 +289,7 @@ export function runningBackgroundTasks(
 }
 
 /** Lines that can move the ledger; everything else is skipped unparsed. */
-const RELEVANT_LINE = /backgroundTaskId|task-notification|"taskId"|"task_id"|scheduledFor|"ScheduleWakeup"/;
+const RELEVANT_LINE = /backgroundTaskId|task-notification|"taskId"|"task_id"|scheduledFor|"ScheduleWakeup"|No task found with ID:/i;
 const READ_CHUNK_BYTES = 1 << 20;
 const MAX_CACHED_TRANSCRIPTS = 256;
 

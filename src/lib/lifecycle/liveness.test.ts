@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
+import { livenessProbe } from "@/lib/agent/accountLiveness";
 import { PROVIDER_THROTTLE_GRACE_MS } from "@/lib/limitsThrottle";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
+import type { Flow } from "@/lib/flows/types";
 import type { FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 
@@ -320,6 +322,9 @@ test("a live agent deep in a tool stretch is running: freshness is the newest RE
   /* Twenty seconds old — the last tool result — and NOT the six-hour-old prose. */
   expect(evidence!.lastRecordTs).toBe(NOW - 20_000);
   expect(evidence!.lastRecordTs).not.toBe(FROZEN_AT);
+  /* The tool result is newer, while provider evidence remains at the assistant
+     record that requested the tool. */
+  expect(evidence!.providerProgressAt).toBe(FROZEN_AT);
 
   const registry = {
     entries: { "claude:session-tools": structuredEntry(agentPath, 4242) },
@@ -371,6 +376,32 @@ test("a Codex turn re-hosted after a severed tool call reports turnState idle (#
 
   expect(snapshot.conversations[0]).toMatchObject({ turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle" });
   expect(snapshot.stalledCount).toBe(0);
+});
+
+test("an active headless reviewer uses its exact persisted process identity without a structured host", async () => {
+  const agentPath = "/transcripts/headless-reviewer.jsonl";
+  const conversationId = "conversation_headless_reviewer";
+  const snapshot = await agentLivenessSnapshot({ conversationId }, sources({
+    probe: { now: () => NOW, pidAlive: (pid) => pid === 4244, processIdentity: () => "reviewer-start" },
+    describeTranscript: async () => ({
+      path: agentPath, project: "viewer", title: "review", engine: "codex", mtimeMs: NOW - 5_000,
+      conversationId, activity: null, activityReason: null,
+    }),
+    registrySnapshot: () => ({ entries: {}, conversations: {
+      [conversationId]: { id: conversationId, generations: [{ path: agentPath }], continuityPaths: [] },
+    } } as unknown as RegistryFile),
+    pipelines: () => [],
+    flows: () => [{
+      reviewerMode: "headless", state: "reviewing", rounds: [{ reviewerPath: agentPath, reviewerConversationId: conversationId, reviewerPid: 4244, reviewerIdentity: "reviewer-start" }],
+    } as unknown as Flow],
+    transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: NOW - 5_000, providerProgressAt: null }),
+  }));
+
+  expect(snapshot.conversations[0]).toMatchObject({
+    host: { state: "alive", kind: "headless", pid: 4244 },
+    lifecycle: "running",
+    reason: "host_alive_turn_active",
+  });
 });
 
 test("a single-conversation query does no inventory sweep and reads the tail once (#645)", async () => {
@@ -536,6 +567,84 @@ test("a live busy host follows its account throttle below the threshold and thro
   });
 });
 
+test("newer provider progress supersedes an account throttle while tool-only traffic preserves the wait", () => {
+  const retryAt = new Date(NOW + 5 * 60_000).toISOString();
+  const throttledAt = NOW - 90_000;
+
+  expect(evaluateLiveness({
+    host: { state: "alive" },
+    turnState: "busy",
+    silentForMs: 5_000,
+    stallAfterMs: 10 * 60_000,
+    providerRetryAt: retryAt,
+    providerThrottleAt: throttledAt,
+    providerProgressAt: NOW - 5_000,
+  })).toEqual({ lifecycle: "running", reason: "host_alive_turn_active" });
+
+  expect(evaluateLiveness({
+    host: { state: "alive" },
+    turnState: "busy",
+    silentForMs: 5_000,
+    stallAfterMs: 10 * 60_000,
+    providerRetryAt: retryAt,
+    providerThrottleAt: throttledAt,
+    /* A newer tool result is ordinary activity, not proof the provider left
+       its wait. */
+    providerProgressAt: null,
+  })).toEqual({ lifecycle: "waiting", reason: "provider_throttled", retryAt });
+
+  expect(evaluateLiveness({
+    host: { state: "alive" },
+    turnState: "busy",
+    silentForMs: 5_000,
+    stallAfterMs: 10 * 60_000,
+    providerRetryAt: retryAt,
+    providerThrottleAt: throttledAt,
+    /* An older provider record cannot defeat a newer throttle observation. */
+    providerProgressAt: throttledAt - 1,
+  })).toEqual({ lifecycle: "waiting", reason: "provider_throttled", retryAt });
+});
+
+test("provider progress remains superseded after a bounded tail rolls over", async () => {
+  const dir = sandbox();
+  const agentPath = path.join(dir, "provider-progress-rollover.jsonl");
+  const retryAt = new Date(NOW + 5 * 60_000).toISOString();
+  const throttledAt = NOW - 90_000;
+  const progressAt = NOW - 60_000;
+  const progress = JSON.stringify({
+    type: "assistant",
+    timestamp: new Date(progressAt).toISOString(),
+    message: { content: [{ type: "text", text: "provider made progress" }], stop_reason: null },
+  }) + "\n";
+  fs.writeFileSync(agentPath, progress, "utf8");
+
+  expect((await readLivenessTranscriptEvidence("claude", agentPath))!.providerProgressAt).toBe(progressAt);
+
+  const toolOnly = JSON.stringify({
+    type: "user",
+    timestamp: new Date(NOW - 1_000).toISOString(),
+    message: { content: [{ type: "tool_result", tool_use_id: "call", content: "ok" }] },
+  }) + "\n";
+  fs.appendFileSync(agentPath, toolOnly.repeat(2_000), "utf8");
+
+  const evidence = await readLivenessTranscriptEvidence("claude", agentPath);
+  expect(evidence!.providerProgressAt).toBe(progressAt);
+  fs.appendFileSync(agentPath, JSON.stringify({
+    type: "assistant",
+    timestamp: new Date(progressAt - 1_000).toISOString(),
+    message: { content: [{ type: "text", text: "late stale record" }], stop_reason: null },
+  }) + "\n", "utf8");
+  expect((await readLivenessTranscriptEvidence("claude", agentPath))!.providerProgressAt).toBe(progressAt);
+  expect(evaluateLiveness({
+    host: { state: "alive" }, turnState: "busy", silentForMs: 1_000, stallAfterMs: 10 * 60_000,
+    providerRetryAt: retryAt, providerThrottleAt: throttledAt, providerProgressAt: evidence!.providerProgressAt,
+  })).toEqual({ lifecycle: "running", reason: "host_alive_turn_active" });
+  expect(evaluateLiveness({
+    host: { state: "alive" }, turnState: "busy", silentForMs: 1_000, stallAfterMs: 10 * 60_000,
+    providerRetryAt: retryAt, providerThrottleAt: progressAt + 1, providerProgressAt: evidence!.providerProgressAt,
+  })).toEqual({ lifecycle: "waiting", reason: "provider_throttled", retryAt });
+});
+
 test("a liveness response resolves throttle provenance once per engine account", async () => {
   const dir = sandbox();
   const paths = [path.join(dir, "worker-a.jsonl"), path.join(dir, "worker-b.jsonl")];
@@ -592,6 +701,30 @@ test("an unregistered transcript is aged: past the grace it has stopped starting
   /* Nothing to age it by keeps the benefit of the doubt. */
   expect(evaluateLiveness({ host: { state: "unknown" }, turnState: "unknown", silentForMs: null, stallAfterMs }))
     .toEqual({ lifecycle: "starting", reason: "launch_unproven" });
+});
+
+test("a headless reviewer needs a readable exact start identity", async () => {
+  const agentPath = "/transcripts/headless-identity.jsonl";
+  const conversationId = "conversation_headless_identity";
+  const snapshotFor = async (reviewerIdentity: string | null, currentIdentity: string | null, alive = true) => agentLivenessSnapshot(
+    { conversationId },
+    sources({
+      probe: { now: () => NOW, pidAlive: () => alive, processIdentity: () => currentIdentity },
+      pipelines: () => [],
+      describeTranscript: async () => ({ path: agentPath, project: "viewer", title: "review", engine: "codex", mtimeMs: NOW - 5_000, conversationId, activity: null, activityReason: null }),
+      registrySnapshot: () => ({ entries: {}, conversations: { [conversationId]: { id: conversationId, generations: [{ path: agentPath }], continuityPaths: [] } } }) as unknown as RegistryFile,
+      flows: () => [{ reviewerMode: "headless", state: "reviewing", rounds: [{ reviewerPath: agentPath, reviewerConversationId: conversationId, reviewerPid: 4244, reviewerIdentity }] }] as Flow[],
+      transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 5_000 }),
+    }),
+  );
+
+  expect((await snapshotFor("reviewer-start", "reviewer-start")).conversations[0]!.host).toMatchObject({ state: "alive", kind: "headless" });
+  for (const [saved, current, alive] of [
+    ["reused-start", "reviewer-start", true], [null, "reviewer-start", true],
+    ["reviewer-start", null, true], ["reviewer-start", "reviewer-start", false],
+  ] as const) {
+    expect((await snapshotFor(saved, current, alive)).conversations[0]!.host.state).toBe("unknown");
+  }
 });
 
 test("a targeted query with an unknown conversation id returns an empty snapshot, never the full inventory", async () => {
@@ -785,6 +918,191 @@ test("a project-scoped live read serves one completed generation, hydrates only 
      measured against a 500 ms bar, so a loaded runner has to be nineteen times
      slower before it means anything. */
   expect(elapsedMs).toBeLessThan(500);
+});
+
+test("liveOnly limit skips stale headless history and keeps the current exact-identity reviewer", async () => {
+  const dir = sandbox();
+  const historical = path.join(dir, "historical-review.jsonl");
+  const staleLive = path.join(dir, "stale-live-review.jsonl");
+  const current = path.join(dir, "current-review.jsonl");
+  const generation = publishedGeneration([
+    fileEntry({ path: staleLive, project: PROJECT, conversationId: "conversation_stale_live", activity: "live", activityReason: "jsonl_turn_open", mtime: Math.floor((NOW - 90_000) / 1000) }),
+    fileEntry({ path: historical, project: PROJECT, conversationId: "conversation_historical", activity: "stalled", activityReason: "jsonl_turn_stalled", mtime: Math.floor((NOW - 60_000) / 1000) }),
+    fileEntry({ path: current, project: PROJECT, conversationId: "conversation_current", activity: "idle", activityReason: "mtime_old", mtime: Math.floor((NOW - 1_000) / 1000) }),
+  ]);
+  const flows = [{ reviewerMode: "headless", state: "reviewing", rounds: [
+    { reviewerPath: historical, reviewerConversationId: "conversation_historical", reviewerPid: 4244, reviewerIdentity: null },
+    { reviewerPath: current, reviewerConversationId: "conversation_current", reviewerPid: 4245, reviewerIdentity: "current-start" },
+  ] }] as unknown as Flow[];
+  const shared = corpusSources(generation, {
+    flows: () => flows,
+    probe: { now: () => NOW, pidAlive: (pid) => pid === 4245, processIdentity: () => "current-start" },
+    registrySnapshot: () => ({ entries: {}, conversations: {
+      conversation_historical: { id: "conversation_historical", generations: [{ path: historical }], continuityPaths: [] },
+      conversation_stale_live: { id: "conversation_stale_live", generations: [{ path: staleLive }], continuityPaths: [] },
+      conversation_current: { id: "conversation_current", generations: [{ path: current }], continuityPaths: [] },
+    } }) as unknown as RegistryFile,
+    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 1_000 }),
+  });
+
+  const project = await agentLivenessSnapshot({ project: PROJECT, liveOnly: true, limit: 1 }, shared);
+  const targeted = await agentLivenessSnapshot({ conversationId: "conversation_current", limit: 1 }, {
+    ...shared,
+    describeTranscript: async () => ({ path: current, project: PROJECT, title: "current", engine: "codex", mtimeMs: NOW - 1_000, conversationId: "conversation_current", activity: null, activityReason: null }),
+  });
+
+  expect(project.conversations.map((record) => record.transcriptPath)).toEqual([current]);
+  expect(project.conversations[0]).toMatchObject({ lifecycle: "running", host: { kind: "headless", state: "alive" } });
+  expect(targeted.conversations[0]).toMatchObject({ transcriptPath: current, lifecycle: "running" });
+  expect(project.selection).toMatchObject({ selected: 1, hydrated: 1, recoveryTruncated: false });
+});
+
+const ownerSelectionCases = (["live", "stalled"] as const).flatMap((activity) =>
+  [true, false].flatMap((present) =>
+    [false, true].flatMap((capped) =>
+      [false, true].map((tied) => ({ activity, present, capped, tied })))));
+
+test.each(ownerSelectionCases)("verified owner survives recovery: cached=$activity present=$present capped=$capped tied=$tied", async ({ activity, present, capped, tied }) => {
+  const dir = sandbox();
+  const current = path.join(dir, "current.jsonl");
+  const history = path.join(dir, "history.jsonl");
+  const outside = path.join(dir, "outside.jsonl");
+  const ownerMtime = NOW - 60_000;
+  // Use the test process's real PID and start identity; no child needs cleanup.
+  const probe = livenessProbe();
+  const identity = probe.processIdentity(process.pid);
+  expect(identity).toBeTruthy();
+  expect(probe.pidAlive(process.pid)).toBe(true);
+  const flow = (transcriptPath: string, savedIdentity: string | null = identity) => ({
+    reviewerMode: "headless", state: "reviewing", rounds: [{
+      reviewerPath: transcriptPath, reviewerPid: process.pid, reviewerIdentity: savedIdentity,
+    }],
+  } as unknown as Flow);
+  const extras = capped
+    ? Array.from({ length: HOSTED_RECOVERY_MAX + 2 }, (_, index) => path.join(dir, `extra-${index}.jsonl`))
+    : [];
+  const files = [
+    fileEntry({ path: outside, project: "other-project", activity: "live", mtime: NOW / 1000 }),
+    fileEntry({ path: history, project: PROJECT, activity, mtime: (tied ? ownerMtime : NOW - 1_000) / 1000 }),
+    ...(present ? [fileEntry({ path: current, project: PROJECT, activity: "idle", mtime: ownerMtime / 1000 })] : []),
+  ];
+  const generation = publishedGeneration(files);
+  const described: string[] = [];
+  const hydrated: string[] = [];
+  const shared = corpusSources(generation, {
+    probe,
+    flows: () => [...extras.map((target) => flow(target)), flow(outside), flow(history, "reused-start"), flow(current)],
+    registrySnapshot: () => ({ entries: { history: structuredEntry(history, process.pid) }, conversations: {
+      conversation_current: { id: "conversation_current", generations: [{ path: current }], continuityPaths: [] },
+    } }) as unknown as RegistryFile,
+    describeTranscript: async (target) => {
+      described.push(target);
+      return {
+        path: target, project: PROJECT, title: "owner", engine: "codex",
+        mtimeMs: target === current ? ownerMtime : ownerMtime - 1_000,
+        sizeBytes: 4096, conversationId: null, activity: null, activityReason: null,
+      };
+    },
+    transcriptEvidence: async (_engine, target) => {
+      hydrated.push(target);
+      return { turn: "busy", lastRecordTs: NOW - 1_000, providerProgressAt: null };
+    },
+  });
+  const project = await agentLivenessSnapshot({ project: PROJECT, liveOnly: true, limit: 1 }, shared);
+
+  expect(project.conversations.map((row) => row.transcriptPath)).toEqual([current]);
+  expect(project.conversations[0]).toMatchObject({ lifecycle: "running", host: { state: "alive", kind: "headless", pid: process.pid } });
+  expect(project.selection).toMatchObject({
+    recovered: capped ? HOSTED_RECOVERY_MAX : present ? 0 : 1,
+    recoveryTruncated: capped, selected: 1, hydrated: 1, evidenceBytes: 4096, freshScan: false,
+  });
+  expect(described).toHaveLength(capped ? HOSTED_RECOVERY_MAX : present ? 0 : 1);
+  expect(described.includes(current)).toBe(!present);
+  expect(described).not.toContain(outside);
+  expect(hydrated).toEqual([current]);
+  expect(generation.reads()).toBe(1);
+
+  const targeted = await agentLivenessSnapshot({ conversationId: "conversation_current", limit: 1 }, shared);
+  expect(targeted.conversations[0]).toMatchObject({ transcriptPath: current, lifecycle: "running", host: project.conversations[0]!.host });
+  expect(generation.reads()).toBe(1);
+});
+
+test.each([
+  { name: "missing saved identity", saved: null, current: "start", alive: true },
+  { name: "unreadable current identity", saved: "start", current: null, alive: true },
+  { name: "reused PID", saved: "old-start", current: "start", alive: true },
+  { name: "dead PID", saved: "start", current: "start", alive: false },
+].flatMap((identity) => [false, true].map((present) => ({ ...identity, present }))))(
+  "unverified headless owner gets no selection or recovery priority: $name present=$present",
+  async ({ saved, current, alive, present }) => {
+    const candidate = "/transcripts/unverified.jsonl";
+    const fallback = "/transcripts/scan-live.jsonl";
+    const generation = publishedGeneration([
+      fileEntry({ path: fallback, activity: "live", mtime: NOW / 1000 }),
+      ...(present ? [fileEntry({ path: candidate, activity: "idle" })] : []),
+    ]);
+    const snapshot = await agentLivenessSnapshot({ project: "viewer", liveOnly: true, limit: 1 }, corpusSources(generation, {
+      probe: { now: () => NOW, pidAlive: () => alive, processIdentity: () => current },
+      flows: () => [{ reviewerMode: "headless", state: "reviewing", rounds: [{
+        reviewerPath: candidate, reviewerPid: 4242, reviewerIdentity: saved,
+      }] }] as unknown as Flow[],
+      // corpusSources throws if an unverified path reaches describeTranscript.
+      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: NOW - 1_000 }),
+    }));
+    expect(snapshot.conversations.map((row) => row.transcriptPath)).toEqual([fallback]);
+    expect(snapshot.selection).toMatchObject({ recovered: 0, recoveryTruncated: false, selected: 1, hydrated: 1 });
+  },
+);
+
+test.each([false, true])("tool-only provider wait survives owner selection with present=%s", async (present) => {
+  const dir = sandbox();
+  const current = path.join(dir, "tool-wait.jsonl");
+  const history = path.join(dir, "history.jsonl");
+  fs.writeFileSync(current, JSON.stringify({
+    type: "user", timestamp: new Date(NOW - 1_000).toISOString(),
+    message: { content: [{ type: "tool_result", tool_use_id: "call", content: "ok" }] },
+  }) + "\n");
+  const generation = publishedGeneration([
+    fileEntry({ path: history, project: PROJECT, activity: "live", mtime: NOW / 1000 }),
+    ...(present ? [fileEntry({ path: current, project: PROJECT, engine: "claude", activity: "idle", mtime: (NOW - 60_000) / 1000 })] : []),
+  ]);
+  const retryAt = new Date(NOW + 60_000).toISOString();
+  const snapshot = await agentLivenessSnapshot({ project: PROJECT, liveOnly: true, limit: 1 }, corpusSources(generation, {
+    registrySnapshot: () => ({ entries: {
+      current: { ...structuredEntry(current, 4242), accountId: "account-a" },
+    }, conversations: {} }) as unknown as RegistryFile,
+    describeTranscript: async (target) => describedTranscript(target, PROJECT, NOW - 60_000),
+    transcriptEvidence: async (engine, target) => {
+      const evidence = await readLivenessTranscriptEvidence(engine, target);
+      expect(evidence).toMatchObject({ lastRecordTs: NOW - 1_000, providerProgressAt: null });
+      return { ...evidence!, turn: "busy" };
+    },
+    limitsProvenance: () => ({ source: "cache", reason: "oauth-rate-limited", staleSince: null, retryAt, throttleAt: new Date(NOW - 90_000).toISOString() }),
+  }));
+  expect(snapshot.conversations[0]).toMatchObject({ transcriptPath: current, lifecycle: "waiting", reason: "provider_throttled", retryAt });
+  expect(snapshot.selection).toMatchObject({ selected: 1, hydrated: 1, recovered: present ? 0 : 1 });
+});
+
+test("recovery deduplicates owners before final truncation and hydration", async () => {
+  const dir = sandbox();
+  const current = path.join(dir, "current.jsonl");
+  const alias = path.join(dir, "alias.jsonl");
+  const cached = path.join(dir, "cached.jsonl");
+  const generation = publishedGeneration([fileEntry({ path: cached, activity: "live", mtime: NOW / 1000 })]);
+  const hydrated: string[] = [];
+  const snapshot = await agentLivenessSnapshot({ liveOnly: true, limit: 2 }, corpusSources(generation, {
+    registrySnapshot: () => ({ entries: {
+      current: structuredEntry(current, 4242), alias: structuredEntry(alias, 4242),
+    }, conversations: {} }) as unknown as RegistryFile,
+    describeTranscript: async () => ({ path: current, project: PROJECT, title: "owner", engine: "codex", mtimeMs: NOW - 60_000, conversationId: null, activity: null, activityReason: null }),
+    transcriptEvidence: async (_engine, target) => {
+      hydrated.push(target);
+      return { turn: "busy", lastRecordTs: NOW - 1_000 };
+    },
+  }));
+  expect(snapshot.conversations.map((row) => row.transcriptPath)).toEqual([current, cached]);
+  expect(hydrated).toEqual([current, cached]);
+  expect(snapshot.selection).toMatchObject({ matched: 2, selected: 2, recovered: 1, hydrated: 2, recoveryTruncated: false });
 });
 
 test("a limit of ten hydrates at most ten transcript tails out of a thousand project rows (#860)", async () => {
