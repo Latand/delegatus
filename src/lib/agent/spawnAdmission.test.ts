@@ -26,6 +26,7 @@ function conversation(id: string, fields: Partial<RegistryConversation> = {}): R
     projectOwnership: null,
     migration: null,
     migrationOptOut: null,
+    deliveryEvidenceTracked: true,
     supersededBy: null,
     agentRole: null,
     delegationDepth: null,

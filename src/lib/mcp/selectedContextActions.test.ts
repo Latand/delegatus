@@ -72,6 +72,7 @@ function conversation(id: string, artifactPath: string): RegistryConversation {
     projectOwnership: { project: "atlas", source: "operator", setAt: "2026-08-01T08:00:00.000Z", operationId: "op-1" },
     migration: null,
     migrationOptOut: null,
+    deliveryEvidenceTracked: true,
     supersededBy: null,
     agentRole: null,
     delegationDepth: null,
