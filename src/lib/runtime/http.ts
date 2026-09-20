@@ -138,6 +138,9 @@ interface CommandAttachments {
   /** Starts `refused`: every exit above the delivery attempt is terminal —
       nothing was ever handed over, so nothing can be reading these paths. */
   outcome: AttachmentDeliveryOutcome;
+  /** Releases this request's in-flight claim on its send key, so the read half
+      stops answering `unknown` once this request has answered (#1932). */
+  releaseAdmission: (() => void) | null;
 }
 
 async function dispatchRuntimeCommand(
@@ -217,6 +220,14 @@ async function dispatchRuntimeCommand(
     command = parseRuntimeCommand(kind, parseValue);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "runtime command is invalid" }, { status: 400 });
+  }
+  /* The key is claimed the moment a message-bearing command is known to be
+     well formed — before the inbox write, before admission, before anything
+     durable exists — because the whole window from here to the answer is the
+     window in which the record says nothing and means nothing. Released in the
+     caller's `finally`, whatever this request does next. */
+  if (command.kind === "send" || command.kind === "steer" || command.kind === "inject") {
+    attachments.releaseAdmission = claimAdmissionInFlight(command.conversationId, command.idempotencyKey);
   }
   /* #1652: the batch derives from the key alone, so a queued message or a send
      of another conversation may already hold these paths. The files are
@@ -367,7 +378,7 @@ export async function handleRuntimeCommand(
   kind: RuntimeOperationKind,
   dependencies: RuntimeHttpDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<NextResponse> {
-  const attachments: CommandAttachments = { files: [], batch: "", staged: null, leave: null, outcome: "refused" };
+  const attachments: CommandAttachments = { files: [], batch: "", staged: null, leave: null, outcome: "refused", releaseAdmission: null };
   try {
     return await dispatchRuntimeCommand(request, kind, dependencies, attachments);
   } finally {
@@ -376,7 +387,13 @@ export async function handleRuntimeCommand(
     try {
       if (attachments.staged) (await import("@/lib/inboxFiles")).settleInboxFiles(attachments.staged, attachments.outcome);
     } finally {
-      attachments.leave?.();
+      try {
+        attachments.leave?.();
+      } finally {
+        /* Last, and unconditionally: this request has answered, so a lookup
+           under its key may read the record it left. */
+        attachments.releaseAdmission?.();
+      }
     }
   }
 }
@@ -868,13 +885,52 @@ export interface RuntimeAdmissionQueryDependencies {
   /** What became of an operation the lookup found, so an admitted key can hand
       back the receipt the caller would otherwise have to ask for separately. */
   query(operationId: string): Promise<NextResponse>;
+  /** Whether a send under this exact key is still being admitted in this
+      process, which makes any absence in the record meaningless. */
+  sendInFlight(conversationId: string, clientMessageId: string): boolean;
 }
 
 const DEFAULT_ADMISSION_QUERY_DEPENDENCIES: RuntimeAdmissionQueryDependencies = {
   enabled: runtimeEventsEnabled,
   registry: agentRegistry,
   query: (operationId) => handleRuntimeOperationQuery(operationId),
+  sendInFlight: (conversationId, clientMessageId) => admissionInFlight(conversationId, clientMessageId),
 };
+
+/**
+ * The keys whose send is between "the request arrived" and "the request
+ * answered", in this process.
+ *
+ * The record a lookup reads is written DURING that window, not at its start,
+ * so a lookup landing inside it sees a registry with nothing under the key and
+ * would otherwise call that proof of non-execution — while the send it is
+ * asking about is still on its way to the host. Counted rather than flagged,
+ * because the same key can legitimately be in flight twice (a replay of an
+ * admitted send answers from its reservation), and released in a `finally` so
+ * a throw cannot leave a key claimed for ever.
+ */
+const admissionsInFlight = new Map<string, number>();
+
+function admissionKey(conversationId: string, clientMessageId: string): string {
+  return `${conversationId}\u0000${clientMessageId}`;
+}
+
+function claimAdmissionInFlight(conversationId: string, clientMessageId: string): () => void {
+  const key = admissionKey(conversationId, clientMessageId);
+  admissionsInFlight.set(key, (admissionsInFlight.get(key) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const remaining = (admissionsInFlight.get(key) ?? 1) - 1;
+    if (remaining > 0) admissionsInFlight.set(key, remaining);
+    else admissionsInFlight.delete(key);
+  };
+}
+
+export function admissionInFlight(conversationId: string, clientMessageId: string): boolean {
+  return (admissionsInFlight.get(admissionKey(conversationId, clientMessageId)) ?? 0) > 0;
+}
 
 /**
  * WAS THIS MESSAGE EVER ADMITTED? — asked under its ORIGINAL key, answered
@@ -894,14 +950,18 @@ const DEFAULT_ADMISSION_QUERY_DEPENDENCIES: RuntimeAdmissionQueryDependencies = 
  * - `admitted` — a reservation or an operation owner exists under that exact
  *   key. The operation id comes back with it, and with it whatever the
  *   operation query can say about its fate. Nothing may be resent.
- * - `not-executed` — the registry was read and holds NO record under the key.
- *   That is affirmative evidence of non-execution: admission writes the
- *   reservation before anything reaches a host, and the operation owner
- *   outlives the reservation, so a message that ever started down the path
- *   left one of the two behind. Only this answer authorizes a later attempt.
- * - `unknown` — the registry could not be read, or the plane is off. The
- *   attempt keeps its uncertainty and its bytes, and the caller may ask again.
- *   Absence that was never actually observed is not evidence of anything.
+ * - `not-executed` — the registry was read, holds NO record under the key, and
+ *   its record of this conversation is complete: no retention boundary stands
+ *   between the question and the answer. Admission writes the reservation
+ *   before anything reaches a host, so a send that ever started left a row
+ *   behind, and here there is none. Only this answer authorizes a later
+ *   attempt.
+ * - `unknown` — the registry could not be read, the plane is off, a POST under
+ *   this very key is still in flight, or the conversation's evidence has been
+ *   compacted past the point where absence means anything. The attempt keeps
+ *   its uncertainty and its bytes, and the caller may ask again. Absence that
+ *   was never actually observed — or that a bounded record could have
+ *   swallowed — is not evidence of anything.
  */
 export async function handleRuntimeAdmissionQuery(
   request: NextRequest,
@@ -920,6 +980,18 @@ export async function handleRuntimeAdmissionQuery(
   if (!dependencies.enabled()) {
     return NextResponse.json({ outcome: "unknown", error: "runtime events are disabled" }, { status: 200 });
   }
+  /* A POST under this key that has not finished is the other way absence
+     lies: the send may be inside its own admission right now, with the
+     reservation a microsecond away from existing. Asked before the record is
+     read — the claim is released only when the request that took it has
+     answered — so a lookup that races the send it is asking about can never
+     be told that nothing was sent. */
+  if (dependencies.sendInFlight(conversationId, clientMessageId.trim())) {
+    return NextResponse.json({
+      outcome: "unknown",
+      reason: "a send under this key is still in flight, so its record is not settled yet",
+    }, { status: 200 });
+  }
   const record = await readEvidence(
     async () => dependencies.registry().deliveryAdmissionForKey(conversationId, clientMessageId.trim()),
     "the delivery record could not be read",
@@ -933,7 +1005,13 @@ export async function handleRuntimeAdmissionQuery(
     return NextResponse.json({ outcome: "unknown", reason: record.reason }, { status: 200 });
   }
   const admission = record.value;
-  if (!admission) {
+  if (admission.outcome === "unknown") {
+    /* The registry answered, and what it answered is that its own retention
+       cannot settle the question. Same word, same 200, same consequence: ask
+       again, never send again. */
+    return NextResponse.json({ outcome: "unknown", reason: admission.reason }, { status: 200 });
+  }
+  if (admission.outcome === "not-executed") {
     return NextResponse.json({ outcome: "not-executed", conversationId, clientMessageId }, { status: 200 });
   }
   const answer = await dependencies.query(admission.operationId);

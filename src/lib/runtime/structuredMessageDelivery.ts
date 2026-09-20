@@ -286,12 +286,26 @@ function heldOutcomeDuringRuntimeSynchronization(
   return requiresStructuredHeldCommand(request) ? "failed" : null;
 }
 
-function holdDuringRuntimeSynchronization(
+/**
+ * What a hold needs to make an IMAGE payload durable: the same blob
+ * publication the live send takes, under the same cross-process lock. A hold
+ * runs where no host can be asked anything, so the bytes have to be published
+ * here or the operator's photo exists only in a browser tab (#1932).
+ */
+interface SynchronizationImageAdmission {
+  rawImages?: readonly RuntimeImageUpload[];
+  storeImages?: StructuredMessageDependencies["storeImages"];
+  previewImageRefs?: StructuredMessageDependencies["previewImageRefs"];
+  withImageAdmissionLock?: StructuredMessageDependencies["withImageAdmissionLock"];
+}
+
+async function holdDuringRuntimeSynchronization(
   request: StructuredMessageRequest,
   registry: AgentRegistry,
   requestTick: () => void,
   allowReclaimed = false,
-): StructuredMessageResult | null {
+  admission: SynchronizationImageAdmission = {},
+): Promise<StructuredMessageResult | null> {
   const owner = persistedCurrentOwner(request, registry);
   const unresolvedConversation = request.conversationId?.startsWith("conversation_")
     ? registry.conversation(request.conversationId as ViewerConversationId)
@@ -341,15 +355,30 @@ function holdDuringRuntimeSynchronization(
       status: 503,
     };
   }
-  if (request.hasImages || request.images?.length) {
-    return { ok: false, structured: true, outcome: "failed", error: "structured host image delivery is unavailable", status: 409 };
+  /* The whole message is held, photo included. This used to be a flat 409 —
+     "structured host image delivery is unavailable" — because publishing blobs
+     wants the admission lock and this function was synchronous. That refusal
+     landed on exactly the send the dead-host composer now offers: a reclaimed
+     conversation has no session to inspect, so a text-plus-photo message came
+     here and was rejected whole, with nothing reserved and nothing to retry.
+     The admission below is the live path's own, lock and publication included,
+     so text and bytes become durable under ONE key before any host is raised. */
+  const rawImages = admission.rawImages ?? [];
+  const suppliedRefs = request.imageRefs ?? [];
+  if (rawImages.length > 0 && suppliedRefs.length > 0) {
+    return deliveryFailure(new Error("structured image payload is ambiguous"));
+  }
+  if (request.hasImages && rawImages.length === 0 && suppliedRefs.length === 0) {
+    return { ok: false, structured: true, outcome: "failed", error: "structured image payload is unavailable", status: 409 };
   }
   try {
     assertStructuredTextEnvelope(request.text);
     const idempotencyKey = request.clientMessageId?.trim() || `queue_${crypto.randomUUID()}`;
     const overlong = refusedIdempotencyKey(idempotencyKey);
     if (overlong) return overlong;
-    const refs = request.imageRefs ?? [];
+    const refs = rawImages.length > 0
+      ? (admission.previewImageRefs ?? runtimeImageRefsForUploads)(rawImages)
+      : suppliedRefs;
     if (!request.text && refs.length === 0) throw new Error("held delivery must contain at most 32000 characters");
     const content = refs.length ? structuredContent(request.text, refs) : null;
     const deliveryText = content?.content.text ?? request.text;
@@ -383,7 +412,7 @@ function holdDuringRuntimeSynchronization(
     if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
       conversation = registry.requestConversationMigrationToActiveAccount(conversation.id);
     }
-    const reservation = registry.holdDelivery(
+    const place = () => registry.holdDelivery(
       conversation.id,
       deliveryText,
       idempotencyKey,
@@ -393,6 +422,31 @@ function holdDuringRuntimeSynchronization(
       commandInput(request),
       { recoveryIntent: allowReclaimed ? "reclaimed-host" : null },
     );
+    /* Publication and reservation are one section per key, as on the live
+       path: two racing attempts under the same client message id see a durable
+       winner, and the bytes are published once, before the row that names
+       them. A replay found inside the lock is answered from the row that
+       already exists rather than publishing over it. */
+    const admissionKey = request.clientMessageId?.trim()
+      ? `${conversation.id}\u0000${request.clientMessageId.trim()}`
+      : null;
+    const reservation = await withAdmissionSection(admissionKey, async () => {
+      if (rawImages.length === 0) return place();
+      return (admission.withImageAdmissionLock ?? withAccountMutationLockAsync)(async () => {
+        const raced = registry.preflightDeliveryReservation(
+          conversation.id,
+          deliveryText,
+          idempotencyKey,
+          payloadKind,
+          refs,
+          contentDigest,
+          commandInput(request),
+        );
+        if (raced) return raced;
+        (admission.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
+        return place();
+      });
+    });
     if (reservation.state === "delivered") {
       return deliveredReservationReplay(reservation, idempotencyKey, conversation.id, false);
     }
@@ -416,6 +470,20 @@ function holdDuringRuntimeSynchronization(
   } catch (error) {
     return deliveryFailure(error);
   }
+}
+
+/** The image half of an admission, carried from the request's dependencies to
+    whichever hold ends up making the payload durable. */
+function synchronizationImageAdmission(
+  dependencies: StructuredMessageDependencies,
+  rawImages: readonly RuntimeImageUpload[],
+): SynchronizationImageAdmission {
+  return {
+    rawImages,
+    ...(dependencies.storeImages ? { storeImages: dependencies.storeImages } : {}),
+    ...(dependencies.previewImageRefs ? { previewImageRefs: dependencies.previewImageRefs } : {}),
+    ...(dependencies.withImageAdmissionLock ? { withImageAdmissionLock: dependencies.withImageAdmissionLock } : {}),
+  };
 }
 
 function recordStructuredRuntimeRecovery(
@@ -559,16 +627,18 @@ async function recoverReclaimedMessage(
   registry: AgentRegistry,
   client: RuntimeHostClient,
   dependencies: StructuredMessageDependencies,
+  rawImages: readonly RuntimeImageUpload[] = [],
 ): Promise<StructuredMessageResult> {
   const conversation = request.conversationId?.startsWith("conversation_")
     ? registry.conversation(request.conversationId as ViewerConversationId)
     : registry.conversationForPath(request.path);
   if (!conversation) return ownershipUnavailable("unknown");
-  const admitted = holdDuringRuntimeSynchronization(
+  const admitted = await holdDuringRuntimeSynchronization(
     request,
     registry,
     dependencies.requestMigrationTick ?? requestAccountMigrationTick,
     true,
+    synchronizationImageAdmission(dependencies, rawImages),
   );
   if (!admitted) return ownershipUnavailable("unknown");
   if (!admitted.ok || admitted.outcome === "delivered") return admitted;
@@ -748,6 +818,8 @@ export async function enqueueStructuredMessage(
       request,
       registry,
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
+      false,
+      synchronizationImageAdmission(dependencies, rawImages),
     );
   }
   let snapshot: Awaited<ReturnType<RuntimeHostClient["snapshot"]>>;
@@ -759,6 +831,8 @@ export async function enqueueStructuredMessage(
       request,
       registry,
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
+      false,
+      synchronizationImageAdmission(dependencies, rawImages),
     );
   }
   recordStructuredRuntimeRecovery(snapshot, dependencies.startupRecovered ?? markStructuredHostStartupReady);
@@ -772,12 +846,14 @@ export async function enqueueStructuredMessage(
       transcriptPath: request.path,
     });
     if (deliverability.condition === "reclaimed") {
-      return recoverReclaimedMessage(request, registry, client, dependencies);
+      return recoverReclaimedMessage(request, registry, client, dependencies, rawImages);
     }
     return holdDuringRuntimeSynchronization(
       request,
       registry,
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
+      false,
+      synchronizationImageAdmission(dependencies, rawImages),
     );
   }
   if (session.hostKind === "tmux-legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
@@ -787,7 +863,7 @@ export async function enqueueStructuredMessage(
       transcriptPath: request.path,
     });
     if (deliverability.condition === "reclaimed") {
-      return recoverReclaimedMessage(request, registry, client, dependencies);
+      return recoverReclaimedMessage(request, registry, client, dependencies, rawImages);
     }
     return ownershipUnavailable(deliverability.condition);
   }

@@ -591,6 +591,16 @@ export interface RegistryConversation {
  */
 export type DeliveryTerminalDisposition = "delivered" | "lost" | "unverified";
 
+/**
+ * What the retained record can say about one send key (#1932): admission
+ * proven, non-execution proven, or neither — the third being the answer a
+ * bounded record owes whenever its own retention could have swallowed the row.
+ */
+export type DeliveryAdmissionEvidence =
+  | { outcome: "admitted"; operationId: string; deliveryId: string; state: HeldDelivery["state"] | null }
+  | { outcome: "not-executed" }
+  | { outcome: "unknown"; reason: string };
+
 export interface DeliveryOperationOwner {
   conversationId: ViewerConversationId;
   runtimeConversationId: ViewerConversationId;
@@ -7907,10 +7917,25 @@ export class AgentRegistry {
    * The answer for a caller that lost the response to its own send and must
    * not send again to find out. Two records can prove admission and they are
    * both consulted: the reservation itself, and the operation owner, which
-   * deliberately outlives the reservation a compaction removes. A key neither
-   * of them names was never admitted — the reservation is written before
-   * anything reaches a host, so there is no window in which a message is on
-   * its way with no row behind it.
+   * deliberately outlives the reservation a compaction removes.
+   *
+   * ABSENCE IS NOT THE SAME EVIDENCE, and the difference is this method's whole
+   * subject. Every send writes its reservation before anything reaches a host,
+   * so a message that ever started down the path left a row behind — but the
+   * rows are RETAINED, not kept forever. Terminal operation owners are
+   * compacted to the newest `DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT` per
+   * conversation, and delivered reservations to the newest hundred. Past that
+   * boundary a delivered message looks exactly like one that never happened,
+   * and reading it as "never happened" is how the operator's message is sent a
+   * second time.
+   *
+   * So absence answers `not-executed` only where the record it would be in is
+   * provably COMPLETE: the conversation retains fewer terminal owners than the
+   * compaction limit. Owner rows are only ever removed by that compaction,
+   * which trims a conversation's group down to exactly the limit, so a count
+   * below it proves the compaction never ran here and nothing was dropped.
+   * Anything else answers `unknown`, which authorizes another lookup and no
+   * resend.
    *
    * Read-only by construction: it mints nothing and settles nothing, so asking
    * repeatedly is free and changes no fate.
@@ -7918,24 +7943,41 @@ export class AgentRegistry {
   deliveryAdmissionForKey(
     conversationId: ViewerConversationId | string,
     clientMessageId: string,
-  ): { operationId: string; deliveryId: string; state: HeldDelivery["state"] | null } | null {
+  ): DeliveryAdmissionEvidence {
     const snapshot = this.readOnlySnapshot();
     const canonicalId = resolveConversationAlias(snapshot, conversationId as ViewerConversationId);
     const reserved = Object.values(snapshot.heldDeliveries).find((item) =>
       resolveConversationAlias(snapshot, item.conversationId) === canonicalId
       && item.clientMessageId === clientMessageId);
     if (reserved) {
-      return { operationId: reserved.command.operationId, deliveryId: reserved.id, state: reserved.state };
+      return {
+        outcome: "admitted",
+        operationId: reserved.command.operationId,
+        deliveryId: reserved.id,
+        state: reserved.state,
+      };
     }
     const owner = Object.values(snapshot.deliveryOperationOwners).find((item) =>
       resolveConversationAlias(snapshot, item.conversationId) === canonicalId
       && item.clientMessageId === clientMessageId);
-    if (!owner) return null;
-    return {
-      operationId: owner.command.operationId,
-      deliveryId: owner.deliveryId,
-      state: owner.terminalState ?? null,
-    };
+    if (owner) {
+      return {
+        outcome: "admitted",
+        operationId: owner.command.operationId,
+        deliveryId: owner.deliveryId,
+        state: owner.terminalState ?? null,
+      };
+    }
+    const retainedTerminalOwners = Object.values(snapshot.deliveryOperationOwners).filter((item) =>
+      item.terminalState !== null
+      && resolveConversationAlias(snapshot, item.conversationId) === canonicalId).length;
+    if (retainedTerminalOwners >= DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT) {
+      return {
+        outcome: "unknown",
+        reason: "this conversation's delivery evidence has been compacted, so nothing under this key is not proof that nothing was sent",
+      };
+    }
+    return { outcome: "not-executed" };
   }
 
   pendingDeliveries(conversationId: ViewerConversationId): HeldDelivery[] {
