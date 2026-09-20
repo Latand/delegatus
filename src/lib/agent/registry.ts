@@ -7901,6 +7901,43 @@ export class AgentRegistry {
     );
   }
 
+  /**
+   * Whether anything was ever admitted under one conversation's ORIGINAL key.
+   *
+   * The answer for a caller that lost the response to its own send and must
+   * not send again to find out. Two records can prove admission and they are
+   * both consulted: the reservation itself, and the operation owner, which
+   * deliberately outlives the reservation a compaction removes. A key neither
+   * of them names was never admitted — the reservation is written before
+   * anything reaches a host, so there is no window in which a message is on
+   * its way with no row behind it.
+   *
+   * Read-only by construction: it mints nothing and settles nothing, so asking
+   * repeatedly is free and changes no fate.
+   */
+  deliveryAdmissionForKey(
+    conversationId: ViewerConversationId | string,
+    clientMessageId: string,
+  ): { operationId: string; deliveryId: string; state: HeldDelivery["state"] | null } | null {
+    const snapshot = this.readOnlySnapshot();
+    const canonicalId = resolveConversationAlias(snapshot, conversationId as ViewerConversationId);
+    const reserved = Object.values(snapshot.heldDeliveries).find((item) =>
+      resolveConversationAlias(snapshot, item.conversationId) === canonicalId
+      && item.clientMessageId === clientMessageId);
+    if (reserved) {
+      return { operationId: reserved.command.operationId, deliveryId: reserved.id, state: reserved.state };
+    }
+    const owner = Object.values(snapshot.deliveryOperationOwners).find((item) =>
+      resolveConversationAlias(snapshot, item.conversationId) === canonicalId
+      && item.clientMessageId === clientMessageId);
+    if (!owner) return null;
+    return {
+      operationId: owner.command.operationId,
+      deliveryId: owner.deliveryId,
+      state: owner.terminalState ?? null,
+    };
+  }
+
   pendingDeliveries(conversationId: ViewerConversationId): HeldDelivery[] {
     const snapshot = this.readOnlySnapshot();
     const canonicalId = resolveConversationAlias(snapshot, conversationId);

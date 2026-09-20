@@ -947,18 +947,70 @@ export async function enqueueStructuredMessage(
   const recoveryRequired = !migrationOwnsSend
     && !successorAwaitsItsHost
     && requiresDeadConversationRecovery(session, registry, conversation);
-  let recoveryReservation: HeldDelivery | null = null;
-  if (recoveryRequired && !wantsImages) {
-    try {
-      recoveryReservation = registry.holdDelivery(
+  /* Conflict preflight computes candidate refs and digest before writing.
+     A changed payload under an existing client message id rejects with zero
+     blob publication, GC, or registry effects. First admissions publish
+     before the reservation references them. */
+  const admissionKey = request.clientMessageId?.trim()
+    ? `${conversation.id}\u0000${request.clientMessageId.trim()}`
+    : null;
+  /* The attachment bytes are published ONCE per request, however many times
+     the admission is entered. A dead-host send enters it twice — before the
+     resume to make the payload durable, and after it to read the reservation
+     the drain may have assigned — and re-publishing on the second pass is
+     duplicated work against the blob store for bytes that are already there
+     under the same content address. */
+  let publishedImages = false;
+  const admitDurably = () => withAdmissionSection(admissionKey, async () => {
+    const admit = () => {
+      const replay = registry.preflightDeliveryReservation(
         conversation.id,
         content.content.text,
         idempotencyKey,
-        "text",
-        [],
+        refs.length ? "runtime-images" : "text",
+        refs,
         content.contentDigest,
         commandInput(request),
       );
+      if (replay) return replay;
+      if (rawImages.length > 0 && !publishedImages) {
+        (dependencies.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
+        publishedImages = true;
+      }
+      /* A reservation race can follow publication when another process runs
+         older code or when a structured spawn published the same digest.
+         The grace-period collector owns orphan cleanup. Synchronous removal
+         cannot distinguish this admission's blob from a deduplicated blob
+         whose durable reservation is still pending. */
+      return registry.holdDelivery(
+        conversation.id,
+        content.content.text,
+        idempotencyKey,
+        refs.length ? "runtime-images" : "text",
+        refs,
+        content.contentDigest,
+        commandInput(request),
+      );
+    };
+    if (rawImages.length === 0) return admit();
+    return (dependencies.withImageAdmissionLock ?? withAccountMutationLockAsync)(async () => admit());
+  });
+  let recoveryReservation: HeldDelivery | null = null;
+  if (recoveryRequired) {
+    /* The WHOLE message is reserved before the host is raised — the text and
+       the attachment bytes, under one key, through the one admission every
+       other send takes.
+
+       It used to be text only, and the reason was the image STORE: publishing
+       blobs wants the admission lock, and the pre-recovery hold ran outside
+       it. The consequence was the operator's, not the code's: a message with a
+       photo reached recovery with nothing durable behind it, so a resume that
+       failed answered 503 with no operation id at all and the queue had
+       nothing to retry with or to show. The admission below is the same
+       closure, lock included, so the payload that survives a failed resume is
+       the whole message rather than the half of it that needed no bytes. */
+    try {
+      recoveryReservation = await admitDurably();
     } catch (error) {
       return deliveryFailure(error);
     }
@@ -1014,55 +1066,32 @@ export async function enqueueStructuredMessage(
     ? runtimeImageCapability(activeSession.sessionKey.engine, true)
     : activeSession.capabilities.imageInput
       ?? runtimeImageCapability(activeSession.sessionKey.engine, false);
+  /* A payload the recovered host cannot accept is refused on the reservation
+     that already holds it, not merely on this response: the record exists from
+     before recovery now, so leaving it held would park an impossible message
+     in the queue forever. Terminalizing it names the real reason on the
+     operator's bubble and releases the key. */
+  const refuseReservedPayload = (error: string, status: number): StructuredMessageResult => {
+    if (recoveryReservation) {
+      registry.terminalizeHeldDelivery(recoveryReservation.id, error);
+      return { ok: false, structured: true, outcome: "failed", error, status, operationId: recoveryReservation.command.operationId };
+    }
+    return { ok: false, structured: true, outcome: "failed", error, status };
+  };
   if (wantsImages && !imageCapability.supported && activeSession.sessionKey.engine !== "codex") {
-    return { ok: false, structured: true, outcome: "failed", error: imageCapability.reason ?? "structured image delivery is unavailable", status: 409 };
+    return refuseReservedPayload(imageCapability.reason ?? "structured image delivery is unavailable", 409);
   }
   const encodedImageBytes = rawImages.reduce((total, image) => total + Buffer.byteLength(image.base64), 0);
   if (encodedImageBytes > imageCapability.maxEncodedBytesPerRequest) {
-    return { ok: false, structured: true, outcome: "failed", error: "runtime image request encoding is too large", status: 413 };
+    return refuseReservedPayload("runtime image request encoding is too large", 413);
   }
   let commandResult: RuntimeOperationResult | null = null;
   try {
-    /* Conflict preflight computes candidate refs and digest before writing.
-       A changed payload under an existing client message id rejects with zero
-       blob publication, GC, or registry effects. First admissions publish
-       before the reservation references them. */
-    const admissionKey = request.clientMessageId?.trim()
-      ? `${conversation.id}\u0000${request.clientMessageId.trim()}`
-      : null;
-    let reservation = await withAdmissionSection(admissionKey, async () => {
-      const admit = () => {
-        const replay = registry.preflightDeliveryReservation(
-          conversation.id,
-          content.content.text,
-          idempotencyKey,
-          refs.length ? "runtime-images" : "text",
-          refs,
-          content.contentDigest,
-          commandInput(request),
-        );
-        if (replay) return replay;
-        if (rawImages.length > 0) {
-          (dependencies.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
-        }
-        /* A reservation race can follow publication when another process runs
-           older code or when a structured spawn published the same digest.
-           The grace-period collector owns orphan cleanup. Synchronous removal
-           cannot distinguish this admission's blob from a deduplicated blob
-           whose durable reservation is still pending. */
-        return registry.holdDelivery(
-          conversation.id,
-          content.content.text,
-          idempotencyKey,
-          refs.length ? "runtime-images" : "text",
-          refs,
-          content.contentDigest,
-          commandInput(request),
-        );
-      };
-      if (rawImages.length === 0) return admit();
-      return (dependencies.withImageAdmissionLock ?? withAccountMutationLockAsync)(async () => admit());
-    });
+    /* The same admission the recovery branch already ran. Re-entering it is
+       how the reservation's CURRENT state is read: a hold the drain assigned
+       to the host that just came back comes back `assigned`, and the command
+       below delivers it in this request. */
+    let reservation = await admitDurably();
     let claimedReservationId: string | null = null;
     if (reservation.state === "delivery-uncertain") {
       reservation = registry.retryUncertainDelivery(reservation.id);

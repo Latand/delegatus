@@ -472,6 +472,10 @@ export const en = {
   "composer.payloadMissing": "Only message metadata was recovered. This browser cannot verify the complete original payload. Re-check the operation for recovery. If attachments are missing, add them again only after a confirmed safe rejection.",
   "composer.admissionTimedOut": "Delivery confirmation timed out. Checking the durable receipt; your message remains preserved.",
   "composer.deliveryUnconfirmed": "Delivery couldn't be confirmed. Your message is preserved. Check its delivery status before trying again.",
+  "composer.admissionLookupRunning": "Checking what became of this message…",
+  "composer.admissionLookupAdmitted": "This message was accepted and is on its way. It was not sent again.",
+  "composer.admissionLookupNotExecuted": "This message was never sent. Your text and attachments are kept — press Retry to send it.",
+  "composer.admissionLookupUnknown": "Still can't tell whether this message was sent. Nothing was sent again; check once more in a moment.",
   "composer.outboxFull": "Message queue is full: every entry is still unresolved. Retry, recover or remove one first; your draft is kept.",
   "composer.runtimePill": "Model and reasoning — applies to your next message",
   // Reply drafts the manager offers under its own message (#1202)
@@ -566,6 +570,7 @@ export const en = {
   "deadHost.respawnFailed": "Respawn failed — try again.",
   "deadHost.sendBlocked": "host is dead — respawn to continue",
   "deadHost.notResumable": "This conversation has no session of its own to resume. Continue in its root conversation, or open it in your terminal.",
+  "deadHost.rootRemoved": "The root conversation this one belongs to is gone, so there is nothing left to resume. Start a new conversation — your text and attachments are kept.",
   "deadHost.expiredCard": "expired — the host died before this was answered",
 
   // Superseded-round banner (issue #383)

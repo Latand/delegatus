@@ -861,3 +861,93 @@ export async function handleRuntimeRetry(
     return NextResponse.json({ error: message, ...(retryable ? { retryable: true } : {}) }, { status });
   }
 }
+
+export interface RuntimeAdmissionQueryDependencies {
+  enabled(): boolean;
+  registry(): AgentRegistry;
+  /** What became of an operation the lookup found, so an admitted key can hand
+      back the receipt the caller would otherwise have to ask for separately. */
+  query(operationId: string): Promise<NextResponse>;
+}
+
+const DEFAULT_ADMISSION_QUERY_DEPENDENCIES: RuntimeAdmissionQueryDependencies = {
+  enabled: runtimeEventsEnabled,
+  registry: agentRegistry,
+  query: (operationId) => handleRuntimeOperationQuery(operationId),
+};
+
+/**
+ * WAS THIS MESSAGE EVER ADMITTED? — asked under its ORIGINAL key, answered
+ * without sending anything.
+ *
+ * A browser that loses the response to `POST /api/runtime/send` knows only
+ * that it asked. The message may be durably admitted and on its way, or it may
+ * never have reached the journal at all, and those two need opposite actions.
+ * Re-posting the send to find out is the one thing that must not happen: under
+ * a key the server already admitted the POST is a second request against a
+ * message that is already being delivered, and the safety contract for an
+ * unknown outcome is a LOOKUP, never a resend.
+ *
+ * So this is a read. It takes the conversation and the client message id the
+ * attempt was stamped with, and answers with one of three words:
+ *
+ * - `admitted` — a reservation or an operation owner exists under that exact
+ *   key. The operation id comes back with it, and with it whatever the
+ *   operation query can say about its fate. Nothing may be resent.
+ * - `not-executed` — the registry was read and holds NO record under the key.
+ *   That is affirmative evidence of non-execution: admission writes the
+ *   reservation before anything reaches a host, and the operation owner
+ *   outlives the reservation, so a message that ever started down the path
+ *   left one of the two behind. Only this answer authorizes a later attempt.
+ * - `unknown` — the registry could not be read, or the plane is off. The
+ *   attempt keeps its uncertainty and its bytes, and the caller may ask again.
+ *   Absence that was never actually observed is not evidence of anything.
+ */
+export async function handleRuntimeAdmissionQuery(
+  request: NextRequest,
+  dependencies: RuntimeAdmissionQueryDependencies = DEFAULT_ADMISSION_QUERY_DEPENDENCIES,
+): Promise<NextResponse> {
+  const rejection = rejectCrossOrigin(request);
+  if (rejection) return rejection;
+  const conversationId = request.nextUrl.searchParams.get("conversationId") ?? "";
+  const clientMessageId = request.nextUrl.searchParams.get("clientMessageId") ?? "";
+  if (!/^conversation_[a-zA-Z0-9_-]+$/.test(conversationId)) {
+    return NextResponse.json({ error: "conversationId is invalid" }, { status: 400 });
+  }
+  if (!clientMessageId.trim()) {
+    return NextResponse.json({ error: "clientMessageId is required" }, { status: 400 });
+  }
+  if (!dependencies.enabled()) {
+    return NextResponse.json({ outcome: "unknown", error: "runtime events are disabled" }, { status: 200 });
+  }
+  const record = await readEvidence(
+    async () => dependencies.registry().deliveryAdmissionForKey(conversationId, clientMessageId.trim()),
+    "the delivery record could not be read",
+  );
+  /* An unreadable registry is the `unknown` case and it answers 200: the caller
+     is not being told something went wrong with its request, it is being told
+     the question has no answer yet. A 503 here reads as a failed lookup the
+     client should convert into a failure, which is exactly the misreading that
+     loses the operator's message. */
+  if (!record.readable) {
+    return NextResponse.json({ outcome: "unknown", reason: record.reason }, { status: 200 });
+  }
+  const admission = record.value;
+  if (!admission) {
+    return NextResponse.json({ outcome: "not-executed", conversationId, clientMessageId }, { status: 200 });
+  }
+  const answer = await dependencies.query(admission.operationId);
+  const body = (await answer.json().catch(() => ({}))) as Record<string, unknown>;
+  /* The operation query's own answer rides along when it had one. When it did
+     not, admission is still proven and still forbids a resend — the fate of an
+     admitted message is a separate question from whether it exists. */
+  return NextResponse.json({
+    outcome: "admitted",
+    conversationId,
+    clientMessageId,
+    operationId: admission.operationId,
+    state: admission.state,
+    ...(body.receipt ? { receipt: body.receipt } : {}),
+    ...(body.send ? { send: body.send } : {}),
+  }, { status: 200 });
+}

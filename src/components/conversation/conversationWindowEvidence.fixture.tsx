@@ -20,7 +20,7 @@ import type { FileEntry } from "@/lib/types";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import { useComposer } from "@/hooks/useComposer";
 
-import { ComposerBar } from "@/components/ComposerBar";
+import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/components/ComposerBar";
 import { capabilitiesFor } from "@/components/agentCapabilities";
 
 import { FeedItem } from "@/components/feed/FeedItem";
@@ -65,8 +65,10 @@ export type ConversationWindowCase =
   | "auth-terminal"
   | "clean-terminal"
   | "dead-host-composer"
+  | "dead-host-not-resumable"
   | "dead-host-queued"
   | "dead-host-resuming"
+  | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed";
 
@@ -216,15 +218,34 @@ function pngFile(): File {
   return new File([bytes], "stack-trace.png", { type: "image/png" });
 }
 
+/** A subagent transcript on a dead host whose ROOT transcript is gone: the one
+    permanently non-resumable state, where Send cannot help and the reason has
+    to name the action that can. */
+const ORPHANED_FILE = {
+  ...DEAD_FILE,
+  root: "claude-projects",
+  kind: "subagent",
+  parent: null,
+  parentRemoved: { conversationId: "conversation_root_gone", path: null },
+} as unknown as FileEntry;
+
 /**
  * The composer on a conversation whose host is gone: text in the field, an
- * image staged beside it, Send live. The three props the old gates worked
- * through — `showImage`, `imageDisabled`, `sendDisabledReason` — are derived
- * here exactly as the pane derives them, from the matrix's verdict.
+ * image staged beside it, Send live. Every prop the old gates worked through —
+ * `showImage`, `imageDisabled`, `sendDisabledReason`, and the phone's
+ * `sendSlot` — is derived here exactly as `TmuxComposer` derives it, from the
+ * matrix's verdict and `composerSlotKind`.
+ *
+ * The slot matters most and was the piece a standalone `ComposerBar` used to
+ * skip. On a phone the one control under the field IS the send, and a stopped
+ * host used to turn it into «Respawn» — the restore-first button this work
+ * removes. A frame that mounted the bar without a slot could never show that,
+ * so it is wired from the same inputs the pane uses: killed, offline, working,
+ * and whether a draft is in the field.
  */
-function DeadComposerFixture() {
+function DeadComposerFixture({ file, id }: { file: FileEntry; id: ConversationWindowCase }) {
   const { t } = useLocale();
-  const caps = capabilitiesFor(DEAD_FILE, DEAD_VIEW, { runtimeEnabled: true });
+  const caps = capabilitiesFor(file, DEAD_VIEW, { runtimeEnabled: true });
   const sendCap = caps.controls.send;
   const imageCap = caps.controls.images;
   const composer = useComposer({
@@ -242,8 +263,22 @@ function DeadComposerFixture() {
     staged.current = true;
     addFiles([pngFile()]);
   }, [addFiles]);
+  /* The pane's own inputs: the host is killed, the bus is up, no turn is
+     running, and the operator has written something. */
+  const slotKind: ComposerSlotKind = composerSlotKind({
+    killed: true,
+    offline: false,
+    working: false,
+    hasDraft: composer.text.trim().length > 0 || composer.attachments.images.length > 0,
+  });
+  const SLOT: Record<ComposerSlotKind, { label: string; text?: string }> = {
+    send: { label: t("composer.sendToAgent") },
+    stop: { label: t("mobile2.composer.stop") },
+    queue: { label: t("mobile2.composer.queueAria"), text: t("mobile2.composer.queue") },
+    respawn: { label: t("mobile2.composer.respawnAria"), text: t("mobile2.composer.respawn") },
+  };
   return (
-    <div data-evidence-case="dead-host-composer" className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+    <div data-evidence-case={id} className="min-h-dvh bg-canvas px-4 py-6 text-primary">
       <div data-evidence-transcript className="my-3 flex justify-end">
         <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5">{DEAD_SENT}</div>
       </div>
@@ -253,6 +288,7 @@ function DeadComposerFixture() {
         textareaAriaLabel={t("composer.sendStructuredAria")}
         imageAriaLabel={t("composer.addAttachments")}
         leftSlot={null}
+        sendSlot={{ kind: slotKind, ...SLOT[slotKind] }}
         sendLabelIdle={t("composer.sendToAgent")}
         sendLabelRecording={t("composer.sendToAgent")}
         sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
@@ -269,6 +305,10 @@ function DeadComposerFixture() {
 const DEAD_SESSION: Record<string, { host: string; turn: string }> = {
   "dead-host-queued": { host: "unhosted", turn: "unknown" },
   "dead-host-resuming": { host: "recovering", turn: "unknown" },
+  /* The host came back and the message is on the wire to it — the step between
+     "starting" and "delivered", and the one the queue's own vocabulary calls
+     `delivering`. */
+  "dead-host-delivering": { host: "hosted", turn: "idle" },
   "dead-host-delivered": { host: "hosted", turn: "idle" },
   "dead-host-resume-failed": { host: "unhosted", turn: "unknown" },
 };
@@ -279,6 +319,9 @@ function deadEntry(id: ConversationWindowCase): OutboxEntry {
   const base = { id: "evidence-dead-key", text: DEAD_SENT, images: 1, at: ADMITTED_AT } as const;
   if (id === "dead-host-queued") return { ...base, state: "queued" } as OutboxEntry;
   if (id === "dead-host-resuming") return { ...base, state: "delivering", acceptedHeld: true } as OutboxEntry;
+  /* Not `acceptedHeld`: the admission is no longer parked, it is being handed
+     over, which is what separates this chip from the resuming one above. */
+  if (id === "dead-host-delivering") return { ...base, state: "delivering", dispatchedAt: ADMITTED_AT } as OutboxEntry;
   if (id === "dead-host-delivered") return { ...base, state: "delivered", settledAt: DELIVERED_AT } as OutboxEntry;
   return { ...base, state: "failed", error: RESUME_FAILURE } as OutboxEntry;
 }
@@ -305,7 +348,8 @@ function DeadQueueFixture({ id }: { id: ConversationWindowCase }) {
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
-  if (id === "dead-host-composer") return <DeadComposerFixture />;
+  if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
+  if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;
   if (id.startsWith("dead-host-")) return <DeadQueueFixture id={id} />;
   const entries = visibleEntries(id);
   return (

@@ -2618,7 +2618,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     }
   };
 
-  const send = async (overrideText?: string, retry?: { receiptId?: number; clientMessageId?: string; unconfirmedAdmission?: true }, outboxId?: string) => {
+  const send = async (overrideText?: string, retry?: { receiptId?: number; clientMessageId?: string }, outboxId?: string) => {
     const originalKey = deliveryAttemptKey(idempotencyKey.current, retry?.clientMessageId);
     const knownPayload = payloadRows.find(row => row.ref.key === originalKey);
     let durable: RestoredComposerSubmission | null = null;
@@ -2637,8 +2637,6 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        failure, and that refusal releases the admitted operation's inbox files.
        The queue bubble's Retry and the recovery row both arrive here. */
     if (durable?.operationId) {
-      // Admission won while an explicit local replay was restoring its bytes.
-      if (retry?.unconfirmedAdmission) { await refreshPayloads(); return; }
       await retryAdmittedPayload(durable, outboxId);
       return;
     }
@@ -3000,7 +2998,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       // Explicit recovery replays the sealed envelope under its original key.
       // Its existing durable attempt already records the possible dispatch;
       // automatic queue dispatch still requires the one-use wire claim.
-      if (durable && !retry?.unconfirmedAdmission && !composerSubmissionPayloads.consumeAttempt(durable.ref)) {
+      /* The one-use wire claim fences EVERY path into this dispatcher now. It
+         used to be waived for the unknown-outcome recovery, which was the one
+         caller that needed the fence most: that recovery is a lookup today and
+         never reaches here, so nothing is left to waive it for. */
+      if (durable && !composerSubmissionPayloads.consumeAttempt(durable.ref)) {
         // The queue bubble's Retry also enters through this dispatcher. Nothing
         // was admitted here, so only a recorded refusal re-opens the envelope.
         const retryClaim = durable.retry === "resend" && await composerSubmissionPayloads.beginAttempt(durable.ref);
@@ -3316,14 +3318,102 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     return entry;
   };
 
+  /**
+   * THE UNKNOWN OUTCOME, RESOLVED BY LOOKING IT UP.
+   *
+   * This attempt reached the network and its response never came back. The
+   * message may be durably admitted and already on its way to the agent, or it
+   * may never have been journaled at all — and the recovery that tells the two
+   * apart must be a READ. Re-posting the send to find out is precisely the
+   * duplicate the contract forbids: under a key the server already admitted,
+   * the second POST is a second request against a message being delivered.
+   *
+   * So this control performs no send. It asks `/api/runtime/send` under the
+   * ORIGINAL key and acts on the one of three answers it gets:
+   *
+   * - `admitted` — the operation exists. Its id (and its receipt, when the
+   *   server could settle one) is adopted onto this key, which is what makes
+   *   the recovery row disappear and hands the message back to ordinary
+   *   receipt reconciliation. Nothing is resent, now or later.
+   * - `not-executed` — the record was read and holds nothing under the key.
+   *   That is affirmative evidence of non-execution, and the ONLY answer that
+   *   authorizes a later attempt; the entry becomes an ordinary failed one,
+   *   whose Retry the operator may press. Its bytes are untouched.
+   * - `unknown` — nothing could be read, including when the lookup itself
+   *   failed. The attempt keeps its uncertainty and every byte, and the
+   *   operator may simply ask again. Absence never observed is not evidence.
+   */
+  const resolveUnknownAdmission = async (entry: OutboxEntry) => {
+    setBusy(true);
+    setStatus({ kind: "info", text: t("composer.admissionLookupRunning") });
+    try {
+      const answer = await runtimeDependencies.lookupRuntimeAdmission(cardId, entry.id);
+      if (answer.outcome === "admitted") {
+        const row = payloadRows.find(candidate => candidate.ref.key === entry.id);
+        if (answer.receipt && row) await composerSubmissionPayloads.observe(row.ref, answer.receipt).catch(() => false);
+        /* The operation id lands on the entry even when no receipt could be
+           settled: it is what proves admission to every later read of this
+           key, and what stops the recovery row from offering a resend. */
+        updateOutbox(cardId, entry.id, {
+          state: "delivering",
+          deliveryUncertain: undefined,
+          error: undefined,
+          settledAt: undefined,
+          ...(answer.operationId ? { operationId: answer.operationId } : {}),
+          ...(answer.receipt ? { deliveryReceipt: answer.receipt } : {}),
+        });
+        persistPendingDeliveries(pendingDeliveries.current.map((pending) =>
+          pending.key === entry.id && answer.operationId
+            ? { ...pending, operationId: answer.operationId }
+            : pending));
+        setImmediateRuntimeReceipts(current =>
+          current.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(entry.id)));
+        if (answer.receipt) setImmediateRuntimeReceipts(current => mergeRuntimeReceipts(current, [answer.receipt!]));
+        setStatus({ kind: "info", text: t("composer.admissionLookupAdmitted") });
+        await refreshPayloads();
+        return;
+      }
+      if (answer.outcome === "not-executed") {
+        /* Proven never sent. The placeholder stops standing for an unknown
+           fate and the message becomes an ordinary failed one the operator can
+           retry — with its original key and its original bytes.
+
+           The proof is RECORDED against the retained payload, as any other
+           pre-admission refusal is. That is what authorizes the later attempt:
+           the one-use wire claim is spent, and only affirmative evidence that
+           nothing was executed re-opens the sealed envelope. Without it the
+           operator would be told the message never went and then find Retry
+           unable to send it. */
+        const proven = payloadRows.find(candidate => candidate.ref.key === entry.id);
+        if (proven) {
+          await composerSubmissionPayloads
+            .refuse(proven.ref, { status: 404, reason: "the delivery record holds nothing under this key" })
+            .catch(() => false);
+        }
+        updateOutbox(cardId, entry.id, {
+          state: "failed",
+          deliveryUncertain: undefined,
+          settledAt: nowMs(),
+          error: t("composer.admissionLookupNotExecuted"),
+        });
+        setImmediateRuntimeReceipts(current =>
+          current.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(entry.id)));
+        setStatus({ kind: "err", text: t("composer.admissionLookupNotExecuted") });
+        await refreshPayloads();
+        return;
+      }
+      setStatus({ kind: "err", text: t("composer.admissionLookupUnknown") });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const retryRuntimeReceipt = async (receipt: RuntimeReceipt, mode?: "uncertain") => {
     if (busy || voiceSending || reconcilingSend) return;
     if (receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
       const entry = localRecoveryEntry(receipt);
       if (!entry) return;
-      // Keep recovery visible if this attempt is refused before admission.
-      // An authoritative receipt supersedes the local placeholder by key.
-      await withComposerSubmission(cardId, () => send(entry.text, { clientMessageId: entry.id, unconfirmedAdmission: true }, entry.id));
+      await resolveUnknownAdmission(entry);
       return;
     }
     setBusy(true);

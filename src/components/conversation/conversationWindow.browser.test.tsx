@@ -299,8 +299,10 @@ describe("composer stays usable with a dead host", () => {
   ] as const;
   const CASES = [
     "dead-host-composer",
+    "dead-host-not-resumable",
     "dead-host-queued",
     "dead-host-resuming",
+    "dead-host-delivering",
     "dead-host-delivered",
     "dead-host-resume-failed",
   ] as const;
@@ -323,6 +325,17 @@ describe("composer stays usable with a dead host", () => {
     micEnabled: boolean | null;
     /** The blocked-send strip. Present is the gate; absent is the fix. */
     sendBlockedStrip: boolean;
+    /** The reason painted where Send is genuinely blocked, which only the
+        permanently non-resumable case has. */
+    sendBlockedText: string | null;
+    /** The phone's one control under the field, by the kind it took. A
+        stopped host used to make this «Respawn» with a message already
+        written; it has to read as Send. */
+    slotKind: string | null;
+    slotLabel: string | null;
+    /** Whether the blocked Send is really inert, found by the reason it wears
+        as its accessible name. */
+    blockedSendInert: boolean | null;
     /** The message's own delivery state and wait phase, as the row publishes them. */
     outboxState: string | null;
     outboxWait: string | null;
@@ -357,12 +370,12 @@ describe("composer stays usable with a dead host", () => {
             );
             try {
               await page.waitForSelector(`[data-evidence-case="${id}"]`);
-              if (id === "dead-host-composer") {
+              if (id === "dead-host-composer" || id === "dead-host-not-resumable") {
                 /* The staged tile decodes asynchronously through the real
                    attachment intake; wait for it rather than racing it. */
                 await page.waitForSelector('[data-testid="attachment-tile"][data-status="ready"]');
               }
-              const reading = await page.evaluate((labels: { attach: string; send: string; mic: string; retry: string }) => {
+              const reading = await page.evaluate((labels: { attach: string; send: string; mic: string; retry: string; blocked: string }) => {
                 const byLabel = (label: string) =>
                   document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
                 const field = document.querySelector<HTMLTextAreaElement>("textarea");
@@ -380,6 +393,16 @@ describe("composer stays usable with a dead host", () => {
                   sendEnabled: send ? !send.disabled && send.getAttribute("aria-disabled") !== "true" : null,
                   micEnabled: mic ? !mic.disabled : null,
                   sendBlockedStrip: Boolean(document.querySelector('[data-testid="composer-send-blocked"]')),
+                  sendBlockedText: document.querySelector('[data-testid="composer-send-blocked"]')?.textContent?.trim() ?? null,
+                  blockedSendInert: (() => {
+                    /* A blocked Send wears its REASON as its accessible name,
+                       which is also why it is not found under the send label. */
+                    const button = byLabel(labels.blocked);
+                    return button ? button.disabled || button.getAttribute("aria-disabled") === "true" : null;
+                  })(),
+                  /* The phone's slot publishes its own kind on the control. */
+                  slotKind: document.querySelector("[data-mobile2-send]")?.getAttribute("data-mobile2-send") ?? null,
+                  slotLabel: document.querySelector("[data-mobile2-send]")?.getAttribute("aria-label") ?? null,
                   outboxState: entry?.getAttribute("data-outbox-state") ?? null,
                   outboxWait: entry?.getAttribute("data-outbox-wait") ?? null,
                   statusLabel: status?.textContent?.trim() ?? null,
@@ -393,6 +416,7 @@ describe("composer stays usable with a dead host", () => {
                 send: translate(lang, "composer.sendToAgent"),
                 mic: translate(lang, "mic.dictate"),
                 retry: translate(lang, "outbox.retry"),
+                blocked: translate(lang, "deadHost.rootRemoved"),
               });
               expect(pageErrors).toEqual([]);
               geometry[`${id}-${viewport.name}-${lang}`] = reading;
@@ -411,6 +435,30 @@ describe("composer stays usable with a dead host", () => {
                 expect(reading.sendEnabled).toBe(true);
                 expect(reading.micEnabled).toBe(true);
                 expect(reading.sendBlockedStrip).toBe(false);
+                /* The phone's one control under the field is the SEND, with a
+                   message already written — never the respawn that used to
+                   stand in front of it. At 1280 there is no slot at all and
+                   the bar's own Send is the control, which is why the kind is
+                   only asserted where the slot renders. */
+                if (viewport.width === 390) {
+                  expect(reading.slotKind).toBe("send");
+                  expect(reading.slotLabel).toBe(translate(lang, "composer.sendToAgent"));
+                }
+              } else if (id === "dead-host-not-resumable") {
+                /* The one permanently non-resumable state. The field, the
+                   attachment and the dictation stay exactly as usable — the
+                   draft is not confiscated — while Send says why it cannot
+                   help and names the action that can. */
+                expect(reading.fieldEnabled).toBe(true);
+                expect(reading.draftLength).toBeGreaterThan(0);
+                expect(reading.readyTiles).toBe(1);
+                /* Not found under the send label at all: it wears its reason. */
+                expect(reading.sendEnabled).toBeNull();
+                expect(reading.blockedSendInert).toBe(true);
+                expect(reading.sendBlockedText).toBe(translate(lang, "deadHost.rootRemoved"));
+                /* And it is not a retry invitation: no Retry is offered for a
+                   state that can never change back. */
+                expect(reading.retryActions).toBe(0);
               } else if (id === "dead-host-queued") {
                 expect(reading.outboxState).toBe("queued");
                 expect(reading.statusLabel).toBe(translate(lang, "outbox.queued"));
@@ -422,6 +470,13 @@ describe("composer stays usable with a dead host", () => {
                   waited: translate(lang, "runtime.receipt.waitedMin", { n: 1 }),
                 }));
                 expect(reading.spinner).toBe(true);
+              } else if (id === "dead-host-delivering") {
+                /* The host is back and the message is being handed to it: the
+                   step between "starting" and "delivered", which the committed
+                   case list used to skip over. */
+                expect(reading.outboxState).toBe("delivering");
+                expect(reading.statusLabel).toBe(translate(lang, "outbox.delivering"));
+                expect(reading.retryActions).toBe(0);
               } else if (id === "dead-host-delivered") {
                 expect(reading.outboxState).toBe("delivered");
                 expect(reading.statusLabel).toBe(translate(lang, "outbox.delivered"));

@@ -210,6 +210,33 @@ function isSubagent(file: FileEntry): boolean {
   return file.kind === "subagent";
 }
 
+/**
+ * The permanent non-resumable states of a dead conversation, and the action
+ * that applies to each.
+ *
+ * Only two of them can be proven from what the client holds, and both are
+ * structural rather than momentary:
+ *
+ * - a **subagent transcript**, which never had a session of its own — its
+ *   root's process wrote it — so the root conversation is where the operator
+ *   continues;
+ * - a subagent whose **root transcript is gone**, carried by the scanner's
+ *   durable `parentRemoved` tombstone. There is nothing to continue in, so the
+ *   alternative is a new conversation.
+ *
+ * A REVOKED SEAT is deliberately not a third case, because in this codebase it
+ * is not a permanent failure: a resume whose recorded account is gone does not
+ * refuse, it falls through to the project's pool
+ * (`resolveContinuityAccount`, src/lib/accounts/manager.ts). What can fail is
+ * an exhausted or unreadable pool, and that is genuinely temporary — its
+ * delivery failure carries the real reason and a Retry that can succeed.
+ * Gating Send on it would refuse a send the server would have completed.
+ */
+function deadSendAlternative(file: FileEntry): Capability {
+  if (!isSubagent(file)) return ENABLED;
+  return disabled(file.parentRemoved ? "deadHost.rootRemoved" : "deadHost.notResumable");
+}
+
 /** Classify the surface. Shell, superseded, and dead-host win over everything
     else. Supersedence (issue #383) is durable registry evidence projected by
     the server — it needs no runtime-plane resolution, wins over `dead` (the
@@ -376,15 +403,29 @@ export function capabilitiesFor(file: FileEntry, rv: RuntimeSessionView | null, 
           // images back only split one message into two and made the operator
           // press a recovery button before the half that mattered could go.
           images: ENABLED,
+          // Send stands down only where raising a host cannot possibly help,
+          // and the reason then names the alternative that CAN.
+          //
           // A SUBAGENT transcript has no session of its own — the root's
-          // process writes it — so sending here raises nothing. Say that, and
-          // name the root, instead of offering a Send with nothing behind it.
+          // process writes it — so sending here raises nothing. The real
+          // alternative is the root conversation, and the reason says so.
+          //
+          // Unless the root is gone too. `parentRemoved` is the scanner's
+          // durable tombstone for a parent transcript that no longer exists,
+          // so "continue in the root" would be an instruction to open
+          // something that is not there; a new conversation is the only thing
+          // left, and the draft is carried into it rather than discarded.
+          //
+          // Neither is a retry invitation: both are permanent, both are read
+          // off evidence that cannot change back, and the composer keeps the
+          // text and the attachments in either case.
+          //
           // Every other dead conversation keeps Send: raising its host is what
           // the send does. The predicate is the transcript kind deliberately,
           // not `isResumableConversation`, which also answers false for whole
           // roots (`claude-tasks`, `openclaw-sessions`) whose dead sends the
           // runtime plane handles exactly like any other.
-          send: isSubagent(file) ? disabled("deadHost.notResumable") : ENABLED,
+          send: deadSendAlternative(file),
         },
       };
     case "superseded":
