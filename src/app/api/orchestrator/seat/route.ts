@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { viewerMcpRegistered } from "@/lib/agent/spawnPolicy";
 import { executeOrchestratorSeatRequest } from "@/lib/orchestrator/seatCommand";
-import { allSeatConversations, orchestratorSeatFor, previousOrchestratorSeats, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
+import { allSeatConversationsIn, orchestratorSeatIn, previousOrchestratorSeatsIn, readOrchestratorSeatFileOrNull, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
 import { loadTasks } from "@/lib/tasks/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -73,14 +73,20 @@ interface SeatFailure {
 export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
   const project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
   if (req.nextUrl.searchParams.get("scope")?.trim() === "all") {
-    return NextResponse.json({ all: allSeatConversations() });
+    return NextResponse.json({ all: allSeatConversationsIn(readOrchestratorSeatFileOrNull()) });
   }
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
   const cwd = req.nextUrl.searchParams.get("cwd")?.trim() || undefined;
   const home = process.env.HOME?.trim() || os.homedir();
-  const { active, pending, history } = orchestratorSeatFor(project);
+  /* ONE read of the seat record for the whole answer. Every part of it — this
+     project's seat, the seats that held it before, and the conversations every
+     OTHER project's seat names — comes out of the same parse: this is a poll,
+     and three readers of one document would re-read and re-parse it three
+     times per tick for one answer. */
+  const record = readOrchestratorSeatFileOrNull();
+  const { active, pending, history } = orchestratorSeatIn(record, project);
   const failed = [...history].reverse().find((entry) => entry.seat.intent.error !== null);
-  const retired = previousOrchestratorSeats(project);
+  const retired = previousOrchestratorSeatsIn(record, project);
   /* The task store is read only when there is a seat to find notes for. A
      failed read leaves the rows without notes; the seat answer still stands. */
   let tasks: ReturnType<typeof loadTasks> = [];
@@ -108,7 +114,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
     viewerMcpRegistered: viewerMcpRegistered(home, cwd),
     previous,
     currentTask: active ? seatTaskOf(tasks, project, active) : null,
-    all: allSeatConversations(),
+    all: allSeatConversationsIn(record),
   });
 }
 

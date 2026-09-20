@@ -34,7 +34,8 @@ mock.module("@/hooks/useConversationCatalog", () => ({
   useConversationCatalog: () => ({ items: [], nextCursor: null, total: 0, loading: false, error: false, loadMore: () => {}, retry: () => {} }),
 }));
 const { resetSelectionSessionsForTest } = await import("@/hooks/useBoardState");
-const { resetOrchestratorSeatCacheForTests } = await import("@/components/orchestrator/useOrchestratorSeat");
+const { resetOrchestratorSeatCacheForTests, SEAT_POLL_MS } = await import("@/components/orchestrator/useOrchestratorSeat");
+const { OrchestratorDock } = await import("@/components/orchestrator/OrchestratorDock");
 const { ProjectDashboard } = await import("@/components/ProjectDashboard");
 
 const dom = new Window({ url: "http://localhost/" });
@@ -207,12 +208,24 @@ const TASKS = (): BoardTask[] => [
   { ...task("task-seat-neighbour", "Neighbour seat, launch week", NEIGHBOUR_CONVERSATION, "/seats/neighbour.jsonl"), project: NEIGHBOUR_PROJECT },
 ];
 
-function mount(): HTMLElement {
+function mount(withDock = false): HTMLElement {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
   flushSync(() =>
     root.render(
+      <>
+      {/* The dock is a SIBLING of the dashboard, as `Viewer` renders it: open
+          on every desktop face but the board's, beside the same project. */}
+      {withDock ? (
+        <OrchestratorDock
+          project={PROJECT}
+          projectName="Atlas"
+          projectCwd="/repos/atlas"
+          files={[file("/alpha", "Alpha", "conversation_worker"), file(SEAT_PATH, "Manager seat", SEAT_CONVERSATION)]}
+          onClose={() => {}}
+        />
+      ) : null}
       <ProjectDashboard
         files={[file("/alpha", "Alpha", "conversation_worker")]}
         flows={[]}
@@ -228,7 +241,8 @@ function mount(): HTMLElement {
         catalogConversationCount={1}
         onArchive={() => {}}
         onUnarchive={() => {}}
-      />,
+      />
+      </>,
     ),
   );
   roots.push(root);
@@ -278,6 +292,32 @@ test("a dashboard that opens on Conversations reads the seat itself, once (#1841
      same answer instead of polling the route for the same project and cwd. */
   expect(seatReads).toBe(1);
 });
+
+/* The dock is open on the Conversations face — the shape the operator actually
+   leaves the desktop in — and its panel reads the same project's seat as the
+   dashboard above the faces. Two readers of one document are still one request:
+   the poll belongs to the project and cwd, not to the mount. */
+test("the dock open beside the Conversations face adds no second seat request (#1841)", async () => {
+  boards = { [PROJECT]: { ...emptyBoard(), prefs: { ...emptyBoard().prefs, viewMode: "list" } } };
+  const host = mount(true);
+  expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
+  expect(await waitFor(() => panelRows(host).length > 0)).toBe(true);
+  await settle();
+  expect(host.querySelector("[data-kanban-board]")).toBeNull();
+
+  /* The dock paints the live seat, from the answer the dashboard's read
+     published to it rather than from one of its own. */
+  const dock = host.querySelector("[data-orchestrator-dock]");
+  expect(dock).not.toBeNull();
+  expect(await waitFor(() => dock!.querySelector('[data-orchestrator-state="live"]') !== null)).toBe(true);
+  expect(seatReads).toBe(1);
+
+  /* And one per interval from there on, not one per reader. */
+  expect(await waitFor(() => seatReads > 1, SEAT_POLL_MS + 3_000)).toBe(true);
+  expect(seatReads).toBe(2);
+  expect(dock!.querySelector('[data-orchestrator-state="live"]')).not.toBeNull();
+/* One poll interval of real waiting: the count over TIME is the claim. */
+}, SEAT_POLL_MS + 12_000);
 
 /* The panel's «all» scope lists every project's tasks, and a seat of ANOTHER
    project is no more a task than this project's is (#1841). */

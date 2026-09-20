@@ -297,7 +297,7 @@ function retainNewestSeat(collection: Record<string, OrchestratorSeat>, seat: Or
  * does not normalize is not evidence of a seat, and the next designation
  * overwrites it.
  */
-function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
+export function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
   let raw: string;
   try {
     raw = fs.readFileSync(seatsFile(), "utf8");
@@ -500,12 +500,29 @@ export function orchestratorSeatFor(project: string): {
   pending: OrchestratorSeat | null;
   history: OrchestratorSeatTerminalization[];
 } {
-  const file = readOrchestratorSeatFile();
+  return orchestratorSeatIn(readOrchestratorSeatFileOrNull(), project);
+}
+
+/**
+ * The same answer, from a record the caller has ALREADY read.
+ *
+ * The record is one document, so a caller that needs more than one thing out of
+ * it — the status read needs the active seat, the retired ones and the
+ * cross-project set — reads and parses it once and derives all three, rather
+ * than once per question. An unreadable record (`null`) answers as an empty
+ * one, exactly as {@link readOrchestratorSeatFile} does.
+ */
+export function orchestratorSeatIn(file: OrchestratorSeatFile | null, project: string): {
+  active: OrchestratorSeat | null;
+  pending: OrchestratorSeat | null;
+  history: OrchestratorSeatTerminalization[];
+} {
+  const record = file ?? emptyFile();
   const canonical = canonicalOrchestratorProject(project);
   return {
-    active: file.seats[canonical] ?? null,
-    pending: file.pending[canonical] ?? null,
-    history: file.history.filter((entry) => entry.seat.project === canonical),
+    active: record.seats[canonical] ?? null,
+    pending: record.pending[canonical] ?? null,
+    history: record.history.filter((entry) => entry.seat.project === canonical),
   };
 }
 
@@ -532,12 +549,22 @@ export interface PreviousOrchestratorSeat {
  * never listed.
  */
 export function previousOrchestratorSeats(project: string, limit = PREVIOUS_SEATS_LIMIT): PreviousOrchestratorSeat[] {
-  const file = readOrchestratorSeatFile();
+  return previousOrchestratorSeatsIn(readOrchestratorSeatFileOrNull(), project, limit);
+}
+
+/** The same list, from a record the caller has already read: see
+    {@link orchestratorSeatIn}. */
+export function previousOrchestratorSeatsIn(
+  file: OrchestratorSeatFile | null,
+  project: string,
+  limit = PREVIOUS_SEATS_LIMIT,
+): PreviousOrchestratorSeat[] {
+  const record = file ?? emptyFile();
   const canonical = canonicalOrchestratorProject(project);
-  const current = file.seats[canonical]?.conversationId ?? null;
+  const current = record.seats[canonical]?.conversationId ?? null;
   const seen = new Set<string>();
   const out: PreviousOrchestratorSeat[] = [];
-  const ordered = file.revocations
+  const ordered = record.revocations
     .map((revocation, index) => ({ revocation, index }))
     .filter(({ revocation }) => revocation.project === canonical)
     .sort((a, b) => b.revocation.revokedAt.localeCompare(a.revocation.revokedAt) || b.index - a.index);
@@ -580,7 +607,13 @@ export interface SeatConversations {
  * distinguishable from «no seats anywhere».
  */
 export function allSeatConversations(): SeatConversations | null {
-  const file = readOrchestratorSeatFileOrNull();
+  return allSeatConversationsIn(readOrchestratorSeatFileOrNull());
+}
+
+/** The same set, from a record the caller has already read: see
+    {@link orchestratorSeatIn}. Null in, null out — a record that could not be
+    read names no conversations and hides no rows. */
+export function allSeatConversationsIn(file: OrchestratorSeatFile | null): SeatConversations | null {
   if (file === null) return null;
   const held = { conversationIds: new Set<string>(), paths: new Set<string>() };
   for (const seat of [...Object.values(file.seats), ...Object.values(file.pending)]) {

@@ -51,7 +51,102 @@ const readKey = (project: string, cwd: string | undefined): string => `${project
     cache exists: a surface that re-opens paints what it already knew. */
 let seatConversations: SeatRefs | null = null;
 
+/**
+ * The one poll behind every mount reading the same project and cwd (#1841).
+ *
+ * The seat is read from more than one place at once on purpose — the dock's
+ * panel beside the board, the board's own seat frame, the phone's focus view
+ * and the seat card under it — and they all want the same document. The answer
+ * cache above is shared, but a `setInterval` per MOUNT is not an answer being
+ * shared, it is the same request made twice on the same cadence. So the poll
+ * belongs to the KEY: the first mount for a key starts it, later mounts join
+ * it, and it stops when the last one leaves. Each arrival still revalidates
+ * once — an opening surface asks whether the seat moved — and arrivals that
+ * find a read in flight share that one. One request per key per interval,
+ * however many surfaces read it.
+ */
+interface SeatPoll {
+  /** Every mount reading this key. Publishing answers all of them at once. */
+  listeners: Set<(read: ScopedRead) => void>;
+  timer: ReturnType<typeof setInterval> | null;
+  /** Aborted when the last mount leaves, so a read in flight for a scope nobody
+      is watching any more does not settle behind them. */
+  controller: AbortController | null;
+  /** A read is out. A tick that finds one still in flight — a slow answer, a
+      surface mounting mid-interval — waits for it rather than asking for the
+      same document a second time. */
+  pending: boolean;
+}
+const polls = new Map<string, SeatPoll>();
+
+/** Give every mount of `key` the answer, and keep it for the next one. */
+function publishSeat(key: string, next: ScopedRead): void {
+  answers.set(key, next);
+  for (const listener of polls.get(key)?.listeners ?? []) listener(next);
+}
+
+function settleSeat(project: string, cwd: string | undefined, status: OrchestratorSeatStatus | null, failed: boolean): void {
+  const key = readKey(project, cwd);
+  publishSeat(key, {
+    project,
+    cwd: cwd ?? "",
+    /* A failed re-read keeps the last good answer for the SAME project; the
+       cache is keyed by project and cwd, so it cannot resurrect another
+       checkout's registration status. */
+    status: status ?? answers.get(key)?.status ?? null,
+    failed,
+  });
+}
+
+function loadSeat(project: string, cwd: string | undefined, key: string): void {
+  const poll = polls.get(key);
+  if (!poll || poll.pending || !poll.controller) return;
+  poll.pending = true;
+  void fetchOrchestratorSeat(project, cwd, poll.controller.signal)
+    .then((status) => settleSeat(project, cwd, status, false))
+    .catch((cause: unknown) => {
+      if ((cause as { name?: string }).name !== "AbortError") settleSeat(project, cwd, null, true);
+    })
+    .finally(() => { poll.pending = false; });
+}
+
+function stopPoll(poll: SeatPoll): void {
+  if (poll.timer !== null) clearInterval(poll.timer);
+  poll.timer = null;
+  poll.controller?.abort();
+  poll.controller = null;
+}
+
+/** Subscribe to `project`'s seat, starting the key's poll if it is the first. */
+function subscribeSeat(project: string, cwd: string | undefined, listener: (read: ScopedRead) => void): () => void {
+  const key = readKey(project, cwd);
+  let poll = polls.get(key);
+  if (!poll) {
+    poll = { listeners: new Set(), timer: null, controller: null, pending: false };
+    polls.set(key, poll);
+  }
+  const started = poll;
+  started.listeners.add(listener);
+  if (started.timer === null) {
+    started.controller = new AbortController();
+    started.timer = setInterval(() => loadSeat(project, cwd, key), SEAT_POLL_MS);
+  }
+  /* Every arriving surface revalidates, as it always has — it paints the cached
+     answer and asks for a fresh one. Surfaces arriving TOGETHER (the dock and
+     the board in one commit) find the first read still in flight and share it,
+     which is the doubling this guard exists for. */
+  loadSeat(project, cwd, key);
+  return () => {
+    started.listeners.delete(listener);
+    if (started.listeners.size > 0) return;
+    stopPoll(started);
+    if (polls.get(key) === started) polls.delete(key);
+  };
+}
+
 export function resetOrchestratorSeatCacheForTests(): void {
+  for (const poll of polls.values()) stopPoll(poll);
+  polls.clear();
   answers.clear();
   seatConversations = null;
 }
@@ -72,6 +167,11 @@ const cachedSeat = (project: string | null, cwd: string | undefined): ScopedRead
  * The project's orchestrator seat, polled — and answered at once for a project
  * this tab already read (stale while it revalidates, #1149).
  *
+ * The poll is per project and cwd, not per mount ({@link subscribeSeat}): every
+ * surface reading the same seat at the same time shares one request per
+ * interval, so opening the dock beside the board — or the phone's seat card
+ * under its focus view — costs no extra reading of the route.
+ *
  * `project` null (Overview, or the panel closed) reads nothing at all.
  */
 export function useOrchestratorSeat(project: string | null, cwd?: string): OrchestratorSeatRead {
@@ -83,47 +183,23 @@ export function useOrchestratorSeat(project: string | null, cwd?: string): Orche
     ? read
     : cachedSeat(project, cwd);
 
-  const settle = useCallback((target: string, targetCwd: string | undefined, status: OrchestratorSeatStatus | null, failed: boolean) => {
-    const key = readKey(target, targetCwd);
-    const next: ScopedRead = {
-      project: target,
-      cwd: targetCwd ?? "",
-      /* A failed re-read keeps the last good answer for the SAME project; the
-         cache is keyed by project and cwd, so it cannot resurrect another
-         checkout's registration status. */
-      status: status ?? answers.get(key)?.status ?? null,
-      failed,
-    };
-    answers.set(key, next);
-    setRead(next);
-  }, []);
-
+  /* An operator action that MOVED the seat — a designation, a rotation — asks
+     for the answer now rather than at the next tick, so it reads past the
+     shared poll's in-flight guard: a read that left before the write cannot
+     describe it. The answer is published to every surface reading this key. */
   const refresh = useCallback(async () => {
     if (!project) return;
     try {
-      settle(project, cwd, await fetchOrchestratorSeat(project, cwd), false);
+      settleSeat(project, cwd, await fetchOrchestratorSeat(project, cwd), false);
     } catch {
-      settle(project, cwd, null, true);
+      settleSeat(project, cwd, null, true);
     }
-  }, [cwd, project, settle]);
+  }, [cwd, project]);
 
   useEffect(() => {
     if (!project) return;
-    const controller = new AbortController();
-    const load = () => {
-      void fetchOrchestratorSeat(project, cwd, controller.signal)
-        .then((status) => settle(project, cwd, status, false))
-        .catch((cause: unknown) => {
-          if ((cause as { name?: string }).name !== "AbortError") settle(project, cwd, null, true);
-        });
-    };
-    load();
-    const timer = setInterval(load, SEAT_POLL_MS);
-    return () => {
-      clearInterval(timer);
-      controller.abort();
-    };
-  }, [cwd, project, settle]);
+    return subscribeSeat(project, cwd, setRead);
+  }, [cwd, project]);
 
   return { status: current?.status ?? null, failed: current?.failed ?? false, refresh };
 }

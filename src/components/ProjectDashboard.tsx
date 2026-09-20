@@ -436,13 +436,15 @@ function ProjectDashboardView({
   const seatPath = seatFile?.path ?? seatRead.status?.seat?.path ?? null;
   const seatState = deriveOrchestratorPanelState({ status: seatRead.status, statusFailed: seatRead.failed,
     submitting: false, submitFailure: null, file: seatFile, surface: null });
-  /* The DESKTOP's one read of the seat (#1841). The phone's read above is
-     gated on its board leaf; this one is not gated on a face, because the
-     Tasks panel and its `Tasks N` count leave the seat's own tasks out
-     wherever the panel is open — and on the Conversations face the board,
-     which used to do this reading, is not mounted at all. The board below is
-     handed this answer (`seatRefs` and `seatRead`) and polls nothing itself,
-     so the desktop still makes exactly one request per interval. */
+  /* The DESKTOP's read of the seat (#1841). The phone's read above is gated on
+     its board leaf; this one is not gated on a face, because the Tasks panel
+     and its `Tasks N` count leave the seat's own tasks out wherever the panel
+     is open — and on the Conversations face the board, which used to do this
+     reading, is not mounted at all. The board below is handed this answer
+     (`seatRefs` and `seatRead`) and polls nothing itself; the dock beside it,
+     which is a sibling of this dashboard and reads for itself, shares this
+     one poll, because the poll belongs to the project and cwd rather than to
+     a mount (`useOrchestratorSeat`). One request per interval per tab. */
   const desktopSeatRead = useOrchestratorSeat(isMobile ? null : project, projectCwd);
   const inlineCatalog = useMobileInlineCatalog(project, isMobile && loaded);
   const projectName = projectDisplayName(
@@ -922,7 +924,8 @@ function ProjectDashboardView({
      board leaf, the desktop's is not gated on a face at all, because the Tasks
      panel is open on the Conversations face too, where the board that used to
      do this reading is not mounted. The board is handed the same answer
-     instead of polling the route a second time. */
+     instead of polling the route a second time, and every other surface
+     reading the same project shares the one poll behind it. */
   const faceSeatRead = isMobile ? seatRead : desktopSeatRead;
   const seatRefs = seatRefsOf(faceSeatRead.status, faceSeatRead.failed);
   const seatKey = seatRefs ? JSON.stringify(seatRefs) : "";
