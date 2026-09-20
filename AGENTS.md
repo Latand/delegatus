@@ -213,3 +213,43 @@ an issue adds a case to it:
 The committed `evidence/**/*.json` files are the record and stay, including the
 ones whose driver is gone. Do not name a new file after your issue number; a
 driver whose only caller is the issue that wrote it is dead the day it merges.
+
+# Only a declared owner resolves the operator's state directory
+
+`bun run build` in a lane once migrated the operator's live account files and
+stopped every spawn on the machine for seventy minutes (#1905). Nothing in that
+build meant to touch state: a route module loaded, it reached a store, the store
+ran its first-boot import, and the import resolved
+`~/.config/agent-log-viewer/state` because that is what an unset environment
+resolves to. The mechanism, in `src/lib/stateOwnership.ts`, is three rules:
+
+1. **Resolution asks who is calling.** `stateDir()` and `inboxDir()` hand back
+   the operator's own directory only to a process that declares
+   `LLV_STATE_OWNER` — `viewer`, `runtime-host`, `launcher`, `deploy-adapter`,
+   `mcp` or `tool`. A production build (`NEXT_PHASE=…build`) and a test run get
+   a throw-away directory under the temp root, stable for the life of the
+   process; anything else is refused with an error naming what to set. A
+   directory the caller chose (`LLV_STATE_DIR`, a sandboxed `XDG_CONFIG_HOME`,
+   a `$HOME` under the temp root) is admitted untouched — that is how every
+   test and capture driver isolates itself, and none of it changed.
+2. **A state-mutating startup step needs the release fence.** Imports,
+   migrations, backups, integrity swaps and cleanups call
+   `assertStateStartupMutation(directory, step)`, which admits only `viewer`
+   and `runtime-host` against the operator's directories and admits everything
+   against a sandbox. A launcher or an MCP server reads what the Viewer already
+   migrated.
+3. **A spawned agent gets its own root.** Both structured hosts run their child
+   environment through `withAgentConfigSandbox`, so the commands an agent runs
+   resolve `<tmp>/llv-spawn-sandbox/<account>/config` and never the operator's.
+   Its account home, its transcript root and its Viewer MCP link keep pointing
+   at the real installation — the MCP link because `viewerMcpServerEnv()` pins
+   the real state directory into the server definition itself, not into the
+   agent's environment — and `GH_CONFIG_DIR` is pinned because `gh` used to
+   read `XDG_CONFIG_HOME`.
+
+When you add a process that legitimately owns live state, give it an owner
+token at its entry point (see `bin/cli.mjs`, `src/runtime-host/main.ts`,
+`src/instrumentation.ts`, `src/lib/mcp/entry.ts`, the `runtime` stage of the
+`Dockerfile`, and the `dev`/`start` scripts). When you add a script that only
+needs *a* state directory, set `LLV_STATE_DIR` instead — claiming an owner
+token to silence a refusal is how the seventy minutes come back.

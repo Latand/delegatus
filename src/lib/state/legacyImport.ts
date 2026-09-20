@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { assertStateStartupMutation, isOperatorOwnedDirectory, ownsStateStartupMutation } from "@/lib/stateOwnership";
+
 import { FileTransactionBusyError, withFileTransactionSync } from "./fileTransaction";
 import { hotStateSqliteWriterReady, hotStateWriterRevision, readHotStateReleaseTarget } from "./hotStateAuthority";
 import {
@@ -98,9 +100,13 @@ export function legacyDatabasePath(legacyPath: string): string {
 }
 
 /** Whether this process may import: the activated release, or any process
-    when no release target exists (npm, source, tests). */
+    when no release target exists (npm, source, tests) — and, against the
+    operator's own state directory, only a process that owns state startup
+    mutation (#1905). */
 export function legacyImportAllowed(legacyPath: string): boolean {
-  return hotStateSqliteWriterReady(path.dirname(legacyPath));
+  const directory = path.dirname(legacyPath);
+  if (!ownsStateStartupMutation() && isOperatorOwnedDirectory(directory)) return false;
+  return hotStateSqliteWriterReady(directory);
 }
 
 /** A reconcile renames the legacy file away. Only the activation of a release,
@@ -238,6 +244,12 @@ export function importLegacyCollection<P>(
 ): LegacyImportOutcome {
   const hooks = options.hooks ?? {};
   const database = legacyDatabasePath(spec.legacyPath);
+  /* The first-boot import is the state-mutating startup step that #1905 was
+     filed for: a lane's `next build` loaded a route module, the module reached
+     a store, and this ran against the operator's live account files. Against
+     their directories it belongs to the serving Viewer or the runtime host,
+     and nowhere else; a temp directory (every test, every sandbox) is free. */
+  assertStateStartupMutation(path.dirname(spec.legacyPath), `${spec.collection} import`);
   return withFileTransactionSync(spec.legacyPath, `${spec.collection} import is busy`, () => {
     const held = readStateImport(database, spec.collection);
     const legacy = readLegacy(spec.legacyPath);

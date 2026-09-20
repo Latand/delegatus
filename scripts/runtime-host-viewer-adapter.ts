@@ -98,6 +98,11 @@ import {
 } from "../src/runtime-host/deploymentHealth";
 import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 
+/* The deploy adapter drives a release against the operator's own state
+   directory, so it is one of the owners #1905 admits there. Inherited from the
+   runtime host when the host started it; claimed here when it was not. */
+if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "deploy-adapter";
+
 const defaultConfigDir = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "/home/user", ".config");
 const stateDir = process.env.LLV_STATE_DIR || path.join(defaultConfigDir, "agent-log-viewer", "state");
 const deploymentDir = path.join(stateDir, "deployments");

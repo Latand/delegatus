@@ -50,6 +50,11 @@ import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 
 const USAGE = "usage: bun scripts/bootstrap-runtime-host.ts [origin/main|<40-hex sha>] [--stage|--hand-over]";
 
+/* Bootstrapping administers the operator's live release state, which is what
+   the `tool` owner is for (#1905). A script that only needs *a* state
+   directory sets LLV_STATE_DIR instead of claiming this. */
+if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "tool";
+
 const defaultConfigDir = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "", ".config");
 const stateDir = process.env.LLV_STATE_DIR || path.join(defaultConfigDir, "agent-log-viewer", "state");
 const deploymentDir = path.join(stateDir, "deployments");

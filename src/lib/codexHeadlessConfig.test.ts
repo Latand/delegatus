@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { viewerMcpServerEntry } from "./agent/spawnPolicy";
+import { viewerMcpServerEntry, viewerMcpServerEnv } from "./agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "./codexHeadlessConfig";
 
 test("headless Codex threads allow only the registered Viewer MCP server", () => {
@@ -13,7 +13,14 @@ test("headless Codex threads allow only the registered Viewer MCP server", () =>
     },
   })).toEqual({
     mcp_servers: {
-      viewer: { command: "agent-log-viewer-mcp", enabled: true, default_tools_approval_mode: "approve" },
+      /* The thread runs under the agent's own config root, so the Viewer
+         server carries the real one itself (#1905). */
+      viewer: {
+        command: "agent-log-viewer-mcp",
+        env: viewerMcpServerEnv(),
+        enabled: true,
+        default_tools_approval_mode: "approve",
+      },
       docs: { enabled: false },
     },
     features: { plugins: false, apps: false, multi_agent: false, realtime_conversation: true },
@@ -142,6 +149,7 @@ test("a replayed Viewer entry drops the unset fields config/read reports as null
     command: "bun",
     args: ["/opt/viewer/bin/mcp-server.mjs"],
     environment_id: "local",
+    env: viewerMcpServerEnv(),
     enabled: true,
     default_tools_approval_mode: "approve",
   });

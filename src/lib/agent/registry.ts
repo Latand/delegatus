@@ -4,6 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import {
   captureProcessIdentity,
@@ -3804,6 +3805,10 @@ export class AgentRegistry {
     openStore: () => SqliteAgentRegistryStore,
     afterJsonRetired: (() => void) | undefined,
   ): SqliteAgentRegistryStore {
+    /* Retiring the JSON registry is a state-mutating startup step: against the
+       operator's own directory it belongs to the serving Viewer or the runtime
+       host, never to a build, a test run or a script (#1905). */
+    assertStateStartupMutation(path.dirname(this.filename), "agent registry import");
     const claim = this.acquireLock(`${this.filename}.write-lock`, captureProcessIdentity(process.pid));
     try {
       const published = publishedRegistryBackendMode(this.filename);

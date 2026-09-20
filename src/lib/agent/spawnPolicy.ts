@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
@@ -46,6 +47,35 @@ export const CODEX_VIEWER_SPAWN_FEATURES = {
 export interface ViewerMcpServerEntry {
   command: string;
   args: string[];
+  env: Record<string, string>;
+}
+
+/**
+ * What the Viewer MCP launcher needs to find this machine's Viewer, written
+ * into the server definition rather than left to the agent's environment.
+ *
+ * A spawned agent now runs under its own throw-away config and state root
+ * (#1905), and the launcher resolves the current release and the stable
+ * listener from exactly these values. Pinning them here is what keeps the MCP
+ * link pointed at the real Viewer while everything else the agent runs stays
+ * in its sandbox.
+ */
+export function viewerMcpServerEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const configRoot = source.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), ".config");
+  const env: Record<string, string> = {
+    XDG_CONFIG_HOME: configRoot,
+    LLV_STATE_DIR: source.LLV_STATE_DIR?.trim() || path.join(configRoot, "agent-log-viewer", "state"),
+  };
+  /* PATH and HOME are restated rather than assumed: a CLI that treats a
+     server's `env` table as the whole environment instead of as additions to
+     it would otherwise launch the server without an interpreter to find. Where
+     the table is additive — Claude's `.mcp.json` is — these are the values the
+     server would have inherited anyway. */
+  for (const name of ["PATH", "HOME", "LLV_VIEWER_DEPLOY_TARGET", "LLV_VIEWER_PORT"] as const) {
+    const value = source[name]?.trim();
+    if (value) env[name] = value;
+  }
+  return env;
 }
 
 /** The package-owned Viewer server, from either a checkout root or the
@@ -58,6 +88,7 @@ export function viewerMcpServerEntry(packageCwd = process.cwd()): ViewerMcpServe
   return {
     command: "bun",
     args: [launcher],
+    env: viewerMcpServerEnv(),
   };
 }
 
@@ -171,7 +202,15 @@ function claudeMcpServers(
   return Object.fromEntries(names.flatMap((name) => {
     const definition = record(registered[name])
       ?? (name === "viewer" ? { type: "stdio", ...viewerMcpServerEntry() } : null);
-    return definition ? [[name, definition]] : [];
+    if (!definition) return [];
+    /* The agent runs under its own config and state root (#1905), so the
+       Viewer server — however it was registered — carries the real ones
+       itself. A value already written into the definition wins: an operator
+       who pinned a state dir there meant it. */
+    const pinned = name === "viewer"
+      ? { ...definition, env: { ...viewerMcpServerEnv(), ...record(definition.env) } }
+      : definition;
+    return [[name, pinned]];
   }));
 }
 
