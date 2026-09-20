@@ -6,7 +6,7 @@ import { parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDepl
   type ViewerDeploymentList, type ViewerDeploymentListOptions } from "./contracts";
 
 
-import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
+import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSession, RuntimeSessionRead, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
 import { runtimeHostSocket } from "./flags";
 
 // The snapshot frame carries every hosted session, and a hosted session keeps
@@ -95,6 +95,7 @@ export interface RuntimeHostClient {
   /** Canonical proof for an entry whose add operation was compacted (#1664).
       Answers the settled entry; there is no operation receipt to answer. */
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
+  readSession?(identity: RuntimeSessionRead): Promise<RuntimeSession | null>;
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor: string[] }): Promise<RuntimeSnapshot>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
@@ -145,6 +146,9 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   }
   nativeQueueSettleCompacted(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement> {
     return this.call("native-queue-settle-compacted", { ...request }) as Promise<NativeQueueCompactedSettlement>;
+  }
+  readSession(identity: RuntimeSessionRead): Promise<RuntimeSession | null> {
+    return this.call("session-read", { ...identity }) as Promise<RuntimeSession | null>;
   }
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor: string[] }): Promise<RuntimeSnapshot> { return this.call("snapshot", options, this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>; }
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
@@ -259,6 +263,9 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     return new Promise((resolve, reject) => {
       const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, ...(params ? { params } : {}) };
       const socket = net.createConnection(this.socketPath);
+      // Decode across chunk boundaries; a split multibyte character belongs
+      // to the same session response and must survive a large frame intact.
+      socket.setEncoding("utf8");
       const startedAt = performance.now();
       let frame = "";
       let settled = false;
@@ -302,4 +309,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
 export function runtimeHostClient(env: NodeJS.ProcessEnv = process.env): RuntimeHostClient | null {
   const socket = runtimeHostSocket(env);
   return socket ? new UnixRuntimeHostClient(socket) : null;
+}
+
+/** A missing keyed capability is unavailable evidence; admission must keep its
+    reservation recoverable instead of falling back to a population read. */
+export function readRuntimeSession(client: RuntimeHostClient, identity: RuntimeSessionRead): Promise<RuntimeSession | null> {
+  if (!client.readSession) throw new RuntimeHostUnavailableError("runtime session read is unavailable");
+  return client.readSession(identity);
 }

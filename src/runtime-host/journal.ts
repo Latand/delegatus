@@ -37,6 +37,7 @@ import {
   type RuntimeReplay,
   type RuntimeRetryOptions,
   type RuntimeSession,
+  type RuntimeSessionRead,
   type RuntimeSnapshot,
   type RuntimeTransitionOptions,
   type ViewerDeploymentOwner,
@@ -423,7 +424,10 @@ export class RuntimeJournal {
     this.metaSetDefault("files_revision", "0");
     this.verify();
     this.sessionHostMetadata = new SessionHostMetadata(this.db);
-    if (!this.fault) this.sessionHostMetadata.start();
+    if (!this.fault) {
+      this.db.exec(`CREATE INDEX IF NOT EXISTS session_artifact_path ON entities(json_extract(state_json, '$.artifactPath'), id) WHERE kind = 'session'`);
+      this.sessionHostMetadata.start();
+    }
   }
 
   append(rawInput: RuntimeEventInput): RuntimeEvent {
@@ -1028,6 +1032,24 @@ export class RuntimeJournal {
     }
   }
 
+  /** Primary-key lookup, with an indexed artifact fallback for path-only sends.
+      Reads inactive sessions too: global snapshot retention is a display bound. */
+  readSession(identity: RuntimeSessionRead): RuntimeSession | null {
+    const { conversationId, artifactPath } = identity;
+    if ((!conversationId && !artifactPath)
+      || (conversationId !== undefined && (typeof conversationId !== "string" || !conversationId.trim()))
+      || (artifactPath !== undefined && (typeof artifactPath !== "string" || !artifactPath.trim()))) {
+      throw new Error("runtime session identity is invalid");
+    }
+    const session = conversationId ? this.entity<RuntimeSession>("session", conversationId) : null;
+    if (session) return presentSession(session);
+    if (!artifactPath) return null;
+    const row = this.db.query<{ state_json: string }, [string]>(
+      "SELECT state_json FROM entities WHERE kind = 'session' AND json_extract(state_json, '$.artifactPath') = ? ORDER BY id LIMIT 1",
+    ).get(artifactPath);
+    return row ? presentSession(JSON.parse(row.state_json) as RuntimeSession) : null;
+  }
+
   snapshot(): RuntimeSnapshot {
     return this.snapshotAt(this.now());
   }
@@ -1042,16 +1064,7 @@ export class RuntimeJournal {
         serverTime: new Date(now).toISOString(),
         runtime: { hostEpoch: Number(this.meta("host_epoch")), health: this.meta("health") },
         filesRevision: Number(this.meta("files_revision")),
-        sessions: this.snapshotSessionValues(voiceBodiesFor).map((session) => ({
-          ...session,
-          // Only a running turn has live text to resume. Re-normalizing here
-          // also caps legacy rows to the 64 KiB UTF-8 tail; omittedChars is the
-          // explicit marker that lets consumers disclose the clipped prefix.
-          liveTurn: session.turn === "running"
-            ? normalizeRuntimeLiveTurn(session.liveTurn)
-            : null,
-          recentReceipts: visibleReceipts(session.recentReceipts).map(runtimePresentationReceipt),
-        })),
+        sessions: this.snapshotSessionValues(voiceBodiesFor).map(presentSession),
         attentions: this.entityValues<RuntimeAttention>("attention"),
         recentOperations: visibleReceipts(
           this.recentEntityValues<RuntimeOperationReceipt>("operation", 100),
@@ -2883,4 +2896,12 @@ export class RuntimeJournal {
 
   private metaSetDefault(key: string, value: string): void { this.db.query("INSERT INTO journal_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING").run(key, value); }
   private metaSet(key: string, value: string): void { this.db.query("INSERT INTO journal_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, value); }
+}
+
+function presentSession(session: RuntimeSession): RuntimeSession {
+  return {
+    ...session,
+    liveTurn: session.turn === "running" ? normalizeRuntimeLiveTurn(session.liveTurn) : null,
+    recentReceipts: visibleReceipts(session.recentReceipts).map(runtimePresentationReceipt),
+  };
 }

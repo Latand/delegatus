@@ -150,6 +150,7 @@ async function waitForCondition(assertion: () => boolean): Promise<void> {
 function runtimeJournalClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
     snapshot: async () => journal.snapshot(),
+    readSession: async (identity) => journal.readSession(identity),
     events: async (afterEventSeq) => journal.replay(afterEventSeq),
     append: async (event) => journal.append(event),
     command: async (command) => journal.executeOperation(command),
@@ -349,6 +350,7 @@ test("the controller republishes a live host into a restarted runtime journal", 
   let journal = new RuntimeJournal(path.join(directory, "runtime-before.sqlite"), { structuredHosts: true });
   const client = {
     snapshot: async () => journal.snapshot(),
+    readSession: async (identity) => journal.readSession(identity),
     append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => journal.append(event),
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => journal.executeOperation(command),
     operationStatus: async (operationId: string) => journal.operationResult(operationId),
@@ -437,6 +439,7 @@ test("one host whose state cannot be read costs no other host its republish (#11
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   const client = {
     snapshot: async () => journal.snapshot(),
+    readSession: async (identity) => journal.readSession(identity),
     append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => journal.append(event),
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => journal.executeOperation(command),
     operationStatus: async (operationId: string) => journal.operationResult(operationId),

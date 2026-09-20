@@ -2,15 +2,57 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
+import type { RuntimeHostClient } from "./client";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-message-sqlite-"));
 
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+test("exact-key replay after SQLite compaction and reopen never publishes another command", async () => {
+  const filename = path.join(sandbox, "compacted-replay.json");
+  const artifactPath = "/sessions/compacted-replay.jsonl";
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const conversation = registry.ensureConversation("codex", artifactPath, "default");
+    const generation = conversation.generations.at(-1)!;
+    const original = registry.holdDelivery(conversation.id, "unknown-fate message", "compacted-replay");
+    registry.recordDeliveryOutcome(original.id, "failed", "unconfirmed result", "unverified");
+    const owner = registry.snapshot().deliveryOperationOwners[original.command.operationId]!;
+    registry.compactDeliveryReservations();
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+    const before = registry.snapshot().heldDeliveries;
+    let commands = 0;
+    const client = {
+      readSession: async () => ({ conversationId: conversation.id, artifactPath,
+        sessionKey: { engine: "codex", sessionId: generation.id },
+        hostKind: "codex-app-server", host: "hosted", turn: "idle",
+        capabilities: { steer: true, structuredAttention: true } }),
+      command: async () => { commands++; throw new Error("unexpected engine command"); },
+    } as unknown as RuntimeHostClient;
+    const assignment = spyOn(registry, "beginDeliveryAttempt");
+    try {
+      const result = await enqueueStructuredMessage({
+        path: artifactPath, conversationId: conversation.id,
+        text: original.text, clientMessageId: original.clientMessageId!,
+      }, { enabled: () => true, client: () => client, registry: () => registry, kick: () => {} });
+      expect(result).toMatchObject({ ok: false, outcome: "failed", status: 409, error: "unconfirmed result" });
+      expect(commands).toBe(0);
+      expect(assignment).not.toHaveBeenCalled();
+      expect(registry.snapshot().heldDeliveries).toEqual(before);
+      expect(registry.snapshot().deliveryOperationOwners[original.command.operationId]).toEqual(owner);
+    } finally {
+      assignment.mockRestore();
+    }
+  } finally {
+    registry.close();
+  }
+});
 
 test("synchronization owner lookup reuses the SQLite read-only snapshot", async () => {
   const filename = path.join(sandbox, "agent-registry.json");
