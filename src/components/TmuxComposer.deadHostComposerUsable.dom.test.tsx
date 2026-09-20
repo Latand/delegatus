@@ -30,6 +30,10 @@
  * and judges the image payload against the RECOVERED session. The browser is
  * what withholds, so the browser is what these tests move.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { act } from "react";
 import { installActEnv } from "@/test-helpers/actEnv";
@@ -45,7 +49,11 @@ import {
   ComposerAdmissionTimeoutError,
   setComposerAdmissionTimingForTests,
 } from "./composerAdmissionDeadline";
-import type { RuntimeAdmissionLookup } from "@/hooks/useRuntime";
+import { lookupRuntimeAdmission, type RuntimeAdmissionLookup } from "@/hooks/useRuntime";
+import { NextRequest } from "next/server";
+import { admissionInFlight, handleRuntimeAdmissionQuery } from "@/lib/runtime/http";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
 import { installTmuxComposerRuntimeForTests, resetTmuxComposerRuntimeForTests } from "@/test-helpers/tmuxComposerRuntime";
 import { agentCapabilitiesFromViews } from "./useAgentCapabilities";
@@ -143,6 +151,11 @@ const realFetch = globalThis.fetch;
    wire. Without this the whole-message admission cannot even be attempted. */
 const composerStorage = installComposerStorageForTests();
 afterAll(() => composerStorage.uninstall());
+/* A registry of this suite's own: the end-to-end case below drives the real
+   store rather than a stub of it. */
+const registrySandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-composer-admission-"));
+let registryFileNumber = 0;
+afterAll(() => fs.rmSync(registrySandbox, { recursive: true, force: true }));
 let sentBodies: Array<Record<string, unknown>> = [];
 
 beforeEach(() => {
@@ -636,6 +649,168 @@ test("a reload before the lookup keeps ONE send, and the lookup still runs under
 
     expect(lookups).toEqual([key]);
     expect(sentBodies).toHaveLength(1);
+  } finally {
+    await act(async () => second.root.unmount());
+  }
+});
+
+/** Waits for the sentence the recovery settles on — either of the two it can
+    reach — so the branch that was taken is read from what the operator is
+    shown rather than from a race with it. */
+async function untilAdmissionAnswer(host: HTMLElement): Promise<string> {
+  const notExecuted = translate("en", "composer.admissionLookupNotExecuted");
+  const unknown = translate("en", "composer.admissionLookupUnknown");
+  const admitted = translate("en", "composer.admissionLookupAdmitted");
+  const shown = () => [notExecuted, unknown, admitted].find((text) => host.textContent?.includes(text));
+  for (let attempt = 0; attempt < 300 && !shown(); attempt += 1) {
+    await act(async () => { await new Promise((r) => setTimeout(r, 3)); });
+  }
+  const answer = shown();
+  expect(answer).toBeTruthy();
+  return answer!;
+}
+
+/**
+ * THE SAME CONTRACT, END TO END, OVER A REGISTRY THAT HAS COMPACTED.
+ *
+ * Every case above chooses the lookup's answer. This one does not: the browser
+ * talks to the real `GET /api/runtime/send` over a real registry, whose
+ * delivery evidence for this key has been compacted away and which has since
+ * re-armed an unrelated unverified operation — the shape that made a retained
+ * terminal-owner count read as "nothing was ever dropped here".
+ *
+ * What the operator must be left with is the whole point: a message that WAS
+ * delivered may not be presented as one that never went, because the sentence
+ * that says so comes with a Retry, and pressing it sends the message twice.
+ * The uncertainty survives a reload, and so does every byte.
+ */
+test("a compacted key the registry re-armed around stays uncertain in the composer, across a reload", async () => {
+  const registry = new AgentRegistry(path.join(registrySandbox, `composer-registry-${registryFileNumber += 1}.json`));
+  const registryPath = "/sessions/44444444-4444-\x34444-8444-444444444444.jsonl";
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: registryPath,
+    accountId: "default",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }),
+    turn: { state: "idle", source: "empty", terminalAt: null },
+    observedAt: "2026-07-13T00:00:00.000Z",
+  }]);
+  const conversationId = registry.conversationForPath(registryPath)!.id;
+  VIEWS[conversationId] = reclaimedView(conversationId);
+
+  const lookups: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url === "/api/tmux/targets") return { ok: true, status: 200, json: async () => ({ targets: {} }) } as Response;
+    if (url.startsWith("/api/runtime/send?")) {
+      lookups.push(url);
+      /* The production handler, over the production registry. */
+      return await handleRuntimeAdmissionQuery(
+        new NextRequest(`http://127.0.0.1${url}`, { method: "GET", headers: { host: "127.0.0.1" } }),
+        {
+          enabled: () => true,
+          registry: () => registry,
+          query: async () => new Response(JSON.stringify({}), { status: 200 }) as never,
+          sendInFlight: (conversation, key) => admissionInFlight(conversation, key),
+        },
+      ) as unknown as Response;
+    }
+    throw new Error(`unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  lostResponseSend();
+  setTmuxComposerRuntimeDependenciesForTests({
+    useAgentCapabilities: (file) => agentCapabilitiesFromViews(
+      file,
+      file.conversationId ? VIEWS[file.conversationId] ?? null : null,
+      null,
+      true,
+    ),
+    refreshRuntime: async () => true,
+    sendRuntimeMessage: (async (body: Record<string, unknown>) => {
+      sentBodies.push(body);
+      throw new ComposerAdmissionTimeoutError();
+    }) as never,
+    /* The real client half, so the answer the component acts on is the one the
+       route actually wrote. */
+    lookupRuntimeAdmission: lookupRuntimeAdmission as never,
+  });
+
+  const first = await renderInto(<TmuxComposer file={conversationFile(conversationId)} deadHost />);
+  let key: string;
+  try {
+    typeInto(first.host, "Carry on from this screenshot, please.");
+    pasteImage(first.host, "compacted");
+    await untilPreviews(first.host, 1);
+    await untilUnknownOutcome(first.host);
+    key = String(sentBodies[0]!.idempotencyKey);
+
+    /* The send DID land: the server admitted it under this very key and
+       delivered it, and only the response was lost. */
+    const delivered = registry.holdDelivery(conversationId as never, "Carry on from this screenshot, please.", key, "text", [], null, {});
+    registry.recordDeliveryOutcome(delivered.id, "delivered", null, "delivered");
+    /* A later message whose fate was never proven, and then enough traffic to
+       compact this conversation's evidence past both retention bounds. */
+    const unverified = registry.holdDelivery(conversationId as never, "the message whose fate is unknown", "composer-unverified", "text", [], null, {});
+    registry.recordDeliveryOutcome(unverified.id, "failed", "no receipt arrived", "unverified");
+    for (let index = 0; index < 205; index += 1) {
+      const later = registry.holdDelivery(conversationId as never, `later message ${index}`, `composer-later-${index}`, "text", [], null, {});
+      registry.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+    }
+    /* And the retry that used to make the conversation look complete again. */
+    expect(registry.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
+
+    const recover = first.host.querySelector("[data-receipt-uncertain-retry]") as HTMLButtonElement;
+    await act(async () => {
+      recover.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    for (let attempt = 0; attempt < 200 && lookups.length === 0; attempt += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 3)); });
+    }
+
+    expect(lookups).toHaveLength(1);
+    expect(lookups[0]).toContain(`clientMessageId=${encodeURIComponent(key)}`);
+    /* The operator is told the fate is still unknown — NOT that the message
+       never went, which is the sentence that comes with a Retry. */
+    expect(await untilAdmissionAnswer(first.host)).toBe(translate("en", "composer.admissionLookupUnknown"));
+    expect(sentBodies).toHaveLength(1);
+    const entry = readOutbox(conversationId).find((row) => row.id === key)!;
+    expect(entry.deliveryUncertain).toBe(true);
+    expect(entry.operationId).toBeUndefined();
+    expect(entry.error).not.toBe(translate("en", "composer.admissionLookupNotExecuted"));
+    /* And the message is whole: the same key, the same text, its image. */
+    expect(entry.text).toBe("Carry on from this screenshot, please.");
+    expect(entry.images).toBe(1);
+  } finally {
+    await act(async () => first.root.unmount());
+  }
+
+  /* A reload changes nothing: the answer is a property of the record, so the
+     message is still uncertain, still whole, and still unsent a second time. */
+  const second = await renderInto(<TmuxComposer file={conversationFile(conversationId)} deadHost />);
+  try {
+    for (let attempt = 0; attempt < 300 && !second.host.querySelector("[data-receipt-uncertain-retry]"); attempt += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 3)); });
+    }
+    const recover = second.host.querySelector("[data-receipt-uncertain-retry]") as HTMLButtonElement;
+    expect(recover).toBeTruthy();
+    await act(async () => {
+      recover.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    for (let attempt = 0; attempt < 200 && lookups.length < 2; attempt += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 3)); });
+    }
+
+    expect(lookups).toHaveLength(2);
+    expect(await untilAdmissionAnswer(second.host)).toBe(translate("en", "composer.admissionLookupUnknown"));
+    expect(sentBodies).toHaveLength(1);
+    const entry = readOutbox(conversationId).find((row) => row.id === key)!;
+    expect(entry.deliveryUncertain).toBe(true);
+    expect(entry.error).not.toBe(translate("en", "composer.admissionLookupNotExecuted"));
+    expect(entry.text).toBe("Carry on from this screenshot, please.");
+    expect(entry.images).toBe(1);
   } finally {
     await act(async () => second.root.unmount());
   }

@@ -280,3 +280,73 @@ test("a lookup racing an unfinished send under the same key answers `unknown`, a
   expect(pending[0]).toMatchObject({ clientMessageId: "raced-key", text: "the message whose response was lost" });
   expect(settledBody.operationId).toBe(pending[0]!.command.operationId);
 });
+
+/**
+ * COMPLETENESS IS A PROPERTY OF THE HISTORY, NOT OF A COUNT TAKEN TODAY.
+ *
+ * Absence answers `not-executed` only where the record it would be in is
+ * provably complete, and the first version of that proof was a count: a
+ * conversation retaining fewer terminal operation owners than the compaction
+ * bound was read as one whose compaction had never run.
+ *
+ * The count is not monotonic. Compaction trims the group to exactly the bound
+ * and stops — and any later operation that leaves its terminal state pushes
+ * the group BELOW it again. Re-arming an unverified operation is exactly that
+ * (the retry route calls `retryUncertainDeliveryForOperation`, which clears
+ * that owner's terminal state), so one retry on an unrelated message turns a
+ * compacted conversation back into a "nothing was ever dropped here" one, and
+ * the delivered key it can no longer see is answered `not-executed`. That
+ * answer authorizes the browser's Retry, and the operator's message goes
+ * twice.
+ *
+ * Driven against the real registry and the real retry entry point.
+ */
+test("a compacted key stays `unknown` when another operation is re-armed afterwards", async () => {
+  const { registry, conversationId: liveConversationId } = conversationRegistry();
+  const original = registry.holdDelivery(liveConversationId as never, "the message that was delivered", "rearm-compacted-key", "text", [], null, {});
+  registry.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
+  /* One operation whose fate was never proven — the kind a later retry re-arms. */
+  const unverified = registry.holdDelivery(liveConversationId as never, "the message whose fate is unknown", "rearm-unverified-key", "text", [], null, {});
+  registry.recordDeliveryOutcome(unverified.id, "failed", "no receipt arrived", "unverified");
+
+  /* Enough later deliveries to push the delivered key past the owner bound. */
+  for (let index = 0; index < 205; index += 1) {
+    const later = registry.holdDelivery(liveConversationId as never, `later message ${index}`, `rearm-later-${index}`, "text", [], null, {});
+    registry.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+  }
+  expect(registry.deliveryAdmissionForKey(liveConversationId, "rearm-compacted-key")).toMatchObject({ outcome: "unknown" });
+
+  /* The production retry route's own call, on the RETAINED unverified
+     operation. It re-arms one message and proves nothing about any other. */
+  expect(registry.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
+
+  /* The compacted key's history is still incomplete, so the answer is still
+     the one that forbids a resend. */
+  expect(registry.deliveryAdmissionForKey(liveConversationId, "rearm-compacted-key")).toMatchObject({ outcome: "unknown" });
+
+  const response = await handleRuntimeAdmissionQuery(
+    lookupRequest(`conversationId=${liveConversationId}&clientMessageId=rearm-compacted-key`),
+    liveDependencies(registry),
+  );
+  expect(response.status).toBe(200);
+  const body = await response.json() as Record<string, unknown>;
+  expect(body.outcome).toBe("unknown");
+  expect(body.reason).toBeTruthy();
+
+  /* The re-armed message keeps its own identity and its own admitted answer,
+     and the newest retained key is still answered from its own row. */
+  expect(registry.deliveryAdmissionForKey(liveConversationId, "rearm-unverified-key")).toMatchObject({
+    outcome: "admitted",
+    operationId: unverified.command.operationId,
+  });
+  const recent = await handleRuntimeAdmissionQuery(
+    lookupRequest(`conversationId=${liveConversationId}&clientMessageId=rearm-later-204`),
+    liveDependencies(registry),
+  );
+  expect((await recent.json() as Record<string, unknown>).outcome).toBe("admitted");
+
+  /* And a conversation that never dropped anything keeps the affirmative
+     answer: this rule narrows nothing but the histories it cannot see. */
+  const fresh = conversationRegistry();
+  expect(fresh.registry.deliveryAdmissionForKey(fresh.conversationId, "never-used-key")).toMatchObject({ outcome: "not-executed" });
+});
