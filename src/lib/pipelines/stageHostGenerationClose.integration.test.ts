@@ -66,7 +66,7 @@ const { runtimeHostClient } = await import("@/lib/runtime/client");
 const { probeRuntimeSocket } = await import("@/runtime-host/hostRehearsalRun");
 const { RUNTIME_HOST_CONTAINER_ENV } = await import("@/runtime-host/hostRelease");
 const { buildPipeline, loadPipelines, savePipelines } = await import("./store");
-const { defaultPipelinePorts, patchPipeline, stopPipelineStageAgent, tickPipelines } = await import("./engine");
+const { defaultPipelinePorts, drainStageActivations, patchPipeline, stopPipelineStageAgent, tickPipelines } = await import("./engine");
 const { PATCH } = await import("@/app/api/pipelines/[id]/route");
 type Pipeline = import("./types").Pipeline;
 
@@ -97,7 +97,7 @@ beforeAll(async () => {
   runtimeHost.stderr?.on("data", collect);
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (await probeRuntimeSocket(runtimeSocket, { id: "ready", method: "snapshot", params: {} }, { abandon: false })) return;
+    if (fs.existsSync(runtimeSocket) && await probeRuntimeSocket(runtimeSocket, { id: "ready", method: "snapshot", params: {} }, { abandon: false })) return;
     await Bun.sleep(50);
   }
   throw new Error(`the runtime host did not answer on its socket:\n${runtimeHostLog.join("\n")}`);
@@ -409,7 +409,10 @@ async function closeOverHttp(id: string): Promise<CloseAnswer> {
     body: JSON.stringify({ action: "close" }),
   });
   const body = await response.json() as { error?: string; close?: CloseReport };
-  return { status: response.status, ...body };
+  expect(response.status).toBe(200);
+  expect(body.close).toMatchObject({ status: "pending" });
+  await drainStageActivations(defaultPipelinePorts());
+  return { status: response.status, ...body, close: pipelineRecord(id).closeReport };
 }
 
 /** The same close through the engine with an injected termination fault, for
@@ -419,7 +422,10 @@ async function closeWithTermination(
   termination: NonNullable<Parameters<typeof stopPipelineStageAgent>[1]>["termination"],
 ): Promise<CloseAnswer> {
   const stopStageAgent = (target: Parameters<typeof stopPipelineStageAgent>[0]) => stopPipelineStageAgent(target, { termination });
-  const result = await patchPipeline(id, { action: "close" }, { ...defaultPipelinePorts(), stopStageAgent });
+  const ports = { ...defaultPipelinePorts(), stopStageAgent };
+  const result = await patchPipeline(id, { action: "close" }, ports);
+  await drainStageActivations(ports);
+  result.close = pipelineRecord(id).closeReport;
   return { status: result.status ?? 200, ...(result.error ? { error: result.error } : {}), ...(result.close ? { close: result.close as CloseReport } : {}) };
 }
 
@@ -580,12 +586,12 @@ test("an identity that changes between the residency probe and the signal refuse
     processIdentity: (pid) => pid === current.hostA.pid && probes++ > 0 ? `${pid}:recycled` : procBackend.processIdentity(pid),
   });
 
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   expect(closed.close?.stillRunning[0]?.error).toContain("identity changed before signalling");
   expect(signals).toEqual([]);
   expect(current.hostA.alive()).toBeTrue();
   expect(current.hostedBy()).toEqual(current.hostA.identity);
-  expect(pipelineRecord(pipeline.id).state).toBe("needs_decision");
+  expect(pipelineRecord(pipeline.id).state).toBe("closed");
 });
 
 test("a legacy row with no start identity is unresolved: no signal, the close is refused with the reason (#1501)", async () => {
@@ -602,13 +608,13 @@ test("a legacy row with no start identity is unresolved: no signal, the close is
 
   const closed = await closeOverHttp(pipeline.id);
 
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   const error = closed.close!.stillRunning[0]!.error;
   expect(error).toContain("identity is unknown");
   expect(error).toContain(`pid ${current.hostA.pid}`);
   expect(signals).toEqual([]);
   expect(current.hostA.alive()).toBeTrue();
-  expect(pipelineRecord(pipeline.id)).toMatchObject({ state: "needs_decision" });
+  expect(pipelineRecord(pipeline.id)).toMatchObject({ state: "closed", hiddenAt: null });
   expect(pipelineRecord(pipeline.id).runs[0]!.attempts[0]!.state).toBe("failed");
 });
 
@@ -626,7 +632,7 @@ test("a row without a boot epoch is ambiguous evidence: no signal, unresolved (#
 
   const closed = await closeOverHttp(pipeline.id);
 
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   expect(closed.close!.stillRunning[0]!.error).toContain("boot epoch is unknown");
   expect(signals).toEqual([]);
   expect(current.hostA.alive()).toBeTrue();
@@ -640,14 +646,14 @@ test("missing launch evidence is unresolved ownership: no launch id, or no recei
   const first = await closeOverHttp(unlaunched.id);
   const second = await closeOverHttp(unreceipted.id);
 
-  expect(first.status).toBe(409);
+  expect(first.status).toBe(200);
   expect(first.close!.stillRunning[0]!.error).toContain("records no launch identity");
-  expect(second.status).toBe(409);
+  expect(second.status).toBe(200);
   expect(second.close!.stillRunning[0]!.error).toContain("no launch receipt exists");
   expect(signals).toEqual([]);
   expect(current.hostA.alive()).toBeTrue();
-  expect(pipelineRecord(unlaunched.id).state).toBe("needs_decision");
-  expect(pipelineRecord(unreceipted.id).state).toBe("needs_decision");
+  expect(pipelineRecord(unlaunched.id).state).toBe("closed");
+  expect(pipelineRecord(unreceipted.id).state).toBe("closed");
 });
 
 test("a launch receipt that names another conversation is contradictory ownership: no signal (#1501)", async () => {
@@ -659,7 +665,7 @@ test("a launch receipt that names another conversation is contradictory ownershi
 
   const closed = await closeOverHttp(pipeline.id);
 
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   expect(closed.close!.stillRunning[0]!.error).toContain("contradictory ownership");
   expect(signals).toEqual([]);
   expect(current.hostA.alive()).toBeTrue();
@@ -699,14 +705,14 @@ test("partial stop: a descendant that outlives the kill keeps the attempt unreso
     graceMs: 20,
   });
 
-  expect(refused.status).toBe(409);
+  expect(refused.status).toBe(200);
   const error = refused.close!.stillRunning[0]!.error;
   expect(error).toContain("EPERM");
   expect(error).toContain(`still running: ${survivor.pid}`);
   await settles(() => !current.hostA.alive(), "root exit");
   expect(survivor.alive()).toBeTrue();
   let record = pipelineRecord(pipeline.id);
-  expect(record.state).toBe("needs_decision");
+  expect(record.state).toBe("closed");
   expect(record.runs[0]!.attempts[0]!.unresolvedTermination).toMatchObject({
     survivors: [{ pid: survivor.pid, startIdentity: survivor.identity.startIdentity }],
   });
@@ -716,13 +722,13 @@ test("partial stop: a descendant that outlives the kill keeps the attempt unreso
      it is not signalled again. */
   signals.length = 0;
   const again = await closeOverHttp(pipeline.id);
-  expect(again.status).toBe(409);
+  expect(again.status).toBe(200);
   expect(again.close!.stillRunning[0]!.error).toContain(`pid ${survivor.pid} is still running`);
   expect(again.close!.alreadyStopped).toEqual([]);
   expect(signals).toEqual([]);
   expect(survivor.alive()).toBeTrue();
   record = pipelineRecord(pipeline.id);
-  expect(record.state).toBe("needs_decision");
+  expect(record.state).toBe("closed");
   expect(record.runs[0]!.attempts[0]!.unresolvedTermination).toBeDefined();
 
   /* Proven gone by identity: the record clears and the close settles. */
@@ -745,14 +751,14 @@ test("a refused signal on the host itself is unresolved with the pid named, and 
     graceMs: 20,
   });
 
-  expect(refused.status).toBe(409);
+  expect(refused.status).toBe(200);
   const error = refused.close?.stillRunning[0]?.error ?? "";
   expect(error).toContain("EPERM");
   expect(error).toContain(`pid ${current.hostA.pid}`);
   expect(current.hostA.alive()).toBeTrue();
   expect(current.hostedBy()).toEqual(current.hostA.identity);
   let record = pipelineRecord(pipeline.id);
-  expect(record.state).toBe("needs_decision");
+  expect(record.state).toBe("closed");
   expect(record.stateDetail).toContain("EPERM");
   expect(record.runs[0]!.attempts[0]!.state).toBe("failed");
   expect(record.runs[0]!.attempts[0]!.unresolvedTermination?.survivors).toEqual([{ ...current.hostA.identity }]);
@@ -787,11 +793,11 @@ test("a seat taken while the termination awaits the runtime is seen before the s
     },
   });
 
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   expect(closed.close!.stillRunning[0]!.error).toContain("orchestrator seat");
   expect(signals).toEqual([]);
   expect(current.hostA.alive()).toBeTrue();
-  expect(pipelineRecord(pipeline.id).state).toBe("needs_decision");
+  expect(pipelineRecord(pipeline.id).state).toBe("closed");
 });
 
 test("a row rebound to another process while the termination awaits the runtime is seen before the signal: refused, nothing sent (#1501)", async () => {
@@ -815,7 +821,7 @@ test("a row rebound to another process while the termination awaits the runtime 
     },
   });
 
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   expect(closed.close!.stillRunning[0]!.error).toContain(`now names pid ${replacement.pid}, not pid ${current.hostA.pid}`);
   expect(signals).toEqual([]);
   expect(current.hostA.alive()).toBeTrue();
@@ -838,7 +844,7 @@ test("a conversation holding an orchestrator seat is revalidated at the kill and
 
   const closed = await closeOverHttp(pipeline.id);
 
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   expect(closed.close!.stillRunning[0]!.error).toContain("orchestrator seat");
   expect(signals).toEqual([]);
   expect(current.hostA.alive()).toBeTrue();
@@ -855,8 +861,9 @@ test("two concurrent closes over HTTP signal the host exactly once (#1501)", asy
   await settles(() => !current.hostA.alive(), "host A exit");
   expect(signalsTo(current.hostA.pid).filter((sent) => sent.signal === "SIGTERM")).toHaveLength(1);
   const reports = [first, second].map((answer) => answer.close!);
-  expect(reports.filter((report) => report.stopped.length === 1)).toHaveLength(1);
-  expect(reports.filter((report) => report.alreadyStopped.length === 1)).toHaveLength(1);
+  expect(reports.some((report) => report.stopped.length === 1)).toBeTrue();
+  expect(pipelineRecord(pipeline.id).closeReport?.stopped).toHaveLength(1);
+  expect(pipelineRecord(pipeline.id).closeReport?.alreadyStopped).toHaveLength(0);
   expect(pipelineRecord(pipeline.id).state).toBe("closed");
 });
 
@@ -874,7 +881,7 @@ test("a row naming a pid in this process's own ancestry is refused without a sig
 
   const closed = await closeOverHttp(pipeline.id);
 
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   expect(closed.close!.stillRunning[0]!.error).toContain("own process chain");
   expect(signals).toEqual([]);
 });
@@ -922,21 +929,21 @@ test("authority lost after TERM retains every survivor across HTTP closes and st
   }) as typeof process.kill;
   const closed = await closeOverHttp(pipeline.id);
   expect(seatInstalled).toBeTrue();
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   expect(closed.close!.stillRunning[0]!.error).toContain("orchestrator seat");
   expect(closed.close!.stillRunning[0]!.error).not.toContain("nothing was signalled");
   expect(current.hostA.alive()).toBeFalse();
   expect(survivor.alive()).toBeTrue();
   expect(pipelineRecord(pipeline.id).runs[0]!.attempts[0]!.unresolvedTermination?.survivors).toContainEqual(survivor.identity);
   signals.length = 0;
-  expect((await closeOverHttp(pipeline.id)).status).toBe(409);
+  expect((await closeOverHttp(pipeline.id)).status).toBe(200);
   expect(signals).toEqual([]);
   await current.incumbent.end();
   holdWork(current);
   const rebooted = await successor(current);
   expect(rebooted.report.adopted).toEqual([]);
   expect(rebooted.report.deferred).toContain("pipeline startup evidence is unresolved");
-  expect((await closeOverHttp(pipeline.id)).status).toBe(409);
+  expect((await closeOverHttp(pipeline.id)).status).toBe(200);
   expect(signals).toEqual([]);
 });
 
@@ -950,7 +957,7 @@ test("successor partial stop merges an earlier generation's late survivor eviden
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
   });
-  expect(first.status).toBe(409);
+  expect(first.status).toBe(200);
   const partial = pipelineRecord(pipeline.id);
   const evidenceA = partial.runs[0]!.attempts[0]!.unresolvedTermination!;
   /* Model a successor admitted before the first close publishes its survivor
@@ -969,10 +976,10 @@ test("successor partial stop merges an earlier generation's late survivor eviden
   const second = await closeWithTermination(pipeline.id, {
     signal: () => { throw Object.assign(new Error("refused"), { code: "EPERM" }); }, deadlineMs: 100, graceMs: 20,
   });
-  expect(second.status).toBe(409);
+  expect(second.status).toBe(200);
   expect(pipelineRecord(pipeline.id).runs[0]!.attempts[0]!.unresolvedTermination?.survivors).toEqual(expect.arrayContaining([survivorA.identity, hostB]));
   const closesB = await closeOverHttp(pipeline.id);
-  expect(closesB.status).toBe(409);
+  expect(closesB.status).toBe(200);
   expect(processIdentityStatus(hostB)).toBe("dead");
   expect(survivorA.alive()).toBeTrue();
   expect(pipelineRecord(pipeline.id).runs[0]!.attempts[0]!.unresolvedTermination?.survivors).toEqual([survivorA.identity]);
@@ -981,7 +988,7 @@ test("successor partial stop merges an earlier generation's late survivor eviden
   expect(rebooted.report.adopted).toEqual([]);
   expect(rebooted.report.deferred).not.toBeNull();
   signals.length = 0;
-  expect((await closeOverHttp(pipeline.id)).status).toBe(409);
+  expect((await closeOverHttp(pipeline.id)).status).toBe(200);
   expect(signals).toEqual([]);
   await survivorA.end();
   expect((await closeOverHttp(pipeline.id)).status).toBe(200);
@@ -1026,7 +1033,7 @@ test("startup defers a running attempt with an unverifiable survivor until posit
       if (pid === survivor.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
-  })).status).toBe(409);
+  })).status).toBe(200);
   const record = pipelineRecord(pipeline.id);
   expect(record.runs[0]!.attempts[0]!.state).toBe("running");
   record.runs[0]!.attempts[0]!.unresolvedTermination!.survivors[0]!.bootEpoch = null;
@@ -1055,7 +1062,7 @@ test("a deferred lane completes the boot once: an unrelated pending launch is re
       if (pid === survivor.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
-  })).status).toBe(409);
+  })).status).toBe(200);
   const record = pipelineRecord(pipeline.id);
   record.runs[0]!.attempts[0]!.unresolvedTermination!.survivors[0]!.bootEpoch = null;
   savePipelines(loadPipelines().map((item) => item.id === pipeline.id ? record : item));
@@ -1125,7 +1132,7 @@ test("terminal reap retains a partial tree for later ticks, HTTP close and start
   expect(survivor.alive()).toBeTrue();
   expect(pipelineRecord(pipeline.id).runs[0]!.attempts[0]!.unresolvedTermination?.survivors).toEqual([survivor.identity]);
   await tickPipelines([], defaultPipelinePorts());
-  expect((await closeOverHttp(pipeline.id)).status).toBe(409);
+  expect((await closeOverHttp(pipeline.id)).status).toBe(200);
   await current.incumbent.end();
   holdWork(current);
   const rebooted = await successor(current);
@@ -1144,15 +1151,16 @@ test("an unconfirmed later stop cannot acknowledge away a captured survivor (#15
       if (pid === survivor.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
-  })).status).toBe(409);
+  })).status).toBe(200);
   signals.length = 0;
   for (const acknowledgeHosts of [false, true]) {
     const result = await patchPipeline(pipeline.id, { action: "close", acknowledgeHosts }, {
       ...defaultPipelinePorts(),
       stopStageAgent: async () => ({ outcome: "unconfirmed", operationId: null, detail: "control receipt unavailable" }),
     });
-    expect(result.status).toBe(409);
-    expect(pipelineRecord(pipeline.id).state).not.toBe("closed");
+    expect(result.status).toBe(undefined);
+    expect(pipelineRecord(pipeline.id).state).toBe("closed");
+  expect(pipelineRecord(pipeline.id).hiddenAt).toBeNull();
     expect(pipelineRecord(pipeline.id).runs[0]!.attempts[0]!.unresolvedTermination?.survivors).toEqual([survivor.identity]);
     expect(survivor.alive()).toBeTrue();
     expect(signals).toEqual([]);
@@ -1170,7 +1178,7 @@ test.each(["shared host", "expired budget"])("%s cannot skip an attempt's durabl
       if (pid === survivor.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
-  })).status).toBe(409);
+  })).status).toBe(200);
   const record = pipelineRecord(pipeline.id);
   const first = record.runs[0]!.attempts[0]!;
   const second = structuredClone(first);
@@ -1185,8 +1193,9 @@ test.each(["shared host", "expired budget"])("%s cannot skip an attempt's durabl
     ...defaultPipelinePorts(), monotonicNow: () => clock += 20_000,
     stopStageAgent: async () => ({ outcome: "not-running" }),
   });
-  expect(result.status).toBe(409);
-  expect(pipelineRecord(pipeline.id).state).not.toBe("closed");
+  expect(result.status).toBe(undefined);
+  expect(pipelineRecord(pipeline.id).state).toBe("closed");
+  expect(pipelineRecord(pipeline.id).hiddenAt).toBeNull();
   expect(pipelineRecord(pipeline.id).runs[0]!.attempts[1]!.unresolvedTermination?.survivors).toEqual([survivor.identity]);
   expect(survivor.alive()).toBeTrue();
   expect(signals).toEqual([]);
@@ -1217,13 +1226,13 @@ test("an authority read exception after TERM preserves survivors through HTTP cl
   try { closed = await closeOverHttp(pipeline.id); }
   finally { current.registry.readOnlySnapshot = snapshot; }
   expect(failedRead).toBeTrue();
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   expect(closed.close!.stillRunning[0]!.error).toContain("evidence became unavailable");
   await settles(() => !current.hostA.alive(), "root exit");
   expect(survivor.alive()).toBeTrue();
   expect(pipelineRecord(pipeline.id).runs[0]!.attempts[0]!.unresolvedTermination?.survivors).toContainEqual(survivor.identity);
   signals.length = 0;
-  expect((await closeOverHttp(pipeline.id)).status).toBe(409);
+  expect((await closeOverHttp(pipeline.id)).status).toBe(200);
   expect(signals).toEqual([]);
   await current.incumbent.end();
   holdWork(current);
@@ -1248,7 +1257,7 @@ test("startup rereads after transcript refresh and defers a concurrently persist
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
   });
-  expect(closed.status).toBe(409);
+  expect(closed.status).toBe(200);
   fs.writeFileSync(`${barrier}.release`, "continue");
   const booted = await boot;
   expect(booted.report.adopted).toEqual([]);
@@ -1288,7 +1297,7 @@ test.each(["retry-stage", "skip-stage"] as const)("%s checks older attempt survi
       if (pid === survivor.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
-  })).status).toBe(409);
+  })).status).toBe(200);
   const record = pipelineRecord(pipeline.id);
   const newer = structuredClone(record.runs[0]!.attempts[0]!);
   newer.n = 2;
@@ -1326,8 +1335,14 @@ test("ticks defer worktree provisioning until an earlier partial tree is positiv
       if (pid === survivor.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
-  })).status).toBe(409);
+  })).status).toBe(200);
   const record = pipelineRecord(pipeline.id);
+  // Model a legacy open lane that retained a partial stop before close custody existed.
+  delete record.closeTeardown;
+  delete record.closeReport;
+  record.state = "needs_decision";
+  record.closedAt = null;
+  record.cursor = structuredClone(pipeline.cursor);
   record.state = "provisioning";
   savePipelines(loadPipelines().map((item) => item.id === pipeline.id ? record : item));
   const commands: string[] = [];
@@ -1415,7 +1430,7 @@ test("an older attempt survivor fences every pipeline conversation until positiv
       if (pid === survivor.pid || Math.abs(pid) === b.hostA.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
-  })).status).toBe(409);
+  })).status).toBe(200);
   expect(a.hostA.alive()).toBeFalse();
   expect(b.hostA.alive()).toBeTrue();
   await loseIncumbent(b);
@@ -1457,8 +1472,14 @@ test.each(["pass", "fail"] as const)("late %s verdict recovery waits for every r
       if (pid === survivor.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
-  })).status).toBe(409);
+  })).status).toBe(200);
   const record = pipelineRecord(pipeline.id);
+  // Model a legacy open lane that retained a partial stop before close custody existed.
+  delete record.closeTeardown;
+  delete record.closeReport;
+  record.state = "needs_decision";
+  record.closedAt = null;
+  record.cursor = structuredClone(pipeline.cursor);
   record.stages.push({ ...record.stages[0]!, id: "recover", onFail: undefined, next: null });
   record.runs.push({ stageId: "recover", attempts: [] });
   record.stages[0]!.onFail = { to: "recover", maxRounds: 1 };
@@ -1512,8 +1533,14 @@ test("bound flow recovery keeps evidence synchronization but defers resume until
       if (pid === survivor.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
       realKill.call(process, pid, value);
     }, deadlineMs: 100, graceMs: 20,
-  })).status).toBe(409);
+  })).status).toBe(200);
   const record = pipelineRecord(pipeline.id);
+  // Model a legacy open lane that retained a partial stop before close custody existed.
+  delete record.closeTeardown;
+  delete record.closeReport;
+  record.state = "needs_decision";
+  record.closedAt = null;
+  record.cursor = structuredClone(pipeline.cursor);
   record.stages.push({ id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null,
     effectiveRole: { ...effectiveRole, roleId: "reviewer", access: "read-only" } });
   const error = "structured resume host claim is unavailable";

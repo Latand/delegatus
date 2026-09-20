@@ -123,19 +123,8 @@ export type PipelineStageSpawn = {
 };
 
 /** Identity of the agent host a stage attempt owns, as a close reports it. */
-export type PipelineStageHostRef = {
-  stageId: string;
-  attempt: number;
-  conversationId: string | null;
-  agentPath: string | null;
-  paneId: string | null;
-  /** Set for a conversation a stage agent spawned and the pipeline adopted, so
-      the report distinguishes it from the stage's own launch. */
-  adopted?: true;
-  /** The attempt's immutable launch identity. A stop that has to act on the
-      registry row alone (#1501) binds the row to this launch's receipt. */
-  launchId?: string | null;
-};
+export type { PipelineStageHostRef, PipelineCloseReport } from "./types";
+import type { PipelineStageHostRef, PipelineCloseReport } from "./types";
 
 export type PipelineStageStopResult =
   /** Termination is evidenced: the kill was delivered, or the host is gone.
@@ -153,33 +142,6 @@ export type PipelineStageStopResult =
       still be alive, so a close carrying one of these never claims a clean stop. */
   | { outcome: "unconfirmed"; operationId: string | null; detail: string }
   | { outcome: "failed"; error: string };
-
-/**
- * What closing a pipeline did to its stage hosts, and what it left on disk
- * (#670). `stopped` is empty and `alreadyStopped` may be populated when nothing
- * was burning quota; a non-empty `stillRunning` means the close was refused.
- */
-export type PipelineCloseReport = {
-  /** Hosts this close terminated, with termination evidenced. */
-  stopped: PipelineStageHostRef[];
-  /** Launched stages — settled or parked included — whose host was already gone. */
-  alreadyStopped: PipelineStageHostRef[];
-  /** Kills the runtime accepted without confirming termination in time. The
-      operation id keeps the possible survivor addressable. */
-  unconfirmed: Array<PipelineStageHostRef & { operationId: string | null; detail: string }>;
-  /** Review rounds whose live reviewer this close terminated through the flow.
-      Headless reviewers are child processes with no registry entry, so they are
-      counted here rather than in `stopped`. */
-  reviewers: Array<{ stageId: string; attempt: number; flowId: string; round: number }>;
-  /** Unconfirmed hosts the operator explicitly dismissed on this close. */
-  acknowledged: Array<PipelineStageHostRef & { detail: string }>;
-  /** Hosts that survived teardown, so the close cannot claim to be clean. */
-  stillRunning: Array<PipelineStageHostRef & { error: string }>;
-  /** Stop failures demoted by durable terminal evidence. */
-  notes: Array<PipelineStageHostRef & { detail: string }>;
-  /** Uncommitted stage work preserved in the worktree; null when unprovisioned. */
-  worktree: { dir: string; uncommitted: string[]; truncated: boolean; error?: string } | null;
-};
 
 export type PipelineStageLaunchReservation = Pick<PipelineStageSpawn, "launchId" | "conversationId" | "accountId">;
 export type PipelineSpawnReceipt = PipelineStageSpawn & {
@@ -2816,7 +2778,7 @@ const activationExecutors = globalThis as unknown as { __llvActivationExecutors?
 const activeActivations = activationExecutors.__llvActivationExecutors ??= new Set<string>();
 
 export async function drainStageActivations(ports: PipelinePorts): Promise<void> {
-  if ((ports.structuredDeliveryPublication?.() ?? "ready") !== "ready") return;
+  if ((ports.structuredDeliveryPublication?.() ?? "ready") !== "ready") { await drainPipelineCloses(ports); return; }
   const owner = captureProcessIdentity(process.pid);
   for (const snapshot of loadPipelines()) {
     for (const run of snapshot.runs) for (const original of run.attempts) {
@@ -2929,6 +2891,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
       await patchPipeline(pipeline.id, { action: "close" }, ports);
     }
   }
+  await drainPipelineCloses(ports);
 }
 
 async function spawnRunStage(
@@ -4671,7 +4634,7 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
   return true;
 }
 
-/** Ceiling on one terminal reap sweep. Like a close's teardown, the sweep runs
+/** Ceiling on one terminal reap sweep. The sweep runs
     inside the pipelines transaction, so a slow host defers the rest of its
     pipeline's candidates to the next tick instead of stalling every mutation. */
 const TERMINAL_REAP_BUDGET_MS = 5_000;
@@ -4897,8 +4860,10 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           pipelineChanged = reconcileParkedStructuredSpawn(pipeline, ports) || pipelineChanged;
           pipelineChanged = reconcileBoundReviewFlow(pipeline, ports, persistPipeline) || pipelineChanged;
         }
-        pipelineChanged = await reconcileUnconfirmedHosts(pipeline, ports) || pipelineChanged;
-        pipelineChanged = await reconcileTerminalStageHosts(pipeline, ports) || pipelineChanged;
+        if (!pipeline.closeTeardown) {
+          pipelineChanged = await reconcileUnconfirmedHosts(pipeline, ports) || pipelineChanged;
+          pipelineChanged = await reconcileTerminalStageHosts(pipeline, ports) || pipelineChanged;
+        }
         if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused" && pipeline.state !== "needs_decision"
           && !pipelineSurvivorRefusal(pipeline)) {
           pipelineChanged = await tickPipeline(
@@ -5970,8 +5935,203 @@ function launchedStageHosts(pipeline: Pipeline): StageHostCandidate[] {
     whether the pane heuristic may speak for it. */
 type StageHostCandidate = { attempt: PipelineStageAttempt; target: PipelineStageHostRef; turnSettled: boolean };
 
-/** Ceiling on a close's whole host teardown, holding the pipelines transaction. */
+/** Ceiling on one close drain pass, outside the collection lease. */
 const CLOSE_TEARDOWN_BUDGET_MS = 10_000;
+
+const closeExecutors = globalThis as unknown as { __llvCloseExecutors?: Set<string> };
+const activeCloses = closeExecutors.__llvCloseExecutors ??= new Set<string>();
+
+/** Claim and checkpoint under short leases; every host/flow/git operation runs
+ * on the claimed snapshot outside them. An unknown owner never grants takeover. */
+async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
+  const owner = captureProcessIdentity(process.pid);
+  for (const snapshot of loadPipelines()) {
+    const obligation = snapshot.closeTeardown;
+    if (!obligation || activeCloses.has(obligation.id)) continue;
+    if (obligation.phase === "settled") {
+      const report = snapshot.closeReport!;
+      if (report.unconfirmed.length && !report.stillRunning.length) {
+        const expected = JSON.stringify(report);
+        const gone: PipelineStageHostRef[] = [];
+        for (const host of report.unconfirmed) {
+          try {
+            if (!(await ports.stageHostResident(host)) && (!host.paneId || !(await ports.paneAgentAlive(host.paneId)))) gone.push(host);
+          } catch { /* An unreadable host remains unconfirmed. */ }
+        }
+        if (gone.length) await withPipelineMutation((pipelines, persist) => {
+          const live = pipelines.find((item) => item.id === snapshot.id);
+          if (live?.closeTeardown?.phase !== "settled" || JSON.stringify(live.closeReport) !== expected) return;
+          report.unconfirmed = report.unconfirmed.filter((host) => !gone.includes(host));
+          report.alreadyStopped.push(...gone);
+          live.closeReport = report;
+          live.unconfirmedHosts = report.unconfirmed.length ? live.unconfirmedHosts?.filter((host) =>
+            report.unconfirmed.some((item) => item.stageId === host.stageId && item.attempt === host.attempt)) : undefined;
+          live.hiddenAt = live.unconfirmedHosts ? null : live.closedAt;
+          live.stateDetail = closeSummary(report);
+          persist([live]);
+        });
+      }
+      continue;
+    }
+    const sameProcess = owner.startIdentity !== null && !!owner.bootEpoch && obligation.owner?.pid === owner.pid
+      && obligation.owner.startIdentity === owner.startIdentity && obligation.owner.bootEpoch === owner.bootEpoch;
+    if (obligation.owner && !sameProcess && processIdentityStatus(obligation.owner) !== "dead") continue;
+    activeCloses.add(obligation.id);
+    try {
+      const claimed = await withPipelineMutation((pipelines, persist) => {
+        const live = pipelines.find((item) => item.id === snapshot.id);
+        if (!live?.closeReport || JSON.stringify(live.closeTeardown) !== JSON.stringify(obligation)) return null;
+        if (live.runs.some((run) => run.attempts.some((attempt) => attempt.activation))) return null;
+        const plan = live.closeTeardown!;
+        if (plan.waitingForActivation) {
+          live.closeReport.pending = launchedStageHosts(live).map(({ target }) => target);
+          plan.waitingForActivation = false;
+        }
+        delete live.activationCloseRequested;
+        plan.owner = owner;
+        plan.phase = "running";
+        persist([live]);
+        return structuredClone(live);
+      });
+      if (!claimed) continue;
+      const plan = claimed.closeTeardown!;
+      const report = claimed.closeReport!;
+      const checkpoint = async (candidate?: StageHostCandidate) => withPipelineMutation((pipelines, persist) => {
+        const live = pipelines.find((item) => item.id === claimed.id);
+        if (live?.closeTeardown?.id !== plan.id || live.closeTeardown.phase !== "running"
+          || JSON.stringify(live.closeTeardown.owner) !== JSON.stringify(owner)) throw new Error("close teardown ownership changed");
+        if (candidate) {
+          const current = runFor(live, candidate.target.stageId)?.attempts.find((item) => item.n === candidate.target.attempt);
+          if (!current || current.conversationId !== candidate.target.conversationId || current.launchId !== candidate.target.launchId
+            || (!(candidate.target.conversationId || candidate.target.launchId)
+              && (current.agentPath !== candidate.target.agentPath || current.paneId !== candidate.target.paneId))) throw new Error("close target identity changed");
+          // A launch/conversation can materialize or rebind its transcript and
+          // pane during teardown. The stop still names the frozen target; its
+          // result must not replace that newer metadata or lose its checkpoint.
+          // Keep unrelated fields and any later report; only apply close evidence.
+          current.unresolvedTermination = structuredClone(candidate.attempt.unresolvedTermination);
+          if (!current.verdict && !current.completedAt) {
+            current.state = candidate.attempt.state;
+            current.error = candidate.attempt.error;
+            current.completedAt = candidate.attempt.completedAt;
+          }
+        }
+        live.closeReport = structuredClone(report);
+        live.closeTeardown = structuredClone(plan);
+        live.stateDetail = report.status === "pending" ? "closed; teardown pending"
+          : report.stillRunning.length ? `closed; could not stop ${report.stillRunning.map((item) => `${stageHostLabel(item)}: ${item.error}`).join("; ")}`
+          : closeSummary(report);
+        live.unconfirmedHosts = [...report.unconfirmed, ...report.stillRunning.map((item) => ({ ...item, operationId: null, detail: item.error }))]
+          .map((item) => ({ ...item, at: ports.now() }));
+        if (!live.unconfirmedHosts.length) delete live.unconfirmedHosts;
+        live.hiddenAt = report.status === "settled" && !live.unconfirmedHosts ? live.closedAt : null;
+        persist([live]);
+      });
+      const deadline = ports.monotonicNow() + CLOSE_TEARDOWN_BUDGET_MS;
+      let processed = 0;
+      for (const target of [...report.pending]) {
+        if (processed++ > 0 && ports.monotonicNow() >= deadline) break;
+        const attempt = runFor(claimed, target.stageId)?.attempts.find((item) => item.n === target.attempt);
+        if (!attempt) throw new Error("close target attempt disappeared");
+        const candidate = { target, attempt, turnSettled: Boolean(attempt.verdict || attempt.completedAt) };
+        try { await stopCloseHost(candidate, report, ports); }
+        catch (error) { report.unconfirmed.push({ ...target, operationId: null, detail: `close stop could not be confirmed: ${String(error)}` }); }
+        report.pending.shift();
+        await checkpoint(candidate);
+      }
+      if (report.pending.length) {
+        plan.phase = "pending";
+        delete plan.owner;
+        await checkpoint();
+        continue;
+      }
+      // Deduplicated hosts can leave another attempt with durable survivors.
+      for (const run of claimed.runs) for (const attempt of run.attempts) {
+        const error = unresolvedTerminationRefusal(attempt);
+        if (error && !report.stillRunning.some((item) => item.stageId === run.stageId && item.attempt === attempt.n)) {
+          report.stillRunning.push({ stageId: run.stageId, attempt: attempt.n, conversationId: attempt.conversationId,
+            agentPath: attempt.agentPath, paneId: attempt.paneId, launchId: attempt.launchId, error });
+        }
+      }
+      if (plan.flow && !report.stillRunning.length) {
+        const ref = plan.flow;
+        const attempt = runFor(claimed, ref.stageId)?.attempts.find((item) => item.n === ref.attempt);
+        try {
+          const flow = ports.getFlow(ref.id);
+          if (flow && flow.state !== "closed") {
+            const closed = await ports.closeFlow(ref.id);
+            if (closed?.error) throw new Error(closed.error);
+            if (closed?.stoppedReviewer) report.reviewers.push({ stageId: ref.stageId, attempt: ref.attempt, flowId: ref.id, round: closed.stoppedReviewer.round });
+          }
+          plan.flow = null;
+        } catch (error) {
+          report.stillRunning.push({ stageId: ref.stageId, attempt: ref.attempt, conversationId: attempt?.conversationId ?? null,
+            agentPath: attempt?.agentPath ?? null, paneId: attempt?.paneId ?? null, launchId: attempt?.launchId ?? null, error: error instanceof Error ? error.message : String(error) });
+        }
+        await checkpoint();
+      }
+      report.worktree = closeWorktreeReport(claimed, ports);
+      if (plan.acknowledgeHosts) {
+        report.acknowledged.push(...report.unconfirmed);
+        report.unconfirmed = [];
+      }
+      report.status = "settled";
+      plan.phase = "settled";
+      delete plan.owner;
+      await checkpoint();
+    } finally { activeCloses.delete(obligation.id); }
+  }
+}
+
+async function stopCloseHost(candidate: StageHostCandidate, close: PipelineCloseReport, ports: PipelinePorts): Promise<void> {
+  const { target, turnSettled } = candidate;
+  const result = await ports.stopStageAgent(target);
+  if (result.outcome === "unresolved") {
+    /* A signal was sent and the authorized tree did not all go. The
+       survivors ride the attempt with their identities: from here no
+       close may terminalize it on row or transcript evidence until each
+       of them is proven gone (#1501). */
+    rememberUnresolvedTermination(candidate.attempt, result, ports.now());
+    close.stillRunning.push({ ...target, error: unresolvedTerminationRefusal(candidate.attempt) ?? result.error });
+    return;
+  }
+  const unresolved = unresolvedTerminationRefusal(candidate.attempt);
+  if (unresolved) {
+    close.stillRunning.push({ ...target, error: unresolved });
+    return;
+  }
+  if (result.outcome === "stopped") {
+    close.stopped.push(target);
+    if (result.detail) close.notes.push({ ...target, detail: result.detail });
+  } else if (result.outcome === "failed") {
+    const evidence = await closeStopFailureEvidence(candidate, ports);
+    if (evidence) {
+      const detail = `stop failed with "${result.error}"; terminalized from ${evidence}`;
+      close.alreadyStopped.push(target);
+      close.notes.push({ ...target, detail });
+      terminalizeAttemptForClose(candidate, detail, ports);
+    } else {
+      close.stillRunning.push({ ...target, error: result.error });
+    }
+  } else if (result.outcome === "unconfirmed") {
+    close.unconfirmed.push({ ...target, operationId: result.operationId, detail: result.detail });
+  } else if (!turnSettled && target.paneId) {
+    /* The registry knows no host, but the attempt never finished its turn
+       and its pane may still hold the agent. The teardown kills it only
+       when durable evidence proves the pane is still this stage's. */
+    const pane = await ports.stopStagePane(target);
+    if (pane.outcome === "stopped") close.stopped.push(target);
+    else if (pane.outcome === "failed") close.stillRunning.push({ ...target, error: pane.error });
+    else if (pane.outcome === "unknown") close.unconfirmed.push({ ...target, operationId: null, detail: pane.detail });
+    else {
+      close.alreadyStopped.push(target);
+      terminalizeAttemptForClose(candidate, "the stage pane was already absent when the pipeline closed", ports);
+    }
+  } else {
+    close.alreadyStopped.push(target);
+    terminalizeAttemptForClose(candidate, "the stage host was already absent when the pipeline closed", ports);
+  }
+}
 
 function stageHostLabel(target: PipelineStageHostRef): string {
   const what = target.adopted ? "adopted agent of stage" : "stage";
@@ -6180,7 +6340,7 @@ export async function patchPipeline(
     if (guardShape) return guardShape;
     const stage = currentStage(pipeline);
     const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
-    const flow = attempt?.flowId ? ports.getFlow(attempt.flowId) : null;
+    const flow = req.action !== "close" && attempt?.flowId ? ports.getFlow(attempt.flowId) : null;
     let graphEdit: PipelineGraphEdit | null = null;
 
     if (req.action === "set-src") {
@@ -6776,208 +6936,89 @@ export async function patchPipeline(
       }
       pipeline.dismissedAt = req.action === "dismiss" ? pipeline.dismissedAt ?? ports.now() : null;
     } else if (req.action === "delete") {
+      if (pipeline.closeTeardown) {
+        if (pipeline.closeReport?.status !== "settled" || pipeline.closeReport.stillRunning.length || pipeline.closeReport.unconfirmed.length) {
+          return { error: "pipeline teardown is pending or unresolved", status: 409, close: pipeline.closeReport };
+        }
+        return { pipeline, close: pipeline.closeReport };
+      }
       if (pipeline.state !== "draft") return { error: "only draft pipelines can be deleted", status: 409 };
       discardDraft(pipeline, ports);
       persist();
       return { pipeline };
     } else if (req.action === "close") {
-      const activations = pipeline.runs.flatMap((run) => run.attempts).filter((item) => item.activation);
-      if (activations.length) {
-        for (const item of activations) item.activation!.closeRequested = true;
-        pipeline.pausedState = pipeline.state === "paused" || pipeline.state === "draft" ? pipeline.pausedState : pipeline.state;
-        pipeline.state = "paused";
-        pipeline.stateDetail = "close is waiting for the original stage launch to reconcile";
-        persist();
-        return { pipeline, error: pipeline.stateDetail, status: 409 };
+      if (req.acknowledgeHosts !== undefined && typeof req.acknowledgeHosts !== "boolean") {
+        return { error: "acknowledgeHosts must be a boolean", status: 400 };
+      }
+      if (pipeline.closeTeardown) {
+        const report = pipeline.closeReport!;
+        if (report.status === "settled" && req.acknowledgeHosts === true && !report.stillRunning.length) {
+          report.acknowledged.push(...report.unconfirmed);
+          report.unconfirmed = [];
+          delete pipeline.unconfirmedHosts;
+          pipeline.hiddenAt = pipeline.closedAt;
+          pipeline.stateDetail = closeSummary(report);
+          persist();
+        } else if (report.status === "settled" && (report.unconfirmed.length || report.stillRunning.length)) {
+          // Retry only unresolved recorded identities. Completed targets remain
+          // in the same receipt and can never be stopped twice by a replay.
+          const seen = new Set<string>();
+          report.pending = [...report.unconfirmed, ...report.stillRunning].filter((target) => {
+            const key = JSON.stringify([target.launchId ?? null, target.conversationId, target.agentPath, target.paneId]);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return ![...report.stopped, ...report.alreadyStopped].some((item) => item.stageId === target.stageId && item.attempt === target.attempt)
+              && launchedStageHosts(pipeline).some((item) => item.target.stageId === target.stageId && item.target.attempt === target.attempt);
+          });
+          report.unconfirmed = [];
+          report.stillRunning = [];
+          report.status = "pending";
+          pipeline.closeTeardown.phase = "pending";
+          pipeline.closeTeardown.acknowledgeHosts = req.acknowledgeHosts === true;
+          pipeline.stateDetail = "closed; teardown pending";
+          persist();
+        }
+        return { pipeline, close: pipeline.closeReport };
       }
       if (pipeline.state === "draft") {
-        /* Closing a draft is the same act as discarding it, and it settles the
-           record the same way — the two verbs differed only in which button
-           the board drew. */
         discardDraft(pipeline, ports);
         persist();
         return { pipeline };
       }
-      /* #670: a close used to leave the stage host resident, so the agent kept
-         executing on a paid quota and the board kept a live-looking chip. Tear
-         the hosts down before the flow and the state write, and report exactly
-         what was stopped. Nothing on disk is touched — uncommitted stage work
-         stays in the worktree and is named in the report instead. */
-      if (req.acknowledgeHosts !== undefined && typeof req.acknowledgeHosts !== "boolean") {
-        return { error: "acknowledgeHosts must be a boolean", status: 400 };
-      }
-      const close: PipelineCloseReport = { stopped: [], alreadyStopped: [], unconfirmed: [], acknowledged: [], reviewers: [], stillRunning: [], notes: [], worktree: null };
-      /* Each host's confirmation is bounded, but N of them multiply, and this
-         whole loop holds the pipelines file transaction — every other pipeline
-         mutation and the controller tick queue behind it. So the aggregate is
-         bounded too, and the hosts the budget cut off are reported as
-         unconfirmed rather than silently skipped: the lane stays visible and a
-         later close picks the work up where this one stopped. */
-      const teardownDeadline = ports.monotonicNow() + CLOSE_TEARDOWN_BUDGET_MS;
-      const candidates = launchedStageHosts(pipeline);
-      for (let index = 0; index < candidates.length; index += 1) {
-        const candidate = candidates[index]!;
-        const { target, turnSettled } = candidate;
-        if (index > 0 && ports.monotonicNow() >= teardownDeadline) {
-          for (const remaining of candidates.slice(index)) {
-            close.unconfirmed.push({
-              ...remaining.target,
-              operationId: null,
-              detail: "close teardown budget expired before this host was probed",
-            });
-          }
-          break;
-        }
-        const result = await ports.stopStageAgent(target);
-        if (result.outcome === "unresolved") {
-          /* A signal was sent and the authorized tree did not all go. The
-             survivors ride the attempt with their identities: from here no
-             close may terminalize it on row or transcript evidence until each
-             of them is proven gone (#1501). */
-          rememberUnresolvedTermination(candidate.attempt, result, ports.now());
-          close.stillRunning.push({ ...target, error: unresolvedTerminationRefusal(candidate.attempt) ?? result.error });
-          continue;
-        }
-        const unresolved = unresolvedTerminationRefusal(candidate.attempt);
-        if (unresolved) {
-          close.stillRunning.push({ ...target, error: unresolved });
-          continue;
-        }
-        if (result.outcome === "stopped") {
-          close.stopped.push(target);
-          if (result.detail) close.notes.push({ ...target, detail: result.detail });
-        } else if (result.outcome === "failed") {
-          const evidence = await closeStopFailureEvidence(candidate, ports);
-          if (evidence) {
-            const detail = `stop failed with "${result.error}"; terminalized from ${evidence}`;
-            close.alreadyStopped.push(target);
-            close.notes.push({ ...target, detail });
-            terminalizeAttemptForClose(candidate, detail, ports);
-          } else {
-            close.stillRunning.push({ ...target, error: result.error });
-          }
-        } else if (result.outcome === "unconfirmed") {
-          close.unconfirmed.push({ ...target, operationId: result.operationId, detail: result.detail });
-        } else if (!turnSettled && target.paneId) {
-          /* The registry knows no host, but the attempt never finished its turn
-             and its pane may still hold the agent. The teardown kills it only
-             when durable evidence proves the pane is still this stage's. */
-          const pane = await ports.stopStagePane(target);
-          if (pane.outcome === "stopped") close.stopped.push(target);
-          else if (pane.outcome === "failed") close.stillRunning.push({ ...target, error: pane.error });
-          else if (pane.outcome === "unknown") close.unconfirmed.push({ ...target, operationId: null, detail: pane.detail });
-          else {
-            close.alreadyStopped.push(target);
-            terminalizeAttemptForClose(candidate, "the stage pane was already absent when the pipeline closed", ports);
-          }
-        } else {
-          close.alreadyStopped.push(target);
-          terminalizeAttemptForClose(candidate, "the stage host was already absent when the pipeline closed", ports);
-        }
-      }
-      /* Host deduplication and the teardown deadline can skip an attempt's
-         stop call. Its durable survivors still veto terminalization. */
-      for (const run of pipeline.runs) {
-        for (const pending of run.attempts) {
-          const unresolved = unresolvedTerminationRefusal(pending);
-          if (!unresolved || close.stillRunning.some((item) => item.stageId === run.stageId && item.attempt === pending.n)) continue;
-          close.stillRunning.push({
-            stageId: run.stageId, attempt: pending.n, conversationId: pending.conversationId,
-            agentPath: pending.agentPath, paneId: pending.paneId, error: unresolved,
-          });
-        }
-      }
-      close.worktree = closeWorktreeReport(pipeline, ports);
-      if (close.stillRunning.length > 0) {
-        /* A host that survived teardown must not be reported as a clean close:
-           the pipeline keeps its state so the survivor stays visible and
-           addressable instead of hiding behind a closed lane. */
-        const detail = `could not stop ${close.stillRunning.map((item) => `${stageHostLabel(item)}: ${item.error}`).join("; ")}`;
-        pipeline.stateDetail = detail;
-        persist();
-        return { error: detail, status: 409, close };
-      }
-      if (flow && flow.state !== "closed") {
-        const closed = await ports.closeFlow(flow.id);
-        if (closed?.error) {
-          /* A reviewer that would not die is a survivor like any other, so it
-             leaves through the same report the host teardown uses. */
-          if (stage && attempt) close.stillRunning.push({
-            stageId: stage.id,
-            attempt: attempt.n,
-            conversationId: attempt.conversationId,
-            agentPath: attempt.agentPath,
-            paneId: attempt.paneId,
-            error: closed.error,
-          });
-          pipeline.stateDetail = closed.error;
-          persist();
-          return { error: closed.error, status: closed.status ?? 409, close };
-        }
-        /* closeFlow terminates a live reviewer itself; counting what it stopped
-           is what keeps a mid-review close from reporting "nothing was running"
-           (#670). Headless reviewers never reach the agent registry, so the host
-           teardown above cannot see them. */
-        if (closed?.stoppedReviewer && stage && attempt) {
-          close.reviewers.push({ stageId: stage.id, attempt: attempt.n, flowId: flow.id, round: closed.stoppedReviewer.round });
-        }
-      }
-      /* A cursor can rest at state pending before its round's attempt
-         materializes: the initial stage right after provisioning, the next stage
-         in the window after an advance, or a fail-edge target whose latest attempt
-         is an older terminal round. Record that resting round as a truthful pending
-         attempt so the cursorless projection keeps the k/n position once the cursor
-         clears — matching the attempt the next tick would create. The attempt
-         inherits the cursor's durable relay record (including fail-edge
-         activatedBy) and carries no run timestamps (it never started). */
-      if (stage && (!attempt || (pipeline.cursor?.state === "pending" && TERMINAL_ATTEMPT_STATES.has(attempt.state)))) {
-        newAttempt(pipeline, stage);
-      }
+      const activations = pipeline.runs.flatMap((run) => run.attempts).filter((item) => item.activation);
+      for (const item of activations) item.activation!.closeRequested = true;
+      // Freeze recorded identities before releasing the collection. A permitted
+      // activation appends its original launch only after reconciliation.
+      const pending = launchedStageHosts(pipeline).map(({ target }) => target);
+      pipeline.closeReport = { status: "pending", pending, stopped: [], alreadyStopped: [],
+        unconfirmed: [], acknowledged: [], reviewers: [], stillRunning: [], notes: [], worktree: null };
+      pipeline.closeTeardown = {
+        id: crypto.randomUUID(), phase: "pending", waitingForActivation: activations.length > 0,
+        acknowledgeHosts: req.acknowledgeHosts === true,
+        flow: attempt?.flowId && stage ? { id: attempt.flowId, stageId: stage.id, attempt: attempt.n } : null,
+      };
+      if (stage && (!attempt || (pipeline.cursor?.state === "pending" && TERMINAL_ATTEMPT_STATES.has(attempt.state)))) newAttempt(pipeline, stage);
       delete pipeline.activationCloseRequested;
       pipeline.state = "closed";
       pipeline.cursor = null;
       pipeline.pausedState = null;
-      /* The operator's way out of an unresolvable host (#670): a pane whose id
-         was recycled can look alive forever, so the lane would otherwise stay
-         pinned to the board with no dismissal. An acknowledgement clears only
-         hosts that are unconfirmed — anything proven to be still running has
-         already refused this close above. */
-      if (req.acknowledgeHosts === true && close.unconfirmed.length > 0) {
-        close.acknowledged.push(...close.unconfirmed.map((item) => ({ ...item, detail: item.detail })));
-        close.unconfirmed.length = 0;
-      }
-      pipeline.stateDetail = closeSummary(close);
-      pipeline.closedAt = ports.now();
-      /* An unconfirmed kill may have left a resident host. Hiding the lane would
-         make that survivor invisible on the board, which is the opposite of
-         surfacing it, so the closed record stays visible (and durable) until a
-         later close confirms the host is gone and clears it. */
-      pipeline.unconfirmedHosts = close.unconfirmed.length > 0
-        ? close.unconfirmed.map((item) => ({
-            stageId: item.stageId,
-            attempt: item.attempt,
-            conversationId: item.conversationId,
-            agentPath: item.agentPath,
-            paneId: item.paneId,
-            operationId: item.operationId,
-            detail: item.detail,
-            at: pipeline.closedAt!,
-          }))
-        : undefined;
-      pipeline.hiddenAt = pipeline.unconfirmedHosts ? null : pipeline.closedAt;
+      pipeline.closedAt ??= ports.now();
+      pipeline.hiddenAt = null;
+      pipeline.stateDetail = "closed; teardown pending";
       persist();
-      return { pipeline, close };
+      return { pipeline, close: pipeline.closeReport };
     } else {
       return { error: "unknown pipeline action", status: 400 };
     }
     persist();
     return graphEdit ? { pipeline, graphEdit } : { pipeline };
   });
-  if (req.action !== "resolve-decision" && patched.pipeline?.delivery?.operation?.state === "pending") {
+  if (req.action !== "close" && req.action !== "delete" && req.action !== "resolve-decision" && patched.pipeline?.delivery?.operation?.state === "pending") {
     const published = await publishPipelineBranch(patched.pipeline, ports.exec, { acceptedSha: patched.pipeline.delivery.operation.sha });
     if (!published.ok) return { error: published.error, status: 409 };
     return { ...patched, pipeline: findPipelineRecord(id)! };
   }
+  if (req.action === "close" && patched.close?.status === "pending") ports.scheduleTick?.(0);
   return patched;
 }
 
