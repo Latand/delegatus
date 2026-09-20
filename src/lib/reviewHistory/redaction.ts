@@ -1,13 +1,25 @@
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { ArchiveReadError } from "./reader";
 
-const SECRET_FIELD = /(?:token|secret|password|passwd|api[_-]?key|authorization|cookie|credential|private[_-]?key)/i;
+const SECRET_FIELD = /(?:token|secret|password|passwd|pwd|api[_-]?key|authorization|bearer|cookie|credential|private[_-]?key)/i;
+const JSON_FIELD = /("(?:\\.|[^"\\])*")(\s*:\s*)("(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/g;
+
+/** Artifact bodies can contain JSON/JSONL inside prose or fenced code. Match
+ * complete quoted values (including escaped quotes), so spaces and punctuation
+ * cannot leave a credential suffix behind. Keep unrelated text byte-for-byte. */
+function redactStructuredText(text: string): string {
+  return text.replace(JSON_FIELD, (match, key: string, separator: string) => {
+    let field = key;
+    try { field = JSON.parse(key); } catch { /* Malformed keys still get the literal field check. */ }
+    return SECRET_FIELD.test(field) ? `${key}${separator}"[redacted]"` : match;
+  });
+}
 
 /** The export is private even after best-effort redaction. Preserve original
  * fields and receipt identities; never advertise arbitrary prose as public. */
 export function redactArchive(value: unknown, depth = 0): unknown {
   if (depth > 64) throw new ArchiveReadError("ARCHIVE_TOO_LARGE", 413);
-  if (typeof value === "string") return redactMonitorText(value).replace(/https?:\/\/[^\s<>"']+/g, match => {
+  if (typeof value === "string") return redactMonitorText(redactStructuredText(value)).replace(/https?:\/\/[^\s<>"']+/g, match => {
     try {
       const url = new URL(match);
       url.username = ""; url.password = "";

@@ -139,6 +139,56 @@ test("private export preserves extension data and available logs while redacting
   }
 });
 
+test("HTTP export redacts structured artifact credentials while preserving raw provenance and SQL revisions", async () => {
+  const flow = row();
+  const credential = "synthetic ordinary value, with spaces and \"quotes\"";
+  const fields = ["password", "passwd", "pwd", "api_key", "api-key", "apiKey", "cookie", "authorization"];
+  const payload = JSON.stringify({ retained: "ordinary history", ...Object.fromEntries(fields.map(key => [key, credential])) });
+  const artifactTexts = {
+    findings: `${findings}\n\n${payload}`,
+    output: JSON.stringify({ retained: "ordinary history", nested: { pwd: credential } }, null, 2),
+    stdout: `${payload}\n${payload}\n`,
+    stderr: `Diagnostic context\n\`\`\`json\n${payload}\n\`\`\`\nEnd of history`,
+  };
+  const settled = {
+    ...flow,
+    extension: { retained: true, nested: [{ pwd: credential, passwd: credential }], receiptId: "archive-receipt" },
+    rounds: [{ ...flow.rounds[0]!, relayPendingSettlement: null, relayDelivery: { path: flow.implementerPath, deliveredAt: "2026-08-10T03:00:00Z" } }],
+  };
+  put(settled as unknown as ReturnType<typeof row>);
+  const artifactDirectory = path.dirname(flow.rounds[0]!.findingsPath);
+  fs.mkdirSync(artifactDirectory, { recursive: true });
+  const paths = {
+    findings: flow.rounds[0]!.findingsPath,
+    output: path.join(artifactDirectory, "round-1-last-message.md"),
+    stdout: path.join(artifactDirectory, "round-1-stdout.log"),
+    stderr: path.join(artifactDirectory, "round-1-stderr.txt"),
+  };
+  for (const kind of Object.keys(paths) as (keyof typeof paths)[]) fs.writeFileSync(paths[kind], artifactTexts[kind]);
+  const before = snapshot();
+  const response = await exported(request(), context());
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body.private).toBe(true); expect(body.redacted).toBe(true);
+  for (const kind of Object.keys(paths) as (keyof typeof paths)[]) {
+    const artifact = body.artifacts[0].artifacts[kind];
+    expect(artifact.status).toBe("available");
+    expect(artifact.text).not.toContain("synthetic ordinary");
+    expect(artifact.text).toContain("ordinary history");
+    expect(artifact.text).toBe(artifactTexts[kind].split(JSON.stringify(credential)).join(JSON.stringify("[redacted]")));
+    expect(fs.readFileSync(paths[kind], "utf8")).toBe(artifactTexts[kind]);
+  }
+  expect(body.row.extension).toEqual({ retained: true, nested: [{ pwd: "[redacted]", passwd: "[redacted]" }], receiptId: "archive-receipt" });
+  expect(body.row.revision).toBe(flow.revision);
+  expect(body.recorded.reviewHeadSha).toBe(flow.rounds[0]!.reviewHeadSha);
+  expect(body.relayOccurrences).toEqual([{
+    textDigest: messageTextDigest(relayPrompt(settled.rounds[0] as unknown as Round, artifactTexts.findings)),
+    deliveredAt: "2026-08-10T03:00:00Z", origin: "agent", senderRole: "reviewer",
+    clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round),
+  }]);
+  expect(snapshot()).toBe(before);
+});
+
 test("bounds reject excessive reads and artifact traversal without returning partial evidence", async () => {
   expect((await list(request())).status).toBe(400);
   expect((await list(request("?project=demo&limit=101"))).status).toBe(400);
