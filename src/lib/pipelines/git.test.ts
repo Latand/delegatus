@@ -31,7 +31,7 @@ function pipeline(): Pipeline {
     runs: [{ stageId: "build", attempts: [] }], cursor: null, state: "running", pausedState: null, stateDetail: null,
     srcPath: null, srcConversationId: null, createdAt: "now", closedAt: null,
   };
-  subject.delivery = { target: { repository: "repo-fixture", remote: "", branch: `refs/heads/${subject.branch}` },
+  subject.delivery = { target: { repository: "repo-fixture", remote: "origin", branch: `refs/heads/${subject.branch}` },
     disposition: "owner", publish: "enabled", active: true, ownerId: subject.id, epoch: 1, journal: [] };
   if (!findPipelineRecord(subject.id)) savePipelines([subject]);
   return subject;
@@ -445,6 +445,7 @@ function publishSandbox(withOrigin = true): PublishSandbox {
   subject.lastPassedCommit = subject.baseRef;
   const provisioned = provisionPipelineWorktree(subject, realExec);
   if (!provisioned.ok) throw new Error(provisioned.error);
+  subject.delivery!.target.remote = withOrigin ? origin : "";
   savePipelines([subject]);
 
   return {
@@ -688,6 +689,18 @@ test("publishPipelineBranch reports a repo with no origin as unavailable rather 
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
   }
+});
+
+test("adding an origin cannot redirect a delivery claim made without a remote", async () => {
+  const box = publishSandbox(false);
+  try {
+    const head = box.commit("local.txt", "local work\n");
+    git(box.root, "init", "--bare", "--initial-branch=main", box.origin);
+    git(box.repo, "remote", "add", "origin", box.origin);
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "unavailable" });
+    expect(box.originHead()).toBe("");
+    expect(findPipelineRecord(box.subject.id)?.delivery?.target.remote).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
 test("publishPipelineBranch refuses a dirty worktree and preserves the uncommitted work", async () => {

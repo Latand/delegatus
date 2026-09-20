@@ -292,6 +292,7 @@ function readRemotePipelineBranch(
   exec: ExecPort,
   step: string,
 ): { ok: true; sha: string } | { ok: false; error: string } {
+  if (pipeline.delivery && !pipeline.delivery.target.remote) return { ok: true, sha: "" };
   const result = exec(
     "timeout",
     ["--signal=KILL", REMOTE_READ_TIMEOUT, "git", "ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
@@ -489,7 +490,7 @@ function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request:
   }
   if (request.publishedSha && request.publishedSha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
 
-  const origin = pipeline.delivery?.target.remote
+  const origin = pipeline.delivery
     ? { code: 0, stdout: pipeline.delivery.target.remote, stderr: "" }
     : exec("git", ["remote", "get-url", "origin"], pipeline.worktreeDir);
   if (origin.code !== 0 || !origin.stdout.trim()) return { ok: true, sha: acceptedSha, remote: "unavailable" };
@@ -544,6 +545,7 @@ function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request:
 export function synchronizePipelineRetryHead(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
   const local = currentPipelineBranchHead(pipeline, exec);
   if (!local.ok) return local;
+  if (pipeline.delivery && !pipeline.delivery.target.remote) return local;
 
   const remoteProbe = exec("git", ["ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`], pipeline.worktreeDir);
   if (remoteProbe.code !== 0) return failure("checking the remote pipeline branch", remoteProbe);

@@ -3,6 +3,14 @@ import { pipelineStageSandbox } from "./stageSandbox";
 
 const RELAY_PLACEHOLDER = "{{prev.output}}";
 
+export function pipelineDeliveryGuidance(pipeline: Pipeline): string[] {
+  if (pipeline.delivery?.publish !== "disabled") return [];
+  return [
+    `Delivery target ${pipeline.delivery.target.branch} is owned by ${pipeline.delivery.ownerId} at epoch ${pipeline.delivery.epoch}. ${pipeline.delivery.disposition === "comparison" ? "This is a comparison lane." : "This lane's publication claim has been released."} Do not push to that branch. Viewer publication is disabled for this lane.`,
+    "This instruction is guidance; your host tools and network access are unchanged. Local tests and commits remain available.",
+  ];
+}
+
 function replaceAll(source: string, token: string, value: string): string {
   return source.split(token).join(value);
 }
@@ -54,10 +62,7 @@ export function renderStagePrompt(
     ...roleContext,
     access,
     hostAccess,
-    ...(pipeline.delivery?.publish === "disabled" ? [
-      `Delivery target ${pipeline.delivery.target.branch} is owned by ${pipeline.delivery.ownerId} at epoch ${pipeline.delivery.epoch}. ${pipeline.delivery.disposition === "comparison" ? "This is a comparison lane." : "This lane's publication claim has been released."} Do not push to that branch. Viewer publication is disabled for this lane.`,
-      "This instruction is guidance; your host tools and network access are unchanged. Local tests and commits remain available.",
-    ] : []),
+    ...pipelineDeliveryGuidance(pipeline),
     "Pipeline nesting is forbidden. Never create or start another pipeline from this stage.",
     "",
     /* One completion channel, one fallback (#1797): asking for the call AND an

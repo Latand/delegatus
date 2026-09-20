@@ -513,6 +513,8 @@ export type PipelineDelivery = {
   epoch: number;
   active: boolean;
   releasedAt?: string;
+  /** Failure already released or explicitly acknowledged by takeover. */
+  settledFailure?: string;
   operation?: {
     id: string;
     epoch: number;

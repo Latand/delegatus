@@ -73,7 +73,7 @@ import {
   MIN_STARTED_PIPELINE_STAGES,
 } from "./limits";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
-import { renderStagePrompt } from "./prompts";
+import { pipelineDeliveryGuidance, renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { collectStageProvenance } from "./stageProvenance";
@@ -3354,7 +3354,7 @@ const FENCE_MARKER = "\n\nSafety fences:\n";
  * error for the caller to park on.
  */
 export function reviewNote(pipeline: Pipeline, stage: PipelineStage, role: EffectivePipelineRole): { note: string } | { error: string } {
-  const prompt = renderNoteTemplate(stage.prompt, pipeline);
+  const prompt = [renderNoteTemplate(stage.prompt, pipeline), ...pipelineDeliveryGuidance(pipeline)].join("\n\n");
   const scaffold = role.roleId && role.promptScaffold ? renderNoteTemplate(role.promptScaffold, pipeline) : "";
   const fenceIndex = scaffold ? scaffold.lastIndexOf(FENCE_MARKER) : -1;
   const body = fenceIndex >= 0 ? scaffold.slice(0, fenceIndex) : scaffold;

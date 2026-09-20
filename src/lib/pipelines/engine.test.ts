@@ -19,7 +19,7 @@ const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pat
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { newRound, setRelayDeliveryForTest, tickFlow } = await import("@/lib/flows/engine");
-const { isRecoverableLegacyRelayFailurePause } = await import("@/lib/flows/commands");
+const { isRecoverableLegacyRelayFailurePause, MAX_FLOW_NOTE_LENGTH } = await import("@/lib/flows/commands");
 const rawCreatePipelineFromRequest = engineModule.createPipelineFromRequest;
 const createPipelineFromRequest: typeof rawCreatePipelineFromRequest = async (request, ports, options) =>
   await rawCreatePipelineFromRequest({ src: "/codex/creator.jsonl", ...request }, ports, options);
@@ -599,6 +599,19 @@ test("legacy publication admission processes bounded batches before provisioning
   await tickPipelines([], h.ports);
   expect(loadPipelines().every((pipeline) => pipeline.delivery?.disposition === "owner")).toBe(true);
   expect(loadPipelines().some((pipeline) => pipeline.state === "needs_decision")).toBe(false);
+});
+
+test("a terminal failing verdict releases ownership and explicit takeover acknowledges that failure", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail")], h.ports);
+  expect(loadPipelines()[0]?.delivery).toMatchObject({ active: false, publish: "disabled", epoch: 1 });
+  const taken = await patchPipeline(pipeline.id, { action: "takeover", expectedOwner: pipeline.id, expectedEpoch: 1, reason: "retry the failed attempt" }, h.ports,
+    { kind: "agent", role: "builder", conversationId: "conversation_retry" });
+  expect(taken.pipeline?.delivery).toMatchObject({ active: true, publish: "enabled", epoch: 2 });
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).pipeline?.delivery?.active).toBe(true);
 });
 
 async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch" } = {}) {
@@ -6160,6 +6173,7 @@ test("issue 533: retry replays the pipeline launch contract from durable stage s
     state: "failed", launchId: firstAttempt.launchId!, conversationId: firstAttempt.conversationId!,
     sessionId: firstAttempt.sessionId, "transcript": firstAttempt.agentPath, paneId: firstAttempt.paneId,
   } : null;
+  expect((await patchPipeline(pipeline.id, { action: "takeover", expectedOwner: pipeline.id, expectedEpoch: 1, reason: "resume the original publication lane" }, h.ports)).pipeline?.delivery?.active).toBe(true);
   await patchPipeline(pipeline.id, {
     action: "retry-stage", stageId: "plan", launchId: firstAttempt.launchId!,
   }, h.ports);
@@ -7553,6 +7567,20 @@ test("creation caps task, spec, and stage prompt sizes", async () => {
 const reviewPipeline = { task: "ship the widget", cursor: null, stages: [], runs: [] } as unknown as Parameters<typeof reviewNote>[0];
 const reviewStage = (prompt: string) => ({ id: "review", kind: "review-loop", prompt, next: null } as unknown as Parameters<typeof reviewNote>[1]);
 const noteOf = (result: ReturnType<typeof reviewNote>) => ("note" in result ? result.note : "");
+
+test("comparison review notes preserve owner guidance within the flow-note budget", () => {
+  const pipeline = { ...reviewPipeline, delivery: {
+    target: { repository: "repo-fixture", remote: "", branch: "refs/heads/review" },
+    disposition: "comparison" as const, publish: "disabled" as const, active: false, ownerId: "publishing-lane", epoch: 4, journal: [],
+  } };
+  const role = { roleId: "reviewer" as const, engine: "codex" as const, model: null, effort: null,
+    access: "read-only" as const, promptScaffold: "review guidance ".repeat(400) };
+  const note = noteOf(reviewNote(pipeline, reviewStage("Check acceptance criteria"), role));
+  expect(note).toContain("owned by publishing-lane at epoch 4");
+  expect(note).toContain("Do not push to that branch");
+  expect(note.length).toBeLessThanOrEqual(MAX_FLOW_NOTE_LENGTH);
+  expect(reviewNote(pipeline, reviewStage("x".repeat(MAX_FLOW_NOTE_LENGTH)), role)).toHaveProperty("error");
+});
 
 test("reviewNote fits the flow-note cap while preserving the directive and safety fences", () => {
   /* A long role scaffold + fences would blow past the flow note's 2,000-char cap.
