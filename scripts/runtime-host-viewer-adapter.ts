@@ -1,5 +1,11 @@
 #!/usr/bin/env bun-container
 
+/* FIRST, and before every other import: the claim has to precede the modules
+   below, which resolve the operator's state directory while they load (#1905).
+   In production the runtime host has already exported its own owner, and the
+   adapter inherits it; this admits a standalone run. */
+import "../src/lib/state/owner/deployAdapter";
+
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

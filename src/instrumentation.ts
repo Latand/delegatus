@@ -26,6 +26,14 @@ export async function registerNodeViewerRuntime(
 
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs" && !process.env.NEXT_PHASE?.includes("build")) {
+    /* A Node runtime outside the build phase is the serving Viewer, the
+       process that owns the state-mutating startup steps (#1905). The claim is
+       made here, before the runtime module loads, so a Viewer started by any
+       route — the launcher, `next start`, the container, `next dev` — resolves
+       the operator's state dir, while the build phase that skips this branch
+       never does. `LLV_STATE_OWNER` is a plain env name rather than the
+       imported constant because this shim must reach no other module. */
+    if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "viewer";
     await registerNodeViewerRuntime(() => import("@/lib/viewerInstrumentation"));
   }
 }

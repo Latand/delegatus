@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt, NATIVE_MULTI_AGENT_HOOK_MATCHER, NATIVE_MULTI_AGENT_TOOLS, NATIVE_SUBAGENT_DENY_MESSAGE, prepareManagedClaudeSpawnHome, viewerMcpServerEntry, VIEWER_SPAWN_PROMPT_FENCE } from "./spawnPolicy";
+import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt, viewerMcpServerEnv, NATIVE_MULTI_AGENT_HOOK_MATCHER, NATIVE_MULTI_AGENT_TOOLS, NATIVE_SUBAGENT_DENY_MESSAGE, prepareManagedClaudeSpawnHome, viewerMcpServerEntry, VIEWER_SPAWN_PROMPT_FENCE } from "./spawnPolicy";
 
 const homes: string[] = [];
 const TELEGRAM_HEADERS = {
@@ -145,7 +145,7 @@ test("Claude native MCP config keeps only granted servers out of the operator's 
   /* Viewer is forced in; every other registered server stays out, including the
      one the allowlist named, because the grant bound excludes it (#739). */
   expect(mcpConfig.mcpServers).toEqual({
-    viewer: { type: "stdio", command: "viewer-mcp", args: ["--viewer"] },
+    viewer: { type: "stdio", command: "viewer-mcp", args: ["--viewer"], env: viewerMcpServerEnv() },
   });
 });
 
@@ -163,7 +163,9 @@ test("Claude native MCP config defaults to the registered Viewer server only", (
     mcpServers: Record<string, unknown>;
   };
 
-  expect(mcpConfig.mcpServers).toEqual({ viewer: { type: "stdio", command: "viewer-mcp" } });
+  expect(mcpConfig.mcpServers).toEqual({
+    viewer: { type: "stdio", command: "viewer-mcp", env: viewerMcpServerEnv() },
+  });
   expect(JSON.parse(fs.readFileSync(installed.settingsPath, "utf8"))).not.toHaveProperty("mcpServers");
 });
 
@@ -176,10 +178,12 @@ test("Claude native MCP config supplies the packaged Viewer server on a fresh in
     mcpServers: Record<string, unknown>;
   };
 
+  /* The spawned agent runs under its own config and state root (#1905), so
+     the Viewer server carries the real one itself. */
   expect(mcpConfig.mcpServers).toEqual({
-    viewer: { type: "stdio", command: "bun", args: [launcher] },
+    viewer: { type: "stdio", command: "bun", args: [launcher], env: viewerMcpServerEnv() },
   });
-  expect(viewerMcpServerEntry()).toEqual({ command: "bun", args: [launcher] });
+  expect(viewerMcpServerEntry()).toEqual({ command: "bun", args: [launcher], env: viewerMcpServerEnv() });
   expect(fs.existsSync(launcher)).toBe(true);
   expect(fs.existsSync(path.join(accountHome, ".claude.json"))).toBe(false);
 });
@@ -188,7 +192,7 @@ test("the packaged Viewer entry fails before writing an unusable launcher path",
   expect(() => viewerMcpServerEntry(home())).toThrow("Viewer MCP launcher could not be resolved");
 });
 
-test("Claude native MCP config preserves an operator Viewer definition byte-for-byte", () => {
+test("Claude native MCP config preserves an operator Viewer definition, pinning only the Viewer's own root", () => {
   const accountHome = home();
   const statePath = path.join(accountHome, ".claude.json");
   const operatorState = JSON.stringify({
@@ -204,7 +208,12 @@ test("Claude native MCP config preserves an operator Viewer definition byte-for-
     mcpServers: Record<string, unknown>;
   };
 
-  expect(mcpConfig.mcpServers.viewer).toEqual({ type: "stdio", command: "operator-viewer", args: ["--custom"] });
+  expect(mcpConfig.mcpServers.viewer).toEqual({
+    type: "stdio",
+    command: "operator-viewer",
+    args: ["--custom"],
+    env: viewerMcpServerEnv(),
+  });
   expect(fs.readFileSync(statePath, "utf8")).toBe(operatorState);
 });
 
@@ -258,7 +267,9 @@ test("Claude native MCP config merges project scope between user and local scope
     type: "stdio",
     command: "project-version",
     args: ["--project"],
-    env: { PROJECT_AUTH: "kept" },
+    /* The scope's own environment is kept and wins; the Viewer's roots are
+       added under it so the sandboxed agent still reaches this machine. */
+    env: { ...viewerMcpServerEnv(), PROJECT_AUTH: "kept" },
     timeout: 12_345,
     alwaysLoad: true,
   });
@@ -277,7 +288,11 @@ test("Claude native MCP config merges project scope between user and local scope
 
   /* The launch directory's local definition wins over both. */
   expect(mcpConfig.mcpServers).toEqual({
-    viewer: { type: "stdio", command: "local-version", env: { LOCAL_AUTH: "kept" } },
+    viewer: {
+      type: "stdio",
+      command: "local-version",
+      env: { ...viewerMcpServerEnv(), LOCAL_AUTH: "kept" },
+    },
   });
   expect(mcpConfig.mcpServers).not.toHaveProperty("project-unrelated");
   expect(settings.enabledMcpjsonServers).toEqual(["viewer"]);

@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { assertStateStartupMutation, isOperatorOwnedDirectory, ownsStateStartupMutation } from "@/lib/stateOwnership";
+
 import { FileTransactionBusyError, withFileTransactionSync } from "./fileTransaction";
 import { assertStateMutationAllowed, stateMutationRefusal } from "./stateMutationBarrier";
 import { hotStateSqliteWriterReady, hotStateWriterRevision, readHotStateReleaseTarget } from "./hotStateAuthority";
@@ -104,14 +106,26 @@ export function legacyDatabasePath(legacyPath: string): string {
   return path.join(path.dirname(legacyPath), "state.sqlite");
 }
 
-/** Whether this process may import on the lazy path a store read takes: the
-    activated release, or any process when no release target exists (npm,
-    source, tests) — and, before either, a process the barrier admits at all.
-    A module load during `next build` is not one (#1905), and a read that
-    lands here returns "the import has not run" rather than importing. */
+/**
+ * Whether this process may import on the lazy path a store read takes.
+ *
+ * Three questions, and all three have to answer yes (#1905). The barrier asks
+ * whether this process may mutate state at all: never during a `next build`
+ * phase, whatever else is true, and outside the serving Viewer's activation
+ * only against a state directory the caller named. Ownership asks whether a
+ * process that declares no owner is reaching the operator's own directories.
+ * The hot-state writer asks whether this release is the one that may write —
+ * or whether there is no release target at all (npm, source, tests).
+ *
+ * A read that lands here while any of them says no returns "the import has not
+ * run" and falls back to the legacy file, which is what every reader did
+ * before the store existed.
+ */
 export function legacyImportAllowed(legacyPath: string): boolean {
   const directory = path.dirname(legacyPath);
-  return stateMutationRefusal(directory) === null && hotStateSqliteWriterReady(directory);
+  if (stateMutationRefusal(directory) !== null) return false;
+  if (!ownsStateStartupMutation() && isOperatorOwnedDirectory(directory)) return false;
+  return hotStateSqliteWriterReady(directory);
 }
 
 /** A reconcile renames the legacy file away. Only the activation of a release,
@@ -249,10 +263,15 @@ export function importLegacyCollection<P>(
 ): LegacyImportOutcome {
   const hooks = options.hooks ?? {};
   const database = legacyDatabasePath(spec.legacyPath);
-  /* The import renames live state files away. Only the serving Viewer's
-     activation, or a caller that named its own state directory, may run it
-     (#1905) — never a module load in a `next build` worker. */
+  /* The first-boot import is the state-mutating startup step that #1905 was
+     filed for: a lane's `next build` loaded a route module, the module reached
+     a store, and this ran against the operator's live account files. Both
+     gates apply, and the barrier goes first because its refusal holds for a
+     process that IS an owner: inside the serving container `LLV_STATE_OWNER`
+     is already set, so a `next build` run there would pass ownership while
+     still being a module load that may never rename live state away. */
   assertStateMutationAllowed(path.dirname(spec.legacyPath));
+  assertStateStartupMutation(path.dirname(spec.legacyPath), `${spec.collection} import`);
   return withFileTransactionSync(spec.legacyPath, `${spec.collection} import is busy`, () => {
     const held = readStateImport(database, spec.collection);
     const legacy = readLegacy(spec.legacyPath);
