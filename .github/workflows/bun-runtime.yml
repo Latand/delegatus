@@ -29,6 +29,11 @@ name: Bun runtime pin
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      native_queue_campaign:
+        description: Run twenty independent large-image cold recovery checks
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,7 +60,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-queue-campaign:
+    if: github.event_name == 'workflow_dispatch' && inputs.native_queue_campaign
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        repetition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - name: Resolve the image's Bun pin
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pins < <(grep -oE 'npm install -g bun@[0-9]+\.[0-9]+\.[0-9]+' Dockerfile | sed 's/.*bun@//' | sort -u)
+          test "${#pins[@]}" -eq 1
+          printf 'version=%s\n' "${pins[0]}" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ steps.pin.outputs.version }}
+      - run: bun install --frozen-lockfile
+      - name: Install the pinned native Codex fixture CLI
+        run: npm install --prefix "$RUNNER_TEMP/native-codex" --no-save --ignore-scripts @openai/codex@0.154.0
+      - name: Exercise coalesced resume and native queue dispatch
+        shell: bash
+        env:
+          EXPECTED_BUN: ${{ steps.pin.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(bun --version)" = "$EXPECTED_BUN"
+          scratch="$(mktemp -d /var/tmp/nq-XXXXXX)"
+          export HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/config" LLV_STATE_DIR="$scratch/state" TMPDIR="$scratch/tmp"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
+          export NATIVE_CODEX_QUEUE_TEST_BINARY="$RUNNER_TEMP/native-codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+          bun test src/lib/runtime/nativeQueueHost.integration.test.ts -t 'recovery \(large\)' 2>&1 | tee "$scratch/result.log"
+          grep -q '1 pass' "$scratch/result.log"
+          grep -q '0 fail' "$scratch/result.log"
+
   bun-runtime:
+    if: github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
