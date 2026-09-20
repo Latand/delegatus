@@ -44,6 +44,7 @@ function conversation(id: string, artifactPath: string, project: string | null):
     projectOwnership: project ? { project, source: "operator", setAt: "2026-07-31T08:00:00.000Z", operationId: "op-1" } : null,
     migration: null,
     migrationOptOut: null,
+    deliveryEvidenceTracked: true,
     supersededBy: null,
     agentRole: null,
     delegationDepth: null,

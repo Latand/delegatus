@@ -1,13 +1,15 @@
 /**
- * Issue #499 + round-2 finding 4 — the dead STRUCTURED host composer must present
- * exactly the production capability set, truthfully, in both locales:
+ * The dead STRUCTURED host composer must present exactly the production
+ * capability set, truthfully, in both locales:
  *
- *   - Send stays enabled: text is admitted durably and delivered after the
- *     host recovers (the capability matrix's `dead` row keeps send ENABLED);
- *   - the image picker is DISABLED with the localized recovery reason (finding
- *     4): the dead host has no image pipeline, so the picker holds an image
- *     submission until recovery, while staged tiles stay removable and text
- *     still sends;
+ *   - Send stays enabled: the message is admitted durably and the send path
+ *     raises the host itself (the capability matrix's `dead` row keeps send
+ *     ENABLED);
+ *   - the image picker is ENABLED too, with no recovery reason on it. The
+ *     picker used to disable here and say the drafted images would go after a
+ *     restore, which split one message in two and put a button between the
+ *     operator and Send; the server judges the payload against the host that
+ *     came back, so there is nothing for this surface to withhold;
  *   - the model/reasoning pill is NOT offered (the matrix hides `runtime` on
  *     the dead surface), so no committed evidence may depict one.
  *
@@ -162,7 +164,7 @@ async function renderInto(node: React.ReactElement): Promise<{ host: HTMLElement
 }
 
 test.each(["en", "uk"] as const)(
-  "[%s] finding 4: a dead structured host keeps Send admitting text but disables the image picker with the recovery reason, no pill",
+  "[%s] a dead structured host keeps Send AND the image picker open, no pill",
   async (locale) => {
     setLocale(locale);
     /* Desktop: the attachment picker rides the always-inline secondary row, so
@@ -183,17 +185,15 @@ test.each(["en", "uk"] as const)(
     expect(send.getAttribute("aria-disabled")).toBe("false");
     expect(send.disabled).toBe(false);
 
-    /* Finding 4: the dead host has no image pipeline, and it says so in the
-       operator's language, keeping an image submission on hold until the host
-       recovers. Since #1224 the control itself stays open — a document is
-       delivered by inbox path and needs no image pipeline at all — so what the
-       recovery reason governs is the image, not the attach button. */
-    const recoveryReason = translate(locale, "composer.imagesBlockedDuringRecovery");
+    /* The attach control carries no recovery reason at all: an image is part of
+       the message being written, admitted with its text under one key, and the
+       host comes back as part of delivering it. Nothing here tells the operator
+       to press something else first. */
     const attachButton = host.querySelector(`button[aria-label="${translate(locale, "composer.addAttachments")}"]`) as HTMLButtonElement;
     expect(attachButton).toBeTruthy();
     expect(attachButton.disabled).toBe(false);
-    expect(attachButton.title).toBe(recoveryReason);
-    expect(host.textContent).toContain(recoveryReason);
+    expect(attachButton.title).toBe("");
+    expect(host.querySelector('[data-testid="composer-send-blocked"]')).toBeNull();
 
     /* Production capability visibility: the matrix hides the runtime control
        on the dead surface, so no model/reasoning pill may render. */

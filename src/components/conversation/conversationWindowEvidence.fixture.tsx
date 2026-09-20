@@ -12,10 +12,16 @@
  * the driver is `conversationWindow.browser.test.tsx`.
  */
 
+import { useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setLocale, useLocale, type Locale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
+import type { RuntimeSessionView } from "@/hooks/useRuntime";
+import { useComposer } from "@/hooks/useComposer";
+
+import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/components/ComposerBar";
+import { capabilitiesFor } from "@/components/agentCapabilities";
 
 import { FeedItem } from "@/components/feed/FeedItem";
 import { buildFeed, type Item } from "@/components/feed/parse";
@@ -57,7 +63,14 @@ export type ConversationWindowCase =
   | "receipt-delivered"
   | "retired-on-transcript"
   | "auth-terminal"
-  | "clean-terminal";
+  | "clean-terminal"
+  | "dead-host-composer"
+  | "dead-host-not-resumable"
+  | "dead-host-queued"
+  | "dead-host-resuming"
+  | "dead-host-delivering"
+  | "dead-host-delivered"
+  | "dead-host-resume-failed";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -127,9 +140,217 @@ function TerminalFixture({ id }: { id: "auth-terminal" | "clean-terminal" }) {
   );
 }
 
+
+/* ── Sending with a host that is gone ────────────────────────────────────────
+   The operator writes, attaches a photo and presses Send once; the Viewer
+   raises the agent on its way to delivering. These cases are the frames that
+   claim is made in: the composer with a real draft and a real staged image on
+   a dead conversation, and the message's own bubble in each state the send
+   passes through.
+
+   The composer's capability props come from the PRODUCTION matrix — the same
+   `capabilitiesFor` the pane calls — so a frame here cannot show an open
+   picker that the shipped matrix would have closed. */
+
+const DEAD_CARD = "conversation_reclaimed_evidence";
+const DEAD_DRAFT = "Look at this stack trace before you continue — same file as yesterday.";
+const DEAD_SENT = "Look at this stack trace before you continue.";
+
+/** The registry-derived row for a conversation whose host was reclaimed: no
+    structured host record survives, so kind and axis both read `unhosted`. */
+const DEAD_VIEW = {
+  session: {
+    conversationId: DEAD_CARD,
+    sessionKey: { engine: "codex", sessionId: "codex-session-evidence" },
+    hostKind: "unhosted",
+    host: "unhosted",
+    turn: "unknown",
+    provenance: "derived",
+    revision: 3,
+    attentionIds: [],
+    recentReceipts: [],
+    accountId: null,
+    parentConversationId: null,
+    flowId: null,
+    workflowId: null,
+    cwd: "viewer",
+    artifactPath: null,
+    capabilities: {
+      steer: false,
+      structuredAttention: false,
+      imageInput: { supported: true },
+      runtimeSettings: { perTurnEffort: true, perTurnModel: false },
+    },
+    activeTurnId: null,
+  },
+  uiState: {},
+  attentions: [],
+  receipts: [],
+  legacy: false,
+  structuredControlsEnabled: true,
+} as unknown as RuntimeSessionView;
+
+const DEAD_FILE = {
+  path: "/codex-reclaimed-evidence.jsonl",
+  root: "codex-sessions",
+  name: "codex-reclaimed-evidence.jsonl",
+  project: "viewer",
+  engine: "codex",
+  kind: "session",
+  fmt: "codex",
+  parent: null,
+  proc: null,
+  pid: null,
+  conversationId: DEAD_CARD,
+} as unknown as FileEntry;
+
+/** A 48x48 PNG — a plain two-tone check — decoded at runtime, so the staged
+    tile in the frame is a real image that came through the production
+    attachment intake rather than a mock standing in for one. */
+const TILE_PNG = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAX0lEQVR42u3XsQkAIAwEQCcRR3AVW6d3E90g"
+  + "FhYKXpHyIVc9n3obM7pcani38wkAAAAA4Ajw+oO7PAAAAADAGUATAwAAANgDmhgAAADAHtDEAAAAAPaAJgYAAAD4DrAAlLbY"
+  + "gOGW5kkAAAAASUVORK5CYII=";
+
+function pngFile(): File {
+  const binary = atob(TILE_PNG);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], "stack-trace.png", { type: "image/png" });
+}
+
+/** A subagent transcript on a dead host whose ROOT transcript is gone: the one
+    permanently non-resumable state, where Send cannot help and the reason has
+    to name the action that can. */
+const ORPHANED_FILE = {
+  ...DEAD_FILE,
+  root: "claude-projects",
+  kind: "subagent",
+  parent: null,
+  parentRemoved: { conversationId: "conversation_root_gone", path: null },
+} as unknown as FileEntry;
+
+/**
+ * The composer on a conversation whose host is gone: text in the field, an
+ * image staged beside it, Send live. Every prop the old gates worked through —
+ * `showImage`, `imageDisabled`, `sendDisabledReason`, and the phone's
+ * `sendSlot` — is derived here exactly as `TmuxComposer` derives it, from the
+ * matrix's verdict and `composerSlotKind`.
+ *
+ * The slot matters most and was the piece a standalone `ComposerBar` used to
+ * skip. On a phone the one control under the field IS the send, and a stopped
+ * host used to turn it into «Respawn» — the restore-first button this work
+ * removes. A frame that mounted the bar without a slot could never show that,
+ * so it is wired from the same inputs the pane uses: killed, offline, working,
+ * and whether a draft is in the field.
+ */
+function DeadComposerFixture({ file, id }: { file: FileEntry; id: ConversationWindowCase }) {
+  const { t } = useLocale();
+  const caps = capabilitiesFor(file, DEAD_VIEW, { runtimeEnabled: true });
+  const sendCap = caps.controls.send;
+  const imageCap = caps.controls.images;
+  const composer = useComposer({
+    initialText: () => DEAD_DRAFT,
+    persistText: () => undefined,
+    submit: () => undefined,
+    acceptFiles: true,
+    holdInputWhileBusy: false,
+  });
+  /* One staged tile, added once through the production intake. */
+  const staged = useRef(false);
+  const addFiles = composer.attachments.addFiles;
+  useEffect(() => {
+    if (staged.current) return;
+    staged.current = true;
+    addFiles([pngFile()]);
+  }, [addFiles]);
+  /* The pane's own inputs: the host is killed, the bus is up, no turn is
+     running, and the operator has written something. */
+  const slotKind: ComposerSlotKind = composerSlotKind({
+    killed: true,
+    offline: false,
+    working: false,
+    hasDraft: composer.text.trim().length > 0 || composer.attachments.images.length > 0,
+  });
+  const SLOT: Record<ComposerSlotKind, { label: string; text?: string }> = {
+    send: { label: t("composer.sendToAgent") },
+    stop: { label: t("mobile2.composer.stop") },
+    queue: { label: t("mobile2.composer.queueAria"), text: t("mobile2.composer.queue") },
+    respawn: { label: t("mobile2.composer.respawnAria"), text: t("mobile2.composer.respawn") },
+  };
+  return (
+    <div data-evidence-case={id} className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex justify-end">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5">{DEAD_SENT}</div>
+      </div>
+      <ComposerBar
+        composer={composer}
+        placeholder={t("composer.placeholderSend")}
+        textareaAriaLabel={t("composer.sendStructuredAria")}
+        imageAriaLabel={t("composer.addAttachments")}
+        leftSlot={null}
+        sendSlot={{ kind: slotKind, ...SLOT[slotKind] }}
+        sendLabelIdle={t("composer.sendToAgent")}
+        sendLabelRecording={t("composer.sendToAgent")}
+        sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
+        showImage={sendCap.state !== "hidden"}
+        imageDisabled={imageCap.state !== "enabled"}
+        imageDisabledReason={imageCap.state === "disabled" ? t(imageCap.reason) : undefined}
+        sendDisabledReason={sendCap.state === "disabled" ? t(sendCap.reason) : undefined}
+      />
+    </div>
+  );
+}
+
+/** The conversation's own host axis in each state the send passes through. */
+const DEAD_SESSION: Record<string, { host: string; turn: string }> = {
+  "dead-host-queued": { host: "unhosted", turn: "unknown" },
+  "dead-host-resuming": { host: "recovering", turn: "unknown" },
+  /* The host came back and the message is on the wire to it — the step between
+     "starting" and "delivered", and the one the queue's own vocabulary calls
+     `delivering`. */
+  "dead-host-delivering": { host: "hosted", turn: "idle" },
+  "dead-host-delivered": { host: "hosted", turn: "idle" },
+  "dead-host-resume-failed": { host: "unhosted", turn: "unknown" },
+};
+
+const RESUME_FAILURE = "structured host recovery failed after 12 contended attempts: account is busy";
+
+function deadEntry(id: ConversationWindowCase): OutboxEntry {
+  const base = { id: "evidence-dead-key", text: DEAD_SENT, images: 1, at: ADMITTED_AT } as const;
+  if (id === "dead-host-queued") return { ...base, state: "queued" } as OutboxEntry;
+  if (id === "dead-host-resuming") return { ...base, state: "delivering", acceptedHeld: true } as OutboxEntry;
+  /* Not `acceptedHeld`: the admission is no longer parked, it is being handed
+     over, which is what separates this chip from the resuming one above. */
+  if (id === "dead-host-delivering") return { ...base, state: "delivering", dispatchedAt: ADMITTED_AT } as OutboxEntry;
+  if (id === "dead-host-delivered") return { ...base, state: "delivered", settledAt: DELIVERED_AT } as OutboxEntry;
+  return { ...base, state: "failed", error: RESUME_FAILURE } as OutboxEntry;
+}
+
+function DeadQueueFixture({ id }: { id: ConversationWindowCase }) {
+  const { t } = useLocale();
+  return (
+    <div data-evidence-case={id} className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex justify-end">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5">{DEAD_SENT}</div>
+      </div>
+      <OutboxBubblesView
+        entries={[deadEntry(id)]}
+        t={t}
+        nowMs={ADMITTED_AT + 60_000}
+        onCancel={() => undefined}
+        onRetry={() => undefined}
+        session={DEAD_SESSION[id] as Parameters<typeof OutboxBubblesView>[0]["session"]}
+      />
+    </div>
+  );
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
+  if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
+  if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;
+  if (id.startsWith("dead-host-")) return <DeadQueueFixture id={id} />;
   const entries = visibleEntries(id);
   return (
     <div data-evidence-case={id} className="min-h-dvh bg-canvas px-4 py-6 text-primary">

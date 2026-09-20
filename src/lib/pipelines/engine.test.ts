@@ -10857,3 +10857,354 @@ test("a COMMENT review flow routes only on findings the review itself reported (
   expect(changesVerdict.syntheticFindings).toBe(true);
   expect(verdictRoutesAsFail(changesVerdict)).toBe(true);
 });
+
+
+async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" | "uncertain" | "turn-started" | "absent" | "permanent" | "held" = "timeout") {
+  const h = harness();
+  let clock = Date.now();
+  h.ports.now = () => new Date(clock).toISOString();
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { spawnStructuredConversation, recoverStagedStructuredLaunch } = await import("@/lib/runtime/structuredSpawn");
+  const { RuntimeHostUnavailableError, isRuntimeHostTransportFailure } = await import("@/lib/runtime/client");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "staged-recovery-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  const artifactPath = path.join(root, "session.jsonl");
+  const sessionId = crypto.randomUUID();
+  let starts = 0;
+  let messages = 0;
+  let failures = ["timeout", "reset", "busy", "503", "held"].includes(mode) ? 2 : 0;
+  let holds = mode === "held" ? 1 : 0;
+  let statusFailures = 0;
+  const lookups: string[] = [];
+  const operations = new Map<string, import("@/lib/runtime/contracts").RuntimeOperationResult>();
+  const record = (id: string, conversationId: string, status: "queued" | "delivered" | "turn-started") => {
+    const result = { receipt: { operationId: id, conversationId, status }, replayed: false } as import("@/lib/runtime/contracts").RuntimeOperationResult;
+    operations.set(id, result);
+    return result;
+  };
+  const client = {
+    command: async (command: Parameters<import("@/lib/runtime/client").RuntimeHostClient["command"]>[0]) => {
+      if (!command.operationId || !command.conversationId) throw new Error("fixture requires original operation identity");
+      return operations.get(command.operationId) ?? record(command.operationId, command.conversationId, "queued");
+    },
+    producerCursor: async () => {
+      if (mode === "permanent") throw new RuntimeHostUnavailableError("authentication denied", "UNAUTHORIZED");
+      if (failures-- > 0) {
+        if (mode === "503") throw Object.assign(new Error("runtime temporarily unavailable"), { status: 503 });
+        if (mode === "reset") throw Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+        if (mode === "busy") throw new RuntimeHostUnavailableError("runtime host busy", "HOST_BUSY");
+        throw new RuntimeHostUnavailableError("runtime host request timed out");
+      }
+      return 0;
+    },
+    operationStatus: async (id: string) => {
+      lookups.push(id);
+      if (statusFailures-- > 0) throw new RuntimeHostUnavailableError("runtime host request timed out");
+      return operations.get(id) ?? null;
+    },
+    transitionOperation: async (id: string, status: import("@/lib/runtime/contracts").RuntimeReceiptStatus) => record(id, operations.get(id)!.receipt.conversationId, status as "delivered"),
+  } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
+  let launchId = "";
+  h.ports.spawnAgent = async (_input, reserve) => {
+    const profile = emptyLaunchProfile({ cwd: root });
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: root, transport: "structured", launchProfile: profile, memberships: [_input.membership] });
+    if (begun.kind !== "created") throw new Error("fixture reservation failed");
+    launchId = begun.receipt.launchId;
+    reserve({ launchId, conversationId: begun.receipt.conversationId });
+    const result = await spawnStructuredConversation({
+      engine: "codex", receipt: begun.receipt, registry, client, prompt: "Build the change",
+      spec: { engine: "codex", command: "codex", cwd: root, windowName: "test", launchProfile: profile },
+      account: { engine: "codex", accountId: "test", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" } },
+    }, {
+      startHost: async () => {
+        starts++;
+        return {
+          identity: { threadId: sessionId, path: artifactPath },
+          health: async () => ({ status: "idle" }), release: async () => {},
+          sessionMaterializationEvidence: async () => ({ state: "materialized" }),
+        } as unknown as import("@/lib/runtime/structuredSpawn").SpawnedStructuredHost;
+      },
+      now: () => clock,
+      bindHost: async (store, key, _host, owner, epoch) => {
+        const entry = store.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
+        store.setStructuredHostClaimed(key, { ...entry.structuredHost!, process: { pid: process.pid, startIdentity: "fixture" } }, "live", owner, epoch);
+        return () => {};
+      },
+      publishHost: async () => { await client.producerCursor("codex-app-server", "test:"); return async () => {}; },
+      deliverFirst: async () => {
+        if (holds-- > 0) return "held";
+        messages++;
+        if (mode !== "absent") record(`spawn_message_${launchId}`, begun.receipt.conversationId, mode === "turn-started" ? "turn-started" : "delivered");
+        if (mode === "absent") throw new RuntimeHostUnavailableError("runtime host request timed out");
+        fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
+        if (mode === "uncertain" || mode === "turn-started") throw new RuntimeHostUnavailableError("runtime host request timed out");
+      },
+    }).catch((error) => { if (isRuntimeHostTransportFailure(error)) throw new Error(HOST_UNAVAILABLE); throw error; });
+    return { launchId, conversationId: result.conversationId!, sessionId: null, transcript: result.path ?? null, paneId: null };
+  };
+  h.ports.spawnReceipt = (id) => {
+    const receipt = registry.readOnlySnapshot().receipts[id];
+    return receipt ? { launchId: id, conversationId: receipt.conversationId, state: receipt.state,
+      sessionId: receipt.state === "completed" ? receipt.key?.sessionId ?? null : null,
+      ["transcript"]: receipt.state === "completed" ? receipt.artifactPath : null, paneId: null,
+      staged: !!receipt.key, error: receipt.error } : null;
+  };
+  const recover = async (id: string, eligible: () => boolean) => {
+    await recoverStagedStructuredLaunch(id, registry, client, { now: () => clock, eligible });
+  };
+  h.ports.recoverStagedLaunch = recover;
+  h.ports.scheduleTick = () => {};
+  h.ports.conversationAgentActive = async () => true;
+  h.ports.pathForConversation = () => null;
+  Object.assign(h.ports, { sleep: forbiddenSleep });
+  const stages = spyOn(registry, "stageStructuredSpawn");
+  const attempt = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  const wake = async () => { clock += 61_000; await tickPipelines([], { ...h.ports }); };
+  return { h, registry, client, stages, attempt, wake, recover,
+    launchId: () => launchId, starts: () => starts, messages: () => messages, lookups,
+    advance: (ms: number) => { clock += ms; }, failStatus: (n: number) => { statusFailures = n; } };
+}
+
+test.each(["timeout", "503", "reset", "busy"] as const)("staged publication %s keeps the same launch waiting for recovery", async (mode) => {
+  const f = await stagedRecoveryHarness(mode);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: expect.stringContaining("waiting for the runtime host") });
+  expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("path-pending");
+  expect(f.starts()).toBe(1);
+  expect(f.messages()).toBe(0);
+  const original = f.attempt().launchId;
+  await f.wake();
+  expect(f.messages()).toBe(0);
+  await f.wake();
+  await f.wake();
+  expect(f.attempt()).toMatchObject({ n: 1, state: "running", launchId: original, spawnCalls: 1 });
+  expect(loadPipelines()[0]!.stateDetail).toBeNull();
+  expect(f.registry.readOnlySnapshot().receipts[original!]?.state).toBe("completed");
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.starts()).toBe(1);
+  expect(f.messages()).toBe(1);
+  expect(f.attempt().retiredLaunches).toBeUndefined();
+});
+
+test.each(["uncertain", "turn-started"] as const)("%s staged delivery resolves by original operation lookup without sending again", async (mode) => {
+  const f = await stagedRecoveryHarness(mode);
+  await tickPipelines([], f.h.ports);
+  f.failStatus(2);
+  await f.wake();
+  await f.wake();
+  await f.wake();
+  expect(f.attempt().state).toBe("running");
+  expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("completed");
+  expect(new Set(f.lookups)).toEqual(new Set([f.launchId(), `spawn_message_${f.launchId()}`]));
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.messages()).toBe(1);
+});
+
+test("an uncertain send missing from lookup exhausts its budget without another first message", async () => {
+  const f = await stagedRecoveryHarness("absent");
+  await tickPipelines([], f.h.ports);
+  await f.wake();
+  expect(f.attempt().state).toBe("spawning");
+  f.advance(10 * 60_000);
+  await f.wake();
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("original launch and first-message operation inspected") });
+  expect(f.attempt().launchId).toBe(f.launchId());
+  expect(f.messages()).toBe(1);
+  expect(f.starts()).toBe(1);
+});
+
+test("a permanent staged publication refusal parks with its cause", async () => {
+  const f = await stagedRecoveryHarness("permanent");
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "authentication denied" });
+  expect(f.messages()).toBe(0);
+  expect(f.starts()).toBe(1);
+});
+
+test("a restarted controller resumes the persisted wait without another spawn", async () => {
+  const f = await stagedRecoveryHarness();
+  await tickPipelines([], f.h.ports);
+  const original = structuredClone(f.attempt());
+  const modulePath = "./engine?staged-controller-restart";
+  const restarted = await import(modulePath) as typeof engineModule;
+  f.h.ports.spawnAgent = async () => { throw new Error("restart must never spawn"); };
+  for (let i = 0; i < 3; i++) { f.advance(61_000); await restarted.tickPipelines([], { ...f.h.ports }); }
+  expect(f.attempt()).toMatchObject({ n: original.n, launchId: original.launchId, state: "running", spawnCalls: 1 });
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.messages()).toBe(1);
+});
+
+test("concurrent controllers probe outside the lease and reject a cancelled attempt", async () => {
+  const f = await stagedRecoveryHarness();
+  await tickPipelines([], f.h.ports);
+  f.advance(61_000);
+  const read = f.client.operationStatus.bind(f.client);
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  f.client.operationStatus = async (id) => { entered(); await blocked; return read(id); };
+  const first = tickPipelines([], f.h.ports);
+  await started;
+  const second = tickPipelines([], { ...f.h.ports });
+  const { withPipelineMutation } = await import("./store");
+  await withPipelineMutation((pipelines, persist) => { pipelines[0]!.state = "paused"; persist(); });
+  release();
+  await Promise.all([first, second]);
+  expect(loadPipelines()[0]!.state).toBe("paused");
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.messages()).toBe(0);
+});
+
+
+test("a controller awaiting the staged host owner uses bounded observer backoff", async () => {
+  const f = await stagedRecoveryHarness();
+  const scheduled: number[] = [];
+  f.h.ports.scheduleTick = (delay) => { scheduled.push(delay); };
+  await tickPipelines([], f.h.ports);
+  f.h.ports.recoverStagedLaunch = async () => {};
+  f.advance(10_000);
+  await tickPipelines([], f.h.ports);
+  const first = f.attempt().controllerWait!;
+  expect(first).toBeDefined();
+  expect(scheduled.every((delay) => delay >= 1_000)).toBe(true);
+  f.advance(2_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempt().controllerWait!.rounds).toBeGreaterThan(first.rounds);
+  expect(f.attempt().controllerWait!.retryMaxMs).toBe(60_000);
+  expect(f.starts()).toBe(1);
+  expect(f.messages()).toBe(0);
+});
+
+
+test("two recovery controllers complete one staged launch and dispatch one first message", async () => {
+  const f = await stagedRecoveryHarness();
+  await tickPipelines([], f.h.ports);
+  f.advance(61_000);
+  await Promise.all([f.recover(f.launchId(), () => true), f.recover(f.launchId(), () => true)]);
+  f.advance(61_000);
+  await Promise.all([f.recover(f.launchId(), () => true), f.recover(f.launchId(), () => true)]);
+  await f.wake();
+  expect(f.attempt()).toMatchObject({ n: 1, launchId: f.launchId(), state: "running", spawnCalls: 1 });
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.starts()).toBe(1);
+  expect(f.messages()).toBe(1);
+});
+
+
+test("generic startup recovery cannot dispatch a pipeline launch without attempt eligibility", async () => {
+  const f = await stagedRecoveryHarness();
+  await tickPipelines([], f.h.ports);
+  const { recoverStagedStructuredLaunch } = await import("@/lib/runtime/structuredSpawn");
+  await recoverStagedStructuredLaunch(f.launchId(), f.registry, f.client, { now: () => Date.now() + 61_000 });
+  expect(f.lookups).toEqual([]);
+  expect(f.messages()).toBe(0);
+  expect(f.starts()).toBe(1);
+});
+
+
+test("a held first-message continuation retries the original staged launch on healthy wakes", async () => {
+  const f = await stagedRecoveryHarness("held");
+  await tickPipelines([], f.h.ports);
+  await f.wake(); // Second publication timeout.
+  await f.wake(); // Publication succeeds; delivery is held before dispatch.
+  expect(f.messages()).toBe(0);
+  const { stagedLaunchRecovery } = await import("@/lib/runtime/structuredSpawn");
+  expect(stagedLaunchRecovery(f.registry.readOnlySnapshot().receipts[f.launchId()])?.phase).toBe("unpublished");
+  for (let i = 0; i < 3; i++) await f.wake();
+  expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("completed");
+  expect(f.attempt()).toMatchObject({ n: 1, launchId: f.launchId(), state: "running", spawnCalls: 1 });
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.starts()).toBe(1);
+  expect(f.messages()).toBe(1);
+});
+
+test.each([false, true])("restart after receipt completion clears only the recovery wait (unrelated park: %s)", async (unrelatedPark) => {
+  const f = await stagedRecoveryHarness();
+  await tickPipelines([], f.h.ports);
+  f.h.ports.recoverStagedLaunch = async () => {};
+  f.advance(10_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempt().controllerWait).toBeDefined();
+  // Finish the durable receipt without applying the observation under the
+  // pipeline lease: the old controller stops at precisely that boundary.
+  for (let i = 0; i < 3; i++) {
+    f.advance(61_000);
+    await f.recover(f.launchId(), () => true);
+  }
+  expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("completed");
+  expect(f.attempt().state).toBe("spawning");
+  expect(loadPipelines()[0]!.stateDetail).toContain("waiting for the runtime host");
+  if (unrelatedPark) {
+    const pipelines = loadPipelines();
+    pipelines[0]!.state = "needs_decision";
+    pipelines[0]!.stateDetail = "manual review required for changed requirements";
+    savePipelines(pipelines);
+  }
+  const modulePath = "./engine?completed-receipt-controller-restart";
+  const restarted = await import(modulePath) as typeof engineModule;
+  f.h.ports.spawnAgent = async () => { throw new Error("completed receipt must never spawn again"); };
+  await restarted.tickPipelines([], { ...f.h.ports });
+  expect(f.attempt()).toMatchObject({ n: 1, launchId: f.launchId(), state: unrelatedPark ? "spawning" : "running", spawnCalls: 1 });
+  if (unrelatedPark) {
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "manual review required for changed requirements" });
+    expect(f.attempt().controllerWait).toBeDefined();
+  } else {
+    expect(f.attempt().controllerWait).toBeUndefined();
+    expect(loadPipelines()[0]!.stateDetail).toBeNull();
+  }
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.starts()).toBe(1);
+  expect(f.messages()).toBe(1);
+});
+
+
+test.each(["before probe", "during probe"] as const)("staged recovery preserves an unrelated park %s", async (boundary) => {
+  const f = await stagedRecoveryHarness();
+  await tickPipelines([], f.h.ports);
+  const parkForReview = () => {
+    const pipelines = loadPipelines();
+    pipelines[0]!.state = "needs_decision";
+    pipelines[0]!.stateDetail = "manual review required for changed requirements";
+    pipelines[0]!.runs[0]!.attempts[0]!.error = "manual review required for changed requirements";
+    savePipelines(pipelines);
+  };
+  if (boundary === "before probe") parkForReview();
+  else {
+    const pipelines = loadPipelines();
+    pipelines[0]!.state = "needs_decision";
+    pipelines[0]!.stateDetail = HOST_UNAVAILABLE;
+    pipelines[0]!.runs[0]!.attempts[0]!.error = HOST_UNAVAILABLE;
+    savePipelines(pipelines);
+    const read = f.client.operationStatus.bind(f.client);
+    f.client.operationStatus = async (id) => { parkForReview(); return read(id); };
+  }
+  await f.wake();
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "manual review required for changed requirements" });
+  expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("path-pending");
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.messages()).toBe(0);
+  if (boundary === "before probe") expect(f.lookups).toEqual([]);
+});
+
+
+test.each(["timeout", "uncertain"] as const)("a staged launch parked for runtime unavailability recovers its original attempt (%s)", async (mode) => {
+  const f = await stagedRecoveryHarness(mode);
+  await tickPipelines([], f.h.ports);
+  const pipelines = loadPipelines();
+  pipelines[0]!.state = "needs_decision";
+  pipelines[0]!.stateDetail = HOST_UNAVAILABLE;
+  pipelines[0]!.runs[0]!.attempts[0]!.state = "needs_decision";
+  pipelines[0]!.runs[0]!.attempts[0]!.error = HOST_UNAVAILABLE;
+  savePipelines(pipelines);
+  for (let i = 0; i < 3; i++) await f.wake();
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
+  expect(f.attempt()).toMatchObject({ n: 1, launchId: f.launchId(), state: "running", spawnCalls: 1 });
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.messages()).toBe(1);
+});

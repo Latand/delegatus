@@ -238,3 +238,77 @@ test("#1224 a bubble for a document-only submission names its attachment instead
   const images = await bubble({ text: "", images: 2 }, SUBMITTED_AT + 1_000);
   expect(images.textContent).toContain(translate("en", "composer.imagesCount", { count: 2 }));
 });
+
+/**
+ * Sending into a host that is gone.
+ *
+ * The operator presses Send once and the Viewer raises the agent on the way to
+ * delivering. The bubble is the message's one delivery state, so it has to walk
+ * that sequence out loud — and the two host phases are not the same fact:
+ * «nothing is hosting this» and «it is starting again» call for different
+ * decisions, and only the second is progress. Both are read from the
+ * conversation's own host axis, never inferred from the fact that a send was
+ * made.
+ */
+const GONE: Session = { host: "unhosted", turn: "unknown" };
+const RESUMING: Session = { host: "recovering", turn: "unknown" };
+
+test("a send into a gone host walks queued → resuming host → delivering → delivered", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    /* Queued: the operator's press landed in the local queue, nothing has been
+       handed over yet. */
+    let host = await bubble({ state: "queued" }, SUBMITTED_AT + 2_000, locale, GONE);
+    expect(chip(host)).toBe(translate(locale, "outbox.queued"));
+
+    /* Admitted while the conversation still has no host. A server-held
+       admission with no receipt yet used to flatten this into a bare "held";
+       the host axis knows more than that and the bubble now says it. */
+    host = await bubble({ state: "delivering", acceptedHeld: true }, SUBMITTED_AT + 60_000, locale, GONE);
+    expect(phase(host)).toBe("awaiting-host");
+    expect(chip(host)).toBe(translate(locale, "runtime.receipt.awaitingHostFor", {
+      waited: translate(locale, "runtime.receipt.waitedMin", { n: 1 }),
+    }));
+
+    /* The send's own recovery is under way: progress, and it reads and spins
+       like progress rather than sitting in the red "nothing is hosting" state. */
+    host = await bubble({ state: "delivering", acceptedHeld: true }, SUBMITTED_AT + 60_000, locale, RESUMING);
+    expect(phase(host)).toBe("resuming-host");
+    expect(chip(host)).toBe(translate(locale, "runtime.receipt.resumingHostFor", {
+      waited: translate(locale, "runtime.receipt.waitedMin", { n: 1 }),
+    }));
+    expect(host.querySelector(".animate-spin")).not.toBeNull();
+
+    /* The host came back and the message is being put in front of the agent. */
+    host = await bubble({ state: "delivering" }, SUBMITTED_AT + 4_000, locale, { host: "hosted", turn: "idle" });
+    expect(chip(host)).toBe(translate(locale, "outbox.delivering"));
+
+    host = await bubble({ state: "delivered" }, SUBMITTED_AT + 8_000, locale, { host: "hosted", turn: "idle" });
+    expect(chip(host)).toBe(translate(locale, "outbox.delivered"));
+  }
+});
+
+test("a resume that failed keeps the real reason and one retry", async () => {
+  /* The server retries a contended resume on its own doubling backoff and only
+     then settles the operation failed, carrying the reason it failed for. The
+     bubble prints that reason verbatim — never a generic "failed" — and offers
+     the single same-key retry. */
+  const reason = "structured host recovery failed after 12 contended attempts: account is busy";
+  let retried = 0;
+  document.body.replaceChildren();
+  const host = await render(
+    <OutboxBubblesView
+      entries={[entry({ state: "failed", error: reason })]}
+      t={translator("en")}
+      nowMs={SUBMITTED_AT + 120_000}
+      onCancel={() => {}}
+      onRetry={() => { retried += 1; }}
+      session={GONE}
+    />,
+  );
+  expect(chip(host)).toBe(reason);
+  expect(chip(host)).not.toBe(translate("en", "outbox.failed"));
+  const retry = host.querySelector(`button[aria-label="${translate("en", "outbox.retry")}"]`) as HTMLButtonElement;
+  expect(retry).toBeTruthy();
+  await act(async () => retry.click());
+  expect(retried).toBe(1);
+});

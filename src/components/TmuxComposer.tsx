@@ -1584,8 +1584,30 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   // `caps` also carries the Send capability: a *hidden* Send (a gated
   // scanner-shaped subagent, a shell task) means this surface exposes no message
   // path at all, so the whole composer stands down below (finding 2).
-  const { caps, structuredSession } = runtimeDependencies.useAgentCapabilities(file);
+  const { caps, structuredSession, runtime } = runtimeDependencies.useAgentCapabilities(file);
   const deadHost = paneDeadHost || caps.surface === "dead";
+  /* WHERE A MESSAGE GOES WHEN THE HOST IS GONE.
+
+     A `dead` surface is by construction a structured-plane conversation:
+     `isDeadHost` only classifies a non-legacy runtime view with structured
+     controls on. What it does NOT always carry is a structured host RECORD —
+     a conversation whose host was reclaimed outright projects
+     `hostKind: "unhosted"`, and `structuredSessionOf` answers null for that.
+     That null used to mean "no route", so the composer gated the input, hid
+     the picker and made the operator press Respawn first.
+
+     It is not the route that is missing, only the host. `/api/runtime/send`
+     takes a conversation id, not a live session: it reserves the instruction
+     durably, classifies the conversation `reclaimed`, raises the host itself
+     and delivers. So a dead surface with a runtime view routes THERE — the
+     same one path a live structured send takes, never a second one — and the
+     composer stays usable meanwhile.
+
+     `structuredSession` keeps its own meaning everywhere else: it is the LIVE
+     host that steering, the native queue, voice and the runtime pill need, and
+     none of those exist for a host that is gone. */
+  const deadHostRoute = caps.surface === "dead" ? runtime : null;
+  const deliveryRoute = structuredSession ?? deadHostRoute;
   const voiceEnabled = cardId.startsWith("conversation_")
     && structuredSession?.session.hostKind === "codex-app-server"
     && structuredSession.session.host === "hosted";
@@ -2397,10 +2419,13 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      resolving reason (so no /api/tmux POST can fire even without the pane's
      prop), and keeps the Re-check recovery route (issue #499 round 2). */
   const unresolvedOwnership = caps.surface === "unresolved";
+  /* The dead row's Send cell is no longer a blanket refusal, so its verdict is
+     read like every other surface's: enabled for a conversation the send path
+     can raise, and disabled with the reason for one it cannot. */
   const effectiveSendBlockedReason = sendBlockedReason
-    ?? (!deadHost && caps.controls.send.state === "disabled" ? t(caps.controls.send.reason) : null)
+    ?? (caps.controls.send.state === "disabled" ? t(caps.controls.send.reason) : null)
     ?? (unresolvedOwnership ? t("strip.resolving") : null);
-  const spawnMode = target === null && !structuredSession && !unresolvedOwnership;
+  const spawnMode = target === null && !deliveryRoute && !unresolvedOwnership;
   const relayMode = spawnMode && file.root === "claude-projects" && file.kind === "subagent";
 
   const persistSent = (next: SentEntry[]) => {
@@ -2429,7 +2454,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     if (voiceSending || reconcilingSend) return;
     if (!requestedText.trim() && !requestedImages.length && !requestedFiles.length) return;
     if (refuseWhileInjecting(requestedFiles)) return;
-    if (deadHost && !structuredSession) {
+    /* A dead surface with NO runtime view at all reached this composer through
+       the pane prop alone: there is no conversation identity to reserve the
+       message against, so it is refused here rather than posted to the legacy
+       pane route, which has nothing on the other end either. */
+    if (deadHost && !deliveryRoute) {
       setStatus({ kind: "err", text: t("deadHost.sendBlocked") });
       return;
     }
@@ -2441,7 +2470,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       setStatus({ kind: "err", text: effectiveSendBlockedReason });
       return;
     }
-    if (structuredSession && requestedImages.length && !attachments.validate()) return;
+    if (deliveryRoute && requestedImages.length && !attachments.validate()) return;
     /* Capacity is a pre-flight refusal like the others (#1538): the bounded
        queue compacts settled history only, so when every slot still holds an
        unresolved operation the new submission is refused HERE — the
@@ -2500,15 +2529,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     // Keep the complete authored generation until both durable phases commit.
     const selectedContext = viewerSelectedContext();
     const submittedFile = { path: file.path, project: file.project, pid: file.pid };
-    const submittedConversationId = structuredSession?.session.conversationId;
+    const submittedConversationId = deliveryRoute?.session.conversationId;
     const legacyResumeRuntime = spawnMode && !relayMode;
-    const runtime = structuredSession ? sendRuntimeFrom(file) : legacyResumeRuntime ? resumeProfileBody(file) : undefined;
+    const sendRuntime = deliveryRoute ? sendRuntimeFrom(file) : legacyResumeRuntime ? resumeProfileBody(file) : undefined;
     const policy = options?.policy ?? "interrupt-active";
     void withComposerSubmission(cardId, async () => {
       try {
         const ref = await composerSubmissionPayloads.retain({ conversationId: cardId, key: clientMessageId }, {
           text: requestedText, images: requestedImages, files: requestedFiles, selectedContext,
-          runtime: runtime as Record<string, unknown> | undefined, policy,
+          runtime: sendRuntime as Record<string, unknown> | undefined, policy,
         });
         const bridge = await drainBridgeTurnStart();
         const prelude = await withComposerAdmissionDeadline(
@@ -2518,16 +2547,20 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         const composed = prelude ? `${prelude}\n${requestedText}` : requestedText;
         const wireText = bridge?.text ? `${bridge.text}\n\n${composed}` : composed;
         const content = {
-          text: structuredSession ? wireText.trim() : wireText,
+          text: deliveryRoute ? wireText.trim() : wireText,
           images: requestedImages.map(({ base64, mime }) => ({ base64, mime })),
           ...(requestedFiles.length ? { files: requestedFiles.map(({ name, base64 }) => ({ name, base64 })) } : {}),
           idempotencyKey: clientMessageId,
         };
-        await composerSubmissionPayloads.seal(ref, structuredSession
+        /* The sealed envelope carries the route, so a retry after a reload
+           takes the path this attempt took — a message admitted against a
+           reclaimed conversation replays into /api/runtime/send, which looks it
+           up under its original key rather than sending it a second time. */
+        await composerSubmissionPayloads.seal(ref, deliveryRoute
           ? { route: "runtime", body: { ...content, conversationId: submittedConversationId,
-              policy, ...(runtime ? { runtime } : {}), selectedContext } }
+              policy, ...(sendRuntime ? { runtime: sendRuntime } : {}), selectedContext } }
           : { route: "legacy", body: { ...content, pid: submittedFile.pid ?? undefined, path: submittedFile.path,
-              clientMessageId, origin: { kind: "operator" }, ...(legacyResumeRuntime ? runtime ?? {} : {}) } });
+              clientMessageId, origin: { kind: "operator" }, ...(legacyResumeRuntime ? sendRuntime ?? {} : {}) } });
         if (!await composerSubmissionPayloads.beginAttempt(ref)) throw new Error("Original attempt is already owned");
         if (bridge?.ackToken) rememberBridgeAcknowledgement(clientMessageId, bridge.ackToken);
         await refreshPayloads();
@@ -2585,7 +2618,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     }
   };
 
-  const send = async (overrideText?: string, retry?: { receiptId?: number; clientMessageId?: string; unconfirmedAdmission?: true }, outboxId?: string) => {
+  const send = async (overrideText?: string, retry?: { receiptId?: number; clientMessageId?: string }, outboxId?: string) => {
     const originalKey = deliveryAttemptKey(idempotencyKey.current, retry?.clientMessageId);
     const knownPayload = payloadRows.find(row => row.ref.key === originalKey);
     let durable: RestoredComposerSubmission | null = null;
@@ -2604,8 +2637,6 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        failure, and that refusal releases the admitted operation's inbox files.
        The queue bubble's Retry and the recovery row both arrive here. */
     if (durable?.operationId) {
-      // Admission won while an explicit local replay was restoring its bytes.
-      if (retry?.unconfirmedAdmission) { await refreshPayloads(); return; }
       await retryAdmittedPayload(durable, outboxId);
       return;
     }
@@ -2792,7 +2823,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        A conversation whose delivery route disappeared AFTER a message was queued
        marks that message undelivered with the reason instead of retrying into a
        wall — the operator keeps the text and the explanation. */
-    if (deadHost && !structuredSession) {
+    if (deadHost && !deliveryRoute) {
       setStatus({ kind: "err", text: t("deadHost.sendBlocked") });
       settleOutbox("failed", t("deadHost.sendBlocked"));
       return;
@@ -2810,7 +2841,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       settleOutbox("failed", effectiveSendBlockedReason);
       return;
     }
-    if (structuredSession && sentImages.length && !attachments.validate()) return;
+    if (deliveryRoute && sentImages.length && !attachments.validate()) return;
     setBusy(true);
     setStatus(deadHost
       ? { kind: "info", text: t("composer.receiptRecovering") }
@@ -2818,13 +2849,13 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     /* The runtime settings this key rides with, frozen at its first attempt so
        structured sends and legacy resume spawns replay byte-identically. */
     const legacyResumeRuntime = spawnMode && !relayMode;
-    const capturesRuntime = Boolean(structuredSession) || legacyResumeRuntime;
+    const capturesRuntime = Boolean(deliveryRoute) || legacyResumeRuntime;
     if (capturesRuntime && !runtimeSendSnapshots.current.has(clientMessageId)) {
       runtimeSendSnapshots.current.set(
         clientMessageId,
         replayGeneration?.runtimeCaptured
           ? replayGeneration.runtime
-          : structuredSession
+          : deliveryRoute
             ? sendRuntimeFrom(file)
             : resumeProfileBody(file),
       );
@@ -2967,7 +2998,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       // Explicit recovery replays the sealed envelope under its original key.
       // Its existing durable attempt already records the possible dispatch;
       // automatic queue dispatch still requires the one-use wire claim.
-      if (durable && !retry?.unconfirmedAdmission && !composerSubmissionPayloads.consumeAttempt(durable.ref)) {
+      /* The one-use wire claim fences EVERY path into this dispatcher now. It
+         used to be waived for the unknown-outcome recovery, which was the one
+         caller that needed the fence most: that recovery is a lookup today and
+         never reaches here, so nothing is left to waive it for. */
+      if (durable && !composerSubmissionPayloads.consumeAttempt(durable.ref)) {
         // The queue bubble's Retry also enters through this dispatcher. Nothing
         // was admitted here, so only a recorded refusal re-opens the envelope.
         const retryClaim = durable.retry === "resend" && await composerSubmissionPayloads.beginAttempt(durable.ref);
@@ -2978,11 +3013,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         }
       }
       if (outboxId && reachesWire) updateOutbox(cardId, outboxId, { dispatchedAt: nowMs() });
-      admissionRequest = Promise.resolve((durable ? durable.envelope?.route === "runtime" : Boolean(structuredSession))
+      admissionRequest = Promise.resolve((durable ? durable.envelope?.route === "runtime" : Boolean(deliveryRoute))
         ? !reachesWire
           ? { ok: false, structured: true, error: structuredImagesReason }
           : runtimeDependencies.sendRuntimeMessage((durable?.envelope?.body ?? {
-              conversationId: structuredSession!.session.conversationId,
+              conversationId: deliveryRoute!.session.conversationId,
               text: payloadText.trim(),
               images: sentImages.map((image) => ({ base64: image.base64, mime: image.mime })),
               /* #1224: the bytes ride the request and the SERVER writes them to
@@ -3283,14 +3318,102 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     return entry;
   };
 
+  /**
+   * THE UNKNOWN OUTCOME, RESOLVED BY LOOKING IT UP.
+   *
+   * This attempt reached the network and its response never came back. The
+   * message may be durably admitted and already on its way to the agent, or it
+   * may never have been journaled at all — and the recovery that tells the two
+   * apart must be a READ. Re-posting the send to find out is precisely the
+   * duplicate the contract forbids: under a key the server already admitted,
+   * the second POST is a second request against a message being delivered.
+   *
+   * So this control performs no send. It asks `/api/runtime/send` under the
+   * ORIGINAL key and acts on the one of three answers it gets:
+   *
+   * - `admitted` — the operation exists. Its id (and its receipt, when the
+   *   server could settle one) is adopted onto this key, which is what makes
+   *   the recovery row disappear and hands the message back to ordinary
+   *   receipt reconciliation. Nothing is resent, now or later.
+   * - `not-executed` — the record was read and holds nothing under the key.
+   *   That is affirmative evidence of non-execution, and the ONLY answer that
+   *   authorizes a later attempt; the entry becomes an ordinary failed one,
+   *   whose Retry the operator may press. Its bytes are untouched.
+   * - `unknown` — nothing could be read, including when the lookup itself
+   *   failed. The attempt keeps its uncertainty and every byte, and the
+   *   operator may simply ask again. Absence never observed is not evidence.
+   */
+  const resolveUnknownAdmission = async (entry: OutboxEntry) => {
+    setBusy(true);
+    setStatus({ kind: "info", text: t("composer.admissionLookupRunning") });
+    try {
+      const answer = await runtimeDependencies.lookupRuntimeAdmission(cardId, entry.id);
+      if (answer.outcome === "admitted") {
+        const row = payloadRows.find(candidate => candidate.ref.key === entry.id);
+        if (answer.receipt && row) await composerSubmissionPayloads.observe(row.ref, answer.receipt).catch(() => false);
+        /* The operation id lands on the entry even when no receipt could be
+           settled: it is what proves admission to every later read of this
+           key, and what stops the recovery row from offering a resend. */
+        updateOutbox(cardId, entry.id, {
+          state: "delivering",
+          deliveryUncertain: undefined,
+          error: undefined,
+          settledAt: undefined,
+          ...(answer.operationId ? { operationId: answer.operationId } : {}),
+          ...(answer.receipt ? { deliveryReceipt: answer.receipt } : {}),
+        });
+        persistPendingDeliveries(pendingDeliveries.current.map((pending) =>
+          pending.key === entry.id && answer.operationId
+            ? { ...pending, operationId: answer.operationId }
+            : pending));
+        setImmediateRuntimeReceipts(current =>
+          current.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(entry.id)));
+        if (answer.receipt) setImmediateRuntimeReceipts(current => mergeRuntimeReceipts(current, [answer.receipt!]));
+        setStatus({ kind: "info", text: t("composer.admissionLookupAdmitted") });
+        await refreshPayloads();
+        return;
+      }
+      if (answer.outcome === "not-executed") {
+        /* Proven never sent. The placeholder stops standing for an unknown
+           fate and the message becomes an ordinary failed one the operator can
+           retry — with its original key and its original bytes.
+
+           The proof is RECORDED against the retained payload, as any other
+           pre-admission refusal is. That is what authorizes the later attempt:
+           the one-use wire claim is spent, and only affirmative evidence that
+           nothing was executed re-opens the sealed envelope. Without it the
+           operator would be told the message never went and then find Retry
+           unable to send it. */
+        const proven = payloadRows.find(candidate => candidate.ref.key === entry.id);
+        if (proven) {
+          await composerSubmissionPayloads
+            .refuse(proven.ref, { status: 404, reason: "the delivery record holds nothing under this key" })
+            .catch(() => false);
+        }
+        updateOutbox(cardId, entry.id, {
+          state: "failed",
+          deliveryUncertain: undefined,
+          settledAt: nowMs(),
+          error: t("composer.admissionLookupNotExecuted"),
+        });
+        setImmediateRuntimeReceipts(current =>
+          current.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(entry.id)));
+        setStatus({ kind: "err", text: t("composer.admissionLookupNotExecuted") });
+        await refreshPayloads();
+        return;
+      }
+      setStatus({ kind: "err", text: t("composer.admissionLookupUnknown") });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const retryRuntimeReceipt = async (receipt: RuntimeReceipt, mode?: "uncertain") => {
     if (busy || voiceSending || reconcilingSend) return;
     if (receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
       const entry = localRecoveryEntry(receipt);
       if (!entry) return;
-      // Keep recovery visible if this attempt is refused before admission.
-      // An authoritative receipt supersedes the local placeholder by key.
-      await withComposerSubmission(cardId, () => send(entry.text, { clientMessageId: entry.id, unconfirmedAdmission: true }, entry.id));
+      await resolveUnknownAdmission(entry);
       return;
     }
     setBusy(true);
@@ -3776,17 +3899,19 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   /* Mode chip, interrupt, compact, and attach-terminal now live in the unified
      control strip (issue #241); the composer no longer renders them. */
 
-  /* The main send surface stays inert for legacy dead hosts and unresolved
-     ownership. Structured dead hosts use durable text-only recovery admission.
+  /* Send is inert only where a message genuinely has nowhere to go: a dead
+     surface the pane announced with no runtime view behind it, an unresolved
+     host, a conversation the matrix says cannot be raised. A host that is
+     merely GONE is not one of those — it is what sending brings back.
      Quick-ack calls the same `send()`, so it obeys the same block and leaves the
      menu when blocked (round-3 finding). */
-  const deadHostBlocksSend = deadHost && !structuredSession;
+  const deadHostBlocksSend = deadHost && !deliveryRoute;
   const sendBlocked = deadHostBlocksSend || reconcilingSend || Boolean(effectiveSendBlockedReason);
   const canQuickAck = (!spawnMode || relayMode) && !sendBlocked;
   const composerHistory = outboxHistory(outbox);
   const quickAckDisabled = busy || voiceSending || attachments.images.length > 0;
 
-  const composerAriaLabel = structuredSession
+  const composerAriaLabel = deliveryRoute
     ? t("composer.sendStructuredAria")
     : unresolvedOwnership
       ? t("composer.resolvingAria")

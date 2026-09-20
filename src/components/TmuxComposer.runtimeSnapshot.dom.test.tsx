@@ -252,7 +252,7 @@ test("text-only unhosted structured composer sends through durable recovery admi
   await act(async () => root.unmount());
 });
 
-test("dead structured image-only input stays removable and avoids failing recovery", async () => {
+test("dead structured image input stays removable and is offered, not withheld", async () => {
   const sends: SendBody[] = [];
   mockWire(sends, [() => ({ status: 503, json: { error: "recovery failed before image admission" } })]);
 
@@ -268,15 +268,19 @@ test("dead structured image-only input stays removable and avoids failing recove
 
   const picker = host.querySelector(`button[aria-label="${translate("en", "composer.addAttachments")}"]`) as HTMLButtonElement;
   const send = host.querySelector('button[type="submit"]') as HTMLButtonElement;
-  /* #1224: the control stays open because a document is still deliverable
-     without any image capability — it is the SEND that the staged images
-     block, with the standing reason beneath it. */
+  /* A host that is gone withholds nothing: the picker is open and so is Send,
+     because the send path admits text and image bytes under one key and raises
+     the host itself. Nothing here says the images are waiting for a restore. */
   expect(picker.disabled).toBe(false);
-  expect(send.disabled).toBe(true);
-  expect(host.textContent).toContain(translate("en", "composer.imagesBlockedDuringRecovery"));
+  expect(send.disabled).toBe(false);
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')).toBeNull();
 
+  /* This DOM has no IndexedDB, and a message carrying attachment bytes is not
+     handed to the wire until its complete copy is durably retained — so the
+     press is refused HERE, for storage, and the operator keeps every tile. */
   await settle(() => composerControls(host).submit());
   expect(sends).toHaveLength(0);
+  expect(host.textContent).toContain(translate("en", "composer.payloadStorageUnavailable"));
   expect(host.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]')).toHaveLength(2);
 
   const remove = host.querySelector(`[aria-label="${translate("en", "img.removeAria", { n: 1 })}"]`) as HTMLButtonElement;
@@ -309,7 +313,7 @@ test("dead structured attachments stay local after host recovery when durable br
   expect((host.querySelector("textarea") as HTMLTextAreaElement).value)
     .toBe("keep this text with both screenshots");
   expect(host.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]')).toHaveLength(2);
-  expect(host.textContent).toContain(translate("en", "composer.imagesBlockedDuringRecovery"));
+  expect(host.textContent).toContain(translate("en", "composer.payloadStorageUnavailable"));
 
   structuredView.session.host = "hosted";
   await act(async () => {

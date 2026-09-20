@@ -1904,3 +1904,91 @@ test("a JSON-mode registry answers the seat tick's conversation read and decline
   expect(registry.seatTickConversation(["conversation", "0000000000000000"].join("_"))).toBeNull();
   expect(registry.pageSeatChildren(seat.id, null, 20)).toBeNull();
 });
+
+/**
+ * THE NOTE THAT SAYS A HISTORY IS INCOMPLETE IS A PERSISTED ROW.
+ *
+ * `deliveryAdmissionForKey` answers `not-executed` — the one answer that
+ * authorizes a resend — only for a conversation that never dropped a keyed
+ * delivery record. That fact is written down when the drop happens, and it is
+ * worth exactly as much as its persistence: a note the SQLite store does not
+ * carry would come back as `not-executed` on the next Viewer restart, and the
+ * operator's delivered message would be sent a second time by the browser.
+ */
+test("SQLite carries the dropped-evidence note across a restart, so a compacted key stays unknown", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-evidence-note-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const sqlite = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const conversation = sqlite.ensureConversation("codex", "/sessions/sqlite-evidence-note.jsonl", "default");
+  const original = sqlite.holdDelivery(conversation.id, "the message that was delivered", "sqlite-compacted-key");
+  sqlite.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
+  expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "admitted" });
+
+  /* One operation whose fate was never proven, then enough later traffic to
+     push the delivered key past the owner retention bound. */
+  const unverified = sqlite.holdDelivery(conversation.id, "the message whose fate is unknown", "sqlite-unverified-key");
+  sqlite.recordDeliveryOutcome(unverified.id, "failed", "no receipt arrived", "unverified");
+  for (let index = 0; index < 205; index += 1) {
+    const later = sqlite.holdDelivery(conversation.id, `later SQLite message ${index}`, `sqlite-later-${index}`);
+    sqlite.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+  }
+  /* Re-arming the unverified operation clears its terminal state, which puts
+     the retained group back under the bound — so nothing but the note itself
+     can still say this history has a hole in it. */
+  expect(sqlite.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
+  expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
+
+  const restarted = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
+  /* The retained end of the same history still answers from its own row. */
+  expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-later-204")).toMatchObject({ outcome: "admitted" });
+});
+
+/**
+ * AND THE SAME HISTORY, CARRIED INTO SQLITE BY THE UPGRADE ITSELF.
+ *
+ * The note only exists from the build that writes it. A registry the previous
+ * build left behind carries none, and its retention still ran — so the
+ * completeness that answers `not-executed` cannot be recovered from what is
+ * left in the file, in either store. The JSON here is what that build's own
+ * writer produced: this build's additions are removed from it before SQLite
+ * ever reads it.
+ */
+test("a pre-note history imported into SQLite keeps its compacted key unknown", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-pre-note-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const json = new AgentRegistry(filename);
+  const conversation = json.ensureConversation("codex", "/sessions/sqlite-pre-note.jsonl", "default");
+  const original = json.holdDelivery(conversation.id, "the message that was delivered", "sqlite-pre-note-key");
+  json.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
+  const unverified = json.holdDelivery(conversation.id, "the message whose fate is unknown", "sqlite-pre-note-unverified");
+  json.recordDeliveryOutcome(unverified.id, "failed", "no receipt arrived", "unverified");
+  for (let index = 0; index < 205; index += 1) {
+    const later = json.holdDelivery(conversation.id, `later SQLite message ${index}`, `sqlite-pre-note-later-${index}`);
+    json.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+  }
+  /* The retry the previous build performed, before any of this existed. */
+  expect(json.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
+
+  const payload = JSON.parse(fs.readFileSync(filename, "utf8")) as {
+    conversations: Record<string, Record<string, unknown>>;
+    deliveryEvidenceCompactions?: unknown;
+  };
+  delete payload.deliveryEvidenceCompactions;
+  for (const row of Object.values(payload.conversations)) delete row.deliveryEvidenceTracked;
+  const stripped = JSON.stringify(payload, null, 2);
+  expect(stripped).not.toContain("deliveryEvidence");
+  fs.writeFileSync(filename, stripped);
+
+  const sqlite = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-pre-note-key")).toMatchObject({ outcome: "unknown" });
+  /* The retained end of the same history still answers from its own row. */
+  expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-pre-note-later-204")).toMatchObject({ outcome: "admitted" });
+
+  const restarted = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-pre-note-key")).toMatchObject({ outcome: "unknown" });
+  /* A conversation this build creates in the migrated store proves its own
+     history, so the affirmative answer survives where it is safe. */
+  const born = restarted.ensureConversation("codex", "/sessions/sqlite-born-after.jsonl", "default");
+  expect(restarted.deliveryAdmissionForKey(born.id, "never-used-key")).toMatchObject({ outcome: "not-executed" });
+});

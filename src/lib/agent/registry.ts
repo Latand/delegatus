@@ -576,6 +576,26 @@ export interface RegistryConversation {
       conversations; admission then falls back to membership/lineage evidence. */
   delegationDepth: number | null;
   turn: TurnState & { observedAt: string | null };
+  /**
+   * THIS CONVERSATION'S DELIVERY EVIDENCE HAS BEEN COMPLETE SINCE IT BEGAN.
+   *
+   * Stamped once, at birth, by a build that writes a
+   * {@link DeliveryEvidenceCompaction} note for every keyed delivery record
+   * its retention drops. It is the only thing that lets absence under a key
+   * mean non-execution, because it is the only thing that says the notes were
+   * there to be written.
+   *
+   * False on every conversation carried across an upgrade FROM a build that
+   * had no note to write. Those histories were trimmed silently and nothing
+   * left in the file can say by how much: a retained-row count at the
+   * retention bound looks like proof that compaction ran, but the count moves
+   * both ways — any later operation that clears its terminal state puts the
+   * group back under the bound — and a fate read off a number that can go back
+   * down is a delivered message read as one that never went. So a pre-note
+   * conversation answers `unknown` for every key it cannot show, for good, and
+   * a conversation this build created answers for itself.
+   */
+  deliveryEvidenceTracked: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -590,6 +610,16 @@ export interface RegistryConversation {
  * one.
  */
 export type DeliveryTerminalDisposition = "delivered" | "lost" | "unverified";
+
+/**
+ * What the retained record can say about one send key (#1932): admission
+ * proven, non-execution proven, or neither — the third being the answer a
+ * bounded record owes whenever its own retention could have swallowed the row.
+ */
+export type DeliveryAdmissionEvidence =
+  | { outcome: "admitted"; operationId: string; deliveryId: string; state: HeldDelivery["state"] | null }
+  | { outcome: "not-executed" }
+  | { outcome: "unknown"; reason: string };
 
 export interface DeliveryOperationOwner {
   conversationId: ViewerConversationId;
@@ -622,6 +652,33 @@ export interface DeliveryOperationOwner {
   settledAt: string | null;
 }
 
+/**
+ * ONE CONVERSATION'S ADMISSION HISTORY IS INCOMPLETE FROM HERE ON.
+ *
+ * Delivery evidence is retained, not kept forever, and the moment a record
+ * that could have answered "was this key ever admitted?" is dropped, absence
+ * under that conversation stops meaning anything. That fact has to outlive the
+ * rows it is about, so it is written down here when the drop happens rather
+ * than inferred afterwards from what is left: the counts that are left move in
+ * both directions — a later operation leaving its terminal state puts a
+ * compacted conversation back under the retention bound — and a fate inferred
+ * from a number that can go back down is a delivered message read as one that
+ * never went.
+ *
+ * Only a dropped row that CARRIED a key is recorded. A record with no client
+ * message id could never have answered a lookup for one, so losing it narrows
+ * nothing.
+ */
+export interface DeliveryEvidenceCompaction {
+  conversationId: ViewerConversationId;
+  /** When this conversation first lost keyed admission evidence. */
+  firstAt: string;
+  /** The most recent drop, and how many rows have gone. Diagnostic: one drop
+      is already the whole answer. */
+  lastAt: string;
+  dropped: number;
+}
+
 export interface RegistryFile {
   version: 2;
   entries: Record<string, AgentRegistryEntry>;
@@ -650,6 +707,8 @@ export interface RegistryFile {
   quotaObservations: Record<Extract<AgentEngine, "claude" | "codex">, Record<string, DurableQuotaObservation>>;
   heldDeliveries: Record<string, HeldDelivery>;
   deliveryOperationOwners: Record<string, DeliveryOperationOwner>;
+  /** Keyed by canonical conversation id; see {@link DeliveryEvidenceCompaction}. */
+  deliveryEvidenceCompactions: Record<string, DeliveryEvidenceCompaction>;
   pendingSuccessorCleanups: Record<string, { conversationId: ViewerConversationId; receipt: ProviderReceipt; createdAt: string; lastError: string | null }>;
   /** Supersedence edges staged behind a still-live chain end (issue #383),
       keyed by successor conversation id. */
@@ -1525,6 +1584,7 @@ const EMPTY: RegistryFile = {
   quotaObservations: { claude: {}, codex: {} },
   heldDeliveries: {},
   deliveryOperationOwners: {},
+  deliveryEvidenceCompactions: {},
   pendingSuccessorCleanups: {},
   pendingSupersedence: {},
 };
@@ -1893,6 +1953,10 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
     turn: value.turn && typeof value.turn === "object"
       ? { state: value.turn.state, source: value.turn.source, terminalAt: value.turn.terminalAt ?? null, observedAt: value.turn.observedAt ?? null }
       : { state: "unknown", source: "empty", terminalAt: null, observedAt: null },
+    /* A record written before the stamp existed cannot claim it, and the
+       absence is the answer rather than a gap to fill in: nothing about the
+       file it came from says its notes were ever written. */
+    deliveryEvidenceTracked: (value as Partial<RegistryConversation>).deliveryEvidenceTracked === true,
   };
 }
 
@@ -2397,6 +2461,53 @@ function normalizeDeliveryOperationOwners(
 
 const DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT = 200;
 
+/**
+ * Writes down that this conversation just lost a record a key lookup could
+ * have been answered from, at the moment it is lost.
+ *
+ * Retention is the only thing that removes these records, and it removes them
+ * silently: afterwards a message that WAS delivered is indistinguishable from
+ * one that never happened. What survives the row is this note, so a later
+ * lookup can tell the two apart — it is durable, it is per conversation, and
+ * nothing ever clears it, because nothing can bring the dropped row back.
+ *
+ * A row with no client message id is skipped: it could never have answered a
+ * lookup for a key, so losing it costs the history nothing.
+ */
+function recordDroppedDeliveryEvidence(
+  file: RegistryFile,
+  conversationId: ViewerConversationId,
+  clientMessageId: string | null,
+): void {
+  if (clientMessageId === null) return;
+  const canonicalId = resolveConversationAlias(file, conversationId);
+  const at = now();
+  const existing = file.deliveryEvidenceCompactions[canonicalId];
+  if (existing) {
+    existing.lastAt = at;
+    existing.dropped += 1;
+    return;
+  }
+  file.deliveryEvidenceCompactions[canonicalId] = {
+    conversationId: canonicalId,
+    firstAt: at,
+    lastAt: at,
+    dropped: 1,
+  };
+}
+
+/** Removes one reservation, recording the loss unless the operation owner it
+    belongs to survives holding the same key — which is the ordinary case, and
+    the reason a conversation's first hundred-and-first delivery does not make
+    every one of its lookups uncertain. */
+function dropCompactedHeldDelivery(file: RegistryFile, delivery: HeldDelivery): void {
+  const owner = file.deliveryOperationOwners[delivery.command.operationId];
+  const keyRetained = owner?.deliveryId === delivery.id
+    && owner.clientMessageId === delivery.clientMessageId;
+  if (!keyRetained) recordDroppedDeliveryEvidence(file, delivery.conversationId, delivery.clientMessageId);
+  delete file.heldDeliveries[delivery.id];
+}
+
 function compactDeliveryOperationOwners(file: RegistryFile, onlyConversationId?: ViewerConversationId): void {
   const terminalGroups = new Map<ViewerConversationId, Array<[string, DeliveryOperationOwner]>>();
   for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
@@ -2415,7 +2526,8 @@ function compactDeliveryOperationOwners(file: RegistryFile, onlyConversationId?:
       Number(right.terminalDisposition === "unverified") - Number(left.terminalDisposition === "unverified")
       || right.createdAt.localeCompare(left.createdAt)
       || rightId.localeCompare(leftId));
-    for (const [operationId] of owners.slice(DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT)) {
+    for (const [operationId, owner] of owners.slice(DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT)) {
+      recordDroppedDeliveryEvidence(file, owner.conversationId, owner.clientMessageId);
       delete file.deliveryOperationOwners[operationId];
     }
   }
@@ -2482,7 +2594,7 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
       const kept: HeldDelivery[] = [];
       for (const delivery of deliveries) {
         if (terminalDeliveryExpired(delivery, nowMs)) {
-          delete file.heldDeliveries[delivery.id];
+          dropCompactedHeldDelivery(file, delivery);
           removed += 1;
         } else {
           kept.push(delivery);
@@ -2494,7 +2606,7 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
   for (const deliveries of deliveredGroups.values()) {
     deliveries.sort((left, right) => (right.deliveredAt ?? right.createdAt).localeCompare(left.deliveredAt ?? left.createdAt) || right.id.localeCompare(left.id));
     for (const expired of deliveries.slice(100)) {
-      delete file.heldDeliveries[expired.id];
+      dropCompactedHeldDelivery(file, expired);
       removed += 1;
     }
   }
@@ -2505,7 +2617,7 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
     const retainedFailed = Math.max(0, Math.min(50, 99 - activeCount));
     deliveries.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
     for (const expired of deliveries.slice(retainedFailed)) {
-      delete file.heldDeliveries[expired.id];
+      dropCompactedHeldDelivery(file, expired);
       removed += 1;
     }
   }
@@ -2885,6 +2997,9 @@ function adoptProvisionalOwner(
   }
   target.agentRole ??= owner.agentRole;
   target.delegationDepth ??= owner.delegationDepth;
+  /* The adopted identity's keys are answered under the target from here on, so
+     the target inherits the weaker of the two histories. */
+  if (!owner.deliveryEvidenceTracked) target.deliveryEvidenceTracked = false;
   for (const receipt of Object.values(file.receipts)) {
     if (receipt.conversationId === owner.id) receipt.conversationId = target.id;
     if (receipt.parentConversationId === owner.id) receipt.parentConversationId = target.id;
@@ -3288,6 +3403,28 @@ function backfillMaterializedSpawnArtifacts(file: RegistryFile): RegistryFile {
   return file;
 }
 
+/** A record here is a durable "this history is incomplete". A row that cannot
+    be read as one is dropped rather than guessed at: the conservative answer
+    it would have forced is reached again by the first drop after this load. */
+function normalizeDeliveryEvidenceCompactions(value: unknown): RegistryFile["deliveryEvidenceCompactions"] {
+  if (!value || typeof value !== "object") return {};
+  const records: RegistryFile["deliveryEvidenceCompactions"] = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const record = raw as Partial<DeliveryEvidenceCompaction> | null;
+    if (!record
+      || typeof record.conversationId !== "string"
+      || !record.conversationId.startsWith("conversation_")
+      || typeof record.firstAt !== "string") continue;
+    records[key] = {
+      conversationId: record.conversationId as ViewerConversationId,
+      firstAt: record.firstAt,
+      lastAt: typeof record.lastAt === "string" ? record.lastAt : record.firstAt,
+      dropped: Number.isSafeInteger(record.dropped) && Number(record.dropped) > 0 ? Number(record.dropped) : 1,
+    };
+  }
+  return records;
+}
+
 function normalizePendingSupersedence(value: unknown): RegistryFile["pendingSupersedence"] {
   if (!value || typeof value !== "object") return {};
   const records: RegistryFile["pendingSupersedence"] = {};
@@ -3376,6 +3513,7 @@ export function normalizeRegistry(value: unknown, policy?: McpGrantPolicy): Regi
         : clone(EMPTY.quotaObservations),
       heldDeliveries,
       deliveryOperationOwners: normalizeDeliveryOperationOwners(parsed.deliveryOperationOwners, heldDeliveries),
+      deliveryEvidenceCompactions: normalizeDeliveryEvidenceCompactions(parsed.deliveryEvidenceCompactions),
       pendingSuccessorCleanups: parsed.pendingSuccessorCleanups && typeof parsed.pendingSuccessorCleanups === "object"
         ? parsed.pendingSuccessorCleanups
         : {},
@@ -5327,6 +5465,7 @@ export class AgentRegistry {
       agentRole: null,
       delegationDepth: null,
       turn: { state: "unknown" as const, source: "empty" as const, terminalAt: null, observedAt: null },
+      deliveryEvidenceTracked: true,
       createdAt,
       updatedAt: createdAt,
     };
@@ -6251,6 +6390,7 @@ export class AgentRegistry {
         agentRole: null,
         delegationDepth: null,
         turn: { state: "unknown", source: "empty", terminalAt: null, observedAt: null },
+        deliveryEvidenceTracked: true,
         createdAt,
         updatedAt: createdAt,
       };
@@ -6450,6 +6590,7 @@ export class AgentRegistry {
             agentRole: null,
             delegationDepth: null,
             turn: { ...observation.turn, observedAt: observation.observedAt },
+            deliveryEvidenceTracked: true,
             createdAt,
             updatedAt: createdAt,
           };
@@ -7907,6 +8048,102 @@ export class AgentRegistry {
       runtimeImages,
       contentDigest,
     );
+  }
+
+  /**
+   * Whether anything was ever admitted under one conversation's ORIGINAL key.
+   *
+   * The answer for a caller that lost the response to its own send and must
+   * not send again to find out. Two records can prove admission and they are
+   * both consulted: the reservation itself, and the operation owner, which
+   * deliberately outlives the reservation a compaction removes.
+   *
+   * ABSENCE IS NOT THE SAME EVIDENCE, and the difference is this method's whole
+   * subject. Every send writes its reservation before anything reaches a host,
+   * so a message that ever started down the path left a row behind — but the
+   * rows are RETAINED, not kept forever. Terminal operation owners are
+   * compacted to the newest `DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT` per
+   * conversation, and delivered reservations to the newest hundred. Past that
+   * boundary a delivered message looks exactly like one that never happened,
+   * and reading it as "never happened" is how the operator's message is sent a
+   * second time.
+   *
+   * So absence answers `not-executed` only where the record it would be in is
+   * provably COMPLETE, and the proof is the conversation's own history: every
+   * retention pass that drops a keyed record writes
+   * {@link DeliveryEvidenceCompaction} for the conversation it dropped it
+   * from, durably and for good. A conversation carrying one has a hole in its
+   * record, wherever the hole happens to be, and every key it cannot show is
+   * `unknown`.
+   *
+   * A COUNT TAKEN NOW IS NOT THAT PROOF, and the difference is the whole
+   * reason the note exists. Compaction trims a group to exactly the retention
+   * bound, so "fewer rows than the bound" looks like "compaction never ran
+   * here" — until any later operation clears its own terminal state and pushes
+   * the group back under it. Re-arming an unverified operation does exactly
+   * that, one retry on an unrelated message, and a delivered key would go back
+   * to reading `not-executed`. No count is consulted here, at any bound, for
+   * anything.
+   *
+   * The other half is the history that predates the note. A registry the
+   * previous build left behind carries no notes because that build had none to
+   * write, and its retention still ran — so the same moving count would read
+   * it as complete, whether the retry that moved it happened before the
+   * upgrade or after. What answers instead is
+   * {@link RegistryConversation.deliveryEvidenceTracked}: a stamp put on a
+   * conversation when it is CREATED, by the build that creates it, which no
+   * later mutation touches. A conversation without it proves nothing and says
+   * so, for good.
+   *
+   * Read-only by construction: it mints nothing and settles nothing, so asking
+   * repeatedly is free and changes no fate.
+   */
+  deliveryAdmissionForKey(
+    conversationId: ViewerConversationId | string,
+    clientMessageId: string,
+  ): DeliveryAdmissionEvidence {
+    const snapshot = this.readOnlySnapshot();
+    const canonicalId = resolveConversationAlias(snapshot, conversationId as ViewerConversationId);
+    const reserved = Object.values(snapshot.heldDeliveries).find((item) =>
+      resolveConversationAlias(snapshot, item.conversationId) === canonicalId
+      && item.clientMessageId === clientMessageId);
+    if (reserved) {
+      return {
+        outcome: "admitted",
+        operationId: reserved.command.operationId,
+        deliveryId: reserved.id,
+        state: reserved.state,
+      };
+    }
+    const owner = Object.values(snapshot.deliveryOperationOwners).find((item) =>
+      resolveConversationAlias(snapshot, item.conversationId) === canonicalId
+      && item.clientMessageId === clientMessageId);
+    if (owner) {
+      return {
+        outcome: "admitted",
+        operationId: owner.command.operationId,
+        deliveryId: owner.deliveryId,
+        state: owner.terminalState ?? null,
+      };
+    }
+    const evidenceDropped = Object.values(snapshot.deliveryEvidenceCompactions).some((record) =>
+      resolveConversationAlias(snapshot, record.conversationId) === canonicalId);
+    if (evidenceDropped) {
+      return {
+        outcome: "unknown",
+        reason: "this conversation's delivery evidence has been compacted, so nothing under this key is not proof that nothing was sent",
+      };
+    }
+    /* A history carried across the upgrade — and a conversation with no record
+       at all, which cannot show a stamp either. Neither one's notes were ever
+       written, so neither one's silence is an answer. */
+    if (!snapshot.conversations[canonicalId]?.deliveryEvidenceTracked) {
+      return {
+        outcome: "unknown",
+        reason: "this conversation's history is not known to be complete, so nothing under this key is not proof that nothing was sent",
+      };
+    }
+    return { outcome: "not-executed" };
   }
 
   pendingDeliveries(conversationId: ViewerConversationId): HeldDelivery[] {
