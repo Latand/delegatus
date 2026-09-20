@@ -103,6 +103,13 @@ export interface StateMutationContext<T> {
   structural: boolean;
 }
 
+export interface StateBoundedTransaction<T> {
+  get(key: string): T | null;
+  pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
+  put(record: T): void;
+  delete(key: string): void;
+}
+
 function sqliteDatabase(): typeof import("bun:sqlite").Database {
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) throw new Error("SQLite state stores require the Bun runtime");
@@ -243,6 +250,21 @@ function openRawDatabase(filename: string): Database {
             ON state_rows(collection, row_order);
           CREATE INDEX IF NOT EXISTS state_rows_controller_active
             ON state_rows(collection, controller_active, row_order);
+          CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
+            ON state_rows(json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'))
+            WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
+              AND json_extract(value_json, '$.delivery.disposition') = 'owner';
+          CREATE INDEX IF NOT EXISTS pipeline_delivery_history
+            ON state_rows(collection, json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'), json_extract(value_json, '$.delivery.epoch') DESC)
+            WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json);
+          CREATE UNIQUE INDEX IF NOT EXISTS pipeline_creation_request
+            ON state_rows(collection, json_extract(value_json, '$.creationRequest.key'))
+            WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.creationRequest.key') IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS pipeline_delivery_unclaimed ON state_rows(row_key)
+            WHERE collection = 'pipelines' AND json_valid(value_json)
+              AND json_extract(value_json, '$.delivery') IS NULL
+              AND json_extract(value_json, '$.publication') = 'remote-branch'
+              AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed');
           CREATE TABLE IF NOT EXISTS state_changes (
             collection TEXT NOT NULL,
             revision INTEGER NOT NULL,
@@ -834,14 +856,10 @@ export class SqliteStateCollection<T> {
 
   /** A bounded read/modify/write transaction. No collection materialization.
       Every read and mutation consumes the caller's finite row budget. */
-  boundedPatch<R>(limit: number, operation: (tx: {
-    get(key: string): T | null;
-    put(record: T): void;
-    delete(key: string): void;
-  }) => R): R {
+  boundedPatch<R>(limit: number, operation: (tx: StateBoundedTransaction<T>) => R, heldLease?: string): R {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4096) throw new Error("invalid state patch limit");
     assertSqliteWriteAuthority(this.filename);
-    const lease = this.acquireLeaseSync();
+    const lease = heldLease ?? this.acquireLeaseSync();
     try {
       const db = connectDatabase(this.filename);
       try {
@@ -853,6 +871,10 @@ export class SqliteStateCollection<T> {
           const consume = () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); };
           const changed = new Map<string, "upsert" | "delete">();
           const result = operation({
+            pipelineLookup: (query) => {
+              consume();
+              return this.lookupPipeline(db, query);
+            },
             get: (key) => {
               consume();
               const row = db.query<{ value_json: string }, [string, string]>(
@@ -868,9 +890,9 @@ export class SqliteStateCollection<T> {
               this.validate(record);
               const key = this.options.key(record);
               db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
-                VALUES (?,?,?,0,?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
+                VALUES (?,?,?,(SELECT COALESCE(MAX(row_order)+1,0) FROM state_rows WHERE collection=?),?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
                 value_json=excluded.value_json,row_revision=excluded.row_revision,controller_active=excluded.controller_active`)
-                .run(this.options.collection, key, JSON.stringify(record), revision, this.options.controllerActive?.(record) === false ? 0 : 1);
+                .run(this.options.collection, key, JSON.stringify(record), this.options.collection, revision, this.options.controllerActive?.(record) === false ? 0 : 1);
               changed.set(key, "upsert");
             },
             delete: (key) => {
@@ -895,7 +917,62 @@ export class SqliteStateCollection<T> {
         this.invalidateAfterCommit();
         return result;
       } finally { db.close(); }
-    } finally { this.releaseLeaseSync(lease); }
+    } finally { if (!heldLease) this.releaseLeaseSync(lease); }
+  }
+
+  async boundedPatchAsync<R>(limit: number, operation: (tx: StateBoundedTransaction<T>) => R, lockWaitMs?: number): Promise<R> {
+    const lease = await this.acquireLease(lockWaitMs);
+    try { return this.boundedPatch(limit, operation, lease); }
+    finally { await this.releaseLease(lease); }
+  }
+
+  private lookupPipeline(db: Database, query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null {
+    if (this.options.collection !== "pipelines") throw new Error("pipeline lookup requires the pipeline collection");
+    if (!("requestKey" in query) && query.active) {
+      const row = db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM state_rows INDEXED BY pipeline_delivery_owner
+        WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
+        AND json_extract(value_json, '$.delivery.disposition') = 'owner'
+        AND json_extract(value_json, '$.delivery.target.repository') = ? AND json_extract(value_json, '$.delivery.target.branch') = ? LIMIT 1`).get(query.repository, query.branch);
+      if (!row) return null;
+      const decoded = this.decodeRow(row.value_json);
+      if (!decoded) throw new Error("invalid indexed owner row");
+      return this.options.clone(decoded);
+    }
+    const rows = ["pipelines", "pipelines_archive"].flatMap((collection) => {
+      if (!("requestKey" in query) && query.active && collection !== "pipelines") return [];
+      const row = "requestKey" in query
+        ? db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM state_rows
+            WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.creationRequest.key') IS NOT NULL
+            AND json_extract(value_json, '$.creationRequest.key') = ? LIMIT 1`).get(collection, query.requestKey)
+        : db.query<{ value_json: string }, [string, string, string]>(`SELECT value_json FROM state_rows
+            WHERE collection = ? AND collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.delivery.target.repository') = ?
+            AND json_extract(value_json, '$.delivery.target.branch') = ?
+            ${query.active ? "AND json_extract(value_json, '$.delivery.active') = 1 AND json_extract(value_json, '$.delivery.disposition') = 'owner'" : ""}
+            ORDER BY json_extract(value_json, '$.delivery.epoch') DESC LIMIT 1`).get(collection, query.repository, query.branch);
+      if (!row) return [];
+      const decoded = this.decodeRow(row.value_json);
+      if (!decoded) throw new Error("invalid indexed pipeline row");
+      return [this.options.clone(decoded)];
+    });
+    if (!("requestKey" in query)) rows.sort((a, b) =>
+      Number((b as { delivery?: { epoch: number } }).delivery?.epoch ?? 0) - Number((a as { delivery?: { epoch: number } }).delivery?.epoch ?? 0));
+    return rows[0] ?? null;
+  }
+
+  pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null {
+    return this.lookupPipeline(this.readDb, query);
+  }
+
+  unclaimedPipelinePublications(): T[] {
+    if (this.options.collection !== "pipelines") throw new Error("pipeline admission requires the pipeline collection");
+    return this.readDb.query<{ value_json: string }, []>(`SELECT value_json FROM state_rows INDEXED BY pipeline_delivery_unclaimed
+      WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery') IS NULL
+      AND json_extract(value_json, '$.publication') = 'remote-branch'
+      AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed') ORDER BY row_key LIMIT 16`).all().map((row) => {
+      const decoded = this.decodeRow(row.value_json);
+      if (!decoded) throw new Error("invalid legacy pipeline row");
+      return this.options.clone(decoded);
+    });
   }
 
   loadReadonly(): readonly T[] {

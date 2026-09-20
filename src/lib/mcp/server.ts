@@ -548,7 +548,7 @@ export interface McpReceiptStore {
       recorded — is released; anything already settled is left exactly as it
       is. Optional so a minimal store keeps working: without it an unadmitted
       refusal is settled as before rather than silently stranding a claim. */
-  release?(key: string, digest: string): boolean | Promise<boolean>;
+  release?(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean | Promise<boolean>;
 }
 
 /**
@@ -642,9 +642,10 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     this.receipts.set(key, { ...receipt, digest, result, stage: "settled" });
   }
 
-  release(key: string, digest: string): boolean {
+  release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest || receipt.result || dispatchedReceipt(receipt)) return false;
+    if (!receipt || receipt.digest !== digest || receipt.result || (dispatchedReceipt(receipt)
+      && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
     this.receipts.delete(key);
     return true;
   }
@@ -1426,11 +1427,12 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     });
   }
 
-  async release(key: string, digest: string): Promise<boolean> {
+  async release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): Promise<boolean> {
     return withFileLock(this.filePath, () => {
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (!receipt || receipt.digest !== digest || receipt.result || dispatchedReceipt(receipt)) return false;
+      if (!receipt || receipt.digest !== digest || receipt.result || (dispatchedReceipt(receipt)
+        && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
       delete state.mutationReceipts[key];
       delete state.readReceipts[key];
       writeReceiptFile(this.filePath, state);
@@ -1612,17 +1614,17 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     }
   }
 
-  release(key: string, digest: string): boolean {
+  release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const receipt = this.db.query<Pick<StoredSqliteReceipt, "digest" | "result_json" | "recovery_result_json" | "stage">, [string]>(`
-        SELECT digest, result_json, recovery_result_json, stage
+      const receipt = this.db.query<Pick<StoredSqliteReceipt, "digest" | "result_json" | "recovery_result_json" | "stage" | "binding_json">, [string]>(`
+        SELECT digest, result_json, recovery_result_json, stage, binding_json
         FROM mcp_receipts
         WHERE receipt_key = ?
       `).get(key);
       const releasable = Boolean(receipt) && receipt!.digest === digest
         && receipt!.result_json === null && receipt!.recovery_result_json === null
-        && receipt!.stage !== "dispatching";
+        && (receipt!.stage !== "dispatching" || (!!unadmittedBinding && receipt!.binding_json === JSON.stringify(unadmittedBinding)));
       if (releasable) this.db.query<unknown, [string]>("DELETE FROM mcp_receipts WHERE receipt_key = ?").run(key);
       this.db.exec("COMMIT");
       return releasable;
@@ -1937,7 +1939,7 @@ function stable(value: unknown): unknown {
     .map(([key, child]) => [key, stable(child)]));
 }
 
-function requestDigest(toolName: McpToolName, args: McpToolArgs): string {
+export function requestDigest(toolName: McpToolName, args: McpToolArgs): string {
   return crypto.createHash("sha256").update(JSON.stringify(stable({ toolName, args }))).digest("hex");
 }
 
@@ -2649,6 +2651,11 @@ export function createMcpToolService(
           outcome = "success";
         } catch (error) {
           phaseDurations.binding = performance.now() - bindingStartedAt;
+          if (error instanceof McpUnadmittedRefusal && receipts.release) {
+            await receipts.release(key, digest, binding);
+            outcome = "failure";
+            return failure(typedTool, requestId, "tool_failed", error.message, true, false, error.details);
+          }
           if (error instanceof McpDispatchUncertainError) {
             /* The request may be on the server. Nothing is written: the row
                stays `dispatching`, which is exactly "unknown" — and every later
@@ -3210,6 +3217,14 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   create_pipeline: z.object({
     clientRequestId: clientRequestIdSchema,
+    recoveryOnly: recoveryOnlySchema,
+    delivery: z.object({
+      branch: z.string().startsWith("refs/heads/"),
+      remote: z.string().optional(),
+      pr: z.number().int().positive().optional(),
+      rejectedHead: z.string().regex(/^[0-9a-f]{40}$/i).optional(),
+      comparison: z.boolean().optional(),
+    }).optional().describe("Delivery target, using the PR head repository remote and full branch. The canonical repository plus branch has one Viewer publisher. A competing creation becomes an internal comparison lane and names its owner; host Git/gh tools remain unchanged."),
     task: z.string().min(1).describe("Board title for the pipeline."),
     taskIds: z.array(z.string()).optional()
       .describe("Board tasks this pipeline's work belongs to (#1720), recorded durably on the pipeline. EVERY stage launch — run, review-loop, retry, fail branch — reads this list at launch time and joins those tasks, so passing it in the create call is what keeps one product outcome on one card; a pipeline created without it is given a placeholder task of its own. Each id must name an existing task in the pipeline's project. pipeline_action \"link-task\" adds one afterwards, for the stages that have not started yet."),
@@ -3229,6 +3244,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     pipelineId: entityIdSchema,
     /* #774: was `z.string().min(1)` while the route admitted a fixed set. */
     action: z.enum(PIPELINE_ACTIONS),
+    expectedOwner: z.string().optional(),
+    expectedEpoch: z.number().int().positive().optional(),
+    reason: z.string().optional(),
+    acceptedSha: z.string().regex(/^[0-9a-f]{40}$/i).optional(),
   }).passthrough(),
   stage_report: z.object({
     clientRequestId: clientRequestIdSchema,

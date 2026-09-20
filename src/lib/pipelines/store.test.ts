@@ -6,8 +6,107 @@ import path from "node:path";
 
 import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
+import { createPipelineWithDelivery, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
+
+const deliveryTarget = { repository: "repo-delivery-fixture", remote: "", branch: "refs/heads/review-target", pr: 637, rejectedHead: "a".repeat(40) };
+function deliveryFixture(id: string): Pipeline {
+  const record = buildPipeline({ id, task: "Delivery fixture", project: "viewer", repoDir: "/repo", stages: [
+    { id: "build", kind: "run", prompt: "build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } },
+  ], srcPath: null,
+    srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft", publication: "remote-branch" });
+  record.creationRequest = { key: `request-${id}`, digest: "original-arguments" };
+  return record;
+}
+
+async function isolatedDelivery(run: (root: string) => Promise<void> | void): Promise<void> {
+  const previous = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-store-"));
+  process.env.LLV_STATE_DIR = root;
+  try { await run(root); }
+  finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("delivery ownership survives concurrent processes and original-key replay after restart", async () => isolatedDelivery(async (root) => {
+  savePipelines([]);
+  const modulePath = path.join(import.meta.dir, "store.ts");
+  const script = `import { createPipelineWithDelivery } from ${JSON.stringify(modulePath)};
+    const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
+    console.log(JSON.stringify(await createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET))));`;
+  const run = (record: Pipeline) => Bun.spawn([process.execPath, "-e", script], {
+    env: { ...process.env, LLV_STATE_DIR: root, DELIVERY_FIXTURE: JSON.stringify(record), DELIVERY_TARGET: JSON.stringify(deliveryTarget) },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const children = [run(deliveryFixture("owner-a")), run(deliveryFixture("owner-b"))];
+  const results = await Promise.all(children.map(async (child) => {
+    const output = await new Response(child.stdout).text();
+    const errors = await new Response(child.stderr).text();
+    expect({ exit: await child.exited, errors }).toEqual({ exit: 0, errors: "" });
+    return JSON.parse(output) as Pipeline;
+  }));
+  const owner = results.find((record) => record.delivery?.active)!;
+  const comparison = results.find((record) => record.delivery?.disposition === "comparison")!;
+  expect(results.filter((record) => record.delivery?.active)).toHaveLength(1);
+  expect(comparison).toMatchObject({ publication: "internal", delivery: { publish: "disabled", ownerId: owner.id, epoch: 1 } });
+  const replay = run(deliveryFixture(owner.id));
+  expect(JSON.parse(await new Response(replay.stdout).text()).id).toBe(owner.id);
+  expect(await replay.exited).toBe(0);
+  expect(loadPipelines()).toHaveLength(2);
+  const database = new Database(path.join(root, "state.sqlite"));
+  try {
+    const duplicate = { ...owner, id: "uncoordinated-owner", creationRequest: { key: "independent-request", digest: "different" } };
+    expect(() => database.query("INSERT INTO state_rows SELECT collection, ?, ?, row_order, row_revision, controller_active FROM state_rows WHERE collection='pipelines' AND row_key=?")
+      .run(duplicate.id, JSON.stringify(duplicate), owner.id)).toThrow();
+  } finally { database.close(); }
+}));
+
+test("a process crash inside the claim transaction leaves no partial owner", async () => isolatedDelivery(async (root) => {
+  savePipelines([]);
+  const script = `import { withDeliveryMutation, assignPipelineDelivery } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
+    const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
+    withDeliveryMutation(tx => { assignPipelineDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET), false, tx.pipelineLookup); tx.put(pipeline); process.exit(19); });`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, LLV_STATE_DIR: root,
+    DELIVERY_FIXTURE: JSON.stringify(deliveryFixture("crashed")), DELIVERY_TARGET: JSON.stringify(deliveryTarget) }, stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(19);
+  expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
+  const recovered = await createPipelineWithDelivery(deliveryFixture("crashed"), deliveryTarget);
+  expect(recovered.delivery).toMatchObject({ active: true, epoch: 1 });
+}));
+
+test("terminal release retains receipts through archive and takeover fences epochs and in-flight writes", async () => isolatedDelivery(async () => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("owner"), deliveryTarget);
+  const comparison = await createPipelineWithDelivery(deliveryFixture("comparison"), deliveryTarget);
+  withDeliveryMutation((tx) => {
+    const record = tx.get(owner.id)!;
+    record.delivery!.operation = { id: "write", sha: "b".repeat(40), epoch: 1, state: "running" };
+    tx.put(record);
+  });
+  expect((await takeoverPipelineDelivery(comparison.id, owner.id, 1, "take over", "conversation_builder")).error).toContain("in flight");
+  withDeliveryMutation((tx) => {
+    const record = tx.get(owner.id)!;
+    record.delivery!.operation = undefined;
+    record.state = "closed";
+    record.cursor = null;
+    record.closedAt = "2026-07-02T00:00:00.000Z";
+    tx.put(record);
+  });
+  expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
+  expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
+  expect((await createPipelineWithDelivery(deliveryFixture(owner.id), deliveryTarget)).id).toBe(owner.id);
+  expect((await takeoverPipelineDelivery(comparison.id, owner.id, 99, "take over", "conversation_builder")).status).toBe(409);
+  const taken = await takeoverPipelineDelivery(comparison.id, owner.id, 1, "previous owner settled", "conversation_builder");
+  expect(taken.pipeline?.delivery).toMatchObject({ active: true, disposition: "owner", epoch: 2, ownerId: comparison.id });
+  expect(taken.pipeline?.delivery?.journal.at(-1)?.conversationId).toBe("conversation_builder");
+  const changed = deliveryFixture(owner.id);
+  changed.creationRequest!.digest = "changed";
+  await expect(createPipelineWithDelivery(changed, deliveryTarget)).rejects.toThrow("idempotency_conflict");
+}));
 
 test.each([false, true])("archive enabled=%s lets the same event loop settle startup admission before moving rows", async (enabled) => {
   const previous = process.env.LLV_STATE_DIR;
