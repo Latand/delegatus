@@ -108,7 +108,9 @@ agent is spawned against a home with no credentials.
 
 **The seat tick checks every 5 minutes and wakes at most hourly.**
 `DEFAULT_SEAT_TICK_POLICY.checkIntervalMs` is 5 minutes and
-`SEAT_TICK_WAKE_INTERVAL_MS` is 60 minutes (`src/lib/monitor/seatTick.ts`). A
+`SEAT_TICK_WAKE_INTERVAL_MS` is 60 minutes (`src/lib/monitor/seatTick.ts`).
+Amended after #1881: while an agent the seat spawned has settled or stalled
+the bound is 5 minutes, and 15 while such agents are only running. A
 project that was never woken has an empty row, and the comment in
 `runSeatTickCheck` (`seatTickController.ts:1084`) confirms an empty row wakes on
 the first check that finds something owed. `runSeatTickCheck(project)` is
@@ -314,13 +316,18 @@ body. No overlays on the live UI, no coach marks, no "next tip" sequence.
 | 1 | The board / Дошка | Every agent on this machine is a card, grouped by project. A card's colour says its state: working, waiting for you, finished, stalled. | Кожен агент на цьому комп'ютері — картка, згрупована за проєктом. Колір картки показує стан: працює, чекає на вас, завершив, завис. |
 | 2 | Tasks / Завдання | A task is one piece of work in your words. Agents and pipelines attach to it, so the board reads as work and its progress. | Завдання — це одна частина роботи вашими словами. До нього прикріплюються агенти й конвеєри, тож дошка показує роботу та її поступ. |
 | 3 | Pipelines and stages / Конвеєри й етапи | A pipeline runs stages in order: build, review, verify. Each stage is a fresh agent in its own worktree that ends with a report: pass, fail, or needs a decision. | Конвеєр виконує етапи по черзі: розробка, рев'ю, перевірка. Кожен етап — новий агент у власному worktree, що завершує звітом: пройдено, не пройдено або потрібне рішення. |
-| 4 | The orchestrator and how it wakes / Оркестратор і як він прокидається | One agent per project runs the pipelines for you. It sleeps between stages. The Viewer checks every 5 minutes and wakes it, at most once an hour, when a stage finished or something is stuck. You can also just message it. | Один агент на проєкт керує конвеєрами за вас. Між етапами він спить. Viewer перевіряє кожні 5 хвилин і будить його, щонайбільше раз на годину, коли етап завершився або щось застрягло. Йому також можна просто написати. |
+| 4 | The orchestrator and how it wakes / Оркестратор і як він прокидається | One agent per project runs the pipelines for you. It sleeps between stages. The Viewer checks every 5 minutes: an agent the orchestrator started itself wakes it at the next check once it finishes; a finished stage or something stuck wakes it at most once an hour. You can also just message it. | Один агент на проєкт керує конвеєрами за вас. Між етапами він спить. Viewer перевіряє кожні 5 хвилин: коли агент, якого оркестратор запустив сам, завершує роботу, наступна перевірка його будить; через завершений етап або щось застрягле він прокидається щонайбільше раз на годину. Йому також можна просто написати. |
 | 5 | Review rounds, and when something waits for you / Раунди рев'ю і коли щось чекає на вас | A failed review sends the work back to the builder. The rounds have a budget; when it runs out the pipeline parks and asks you. "Needs you" in the corner counts everything waiting for your answer. Press it to jump there. | Невдале рев'ю повертає роботу розробнику. Раунди мають бюджет; коли він вичерпується, конвеєр зупиняється й питає вас. «Потрібні ви» в кутку рахує все, що чекає на вашу відповідь. Натисніть, щоб перейти. |
 
 Card 4 states the two numbers the new user never saw (5 minutes, one hour).
 They are read from `DEFAULT_SEAT_TICK_POLICY` and
 `SEAT_TICK_WAKE_INTERVAL_MS` at render, so the card cannot drift from the
-code. Card 5 uses the attention island's own label (`NEEDS YOU`) so the word on
+code. Since #1881 the hour is the bound for a board where nothing the seat
+spawned is moving: a child the seat launched with `spawn_agent` that settles
+or stalls is due at the next check (`SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS`),
+and while such children only run the bound is 15 minutes. A pipeline stage is
+not the seat's child (its lineage parent is the stage before it), so a
+finished stage is still carried by the hourly wake as "a lane you launched". Card 5 uses the attention island's own label (`NEEDS YOU`) so the word on
 the card is the word on the screen.
 
 Controls: none beyond Back / Continue; on the phone, the pager dots and swipe.
@@ -348,6 +355,8 @@ when one fails.
 | All passed | Everything works on this machine. | На цьому комп'ютері все працює. |
 | Finish | Open the board | Відкрити дошку |
 | Failed footer | The check stopped at "{row}". Fix that, then run it again: the rows before it passed. | Перевірка зупинилась на «{row}». Виправте це й запустіть знову: попередні кроки пройшли. |
+| Failed footer, nothing the user can fix | The check stopped at "{row}". The rows before it passed. | Перевірка зупинилась на «{row}». Попередні кроки пройшли. |
+| Cleanup left something | Could not undo everything: {problems}. The Viewer clears what is left the next time this check opens or runs. If the next run says the same, copy this line into a bug report. | Не вдалося все прибрати: {problems}. Viewer прибере залишки, коли ця перевірка наступного разу відкриється або запуститься. Якщо після наступного запуску напис той самий, скопіюйте цей рядок у повідомлення про помилку. |
 | Skip | Skip the check | Пропустити перевірку |
 | No engine | Connect an engine first (step 1). | Спершу підключіть рушій (крок 1). |
 | Details toggle | Show details | Показати подробиці |
@@ -355,7 +364,24 @@ when one fails.
 Row-by-row failure copy is in §5.2. Skipped when: no engine is connected (the
 row list is replaced by the no-engine line and "Open the board" stays
 available). Row 5 shows `skipped` with "No orchestrator yet." / «Оркестратора
-ще немає.» when the install has no seat.
+ще немає.» when the install has no seat. That is the pass a new install ends
+on, so it is a captured state of its own. The note is a sentence where the
+other rows carry one word: on a phone it drops to its own line under the label,
+which keeps the longest row label at one line and the row at two.
+
+The four footer lines are one sentence apart. "Fix that, then run it again"
+is only written under a failure the user can act on; `DELIVERY_FAILED`,
+`WAKE_NOT_OWED`, `WAKE_UNDELIVERED` and `SEAT_UNREADABLE` say to copy the
+details into a bug report, so their footer states where the check stopped and
+stops there. `RUN_BOUND` takes a footer of its own, ahead of both: the
+whole-run bound belongs to the run rather than to the row it happened to stop,
+and it is the one failure that can land on the first row as well as any later
+one.
+
+While the check runs, no control on the screen is filled: the step's own button
+is "Stop" and the footer's "Open the board" steps back to a border, so the
+brightest thing during a two-minute wait is not the control that leaves. A
+failed row's state word carries `text-danger` with its glyph.
 
 "Open the board" writes `completedAt` and closes the dialog. It is enabled
 whatever the check's result, including never run.
@@ -662,10 +688,10 @@ hit.
 Runs server-side from `src/lib/onboarding/healthCheck.ts`, started by `POST
 /api/onboarding/health`, polled by `GET /api/onboarding/health?run=<id>`. One
 run at a time per install; a second start answers the running one. Whole-run
-bound 5 minutes; Stop cancels, closes the pipeline and revokes the scratch
-seat.
+bound 5 minutes; Stop cancels, closes the pipeline and stops the test
+orchestrator.
 
-- **Scratch repository:** `state/onboarding/health-repo`, created on first use
+- **Scratch repository:** `state/onboarding/viewer-health-check`, created on first use
   with `git init`, a committed `README`, no `origin` (`publishStage` already
   accepts `remote: "unavailable"`, `src/lib/pipelines/git.ts:346`). It is its
   own project (`dir-<hash>`), display name "Viewer health check", archived when
@@ -678,23 +704,55 @@ seat.
   through the same engine entry `create_pipeline` uses. Stage prompt: "Health
   check from the Viewer. Do nothing in the repository. Call stage_report with
   verdict pass, findings [], summary "ok"."
-- **The scratch seat:** an orchestrator seat for the scratch project on the
-  same model and effort, created through the ordinary seat intent path
-  (`beginOrchestratorSeatIntent` → `completeOrchestratorSeatIntent`) with a
-  three-line mandate: "You are a test seat for the Viewer's health check. When
-  you receive a wake, reply with the single word ok. Do nothing else." It is
-  created after row 3 passes and revoked when the run ends.
+- **The scratch seat:** a test orchestrator on the same model and effort,
+  launched in the scratch folder before the pipeline with a three-line prompt:
+  "You are a test seat for the Viewer's health check. When you receive a wake,
+  reply with the single word ok. Do nothing else." The pipeline is created with
+  that conversation as its creator (`src`), so the lane is the seat's own.
+
+**As built (slice 2): no seat-store record.** A seat can be ended only by a
+rotation or a stillborn rollback, both under `src/lib/orchestrator/`, which is
+outside this slice's fence; a designated scratch seat would outlive the run and
+the real tick would keep waking it. So row 4 runs the production
+`runSeatTickCheck` over the scratch project with the test orchestrator handed
+in as that project's seat through the check's sources, on a tick row of the
+run's own (`state/onboarding/health-runs/<run>/`), with board cards not
+written. The gather, the project identity, the decision and the send are the
+production ones; what stays unproven is the seat store's own lookup, which
+row 5 reads for every real seat. A throw-away seat through the intent path
+needs a way to end a seat, which is a finding for the orchestrator lane.
+
+Row 1 covers both launches, each within its 60 s bound: the test
+orchestrator's transcript must exist before the pipeline can name it as
+creator. The scratch repository is `state/onboarding/viewer-health-check`, so
+the rail names it after the folder. No project archive exists, so the project
+stays in the rail with its two conversations archived off its board and its
+task cards hidden.
+
+A cleanup that could not finish keeps its run file, so the next read or start
+of the check undoes the rest from what the file names; the sweep then removes
+the file whatever that second attempt does, so a step that can never succeed is
+tried once rather than on every read. The amber line says exactly that.
+
+Cleanup survives a Viewer restart. As each thing comes into existence (the
+scratch folder, the test orchestrator, its project, the pipeline), the run
+writes it to `state/onboarding/health-runs/<run>/run.json`. A restart forgets
+the run in progress, so the next read or start of the check cleans up every
+run file that no live run in this process owns, from what that file names,
+and then removes it. A run that ends before its pipeline exists archives the
+seat off the board of the seat's project, or of the scratch folder's project
+when the seat's transcript never appeared.
 
 Row by row, what is observed (each row is a durable fact the Viewer already
 records, never the agent's own claim):
 
 | Row | Proves | Observed as | Bound |
 |---|---|---|---|
-| 1 An agent starts | the CLI resolves, the account launches, the host comes up | the stage attempt's launch reservation gains a conversation with a transcript | 60 s |
-| 2 A message reaches it | delivery into a live host | the stage prompt's delivery receipt reaches a delivered outcome (`message_receipt`) | 30 s |
+| 1 An agent starts | the CLI resolves, the account launches, the host comes up | the test orchestrator's launch, then the stage attempt's, gains a conversation with a transcript | 60 s each |
+| 2 A message reaches it | delivery into a live host | the stage launch receipt reaches `prompt-delivered` or later | 30 s |
 | 3 The stage reports back | the agent's MCP link to the Viewer, `stage_report`, settlement | the pipeline records the accepted report and the stage settles `passed` | 120 s |
 | 4 The orchestrator is woken | project identity, the tick's decision, the wake send, resume of an idle seat | one on-demand `runSeatTickCheck(scratchProject)`; its record has verdict `wake` naming the settled lane and a delivery that `wakeReached` | 60 s |
-| 5 Your orchestrators are filed under the right project | the #1874 condition on the user's real seats | for every active seat: `canonicalOrchestratorProject(seat.project)` equals the identity `projectIdentityFromDirectory(seat cwd)` resolves now. Pure, no spawn, no wake | instant |
+| 5 Your orchestrators are filed under the right project | the #1874 condition on the user's real seats | for every active seat, `projectSuccessionFor(seat.project, seat cwd)` owes no succession. Pure, no spawn, no wake | instant |
 
 Row 4 uses a scratch seat so that the check never spends a real seat's hourly
 wake and never writes into a real orchestrator's context. It relies on an empty
@@ -714,24 +772,33 @@ detail), a sentence of what happened and a sentence of what to do.
 | 1 | `CLI_MISSING` | The {engine} command was not found on this machine. / Команду {engine} не знайдено на цьому комп'ютері. | Install it, or make sure the Viewer is started from a shell where `{bin}` runs. / Встановіть її або запускайте Viewer з оболонки, де працює `{bin}`. | Go to Engines |
 | 1 | `ENGINE_NOT_CONNECTED` | No {engine} account is signed in. / Немає акаунта {engine} з виконаним входом. | Sign in, then run the check again. / Увійдіть і запустіть перевірку знову. | Go to Engines |
 | 1 | `ACCOUNT_EXHAUSTED` | The {engine} account has no capacity left until {time}. / Акаунт {engine} вичерпав ліміт до {time}. | Wait for the reset, or connect the other engine. / Дочекайтесь оновлення ліміту або підключіть інший рушій. | Open Accounts |
-| 1 | `SPAWN_TIMEOUT` | The agent did not start within 60 seconds. / Агент не запустився за 60 секунд. | Run `{bin} --version` in a terminal. If it answers, open the agent's card to see where it stopped. / Виконайте `{bin} --version` у терміналі. Якщо відповідає, відкрийте картку агента й подивіться, де він зупинився. | Open the agent |
+| 1 | `SPAWN_TIMEOUT` | The agent did not start within 60 seconds. / Агент не запустився за 60 секунд. | Run `{bin} --version` in a terminal. If it answers, open the agent's card to see where it stopped. If it does not, reinstall it. / Виконайте `{bin} --version` у терміналі. Якщо відповідає, відкрийте картку агента й подивіться, де він зупинився. Якщо ні — перевстановіть її. | Open the agent |
 | 2 | `DELIVERY_FAILED` | The agent started, and the first message did not reach it. / Агент запустився, але перше повідомлення до нього не дійшло. | This is a Viewer fault on this machine. Copy the details into a bug report. / Це несправність Viewer на цьому комп'ютері. Скопіюйте подробиці в повідомлення про помилку. | Copy details |
 | 3 | `MCP_UNREACHABLE` | The agent ran and could not reach the Viewer's tools, so it could not report. / Агент працював, але не зміг звернутися до інструментів Viewer і тому не звітував. | The agent's session has no `viewer` MCP server. Restart the Viewer; if it repeats, copy the details into a bug report. / У сесії агента немає MCP-сервера `viewer`. Перезапустіть Viewer; якщо повториться, скопіюйте подробиці в повідомлення про помилку. | Copy details |
 | 3 | `REPORT_TIMEOUT` | The agent finished its turn without reporting the stage. / Агент завершив хід і не відзвітував про етап. | Open the agent to read what it said. A model that ignores the instruction is rare on this prompt; running again usually passes. / Відкрийте агента й прочитайте його відповідь. Модель рідко ігнорує цю інструкцію; повторний запуск зазвичай проходить. | Open the agent |
-| 4 | `TICK_OFF` | The seat tick is turned off on this machine (`LLV_SEAT_TICK_CHECK_MINUTES=0`). / Пробудження оркестратора вимкнено на цьому комп'ютері (`LLV_SEAT_TICK_CHECK_MINUTES=0`). | Remove that setting and restart. With it, an orchestrator sleeps until you message it. / Приберіть це налаштування й перезапустіть. З ним оркестратор спить, доки ви йому не напишете. | none |
+| 4 | `TICK_OFF` | The seat tick is turned off on this machine (`LLV_SEAT_TICK_CHECK_MINUTES=0`). / Пробудження оркестратора вимкнено на цьому комп'ютері (`LLV_SEAT_TICK_CHECK_MINUTES=0`). | Remove that setting and restart the Viewer. With it, an orchestrator sleeps until you message it. / Приберіть це налаштування й перезапустіть Viewer. З ним оркестратор спить, доки ви йому не напишете. | none |
 | 4 | `WAKE_NOT_OWED` | The stage finished, and the wake check found nothing to tell the orchestrator. The finished lane and the seat are filed under different projects. / Етап завершився, але перевірка не знайшла, про що повідомити оркестратора. Завершений конвеєр і оркестратор записані в різних проєктах. | This is the fault that leaves an orchestrator waiting for ever. Copy the details into a bug report; until it is fixed, message your orchestrator after each stage. / Саме через цю несправність оркестратор чекає без кінця. Скопіюйте подробиці в повідомлення про помилку; поки її не виправлено, пишіть оркестратору після кожного етапу. | Copy details |
 | 4 | `WAKE_UNDELIVERED` | The wake was sent and did not reach the orchestrator. / Пробудження надіслано, але воно не дійшло до оркестратора. | Copy the details into a bug report. / Скопіюйте подробиці в повідомлення про помилку. | Copy details |
-| 5 | `SEAT_MISFILED` | The orchestrator of "{project}" is filed under another key than its pipelines, so it will not be woken. / Оркестратор проєкту «{project}» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть. | Restart the Viewer: it re-files seats at start. If this row still fails, copy the details into a bug report. / Перезапустіть Viewer: під час запуску він перезаписує оркестраторів. Якщо рядок знову з помилкою, скопіюйте подробиці в повідомлення про помилку. | Copy details |
+| 5 | `SEAT_MISFILED` | The orchestrator of "{project}" is filed under another key than its pipelines, so it will not be woken. / Оркестратор проєкту «{project}» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть. | The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report. / Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку. | Copy details |
+| 5 | `SEAT_UNREADABLE` | The Viewer could not read the record of your orchestrators, so this row could not be checked. / Viewer не зміг прочитати запис про ваших оркестраторів, тому цей рядок не перевірено. | Restart the Viewer and run the check again. If it repeats, copy the details into a bug report. / Перезапустіть Viewer і запустіть перевірку знову. Якщо повториться, скопіюйте подробиці в повідомлення про помилку. | Copy details |
+| any | `RUN_BOUND` | The whole check passed its 5-minute limit while this row was still running. / Уся перевірка вичерпала свої 5 хвилин, поки цей рядок ще виконувався. | Run it again when the machine is less busy. If it stops here again, copy the details into a bug report. / Запустіть її знову, коли комп'ютер буде менш завантажений. Якщо вона знову спиниться тут, скопіюйте подробиці в повідомлення про помилку. | Copy details |
 
 "Copy details" copies the code, both project keys where relevant, the tick
 record's verdict and detail, and the Viewer version, passed through
 `redactMonitorText`; it contains no account handle, token or home path, so it
 is safe to paste into a public issue.
 
-`SEAT_MISFILED` promises a repair at restart. That repair is #1874's fix, which
-is a separate lane and is not on `main` at the commit this document was written
-against. Slice 2 lands after it; if the order changes, the row's remedy text is
-the bug-report sentence alone.
+`SEAT_UNREADABLE` is row 5's other outcome and never `SEAT_MISFILED`: when the
+seat record cannot be read at all, nothing is known to be misfiled, and the
+misfiling sentence names a project the Viewer never learned. `RUN_BOUND` is
+what the whole-run bound raises, on whichever row was open when it passed —
+including row 1, where a launch that hangs for minutes puts it.
+
+`SEAT_MISFILED` promises a repair. That repair is #1874's fix, on `main`
+since: a key a folder has moved on from is recorded as an alias on scan, at
+seat tick boot and on every tick sweep, and at designation, so the next check
+re-files the seat. Row 5 reads the same judgement (`projectSuccessionFor`) for
+every active seat.
 
 ## 6. Entry points
 

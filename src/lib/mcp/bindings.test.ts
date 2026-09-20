@@ -1269,7 +1269,11 @@ test.each(["kill", "interrupt", "resume", "compact", "dialog-key"])("conversatio
 test("conversation_action archives every generation from either target form and unarchives symmetrically", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-archive-generations-"));
   sandboxes.push(sandbox);
-  const boardFile = path.join(sandbox, "board.json");
+  /* Each phase starts on a board of its own: the store imports a board.json
+     once and leaves a tombstone in its place (#1870), so a phase boundary is a
+     fresh directory rather than deleting the file. */
+  const freshBoard = () => path.join(fs.mkdtempSync(path.join(sandbox, "board-")), "board.json");
+  let boardFile = freshBoard();
   const project = "fixture-generation-project";
   const earlierPath = "/fixtures/codex/raw-sessions/2026/08/rollout-earlier.jsonl";
   const currentPath = "/fixtures/codex/accounts/account-a/sessions/2026/08/rollout-current.jsonl";
@@ -1395,7 +1399,7 @@ test("conversation_action archives every generation from either target form and 
     outcomes: [{ transcriptPath: currentPath, paths: [earlierPath, currentPath], outcome: "unarchived" }],
   });
   expect(boardFor(project, boardFile)).toMatchObject({ revision: 2, prefs: { hidden: [] } });
-  fs.rmSync(boardFile);
+  boardFile = freshBoard();
 
   expect(mutateBoard(project, 0, [{
     kind: "remap-paths",
@@ -1453,7 +1457,7 @@ test("conversation_action archives every generation from either target form and 
     revision: 4,
     prefs: { hidden: [], taskPanelOpen: true },
   });
-  fs.rmSync(boardFile);
+  boardFile = freshBoard();
 
   expect(patchBoard(project, 0, { hidden: [currentPath] }, boardFile)).toMatchObject({ ok: true, applied: true });
   const repairedPartialArchive = await bindings.conversation_action({

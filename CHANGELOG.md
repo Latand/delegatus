@@ -8,6 +8,17 @@ guarantees for the 1.x series.
 ## [Unreleased]
 
 ### Changed
+- Board placements are stored in SQLite (`state.sqlite`, collection `board`),
+  one row per project, instead of `board.json`. A pin, a hidden group or a
+  view-mode change commits only that project's row in one transaction, so a
+  crash can no longer leave the whole board zero-filled or half-written, and one
+  project's write never rewrites another's bytes. On first start the existing
+  `board.json` is imported and verified by row count and digest, then kept as
+  `board.json.imported-<release>`; a directory with a README takes its place
+  (#1870).
+- A `board.json` that cannot be parsed at all (empty, NUL-filled or truncated)
+  is kept as `board.json.unreadable-<time>` and the board starts empty with a
+  logged incident, instead of every board request failing.
 - Account state is stored in SQLite (`state.sqlite`, collection `accounts`)
   instead of eight JSON files: the Claude and Codex account registries with
   their retirement and removal journals, the account↔project bindings, the
@@ -33,6 +44,17 @@ guarantees for the 1.x series.
   registry reports itself corrupt and refuses mutations, and the out-of-pool
   journal — which nothing consults to decide anything — reports nothing. The
   first successful write clears the gap.
+- A state-mutating startup step — the first-boot import of any moved store, its
+  rollback mirror, the copy-once move of the legacy state directory — runs only
+  in the serving Viewer's release activation, or against a state directory the
+  caller named itself. It never runs while Next.js collects page data for a
+  build, whatever else is true. A build in a checkout used to resolve whatever
+  state directory it found and import it out from under the running Viewer
+  (#1905).
+- An import record that names no release, in a state directory that has a
+  release target, was written by a process that did not own the release, so the
+  legacy file still standing beside it is re-imported over those rows rather
+  than merged into them (#1905).
 
 ### Downgrading
 - A version older than this one cannot read the SQLite account state and fails
@@ -41,6 +63,11 @@ guarantees for the 1.x series.
   works, but loses account changes made since the upgrade. Deployed releases
   rolled back through the release fence get every file written back for them
   automatically, and the changes they make are merged at roll-forward.
+- A version older than this one cannot read the SQLite board and fails on the
+  `board.json` directory, naming the path. Upgrade again to recover. Replacing
+  the directory with the `board.json.imported-*` copy also works, but loses
+  board changes made since the upgrade. Deployed releases rolled back through
+  the release fence get a fresh `board.json` written for them automatically.
 
 ## [1.2.2] — 2026-09-19
 

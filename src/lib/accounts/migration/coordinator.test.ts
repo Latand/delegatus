@@ -10,6 +10,7 @@ import { terminalizeStaleUndeliverableHeldDeliveries } from "@/lib/reaperRuntime
 import { tailRecordsResult } from "@/lib/scanner/activity";
 import type { FileEntry } from "@/lib/types";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import { stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 
 import { advanceConversationMigration, createMigrationIntent, drainHeldDeliveries, previewMigration, reconcileMigrationInventory, reconcileMigrations } from "./coordinator";
 import { emptyLaunchProfile, type MigrationEngine, type ProviderReceipt, type SuccessorProviderPort } from "./contracts";
@@ -4497,10 +4498,10 @@ describe("Codex canonical root conversation and fork recovery (#708)", () => {
   });
 
   test("one unreadable board leaves every other project reconciled", async () => {
-    /* `boardFor` used to run unguarded, so a single malformed `board.json`
-       threw `BoardStoreError` out of `reconcileMigrationInventory` and aborted
-       the whole controller cycle and reaper pass — for every project, not just
-       the broken one. Placement repair is the only thing that may be lost. */
+    /* `boardFor` used to run unguarded, so a single unusable board threw
+       `BoardStoreError` out of `reconcileMigrationInventory` and aborted the
+       whole controller cycle and reaper pass — for every project, not just the
+       broken one. Placement repair is the only thing that may be lost. */
     const store = registry();
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-708-unreadable-board-"));
     roots.push(base);
@@ -4520,8 +4521,14 @@ describe("Codex canonical root conversation and fork recovery (#708)", () => {
       files.push(...[rootPath, forkPath].map((pathname) => ({ ...fileEntry(pathname), project })));
       store.ensureConversation("codex", rootPath, "a");
     });
-    /* Not JSON at all — the shape an interrupted write or a hand edit leaves. */
-    fs.writeFileSync(path.join(path.dirname(store.filename), "board.json"), "{ not a board", { mode: 0o600 });
+    /* Valid JSON the board cannot mean — the shape a hand edit leaves. Bytes
+       that are not JSON at all are imported as a recorded gap now (#1870), so
+       they no longer refuse a read; this shape still does. */
+    fs.writeFileSync(
+      path.join(path.dirname(store.filename), "board.json"),
+      JSON.stringify({ projects: { "alpha-project": { schemaVersion: 2 } } }),
+      { mode: 0o600 },
+    );
 
     const warnings: unknown[][] = [];
     const originalWarn = console.warn;
@@ -4568,23 +4575,15 @@ describe("Codex canonical root conversation and fork recovery (#708)", () => {
     expect(boardFor("repo").pathAliases?.[forkPath]).toBe(rootPath);
     const settledRevision = boardFor("repo").revision;
 
-    /* The replay runs against the real store, so the write lock the production
-       path would take is observable: `withBoardWriteLock` creates the ticket
-       queue before it can decide there is nothing to write. */
-    const boardFile = path.join(path.dirname(store.filename), "board.json");
-    const lockQueues: string[] = [];
-    const originalMkdirSync = fs.mkdirSync;
-    fs.mkdirSync = ((target: fs.PathLike, ...args: unknown[]) => {
-      if (String(target).startsWith(`${boardFile}.write-lock`)) lockQueues.push(String(target));
-      return Reflect.apply(originalMkdirSync, fs, [target, ...args]) as string | undefined;
-    }) as typeof fs.mkdirSync;
-    try {
-      await reconcileMigrationInventory(store, files);
-    } finally {
-      fs.mkdirSync = originalMkdirSync;
-    }
+    /* The replay runs against the real store, so the work the production path
+       would do is observable in the state database: reaching the store at all
+       takes the collection lease, which writes to `state.sqlite` (#1870). */
+    const database = path.join(path.dirname(store.filename), "state.sqlite");
+    const signature = stateDatabaseSignature(database);
 
-    expect(lockQueues).toEqual([]);
+    await reconcileMigrationInventory(store, files);
+
+    expect(stateDatabaseSignature(database)).toBe(signature);
     expect(boardFor("repo").revision).toBe(settledRevision);
 
     /* And the store is not reached at all, not merely reached to no effect. */
