@@ -24,7 +24,9 @@ import {
   seedLaunchOutbox,
   settleLaunchOutboxDelivered,
   settleLaunchOutboxFailed,
+  transcriptEchoBindings,
   transcriptEchoCount,
+  transcriptEchoObservationId,
   updateOutbox,
   visibleOutbox,
   type OutboxEntry,
@@ -2127,4 +2129,54 @@ test("pending then queued observations preserve a server-reported unknown delive
   const queued = { ...pending, ...outboxReceiptPatch(pending, "queued", { ...receipt, status: "queued", revision: 3 }) };
   expect(queued.deliveryUncertain).toBe(true);
   expect(queued.awaitingTurn).toBeUndefined();
+});
+
+test("an unknown outcome owns its own transcript record, and only its own", () => {
+  /* Round-4 P1. A submission whose acknowledgement never came back used to be
+     excluded from echo ownership, so the transcript's own record of it could
+     not be recognised as belonging to the row the operator already had — and
+     the feed mounted the canonical row beside the spinning one.
+
+     It owns records now, under the SAME rule as every other submission: one
+     record per owner, in submission order, past the owner's own watermark. So
+     two identical texts still own two different records, and an unknown
+     outcome buys no claim on anyone else's. */
+  const conversation = "conv-unknown-echo";
+  const text = "Check the release status";
+  enqueueOutbox(conversation, { id: "key-unknown", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-unknown", { state: "failed", deliveryUncertain: true, error: "lost response" });
+  enqueueOutbox(conversation, { id: "key-later", text, images: 0, at: 2_000 });
+  updateOutbox(conversation, "key-later", { state: "delivering" });
+
+  const first: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text };
+  const second: TranscriptEchoObservation = { generation: "gen-1", id: "row:1:0", text };
+  /* One record: it belongs to the older submission — the unacknowledged one. */
+  expect([...transcriptEchoBindings(conversation, [first])])
+    .toEqual([[transcriptEchoObservationId(first), "key-unknown"]]);
+  /* Two records, two submissions, in order — never one record answering for
+     both, and never identical text merging them. */
+  expect([...transcriptEchoBindings(conversation, [first, second])]).toEqual([
+    [transcriptEchoObservationId(first), "key-unknown"],
+    [transcriptEchoObservationId(second), "key-later"],
+  ]);
+
+  /* And the record retires the row it answers for, exactly once: the unknown
+     entry leaves the tail for its canonical record while the later submission
+     keeps waiting. The payload and the unknown fate stay in the queue. */
+  publishTranscriptEchoes(conversation, [first]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-later"]);
+  expect(readOutbox(conversation).find((entry) => entry.id === "key-unknown"))
+    .toMatchObject({ text, deliveryUncertain: true });
+});
+
+test("an unknown outcome with no record of its own keeps its row", () => {
+  /* The other side of the same rule: without evidence, unknown is neither
+     delivered nor lost, so the row stays whatever the failed request left
+     behind on the local entry. */
+  const conversation = "conv-unknown-alone";
+  enqueueOutbox(conversation, { id: "key-unknown", text: "Nobody can say", images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-unknown", { state: "failed", deliveryUncertain: true, error: "lost response" });
+  expect(visibleOutbox(readOutbox(conversation), echoes("something else"), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-unknown"]);
 });
