@@ -146,10 +146,22 @@ export function BarCreateGroup({ wide, task, agent, onMenu, menuOpen = false, re
   );
 }
 
+/* The seat state's colour on the Orchestrator toggle (#1841): success is
+   working, warning needs you, danger failed, muted idle. */
+const SEAT_DOT_TONE: Record<string, string> = {
+  working: "bg-success",
+  needs: "bg-warning",
+  failed: "bg-danger",
+  accent: "bg-accent",
+  quiet: "bg-muted",
+};
+
 /** The two panel switches: the orchestrator dock and the task panel. Icon only (with the count) when narrow. */
 export function BarPanelToggles({ wide, orchestrator, tasks }: {
   wide: boolean;
-  orchestrator: { open: boolean; onToggle: () => void } | null;
+  /** `dot`: the collapsed seat's state (#1841), drawn on the icon so it stays
+      readable with the seat out of view. */
+  orchestrator: { open: boolean; onToggle: () => void; dot?: { tone: string; label: string } | null } | null;
   tasks: { open: boolean; count: number; onToggle: () => void };
 }) {
   const { t } = useLocale();
@@ -166,7 +178,17 @@ export function BarPanelToggles({ wide, orchestrator, tasks }: {
           data-bar-control=""
           className={`${BAR_CONTROL} ${orchestrator.open ? BAR_PRESSED : BAR_OUTLINED} ${wide ? "" : "px-2"}`}
         >
-          <Bot className={BAR_ICON} aria-hidden />
+          <span className="relative inline-flex">
+            <Bot className={BAR_ICON} aria-hidden />
+            {orchestrator.dot ? (
+              <i
+                className={`absolute -bottom-px -right-px h-1.5 w-1.5 rounded-full ring-1 ring-card ${SEAT_DOT_TONE[orchestrator.dot.tone] ?? "bg-muted"}`}
+                data-orchestrator-toggle-dot={orchestrator.dot.tone}
+                title={orchestrator.dot.label}
+                aria-hidden
+              />
+            ) : null}
+          </span>
           {wide ? t("orchPanel.title") : null}
         </button>
       ) : null}
