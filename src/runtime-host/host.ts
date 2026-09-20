@@ -99,6 +99,10 @@ export class RuntimeHost {
       } else if (request.method === "snapshot") result = new PreserializedJson(this.journal.snapshotJson(Array.isArray(request.params?.voiceBodiesFor)
         ? request.params.voiceBodiesFor.filter((id): id is string => typeof id === "string").slice(0, 1)
         : undefined));
+      else if (request.method === "session-read") result = this.journal.readSession({
+        conversationId: request.params?.conversationId as string | undefined,
+        artifactPath: request.params?.artifactPath as string | undefined,
+      });
       else if (request.method === "events") result = this.journal.replay(Number(request.params?.after ?? 0));
       else if (request.method === "wait") result = await this.journal.waitForEvents(
         Number(request.params?.after ?? 0),
