@@ -111,12 +111,14 @@ function chip(value: string, label?: string): ArgChip {
    with certainty is refused outright, so `env T=$(mktemp -d) bun test` keeps
    its whole label instead of being cut at the space inside the substitution.
 
-   Bounded twice over, because the caller hands this uncapped commands and the
-   display limits are applied after it: a pass reads at most
-   FOLD_PREFIX_WINDOW characters, at most FOLD_PASSES prefixes are folded, and
-   the scans that span a whole region draw on one FOLD_CHAR_BUDGET. Exhausting
-   a budget stops the fold where it stands: what was folded before that point
-   was read in full, and everything left is kept verbatim. */
+   Bounded by budget, not only by termination, because the caller hands this
+   uncapped commands and the display limits are applied after it: every prefix
+   pattern carries its own length bound, an assignment is scanned inside a
+   FOLD_PREFIX_WINDOW, at most FOLD_PASSES prefixes are folded in all, and the
+   one scan that can span a whole region — the outer quote pair — draws on a
+   single FOLD_CHAR_BUDGET. Exhausting a budget stops the fold where it stands:
+   what was folded before that point was read in full, and everything left is
+   kept verbatim. */
 const FOLD_PASSES = 24;
 const FOLD_PREFIX_WINDOW = 512;
 const FOLD_CHAR_BUDGET = 1 << 16;
