@@ -72,6 +72,7 @@ plugins = false
    *  the process it is testing, and a child exit with no reason to report. */
   const diagnostics: string[] = [];
   let liveChildren = 0;
+  let coalescedResume = false;
   let dropAdd = false;
   let hideCanonicalClient: string | null = null;
   // Only authentication/catalog projection is synthetic. Queue, history,
@@ -86,6 +87,7 @@ plugins = false
     });
     const input = new PassThrough(); const output = new PassThrough();
     const methods = new Map<number, string>();
+    let resumeFrames: string[] | null = null;
     const inbound = createInterface({ input });
     inbound.on("line", line => {
       const message = JSON.parse(line); if (typeof message.id === "number") methods.set(message.id, message.method);
@@ -107,7 +109,24 @@ plugins = false
           if (Array.isArray(turn.items)) turn.items = turn.items.filter((item: {clientId?: string}) => item.clientId !== hideCanonicalClient);
         }
       }
-      output.write(JSON.stringify(message) + "\n");
+      // Make the hosted race deterministic: the CLI takes an idle resume
+      // snapshot, then dispatches the recovered native entry. Deliver the
+      // reply and that real start together so open() must reconcile both.
+      // This barrier follows protocol events and does not sleep or invent one.
+      if (scenario === "large" && method === "thread/resume" && message.result) {
+        expect(message.result.thread.status.type).toBe("idle");
+        resumeFrames = [];
+      }
+      const frame = JSON.stringify(message) + "\n";
+      if (resumeFrames) {
+        resumeFrames.push(frame);
+        if (message.method !== "turn/started") return;
+        coalescedResume = true;
+        output.write(resumeFrames.join(""));
+        resumeFrames = null;
+      } else {
+        output.write(frame);
+      }
     });
     child.once("close", (code, signal) => {
       liveChildren--;
@@ -263,6 +282,10 @@ plugins = false
     const adds = requests.filter(r => r.method === "thread/queue/add").length;
     await host.release(); dropAdd = false;
     host = await CodexAppServerHost.adopt(threadId, options);
+    if (scenario === "large") {
+      expect(coalescedResume).toBeTrue();
+      expect((await host.health()).activeTurnRef).toBeTruthy();
+    }
     await executor.reconcile(conversationId);
     expect(requests.filter(r => r.method === "thread/queue/add")).toHaveLength(adds);
     // A cold resume may dispatch the queued entry. A complete canonical read

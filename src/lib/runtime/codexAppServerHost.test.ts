@@ -2998,6 +2998,48 @@ describe("CodexAppServerHost", () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
+  test("a native queue turn started during resume survives its idle snapshot", async () => {
+    const threadId = "queue-start-during-idle-resume";
+    const turnId = "queued-turn";
+    const eventStore = new MemoryEventStore();
+    const server = new FakeAppServer(threadId, threadId, false, [], { type: "idle" }, [
+      { method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: ["running"] } } },
+      { method: "turn/started", params: { threadId, turn: { id: turnId } } },
+    ]);
+    const host = await CodexAppServerHost.adopt(threadId, {
+      cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server),
+    });
+    try {
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: turnId });
+      expect(eventStore.load(threadId).filter(event => event.kind === "turn-ended")).toEqual([]);
+      await host.interrupt(turnId);
+      expect(server.requests.some(request => request.method === "turn/interrupt")).toBeTrue();
+    } finally {
+      await host.release();
+    }
+  });
+
+  test("a buffered start cannot reopen a turn the resume history proves terminal", async () => {
+    const threadId = "buffered-start-terminal-history";
+    const turnId = "completed-before-snapshot";
+    const eventStore = new MemoryEventStore();
+    const server = new FakeAppServer(threadId, threadId, false, [
+      { id: turnId, status: "completed", items: [] },
+    ], { type: "idle" }, { method: "turn/started", params: { threadId, turn: { id: turnId } } });
+    const host = await CodexAppServerHost.adopt(threadId, {
+      cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server),
+    });
+    try {
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(eventStore.load(threadId).filter(event => event.kind === "turn-started")).toHaveLength(1);
+      expect(eventStore.load(threadId).filter(event => event.kind === "turn-ended")).toEqual([
+        expect.objectContaining({ turnId, status: "completed" }),
+      ]);
+    } finally {
+      await host.release();
+    }
+  });
+
   test("a newer buffered turn survives the stale snapshot of its completed predecessor", async () => {
     const threadId = "buffered-successor-after-stale-snapshot";
     const completedTurnId = "turn-stale-snapshot";
