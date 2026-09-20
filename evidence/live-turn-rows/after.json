@@ -1,5 +1,6 @@
 {
   "phase": "after",
+  "source": "b85d88a356c231ddf917fe53cb5350eb33d3b9a5",
   "shots": [
     "stale-390-dark-en-after.png",
     "current-390-dark-en-after.png",
@@ -58,64 +59,112 @@
           "mcp": [],
           "canonicalMcp": [
             {
+              "tool": "Creating pipeline: Bound the live overla",
               "rowWidth": 330,
-              "titleWidth": 129.53,
-              "chips": 0
+              "titleWidth": 174.22,
+              "titleShare": 53,
+              "chips": 0,
+              "minChipWidth": 0,
+              "minChipHeight": 0
             },
             {
+              "tool": "Updating task task-demo-4417: assigned",
               "rowWidth": 330,
-              "titleWidth": 39.36,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 82,
+              "minChipHeight": 24
             },
             {
+              "tool": "Opening pipeline: pipeline-demo-2208",
               "rowWidth": 330,
-              "titleWidth": 20.5,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 101,
+              "minChipHeight": 24
             },
             {
+              "tool": "Linking task to pipeline: task-demo-4417",
               "rowWidth": 330,
-              "titleWidth": 1.27,
-              "chips": 2
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24
             },
             {
+              "tool": "Searching transcripts: live turn rows ar",
               "rowWidth": 330,
-              "titleWidth": 129.53,
-              "chips": 0
+              "titleWidth": 174.22,
+              "titleShare": 53,
+              "chips": 0,
+              "minChipWidth": 0,
+              "minChipHeight": 0
             },
             {
+              "tool": "Starting pipeline pipeline-demo-2208",
               "rowWidth": 330,
-              "titleWidth": 20.5,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 101,
+              "minChipHeight": 24
             },
             {
+              "tool": "Sending message to conversation-demo-993",
               "rowWidth": 330,
-              "titleWidth": 42.31,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 124,
+              "minChipHeight": 24
             },
             {
+              "tool": "Creating task: Capture the phone evidenc",
               "rowWidth": 330,
-              "titleWidth": 129.53,
-              "chips": 0
+              "titleWidth": 174.22,
+              "titleShare": 53,
+              "chips": 0,
+              "minChipWidth": 0,
+              "minChipHeight": 0
             },
             {
+              "tool": "Creating pipeline: Bound the live overla",
               "rowWidth": 330,
-              "titleWidth": 129.53,
-              "chips": 0
+              "titleWidth": 174.22,
+              "titleShare": 53,
+              "chips": 0,
+              "minChipWidth": 0,
+              "minChipHeight": 0
             },
             {
+              "tool": "Updating task task-demo-4417: assigned",
               "rowWidth": 330,
-              "titleWidth": 39.36,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 82,
+              "minChipHeight": 24
             },
             {
+              "tool": "Opening pipeline: pipeline-demo-2208",
               "rowWidth": 330,
-              "titleWidth": 20.5,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 101,
+              "minChipHeight": 24
             },
             {
+              "tool": "Linking task to pipeline: task-demo-4417",
               "rowWidth": 330,
-              "titleWidth": 1.27,
-              "chips": 2
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24
             }
           ],
           "rows": 0,
@@ -263,64 +312,112 @@
           "mcp": [],
           "canonicalMcp": [
             {
+              "tool": "Creating pipeline: Bound the live overla",
               "rowWidth": 330,
-              "titleWidth": 128,
-              "chips": 0
+              "titleWidth": 172.69,
+              "titleShare": 52,
+              "chips": 0,
+              "minChipWidth": 0,
+              "minChipHeight": 0
             },
             {
+              "tool": "Updating task task-demo-4417: assigned",
               "rowWidth": 330,
-              "titleWidth": 37.83,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 82,
+              "minChipHeight": 24
             },
             {
+              "tool": "Opening pipeline: pipeline-demo-2208",
               "rowWidth": 330,
-              "titleWidth": 18.97,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 101,
+              "minChipHeight": 24
             },
             {
+              "tool": "Linking task to pipeline: task-demo-4417",
               "rowWidth": 330,
-              "titleWidth": 1.27,
-              "chips": 2
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24
             },
             {
+              "tool": "Searching transcripts: live turn rows ar",
               "rowWidth": 330,
-              "titleWidth": 128,
-              "chips": 0
+              "titleWidth": 172.69,
+              "titleShare": 52,
+              "chips": 0,
+              "minChipWidth": 0,
+              "minChipHeight": 0
             },
             {
+              "tool": "Starting pipeline pipeline-demo-2208",
               "rowWidth": 330,
-              "titleWidth": 18.97,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 101,
+              "minChipHeight": 24
             },
             {
+              "tool": "Sending message to conversation-demo-993",
               "rowWidth": 330,
-              "titleWidth": 40.78,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 124,
+              "minChipHeight": 24
             },
             {
+              "tool": "Creating task: Capture the phone evidenc",
               "rowWidth": 330,
-              "titleWidth": 128,
-              "chips": 0
+              "titleWidth": 172.69,
+              "titleShare": 52,
+              "chips": 0,
+              "minChipWidth": 0,
+              "minChipHeight": 0
             },
             {
+              "tool": "Creating pipeline: Bound the live overla",
               "rowWidth": 330,
-              "titleWidth": 128,
-              "chips": 0
+              "titleWidth": 172.69,
+              "titleShare": 52,
+              "chips": 0,
+              "minChipWidth": 0,
+              "minChipHeight": 0
             },
             {
+              "tool": "Updating task task-demo-4417: assigned",
               "rowWidth": 330,
-              "titleWidth": 37.83,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 82,
+              "minChipHeight": 24
             },
             {
+              "tool": "Opening pipeline: pipeline-demo-2208",
               "rowWidth": 330,
-              "titleWidth": 18.97,
-              "chips": 1
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 1,
+              "minChipWidth": 101,
+              "minChipHeight": 24
             },
             {
+              "tool": "Linking task to pipeline: task-demo-4417",
               "rowWidth": 330,
-              "titleWidth": 1.27,
-              "chips": 2
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24
             }
           ],
           "rows": 0,
