@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -520,6 +521,52 @@ export class SqliteAgentRegistryStore {
       try { this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
       throw error;
     }
+  }
+
+  /** Retirement observation reads only the named conversation and session row.
+      No receipt/catalog materialization, catalog fallback or state write. */
+  retirementSubject(conversationId: string, key: string): {
+    conversation: RegistryFile["conversations"][string] | null;
+    entry: RegistryFile["entries"][string] | null;
+  } {
+    this.db.exec("BEGIN");
+    try {
+      const read = (collection: "conversations" | "entries", id: string): unknown => {
+        const row = this.db.query<{ value_json: string | null }, [string, string]>(
+          "SELECT CASE WHEN length(CAST(value_json AS BLOB)) <= 262144 THEN value_json END AS value_json FROM registry_rows WHERE collection=? AND row_key=?",
+        ).get(collection, id);
+        this.onRowPayloadRead?.(collection, row ? 1 : 0);
+        if (!row) return null;
+        if (row.value_json === null) throw new Error("retirement subject exceeds the row byte budget");
+        return this.parseRow(collection, id, row.value_json, true);
+      };
+      const rawConversation = read("conversations", conversationId);
+      const rawEntry = read("entries", key);
+      const normalized = this.normalize({ version: 2, receipts: {},
+        conversations: rawConversation === null ? {} : { [conversationId]: rawConversation },
+        entries: rawEntry === null ? {} : { [key]: rawEntry } });
+      this.db.exec("COMMIT");
+      return { conversation: normalized.conversations[conversationId] ?? null, entry: normalized.entries[key] ?? null };
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
+      throw error;
+    }
+  }
+
+  /** The supplied receipt is a lookup key, never authority. The server's
+      capability must still match its live digest. Naming it avoids a registry-
+      wide capability/receipt search on an observation-only call. */
+  retirementCaller(launchId: string, digest: string): string | null {
+    const row = this.db.query<{ value_json: string | null }, [string]>(
+      "SELECT CASE WHEN length(CAST(value_json AS BLOB)) <= 262144 THEN value_json END AS value_json FROM registry_rows WHERE collection='receipts' AND row_key=?",
+    ).get(launchId);
+    this.onRowPayloadRead?.("receipts", row ? 1 : 0);
+    if (!row?.value_json) return null;
+    const receipt = JSON.parse(row.value_json) as { spawnCapabilityDigest?: unknown; conversationId?: unknown };
+    if (typeof receipt.spawnCapabilityDigest !== "string" || !/^[a-f0-9]{64}$/.test(receipt.spawnCapabilityDigest)
+      || !/^[a-f0-9]{64}$/.test(digest) || typeof receipt.conversationId !== "string") return null;
+    return crypto.timingSafeEqual(Buffer.from(digest, "hex"), Buffer.from(receipt.spawnCapabilityDigest, "hex"))
+      ? receipt.conversationId : null;
   }
 
   /** Keyed title lookup for the bounded custom-title store. A request reads at
