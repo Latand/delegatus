@@ -256,7 +256,7 @@ for (const lang of ["en", "uk"] as const) {
       /* An outcome nobody knows is announced by no assistive label at all —
          the row prints the word instead, so the reader sees it too. */
       const announced = row.querySelector("[aria-label]:not([aria-hidden])");
-      expect(announced?.getAttribute("aria-label") ?? null).toBe(aria);
+      expect(announced?.getAttribute("aria-label") ?? "").toBe(aria ?? "");
       if (text) {
         expect(row.textContent).toContain(lang === "en" ? text : translate("uk", "feed.liveToolOutcomeOmitted"));
       }
@@ -268,10 +268,11 @@ for (const lang of ["en", "uk"] as const) {
         if (other !== tone) expect(row.innerHTML).not.toContain(other);
       }
 
-      /* And the row is still an MCP row: the card's summary and both chips. */
-      expect(row.querySelector("[data-live-mcp-title]")!.textContent)
-        .toBe(row.querySelector("[data-live-mcp-title]")!.getAttribute("title"));
-      expect(row.querySelector("[data-live-mcp-title]")!.textContent!.length).toBeGreaterThan(0);
+      /* And the row is still an MCP row: the card's summary and both chips.
+         The title's tooltip carries it in full, as the canonical card's does. */
+      const title = row.querySelector("[data-live-mcp-title]")!;
+      expect(title.textContent ?? "").toBe(title.getAttribute("title") ?? "");
+      expect((title.textContent ?? "").length).toBeGreaterThan(0);
       expect(chipsOf(row, "[data-live-mcp-link]")).toHaveLength(2);
       expect(row.textContent).toContain("MCP · viewer");
     });

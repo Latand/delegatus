@@ -104,7 +104,10 @@ const PROSE = [
     the calls, every tool row keyed by the engine call id its canonical row
     carries. */
 export function longTurnLiveItems(count = LONG_TURN_CALLS): RuntimeLiveTurnItem[] {
-  const calls = longTurnCalls(count);
+  return liveItemsFor(longTurnCalls(count));
+}
+
+function liveItemsFor(calls: Call[]): RuntimeLiveTurnItem[] {
   const items: RuntimeLiveTurnItem[] = [];
   calls.forEach((call, index) => {
     if (index % 24 === 0) {
@@ -138,8 +141,12 @@ export function longTurnLiveItems(count = LONG_TURN_CALLS): RuntimeLiveTurnItem[
     per call and one `tool_result` for every call that finished. This is what a
     CURRENT canonical window holds, and every id in it claims a live row. */
 export function longTurnTranscriptLines(count = LONG_TURN_CALLS): string[] {
+  return transcriptLinesFor(longTurnCalls(count));
+}
+
+function transcriptLinesFor(calls: Call[]): string[] {
   const lines: string[] = [];
-  longTurnCalls(count).forEach((call, index) => {
+  calls.forEach((call, index) => {
     if (index % 24 === 0) {
       lines.push(JSON.stringify({
         type: "assistant",
@@ -186,4 +193,14 @@ export function staleTranscriptLines(): string[] {
       message: { role: "assistant", id: "rec-stale-2", content: [{ type: "text", text: "Starting on it." }] },
     }),
   ];
+}
+
+/** The same turn part-way through: its first `calls` calls, as the pair a pane
+    holds at that moment — the bytes the transcript file has on disk and the
+    items the runtime store has projected. It is a genuine PREFIX of the whole
+    turn, so a file that grows only ever appends and a live turn that grows only
+    ever extends, which is what a test driving the real transports needs. */
+export function longTurnPrefix(calls: number): { lines: string[]; items: RuntimeLiveTurnItem[] } {
+  const kept = longTurnCalls().slice(0, Math.max(0, Math.min(calls, LONG_TURN_CALLS)));
+  return { lines: transcriptLinesFor(kept), items: liveItemsFor(kept) };
 }

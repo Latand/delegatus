@@ -44,10 +44,14 @@ import { summarizeTool } from "@/components/feed/tools";
  * to carry anyway. Its only bound used to be the canonical claim, which is a condition
  * OUTSIDE this component — the transcript window has to be current for a row to
  * be claimed or to fall behind the #674 fence. A pane whose tail is paused
- * (`BranchPane`: dormant or offscreen) keeps its transcript window frozen while
- * the runtime store keeps projecting items into the same turn, and then every
- * unclaimed item — up to 544 of them, 32 active plus 512 overflow — reaches the
- * renderer at once. That is the reported wall.
+ * (`BranchPane`: dormant or offscreen) unsubscribes from the log bus, so its
+ * transcript window stands still while the runtime store — which takes no such
+ * pause — keeps projecting items into the same turn. Every item projected into
+ * that gap is unclaimed, up to 544 of them (32 active plus 512 overflow), and
+ * before this bound the renderer painted all of them. That is the reported
+ * wall, and `liveTurnStallPath.dom.test.tsx` drives it through both real
+ * transports: the polling fallback keeps the window current by itself, and
+ * only the pane's own pause freezes it.
  *
  * Eight is the tail an operator can actually read: at 390 px a quiet row is
  * ~20 px, so eight rows are the ~160 px that fit between the last transcript
@@ -354,7 +358,7 @@ function LiveToolRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeL
       </span>
       {state !== "success" ? (
         <span className={`inline-flex shrink-0 items-center gap-1 text-caption font-semibold ${isErr ? "text-danger" : "text-muted"}`}>
-          {state !== "outcome-omitted" ? <StatusIcon status={tool.status} className="h-3 w-3" /> : null}
+          {tool.status === "unknown" ? null : <StatusIcon status={tool.status} className="h-3 w-3" />}
           {label}
         </span>
       ) : null}

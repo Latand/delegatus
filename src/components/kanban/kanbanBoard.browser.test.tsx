@@ -6570,8 +6570,8 @@ describe("live turn rows on a phone", () => {
          how much of the row it holds now, and how tall the row grew to keep
          its chips whole. */
       const mcp = [...overlay.querySelectorAll("[data-live-mcp]")].map(row => {
-        /* `span.flex-1` is where the title lived before it was given a basis
-           of its own, so the before phase measures the same thing. */
+        /* A bare flex-1 span is where the title lived before it was given a
+           basis of its own, so the before phase measures the same thing. */
         const title = row.querySelector("[data-live-mcp-title]") || row.querySelector("span.flex-1");
         const rowBox = row.getBoundingClientRect();
         const titleBox = title.getBoundingClientRect();
@@ -6623,7 +6623,12 @@ describe("live turn rows on a phone", () => {
   })()`;
 
   browserTest("the overlay is a bounded tail, and nothing at all once the transcript carries the calls", async () => {
-    const phase = process.env.LIVE_ROWS_CAPTURE_PHASE === "before" ? "before" : "after";
+    /* Any phase name but "after" records without asserting, so the overlay as
+       it was at an earlier commit can be measured in these same units: "before"
+       is the unbounded wall this issue started from, "round1" the bounded
+       overlay whose MCP row still squeezed its title and called an unknown
+       outcome a success. */
+    const phase = (process.env.LIVE_ROWS_CAPTURE_PHASE ?? "after").replace(/[^a-z0-9-]/gi, "") || "after";
     const out = path.resolve(`.artifacts/live-turn-rows/${phase}`);
     const pngDir = process.env.LIVE_ROWS_PNG_DIR ?? "/var/tmp/llv-live-rows-evidence";
     fs.mkdirSync(out, { recursive: true });

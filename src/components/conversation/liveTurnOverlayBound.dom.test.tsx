@@ -21,19 +21,23 @@ import {
  * The live overlay is the in-flight TAIL of a turn, never a second copy of the
  * transcript.
  *
- * What this file holds is the diagnosis of the reported wall, kept as
- * executable evidence:
+ * What this file holds is the part of the diagnosis that is about the HANDOFF —
+ * what each canonical window does to the overlay it is handed:
  *
  *   (b) claim identity is NOT the defect. A canonical Claude window carrying
  *       the same call ids claims every one of the sixty live rows — folded runs
  *       through `cmd-group.ids`, standalone MCP rows through `tool.id`.
- *   (a) the trigger is a canonical window that is not current: with a stale
- *       one, nothing claims anything, no live row is older than the newest
- *       transcript instant, and every unclaimed row is returned.
+ *   (a) a canonical window that is not current claims nothing: no live row is
+ *       older than the newest transcript instant, so `transcriptMovedPast`
+ *       never fires either and every unclaimed row is returned. That is the
+ *       CONSEQUENCE of a stalled window; what stalls one is a paused pane, and
+ *       the proof of that runs through the real transports in
+ *       `liveTurnStallPath.dom.test.tsx` — the degraded runtime bus named on
+ *       the operator's banner is not it.
  *   (c) the amount is the overflow: `runtimeLiveTurnItems` hands the renderer
  *       the overflow buffer as well as the hot window.
  *
- * The fix is here rather than in either of those: whatever the canonical window
+ * The fix is here rather than in any of those: whatever the canonical window
  * is doing, the pane paints a bounded tail and one counted line.
  */
 
