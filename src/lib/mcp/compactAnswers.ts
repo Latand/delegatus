@@ -16,7 +16,7 @@ import type { AgentLivenessRecord, AgentLivenessSnapshot } from "@/lib/lifecycle
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { clampChars, clampLine } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
-import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
+import type { Pipeline, PipelineStageAttempt, PipelineStageReport } from "@/lib/pipelines/types";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { modelTierWindows, type LimitWindow } from "@/lib/types";
 
@@ -65,6 +65,39 @@ export function pipelineActionAcknowledgement(pipeline: Pipeline) {
   };
 }
 
+/**
+ * The durable stage report is the authority for findings and the narrative.
+ * A successful completion only needs enough metadata to identify that report;
+ * `get_pipeline` with `stageId` reads its complete bounded record. Keep this
+ * projection scalar/bounded so a large finding list cannot return through a
+ * second field in the acknowledgement.
+ */
+export function stageReportAcknowledgement(report: PipelineStageReport) {
+  const findings = report.verdict.findings ?? [];
+  const severityCounts = { P0: 0, P1: 0, P2: 0, P3: 0 };
+  for (const finding of report.verdict.rankedFindings ?? []) {
+    if (finding.severity) severityCounts[finding.severity] += 1;
+  }
+  return {
+    seq: report.seq,
+    at: report.at,
+    verdict: {
+      status: report.verdict.status,
+      findingCount: findings.length,
+      severityCounts,
+    },
+    provenance: {
+      head: report.provenance.head,
+      branch: report.provenance.branch,
+      dirty: report.provenance.uncommitted === null ? null : report.provenance.uncommitted.length > 0,
+      pullRequest: report.provenance.pullRequest,
+      /* Declared outputs are capped by the pipeline schema. */
+      outputs: report.provenance.outputs,
+    },
+    calls: report.calls,
+  };
+}
+
 export class StageReadError extends Error {}
 
 function attemptFor(pipeline: Pipeline, stageId: string, attempt: number | undefined): PipelineStageAttempt | null {
@@ -91,6 +124,11 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
   const selected = attemptFor(pipeline, stageId, attempt);
   const attempts = (pipeline.runs ?? []).find((run) => run.stageId === stageId)?.attempts ?? [];
   const role = stage.effectiveRole;
+  /* A stage report is accepted before the reporting turn settles. During that
+     interval the attempt stays running and has no settled verdict yet, while
+     its report is already the authoritative completion record. */
+  const reportedVerdict = selected?.report?.verdict;
+  const verdict = selected?.verdict ?? reportedVerdict;
   return {
     pipelineId: pipeline.id,
     state: pipeline.state,
@@ -110,8 +148,8 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
     attempt: selected ? {
       n: selected.n,
       state: selected.state,
-      verdict: selected.verdict?.status ?? null,
-      findings: selected.verdict?.findings ?? [],
+      verdict: verdict?.status ?? null,
+      findings: verdict?.findings ?? [],
       summary: clampChars(selected.report?.summary ?? null, SUMMARY_CHARS),
       decisionRequested: selected.decisionRequested === true,
       /* Findings handed to the fix stage after the budget was spent and never
