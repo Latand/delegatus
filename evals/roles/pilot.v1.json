@@ -1,22 +1,180 @@
 {
-  "schemaVersion": "role-eval.v2",
-  "datasetVersion": "pilot.v1",
+  "schemaVersion": "role-eval.v3",
+  "datasetVersion": "pilot.v2",
   "seed": "20260920",
   "sourceBaseCommit": "a5d37a2d0ff7a943bb39e7ac6666e7450c4f9147",
   "fixtures": [
-    {"id":"quota-window","baseCommit":"95b8edfc00b5100b9f464b81c2a923b264f5a088","treeHash":"34ca805e10143251404d7190f308290babb11841142d380ff01c8806c6a6fcc7","supportHash":"b92c54e2115a0b3849b447c010e70cbe54a5af66e2b1402eb048f835fa4b4272","taskHash":"c45180034c3b5cec53374120df8d84c3c02d2284e242212b0aa37b1a92210ad4","candidateFiles":["case/quotaSummary.ts","case/quotaSummary.test.ts"],"forbiddenFiles":["support/routeWindowsByHorizon.ts"],"requiresRenderedEvidence":false,"hiddenCommitment":"bc3c927d258288eb469329d5c3ee72f29da608fc8c81e8db3c9855c22eb2e2cf","holdoutCommitment":"d83c91d8a4b1850e85a70619b7b9d7444178c468bfc7fd5e6817becd6cfb0a72"},
-    {"id":"error-row","baseCommit":"e7167ee72f3fac5dd99c2245cd0c66d94df5a826","treeHash":"b76edfbe3385340f38f49243cd10b058dc07d3fde182c59f02248fdc690d3840","supportHash":"b92c54e2115a0b3849b447c010e70cbe54a5af66e2b1402eb048f835fa4b4272","taskHash":"f42d1cb7161023c1b8798d46602a19cc99828966278b55b429406b20d36a0d19","candidateFiles":["case/ErrorRow.tsx","case/error-row.css","case/ErrorRow.test.tsx"],"forbiddenFiles":["support/MobileSwipeRow.tsx"],"requiresRenderedEvidence":true,"hiddenCommitment":"75b99973d38fd0aa91eac107c4336b0c80cbb88a6530d5e8e7c589729de2a2fd","holdoutCommitment":"6d8c82f9281068167507c660f0ceaf3d6d995dcf2ff15710f18383bfba3d220a"},
-    {"id":"diagnostic-summary","baseCommit":"cda89a273f1c912a50600af4867de864720488a6","treeHash":"344710167580fdccca028ff669896a72b64f21bba65b8a3dee3aa76d42dc171c","supportHash":"b92c54e2115a0b3849b447c010e70cbe54a5af66e2b1402eb048f835fa4b4272","taskHash":"ad79118c67d9a031d2ab15d8ce0ed311621247acea82170fd8a4dc8abc6a1c7d","candidateFiles":["case/diagnosticSummary.ts","case/diagnosticSummary.test.ts"],"forbiddenFiles":["support/redactMonitorText.ts"],"requiresRenderedEvidence":false,"hiddenCommitment":"d7f896a108852f409edbb05cf6e9bf2b3b01903f03e0c3fe509cab0204ef83c7","holdoutCommitment":"e984627b7b4c2f7d05c6889d4f719b4f6536b00816a4a5bc3ec2cfde771c0b08"}
+    {
+      "id": "quota-window",
+      "baseCommit": "51d6d6c432512763335fa50072a33f26d7d93174",
+      "treeHash": "6851e67c9fb7779d76697b5be168c5ec93f0d2811e2e215ff1e0268325cd4278",
+      "supportHash": "2b9d602da0e265cb02b374cb55f5b3c6e71d3dea5b962e1f77eeac0c8b8de503",
+      "taskHash": "b8ef38e4d9cc27d6ee3db7a2c62d5364985806ef3f784e0092391844bf883e13",
+      "candidateFiles": [
+        "case/quotaSummary.ts",
+        "case/quotaSummary.test.ts"
+      ],
+      "forbiddenFiles": [
+        "support/",
+        "task.md",
+        "public.json"
+      ],
+      "requiresRenderedEvidence": false,
+      "hiddenCommitment": "78dbb77b82c87bd04e41f1b5dbd5202ac8594ad258eb8711b770481da47c79b8",
+      "holdoutCommitment": "04b8d1f151beefd5fde553d2a25a122dcfceca7a4cb186073b92af8bc298eced",
+      "publicHash": "514efa397418f677b46c072feb7bab0749a2417d81068ada977ac933dc99e4e0"
+    },
+    {
+      "id": "error-row",
+      "baseCommit": "827da5b1b2ec6869aa61fa477907135244856806",
+      "treeHash": "2988784777b562332678cee88ed9bd3611f2a3f81177d201c3df219cd309ef6e",
+      "supportHash": "413e784f267a3a155d75dd50eda8cf1125879ea46a97681e371c45d93ac2be09",
+      "taskHash": "5a5836e8edf32f3cb50b77756e42591ef0ab18317b884c0f567a905ca6994708",
+      "candidateFiles": [
+        "case/ErrorRow.tsx",
+        "case/error-row.css",
+        "case/ErrorRow.test.tsx"
+      ],
+      "forbiddenFiles": [
+        "support/",
+        "task.md",
+        "public.json"
+      ],
+      "requiresRenderedEvidence": true,
+      "hiddenCommitment": "eb7483dd50360bd4e9ab4359e387ffbb395849533df0b3d0b0083dd282960f65",
+      "holdoutCommitment": "47ffb4ca2c722ec8017662cb21285738e3decf293f02f77d27ee43b9043ca612",
+      "publicHash": "533e6cc1aad89d5e7ee04133c6d6e4b789657a43db6845fdd4cffcb66c74944f"
+    },
+    {
+      "id": "diagnostic-summary",
+      "baseCommit": "e80ed23f414b8ec55cf67cd08c97ffec52be244e",
+      "treeHash": "6255f2c212ec2eb4aaca6b779034c014d22393c125f542c68f0451a17f8f588f",
+      "supportHash": "7c7acd15c35b93a77d0876021f953a50af26f5c80a43a4572b392bd87c331433",
+      "taskHash": "21e3b098c02689c4192e7200eb14506722812edfb52481673f0bc267522280dd",
+      "candidateFiles": [
+        "case/diagnosticSummary.ts",
+        "case/diagnosticSummary.test.ts"
+      ],
+      "forbiddenFiles": [
+        "support/",
+        "task.md",
+        "public.json"
+      ],
+      "requiresRenderedEvidence": false,
+      "hiddenCommitment": "59f56db1a5998df2e10f8ba14124ee3fdadaa50733a1c30b4a65507a94b73e66",
+      "holdoutCommitment": "9cae5d929cc2f8f5e09f33da302e69b415d56c52e6acaa554e4105afc83e9f8f",
+      "publicHash": "47ea50a7a5790f5cf58482292a326f9dd1abdf3178cec1d7ce250e3a9dddf460"
+    }
   ],
   "cells": [
-    {"id":"quota-window-A","caseId":"quota-window","arm":"A","order":1,"requestedModel":"gpt-5.6-luna","requestedEffort":"high","receivesBrief":false,"taskHash":"c45180034c3b5cec53374120df8d84c3c02d2284e242212b0aa37b1a92210ad4","briefHash":null},
-    {"id":"quota-window-B","caseId":"quota-window","arm":"B","order":2,"requestedModel":"gpt-5.6-luna","requestedEffort":"high","receivesBrief":true,"taskHash":"c45180034c3b5cec53374120df8d84c3c02d2284e242212b0aa37b1a92210ad4","briefHash":"3872dfb2355af4ac93ab579158fc877205f934816c21a162ac5701dde9351b4e"},
-    {"id":"quota-window-C","caseId":"quota-window","arm":"C","order":3,"requestedModel":"gpt-6-astra","requestedEffort":"high","receivesBrief":false,"taskHash":"c45180034c3b5cec53374120df8d84c3c02d2284e242212b0aa37b1a92210ad4","briefHash":null},
-    {"id":"error-row-A","caseId":"error-row","arm":"A","order":1,"requestedModel":"sonnet-5","requestedEffort":"high","receivesBrief":false,"taskHash":"f42d1cb7161023c1b8798d46602a19cc99828966278b55b429406b20d36a0d19","briefHash":null},
-    {"id":"error-row-B","caseId":"error-row","arm":"B","order":2,"requestedModel":"sonnet-5","requestedEffort":"high","receivesBrief":true,"taskHash":"f42d1cb7161023c1b8798d46602a19cc99828966278b55b429406b20d36a0d19","briefHash":"0fde308ba9c6598db4f1182eea4192d90897cab010c1f90d4ddc2a86958852da"},
-    {"id":"error-row-C","caseId":"error-row","arm":"C","order":3,"requestedModel":"gpt-6-astra","requestedEffort":"high","receivesBrief":false,"taskHash":"f42d1cb7161023c1b8798d46602a19cc99828966278b55b429406b20d36a0d19","briefHash":null},
-    {"id":"diagnostic-summary-A","caseId":"diagnostic-summary","arm":"A","order":1,"requestedModel":"gpt-5.6-terra","requestedEffort":"medium","receivesBrief":false,"taskHash":"ad79118c67d9a031d2ab15d8ce0ed311621247acea82170fd8a4dc8abc6a1c7d","briefHash":null},
-    {"id":"diagnostic-summary-B","caseId":"diagnostic-summary","arm":"B","order":2,"requestedModel":"gpt-5.6-terra","requestedEffort":"medium","receivesBrief":true,"taskHash":"ad79118c67d9a031d2ab15d8ce0ed311621247acea82170fd8a4dc8abc6a1c7d","briefHash":"16e40ac4c75621daf52eef8fabe9deccf3896b310223c804e5c547610271bcdb"},
-    {"id":"diagnostic-summary-C","caseId":"diagnostic-summary","arm":"C","order":3,"requestedModel":"gpt-6-astra","requestedEffort":"high","receivesBrief":false,"taskHash":"ad79118c67d9a031d2ab15d8ce0ed311621247acea82170fd8a4dc8abc6a1c7d","briefHash":null}
-  ]
+    {
+      "id": "quota-window-A",
+      "caseId": "quota-window",
+      "arm": "A",
+      "order": 1,
+      "requestedModel": "gpt-5.6-luna",
+      "requestedEffort": "high",
+      "receivesBrief": false,
+      "taskHash": "b8ef38e4d9cc27d6ee3db7a2c62d5364985806ef3f784e0092391844bf883e13",
+      "engine": "codex",
+      "launchAlias": "gpt-5.6-luna"
+    },
+    {
+      "id": "quota-window-B",
+      "caseId": "quota-window",
+      "arm": "B",
+      "order": 2,
+      "requestedModel": "gpt-5.6-luna",
+      "requestedEffort": "high",
+      "receivesBrief": true,
+      "taskHash": "b8ef38e4d9cc27d6ee3db7a2c62d5364985806ef3f784e0092391844bf883e13",
+      "engine": "codex",
+      "launchAlias": "gpt-5.6-luna"
+    },
+    {
+      "id": "quota-window-C",
+      "caseId": "quota-window",
+      "arm": "C",
+      "order": 3,
+      "requestedModel": "gpt-6-astra",
+      "requestedEffort": "high",
+      "receivesBrief": false,
+      "taskHash": "b8ef38e4d9cc27d6ee3db7a2c62d5364985806ef3f784e0092391844bf883e13",
+      "engine": "codex",
+      "launchAlias": "gpt-6-astra"
+    },
+    {
+      "id": "error-row-A",
+      "caseId": "error-row",
+      "arm": "A",
+      "order": 6,
+      "requestedModel": "sonnet-5",
+      "requestedEffort": "high",
+      "receivesBrief": false,
+      "taskHash": "5a5836e8edf32f3cb50b77756e42591ef0ab18317b884c0f567a905ca6994708",
+      "engine": "claude",
+      "launchAlias": "sonnet"
+    },
+    {
+      "id": "error-row-B",
+      "caseId": "error-row",
+      "arm": "B",
+      "order": 4,
+      "requestedModel": "sonnet-5",
+      "requestedEffort": "high",
+      "receivesBrief": true,
+      "taskHash": "5a5836e8edf32f3cb50b77756e42591ef0ab18317b884c0f567a905ca6994708",
+      "engine": "claude",
+      "launchAlias": "sonnet"
+    },
+    {
+      "id": "error-row-C",
+      "caseId": "error-row",
+      "arm": "C",
+      "order": 5,
+      "requestedModel": "gpt-6-astra",
+      "requestedEffort": "high",
+      "receivesBrief": false,
+      "taskHash": "5a5836e8edf32f3cb50b77756e42591ef0ab18317b884c0f567a905ca6994708",
+      "engine": "codex",
+      "launchAlias": "gpt-6-astra"
+    },
+    {
+      "id": "diagnostic-summary-A",
+      "caseId": "diagnostic-summary",
+      "arm": "A",
+      "order": 8,
+      "requestedModel": "gpt-5.6-terra",
+      "requestedEffort": "medium",
+      "receivesBrief": false,
+      "taskHash": "21e3b098c02689c4192e7200eb14506722812edfb52481673f0bc267522280dd",
+      "engine": "codex",
+      "launchAlias": "gpt-5.6-terra"
+    },
+    {
+      "id": "diagnostic-summary-B",
+      "caseId": "diagnostic-summary",
+      "arm": "B",
+      "order": 9,
+      "requestedModel": "gpt-5.6-terra",
+      "requestedEffort": "medium",
+      "receivesBrief": true,
+      "taskHash": "21e3b098c02689c4192e7200eb14506722812edfb52481673f0bc267522280dd",
+      "engine": "codex",
+      "launchAlias": "gpt-5.6-terra"
+    },
+    {
+      "id": "diagnostic-summary-C",
+      "caseId": "diagnostic-summary",
+      "arm": "C",
+      "order": 7,
+      "requestedModel": "gpt-6-astra",
+      "requestedEffort": "high",
+      "receivesBrief": false,
+      "taskHash": "21e3b098c02689c4192e7200eb14506722812edfb52481673f0bc267522280dd",
+      "engine": "codex",
+      "launchAlias": "gpt-6-astra"
+    }
+  ],
+  "graderHash": "9a64127999431c6828cd305172bb9782f4f344d00f619bfd393393e54ba3f714"
 }

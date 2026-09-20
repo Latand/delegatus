@@ -9,7 +9,7 @@ export function ErrorRow({ rows, perform, labels }: Props) {
   const active = useRef(new Set<string>());
   const run = async (id: string) => {
     if (active.current.has(id)) return;
-    active.current.add(id); setPending([...active.current]); setDone((old) => [...old, id]);
+    active.current.add(id); setPending([...active.current]);
     setErrors((old) => { const next = { ...old }; delete next[id]; return next; });
     try { await perform(id); setDone((old) => [...old, id]); }
     catch { setErrors((old) => ({ ...old, [id]: labels.error })); }

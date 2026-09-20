@@ -1,5 +1,6 @@
 import { routeWindowsByHorizon } from "../support/routeWindowsByHorizon";
 export type Input = { primary?: { usedPercent: number; windowMinutes?: number | null; resetsAt?: number | null } | null; secondary?: Input["primary"]; capturedAt?: number | null };
 export function quotaSummary(input: Input): { session: number | null; weekly: number | null } {
-  return { session: input.primary?.usedPercent ?? null, weekly: input.secondary?.usedPercent ?? null };
+  const windows = routeWindowsByHorizon(input.primary, input.secondary, input.capturedAt ?? null);
+  return { session: windows.session?.usedPercent ?? null, weekly: windows.weekly?.usedPercent ?? null };
 }

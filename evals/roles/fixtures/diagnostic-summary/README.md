@@ -1,3 +1,1 @@
-# Diagnostic summary fixture
-
-Synthetic starting case: a formatter truncates before redaction. Sealed inputs cover credential-shaped strings, address-like values, encoded path material, headers, Unicode, hostile data, and unchanged inputs.
+The base contains the defect. Public vectors test the declared interface; controls contain executable candidate source. Root keeps private regressions and holdouts in the external sealed package.

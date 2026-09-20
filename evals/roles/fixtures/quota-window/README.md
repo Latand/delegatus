@@ -1,3 +1,1 @@
-# Quota window fixture
-
-Synthetic starting case: a summary labels `primary` as session even when its declared horizon is weekly. Candidate files are fenced in the dataset. Sealed tests cover weekly-only primary, reversed slots, unknown values, declared-horizon precedence, and input immutability.
+The base contains the defect. Public vectors test the declared interface; controls contain executable candidate source. Root keeps private regressions and holdouts in the external sealed package.

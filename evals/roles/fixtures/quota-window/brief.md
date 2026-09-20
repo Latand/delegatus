@@ -1,1 +1,0 @@
-Behavior: show the declared horizon for the primary quota. Diagnosis: the current summary derives its label from position. Reuse the existing input type. Preserve unknown values and do not mutate input. Files: `case/quotaSummary.ts` and its test. Check the public grader. Escalate if the declared horizon is absent from the fixture input.
