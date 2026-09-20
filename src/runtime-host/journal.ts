@@ -1,3 +1,4 @@
+import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
 import { NativeQueueJournal } from "./nativeQueueJournal";
 import type { NativeQueueCommand, NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
 import { parseRuntimeCommand } from "@/lib/runtime/commands";
@@ -324,6 +325,7 @@ export interface RuntimeJournalOptions {
 export class RuntimeJournal {
   private readonly db: Database;
   private readonly nativeQueue: NativeQueueJournal;
+  private readonly sessionHostMetadata: SessionHostMetadata;
   private readonly maxEvents: number;
   private readonly now: () => number;
   private readonly structuredHosts: boolean;
@@ -410,6 +412,8 @@ export class RuntimeJournal {
     this.metaSetDefault("health", "ready");
     this.metaSetDefault("files_revision", "0");
     this.verify();
+    this.sessionHostMetadata = new SessionHostMetadata(this.db);
+    if (!this.fault) this.sessionHostMetadata.start();
   }
 
   append(rawInput: RuntimeEventInput): RuntimeEvent {
@@ -1062,8 +1066,9 @@ export class RuntimeJournal {
       every socket request exceeds the client's timeout and the retry storm
       keeps the host saturated (the 2026-08-04 spawn freeze). total_changes()
       counts every row this connection has written, so no mutation path needs
-      to remember to invalidate. The time expiry covers the only projection
-      whose visibility changes without a write. serverTime inside the cached
+      to remember to invalidate. Metadata backfill writes are excluded while
+      completion invalidates once to enable indexed selection. The time expiry
+      covers the only projection whose visibility changes without a write. serverTime inside the cached
       frame dates from the last rebuild; no consumer reads it. */
   snapshotJson(voiceBodiesFor?: readonly string[]): string {
     const scope = JSON.stringify(voiceBodiesFor ?? null);
@@ -1078,7 +1083,8 @@ export class RuntimeJournal {
   }
 
   private totalChanges(): number {
-    return Number(this.db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()?.changes ?? 0);
+    return Number(this.db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()?.changes ?? 0)
+      - this.sessionHostMetadata.excludedChanges + Number(this.sessionHostMetadata.ready);
   }
 
   replay(after: number, limit = 128): RuntimeReplay {
@@ -1641,7 +1647,7 @@ export class RuntimeJournal {
     return { scanned: rows.length, deleted: stale.length, cycled };
   }
 
-  close(): void { this.db.close(); }
+  close(): void { this.sessionHostMetadata.close(); this.db.close(); }
 
   private appendInTransaction(input: NormalizedRuntimeEventInput): RuntimeEvent {
     const producerKey = input.producer.eventKey ?? null;
@@ -2486,13 +2492,24 @@ export class RuntimeJournal {
   private snapshotSessionValues(voiceBodiesFor?: readonly string[]): RuntimeSession[] {
     // SQLite removes the heavy bodies before they cross into JS. The original
     // entity, receipts, tombstones and full snapshot API remain unchanged.
-    const projection = voiceBodiesFor === undefined ? "state_json" : `CASE WHEN id = ? THEN state_json ELSE json_set(state_json,
+    const projection = voiceBodiesFor === undefined ? "state_json" : `CASE WHEN entities.id = ? THEN state_json ELSE json_set(state_json,
       '$.voiceDeliveries', json(COALESCE((SELECT json_group_array(json_set(delivery.value,
         '$.responses', json(COALESCE((SELECT json_group_array(json_set(response.value, '$.text', ''))
           FROM json_each(delivery.value, '$.responses') AS response), '[]'))))
         FROM json_each(state_json, '$.voiceDeliveries') AS delivery), '[]')),
       '$.voiceDeliverySnapshotRevision', json_extract(state_json, '$.revision')) END AS state_json`;
     const selected = voiceBodiesFor?.[0] ?? "";
+    if (this.sessionHostMetadata.ready) {
+      const parameters = voiceBodiesFor === undefined ? [] : [selected];
+      const active = this.db.query<{ state_json: string }, (string | number)[]>(
+        `SELECT ${projection} ${SESSION_HOST_ACTIVE_FROM}`,
+      ).all(...parameters);
+      const inactive = this.db.query<{ state_json: string }, (string | number)[]>(
+        `SELECT ${projection} ${SESSION_HOST_INACTIVE_FROM}`,
+      ).all(...parameters, RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT);
+      return [...active, ...inactive].map(row => JSON.parse(row.state_json) as RuntimeSession)
+        .sort((left, right) => left.conversationId.localeCompare(right.conversationId));
+    }
     const active = this.db.query<{ state_json: string }, (string | number)[]>(`
       SELECT ${projection}
       FROM entities
@@ -2517,7 +2534,9 @@ export class RuntimeJournal {
   }
 
   private snapshotEdgeValues(now: number): RuntimeEdge[] {
-    const terminalSessions = new Map(this.db.query<{
+    const rows = this.sessionHostMetadata.ready
+      ? this.db.query<{ id: string; last_changed_at: number | null }, []>(SESSION_HOST_TERMINAL).all()
+      : this.db.query<{
       id: string;
       last_changed_at: number | null;
     }, [string, string, string]>(`
@@ -2525,7 +2544,8 @@ export class RuntimeJournal {
       FROM entities AS session
       WHERE session.kind = ?
         AND json_extract(session.state_json, '$.host') IN (?, ?)
-    `).all("session", "dead", "unhosted").map((row) => [row.id, row.last_changed_at]));
+    `).all("session", "dead", "unhosted");
+    const terminalSessions = new Map(rows.map(row => [row.id, row.last_changed_at]));
 
     return this.entityValues<RuntimeEdge>("edge").filter((edge) => {
       if (!terminalSessions.has(edge.childConversationId)) return true;
@@ -2537,6 +2557,11 @@ export class RuntimeJournal {
   }
 
   private snapshotEdgeExpiry(now: number): number | null {
+    if (this.sessionHostMetadata.ready) {
+      return this.db.query<{ expires_at: number | null }, [number, number, number]>(SESSION_HOST_EXPIRY).get(
+        RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS, RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS, now,
+      )?.expires_at ?? null;
+    }
     return this.db.query<{ expires_at: number | null }, [number, string, string, number, number]>(`
       SELECT MIN(session.updated_at + ? + 1) AS expires_at
       FROM entities AS edge
