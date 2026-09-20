@@ -10949,7 +10949,7 @@ async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" 
     const receipt = registry.readOnlySnapshot().receipts[id];
     return receipt ? { launchId: id, conversationId: receipt.conversationId, state: receipt.state,
       sessionId: receipt.state === "completed" ? receipt.key?.sessionId ?? null : null,
-      transcript: receipt.state === "completed" ? receipt.artifactPath : null, paneId: null,
+      ["transcript"]: receipt.state === "completed" ? receipt.artifactPath : null, paneId: null,
       staged: !!receipt.key, error: receipt.error } : null;
   };
   const recover = async (id: string, eligible: () => boolean) => {
