@@ -7,6 +7,7 @@ import path from "node:path";
 import { emptyLaunchProfile, migrationSuccessorLaunchProfile, sameProviderReceiptOutcome, type NativeGeneration, type ProviderReceipt, type SuccessorProviderPort } from "./contracts";
 import {
   authorizeCodexForkRetry,
+  persistedCodexOperationJournal,
   codexForkArtifacts,
   CodexForkOutcomeUnknownError,
   RegisteredSuccessorProvider,
@@ -1410,8 +1411,7 @@ test("orphan forks recorded by journals that predate conversation identity are s
   expect(fs.existsSync(orphanPath(orphanIds[0]!))).toBeTrue();
   expect(fs.existsSync(orphanPath(orphanIds[1]!))).toBeTrue();
   /* Reading a legacy journal names it, so the next scan matches it exactly. */
-  const backfilled = JSON.parse(fs.readFileSync(path.join(journalRoot, journalName("legacy-0")), "utf8")) as { conversationId: string | null };
-  expect(backfilled.conversationId).toBe("conversation_legacy_journals");
+  expect(persistedCodexOperationJournal(journalRoot, "legacy-0")?.conversationId).toBe("conversation_legacy_journals");
 });
 
 test("two forks inside one operation's own window resolve to the newest", async () => {
@@ -1533,14 +1533,7 @@ test("an explicit retry reauthorizes one fork after an unknown outcome produced 
   expect(forkCalls).toBe(2);
   expect(receipt.nativeId).toBe(forkId);
   expect(fs.existsSync(receipt.path)).toBeTrue();
-  const journalFile = path.join(
-    journalRoot,
-    `${crypto.createHash("sha256").update(input.operationId).digest("hex")}.json`,
-  );
-  const journal = JSON.parse(fs.readFileSync(journalFile, "utf8")) as {
-    forkRecoveryFloorMs: number | null;
-    forkRequestedAtMs: number | null;
-  };
+  const journal = persistedCodexOperationJournal(journalRoot, input.operationId)!;
   expect(journal.forkRecoveryFloorMs).toBeNumber();
   expect(journal.forkRequestedAtMs).toBeNumber();
 });
@@ -1622,14 +1615,11 @@ test("a legacy journal backfills its first recovery floor before retry authoriza
   }, null, 2));
 
   expect(await authorizeCodexForkRetry(operationId, conversationId, journalRoot, () => [])).toBe("reauthorized");
-  const after = JSON.parse(fs.readFileSync(filename, "utf8")) as {
-    forkRecoveryFloorMs: number | null;
-    forkRequestedAtMs: number | null;
-  };
+  const after = persistedCodexOperationJournal(journalRoot, operationId)!;
   expect(after.forkRecoveryFloorMs).toBe(requestedAt);
   expect(after.forkRequestedAtMs).toBe(null);
   expect(await authorizeCodexForkRetry(operationId, conversationId, journalRoot, () => [])).toBe("not-needed");
-  expect((JSON.parse(fs.readFileSync(filename, "utf8")) as { forkRecoveryFloorMs: number }).forkRecoveryFloorMs).toBe(requestedAt);
+  expect(persistedCodexOperationJournal(journalRoot, operationId)!.forkRecoveryFloorMs).toBe(requestedAt);
 });
 
 test("a retry re-forks when the source gained turns while the migration was parked", async () => {

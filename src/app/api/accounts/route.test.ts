@@ -16,6 +16,8 @@ process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 
 const { GET } = await import("./route");
+const { BINDINGS_SOURCE, CODEX_ACCOUNTS_SOURCE, resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
+const { persistedAccountRegistry, persistedAccountSource, seedAccountRegistry, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
 const { POST } = await import("./codex/active/route");
 const { POST: setClaudeActive } = await import("./claude/active/route");
 const { POST: createClaude } = await import("./claude/route");
@@ -58,6 +60,7 @@ beforeEach(() => {
      macOS answers the next query on a removed store with SQLITE_IOERR_VNODE. */
   closeAgentRegistryForTests();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+  resetAccountCollectionsForTests();
   installRuntime(false);
 });
 afterAll(() => {
@@ -435,28 +438,26 @@ test("future quota and auth observations remain ineligible", async () => {
   }));
 });
 
-test("GET stays readable for a partially corrupt registry and leaves its bytes untouched", async () => {
-  const registry = path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json");
-  fs.mkdirSync(path.dirname(registry), { recursive: true });
+test("GET stays readable for a partially corrupt registry and leaves its rows untouched", async () => {
   // One retained valid account carrying a stale (dead-pane) login, plus one rejected
   // record that flips the store to mutation-locked. The GET must not attempt the
-  // best-effort clear, so it neither 500s nor rewrites the file.
-  const mixed = JSON.stringify({
+  // best-effort clear, so it neither 500s nor rewrites the record.
+  const mixed = {
     version: 1,
     active: "default",
     accounts: [
       { id: "work", label: "Work", kind: "managed", createdAt: 1, loginPane: { paneId: "%dead", windowName: "codex-login", startedAt: 0 } },
       { id: "../escape", label: "Escape", kind: "managed", createdAt: 2 },
     ],
-  });
-  fs.writeFileSync(registry, mixed);
+  };
+  seedAccountRegistry("codex", mixed);
 
   const response = await GET();
   expect(response.status).toBe(200);
   const body = await response.json() as { codex: { active: string; accounts: { id: string }[] } };
   expect(body.codex.active).toBe("default");
   expect(body.codex.accounts.map((item) => item.id).sort()).toEqual(["default", "work"]);
-  expect(fs.readFileSync(registry, "utf8")).toBe(mixed);
+  expect(persistedAccountSource(CODEX_ACCOUNTS_SOURCE)).toEqual(mixed);
 });
 
 test("active mutation rejects cross-origin, unknown, and corrupt catalogs", async () => {
@@ -465,12 +466,11 @@ test("active mutation rejects cross-origin, unknown, and corrupt catalogs", asyn
   expect((await POST(request("missing"))).status).toBe(400);
   expect(agentRegistry().snapshot().engineRouting.codex).toEqual(routingBefore);
 
-  const registry = path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json");
-  fs.mkdirSync(path.dirname(registry), { recursive: true });
-  fs.writeFileSync(registry, "{ corrupt");
+  const corrupt = { version: 1, active: "default", accounts: [{ id: "../escape", label: "Escape", kind: "managed", createdAt: 2 }] };
+  seedAccountRegistry("codex", corrupt);
   const response = await POST(request("default"));
   expect(response.status).toBe(400);
-  expect(fs.readFileSync(registry, "utf8")).toBe("{ corrupt");
+  expect(persistedAccountSource(CODEX_ACCOUNTS_SOURCE)).toEqual(corrupt);
 });
 
 test("Codex selection changes routing while preserving every conversation record", async () => {
@@ -661,7 +661,7 @@ test("Claude DTOs remain secret-free and creation rejects cross-origin before an
   expect(JSON.stringify(body)).not.toContain("credentials");
   const req = new NextRequest("http://127.0.0.1/api/accounts/claude", { method: "POST", headers: { host: "evil.example", origin: "https://evil.example" }, body: JSON.stringify({ label: "Work" }) });
   expect((await createClaude(req)).status).toBe(403);
-  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "claude-accounts.json"))).toBe(false);
+  expect(persistedAccountRegistry("claude").accounts).toEqual([]);
 });
 
 test("GET projects the per-engine quick-switch catalog: active id plus secret-free {id,label,authPresent} rows", async () => {
@@ -699,11 +699,7 @@ test("a damaged binding record leaves the accounts panel readable, and never cla
   authenticateClaude(claude);
   const codex = createManagedCodexAccount("Codex Work");
   authenticateCodex(codex);
-  fs.writeFileSync(
-    path.join(process.env.LLV_STATE_DIR!, "account-project-bindings.json"),
-    '{"schemaVersion":1,"bindings":[{"engine":"claude","accountId":"acct-reserved"',
-    "utf8",
-  );
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude", accountId: "acct-reserved" }] });
 
   const response = await GET();
   expect(response.status).toBe(200);

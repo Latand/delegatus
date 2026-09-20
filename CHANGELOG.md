@@ -7,6 +7,41 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Changed
+- Account state is stored in SQLite (`state.sqlite`, collection `accounts`)
+  instead of eight JSON files: the Claude and Codex account registries with
+  their retirement and removal journals, the account↔project bindings, the
+  out-of-pool choice journal, the spawn admission fences, the in-flight Claude
+  and Codex login operations, and the account mutation revision. A write
+  commits only the rows it changed, in one transaction, so a crash can no
+  longer leave a zero-filled or half-written registry. On first start the
+  existing files are imported and verified by row count and digest, then kept
+  as `<name>.imported-<release>`; a directory with a README takes each of their
+  places (#1870).
+- Removing an account now commits its registry row, its retirement record and
+  its removal journal step in ONE transaction, together with the mutation
+  revision that admits them. The revision is the collection's own, so
+  `account-mutation-revision.json` is gone and a crash can no longer leave a
+  fence that moved without the write it admitted (#1857, #1870).
+- Conversation-migration operation journals move into the same database, one
+  collection per journal root. The roots stay directories, because the
+  per-operation lease that guards them has to be claimable while the database
+  is busy (#1870).
+- An account store whose file could not be read at the import is recorded as a
+  gap rather than imported as empty, and each owner answers as it always did: a
+  binding record refuses every read and names the file that was kept, a
+  registry reports itself corrupt and refuses mutations, and the out-of-pool
+  journal — which nothing consults to decide anything — reports nothing. The
+  first successful write clears the gap.
+
+### Downgrading
+- A version older than this one cannot read the SQLite account state and fails
+  on the directories left where its files were, naming the path. Upgrade again
+  to recover. Replacing a directory with its `<name>.imported-*` copy also
+  works, but loses account changes made since the upgrade. Deployed releases
+  rolled back through the release fence get every file written back for them
+  automatically, and the changes they make are merged at roll-forward.
+
 ## [1.2.2] — 2026-09-19
 
 ### Changed

@@ -14,6 +14,7 @@ import {
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import { admitAutomaticAccountTarget } from "@/lib/accounts/projectSelection";
@@ -4626,13 +4627,9 @@ export class AgentRegistry {
   beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
     const result = withAccountMutationLock(() => {
       if ((input.engine === "claude" || input.engine === "codex") && input.accountId && input.accountId !== "default") {
-        const filename = statePath(`${input.engine}-accounts.json`);
-        try {
-          const value = JSON.parse(fs.readFileSync(filename, "utf8")) as { retired?: Array<{ id?: unknown }> };
-          if (value.retired?.some((account) => account.id === input.accountId)) throw new Error(`${input.engine} account is retired`);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
+        /* The registry moved into state.sqlite (#1870, slice 7); its retired
+           list is read through the store rather than by parsing the file. */
+        if (retiredAccountIds(input.engine).has(input.accountId)) throw new Error(`${input.engine} account is retired`);
       }
       const result = this.mutate((file) => this.beginSpawnRequestInFile(file, input));
       if (result.kind === "rejected") throw new SpawnAdmissionError(result.receipt, result.receipt.rejection!);

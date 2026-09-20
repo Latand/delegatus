@@ -4,6 +4,14 @@ import path from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
 
+import {
+  ACCOUNT_SOURCE_NAMES,
+  BINDINGS_SOURCE,
+  CLAUDE_ACCOUNTS_SOURCE,
+  readAccountSource,
+  resetAccountCollectionsForTests,
+  writeAccountSource,
+} from "@/lib/accounts/accountsStore";
 import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import {
@@ -89,4 +97,73 @@ test("an unpromoted release reads tasks.json, activation imports it, and demotio
   expect(rolledForward.get("tasks")).toMatchObject({ state: "already-imported", incident: null });
   expect(fs.statSync(tasksFile).isDirectory()).toBe(true);
   expect(loadTasks(tasksFile).map((row) => row.id)).toEqual(["legacy", "after-import"]);
+});
+
+test("the account stores follow the same release path: unpromoted reads the files, activation imports, demotion mirrors", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-legacy-collections-accounts-"));
+  sandboxes.push(sandbox);
+  const revision = "5".repeat(40);
+  process.env.LLV_STATE_DIR = sandbox;
+  process.env.PORT = "19072";
+  resetAccountCollectionsForTests();
+  fs.writeFileSync(path.join(sandbox, "viewer-release.json"), JSON.stringify({
+    endpoint: "http://127.0.0.1:19072",
+    revision,
+    hotStateBackend: HOT_STATE_BACKEND,
+  }));
+  const registryFile = path.join(sandbox, "claude-accounts.json");
+  const bindingsFile = path.join(sandbox, "account-project-bindings.json");
+  fs.writeFileSync(registryFile, JSON.stringify({
+    version: 1, active: "default",
+    accounts: [{ id: "lane-one", label: "Lane One", kind: "managed", createdAt: 1 }],
+    retired: [], removals: [],
+  }));
+  fs.writeFileSync(bindingsFile, JSON.stringify({
+    schemaVersion: 1,
+    bindings: [{ engine: "claude", accountId: "lane-one", project: "repo-alpha", createdAt: "2026-09-19T00:00:00.000Z" }],
+  }));
+
+  // Before activation this release may not import: reads fall back to the files, writes are busy.
+  expect(readAccountSource(CLAUDE_ACCOUNTS_SOURCE, sandbox).kind).toBe("legacy");
+  expect(() => writeAccountSource(CLAUDE_ACCOUNTS_SOURCE, {}, sandbox)).toThrow("waiting for release promotion");
+  expect(fs.statSync(registryFile).isFile()).toBe(true);
+
+  const boundary = await establishHotStateCutoverBoundary(() => true, {
+    pollMs: 0,
+    stablePolls: 1,
+    maxPolls: 2,
+    schedule: (callback) => { callback(); return { unref() {} }; },
+  });
+  await initializeHotStateStoresAtStartup(boundary);
+  const outcomes = await ensureLegacyCollectionsImported();
+
+  expect(outcomes.get("accounts")).toMatchObject({ state: "imported" });
+  expect(readStateImport(path.join(sandbox, "state.sqlite"), "accounts")?.release).toBe(revision.slice(0, 12));
+  /* Every one of the eight is retired behind its tombstone, the primary and
+     its siblings alike. */
+  for (const name of ACCOUNT_SOURCE_NAMES) {
+    expect([name, fs.statSync(path.join(sandbox, name)).isDirectory()]).toEqual([name, true]);
+  }
+  expect(readAccountSource(BINDINGS_SOURCE, sandbox)).toMatchObject({
+    body: { bindings: [{ accountId: "lane-one", project: "repo-alpha" }] },
+  });
+
+  await checkpointHotStateRollbackMirrorsForDemotion();
+
+  // A rollback release finds every store back as the file it knows.
+  expect((JSON.parse(fs.readFileSync(registryFile, "utf8")) as { accounts: { id: string }[] }).accounts.map((row) => row.id))
+    .toEqual(["lane-one"]);
+  expect((JSON.parse(fs.readFileSync(bindingsFile, "utf8")) as { bindings: { project: string }[] }).bindings.map((row) => row.project))
+    .toEqual(["repo-alpha"]);
+  const marker = JSON.parse(fs.readFileSync(path.join(sandbox, "account-mutation-revision.json"), "utf8")) as { revision: number };
+  expect(marker.revision).toBe(readStateImport(path.join(sandbox, "state.sqlite"), "accounts")!.mirrorRevision!);
+
+  // Roll-forward: the untouched mirror is recognized and retired, not imported twice.
+  resetAccountCollectionsForTests();
+  const rolledForward = await ensureLegacyCollectionsImported();
+  expect(rolledForward.get("accounts")).toMatchObject({ state: "already-imported", incident: null });
+  expect(fs.statSync(registryFile).isDirectory()).toBe(true);
+  expect(readAccountSource(CLAUDE_ACCOUNTS_SOURCE, sandbox)).toMatchObject({
+    body: { accounts: [{ id: "lane-one" }] },
+  });
 });
