@@ -342,13 +342,14 @@ async function drive(): Promise<void> {
     );
     const textarea = await waitFor(() => document.querySelector("textarea"), "composer textarea");
     typeInto(textarea, "Recover and continue this task.");
-    /* The truthful dead-host surface (repair round): the banner body states
-       durable admission / delayed delivery / the image restriction in the
-       CURRENT locale, the composer's inline image-restriction notice renders,
-       and the model/reasoning pill is absent exactly as the production
-       capability matrix hides `runtime` on the dead surface. */
-    const imagesNotice = [...document.querySelectorAll('[role="status"]')]
-      .some((node) => (node.textContent ?? "").trim() === t("composer.imagesBlockedDuringRecovery"));
+    /* The truthful dead-host surface: the banner body states, in the CURRENT
+       locale, that the whole message is saved first and that sending starts the
+       agent again; the attach control is OPEN, because images ride with their
+       text under one key rather than waiting for a manual restore; and the
+       model/reasoning pill is absent exactly as the production capability
+       matrix hides `runtime` on the dead surface. */
+    const attach = document.querySelector<HTMLButtonElement>(`button[aria-label="${t("composer.addAttachments")}"]`);
+    const imagesOffered = Boolean(attach) && attach!.disabled === false;
     logVerify({
       kind: "state",
       view,
@@ -357,7 +358,7 @@ async function drive(): Promise<void> {
       bannerBody: banner.querySelector("p")?.textContent ?? "",
       recoveryActions: banner.querySelectorAll("button").length,
       sendAriaDisabled: send.getAttribute("aria-disabled"),
-      imagesNotice,
+      imagesOffered,
       pillVisible: Boolean(document.querySelector("[data-runtime-pill]")),
     });
     return;

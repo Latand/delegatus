@@ -2,6 +2,7 @@
 
 import {
   injectRuntimeContext,
+  lookupRuntimeAdmission,
   refreshRuntime,
   sendRuntimeMessage,
   useRuntimeReceiptsForArtifact,
@@ -17,6 +18,9 @@ export interface TmuxComposerRuntimeDependencies {
   /** #1560: native history injection, behind the same seam as the send so a
       test can drive the composer's injection action without a socket. */
   injectRuntimeContext: typeof injectRuntimeContext;
+  /** The read half of the send key. An attempt whose response was lost is
+      resolved THROUGH this and never by posting the send again. */
+  lookupRuntimeAdmission: typeof lookupRuntimeAdmission;
   useRuntimeReceiptsForArtifact: typeof useRuntimeReceiptsForArtifact;
   useAgentCapabilities: typeof useAgentCapabilities;
   /** #1629: the native queue transport, so a test can drive the whole control
@@ -28,6 +32,7 @@ const productionDependencies: TmuxComposerRuntimeDependencies = {
   refreshRuntime,
   sendRuntimeMessage,
   injectRuntimeContext,
+  lookupRuntimeAdmission,
   useRuntimeReceiptsForArtifact,
   useAgentCapabilities,
   nativeQueue: productionNativeQueueDependencies,

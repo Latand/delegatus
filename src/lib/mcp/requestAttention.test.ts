@@ -174,6 +174,7 @@ function rootConversation(id: string, transcript: string, updatedAt: string): Re
     projectOwnership: null,
     migration: null,
     migrationOptOut: null,
+    deliveryEvidenceTracked: true,
     supersededBy: null,
     /* No role PRESET: the operator's own session is precisely the one without
        one, which is why the preset id can never identify it. */

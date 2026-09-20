@@ -21,6 +21,12 @@
  *                             back. A deployment rollback terminates every
  *                             structured host at once, and every send in flight
  *                             lands here;
+ * - `resuming-host`         — admitted and journaled, and a host IS being
+ *                             started for it right now. A send to a conversation
+ *                             whose host was reclaimed raises that host as part
+ *                             of delivering, and the operator who pressed Send
+ *                             once is owed the difference between "nothing is
+ *                             happening" and "it is coming back";
  * - `awaiting-handover`     — admitted and journaled, and the composer cannot
  *                             say what it is waiting on. The honest answer when
  *                             no host axis reached this surface: naming a turn
@@ -47,6 +53,7 @@ export type DeliveryWaitPhase =
   | "handing-over"
   | "awaiting-turn"
   | "awaiting-host"
+  | "resuming-host"
   | "awaiting-handover"
   | "unconfirmed-admission"
   | "uncertain";
@@ -145,6 +152,13 @@ export function deliveryWaitFor(input: DeliveryWaitInput): DeliveryWait | null {
   /* `queued` is the durable admission the delivery queue parks at the turn
      boundary: the message is sitting still, not moving down a wire. */
   if (input.status !== "queued") return wait("transmitting");
+  /* A host axis mid-publication: the message is not stalled, it is waiting out
+     a window that is coming up. Both axes count — a recovery publishes
+     `registering` as it spawns the successor, exactly like a first start — so
+     the sentence this phase renders is worded to be true of either, and the
+     phase is claimed from the axis alone, never inferred from the fact that a
+     send was made. */
+  if (input.host === "recovering" || input.host === "registering") return wait("resuming-host");
   if (cause === "host") return wait("awaiting-host");
   return wait(cause === "turn" ? "awaiting-turn" : "awaiting-handover");
 }
@@ -160,7 +174,8 @@ export function deliveryWaitFor(input: DeliveryWaitInput): DeliveryWait | null {
  */
 function waitCause(input: DeliveryWaitInput): DeliveryWaitCause {
   if (!input.host) return "unknown";
-  if (input.host === "dead" || input.host === "unhosted") return "host";
+  if (input.host === "dead" || input.host === "unhosted"
+    || input.host === "recovering" || input.host === "registering") return "host";
   return input.turn === "running" || input.turn === "interrupt_requested" ? "turn" : "unknown";
 }
 
@@ -196,6 +211,7 @@ export function deliveryWaitText(
   if (wait.phase === "uncertain") return t("runtime.receipt.unconfirmed", { waited });
   if (wait.phase === "unconfirmed-admission") return t("runtime.receipt.admissionUnconfirmed", { waited });
   if (wait.phase === "awaiting-host") return t("runtime.receipt.awaitingHostFor", { waited });
+  if (wait.phase === "resuming-host") return t("runtime.receipt.resumingHostFor", { waited });
   if (wait.phase === "awaiting-handover") return t("runtime.receipt.awaitingHandoverFor", { waited });
   if (wait.phase === "handing-over") {
     return wait.waitedMs >= DELIVERY_UNCERTAIN_MS ? t("runtime.receipt.handingOverFor", { waited }) : null;

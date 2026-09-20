@@ -344,14 +344,76 @@ test("resume: runtime picks the on-resume profile, stop/compact/kill hidden", ()
   expect(state("send", f, null)).toBe("enabled");
 });
 
-test("dead structured host keeps durable text send available and disables images until recovery", () => {
+test("dead structured host admits the whole message: send AND images stay open", () => {
   const f = genuinelyDeadFile();
   const view = rv("claude-broker", "dead");
   expect(state("terminal", f, view)).toBe("enabled");
   expect(state("send", f, view)).toBe("enabled");
-  expect(reason("images", f, view)).toBe("composer.imagesBlockedDuringRecovery");
+  /* The send path raises the host and judges the payload against the host that
+     came back, so this projection — of a host that is gone — withholds nothing
+     and the operator's images ride with their text under one key. */
+  expect(state("images", f, view)).toBe("enabled");
   for (const c of ["stop", "compact", "runtime", "kill"] as ControlName[]) {
     expect(state(c, f, view)).toBe("hidden");
+  }
+});
+
+test("a dead conversation with no session of its own says so instead of offering Send", () => {
+  /* A subagent transcript has no session of its own: its root owns the process
+     that writes it. Sending cannot raise anything, so the cell names the real
+     alternative rather than leaving a live-looking input. */
+  const f = { ...genuinelyDeadFile(), root: "claude-projects", kind: "subagent", parent: "/root.jsonl" } as FileEntry;
+  const view = rv("claude-broker", "dead");
+  expect(state("send", f, view)).toBe("disabled");
+  expect(reason("send", f, view)).toBe("deadHost.notResumable");
+  expect(state("terminal", f, view)).toBe("enabled");
+});
+
+test("a dead subagent whose ROOT transcript is gone offers a new conversation, not an endless retry", () => {
+  /* `parentRemoved` is the scanner's durable tombstone for a parent transcript
+     that no longer exists. "Continue in the root conversation" would then name
+     something that is not there, so the permanent state says what it is and
+     points at the only action left. Both states are read off evidence that
+     cannot change back — neither is a retry invitation. */
+  const view = rv("claude-broker", "dead");
+  const orphaned = {
+    ...genuinelyDeadFile(),
+    root: "claude-projects",
+    kind: "subagent",
+    parent: null,
+    parentRemoved: { conversationId: "conversation_gone", path: null },
+  } as unknown as FileEntry;
+  expect(state("send", orphaned, view)).toBe("disabled");
+  expect(reason("send", orphaned, view)).toBe("deadHost.rootRemoved");
+
+  /* The two are distinct: a root that still exists keeps the "continue there"
+     reason, so the operator is never sent to a conversation that is gone. */
+  const withRoot = { ...orphaned, parent: "/root.jsonl", parentRemoved: undefined } as unknown as FileEntry;
+  expect(reason("send", withRoot, view)).toBe("deadHost.notResumable");
+});
+
+test("a revoked seat is NOT a permanent dead-host state and keeps Send", () => {
+  /* A resume whose recorded account is gone does not refuse: it falls through
+     to the project's pool (`resolveContinuityAccount`). Gating Send on a
+     missing account would refuse a send the server would have completed, so
+     the dead row keeps it and a genuinely exhausted pool reports its own
+     retryable failure on the message. */
+  const f = { ...genuinelyDeadFile(), accountId: null } as unknown as FileEntry;
+  const view = rv("claude-broker", "dead");
+  expect(state("send", f, view)).toBe("enabled");
+  expect(state("images", f, view)).toBe("enabled");
+});
+
+test("a dead conversation on a root with no resume command of its own still sends", () => {
+  /* `isResumableConversation` answers false for whole roots — a broader
+     predicate here would have taken Send away from every dead OpenClaw or
+     Claude-task conversation, whose host the runtime plane raises exactly like
+     any other. Only the subagent case above loses it. */
+  for (const root of ["claude-tasks", "openclaw-sessions"] as const) {
+    const f = { ...genuinelyDeadFile(), root, kind: "session" } as unknown as FileEntry;
+    const view = rv("claude-broker", "dead");
+    expect(state("send", f, view)).toBe("enabled");
+    expect(state("images", f, view)).toBe("enabled");
   }
 });
 
