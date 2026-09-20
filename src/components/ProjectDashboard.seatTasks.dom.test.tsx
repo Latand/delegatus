@@ -215,33 +215,33 @@ function mount(withDock = false): HTMLElement {
   flushSync(() =>
     root.render(
       <>
-      {/* The dock is a SIBLING of the dashboard, as `Viewer` renders it: open
-          on every desktop face but the board's, beside the same project. */}
-      {withDock ? (
-        <OrchestratorDock
+        {/* The dock is a SIBLING of the dashboard, as `Viewer` renders it: open
+            on every desktop face but the board's, beside the same project. */}
+        {withDock ? (
+          <OrchestratorDock
+            project={PROJECT}
+            projectName="Atlas"
+            projectCwd="/repos/atlas"
+            files={[file("/alpha", "Alpha", "conversation_worker"), file(SEAT_PATH, "Manager seat", SEAT_CONVERSATION)]}
+            onClose={() => {}}
+          />
+        ) : null}
+        <ProjectDashboard
+          files={[file("/alpha", "Alpha", "conversation_worker")]}
+          flows={[]}
+          pipelines={[]}
+          workflows={[]}
+          tasks={TASKS()}
           project={PROJECT}
-          projectName="Atlas"
           projectCwd="/repos/atlas"
-          files={[file("/alpha", "Alpha", "conversation_worker"), file(SEAT_PATH, "Manager seat", SEAT_CONVERSATION)]}
-          onClose={() => {}}
+          loaded
+          openNonce={0}
+          archived={false}
+          catalogKnown
+          catalogConversationCount={1}
+          onArchive={() => {}}
+          onUnarchive={() => {}}
         />
-      ) : null}
-      <ProjectDashboard
-        files={[file("/alpha", "Alpha", "conversation_worker")]}
-        flows={[]}
-        pipelines={[]}
-        workflows={[]}
-        tasks={TASKS()}
-        project={PROJECT}
-        projectCwd="/repos/atlas"
-        loaded
-        openNonce={0}
-        archived={false}
-        catalogKnown
-        catalogConversationCount={1}
-        onArchive={() => {}}
-        onUnarchive={() => {}}
-      />
       </>,
     ),
   );
