@@ -6058,13 +6058,27 @@ export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field">
   replayed?: boolean;
 };
 
+/** Also checked before MCP receipt access; authorization refusals must never spend an answer's key. */
+export function decisionAnswerActorRefusal(
+  pipeline: Pipeline, actor: PauseResumeActor | null, clientRequestId: unknown,
+): PipelinePatchResult | null {
+  if (!actor || (actor.kind === "agent" && (!actor.conversationId || actor.conversationId !== pipeline.srcConversationId))) {
+    return { error: "only the pipeline creator conversation or a direct user action can answer this decision", status: 403 };
+  }
+  const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === clientRequestId);
+  if (prior && (prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent"
+    && prior.actor.conversationId !== actor.conversationId))) {
+    return { error: "clientRequestId already belongs to a different decision answer", status: 409 };
+  }
+  return null;
+}
+
 /** No host or Git operations here: accepting an answer only reserves work. */
 function resolveDecision(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
 ): PipelinePatchResult {
-  if (!actor || (actor.kind === "agent" && (!actor.conversationId || actor.conversationId !== pipeline.srcConversationId))) {
-    return { error: "only the pipeline creator conversation or a direct user action can answer this decision", status: 403 };
-  }
+  const refusal = decisionAnswerActorRefusal(pipeline, actor, req.clientRequestId);
+  if (refusal) return refusal;
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
     || typeof req.answer !== "string" || !req.answer.trim() || req.answer.length > MAX_DECISION_ANSWER_CHARS
     || typeof req.expectedStageId !== "string" || !req.expectedStageId.trim()
@@ -6076,9 +6090,7 @@ function resolveDecision(
   if (guardShape) return guardShape;
   const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === req.clientRequestId);
   if (prior) {
-    const sameActor = prior.actor.kind === actor.kind && (actor.kind === "operator"
-      || (prior.actor.kind === "agent" && prior.actor.conversationId === actor.conversationId));
-    if (!sameActor || prior.answer !== req.answer || prior.stageId !== req.expectedStageId
+    if (prior.answer !== req.answer || prior.stageId !== req.expectedStageId
       || prior.attempt !== req.expectedAttempt || prior.expectedRevision !== req.expectedRevision) {
       return { error: "clientRequestId already belongs to a different decision answer", status: 409 };
     }
@@ -6108,7 +6120,7 @@ function resolveDecision(
     clientRequestId: req.clientRequestId, expectedRevision: req.expectedRevision,
     stageId: stage.id, attempt: attempt.n, nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1,
     question: attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
-    actor: structuredClone(actor), at: ports.now(),
+    actor: structuredClone(actor!), at: ports.now(),
   };
   // Keep the settled attempt, its report and worktree untouched. A fresh identity owns the continuation.
   setCursorState(pipeline, stage.id, "pending");

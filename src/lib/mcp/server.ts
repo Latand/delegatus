@@ -273,7 +273,10 @@ export function nativeWorkFromRequestMeta(meta: unknown): McpNativeWork | null {
 export interface McpDispatchTracker {
   attempted: boolean;
 }
-export type McpToolBinding = (args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>;
+export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
+  /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
+  authorizeReceipt?: (args: McpToolArgs) => void | Promise<void>;
+};
 export type McpToolBindings = Record<McpToolName, McpToolBinding>;
 
 export interface McpBoundedNumericArg {
@@ -2329,6 +2332,12 @@ export function createMcpToolService(
       const verdict = policy?.permit(typedTool, effectiveArgs);
       if (verdict && !verdict.allowed) {
         return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
+      }
+      try {
+        const authorize = bindings[typedTool].authorizeReceipt;
+        if (authorize) await authorize(effectiveArgs);
+      } catch (error) {
+        return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
       }
 
       /* #1490: `recoveryOnly` decides only whether an absent claim may start

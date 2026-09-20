@@ -248,6 +248,7 @@ async function interruptedAnswer(boundary: "before-admission" | "after-answer", 
   expect(current().decisionAnswers?.length ?? 0).toBe(boundary === "before-admission" ? 0 : 1);
   return {
     ...h, args,
+    receiptContents: () => fs.readFileSync(filename, "utf8"),
     reopen: (conversationId?: string) => createMcpToolService(bindingsFor(conversationId), new FileMcpReceiptStore(filename)),
   };
 }
@@ -280,10 +281,43 @@ test.each(["before-admission", "after-answer"] as const)("MCP restart %s recover
 test.each(["before-admission", "after-answer"] as const)("MCP restart %s rechecks the server-attributed actor", async (boundary) => {
   const h = await interruptedAnswer(boundary);
   const before = current();
+  const receiptBefore = h.receiptContents();
   const result = await h.reopen("conversation_other").callTool("pipeline_action", h.args);
   expect(result).toMatchObject({ ok: false });
   expect(result.error).toContain("only the pipeline creator conversation");
   expect(current()).toEqual(before);
+  expect(h.receiptContents()).toBe(receiptBefore);
+  const recovered = await h.reopen().callTool("pipeline_action", h.args);
+  expect(recovered).toMatchObject({ ok: true });
+  expect(await h.reopen().callTool("pipeline_action", h.args)).toEqual({ ...recovered, replayed: true });
+  expect(current().decisionAnswers).toHaveLength(1);
+  expect(attemptsOf("build")).toHaveLength(2);
+  await tickPipelines([], h.ports);
+  expect(h.spawnedStages).toEqual(["build", "build"]);
+});
+
+test("MCP completed replay refuses another actor without replacing the creator receipt", async () => {
+  const h = await interruptedAnswer("after-answer");
+  const completed = await h.reopen().callTool("pipeline_action", h.args);
+  expect(completed).toMatchObject({ ok: true });
+  const before = current();
+  const receiptBefore = h.receiptContents();
+  const refused = await h.reopen("conversation_other").callTool("pipeline_action", h.args);
+  expect(refused).toMatchObject({ ok: false });
+  expect(refused.error).toContain("only the pipeline creator conversation");
+  expect(current()).toEqual(before);
+  expect(h.receiptContents()).toBe(receiptBefore);
+  expect(await h.reopen().callTool("pipeline_action", h.args)).toEqual({ ...completed, replayed: true });
+  expect(current().decisionAnswers).toHaveLength(1);
+  expect(attemptsOf("build")).toHaveLength(2);
+  // Changing creator lineage cannot transfer the original caller's receipt.
+  const changedOwner = current();
+  changedOwner.srcConversationId = "conversation_other";
+  savePipelines([changedOwner]);
+  const newOwnerReplay = await h.reopen("conversation_other").callTool("pipeline_action", h.args);
+  expect(newOwnerReplay).toMatchObject({ ok: false });
+  expect(newOwnerReplay.error).toContain("different decision answer");
+  expect(h.receiptContents()).toBe(receiptBefore);
 });
 
 test.each([

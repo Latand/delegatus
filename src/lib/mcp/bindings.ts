@@ -89,7 +89,7 @@ import { projectSuccessionFor } from "@/lib/projects/succession";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { createPipelineFromRequest, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
+import { createPipelineFromRequest, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
@@ -4900,7 +4900,19 @@ export function viewerMcpBindings(
     create_task: createBoardTask,
     update_task: (args) => updateBoardTask(args, domainDependencies),
     create_pipeline: (args, context) => unadmittedOnStoreBusy(() => createPipeline(args, context)),
-    pipeline_action: (args) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
+    pipeline_action: Object.assign(
+      (args: McpToolArgs) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
+      { authorizeReceipt: (args: McpToolArgs) => {
+        if (args.action !== "resolve-decision") return;
+        const id = required(args, "pipelineId");
+        const pipeline = domainDependencies.readPipelineRecord
+          ? domainDependencies.readPipelineRecord(id)
+          : domainDependencies.getPipelines?.().pipelines.find((item) => item.id === id);
+        if (!pipeline) throw new Error("pipeline not found");
+        const refusal = decisionAnswerActorRefusal(pipeline, pauseResumeActorOf(domainDependencies), args.clientRequestId);
+        if (refusal) throw new Error(refusal.error);
+      } },
+    ),
     stage_report: (args) => stageReport(args, domainDependencies),
     link_task_to_pipeline: (args) => unadmittedOnStoreBusy(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),

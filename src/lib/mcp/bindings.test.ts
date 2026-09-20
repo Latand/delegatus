@@ -3598,6 +3598,7 @@ test("resolve-decision forwards its receipt key and server actor and wakes the c
   const calls: unknown[] = [];
   const decisionAnswer = { clientRequestId: "decision-answer", stageId: "build", attempt: 1, nextAttempt: 2, at: "2026-09-20T00:00:00.000Z" };
   const bindings = viewerMcpBindings(undefined, undefined, {
+    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
     patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
       calls.push({ request, actor });
       return { pipeline: { id: "pipeline_1", state: "running" }, decisionAnswer, replayed: false };
