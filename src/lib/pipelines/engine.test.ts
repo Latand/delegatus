@@ -451,7 +451,7 @@ function harness() {
       spawnTitles.push(title);
       calls.push(`spawn:${clientAttemptId}:parent=${parentPath ?? "root"}:supersedes=${supersedes ?? "none"}`);
       calls.push(`membership:${membership.kind}:${membership.containerId}:${membership.slot}:${membership.role}:${membership.stageOrder}:round=${membership.round}`);
-      onReserved({ launchId: `launch-${spawn}`, conversationId: `conversation_stage_${spawn}`, accountId });
+      await onReserved({ launchId: `launch-${spawn}`, conversationId: `conversation_stage_${spawn}`, accountId });
       return { launchId: `launch-${spawn}`, conversationId: `conversation_stage_${spawn}`, sessionId: `session-${spawn}`, transcript: `/codex/stage-${spawn}.jsonl`, paneId: `%${spawn}`, accountId };
     },
     paneAgentAlive: async () => paneAlive,
@@ -2187,6 +2187,75 @@ test("spawn reservations persist before actuation and concurrent creation waits 
   expect((await creating).pipeline).toBeDefined();
   expect(loadPipelines()).toHaveLength(2);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.launchId).toBe("launch-durable");
+});
+
+test.each([false, true])("activation drain measures lease hold and unrelated commands (enabled: %s)", async (enabled) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const retry = structuredClone(loadPipelines()[0]!);
+  retry.id = "pipeline-unrelated-retry";
+  Object.assign(retry, pipelineIdentity(retry.id, retry.task, retry.repoDir));
+  retry.state = "needs_decision";
+  retry.delivery = undefined;
+  savePipelines([...loadPipelines(), retry]);
+  const oldWait = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+  const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+  process.env.LLV_PIPELINE_LOCK_WAIT_MS = "20";
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = enabled ? "1" : "0";
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const spawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    entered();
+    await gate;
+    return spawn(input, onReserved);
+  };
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  type LeaseProbe = { options: { collection: string }; filename: string; acquireLease(wait?: number): Promise<string>; releaseLease(token: string): Promise<void> };
+  const prototype = SqliteStateCollection.prototype as unknown as LeaseProbe;
+  const acquire = prototype.acquireLease;
+  const relinquish = prototype.releaseLease;
+  const starts = new Map<string, number>();
+  const holds: number[] = [];
+  const acquired = spyOn(prototype, "acquireLease").mockImplementation(async function(this: LeaseProbe, wait) {
+    const token = await acquire.call(this, wait);
+    if (this.options.collection === "pipelines") starts.set(token, performance.now());
+    return token;
+  });
+  const released = spyOn(prototype, "releaseLease").mockImplementation(async function(this: LeaseProbe, token) {
+    await relinquish.call(this, token);
+    const start = starts.get(token);
+    if (start !== undefined) { holds.push(performance.now() - start); starts.delete(token); }
+  });
+  const start = performance.now();
+  const ticking = tickPipelines([], h.ports);
+  await started;
+  try {
+    await Bun.sleep(100);
+    const making = createPipelineFromRequest({ task: "Unrelated draft", repoDir: "/repo", autoStart: false, stages: [...RUN_STAGES] }, h.ports);
+    if (enabled) expect((await making).pipeline).toBeDefined();
+    else await expect(making).rejects.toThrow("pipeline state is busy");
+    const retrying = patchPipeline(retry.id, { action: "retry-stage" }, h.ports);
+    if (enabled) expect((await retrying).error).toBeUndefined();
+    else await expect(retrying).rejects.toThrow("pipeline state is busy");
+    const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
+    try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: enabled ? 0 : 1 }); }
+    finally { db.close(); }
+  } finally {
+    console.log(`spawn workload pending for ${(performance.now() - start).toFixed(1)}ms`);
+    release();
+    await ticking;
+    acquired.mockRestore(); released.mockRestore();
+    console.log(`activation drain=${enabled}: max collection lease hold=${Math.max(...holds).toFixed(1)}ms, holds=${holds.length}`);
+    expect(holds.length).toBeGreaterThan(0);
+    if (enabled) expect(Math.max(...holds)).toBeLessThan(100);
+    else expect(Math.max(...holds)).toBeGreaterThanOrEqual(100);
+    if (oldWait === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS; else process.env.LLV_PIPELINE_LOCK_WAIT_MS = oldWait;
+    if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+  }
 });
 
 test("a dirty read-only stage parks without staging repository changes", async () => {
@@ -11074,7 +11143,7 @@ async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" 
     const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: root, transport: "structured", launchProfile: profile, memberships: [_input.membership] });
     if (begun.kind !== "created") throw new Error("fixture reservation failed");
     launchId = begun.receipt.launchId;
-    reserve({ launchId, conversationId: begun.receipt.conversationId });
+    await reserve({ launchId, conversationId: begun.receipt.conversationId });
     const result = await spawnStructuredConversation({
       engine: "codex", receipt: begun.receipt, registry, client, prompt: "Build the change",
       spec: { engine: "codex", command: "codex", cwd: root, windowName: "test", launchProfile: profile },
@@ -11366,4 +11435,299 @@ test.each(["timeout", "uncertain"] as const)("a staged launch parked for runtime
   expect(f.attempt()).toMatchObject({ n: 1, launchId: f.launchId(), state: "running", spawnCalls: 1 });
   expect(f.stages).toHaveBeenCalledTimes(1);
   expect(f.messages()).toBe(1);
+});
+
+async function activationDrainFixture(afterPermit = false) {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  let calls = 0;
+  let launches = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    calls++;
+    if (!afterPermit) { entered(); await gate; }
+    await onReserved({ launchId: "activation-launch", conversationId: "conversation_activation" });
+    if (afterPermit) { entered(); await gate; }
+    launches++;
+    return { launchId: "activation-launch", conversationId: "conversation_activation", sessionId: "activation-session", transcript: "/codex/activation.jsonl", paneId: null };
+  };
+  const ticking = tickPipelines([], h.ports);
+  await started;
+  return { h, release, ticking, calls: () => calls, launches: () => launches, id: loadPipelines()[0]!.id };
+}
+
+test.each(["pause", "close", "set-edge"] as const)("activation drain honors %s before the dispatch permit", async (action) => {
+  const f = await activationDrainFixture();
+  try {
+    const changed = await patchPipeline(f.id, action === "set-edge"
+      ? { action, stageId: "plan", edge: "pass", to: null }
+      : { action }, f.h.ports);
+    if (action !== "close") expect(changed.error).toBeUndefined();
+    f.release();
+    await f.ticking;
+    const live = loadPipelines()[0]!;
+    expect(f.launches()).toBe(0);
+    expect(live.runs[0]!.attempts).toHaveLength(1);
+    expect(live.runs[0]!.attempts[0]!.activation).toBeUndefined();
+    if (action === "pause") expect(live.state).toBe("paused");
+    if (action === "close") expect(live.state).toBe("closed");
+    if (action === "set-edge") expect(live.stages[0]!.next).toBeNull();
+  } finally { f.release(); await f.ticking; delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
+});
+
+test.each(["pause", "close"] as const)("activation drain preserves %s after the permit and reconciles the original launch", async (action) => {
+  const f = await activationDrainFixture(true);
+  try {
+    const changed = await patchPipeline(f.id, { action }, f.h.ports);
+    if (action === "close") {
+      expect(changed.status).toBe(409);
+      expect(loadPipelines()[0]!.state).toBe("paused");
+    }
+    f.release(); await f.ticking;
+    const live = loadPipelines()[0]!;
+    expect(live.state).toBe(action === "close" ? "closed" : "paused");
+    expect(live.runs[0]!.attempts[0]!.launchId).toBe("activation-launch");
+    expect(f.launches()).toBe(1);
+    expect(live.runs[0]!.attempts[0]!.activation).toBeUndefined();
+  } finally { f.release(); await f.ticking; delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
+});
+
+test("activation drain rollback consumes existing custody and a second controller cannot launch", async () => {
+  const f = await activationDrainFixture();
+  try {
+    delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    // A separate module has a separate in-flight set, while the durable process claim remains shared.
+    const modulePath = "./engine?activation-other-controller";
+    const other = await import(modulePath) as typeof engineModule;
+    await other.tickPipelines([], f.h.ports);
+    expect(f.calls()).toBe(1);
+    f.release(); await f.ticking;
+    const live = loadPipelines()[0]!;
+    expect(live.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "activation-launch", spawnCalls: 1 });
+    expect(live.runs[0]!.attempts[0]!.activation).toBeUndefined();
+    expect(f.launches()).toBe(1);
+  } finally { f.release(); await f.ticking; delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
+});
+
+function expectPipelineLeaseFree() {
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
+  try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: 0 }); }
+  finally { db.close(); }
+}
+
+test("activation drain keeps account and real structured adapter RPC waits outside the lease", async () => {
+  const f = await stagedRecoveryHarness();
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  let releaseAccount!: () => void, accountEntered!: () => void;
+  let releaseRpc!: () => void, rpcEntered!: () => void;
+  const accountGate = new Promise<void>((resolve) => { releaseAccount = resolve; });
+  const accountStarted = new Promise<void>((resolve) => { accountEntered = resolve; });
+  const rpcGate = new Promise<void>((resolve) => { releaseRpc = resolve; });
+  const rpcStarted = new Promise<void>((resolve) => { rpcEntered = resolve; });
+  const spawn = f.h.ports.spawnAgent;
+  f.h.ports.spawnAgent = async (input, reserved) => {
+    expectPipelineLeaseFree(); accountEntered(); await accountGate;
+    expectPipelineLeaseFree(); return spawn(input, reserved);
+  };
+  const producerCursor = f.client.producerCursor.bind(f.client);
+  f.client.producerCursor = async (...args) => {
+    expectPipelineLeaseFree(); rpcEntered(); await rpcGate;
+    expectPipelineLeaseFree(); return producerCursor(...args);
+  };
+  const ticking = tickPipelines([], f.h.ports);
+  try {
+    await accountStarted;
+    expect((await createPipelineFromRequest({ task: "During account wait", repoDir: "/repo", autoStart: false, stages: [...RUN_STAGES] }, f.h.ports)).pipeline).toBeDefined();
+    releaseAccount(); await rpcStarted;
+    expect((await createPipelineFromRequest({ task: "During RPC wait", repoDir: "/repo", autoStart: false, stages: [...RUN_STAGES] }, f.h.ports)).pipeline).toBeDefined();
+    releaseRpc(); await ticking;
+    expect(f.starts()).toBe(1);
+    expect(f.attempt().launchId).toBe(f.launchId());
+  } finally { releaseAccount(); releaseRpc(); await ticking; delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
+});
+
+async function reserveActivationOnly() {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  let checks = 0;
+  h.ports.structuredDeliveryPublication = () => ++checks <= 2 ? "ready" : "unbound";
+  try { await tickPipelines([], h.ports); }
+  finally { delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
+  h.ports.structuredDeliveryPublication = () => "ready";
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.activation?.phase).toBe("reserved");
+  return h;
+}
+
+test("activation drain recovers the original registry launch after a process exits before binding", async () => {
+  const h = await reserveActivationOnly();
+  const registryPath = path.join(process.env.LLV_STATE_DIR!, "activation-crash-registry.json");
+  const marker = path.join(process.env.LLV_STATE_DIR!, "activation-crash-launch");
+  const child = Bun.spawn([process.execPath, "-e", `
+    import fs from "node:fs";
+    const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
+    const { accountManager } = await import("./src/lib/accounts/manager.ts");
+    const { drainStageActivations, defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
+    const registry = new AgentRegistry(process.env.LLV_TEST_REGISTRY);
+    setAgentRegistryForTests(registry);
+    accountManager.resolveProjectSpawn = (engine) => ({ kind: "available", account: {
+      engine, accountId: "test", kind: "managed", home: process.env.HOME,
+      transcriptRoot: process.env.HOME, env: { NODE_ENV: "test" },
+    }});
+    const ports = defaultPipelinePorts();
+    const spawn = ports.spawnAgent;
+    await drainStageActivations({ ...ports, structuredDeliveryPublication: () => "ready",
+      spawnAgent: (input) => spawn(input, async (reservation) => {
+        fs.writeFileSync(process.env.LLV_TEST_MARKER, reservation.launchId);
+        process.exit(0);
+      }),
+    });
+    process.exit(2);
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath, LLV_TEST_MARKER: marker }, stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(0);
+  const launch = fs.readFileSync(marker, "utf8");
+  const before = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(before.launchId).toBeNull();
+  expect(before.activation).toMatchObject({ phase: "reserving", owner: { pid: child.pid } });
+  const registry = new AgentRegistry(registryPath);
+  setAgentRegistryForTests(registry);
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation((engine) => ({ kind: "available", account: {
+    engine, accountId: "test", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" },
+  }}));
+  try {
+    const ports = defaultPipelinePorts();
+    await engineModule.drainStageActivations({ ...h.ports, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt });
+    const recovered = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(recovered).toMatchObject({ n: 1, launchId: launch, spawnCalls: 1, state: "needs_decision" });
+    expect(recovered.activation).toBeUndefined();
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
+  } finally { resolve.mockRestore(); setAgentRegistryForTests(null); }
+});
+
+test("activation drain preserves uncertain read-write delivery and the staged recovery budget", async () => {
+  const f = await stagedRecoveryHarness("uncertain");
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  try {
+    await tickPipelines([], f.h.ports);
+    for (let i = 0; i < 4; i++) await f.wake();
+    expect(f.starts()).toBe(1);
+    expect(f.messages()).toBe(1);
+    expect(f.attempt()).toMatchObject({ n: 1, launchId: f.launchId(), spawnCalls: 1, state: "running" });
+  } finally { delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
+});
+
+test("activation drain close custody survives a failed teardown and retries after restart", async () => {
+  const f = await activationDrainFixture(true);
+  f.h.ports.stageHostResident = async () => true;
+  f.h.ports.stopStageAgent = async () => ({ outcome: "failed", error: "fixture host still running" });
+  try {
+    await patchPipeline(f.id, { action: "close" }, f.h.ports);
+    f.release(); await f.ticking;
+    expect(loadPipelines()[0]).toMatchObject({ activationCloseRequested: true, state: "paused" });
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.activation).toBeUndefined();
+    f.h.ports.stopStageAgent = async () => ({ outcome: "stopped" });
+    await engineModule.drainStageActivations(f.h.ports);
+    expect(loadPipelines()[0]!.state).toBe("closed");
+    expect(loadPipelines()[0]!.activationCloseRequested).toBeUndefined();
+  } finally { f.release(); await f.ticking; delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
+});
+
+test("activation drain excludes another process while the reserved owner is alive", async () => {
+  const f = await activationDrainFixture();
+  try {
+    const child = Bun.spawn([process.execPath, "-e", `
+      const { drainStageActivations, defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
+      await drainStageActivations({ ...defaultPipelinePorts(), structuredDeliveryPublication: () => "ready",
+        spawnAgent: async () => { process.exit(3); },
+      });
+    `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    expect(await child.exited).toBe(0);
+    f.release(); await f.ticking;
+    expect(f.calls()).toBe(1);
+    expect(f.launches()).toBe(1);
+  } finally { f.release(); await f.ticking; delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
+});
+
+test("activation drain recovers its living process claim after final reacquisition fails", async () => {
+  const f = await activationDrainFixture(true);
+  const store = await import("./store");
+  const mutate = store.withPipelineMutation;
+  let fail = true;
+  const broken = spyOn(store, "withPipelineMutation").mockImplementation((...args) => {
+    if (fail) { fail = false; return Promise.reject(new Error("fixture final mutation busy")); }
+    return mutate(...args);
+  });
+  try {
+    f.release();
+    await expect(f.ticking).rejects.toThrow("fixture final mutation busy");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.activation?.phase).toBe("dispatching");
+    f.h.ports.spawnReceipt = () => ({ state: "completed", launchId: "activation-launch", conversationId: "conversation_activation",
+      sessionId: "activation-session", transcript: "/codex/activation.jsonl", paneId: null });
+    await engineModule.drainStageActivations(f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ launchId: "activation-launch", state: "running", spawnCalls: 1 });
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.activation).toBeUndefined();
+    expect(f.calls()).toBe(1);
+  } finally { broken.mockRestore(); f.release(); await f.ticking.catch(() => {}); delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
+});
+
+test("activation drain settled checkpoint survives a crash without spending another retry", async () => {
+  const h = await reserveActivationOnly();
+  const pipelines = loadPipelines();
+  const pipeline = pipelines[0]!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  attempt.state = "pending";
+  attempt.spawnCalls = 1;
+  attempt.controllerWait = { startedAt: h.ports.now(), retryAfter: new Date(Date.parse(h.ports.now()) + 60_000).toISOString(), rounds: 1 } as typeof attempt.controllerWait;
+  attempt.activation!.phase = "settled";
+  // The recorded process has exited; no live process is signalled by this test.
+  const child = Bun.spawn([process.execPath, "-e", "process.exit(0)"], { stdout: "pipe", stderr: "pipe" });
+  await child.exited;
+  attempt.activation!.owner = { pid: child.pid, startIdentity: "exited-fixture", bootEpoch: "fixture" };
+  pipeline.cursor!.state = "pending";
+  savePipelines(pipelines);
+  const before = structuredClone(attempt.controllerWait);
+  let calls = 0;
+  h.ports.spawnAgent = async () => { calls++; throw new Error("retry is not due"); };
+  await engineModule.drainStageActivations(h.ports);
+  const recovered = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(recovered.activation).toBeUndefined();
+  expect(recovered.controllerWait).toEqual(before);
+  expect(recovered.spawnCalls).toBe(1);
+  expect(recovered.state).toBe("pending");
+  expect(calls).toBe(0);
+});
+
+test("activation drain keeps a settled staged launch across a crash and pause", async () => {
+  const f = await stagedRecoveryHarness();
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  const store = await import("./store");
+  const mutate = store.withPipelineMutation;
+  const broken = spyOn(store, "withPipelineMutation").mockImplementation((...args) => {
+    if (loadPipelines()[0]?.runs[0]?.attempts[0]?.activation?.phase === "settled") {
+      return Promise.reject(new Error("fixture crash after settled checkpoint"));
+    }
+    return mutate(...args);
+  });
+  try {
+    await expect(tickPipelines([], f.h.ports)).rejects.toThrow("fixture crash after settled checkpoint");
+    broken.mockRestore();
+    expect(f.attempt().activation?.phase).toBe("settled");
+    const id = loadPipelines()[0]!.id;
+    await patchPipeline(id, { action: "pause" }, f.h.ports);
+    await engineModule.drainStageActivations(f.h.ports);
+    expect(f.attempt().state).toBe("spawning");
+    expect(f.attempt().launchId).toBe(f.launchId());
+    expect(loadPipelines()[0]!.state).toBe("paused");
+    await patchPipeline(id, { action: "resume" }, f.h.ports);
+    for (let i = 0; i < 4; i++) await f.wake();
+    expect(f.starts()).toBe(1);
+    expect(f.messages()).toBe(1);
+    expect(f.attempt()).toMatchObject({ n: 1, state: "running", launchId: f.launchId(), spawnCalls: 1 });
+  } finally { broken.mockRestore(); delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
 });
