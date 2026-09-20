@@ -184,6 +184,8 @@ export type McpToolPayload = Record<string, unknown>;
 export interface McpToolCallContext {
   signal?: AbortSignal;
   deadlineAt?: number;
+  /** Numeric transport subphases, supplied by the service, never tool arguments. */
+  recordTiming?: (phase: "http", milliseconds: number) => void;
   /** #1490: the durable binding this call's dispatch must use. Present only on
       a recoverable mutation's single dispatch; the binding reads its downstream
       idempotency key from here rather than deriving one of its own. */
@@ -1964,7 +1966,7 @@ export interface McpToolService {
 }
 
 type McpTimingOutcome = "success" | "failure" | "replay" | "conflict" | "pending" | "deadline" | "cancelled";
-type McpTimingPhase = "claim" | "binding" | "completion" | "serialization" | "serviceTotal" | "replay";
+type McpTimingPhase = "caller" | "http" | "claim" | "binding" | "completion" | "serialization" | "serviceTotal" | "replay";
 
 interface McpToolTimingSample {
   toolName: McpToolName;
@@ -2045,7 +2047,7 @@ const MCP_TIMING_OUTCOMES: McpTimingOutcome[] = [
   "success", "failure", "replay", "conflict", "pending", "deadline", "cancelled",
 ];
 const MCP_TIMING_PHASES: McpTimingPhase[] = [
-  "claim", "binding", "completion", "serialization", "serviceTotal", "replay",
+  "caller", "http", "claim", "binding", "completion", "serialization", "serviceTotal", "replay",
 ];
 
 function mutableToolTiming(): MutableToolTiming {
@@ -2274,6 +2276,20 @@ export function createMcpToolService(
       const effectiveArgs = normalized.args;
       const callStartedAt = performance.now();
       const phaseDurations: Partial<Record<McpTimingPhase, number>> = {};
+      context = { ...context, recordTiming: (phase, milliseconds) => {
+        phaseDurations[phase] = (phaseDurations[phase] ?? 0) + milliseconds;
+      } };
+      const permit = () => {
+        const startedAt = performance.now();
+        try { return policy?.permit(typedTool, effectiveArgs); }
+        finally { phaseDurations.caller = (phaseDurations.caller ?? 0) + performance.now() - startedAt; }
+      };
+      const measure = async <T>(phase: McpTimingPhase, run: () => T | Promise<T>): Promise<T> => {
+        const startedAt = performance.now();
+        try { return await run(); }
+        finally { phaseDurations[phase] = (phaseDurations[phase] ?? 0) + performance.now() - startedAt; }
+      };
+      try {
       const deadlineBudgetMs = context.deadlineAt === undefined
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
@@ -2302,7 +2318,7 @@ export function createMcpToolService(
          binding so caller authority is checked before replay, including after
          restart; an MCP-cache hit must never disclose another owner's receipt. */
       if (typedTool === "flow_action" && effectiveArgs.action === "agent-decision") {
-        const verdict = policy?.permit(typedTool, effectiveArgs);
+        const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
         try {
           const payload = await bindings[typedTool](effectiveArgs, context);
@@ -2320,7 +2336,7 @@ export function createMcpToolService(
          property of who is calling, not of the operation, so it must not burn the
          clientRequestId — the same call becomes legitimate the moment the operator
          grants the tool, and a spent receipt would answer it with a stale no. */
-      const verdict = policy?.permit(typedTool, effectiveArgs);
+      const verdict = permit();
       if (verdict && !verdict.allowed) {
         return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
       }
@@ -2354,6 +2370,7 @@ export function createMcpToolService(
            what may be disclosed, so it cannot be learned from the answer. A
            refusal here burns nothing — no claim exists yet. */
         let bound: McpRequestBindingInput;
+        const callerStartedAt = performance.now();
         try {
           bound = await tool.bind(digestArgs);
         } catch (error) {
@@ -2367,6 +2384,8 @@ export function createMcpToolService(
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
+        } finally {
+          phaseDurations.caller = (phaseDurations.caller ?? 0) + performance.now() - callerStartedAt;
         }
         const binding: McpRequestBinding = {
           version: 1,
@@ -2731,9 +2750,7 @@ export function createMcpToolService(
       };
       const result = (async (): Promise<McpToolResult> => {
         if (recoverable && recoveryStore) return recoverableCall(recoverable, recoveryStore);
-        const claimStartedAt = performance.now();
-        const claim = await receipts.claim(key, digest, retention);
-        phaseDurations.claim = performance.now() - claimStartedAt;
+        const claim = await measure("claim", () => receipts.claim(key, digest, retention));
         if (claim.kind === "conflict") {
           outcome = "conflict";
           return failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
@@ -2830,9 +2847,7 @@ export function createMcpToolService(
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
-        const completionStartedAt = performance.now();
-        await receipts.complete(key, digest, settled, retention);
-        phaseDurations.completion = performance.now() - completionStartedAt;
+        await measure("completion", () => receipts.complete(key, digest, settled, retention));
         return settled;
       })();
       inFlight.set(key, { digest, result });
@@ -2840,6 +2855,16 @@ export function createMcpToolService(
         return finish(await result, outcome, unfinishedAgeMs);
       } finally {
         if (inFlight.get(key)?.result === result) inFlight.delete(key);
+      }
+      } finally {
+        const totalMs = performance.now() - callStartedAt;
+        if (totalMs >= 2_000) {
+          // Fixed vocabulary only: no keys, arguments, identities or error text.
+          // http is a subphase of binding; these wall times are not additive.
+          phaseDurations.serviceTotal = totalMs;
+          console.error(`[mcp slow] tool=${typedTool} ${MCP_TIMING_PHASES
+            .map(phase => `${phase}Ms=${Math.round(phaseDurations[phase] ?? 0)}`).join(" ")}`);
+        }
       }
     },
   };
