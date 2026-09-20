@@ -58,7 +58,7 @@ import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed } from "./failEdgeBudget";
-import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -80,7 +80,8 @@ import { collectStageProvenance } from "./stageProvenance";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
-import { buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import type {
   CreatePipelineRequest,
@@ -2208,6 +2209,23 @@ function keepPassedStageUnpublished(
     committing cursor becomes a publication retry seam, so later ticks never
     rerun or reset stage work. An internal pipeline has nothing to wait for:
     a pass an older build left waiting here closes on its own record. */
+function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: { acceptedSha: string; publishedSha?: string | null }): import("./git").PipelinePublishResult {
+  if (!pipeline.delivery) {
+    return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "awaiting durable delivery admission" };
+  }
+  const delivery = pipeline.delivery!;
+  const requestKey = `${request.publishedSha === undefined ? "review" : "pass"}:${pipeline.cursor?.stageId ?? "manual"}:${pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId)?.n ?? 0 : 0}`;
+  const error = deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...delivery.target, active: true }) ?? pipeline);
+  if (error) return { ok: false, error };
+  const operation = delivery.operation;
+  if (operation?.state === "running") return { ok: false, error: `publisher ${delivery.ownerId} at epoch ${delivery.epoch} is in flight or uncertain` };
+  if (operation?.sha === request.acceptedSha && operation.requestKey === requestKey && operation.epoch === delivery.epoch && operation.state === "settled" && operation.result) {
+    return operation.result as import("./git").PipelinePublishResult;
+  }
+  delivery.operation = { id: crypto.randomUUID(), epoch: delivery.epoch, sha: request.acceptedSha, requestKey, state: "pending" };
+  return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "Viewer publication reserved for execution outside the mutation lease" };
+}
+
 function retryTerminalStagePublication(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -2219,7 +2237,7 @@ function retryTerminalStagePublication(
     advancePipeline(pipeline, stage, ports, attempt);
     return;
   }
-  const published = publishPipelineBranch(pipeline, ports.exec, {
+  const published = queuePipelinePublication(pipeline, ports.exec, {
     acceptedSha: pipeline.lastPassedCommit,
     publishedSha: pipeline.publishedCommit ?? null,
   });
@@ -2228,6 +2246,9 @@ function retryTerminalStagePublication(
     return;
   }
   if (published.remote === "unreachable") {
+    if (pipeline.delivery?.operation?.state === "settled" && passSuccessor(pipeline, stage, attempt).next !== null) {
+      advancePipeline(pipeline, stage, ports, attempt);
+    }
     keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
   }
@@ -2347,7 +2368,7 @@ function commitPassedStage(
      pipeline 2ae14391 parked for over seven hours. Publication failure is its
      own recoverable class: the commit is already durable in
      `lastPassedCommit`, so nothing is lost while the operator resolves it. */
-  const published = publishPipelineBranch(pipeline, ports.exec, {
+  const published = queuePipelinePublication(pipeline, ports.exec, {
     acceptedSha: result.sha,
     publishedSha: pipeline.publishedCommit ?? null,
   });
@@ -2358,14 +2379,11 @@ function commitPassedStage(
   pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
   attempt.state = "passed";
   attempt.completedAt = ports.now();
-  if (published.remote === "unreachable" && passSuccessor(pipeline, stage, attempt).next === null) {
+  if (published.remote === "unreachable") {
     keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
   }
   advancePipeline(pipeline, stage, ports, attempt);
-  if (published.remote === "unreachable") {
-    keepPassedStageUnpublished(pipeline, attempt, published.detail);
-  }
 }
 
 /**
@@ -3399,7 +3417,7 @@ function publishReviewIngressHead(
 
   /* `publishedSha` is deliberately omitted: ingress probes the remote for real
      rather than trusting a durable record that may be stale or migrated. */
-  const published = publishPipelineBranch(pipeline, ports.exec, { acceptedSha: expected });
+  const published = queuePipelinePublication(pipeline, ports.exec, { acceptedSha: expected });
   if (!published.ok) {
     return { ok: false, retryable: false, detail: `review stage could not publish the accepted head ${expected}: ${published.error}` };
   }
@@ -3495,7 +3513,7 @@ async function tickReviewStage(
       roles: { implementer: implementerRole, reviewer: reviewerRole },
       baseMode: "head",
       baseRef: pipeline.baseRef,
-      headRef: pipeline.branch,
+      headRef: pipeline.delivery?.target.branch.replace(/^refs\/heads\//, "") ?? pipeline.branch,
       ...(publishesRemoteBranch(pipeline) ? { requireRemoteHead: true } : {}),
       targetSha: attempt.expectedReviewHeadSha,
       spec: pipeline.spec ?? pipeline.task,
@@ -3725,7 +3743,8 @@ function provisionPendingPipelines(ports: PipelinePorts): Map<string, PipelinePr
   let pending: Pipeline[];
   try {
     pending = loadPipelinesForProjection().filter((pipeline) =>
-      pipeline.state === "provisioning" && !pipeline.hiddenAt && !pipeline.closedAt);
+      pipeline.state === "provisioning" && !pipeline.hiddenAt && !pipeline.closedAt
+      && (!publishesRemoteBranch(pipeline) || pipeline.delivery));
   } catch (error) {
     /* The lease-taking pass below reports an unreadable registry; this read
        having failed is not a second outage to announce. */
@@ -4484,18 +4503,44 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
   return true;
 }
 
-export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts()): Promise<{ pipelines: Pipeline[]; changed: boolean }> {
+async function admitExistingPipelineDelivery(pipeline: Pipeline, ports: PipelinePorts): Promise<Pipeline | null> {
+  const remote = ports.exec("git", ["remote", "get-url", "--push", "origin"], pipeline.repoDir);
+  let url = remote.code === 0 ? remote.stdout.trim() : "";
+  if (url && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url) && !/^[^/]+:/.test(url)) url = path.resolve(pipeline.repoDir, url);
+  const repository = (url ? projectIdentityFromRemote(url, pipeline.repoDir)?.project : localRepositoryProjectId(pipeline.repoDir)) ?? pipeline.project;
+  const target = { repository, remote: url, branch: `refs/heads/${pipeline.branch}` };
+  return withDeliveryMutationAsync((tx) => {
+    const current = tx.get(pipeline.id);
+    if (current && !current.delivery && current.repoDir === pipeline.repoDir && current.branch === pipeline.branch
+      && current.state !== "closed" && current.state !== "completed") {
+      assignPipelineDelivery(current, target, false, tx.pipelineLookup);
+      tx.put(current);
+    }
+    return current;
+  });
+}
+
+export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean }> {
   if (tickStore.__llvPipelineTick) return { pipelines: [], changed: false };
   tickStore.__llvPipelineTick = true;
   let followUp = false;
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
+    const legacy = unclaimedPipelinePublications();
+    for (const pipeline of legacy) await admitExistingPipelineDelivery(pipeline, ports);
+    if (legacy.length === 16) followUp = true;
     /* Before the lease, never under it (#1799). */
     const provisioned = provisionPendingPipelines(ports);
     const result = await withPipelineControllerMutation(async (pipelines, persist) => {
       let changed = reconcilePipelineFallbackTasks(pipelines, persist);
       await forEachCooperatively(pipelines, async (pipeline) => {
+        if (publishesRemoteBranch(pipeline) && !pipeline.delivery) return;
         const persistPipeline = () => persist([pipeline]);
+        if (publicationPass === 0 && pipeline.delivery?.operation?.state === "settled"
+          && pipeline.delivery.operation.result?.ok && pipeline.delivery.operation.result.remote === "unreachable") {
+          delete pipeline.delivery.operation;
+          persistPipeline();
+        }
         let pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, ports);
         pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, ports) || pipelineChanged;
         pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, ports) || pipelineChanged;
@@ -4532,8 +4577,16 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     /* A pass that ends on a pending cursor (a stage just passed and advanced,
        or provisioning finished) must not wait for an unrelated wake-up to
        materialize the next attempt (#337). */
+    const pending = result.pipelines.filter((pipeline) => pipeline.delivery?.operation?.state === "pending"
+      && pipeline.delivery.active && pipeline.state !== "closed" && pipeline.state !== "completed");
+    for (const pipeline of pending) await publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha });
+    if (pending.length && publicationPass < 3) {
+      tickStore.__llvPipelineTick = false;
+      const settled = await tickPipelines(entries, ports, publicationPass + 1);
+      return { ...settled, changed: true };
+    }
     const followUpAt = unixMs(ports.now());
-    followUp = result.pipelines.some((pipeline) => pipeline.state === "running"
+    followUp = followUp || result.pipelines.some((pipeline) => pipeline.state === "running"
       && pipeline.cursor?.state === "pending"
       && !stageActivationIsWaiting(pipeline, followUpAt));
     return result;
@@ -5118,6 +5171,7 @@ function resolvePipelineCreatorLineage(
 }
 
 type CreatePipelineOptions = {
+  creationRequest?: { key: string; digest: string };
   ensureTask?: BoardTask;
   spawnParams?: TaskPipelineSpawnParams;
   allowOperatorDraftWithoutLineage?: boolean;
@@ -5192,6 +5246,11 @@ export async function createPipelineFromRequest(
   ports: PipelinePorts = defaultPipelinePorts(),
   options: CreatePipelineOptions = {},
 ): Promise<PipelineMutationResult> {
+  if (options.creationRequest) {
+    const replay = pipelineDeliveryLookup({ requestKey: options.creationRequest.key });
+    if (replay) return replay.creationRequest?.digest === options.creationRequest.digest
+      ? { pipeline: replay } : { error: "idempotency_conflict: creation arguments changed", status: 409 };
+  }
   /* #1026: every request-shape constraint is evaluated before the request is
      answered, and the response carries all of them. The checks and their
      verdicts are the ones that were here before, only their reporting is
@@ -5313,6 +5372,34 @@ export async function createPipelineFromRequest(
     pipeline.baseBranch = requestedBaseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
     pipeline.stateDetail = PIPELINE_BASE_UNRESOLVED_DETAIL;
   }
+  const targetInput = req.delivery;
+  if (targetInput && (typeof targetInput !== "object" || typeof targetInput.branch !== "string" || !targetInput.branch.startsWith("refs/heads/")
+    || pipelineBaseBranchError(targetInput.branch.slice("refs/heads/".length))
+    || (targetInput.pr !== undefined && (!Number.isSafeInteger(targetInput.pr) || targetInput.pr < 1))
+    || (targetInput.comparison !== undefined && typeof targetInput.comparison !== "boolean")
+    || (targetInput.rejectedHead !== undefined && !/^[0-9a-f]{40}$/i.test(targetInput.rejectedHead)))) {
+    return { error: "delivery requires a full refs/heads branch, positive PR number and exact rejected head", status: 400 };
+  }
+  const originUrl = ports.exec("git", ["remote", "get-url", "origin"], repoDir).stdout.trim();
+  const requestedRemote = targetInput?.remote;
+  if (requestedRemote !== undefined && (typeof requestedRemote !== "string" || !requestedRemote.trim() || requestedRemote.startsWith("-") || /[\r\n\0]/.test(requestedRemote))) return { error: "invalid delivery remote", status: 400 };
+  const alias = ports.exec("git", ["remote", "get-url", "--push", requestedRemote ?? "origin"], repoDir);
+  let origin = alias.code === 0 && alias.stdout.trim() ? alias.stdout.trim() : requestedRemote ?? originUrl;
+  // Relative filesystem remotes must keep their meaning in the sibling worktree.
+  if (origin && !/^[a-z][a-z0-9+.-]*:\/\//i.test(origin) && !/^[^/]+:/.test(origin)) origin = path.resolve(repoDir, origin);
+  if (typeof origin !== "string" || origin.startsWith("-") || /[\r\n\0]/.test(origin)) return { error: "invalid delivery remote", status: 400 };
+  const repository = (origin ? projectIdentityFromRemote(origin, repoDir)?.project : localRepositoryProjectId(repoDir)) ?? project;
+  if (normalized.stages.some((stage) => stage.kind === "review-loop") && originUrl
+    && repository !== projectIdentityFromRemote(originUrl, repoDir)?.project) return { error: "review-loop delivery must use the origin repository; create the lane in a checkout of the PR head repository", status: 400 };
+  const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
+    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(targetInput?.rejectedHead ? { rejectedHead: targetInput.rejectedHead } : {}) };
+  pipeline.creationRequest = options.creationRequest;
+  if (!options.ensureTask) {
+    const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, loadTasks());
+    if (taskLinkError) return { error: taskLinkError, status: 400 };
+    const created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison);
+    return engineWarnings.length ? { pipeline: created, warnings: engineWarnings } : { pipeline: created };
+  }
   return withPipelineMutation((pipelines, persist) => {
     if (options.ensureTask && options.spawnParams) {
       const decision = ensurePipelineForTask(options.ensureTask, pipelines, options.spawnParams);
@@ -5332,6 +5419,7 @@ export async function createPipelineFromRequest(
     }
     const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, loadTasks());
     if (taskLinkError) return { error: taskLinkError, status: 400 };
+    assignPipelineDelivery(pipeline, target, targetInput?.comparison);
     pipelines.push(pipeline);
     persist();
     return engineWarnings.length ? { pipeline, warnings: engineWarnings } : { pipeline };
@@ -5626,9 +5714,37 @@ export async function patchPipeline(
   ports: PipelinePorts = defaultPipelinePorts(),
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
 ): Promise<PipelinePatchResult> {
-  return withPipelineMutation(async (pipelines, persist) => {
+  let draftRepository: string | undefined;
+  if (req.action === "update-draft" && typeof req.repoDir === "string" && req.repoDir.trim()) {
+    const remote = ports.exec("git", ["remote", "get-url", "origin"], req.repoDir.trim());
+    draftRepository = (remote.code === 0 ? projectIdentityFromRemote(remote.stdout.trim(), req.repoDir.trim())?.project : localRepositoryProjectId(req.repoDir.trim())) ?? undefined;
+  }
+  if (req.action === "takeover") {
+    if (typeof req.expectedOwner !== "string" || !req.expectedOwner || !Number.isSafeInteger(req.expectedEpoch) || req.expectedEpoch! < 1
+      || typeof req.reason !== "string" || !req.reason.trim() || req.reason.length > 2000) return { error: "takeover requires expectedOwner, positive expectedEpoch and a reason up to 2000 characters", status: 400 };
+    const conversationId = actor?.kind === "agent" ? actor.conversationId : null;
+    const recoveryError = await reconcilePipelinePublication(req.expectedOwner, req.expectedEpoch!, ports.exec, conversationId);
+    if (recoveryError) return { error: recoveryError, status: 409 };
+    return takeoverPipelineDelivery(id, req.expectedOwner, req.expectedEpoch!, req.reason, conversationId);
+  }
+  if (req.action === "publish") {
+    let pipeline = findPipelineRecord(id);
+    if (!pipeline) return { error: "pipeline not found", status: 404 };
+    if (!pipeline.delivery) {
+      pipeline = await admitExistingPipelineDelivery(pipeline, ports);
+      if (!pipeline) return { error: "pipeline no longer available", status: 409 };
+    }
+    const published = await publishPipelineBranch(pipeline, ports.exec, { acceptedSha: req.acceptedSha ?? pipeline.lastPassedCommit });
+    if (published.ok && published.remote === "unreachable") return { error: `${published.detail}; reconcile through takeover with expectedOwner ${pipeline.delivery?.ownerId ?? pipeline.id} and expectedEpoch ${pipeline.delivery?.epoch ?? 0}`, status: 409 };
+    return published.ok ? { pipeline: findPipelineRecord(id)! } : { error: published.error, status: 409 };
+  }
+  const patched = await withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
+    if (req.action === "retry-stage" && pipeline.delivery?.operation?.state === "settled") {
+      delete pipeline.delivery.operation;
+      pipeline.publishedCommit = null;
+    }
     const guardShape = stageGuardShapeError(req);
     if (guardShape) return guardShape;
     const stage = currentStage(pipeline);
@@ -5709,6 +5825,7 @@ export async function patchPipeline(
       if (repoChanged) {
         const taskLinkError = pipelineTaskLinkError({ project }, pipeline.taskIds, loadTasks(), { allowMissing: true });
         if (taskLinkError) return { error: taskLinkError, status: 400 };
+        if (pipeline.delivery && draftRepository !== pipeline.delivery.target.repository) return { error: "this draft has a claimed delivery repository; create a new lane to change repositories", status: 409 };
       }
       /* #1279: the allowed set travels with the PROJECT, not with the plan, so
          a move re-reads the binding exactly as create does. A pin that was
@@ -6023,7 +6140,7 @@ export async function patchPipeline(
              first one. Without this, a local repair the operator committed in
              the worktree would park the retry on the same unavailable remote
              the retry was meant to escape — an unbounded operator loop. */
-          const republished = publishPipelineBranch(pipeline, ports.exec, {
+          const republished = queuePipelinePublication(pipeline, ports.exec, {
             acceptedSha: retryReviewHead!.sha,
             publishedSha: pipeline.publishedCommit ?? null,
           });
@@ -6406,6 +6523,12 @@ export async function patchPipeline(
     persist();
     return graphEdit ? { pipeline, graphEdit } : { pipeline };
   });
+  if (patched.pipeline?.delivery?.operation?.state === "pending") {
+    const published = await publishPipelineBranch(patched.pipeline, ports.exec, { acceptedSha: patched.pipeline.delivery.operation.sha });
+    if (!published.ok) return { error: published.error, status: 409 };
+    return { ...patched, pipeline: findPipelineRecord(id)! };
+  }
+  return patched;
 }
 
 /** A run attempt whose own turn is under way, so its conversation can still

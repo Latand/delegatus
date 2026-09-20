@@ -5,6 +5,7 @@ import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineState } fro
 import type { Flow } from "@/lib/flows/types";
 
 import { PipelineStrip } from "./PipelineStrip";
+import { withDeliveryPublicationDetail } from "@/lib/pipelines/store";
 
 function stage(id: string, kind: PipelineStage["kind"] = "run"): PipelineStage {
   return { id, kind, prompt: "", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } } as PipelineStage;
@@ -32,6 +33,19 @@ function pipeline(over: Partial<Pipeline>): Pipeline {
 }
 
 const render = (p: Pipeline) => renderToStaticMarkup(<PipelineStrip pipeline={p} />);
+
+test("delivery owner and comparison render in the existing publication detail slot", () => {
+  for (const disposition of ["owner", "comparison"] as const) {
+    const subject = pipeline({ delivery: { target: { repository: "repo-fixture", remote: "", branch: "refs/heads/review" },
+      disposition, publish: disposition === "owner" ? "enabled" : "disabled", active: disposition === "owner",
+      ownerId: "publishing-lane", epoch: 3, journal: [] } });
+    const projected = withDeliveryPublicationDetail(subject);
+    const html = render(projected);
+    expect(html).toContain(`Viewer publication: ${disposition}; owner publishing-lane, epoch 3`);
+    expect(subject.stateDetail).toBeNull();
+    if (disposition === "comparison") expect(html).toContain("disabled");
+  }
+});
 
 test("a paused pipeline card renders the attributed actor (#1121)", () => {
   for (const detail of ["paused by operator", "paused by orchestrator conversation_orchestrator"]) {

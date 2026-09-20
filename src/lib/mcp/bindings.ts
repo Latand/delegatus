@@ -92,7 +92,7 @@ import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { projectTaskPipelineIds, type TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, projectPipelineCompactRows, projectPipelineListRows } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
-import { loadPipelinesForList } from "@/lib/pipelines/store";
+import { loadPipelinesForList, pipelineDeliveryLookup } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
@@ -149,6 +149,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { validateSnapshotRequest } from "@/lib/view/validation";
 
 import {
+  requestDigest,
   McpDispatchNotExecutedError,
   McpDispatchUncertainError,
   McpDispatchVerdictError,
@@ -1411,10 +1412,21 @@ async function unadmittedOnStoreBusy<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-async function createPipeline(args: McpToolArgs): Promise<McpToolPayload> {
-  const request = withoutKeys(args, ["clientRequestId"]);
-  const result = await createPipelineFromRequest(request as CreatePipelineRequest);
+function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipeline): McpToolPayload {
+  const delivery = pipeline.delivery!;
+  return { target: delivery.target, disposition: delivery.disposition, publish: delivery.publish,
+    ownerId: delivery.ownerId, epoch: delivery.epoch, active: delivery.active,
+    ...(delivery.disposition === "comparison" ? { conflict: `Target owned by ${delivery.ownerId} at epoch ${delivery.epoch}; comparison lane created with Viewer publication disabled` } : {}) };
+}
+
+async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): Promise<McpToolPayload> {
+  const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
+  if (context?.dispatch) context.dispatch.attempted = true;
+  const result = await createPipelineFromRequest(request as CreatePipelineRequest, undefined, {
+    creationRequest: { key: `create_pipeline:${requestId(args)}`, digest: requestDigest("create_pipeline", request) },
+  });
   if (!result.pipeline) {
+    if (context?.dispatch) context.dispatch.attempted = false;
     const message = result.error ?? "could not create pipeline";
     /* #1026: a rejected create carries every violated constraint with its field
        and expected shape, so an agent composing its first pipeline reads the
@@ -1430,6 +1442,7 @@ async function createPipeline(args: McpToolArgs): Promise<McpToolPayload> {
      had just sent them — a median 10 KB per create. get_pipeline reads it. */
   return redactPayload({
     ...pipelineAcknowledgement(result.pipeline),
+    ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
   });
 }
@@ -1439,7 +1452,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const action = required(args, "action") as PipelineAction;
   const request = withoutKeys(args, ["pipelineId", "clientRequestId"]);
   /* Pause, resume and graph edits carry the calling agent as their actor. */
-  const result = action === "pause" || action === "resume" || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
+  const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest);
   if (!result.pipeline) {
@@ -1447,6 +1460,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     /* A refused close carries the hosts it stopped and the one it could not
        (#670); an agent driving the board must not get less than an HTTP caller. */
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
+    if (action === "publish" || action === "takeover") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
@@ -1455,6 +1469,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
      pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
   return redactPayload({
     ...pipelineActionAcknowledgement(result.pipeline),
+    ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
   });
@@ -4646,6 +4661,18 @@ export function viewerMcpRecoverableTools(
   domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
+    create_pipeline: {
+      bind: (args) => ({ caller: recoveryCaller(domainDependencies),
+        target: { project: projectForCwd(required(args, "repoDir")), identity: path.resolve(required(args, "repoDir")) },
+        downstreamKey: `create_pipeline:${requestId(args)}` }),
+      recover: async (binding, options): Promise<McpRecoveryEvidence> => {
+        if (options.legacy) return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "creation has no caller-bound receipt", ids: {}, ownership: "unknown" };
+        const pipeline = pipelineDeliveryLookup({ requestKey: binding.downstreamKey });
+        if (!pipeline) return { outcome: "unknown", evidence: "pipeline-row", reason: RECOVERY_ABSENT_REASON, ids: {} };
+        return { outcome: "settled", evidence: "pipeline-row", reason: null,
+          ids: { pipelineId: pipeline.id }, facts: { ...pipelineAcknowledgement(pipeline), delivery: deliveryAcknowledgement(pipeline) } };
+      },
+    },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
@@ -4668,7 +4695,7 @@ export function viewerMcpBindings(
     message_receipt: (args) => messageReceipt(args),
     create_task: createBoardTask,
     update_task: (args) => updateBoardTask(args, domainDependencies),
-    create_pipeline: (args) => unadmittedOnStoreBusy(() => createPipeline(args)),
+    create_pipeline: (args, context) => unadmittedOnStoreBusy(() => createPipeline(args, context)),
     pipeline_action: (args) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
     stage_report: (args) => stageReport(args, domainDependencies),
     link_task_to_pipeline: (args) => unadmittedOnStoreBusy(() => linkTaskToPipeline(args, linkTaskDependencies)),

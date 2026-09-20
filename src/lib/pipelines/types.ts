@@ -497,7 +497,38 @@ export type PipelineTerminalReap = {
   settledAt: string | null;
 };
 
+export type PipelineDeliveryTarget = {
+  repository: string;
+  remote: string;
+  branch: string;
+  pr?: number;
+  rejectedHead?: string;
+};
+
+export type PipelineDelivery = {
+  target: PipelineDeliveryTarget;
+  disposition: "owner" | "comparison";
+  publish: "enabled" | "disabled";
+  ownerId: string;
+  epoch: number;
+  active: boolean;
+  releasedAt?: string;
+  operation?: {
+    id: string;
+    epoch: number;
+    sha: string;
+    requestKey?: string;
+    state: "pending" | "running" | "settled";
+    executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean };
+    result?: { ok: true; sha: string; remote: "published" | "unavailable" | "unreachable"; detail?: string; uncertain?: boolean } | { ok: false; error: string };
+  };
+  journal: Array<{ at: string; kind: "claim" | "comparison" | "release" | "takeover" | "denied" | "recovery"; ownerId: string; epoch: number; conversationId: string | null; reason: string }>;
+};
+
 export type Pipeline = {
+  /** Viewer publication ownership. Agent tools remain unrestricted. */
+  delivery?: PipelineDelivery;
+  creationRequest?: { key: string; digest: string };
   id: string;
   task: string;
   /** Durable board-task membership. The legacy `task` field remains the title. */
@@ -567,6 +598,7 @@ export type Pipeline = {
 };
 
 export type CreatePipelineRequest = {
+  delivery?: { branch: string; remote?: string; pr?: number; rejectedHead?: string; comparison?: boolean };
   task: string;
   taskIds?: string[];
   spec?: string;
@@ -587,6 +619,8 @@ export type CreatePipelineRequest = {
    these to callers and the PATCH route admits exactly this set; an action added
    to one and forgotten in the other is the defect this constant prevents. */
 export const PIPELINE_ACTIONS = [
+  "publish",
+  "takeover",
   "start",
   "update-draft",
   "set-position",
@@ -611,6 +645,10 @@ export const PIPELINE_ACTIONS = [
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
 
 export type PatchPipelineRequest = {
+  expectedOwner?: string;
+  expectedEpoch?: number;
+  acceptedSha?: string;
+  reason?: string;
   action: PipelineAction;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
