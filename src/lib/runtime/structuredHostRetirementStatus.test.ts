@@ -166,6 +166,10 @@ test("production reads only named authorization and subject rows without writing
   const page = readRetirementStatus({ project: "project-a" }, authentication);
   expect(page.items).toHaveLength(1);
   expect(page.items[0]).toMatchObject({ result: "undetermined", operationId: null });
+  expect(readRetirementStatus({ project: "project-a" }, { conversationId, launchId: authentication.launchId }).items).toHaveLength(1);
+  expect(readRetirementStatus({ project: "project-a" }, { conversationId, seatProject: "project-a" }).items).toHaveLength(1);
+  expect(() => readRetirementStatus({ project: "project-a" }, { conversationId: "conversation_foreign", launchId: authentication.launchId })).toThrow("authenticated");
+  expect(() => readRetirementStatus({ project: "project-b" }, { conversationId, seatProject: "project-a" })).toThrow("authenticated");
   expect(fs.readFileSync(filename)).toEqual(before[0]!);
   expect(fs.readFileSync(reportFile)).toEqual(before[1]!);
   expect(fs.existsSync(path.join(root, "agent-registry.json"))).toBe(false);

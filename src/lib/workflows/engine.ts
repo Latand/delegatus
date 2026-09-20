@@ -10,7 +10,7 @@ import { projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
 import { headCwd } from "@/lib/agent/transcript";
 import { closeFlow, createFlowFromRequest, patchFlow as patchReviewFlow } from "@/lib/flows/commands";
-import { lastAssistantMessage } from "@/lib/flows/findings";
+import { lastAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
 import { loadFlows } from "@/lib/flows/store";
 import type { CreateFlowRequest, Flow, RoleConfig } from "@/lib/flows/types";
 import { persistHandoffLineage, rememberHandoffChild } from "@/lib/handoffLineage";

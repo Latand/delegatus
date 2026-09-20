@@ -1,4 +1,4 @@
-import type { FlowEngine, RoleConfig } from "@/lib/flows/types";
+import type { RuntimeEngine as FlowEngine, RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import type { BackgroundWait } from "./backgroundTasks";
 
@@ -303,6 +303,19 @@ export type PipelineStageAttempt = {
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
   historical?: boolean;
   state: PipelineAttemptState;
+  /** Durable custody across the pipeline/registry boundary. Rollback keeps draining these. */
+  activation?: {
+    id: string;
+    phase: "reserved" | "reserving" | "dispatching" | "settled";
+    input: Parameters<import("./engine").PipelinePorts["spawnAgent"]>[0];
+    clientAttemptId: string;
+    startedAt: string;
+    fence: string;
+    owner?: import("@/lib/processIdentity").ProcessIdentity;
+    replay?: boolean;
+    closeRequested?: boolean;
+    cancelRequested?: boolean;
+  };
   effectiveRole: EffectivePipelineRole;
   /** Absent until the attempt leaves `pending`, and on attempts recorded
       before definitions were bound, which read the live stage. */
@@ -332,10 +345,10 @@ export type PipelineStageAttempt = {
     roundCount: number;
     implementerHeadSha: string | null;
     reviewerHeadSha: string | null;
-    verdict: import("@/lib/flows/types").ReviewVerdict | null;
-    relayState: import("@/lib/flows/types").FlowState;
-    terminalState: import("@/lib/flows/types").FlowState | null;
-    hostClaim?: import("@/lib/flows/types").FlowHostClaim | null;
+    verdict: import("@/lib/review/types").ReviewVerdict | null;
+    relayState: import("@/lib/reviewHistory/types").FlowState;
+    terminalState: import("@/lib/reviewHistory/types").FlowState | null;
+    hostClaim?: import("@/lib/reviewHistory/types").FlowHostClaim | null;
     synchronizedAt: string;
     sourceUpdatedAt: string | null;
     lagMs: number | null;
@@ -528,6 +541,8 @@ export type PipelineDelivery = {
 };
 
 export type Pipeline = {
+  /** Retained until a close requested during spawn has completed teardown. */
+  activationCloseRequested?: boolean;
   /** Viewer publication ownership. Agent tools remain unrestricted. */
   delivery?: PipelineDelivery;
   creationRequest?: { key: string; digest: string };

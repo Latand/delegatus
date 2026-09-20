@@ -1,32 +1,27 @@
 import { expect, test } from "bun:test";
 import { viewerMcpBindings } from "./bindings";
 import { TOOL_INPUT_SCHEMAS } from "./server";
-import type { readRetirementStatus } from "@/lib/runtime/structuredHostRetirementStatus";
 import type { ResourcesRead } from "@/lib/resources";
 
-test("retirement status forwards the exact authentication selector without caller scans or HTTP", async () => {
-  let reads = 0;
-  const fixture: ReturnType<typeof readRetirementStatus> = {
-    kind: "host-retirement", project: "project-a", items: [{ result: "undetermined" }], cursor: "next", hasMore: true,
-    status: "observed", observedAt: "2026-07-01T12:00:00Z", capturedAt: "2026-07-01T11:59:00Z",
-    requestedAt: "2026-07-01T12:00:00Z", ageMs: 60_000, refreshSucceeded: true, refreshMeaning: "report reread; no sweep requested",
-    coverage: "latest-report-only", history: "absence does not prove completion", limit: 100, maxPages: 20, source: "latest-retirement-report",
-  };
-  const bindings = viewerMcpBindings(undefined, { get: async () => { throw new Error("unexpected HTTP read"); },
-    post: async () => { throw new Error("unexpected control write"); } }, {
-    callerProject: () => { throw new Error("unbounded caller lookup"); },
-    readRetirementStatus: ((request, authentication) => { reads++; expect(request).toEqual({ project: "project-a", limit: 100, cursor: "prior" });
-      expect(authentication.launchId).toBe("own-receipt");
-      expect(authentication.capability).not.toBe("forged-argument");
-      return fixture; }) as typeof readRetirementStatus,
+test("retirement status proxies only server-attributed identity and bounded arguments", async () => {
+  const posts: Array<{ pathname: string; body: Record<string, unknown> }> = [];
+  const fixture = { kind: "host-retirement", project: "project-a", items: [], cursor: "next", hasMore: true };
+  const bindings = viewerMcpBindings(undefined, {
+    post: async (pathname, body) => { posts.push({ pathname, body }); return fixture; },
+  }, {
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }),
+    authorizedSeats: () => [{ conversationId: "conversation_seat", project: "project-a", path: null }],
+    registrySnapshot: () => { throw new Error("a seat needs no receipt lookup"); },
   } as never);
-  const args = { clientRequestId: "retirement-page", kind: "host-retirement", project: "project-a", callerLaunchId: "own-receipt", capability: "forged-argument", limit: 900, cursor: "prior" };
+  const args = { clientRequestId: "retirement-page", kind: "host-retirement", project: "project-a",
+    callerLaunchId: "seat-assignment", authentication: { conversationId: "forged" }, capability: "forged", limit: 900, cursor: "prior" };
   expect(await bindings.deployment_status(args)).toEqual(fixture);
-  expect(reads).toBe(1);
-  await expect(bindings.deployment_status({ ...args, callerLaunchId: undefined })).rejects.toThrow("callerLaunchId");
+  expect(posts).toEqual([{ pathname: "/api/runtime/deployments?kind=host-retirement", body: {
+    project: "project-a", limit: 100, cursor: "prior", authentication: { conversationId: "conversation_seat", seatProject: "project-a" },
+  } }]);
   await expect(bindings.deployment_status({ ...args, project: undefined })).rejects.toThrow("project");
   await expect(bindings.deployment_status({ ...args, operationId: "op-known" })).rejects.toThrow("combined");
-  expect(reads).toBe(1);
+  expect(posts).toHaveLength(1);
 });
 
 test("known-operation and deployment reads retain their original contract", async () => {
@@ -36,7 +31,6 @@ test("known-operation and deployment reads retain their original contract", asyn
     return pathname.endsWith("op-known") ? { operationId: "op-known", receipt: { status: "pending" } } : { count: 0, deployments: [] };
   }, post: async () => { throw new Error("unexpected control write"); } }, {
     callerProject: () => { throw new Error("old lookup must not acquire new authorization requirements"); },
-    readRetirementStatus: () => { throw new Error("old lookup must not read retirement state"); },
   } as never);
   expect(await bindings.deployment_status({ clientRequestId: "old-operation", operationId: "op-known" })).toEqual({
     operationId: "op-known", operation: { operationId: "op-known", receipt: { status: "pending" }, replayed: false } });

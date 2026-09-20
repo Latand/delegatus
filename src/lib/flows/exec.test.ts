@@ -9,7 +9,8 @@ import { procBackend } from "@/lib/proc";
 /* The state dir must point at a sandbox before store.ts computes its
    module-level constants, so exec/store load dynamically after the env set. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-exec-test-"));
-const { forgetHeadlessReview, headlessReviewStatus, reviewerCommand, runHeadlessCodexOnce, scanEventStream, startHeadlessReview, terminateHeadlessReviewerGroup, terminateHeadlessReviewerGroupAndWait } = await import("./exec");
+const { forgetHeadlessReview, headlessReviewStatus, reviewerCommand, scanEventStream, startHeadlessReview, terminateHeadlessReviewerGroup, terminateHeadlessReviewerGroupAndWait } = await import("./exec");
+const { runHeadlessCodexOnce } = await import("@/lib/agent/headless");
 const { reviewerPrompt } = await import("./prompts");
 const { outputPathFor, stdoutPathFor } = await import("./store");
 const { WAKATIME_CREDENTIAL_ENV } = await import("../wakatime/credential");

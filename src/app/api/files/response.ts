@@ -20,13 +20,13 @@ import {
 import { projectLaunchConversations } from "@/lib/agent/spawnProjection";
 import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 import { pidAlive, readPpid } from "@/lib/scanner/process";
-import { repositoryForProjectRoot } from "@/lib/flows/git";
-import { reviewOutcomeFor } from "@/lib/flows/reviewOutcome";
+import { repositoryForProjectRoot } from "@/lib/projects/git";
+import { reviewOutcomeFor } from "@/lib/review/reviewOutcome";
 import { overlayPromptDisplayTitles, projectDisplayName } from "@/lib/displayNames";
 import { projectAliasSnapshot } from "@/lib/projects/aliases";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { isCanonicalProjectId, isRepositoryProjectId, projectIdentityFromRepositoryRoot, UNRESOLVED_PROJECT, UNRESOLVED_PROJECT_NAME } from "@/lib/projects/identity";
-import { projectRestoredFlows } from "@/lib/flows/visibility";
+import { projectRestoredFlows } from "@/lib/reviewHistory/visibility";
 import { reconcileEmbeddedReviewFlows } from "@/lib/pipelines/engine";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
