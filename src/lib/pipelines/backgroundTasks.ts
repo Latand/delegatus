@@ -289,7 +289,7 @@ export function runningBackgroundTasks(
 }
 
 /** Lines that can move the ledger; everything else is skipped unparsed. */
-const RELEVANT_LINE = /backgroundTaskId|task-notification|"taskId"|"task_id"|scheduledFor|"ScheduleWakeup"/;
+const RELEVANT_LINE = /backgroundTaskId|task-notification|"taskId"|"task_id"|scheduledFor|"ScheduleWakeup"|No task found with ID:/;
 const READ_CHUNK_BYTES = 1 << 20;
 const MAX_CACHED_TRANSCRIPTS = 256;
 

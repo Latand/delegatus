@@ -490,6 +490,40 @@ test("stage_report accepts after its monitor expires while the watched source re
   expect(accepted.report?.verdict).toMatchObject({ status: "pass" });
 });
 
+test("stage_report's production reader retires only the monitor named by a text-only TaskStop miss", async () => {
+  const h = harness();
+  await runningStage(h);
+
+  append(
+    records.monitorStart(h.now() + 2_000, "bm-old", "toolu_monitor_old"),
+    records.monitorStart(h.now() + 2_100, "bm-live", "toolu_monitor_live"),
+    records.toolUse(h.now() + 3_000, "toolu_stop_old", "TaskStop", { task_id: "bm-old" }),
+    {
+      type: "user", timestamp: iso(h.now() + 3_010),
+      message: { role: "user", content: [{ tool_use_id: "toolu_stop_old", type: "tool_result", content: "<tool_use_error>No task found with ID: bm-old</tool_use_error>" }] },
+      toolUseResult: "No task found with ID: bm-old",
+    },
+  );
+  h.advance(5_000);
+  const stillLive = await reportStageCompletion({ verdict: "pass", summary: "the old watch was already gone" }, agent, h.ports);
+  expect(stillLive.code).toBe("STAGE_REPORT_BACKGROUND_TASK_RUNNING");
+  expect(stillLive.error).toContain("monitor bm-live");
+  expect(stillLive.error).not.toContain("monitor bm-old");
+
+  append(
+    records.toolUse(h.now() + 1_000, "toolu_stop_live", "TaskStop", { task_id: "bm-live" }),
+    {
+      type: "user", timestamp: iso(h.now() + 1_010),
+      message: { role: "user", content: [{ tool_use_id: "toolu_stop_live", type: "tool_result", content: "<tool_use_error>No task found with ID: bm-live</tool_use_error>" }] },
+      toolUseResult: "No task found with ID: bm-live",
+    },
+  );
+  h.advance(2_000);
+  const accepted = await reportStageCompletion({ verdict: "pass", summary: "both watches are terminal" }, agent, h.ports);
+  expect(accepted.code).toBeUndefined();
+  expect(accepted.report?.verdict).toMatchObject({ status: "pass" });
+});
+
 test("stage_report refuses a verdict while a background task runs, records nothing, and accepts it once the task reports", async () => {
   const h = harness();
   await runningStage(h);

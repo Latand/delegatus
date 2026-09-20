@@ -264,3 +264,32 @@ test("the transcript reader folds the whole file incrementally and waits for a l
   expect(pendingBackgroundTasks((await readBackgroundTaskLedger(file))!, T0 + 60_000).map((task) => task.id)).toEqual(["bq2"]);
   expect(await readBackgroundTaskLedger(path.join(ROOT, "missing.jsonl"))).toBeNull();
 });
+
+test("the transcript reader applies a text-only TaskStop miss incrementally to only its requested monitor", async () => {
+  const file = path.join(ROOT, "incremental-task-stop-miss.jsonl");
+  const old = {
+    type: "user", timestamp: iso(T0),
+    message: { role: "user", content: [{ tool_use_id: "toolu_old", type: "tool_result", content: "Monitor started (task bm-old)." }] },
+    toolUseResult: { taskId: "bm-old", timeoutMs: 300_000, persistent: true },
+  };
+  const live = {
+    type: "user", timestamp: iso(T0 + 1),
+    message: { role: "user", content: [{ tool_use_id: "toolu_live", type: "tool_result", content: "Monitor started (task bm-live)." }] },
+    toolUseResult: { taskId: "bm-live", timeoutMs: 300_000, persistent: true },
+  };
+  const stop = {
+    type: "assistant", timestamp: iso(T0 + 2),
+    message: { role: "assistant", content: [{ id: "toolu_stop", type: "tool_use", name: "TaskStop", input: { task_id: "bm-old" } }] },
+  };
+  const miss = {
+    type: "user", timestamp: iso(T0 + 3),
+    message: { role: "user", content: [{ tool_use_id: "toolu_stop", type: "tool_result", content: "<tool_use_error>No task found with ID: bm-old</tool_use_error>" }] },
+    toolUseResult: "No task found with ID: bm-old",
+  };
+
+  fs.writeFileSync(file, `${JSON.stringify(old)}\n${JSON.stringify(live)}\n${JSON.stringify(stop)}\n`);
+  expect(pendingBackgroundTasks((await readBackgroundTaskLedger(file))!, T0 + 10).map((task) => task.id)).toEqual(["bm-old", "bm-live"]);
+
+  fs.appendFileSync(file, `${JSON.stringify(miss)}\n`);
+  expect(pendingBackgroundTasks((await readBackgroundTaskLedger(file))!, T0 + 10).map((task) => task.id)).toEqual(["bm-live"]);
+});
