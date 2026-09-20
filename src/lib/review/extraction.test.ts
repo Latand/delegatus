@@ -59,3 +59,20 @@ test("archive GET import graphs cannot tick, refresh merge evidence or reconcile
     expect(dependencies.filter(file => file.startsWith("src/runtime-host/"))).toEqual([]);
   }
 });
+
+test("archive route configuration loads in Node build workers without loading Bun SQLite", async () => {
+  const root = fs.mkdtempSync("/var/tmp/review-history-node-import-");
+  try {
+    const result = await Bun.build({
+      entrypoints: ["src/app/api/review-history/route.ts", "src/app/api/review-history/[id]/route.ts", "src/app/api/review-history/[id]/export/route.ts"],
+      outdir: root, root: "src/app/api/review-history", target: "node", format: "cjs", external: ["next/*", "bun:*"],
+    });
+    expect(result.success).toBe(true);
+    const node = process.env.LLV_TEST_NODE_BIN || "/usr/bin/node";
+    const probe = Bun.spawnSync({ cmd: [node, "-e", "for (const file of process.argv.slice(1)) require(file);", ...result.outputs.map(output => output.path)],
+      env: { ...process.env, NODE_PATH: path.resolve("node_modules"), HOME: root, XDG_CONFIG_HOME: path.join(root, "config"), LLV_STATE_DIR: path.join(root, "state"), TMPDIR: root, NODE_ENV: "production" },
+      stdout: "pipe", stderr: "pipe" });
+    expect({ exit: probe.exitCode, error: probe.stderr.toString() }).toEqual({ exit: 0, error: "" });
+    expect(fs.existsSync(path.join(root, "state"))).toBe(false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

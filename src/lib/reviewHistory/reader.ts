@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -36,7 +36,9 @@ export function reviewHistorySelectionSource(directory = archiveDirectory()) {
   let db: Database | null = null;
   try {
     if (fs.existsSync(filename)) {
-      db = new Database(filename, { readonly: true, strict: true });
+      const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+      if (!sqlite) throw new ArchiveReadError("ARCHIVE_UNAVAILABLE");
+      db = new sqlite.Database(filename, { readonly: true, strict: true });
       db.exec("PRAGMA query_only=ON; BEGIN");
       const initialized = db.query("SELECT 1 FROM state_collections WHERE collection='flows'").get();
       if (!initialized) throw new ArchiveReadError("ARCHIVE_NOT_INITIALIZED");

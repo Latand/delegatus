@@ -1,4 +1,4 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { LIST_ANSWER_BYTES } from "./listAnswers";
@@ -11,14 +11,24 @@ export type ProjectSelection = { canonical: (project: string) => string; aliases
 const defaultProjects: ProjectSelection = { canonical: canonicalProject, aliases: () => projectAliasSnapshot().aliases };
 const projections = new Map<string, BoardSelection>();
 
+// Route configuration is also loaded by Node during next build. Resolve Bun's
+// database only when a caller actually requests a selection index.
+function sqliteDatabase(): typeof import("bun:sqlite").Database {
+  const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+  if (!sqlite) throw new Error("Board selection requires the Bun runtime");
+  return sqlite.Database;
+}
+
 /** One process-local scalar index per durable collection. Bootstrap reads only
  * selection fields; later generations replay the indexed SQLite change journal.
  * Full records are fetched by primary key only for the delivered page. */
 export class BoardSelection {
-  private db = new Database(":memory:");
+  private db: Database;
   private revision = -1;
   readonly work = { metadataRows: 0, recordReads: 0, rebuilds: 0 };
   constructor(private filename: string, private collection: "tasks" | "pipelines" | "flows", private projects: ProjectSelection = defaultProjects) {
+    const Database = sqliteDatabase();
+    this.db = new Database(":memory:");
     this.db.exec(`CREATE TABLE rows(id TEXT PRIMARY KEY, time TEXT, project TEXT, status TEXT, placement TEXT, hidden INTEGER, text TEXT);
       CREATE INDEX row_time ON rows(time DESC,id DESC);
       CREATE INDEX row_project ON rows(project,time DESC,id DESC);
@@ -58,6 +68,7 @@ export class BoardSelection {
     }
   }
   sync(snapshot?: Database | null) {
+    const Database = sqliteDatabase();
     const source = snapshot ?? new Database(this.filename, { readonly: true });
     try {
       if (!snapshot) source.exec("BEGIN");
