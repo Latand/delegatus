@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { newestDeploymentsFirst } from "@/lib/mcp/compactAnswers";
 import { isCanonicalBranchRef } from "@/lib/runtime/canonicalRevision";
 import { RuntimeHostUnavailableError, runtimeHostClient, runtimeHostRequestHealth } from "@/lib/runtime/client";
 import { DeploymentRuntimeUnavailableError, requestViewerDeployment } from "@/lib/runtime/deploymentRuntime";
@@ -13,9 +12,11 @@ export const dynamic = "force-dynamic";
 const DEFAULT_LIST_LIMIT = 25;
 const MAX_LIST_LIMIT = 100;
 
-function deploymentListLimit(request: NextRequest): number | null {
+function deploymentListLimit(request: NextRequest): number {
   const rawLimit = request.nextUrl.searchParams.get("limit");
-  if (rawLimit === null) return null;
+  // Legacy journal-projection readers omit the limit. Keep the largest bounded
+  // page for them; MCP readers explicitly request their smaller default.
+  if (rawLimit === null) return MAX_LIST_LIMIT;
   const parsedLimit = rawLimit && /^\d+$/.test(rawLimit)
     ? Number(rawLimit)
     : DEFAULT_LIST_LIMIT;
@@ -38,14 +39,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
   const limit = deploymentListLimit(request);
   try {
-    /* Newest first (#1845 defect C). The snapshot orders deployments by id,
-       a random UUID, so the "last `limit`" of it was an arbitrary window that
-       could leave out the day's deploys entirely. */
-    const ledger = newestDeploymentsFirst((await client.snapshot()).deployments);
-    const deployments = limit === null ? ledger : ledger.slice(0, limit);
+    const page = await client.listViewerDeployments!({ limit,
+      ...(request.nextUrl.searchParams.has("cursor") ? { cursor: request.nextUrl.searchParams.get("cursor")! } : {}),
+      compact: request.nextUrl.searchParams.get("compact") === "true",
+    });
     return NextResponse.json({
-      count: deployments.length,
-      deployments,
+      count: page.deployments.length,
+      ...page,
       runtimeHostRequests: runtimeHostRequestHealth(),
     });
   } catch (error) {
@@ -54,7 +54,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         error: error instanceof Error ? error.message : "runtime host is unavailable",
         runtimeHostRequests: runtimeHostRequestHealth(),
       },
-      { status: 503 },
+      { status: error instanceof Error && error.message === "deployment list cursor is invalid" ? 400 : 503 },
     );
   }
 }

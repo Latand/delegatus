@@ -235,6 +235,12 @@ export class RuntimeHost {
       } else if (request.method === "viewer-deployment-cancel") {
         if (!this.deployments) throw new Error("viewer deployments are disabled");
         result = this.deployments.cancelViewerDeployment(String(request.params?.deploymentId ?? ""));
+      } else if (request.method === "viewer-deployment-list") {
+        const { limit, cursor, compact } = request.params ?? {};
+        if (limit !== undefined && (typeof limit !== "number" || !Number.isFinite(limit))) throw new Error("deployment list limit is invalid");
+        if (cursor !== undefined && typeof cursor !== "string") throw new Error("deployment list cursor is invalid");
+        if (compact !== undefined && typeof compact !== "boolean") throw new Error("deployment list compact option is invalid");
+        result = this.journal.listViewerDeployments({ limit, cursor, compact });
       } else if (request.method === "viewer-deployment-read") {
         if (!this.deployments) throw new Error("viewer deployments are disabled");
         result = this.deployments.readViewerDeployment(String(request.params?.deploymentId ?? ""));
