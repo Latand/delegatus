@@ -145,6 +145,19 @@
   border: 1px solid var(--border-default);
 }
 .kb .column.drop { box-shadow: inset 0 0 0 2px var(--color-accent); }
+/* The wide share (#1841): a widened shelf takes the workspace's dot grid and
+   Assigned the shelf's fill, and the swap animates. */
+.kb .board:not(.scroll):not(.tabs) { transition: grid-template-columns var(--motion-base) var(--ease-standard); }
+.kb .column.wide {
+  background-color: var(--surface-canvas);
+  background-image: radial-gradient(var(--kb-grid-dot) 1px, transparent 1px);
+  background-size: 18px 18px; background-position: 9px 9px;
+  border: 1px solid var(--border-default);
+}
+.kb .column[data-status="assigned"].shelf { background: var(--surface-well); border-color: transparent; }
+.kb .board.scroll .column.wide { flex-basis: 480px; }
+.kb .board.scroll .column[data-status="assigned"].shelf { flex-basis: 280px; }
+.kb .col-head .icon-btn.col-pin[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent); }
 
 .kb .col-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px 14px; position: sticky; top: 0; z-index: 2; }
 .kb .col-head h2 { margin: 0; font-size: var(--text-body); font-weight: 600; }
@@ -258,6 +271,11 @@
   transition: border-color var(--motion-fast);
 }
 .kb .tile:hover { border-color: var(--border-strong); }
+/* A shelf's tiles fill its narrow column. Whichever column holds the wide
+   share lays them out as the workspace does, and Assigned given a shelf's
+   width fills it (#1841). */
+.kb .tile.fill, .kb .column.shelf .tile { width: 100%; }
+.kb .column.wide .tile.fill { width: 196px; }
 .kb .tile .row { display: flex; align-items: center; gap: 6px; font-size: var(--text-label); min-width: 0; }
 .kb .tile .role { font-weight: 600; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .tile .engine { flex-shrink: 0; }
@@ -606,7 +624,7 @@
 .kb .seat [data-orchestrator-conversation] [data-agent-control-strip] { padding-top: 2px; padding-bottom: 2px; }
 .kb .seat [data-orchestrator-conversation] form { padding-top: 4px; padding-bottom: 4px; }
 .kb .seat-head [data-orchestrator-incumbent] { min-width: 0; }
-.kb .seat.folded [data-orchestrator-panel] > :not(.seat-head) { display: none; }
+.kb .seat.folded [data-orchestrator-panel] > :not(.seat-head):not(.seat-rail) { display: none; }
 .kb .seat-head { display: flex; flex-shrink: 0; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; min-height: 46px; }
 .kb .seat:not(.folded) .seat-head { border-bottom: 1px solid var(--border-default); }
 .kb .seat .av { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: #fff; background: var(--color-claude); }
@@ -621,8 +639,23 @@
 .kb .seat-title .state.needs { color: var(--color-warning); }
 .kb .seat-title .state.failed { color: var(--color-danger); }
 .kb .seat-title .state.accent { color: var(--color-accent); }
-.kb .seat .lock { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); background: var(--surface-well); white-space: nowrap; }
-.kb .seat .lock svg { width: 11px; height: 11px; }
+/* Previous seats (#1841): one outlined 28 px control where the lock pill was. */
+.kb .seat-head .seat-prev {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; flex-shrink: 0;
+  border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-card);
+  font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap;
+  transition: border-color var(--motion-fast);
+}
+.kb .seat-head .seat-prev:hover { border-color: var(--border-strong); color: var(--color-primary); }
+.kb .seat-head .seat-prev[aria-expanded="true"] { border-color: var(--border-strong); color: var(--color-primary); }
+.kb .seat-head .seat-prev svg { width: 14px; height: 14px; }
+.kb .seat-head .seat-prev .num { color: var(--color-muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* The placement switch: a quiet 28 px icon, left of the fold. */
+.kb .seat-head .icon-btn.seat-dock { width: 28px; height: 28px; border-radius: var(--radius-control); color: var(--color-muted); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.kb .seat-head .icon-btn.seat-dock:hover { background: var(--surface-well); color: var(--color-primary); }
+.kb .seat-head .icon-btn.seat-dock svg { width: 15px; height: 15px; }
+/* Collapsed on top: one 40 px strip. */
+.kb .seat.folded .seat-head { min-height: 40px; padding-top: 5px; padding-bottom: 5px; }
 .kb .seat .grow { flex: 1; }
 /* The fold control (#1802): the operator must find it without hunting, so it
    reads as a button with a word on it rather than a bare chevron, and it keeps
@@ -639,11 +672,79 @@
 .kb .seat-grip { position: absolute; left: 0; right: 0; bottom: -7px; height: 14px; z-index: 4; cursor: ns-resize; display: flex; align-items: center; justify-content: center; touch-action: none; }
 .kb .seat-grip::before { content: ""; width: 44px; height: 4px; border-radius: 2px; background: var(--border-strong); }
 .kb .seat-grip:hover::before, .kb .seat-grip:focus-visible::before { background: var(--color-accent); }
-@media (max-width: 1199px) { .kb .seat { width: calc(100% - 32px); margin-top: 10px; } }
+/* Docked at the side (#1841): a full-height column between the rail and the
+   columns, dragged wider or narrower on its right edge. */
+.kb .kb-body { position: relative; }
+.kb .seat.side {
+  width: var(--seat-w, 380px); max-width: none; height: auto; margin: 0; align-self: stretch; flex: 0 0 auto;
+  border-radius: 0; border-width: 0 1px 0 0; box-shadow: none;
+  transition: width var(--motion-base) var(--ease-standard);
+}
+.kb .seat.side > [data-orchestrator-panel] { border-radius: 0; }
+.kb .seat-head .seat-meta { display: contents; }
+.kb .seat-head .grow.side-only { display: none; }
+.kb .seat.side .seat-head { flex-wrap: wrap; row-gap: 6px; }
+.kb .seat.side .seat-head .grow.side-only { display: block; }
+/* 380 px holds the title, the state, Previous seats and the two controls on
+   one row only with Fold as its chevron; the word stays in its label. */
+.kb .seat.side .seat-head .icon-btn.seat-fold { width: 28px; padding: 0; justify-content: center; }
+.kb .seat.side .seat-head .icon-btn.seat-fold span { display: none; }
+.kb .seat.side .seat-head .seat-meta { display: flex; align-items: center; gap: 8px; order: 10; flex: 1 0 100%; min-width: 0; }
+.kb .seat.side .seat-head .seat-meta [data-orchestrator-incumbent] { flex: 1 1 auto; min-width: 0; }
+.kb .seat.side .seat-title .proj { display: none; }
+.kb .seat.side.folded { width: 44px; }
+.kb .seat-grip.vertical { left: auto; right: -7px; top: 0; bottom: 0; width: 14px; height: auto; cursor: ew-resize; }
+.kb .seat-grip.vertical::before { width: 4px; height: 44px; }
+/* Collapsed at the side: the 44 px rail, one button. */
+.kb .seat-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; height: 100%;
+  padding: 9px 0; background: var(--surface-card); color: var(--color-muted); cursor: pointer; border: 0;
+}
+.kb .seat-rail:hover { background: var(--surface-well); }
+.kb .seat-rail:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.kb .seat-rail .rail-dot { display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-muted); }
+.kb .seat-rail .rail-dot.working { background: var(--color-success); }
+.kb .seat-rail .rail-dot.needs { background: var(--color-warning); }
+.kb .seat-rail .rail-dot.failed { background: var(--color-danger); }
+.kb .seat-rail .rail-dot.accent, .kb .seat-rail .rail-dot.unread { background: var(--color-accent); }
+.kb .seat-rail .grow { flex: 1; }
+.kb .seat-rail .rail-expand { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-control); }
+.kb .seat-rail .rail-expand svg { width: 15px; height: 15px; }
+.kb .seat { transition: height var(--motion-base) var(--ease-standard); }
+@media (prefers-reduced-motion: reduce) {
+  .kb .seat, .kb .seat.side, .kb .board, .kb .seats-pop .notes-btn svg { transition: none; }
+}
+
+/* The Previous seats popover: 340 px, scrolling inside. */
+.kb .popover.seats-pop { width: 340px; max-height: min(420px, 60vh); padding: 0 0 6px; background: var(--surface-card); }
+.kb .seats-pop .head { padding: 12px 14px 6px; font-size: var(--text-label); font-weight: 600; color: var(--color-muted); }
+.kb .seats-pop .seat-row + .seat-row { border-top: 1px solid var(--border-default); }
+.kb .seats-pop .seat-row .line { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 8px 14px; }
+.kb .seats-pop .seat-row .line:hover { background: var(--surface-well); }
+.kb .seats-pop .seat-row .open { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; color: inherit; text-decoration: none; }
+.kb .seats-pop .seat-row .t1 { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); }
+.kb .seats-pop .seat-row .t1 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb .seats-pop .seat-row .t2 { font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kb .seats-pop .notes-btn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 2px; font-size: var(--text-label); font-weight: 600; color: var(--color-accent); padding: 4px 2px; }
+/* The chevron turns down on the open row. */
+.kb .seats-pop .notes-btn svg { width: 13px; height: 13px; transition: transform var(--motion-fast) var(--ease-standard); }
+.kb .seats-pop .notes-btn[aria-expanded="true"] svg { transform: rotate(90deg); }
+/* The open notes carry an edge of their own, so the block reads as an inset
+   inside the row: in dark mode the popover's card, the hovered row and a well
+   all sit within a few percent of each other. */
+.kb .seats-pop .notes {
+  margin: 0 14px 10px; padding: 9px; border-radius: var(--radius-control);
+  background: var(--surface-board); border: 1px solid var(--border-default);
+  font-size: var(--text-caption); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; color: var(--color-secondary);
+}
+.kb .seats-pop .notes-retry { color: var(--color-accent); font-weight: 600; }
+.kb .seats-pop .notes .empty { color: var(--color-muted); }
+
+@media (max-width: 1199px) { .kb .seat:not(.side) { width: calc(100% - 32px); margin-top: 10px; } }
 @media (max-width: 767px) {
-  .kb .seat { width: calc(100% - 24px); margin-top: 8px; }
+  .kb .seat:not(.side) { width: calc(100% - 24px); margin-top: 8px; }
   .kb .seat-head { flex-wrap: wrap; row-gap: 2px; }
-  .kb .seat-title .proj, .kb .seat .lock span, .kb .seat .seat-unread span { display: none; }
+  .kb .seat-title .proj, .kb .seat-head .seat-prev .word, .kb .seat .seat-unread span { display: none; }
 }
 
 /* ── Readers: conversations open inside cards (K3) ───────────────────────── */

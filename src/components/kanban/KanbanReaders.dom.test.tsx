@@ -131,6 +131,8 @@ function mount(options: { tasks: BoardTask[]; files: FileEntry[]; assignments?: 
   const render = (next: { tasks?: BoardTask[]; focus?: string | null } = {}) => flushSync(() => root.render(
     <KanbanBoard
       project="fixture"
+      /* No seat in play here, and known to be none: the board reads none itself. */
+      seatRefs={null}
       groups={[]}
       manual={options.files}
       files={options.files}

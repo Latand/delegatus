@@ -458,6 +458,49 @@ async function serveFixture(): Promise<{ base: string; stop: () => void }> {
 
 const launchChromium = () => chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
 
+browserTest("composer queue: a lost seat read drains once on the phone and survives reload", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const out = path.resolve(".artifacts/composer-queue");
+  fs.mkdirSync(out, { recursive: true });
+  const results = [];
+  try {
+    for (const viewport of VIEWPORTS) {
+      const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, colorScheme: "dark" });
+      try {
+        const page = await context.newPage();
+        await page.goto(`${base}/?runtime=structured&queue-recovery=1#c=conversation_running`);
+        const input = page.locator("textarea:visible").first();
+        await input.fill("First message awaiting its seat read.");
+        await input.press("Enter");
+        await page.waitForSelector("[data-outbox-entry]", { timeout: 5_000 });
+        await input.fill("Keep this original message.");
+        await input.press("Enter");
+        await page.waitForSelector('[data-outbox-state="queued"]');
+        const key = await page.locator('[data-outbox-state="queued"]').getAttribute("data-outbox-entry");
+        await page.screenshot({ path: path.join(out, `${viewport.width}-waiting.png`) });
+        // Each serial entry reaches the production 15 s bound. The second row
+        // stays visibly Queued on the unfixed composer, with no server operation.
+        await page.waitForFunction(() => JSON.parse(sessionStorage.getItem("evidence-queue-sends") ?? "[]").length === 2, undefined, { timeout: 40_000 });
+        await page.waitForFunction(() => document.querySelectorAll('[data-outbox-state="delivered"]').length === 2);
+        await page.screenshot({ path: path.join(out, `${viewport.width}-delivered.png`) });
+        const sends = await page.evaluate(() => JSON.parse(sessionStorage.getItem("evidence-queue-sends") ?? "[]"));
+        if (sends[1]?.idempotencyKey !== key || sends[1]?.text !== "Keep this original message."
+          || sends[0]?.idempotencyKey === key) throw new Error("the original submission changed");
+        await page.reload();
+        await page.waitForSelector("textarea");
+        await page.waitForTimeout(500);
+        const count = await page.evaluate(() => JSON.parse(sessionStorage.getItem("evidence-queue-sends") ?? "[]").length);
+        if (count !== 2) throw new Error("reload dispatched again");
+        results.push({ viewport, posts: count, originalKeyPreserved: true, originalTextPreserved: true });
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); stop(); }
+  const evidence = path.resolve("evidence/composer-queue");
+  fs.mkdirSync(evidence, { recursive: true });
+  fs.writeFileSync(path.join(evidence, "recovery.json"), JSON.stringify(results, null, 2) + "\n");
+}, 90_000);
+
 browserTest("#1671 at phone width: real touches on the real Viewer, in both schemes", async () => {
   fs.mkdirSync(EVIDENCE, { recursive: true });
   const { base: fixtureBase, stop } = await serveFixture();

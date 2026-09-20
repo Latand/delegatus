@@ -8,6 +8,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
+import { useSeatConversations } from "./orchestrator/useOrchestratorSeat";
 import { KanbanBoard, type KanbanOverviewScope } from "./kanban/KanbanBoard";
 import { cardHasLiveWork } from "./kanban/kanbanModel";
 import { pipelinesForProjects } from "./pipelines/pipelineModel";
@@ -29,6 +30,12 @@ import { buildBranchGroups, OVERVIEW } from "./projectModel";
  *    «N working» and «N need you» counters — narrows the columns exactly where
  *    the board's search narrows them.
  *
+ * The one thing it asks for itself is the set of conversations the seat
+ * records name (#1841): an orchestrator seat belongs to the seat panel of its
+ * own project's board and to no task list, and a board spanning every project
+ * needs every project's seats to keep them all out. The per-project read
+ * cannot answer that here, because the Overview names no project.
+ *
  * What stays project-only is what needs one project to write into: the
  * orchestrator seat, «+ Task», «+ Agent», drafts and the per-project board
  * preferences (hidden cards, crowned favourites, manual placement). None of
@@ -36,8 +43,9 @@ import { buildBranchGroups, OVERVIEW } from "./projectModel";
  * A status move is unaffected — it already writes with the task's own
  * `expectedProject`.
  *
- * Every byte comes from the projection the Viewer already polls. This file
- * issues no request and starts no loop of its own.
+ * Every card, count and column comes from the projection the Viewer already
+ * polls; the seat read above is the file's only request, one slow status read
+ * that starts and stops with this board.
  */
 
 const NO_FILES: FileEntry[] = [];
@@ -66,6 +74,9 @@ export function OverviewKanban({ projects, displayNames, files, tasks, flows, pi
   /* The dashboard's board clock, shared by cadence: the working predicate is
      read from row states that age, so it must advance between scans. */
   const now = useNowSeconds(BOARD_CLOCK_MS);
+  /* Null until the first answer, which hides nothing: the board draws the
+     seats it does today until it is told which conversations they are. */
+  const seatRefs = useSeatConversations(true);
   const shown = useMemo(() => new Set(projects), [projects]);
   /* One grouping pass per project, concatenated. `buildBranchGroups` already
      selects a project's own roots out of the whole file list, so this is the
@@ -101,9 +112,9 @@ export function OverviewKanban({ projects, displayNames, files, tasks, flows, pi
       loaded={loaded}
       catalogFailures={catalogFailures}
       selection={NO_SELECTION}
-      /* Known and empty: the Overview reads no seat, so the board neither
-         fetches one nor waits on one. */
-      seatRefs={null}
+      /* Every project's seat conversations, so no seat draws a card and no
+         seat-only task lands in the header's hidden count (#1841). */
+      seatRefs={seatRefs}
       onOpenConversations={onOpenConversations}
     />
   );

@@ -2,6 +2,7 @@ import { currentConversationFile } from "@/lib/accounts/identity";
 import type { MessageKey } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
+import type { SeatRefs } from "@/lib/tasks/groupHide";
 import type { FileEntry } from "@/lib/types";
 
 import type { StripSurface } from "../agentCapabilities";
@@ -41,6 +42,40 @@ export interface OrchestratorSeatStatus {
   /** Whether Claude resolves an operator-authored Viewer MCP definition for
       the project cwd. Structured spawns can supply their own definition. */
   viewerMcpRegistered: boolean;
+  /** Seats that held the project before this one, newest first (#1841). Absent
+      from an answer written before the route carried them. */
+  previous?: PreviousSeat[];
+  /** The task that keeps the CURRENT seat's notes, when one names it: its id,
+      its title and whether it holds notes at all. Read from the answer so the
+      phone's seat screens, which carry no task list, can still name the live
+      seat and know whether to offer its notes. */
+  currentTask?: SeatNotesTaskRead | null;
+  /** Every conversation ANY project's seat record names (#1841), as the same
+      answer carries it. Null when the record could not be read, and absent
+      from an answer written before the route carried the field. */
+  all?: SeatRefs | null;
+}
+
+/** A seat's notes task as the answer carries it. */
+export interface SeatNotesTaskRead {
+  taskId: string;
+  title: string | null;
+  hasNotes: boolean;
+}
+
+/** A seat that held the project and was revoked, as the route reports it. */
+export interface PreviousSeat {
+  conversationId: string;
+  path: string | null;
+  title: string | null;
+  engine: string | null;
+  /** When it took the project; null on a revocation recorded before that was kept. */
+  heldFrom: string | null;
+  heldTo: string;
+  /** The task that keeps its notes. */
+  taskId: string | null;
+  /** Whether that task carries notes at all. */
+  hasNotes: boolean;
 }
 
 /** One terminalized designation attempt, as the panel reads it. */
@@ -61,6 +96,9 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     lastFailure?: unknown;
     exists?: unknown;
     viewerMcpRegistered?: unknown;
+    previous?: unknown;
+    currentTask?: unknown;
+    all?: unknown;
   } | null;
   return {
     seat: seatOf(raw?.seat),
@@ -68,7 +106,114 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     lastFailure: failureOf(raw?.lastFailure),
     exists: raw?.exists !== false,
     viewerMcpRegistered: raw?.viewerMcpRegistered === true,
+    previous: Array.isArray(raw?.previous) ? raw.previous.flatMap((entry) => previousSeatOf(entry) ?? []) : [],
+    currentTask: seatNotesTaskOf(raw?.currentTask),
+    all: seatConversationsOf(raw?.all),
   };
+}
+
+const strings = (value: unknown): string[] => (
+  Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string" && entry !== "") : []
+);
+
+/**
+ * The cross-project seat conversations an answer carries (#1841), as the
+ * surfaces that span projects read them.
+ *
+ * Null unless the answer carries the whole shape — `previous` included, since
+ * that is what marks the record as read: the hiding rule turns itself off
+ * without it, so a body that cannot supply it must not read as "no seats".
+ */
+export function seatConversationsOf(value: unknown): SeatRefs | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const previous = row.previous;
+  if (!previous || typeof previous !== "object" || Array.isArray(previous)) return null;
+  const retired = previous as Record<string, unknown>;
+  return {
+    conversationIds: strings(row.conversationIds),
+    paths: strings(row.paths),
+    previous: { conversationIds: strings(retired.conversationIds), paths: strings(retired.paths) },
+  };
+}
+
+const text = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
+
+function seatNotesTaskOf(value: unknown): SeatNotesTaskRead | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const taskId = text(row.taskId);
+  if (!taskId) return null;
+  return { taskId, title: text(row.title), hasNotes: row.hasNotes === true };
+}
+
+function previousSeatOf(value: unknown): PreviousSeat | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const conversationId = text(row.conversationId);
+  const heldTo = text(row.heldTo);
+  if (!conversationId || !heldTo) return null;
+  return {
+    conversationId,
+    path: text(row.path),
+    title: text(row.title),
+    engine: text(row.engine),
+    heldFrom: text(row.heldFrom),
+    heldTo,
+    taskId: text(row.taskId),
+    hasNotes: row.hasNotes === true,
+  };
+}
+
+/**
+ * Every conversation the project's seat record names (#1841): the active seat,
+ * a pending intent, and the seats it revoked. The board draws none of them as
+ * a task band. Null while the read has not answered, so nothing is hidden on a
+ * guess.
+ */
+export function seatRefsOf(status: OrchestratorSeatStatus | null, failed = false): SeatRefs | null {
+  if (!status) return null;
+  const seats = [status.seat, status.pending];
+  const current = {
+    conversationIds: seats.flatMap((seat) => (seat?.conversationId ? [seat.conversationId] : [])),
+    paths: seats.flatMap((seat) => (seat?.path ? [seat.path] : [])),
+  };
+  /* A failed re-read keeps the last good answer, which may be stale: the
+     bands then draw as they did before, seat included. */
+  if (failed) return current;
+  const previous = status.previous ?? [];
+  return {
+    ...current,
+    previous: {
+      conversationIds: previous.map((seat) => seat.conversationId),
+      paths: previous.flatMap((seat) => (seat.path ? [seat.path] : [])),
+    },
+  };
+}
+
+/**
+ * Every transcript path a seat the project RETIRED can be drawn under (#1841),
+ * for the surfaces that keep it out of their rows by path (the phone's board).
+ *
+ * Both sources are taken, never one in preference to the other: a stored
+ * revocation path goes stale on its own — the identity wave rekeys `seats[*]`
+ * and not the revocations, and a conversation that moves accounts keeps its id
+ * while its transcript path changes — so preferring it would put the retired
+ * seat back on the board as a row beside product work.
+ */
+export function retiredSeatPaths(
+  previous: readonly Pick<PreviousSeat, "conversationId" | "path">[],
+  files: readonly Pick<FileEntry, "path" | "conversationId">[],
+): string[] {
+  if (!previous.length) return [];
+  const byConversation = new Map(files.flatMap((file) => (file.conversationId ? [[file.conversationId, file.path] as const] : [])));
+  const paths = new Set<string>();
+  for (const seat of previous) {
+    for (const path of [seat.path, byConversation.get(seat.conversationId) ?? null]) {
+      if (path) paths.add(path);
+    }
+  }
+  return [...paths];
 }
 
 function failureOf(value: unknown): SeatFailureRecord | null {

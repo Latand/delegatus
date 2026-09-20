@@ -26,6 +26,20 @@
  * uk, light and dark, under a 21-character project name — and the phone's 52 px
  * bar in the same four.
  *
+ * With BOARD_CAPTURE_CASE=seats, seat-placement or columns-wide it measures
+ * the orchestrator seat's own place (#1841) on a home with two projects, a
+ * live seat, two seats it replaced (each with its task and notes) and product
+ * tasks over the four columns: no seat band on any column, the Previous seats
+ * popover with one Notes row open, inside the viewport and clear of the head
+ * controls; the top strip, the side panel and the side rail with the board
+ * growing by what they free and the header toggle's dot in the seat's colour;
+ * the popover under its control in the strip and at the side, the side seat
+ * leaving the columns scrolling at 1280; and a shelf taking the wide share with
+ * the workspace's tile grid, pinned through work in Assigned and a reload,
+ * while the Overview keeps its own shares — at 1440 and 1280 in en and uk,
+ * light and dark, and the phone's Previous seats row (drawn as the tick row),
+ * list with the live seat first, and notes at 390 × 844.
+ *
  * With BOARD_CAPTURE_CASE=account-removal it drives the accounts dialog's
  * removal answers (#1857) on the same seeded accounts, with every DELETE
  * answered by a stub at the network layer so no account is removed anywhere:
@@ -2624,7 +2638,501 @@ async function accountRemovalMain(): Promise<void> {
   }
 }
 
+/* ------------------------------------------------------------------------- */
+/* Orchestrator seats, their placement and the wide column (#1841,           */
+/* docs/design/ui-batch-2026-09 §2)                                          */
+/* ------------------------------------------------------------------------- */
+
+const SEAT_CASES = ["seats", "seat-placement", "columns-wide"] as const;
+type SeatCase = (typeof SEAT_CASES)[number];
+/* Composed rather than written out, like the header's sessions. */
+const seatSession = (serial: number) => [String(serial).padStart(8, "0"), "1841", "4000", "8000", "0".repeat(12)].join("-");
+const SEAT_STATUSES = ["assigned", "inbox", "blocked", "done", "assigned"] as const;
+
+interface SeatSeed { id: string; path: string; title: string; notes: string }
+
+/**
+ * A live seat and two it replaced, each with the task its launch minted and
+ * that task's notes, written through the Viewer's own seat module into the
+ * synthetic state dir. The seats rotate at invented times, so the popover's
+ * spans read the same on every run.
+ */
+async function seedSeats(project: string): Promise<{ live: SeatSeed; retired: SeatSeed[] }> {
+  process.env.HOME = HOME;
+  process.env.XDG_CONFIG_HOME = path.join(HOME, ".config");
+  process.env.LLV_STATE_DIR = STATE_DIR;
+  const folder = path.join(HOME, ".claude/projects", projectSlug(REPO_DIR));
+  /* Whole minutes before now, so the spans read like a working week: 13 h, then 28 h, then the live seat. */
+  const minute = 60_000;
+  const start = Math.floor(Date.now() / minute) * minute;
+  const ago = (minutes: number) => new Date(start - minutes * minute).toISOString();
+  const specs = [
+    { serial: 61, title: "Orchestrator seat, launch week", notes: "Lanes: header, stage labels.\nRotated after the context filled.", from: ago(47 * 60 + 18) },
+    { serial: 62, title: "Manager seat, release week", notes: "Open: the September train.\nMerged: the header.\nNext: seats out of the columns.", from: ago(19 * 60 + 18) },
+    { serial: 63, title: "Orchestrator seat, board batch", notes: "Watching the seats lane and the undo lane.", from: ago(6 * 60 + 10) },
+  ];
+  const seeds: SeatSeed[] = specs.map((spec, index) => {
+    const id = seatSession(spec.serial);
+    const file = writeConversation(folder, id, `seat conversation ${index + 1}`, `Holding the seat: ${spec.title}. ` + "Board notes. ".repeat(40), false, spec.from);
+    return { id, path: file, title: spec.title, notes: spec.notes };
+  });
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  for (const [index, seed] of seeds.entries()) {
+    const now = specs[index]!.from;
+    const clientRequestId = `req_1841_${index}`;
+    beginOrchestratorSeatIntent({ project, mandate: "Run the board.", clientRequestId, mode: "spawn", now });
+    const done = completeOrchestratorSeatIntent({ project, clientRequestId, conversationId: seed.id, path: seed.path, engine: "claude", model: "opus", now });
+    if (done.kind !== "activated") throw new Error(`seat ${index} did not activate: ${done.kind}`);
+  }
+  const file = path.join(STATE_DIR, "tasks.json");
+  const store = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: Record<string, unknown>[] };
+  for (const [index, seed] of seeds.entries()) {
+    store.tasks.push({
+      id: `task-1841-seat-${index}`, project, status: "assigned", text: seed.title, details: seed.notes, placement: "unplaced",
+      assignments: [{ path: seed.path, conversationId: seed.id, panePid: null, state: "delivered", error: null, at: specs[index]!.from }],
+      createdAt: specs[index]!.from, updatedAt: specs[index]!.from,
+    });
+  }
+  /* The product tasks spread over the four columns. */
+  for (const [index, task] of store.tasks.entries()) if (String(task.id).startsWith("task-1641-")) task.status = SEAT_STATUSES[index % SEAT_STATUSES.length];
+  fs.writeFileSync(file, JSON.stringify(store, null, 2) + "\n", "utf8");
+  return { live: seeds[2]!, retired: [seeds[1]!, seeds[0]!] };
+}
+
+/** What the board says it is NOT drawing: the hidden pill's count and the
+    tasks its tray names as off the board. A seat task must appear in neither
+    (#1841) — the tray is where the Overview used to list every seat. */
+function readHiddenTray() {
+  const pill = document.querySelector("[data-hidden-pill]");
+  return {
+    count: Number(pill?.getAttribute("data-count") ?? "-1"),
+    tasks: [...document.querySelectorAll("[data-hidden-task]")].map((row) => row.querySelector(".title")?.textContent?.trim() ?? ""),
+  };
+}
+
+/** The board as the seat cases read it. */
+function readSeatBoard() {
+  const box = (element: Element | null) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: Math.round(r.x * 2) / 2, y: Math.round(r.y * 2) / 2, w: Math.round(r.width * 2) / 2, h: Math.round(r.height * 2) / 2 };
+  };
+  const seat = document.querySelector("[data-kanban-seat]");
+  const head = seat?.querySelector(".seat-head") ?? null;
+  const headControls = head ? [...head.querySelectorAll("button, a, [data-orchestrator-badge]")].map((node) => ({ name: node.getAttribute("aria-label") ?? node.textContent?.trim() ?? "", rect: box(node)! })).filter((entry) => entry.rect.w > 0) : [];
+  const columns = [...document.querySelectorAll<HTMLElement>(".kb .column")].map((column) => ({
+    status: column.dataset.status ?? "",
+    wide: column.dataset.wide ?? null,
+    rect: box(column)!,
+    cards: [...column.querySelectorAll(".card")].map((card) => card.querySelector(".title")?.textContent?.trim() ?? ""),
+    clippedTitles: [...column.querySelectorAll<HTMLElement>(".card .title")].filter((title) => title.scrollWidth > title.clientWidth + 1).length,
+    /* Conversation tiles: a wrapping grid of ~196 px tiles in the wide column. */
+    tileWidths: [...column.querySelectorAll(".tile")].map((tile) => Math.round(tile.getBoundingClientRect().width)),
+    /* The head holds on one line: its tallest child is no taller than one line. */
+    headHeight: Math.round(column.querySelector(".col-head")?.getBoundingClientRect().height ?? 0),
+    widthControls: column.querySelectorAll("[data-col-width], [data-col-pin]").length,
+    /* Cards carrying a seat conversation anywhere: its title, a tile, a mirror. */
+    seatCards: [...column.querySelectorAll(".card")].filter((card) => /seat conversation/.test(card.textContent ?? "")).length,
+  }));
+  const toggle = document.querySelector("[data-orchestrator-toggle]");
+  return {
+    bar: box(document.querySelector("[data-kanban-board] header.bar")),
+    page: box(document.querySelector(".kb-page")),
+    frame: box(document.querySelector(".board-frame")),
+    seat: box(seat),
+    seatPlacement: seat?.getAttribute("data-placement") ?? null,
+    seatCollapsed: seat?.getAttribute("data-collapsed") ?? null,
+    head: box(head),
+    headKind: head?.getAttribute("data-seat-head") ?? null,
+    headControls,
+    rail: box(document.querySelector("[data-seat-rail]")),
+    railTone: document.querySelector("[data-seat-rail-state]")?.getAttribute("data-seat-rail-state") ?? null,
+    stateWord: document.querySelector(".seat-title .state")?.className ?? null,
+    previousCount: document.querySelector("[data-previous-seats]")?.getAttribute("data-previous-seats") ?? null,
+    previousText: document.querySelector("[data-previous-seats]")?.textContent?.trim() ?? null,
+    toggleDot: toggle?.querySelector("[data-orchestrator-toggle-dot]")?.getAttribute("data-orchestrator-toggle-dot") ?? null,
+    togglePressed: toggle?.getAttribute("aria-pressed") ?? null,
+    columns,
+    board: document.querySelector("[data-board]")?.getAttribute("data-mode") ?? null,
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+  };
+}
+
+function readSeatPopover() {
+  const pop = document.querySelector("[data-previous-seats-popover]")?.closest(".popover") ?? null;
+  if (!pop) return null;
+  const r = pop.getBoundingClientRect();
+  return {
+    rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+    heads: [...pop.querySelectorAll(".head")].map((node) => node.textContent?.trim() ?? ""),
+    rows: [...pop.querySelectorAll<HTMLElement>("[data-seat-row]")].map((row) => ({
+      current: row.dataset.seatCurrent === "1",
+      title: row.querySelector(".t1 .title")?.textContent?.trim() ?? "",
+      span: row.querySelector(".t2")?.textContent?.trim() ?? "",
+      /* Whether the row opens its own conversation; the id itself stays out of the record. */
+      opensItself: row.querySelector("a")?.getAttribute("href") === `#c=${encodeURIComponent(row.dataset.seatRow ?? "")}`,
+      height: row.querySelector(".line")?.getBoundingClientRect().height ?? 0,
+      notes: row.querySelector("[data-seat-notes]")?.textContent ?? null,
+    })),
+    openNotes: pop.querySelectorAll("[data-seat-notes]").length,
+    /* How the open notes are painted (#1841 review): in dark mode the popover's
+       card, a hovered row and a well sit within a few percent of each other, so
+       the block has to carry an edge of its own to read as an inset. */
+    notesPaint: (() => {
+      const notes = pop.querySelector("[data-seat-notes]");
+      if (!notes) return null;
+      const style = getComputedStyle(notes);
+      const row = notes.closest("[data-seat-row]")?.querySelector(".line");
+      return {
+        fill: style.backgroundColor,
+        border: style.borderTopColor,
+        borderWidth: Math.round(parseFloat(style.borderTopWidth) * 100) / 100,
+        /* What the row around it paints while the pointer is on it. */
+        rowHoverFill: getComputedStyle(document.documentElement).getPropertyValue("--surface-well").trim(),
+        rowFill: row ? getComputedStyle(row).backgroundColor : null,
+      };
+    })(),
+  };
+}
+
+async function seatsMain(which: SeatCase): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  writeQuietProject();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  /* A port this process bound itself and released, never a fixed one. */
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit(), case: which };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    const project = await (async () => {
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        const files = ((await (await fetch(`${baseUrl}/api/files`)).json()) as FilesPayload).files ?? [];
+        const busy = files.find((file) => file.path?.includes(projectSlug(REPO_DIR)))?.project;
+        const quiet = files.find((file) => file.path?.includes(projectSlug(QUIET_DIR)))?.project;
+        if (busy && quiet) return busy;
+        await Bun.sleep(2_000);
+      }
+      throw new Error("the two seeded projects never scanned");
+    })();
+    await stop(server);
+    server = null;
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    seedState(project, tasks, reviewers);
+    const seats = await seedSeats(project);
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, true);
+    await Bun.sleep(4_000);
+    const seatTitles = [seats.live.title, ...seats.retired.map((seed) => seed.title)];
+    report.seeded = { productTasks: tasks.length, seats: seatTitles };
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+
+    /* At 1440 and 1280 the rail leaves the board under 1200 px, where it scrolls; 1920 is the grid. */
+    const widths = which === "columns-wide" ? [1920, 1440, 1280] : [1440, 1280];
+    const combos = widths.flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
+    for (const { width, lang, colorScheme } of combos) {
+      const tag = `${which}-${width}-${lang}-${colorScheme}`;
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 120_000 });
+      await page.waitForSelector('[data-kanban-seat] [data-orchestrator-state="live"]', { timeout: 60_000 }).catch(() => {});
+      await page.waitForTimeout(2_500);
+      const base = await page.evaluate(readSeatBoard);
+      const entry: Record<string, unknown> = { base };
+      must(base.bar !== null && near(base.bar.h, 48, 0.5), `${tag}: the bar is ${base.bar?.h}px`);
+      /* The seat bands are gone from every column; the product cards all draw. */
+      const carded = base.columns.flatMap((column) => column.cards);
+      must(seatTitles.every((title) => !carded.includes(title)), `${tag}: a seat card is on the board (${carded.join(" | ")})`);
+      must(base.columns.every((column) => column.seatCards === 0), `${tag}: a seat conversation is drawn in ${base.columns.filter((column) => column.seatCards).map((column) => column.status).join(", ")}`);
+      must(carded.length === tasks.length, `${tag}: ${carded.length} cards for ${tasks.length} product tasks (${carded.join(" | ")})`);
+      must(tasks.every((task) => carded.includes(task.title)), `${tag}: ${carded.length} cards, a product task is missing`);
+      must(new Set(base.columns.filter((column) => column.cards.length).map((column) => column.status)).size >= 3, `${tag}: fewer than three columns hold cards`);
+
+      if (which === "seats") {
+        must(base.previousCount === "2", `${tag}: Previous seats reads ${base.previousCount}`);
+        await page.click("[data-previous-seats]");
+        await page.waitForSelector("[data-previous-seats-popover]");
+        await page.click('[data-seat-row] >> nth=1 >> [data-seat-notes-toggle]');
+        await page.waitForTimeout(300);
+        const popover = await page.evaluate(readSeatPopover);
+        const head = await page.evaluate(readSeatBoard);
+        entry.popover = popover;
+        entry.head = head.headControls;
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}.png`) });
+        must(popover !== null, `${tag}: the popover did not open`);
+        if (popover) {
+          must(popover.rect.x >= 0 && popover.rect.y >= 0 && popover.rect.x + popover.rect.w <= width && popover.rect.y + popover.rect.h <= 900, `${tag}: the popover leaves the viewport ${JSON.stringify(popover.rect)}`);
+          must(near(popover.rect.w, 340, 1), `${tag}: the popover is ${popover.rect.w}px wide`);
+          must(head.seat !== null && popover.rect.x >= head.seat.x - 0.5, `${tag}: the popover starts at ${popover.rect.x}, left of the seat at ${head.seat?.x}`);
+          must(popover.rows.map((row) => row.title).join("|") === [seats.live.title, ...seats.retired.map((seed) => seed.title)].join("|"), `${tag}: rows ${popover.rows.map((row) => row.title).join(" | ")}`);
+          must(popover.rows[0]?.current === true && popover.rows.slice(1).every((row) => !row.current), `${tag}: the live seat is not first under Current`);
+          must(popover.rows.every((row) => row.height >= 52), `${tag}: a row is under 52 px`);
+          must(popover.openNotes === 1 && popover.rows[1]?.notes === seats.retired[0]!.notes, `${tag}: the Notes row reads ${popover.rows[1]?.notes}`);
+          must(popover.rows.every((row) => row.opensItself), `${tag}: a row does not open its conversation`);
+          must(popover.rows.slice(1).every((row) => / · /.test(row.span)), `${tag}: a previous row has no span (${popover.rows.map((row) => row.span).join(" | ")})`);
+          /* The open notes read as an inset: a border of their own, in a tone
+             the block is not filled with. */
+          must(popover.notesPaint !== null && popover.notesPaint.borderWidth >= 1 && popover.notesPaint.border !== popover.notesPaint.fill, `${tag}: the notes paint ${JSON.stringify(popover.notesPaint)}`);
+        }
+        const controls = head.headControls;
+        for (const [index, a] of controls.entries()) for (const b of controls.slice(index + 1)) {
+          if (a.rect.x <= b.rect.x && a.rect.x + a.rect.w >= b.rect.x + b.rect.w) continue;
+          if (b.rect.x <= a.rect.x && b.rect.x + b.rect.w >= a.rect.x + a.rect.w) continue;
+          must(!overlaps(a.rect, b.rect, 0.5), `${tag}: seat head «${a.name}» and «${b.name}» overlap`);
+        }
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(200);
+
+        /* A band the board draws for nobody is not an off-board task either:
+           the hidden tray names no seat, on the project's board and on the
+           Overview, which spans every project and reads every project's
+           seats. */
+        const tray = async (where: string) => {
+          const closed = await page.evaluate(readHiddenTray);
+          if (closed.count > 0) {
+            await page.click("[data-hidden-pill]");
+            await page.waitForTimeout(250);
+          }
+          const open = await page.evaluate(readHiddenTray);
+          const named = seatTitles.filter((title) => open.tasks.includes(title));
+          must(named.length === 0, `${tag} ${where}: the hidden tray names ${named.join(" | ")}`);
+          if (closed.count > 0) {
+            await page.keyboard.press("Escape");
+            await page.waitForTimeout(150);
+          }
+          return open;
+        };
+        entry.hidden = await tray("board");
+
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent("__overview__")}`, { waitUntil: "domcontentloaded" });
+        await page.waitForSelector('[data-kanban-board] header.bar[data-bar="overview"]', { timeout: 60_000 });
+        await page.waitForTimeout(2_500);
+        const overview = await page.evaluate(readSeatBoard);
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-overview.png`) });
+        const overviewCards = overview.columns.flatMap((column) => column.cards);
+        must(overview.columns.every((column) => column.seatCards === 0), `${tag} overview: a seat conversation is drawn in ${overview.columns.filter((column) => column.seatCards).map((column) => column.status).join(", ")}`);
+        must(seatTitles.every((title) => !overviewCards.includes(title)), `${tag} overview: a seat card is on the board (${overviewCards.join(" | ")})`);
+        entry.overview = {
+          columns: overview.columns.map((column) => ({ status: column.status, cards: column.cards, seatCards: column.seatCards })),
+          hidden: await tray("overview"),
+        };
+      }
+
+      if (which === "seat-placement") {
+        const states: Record<string, ReturnType<typeof readSeatBoard>> = { topExpanded: base };
+        await page.click("[data-seat-collapse]");
+        await page.waitForTimeout(400);
+        states.topCollapsed = await page.evaluate(readSeatBoard);
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-top-collapsed.png`) });
+        entry.popoverStrip = await (async () => {
+          await page.click("[data-previous-seats]");
+          await page.waitForSelector("[data-previous-seats-popover]");
+          const reading = await page.evaluate(() => ({
+            popoverX: Math.round(document.querySelector("[data-previous-seats-popover]")!.closest(".popover")!.getBoundingClientRect().x),
+            seatX: Math.round(document.querySelector("[data-kanban-seat]")!.getBoundingClientRect().x),
+          }));
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(150);
+          must(reading.popoverX >= reading.seatX, `${tag} strip: the popover starts at ${reading.popoverX}, left of the strip at ${reading.seatX}`);
+          return reading;
+        })();
+        await page.click("[data-seat-collapse]");
+        await page.waitForTimeout(300);
+        await page.click("[data-seat-placement]");
+        await page.waitForTimeout(600);
+        states.sideExpanded = await page.evaluate(readSeatBoard);
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-side.png`) });
+        /* The popover under its control, not hanging over the rail. */
+        const popoverIn = async (name: string) => {
+          await page.click("[data-previous-seats]");
+          await page.waitForSelector("[data-previous-seats-popover]");
+          const reading = await page.evaluate(() => {
+            const pop = document.querySelector("[data-previous-seats-popover]")!.closest(".popover")!.getBoundingClientRect();
+            const seat = document.querySelector("[data-kanban-seat]")!.getBoundingClientRect();
+            const control = document.querySelector("[data-previous-seats]")!.getBoundingClientRect();
+            return { popoverX: Math.round(pop.x), seatX: Math.round(seat.x), controlX: Math.round(control.x), controlRight: Math.round(control.right) };
+          });
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(150);
+          must(reading.popoverX >= reading.seatX && (reading.popoverX === reading.controlX || Math.abs(reading.popoverX + 340 - reading.controlRight) <= 1), `${tag} ${name}: the popover starts at ${reading.popoverX}, the seat at ${reading.seatX}, the control at ${reading.controlX}–${reading.controlRight}`);
+          return reading;
+        };
+        entry.sideFoldIcon = await page.evaluate(() => /lucide-(chevron-[a-z]+)/.exec(document.querySelector("[data-seat-collapse] svg")?.getAttribute("class") ?? "")?.[1] ?? null);
+        entry.popoverSide = await popoverIn("side");
+        await page.click("[data-seat-collapse]");
+        await page.waitForTimeout(600);
+        states.sideCollapsed = await page.evaluate(readSeatBoard);
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-side-collapsed.png`) });
+        entry.states = states;
+        const { topExpanded, topCollapsed, sideExpanded, sideCollapsed } = states as Record<string, ReturnType<typeof readSeatBoard>>;
+        must(topCollapsed!.headKind === "strip" && topCollapsed!.head !== null && near(topCollapsed!.head.h, 40, 1), `${tag}: the top strip is ${topCollapsed!.head?.h}px`);
+        must(topCollapsed!.frame !== null && topExpanded!.frame !== null && topCollapsed!.frame.y < topExpanded!.frame.y - 100, `${tag}: collapsing on top freed ${(topExpanded!.frame?.y ?? 0) - (topCollapsed!.frame?.y ?? 0)}px`);
+        must(sideExpanded!.seatPlacement === "side" && sideExpanded!.seat !== null && near(sideExpanded!.seat.w, 380, 1), `${tag}: the side seat is ${sideExpanded!.seat?.w}px`);
+        /* Docked at the side the board keeps its columns: scrolling at 1280, never tabs. */
+        must(sideExpanded!.board !== "tabs" && sideExpanded!.columns.every((column) => column.rect.w >= 200), `${tag}: beside the side seat the board is ${sideExpanded!.board} (${sideExpanded!.columns.map((column) => `${column.status} ${column.rect.w}`).join(", ")})`);
+        /* The fold points left, into the rail. */
+        must(entry.sideFoldIcon === "chevron-left", `${tag}: the side fold's arrow is ${entry.sideFoldIcon}`);
+        /* The side head's first row holds the title and both controls. */
+        const sideRow = (name: RegExp) => sideExpanded!.headControls.find((control) => name.test(control.name))?.rect.y ?? -1;
+        must(sideRow(/Dock|Закріпити/) === sideRow(/(Collapse|Згорнути)/), `${tag}: at the side the fold sits on another row than the placement switch`);
+        must(sideCollapsed!.seat !== null && near(sideCollapsed!.seat.w, 44, 1) && sideCollapsed!.rail !== null, `${tag}: the rail is ${sideCollapsed!.seat?.w}px`);
+        /* Every head control inside the 380 px panel and clear of the others, in both placements. */
+        for (const [name, state] of [["top", topExpanded!], ["side", sideExpanded!], ["top strip", topCollapsed!]] as const) {
+          const controls = state.headControls;
+          must(state.seat === null || controls.every((control) => control.rect.x >= state.seat!.x - 0.5 && control.rect.x + control.rect.w <= state.seat!.x + state.seat!.w + 0.5), `${tag} ${name}: a head control leaves the seat`);
+          for (const [index, a] of controls.entries()) for (const b of controls.slice(index + 1)) {
+            if (a.rect.x <= b.rect.x && a.rect.x + a.rect.w >= b.rect.x + b.rect.w && a.rect.y <= b.rect.y && a.rect.y + a.rect.h >= b.rect.y + b.rect.h) continue;
+            if (b.rect.x <= a.rect.x && b.rect.x + b.rect.w >= a.rect.x + a.rect.w && b.rect.y <= a.rect.y && b.rect.y + b.rect.h >= a.rect.y + a.rect.h) continue;
+            must(!overlaps(a.rect, b.rect, 0.5), `${tag} ${name}: seat head «${a.name}» and «${b.name}» overlap`);
+          }
+        }
+        must(sideCollapsed!.page !== null && sideExpanded!.page !== null && near(sideCollapsed!.page.w - sideExpanded!.page.w, 336, 2), `${tag}: the board grew ${(sideCollapsed!.page?.w ?? 0) - (sideExpanded!.page?.w ?? 0)}px when the side seat collapsed`);
+        for (const [name, state] of Object.entries(states)) must(state.bar !== null && near(state.bar.h, 48, 0.5), `${tag} ${name}: the bar is ${state.bar?.h}px`);
+        must(sideCollapsed!.togglePressed === "false" && sideCollapsed!.toggleDot !== null && sideCollapsed!.toggleDot === sideCollapsed!.railTone, `${tag}: the toggle dot ${sideCollapsed!.toggleDot} vs the rail ${sideCollapsed!.railTone}`);
+        must(topCollapsed!.toggleDot !== null && topCollapsed!.stateWord?.includes(topCollapsed!.toggleDot === "quiet" ? "quiet" : topCollapsed!.toggleDot) === true, `${tag}: the toggle dot ${topCollapsed!.toggleDot} vs the state word ${topCollapsed!.stateWord}`);
+        must(topExpanded!.toggleDot === null && topExpanded!.togglePressed === "true", `${tag}: the expanded seat's toggle carries a dot or is not pressed`);
+        /* Put the browser back on top and expanded for the next context. */
+        await page.click("[data-seat-rail]");
+        await page.click("[data-seat-placement]");
+      }
+
+      if (which === "columns-wide") {
+        const share = (reading: ReturnType<typeof readSeatBoard>, status: string) => reading.columns.find((column) => column.status === status)?.rect.w ?? 0;
+        const wideOnes = (reading: ReturnType<typeof readSeatBoard>) => reading.columns.filter((column) => column.wide === "1").map((column) => column.status);
+        must(wideOnes(base).join() === "assigned", `${tag}: default wide ${wideOnes(base).join()}`);
+        await page.click('[data-col-width="done"]');
+        await page.waitForTimeout(500);
+        const doneWide = await page.evaluate(readSeatBoard);
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-done.png`) });
+        must(wideOnes(doneWide).join() === "done", `${tag}: Done widened, wide is ${wideOnes(doneWide).join()}`);
+        must(share(doneWide, "done") > share(doneWide, "assigned") + 150, `${tag}: Done ${share(doneWide, "done")}px vs Assigned ${share(doneWide, "assigned")}px`);
+        must(near(share(doneWide, "done"), share(base, "assigned"), 2), `${tag}: Done took ${share(doneWide, "done")}px of Assigned's ${share(base, "assigned")}px`);
+        must(doneWide.columns.find((column) => column.status === "done")!.clippedTitles === 0, `${tag}: a title in the wide column is clipped`);
+        /* The wide column lays its tiles out as the workspace does: fixed tiles, not full-width rows. */
+        const wideTiles = doneWide.columns.find((column) => column.status === "done")!.tileWidths;
+        must(wideTiles.length > 0 && wideTiles.every((w) => w <= 200), `${tag}: the wide Done's tiles are ${wideTiles.join(", ")}px`);
+        const shelfTiles = doneWide.columns.find((column) => column.status === "assigned")!;
+        must(shelfTiles.tileWidths.every((w) => w <= shelfTiles.rect.w), `${tag}: a tile in the narrowed Assigned overflows it (${shelfTiles.tileWidths.join(", ")} in ${shelfTiles.rect.w})`);
+        await page.click('[data-col-width="blocked"]');
+        await page.waitForTimeout(300);
+        await page.click('[data-col-pin="blocked"]');
+        await page.waitForTimeout(300);
+        /* Work in Assigned: a pinned shelf keeps the wide share. */
+        await page.click('.column[data-status="assigned"] .card .title-trigger, .column[data-status="assigned"] .card').catch(() => {});
+        await page.keyboard.press("Escape").catch(() => {});
+        await page.waitForTimeout(400);
+        const pinned = await page.evaluate(readSeatBoard);
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-blocked-pinned.png`) });
+        must(wideOnes(pinned).join() === "blocked", `${tag}: pinned Blocked, wide is ${wideOnes(pinned).join()}`);
+        /* The shelf share: at most 264 px in the grid, the 280 px basis when the board scrolls. */
+        must(share(pinned, "assigned") <= (pinned.board === "scroll" ? 280.5 : 264.5), `${tag}: Assigned kept ${share(pinned, "assigned")}px beside a pinned shelf (${pinned.board})`);
+        /* The capture's init script empties storage on every load; the stored pin is put back ahead of
+           the page, exactly as the browser would have kept it, so the reload reads it from storage. */
+        const stored = await page.evaluate(() => localStorage.getItem("llv:kanban-wide:v1"));
+        must(stored === "blocked", `${tag}: the pin stored ${stored}`);
+        await context.addInitScript((value: string | null) => { if (value) localStorage.setItem("llv:kanban-wide:v1", value); }, stored);
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await page.waitForSelector(".kb .column", { timeout: 60_000 });
+        await page.waitForTimeout(2_000);
+        const reloaded = await page.evaluate(readSeatBoard);
+        must(wideOnes(reloaded).join() === "blocked", `${tag}: after a reload, wide is ${wideOnes(reloaded).join()}`);
+        /* The Overview keeps its fixed shares with the project's pin stored: no
+           width controls, Assigned the wide one, every column head on one line. */
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent("__overview__")}`, { waitUntil: "domcontentloaded" });
+        await page.waitForSelector('[data-kanban-board] header.bar[data-bar="overview"]', { timeout: 60_000 });
+        await page.waitForTimeout(2_000);
+        const overview = await page.evaluate(readSeatBoard);
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-overview.png`) });
+        must(overview.columns.every((column) => column.widthControls === 0 && column.wide === null), `${tag} overview: width controls draw (${overview.columns.map((column) => `${column.status} ${column.widthControls}`).join(", ")})`);
+        must(share(overview, "assigned") > share(overview, "blocked"), `${tag} overview: Assigned ${share(overview, "assigned")}px beside Blocked ${share(overview, "blocked")}px`);
+        const oneLine = Math.min(...overview.columns.map((column) => column.headHeight));
+        must(overview.columns.every((column) => column.headHeight <= oneLine + 1), `${tag} overview: a column head wraps (${overview.columns.map((column) => `${column.status} ${column.headHeight}`).join(", ")})`);
+        entry.states = { default: base.columns, doneWide: doneWide.columns, blockedPinned: pinned.columns, reloaded: reloaded.columns, overview: overview.columns };
+      }
+      report[tag] = entry;
+      await context.close();
+    }
+
+    if (which === "seats") {
+      for (const lang of ["en", "uk"] as const) for (const colorScheme of ["light", "dark"] as const) {
+        const tag = `seats-390-${lang}-${colorScheme}`;
+        const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme, reducedMotion: "reduce" });
+        await phone.addInitScript(seedInit);
+        await phone.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+        const page = await phone.newPage();
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector('[data-mobile2-open="seat"]', { timeout: 120_000 });
+        await page.waitForTimeout(2_500);
+        /* Outside the seat card, nothing on the phone board names a seat. */
+        const rows = await page.evaluate((titles: string[]) => [...document.querySelectorAll("body *")].filter((node) => node.children.length === 0
+          && !node.closest('[data-mobile2-open="seat"], [data-testid="mobile-orchestrator-slot"]')
+          && (titles.includes(node.textContent?.trim() ?? "") || /^seat conversation/.test(node.textContent?.trim() ?? ""))).length, seatTitles);
+        must(rows === 0, `${tag}: ${rows} seat rows show on the phone board`);
+        await page.click('[data-mobile2-open="seat"]');
+        await page.waitForSelector("[data-mobile-previous-seats]", { timeout: 30_000 });
+        const row = await page.evaluate(() => {
+          const node = document.querySelector("[data-mobile-previous-seats]")!;
+          const r = node.getBoundingClientRect();
+          /* Drawn as the Seat tick row above it: the same inset, icon and chevron. */
+          const tick = document.querySelector("[data-seat-tick-row]");
+          const icon = (el: Element | null) => el?.querySelector("svg")?.getBoundingClientRect().x ?? null;
+          return {
+            count: node.getAttribute("data-mobile-previous-seats"), h: r.height, text: node.textContent?.trim() ?? "",
+            iconX: icon(node), tickIconX: icon(tick),
+            right: r.right, tickRight: tick?.getBoundingClientRect().right ?? null,
+            chevron: node.querySelector("svg.lucide-chevron-right") !== null,
+          };
+        });
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-sheet.png`) });
+        must(row.count === "2" && row.h >= 44, `${tag}: the sheet row reads ${row.count} at ${row.h}px`);
+        must(row.iconX !== null && row.iconX === row.tickIconX && row.right === row.tickRight && row.chevron, `${tag}: the row's icon at ${row.iconX} vs the tick row's ${row.tickIconX}, right ${row.right} vs ${row.tickRight}, chevron ${row.chevron}`);
+        await page.click("[data-mobile-previous-seats]");
+        await page.waitForSelector("[data-mobile-previous-list]");
+        const list = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-mobile-previous-list] [data-seat-row]")].map((node) => ({ current: node.dataset.seatCurrent === "1", h: node.getBoundingClientRect().height, text: node.textContent?.trim() ?? "", notes: node.querySelector("[data-seat-notes-toggle]")?.getBoundingClientRect().height ?? 0 })));
+        const backText = await page.evaluate(() => document.querySelector("[data-mobile-previous-back]")?.textContent?.trim() ?? "");
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-list.png`) });
+        /* The live seat first, under Current, then the two previous ones. */
+        must(list.length === 3 && list[0]!.current && list.slice(1).every((entry) => !entry.current) && list.every((entry) => entry.h >= 56 && entry.notes >= 44), `${tag}: the list rows ${JSON.stringify(list)}`);
+        must(backText === (lang === "uk" ? "Оркестратор" : "Orchestrator"), `${tag}: the back link reads «${backText}»`);
+        await page.click("[data-mobile-previous-list] [data-seat-notes-toggle] >> nth=0");
+        await page.waitForSelector("[data-mobile-previous-notes] [data-seat-notes]");
+        await page.waitForFunction(() => !/…/.test(document.querySelector("[data-mobile-previous-notes] [data-seat-notes]")?.textContent ?? "…"), undefined, { timeout: 15_000 }).catch(() => {});
+        const notes = await page.evaluate(() => document.querySelector("[data-mobile-previous-notes] [data-seat-notes]")?.textContent ?? "");
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-notes.png`) });
+        /* The first row is the live seat: its notes are readable on the phone too. */
+        must(notes === seats.live.notes, `${tag}: the notes screen reads «${notes}»`);
+        report[tag] = { row, list, backText, notes };
+        await phone.close();
+      }
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, `${which}.json`), JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(`${which} measurements: ${path.join(OUT_DIR, `${which}.json`)}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`${which} acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log(`${which} acceptance passed at ${which === "columns-wide" ? "1920, " : ""}1440 and 1280 (en, uk; light, dark)${which === "seats" ? " and 390 × 844" : ""}.`);
+  }
+}
+
 /* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
+else if ((SEAT_CASES as readonly string[]).includes(process.env.BOARD_CAPTURE_CASE ?? "")) await seatsMain(process.env.BOARD_CAPTURE_CASE as SeatCase);
 else await main();

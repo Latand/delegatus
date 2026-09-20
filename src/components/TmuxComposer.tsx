@@ -2511,7 +2511,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           runtime: runtime as Record<string, unknown> | undefined, policy,
         });
         const bridge = await drainBridgeTurnStart();
-        const prelude = await isDesignatedManagerConversation(cardId, submittedFile.project)
+        const prelude = await withComposerAdmissionDeadline(
+          isDesignatedManagerConversation(cardId, submittedFile.project), admissionTiming.admissionDeadlineMs,
+        ).catch(() => false)
           ? viewerContextPrelude({ path: submittedFile.path, project: submittedFile.project }) : "";
         const composed = prelude ? `${prelude}\n${requestedText}` : requestedText;
         const wireText = bridge?.text ? `${bridge.text}\n\n${composed}` : composed;
@@ -2744,7 +2746,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        prepended the operator's view to unrelated workers' turns. The one thing
        that names the manager is the project's active seat (`managerIdentity`),
        queried per dispatch and cached. */
-    const viewerPrelude = durable || replayGeneration || !(await isDesignatedManagerConversation(cardId, file.project))
+    // This optional read precedes admission. A lost seat response must not hold
+    // the local wire fence forever; an unconfirmed designation adds no context.
+    const viewerPrelude = durable || replayGeneration || !(await withComposerAdmissionDeadline(
+      isDesignatedManagerConversation(cardId, file.project), admissionTiming.admissionDeadlineMs,
+    ).catch(() => false))
       ? ""
       : viewerContextPrelude({ path: file.path, project: file.project });
     const composedText = viewerPrelude ? `${viewerPrelude}\n${requestedText}` : requestedText;
