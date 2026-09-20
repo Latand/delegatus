@@ -50,3 +50,12 @@ test("legacy entry points share the extracted implementations", async () => {
   const history = await import("@/lib/reviewHistory/relayPrompt");
   expect(oldPrompts.relayPrompt).toBe(history.relayPrompt);
 });
+
+test("archive GET import graphs cannot tick, refresh merge evidence or reconcile ownership", () => {
+  for (const entry of ["src/app/api/review-history/route.ts", "src/app/api/review-history/[id]/route.ts", "src/app/api/review-history/[id]/export/route.ts"]) {
+    const dependencies = [...runtimeDependencies(entry)].map(file => path.relative(process.cwd(), file));
+    expect(dependencies.filter(file => file.startsWith("src/lib/flows/"))).toEqual([]);
+    expect(dependencies.filter(file => /(?:engine|controller|registry|reaperRuntime|scanner\/index|viewerInstrumentation)\.ts$/.test(file))).toEqual([]);
+    expect(dependencies.filter(file => file.startsWith("src/runtime-host/"))).toEqual([]);
+  }
+});

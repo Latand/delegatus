@@ -4,9 +4,11 @@ import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { LIST_ANSWER_BYTES } from "./listAnswers";
 
 type Metadata = { id: string; time: string; project: string; status: string; placement: string; hidden: number; text: string; links: string };
-type Source<T> = { filename: string; read: (id: string) => T | null };
+export type Source<T> = { filename: string; read: (id: string) => T | null; database?: Database | null };
 export type BoardScope = { project: string; ids: string[]; query: string; updatedSince: string;
   statuses?: string[]; states?: string[]; placement?: string; openOnly?: boolean; includeClosed?: boolean };
+export type ProjectSelection = { canonical: (project: string) => string; aliases: () => Record<string, string> };
+const defaultProjects: ProjectSelection = { canonical: canonicalProject, aliases: () => projectAliasSnapshot().aliases };
 const projections = new Map<string, BoardSelection>();
 
 /** One process-local scalar index per durable collection. Bootstrap reads only
@@ -16,7 +18,7 @@ export class BoardSelection {
   private db = new Database(":memory:");
   private revision = -1;
   readonly work = { metadataRows: 0, recordReads: 0, rebuilds: 0 };
-  constructor(private filename: string, private collection: "tasks" | "pipelines" | "flows") {
+  constructor(private filename: string, private collection: "tasks" | "pipelines" | "flows", private projects: ProjectSelection = defaultProjects) {
     this.db.exec(`CREATE TABLE rows(id TEXT PRIMARY KEY, time TEXT, project TEXT, status TEXT, placement TEXT, hidden INTEGER, text TEXT);
       CREATE INDEX row_time ON rows(time DESC,id DESC);
       CREATE INDEX row_project ON rows(project,time DESC,id DESC);
@@ -27,6 +29,7 @@ export class BoardSelection {
       CREATE TABLE links(task TEXT, pipeline TEXT, PRIMARY KEY(task,pipeline));
       CREATE INDEX links_pipeline ON links(pipeline);`);
   }
+  close() { this.db.close(); }
   private metadataSql() {
     const task = this.collection === "tasks";
     return `SELECT json_extract(value_json,'$.id') AS id,
@@ -54,10 +57,10 @@ export class BoardSelection {
       this.db.query("INSERT OR IGNORE INTO links VALUES (?,?)").run(task, row.id);
     }
   }
-  sync() {
-    const source = new Database(this.filename, { readonly: true });
+  sync(snapshot?: Database | null) {
+    const source = snapshot ?? new Database(this.filename, { readonly: true });
     try {
-      source.exec("BEGIN");
+      if (!snapshot) source.exec("BEGIN");
       const meta = source.query<{ revision: number; change_floor: number }, [string]>("SELECT revision,change_floor FROM state_collections WHERE collection=?").get(this.collection);
       if (!meta) throw new Error(`missing ${this.collection} collection`);
       if (meta.revision === this.revision) return;
@@ -78,7 +81,7 @@ export class BoardSelection {
         }
       })();
       this.revision = meta.revision;
-    } finally { source.close(); }
+    } finally { if (!snapshot) source.close(); }
   }
   links(task: string): string[] {
     this.sync();
@@ -103,7 +106,7 @@ export class BoardSelection {
         if (!record) continue;
         const row = record as Record<string, any>;
         const time = String(this.collection === "tasks" ? row.updatedAt : row.createdAt);
-        if (!matches(row, scope, this.collection)) continue;
+        if (!matches(row, scope, this.collection, this.projects.canonical)) continue;
         keyed.set(id, record); candidates.push({ id, time });
       }
       candidates.sort(compare);
@@ -112,7 +115,7 @@ export class BoardSelection {
       remaining = candidates.length;
       candidates = candidates.slice(0, limit);
     } else {
-      this.sync();
+      this.sync(source.database);
       const { where, values } = this.where(scope);
       total = this.db.query<{ n: number }, SQLQueryBindings[]>(`SELECT count(*) AS n FROM rows WHERE ${where}`).get(...values)!.n;
       const after = boundary ? " AND (time < ? OR (time = ? AND id < ?))" : "";
@@ -140,7 +143,7 @@ export class BoardSelection {
     const set = (column: string, items: string[]) => {
       if (items.length) { clauses.push(`${column} IN (${items.map(() => "?").join(",")})`); values.push(...items); }
     };
-    if (scope.project) set("project", [scope.project, ...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === scope.project)]);
+    if (scope.project) set("project", [scope.project, ...Object.keys(this.projects.aliases()).filter(key => this.projects.canonical(key) === scope.project)]);
     set("status", scope.statuses ?? expandStates(scope.states ?? []));
     if (scope.placement) set("placement", [scope.placement]);
     if (scope.openOnly) clauses.push("status != 'done'");
@@ -162,9 +165,9 @@ function grams(text: string, only?: number) {
   return result;
 }
 function expandStates(states: string[]) { return [...new Set(states.flatMap(state => state === "open" ? ["draft", "provisioning", "running", "paused", "needs_decision"] : [state]))]; }
-function matches(row: Record<string, any>, scope: BoardScope, collection: string) {
+function matches(row: Record<string, any>, scope: BoardScope, collection: string, canonical: (project: string) => string) {
   const task = collection === "tasks", states = scope.statuses ?? expandStates(scope.states ?? []);
-  return (!scope.project || canonicalProject(row.project) === scope.project)
+  return (!scope.project || canonical(row.project) === scope.project)
     && (!states.length || states.includes(task ? row.status : row.state))
     && (!scope.openOnly || row.status !== "done") && (!scope.placement || row.placement === scope.placement)
     && (task || scope.includeClosed || (row.state !== "closed" && !(collection === "flows" ? row.closedAt : row.hiddenAt)))
