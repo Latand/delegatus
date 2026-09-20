@@ -47,7 +47,7 @@ function controlStub(responses: Record<string, Record<string, unknown>> = {}) {
   const control: ViewerControlDependencies = {
     post: async (pathname, body, headers) => {
       posts.push({ pathname, body, headers: headers ?? {} });
-      return responses[pathname] ?? { ok: true, outcome: "delivered" };
+      return responses[pathname] ?? { ok: true, outcome: "delivered", operationId: "fixture-operation" };
     },
   };
   return { posts, control };
@@ -89,7 +89,7 @@ function gatedControlStub() {
 }
 
 function bindingsWith(control: ViewerControlDependencies) {
-  return viewerMcpBindings(undefined, control, {} as never);
+  return viewerMcpBindings(undefined, control, { registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }) } as never);
 }
 
 test("get_orchestrator with nothing designated says so and names the current default prompt version", async () => {
@@ -288,7 +288,7 @@ test("send_message_to_orchestrator resolves the seat server-side and delivers wi
   expect(posts[0]!.body).toMatchObject({
     conversationId: SEATED_ID,
     path: "/tmp/o.jsonl",
-    clientMessageId: "send-1",
+    clientMessageId: expect.stringMatching(/^mcp_orchestrator_/),
     text: "status?",
   });
   expect(result).toMatchObject({ conversationId: SEATED_ID, created: false });
@@ -309,7 +309,7 @@ test("send_message_to_orchestrator with nothing designated creates one first, th
      side effects instead of creating a second orchestrator. */
   expect(posts[0]!.body.clientRequestId).not.toBe("send-2");
   expect(posts[0]!.body).toMatchObject({ mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
-  expect(posts[1]!.body).toMatchObject({ conversationId: SEATED_ID, clientMessageId: "send-2", text: "kick off" });
+  expect(posts[1]!.body).toMatchObject({ conversationId: SEATED_ID, clientMessageId: expect.stringMatching(/^mcp_orchestrator_/), text: "kick off" });
   expect(result).toMatchObject({ created: true, conversationId: SEATED_ID, seatEpoch: 1 });
 });
 

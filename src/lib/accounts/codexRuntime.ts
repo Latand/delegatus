@@ -4,6 +4,7 @@ import path from "node:path";
 import { listCodexAccounts, UnknownAccountError, type CodexAccount } from "./codex";
 import { AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "./accountMutation";
 import { statePath } from "../configDir";
+import { CODEX_ACCOUNTS_SOURCE, CODEX_LOGIN_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import {
   CodexAppServerClient,
   type AppServerAccountRead,
@@ -89,12 +90,22 @@ function canonicalHome(home: string): string {
   try { return fs.realpathSync(resolved); } catch { return resolved; }
 }
 
-function currentCodexAccount(account: CodexAccount): CodexAccount {
-  try { fs.lstatSync(statePath("codex-accounts.json")); }
+/** Whether this installation records a Codex registry at all. An installation
+    that has never had one trusts the account it was handed; since #1870 that is
+    a collection with no registry rows rather than a pathname with no file. */
+function codexRegistryRecorded(): boolean {
+  const read = readAccountSource(CODEX_ACCOUNTS_SOURCE);
+  if (read.kind === "collection") return read.body !== undefined;
+  if (read.kind === "gap") return true;
+  try { fs.lstatSync(statePath("codex-accounts.json")); return true; }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return account;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+}
+
+function currentCodexAccount(account: CodexAccount): CodexAccount {
+  if (!codexRegistryRecorded()) return account;
   const current = listCodexAccounts().find((candidate) => candidate.id === account.id);
   if (!current || current.kind !== account.kind || canonicalHome(current.home) !== canonicalHome(account.home)) {
     throw new UnknownAccountError(account.id);
@@ -111,9 +122,16 @@ function safeStoredAttempt(value: unknown): value is PersistedAttempt {
     (item.reason === null || item.reason === "child-died" || item.reason === "login-unsuccessful" || item.reason === "cancelled" || item.reason === "viewer-restarted" || item.reason === "account-read-failed" || item.reason === "start-failed");
 }
 
+/* Device-login attempts are the `accounts` collection of state.sqlite (#1870,
+   slice 7), one row per canonical CODEX_HOME. `file` names the store's
+   directory; a store this process cannot read reports no attempt, the way an
+   absent or damaged file always did. */
 function readStoredAttempts(file: string): Map<string, PersistedAttempt> {
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<StoredAttempts>;
+    const read = readAccountSource(CODEX_LOGIN_SOURCE, path.dirname(file));
+    const parsed = (read.kind === "collection"
+      ? read.body ?? {}
+      : JSON.parse(fs.readFileSync(file, "utf8"))) as Partial<StoredAttempts>;
     if (parsed.version !== 1 || !parsed.attempts || typeof parsed.attempts !== "object") return new Map();
     return new Map(Object.entries(parsed.attempts).filter((entry): entry is [string, PersistedAttempt] => safeStoredAttempt(entry[1])));
   } catch {
@@ -423,15 +441,7 @@ export class ManagedCodexRuntime {
     }
     if (!changed) return;
     const stored: StoredAttempts = { version: 1, attempts: Object.fromEntries(this.records) };
-    const dir = path.dirname(this.stateFile);
-    const tmp = path.join(dir, `.${path.basename(this.stateFile)}.${process.pid}.${Date.now()}.tmp`);
-    try {
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(tmp, JSON.stringify(stored, null, 2) + "\n", { mode: 0o600 });
-      fs.renameSync(tmp, this.stateFile);
-    } finally {
-      fs.rmSync(tmp, { force: true });
-    }
+    writeAccountSource(CODEX_LOGIN_SOURCE, stored, path.dirname(this.stateFile));
   }
 
   private queueRecord(home: string, attempt: PersistedAttempt): void {

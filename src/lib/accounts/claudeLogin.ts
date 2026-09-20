@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { resolveBinary } from "@/lib/agent/cli";
 import { statePath } from "@/lib/configDir";
+import { CLAUDE_LOGIN_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { darwinProcessArgv } from "@/lib/proc/darwinArgv";
 import { darwinProcessIdentity } from "@/lib/proc/darwinIdentity";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
@@ -229,22 +230,20 @@ export const realClaudeLoginPorts: ClaudeLoginPorts = {
   clearTimeout,
 };
 
+/* In-flight login operations are the `accounts` collection of state.sqlite
+   (#1870, slice 7), one row per operation. A load that cannot produce a list
+   throws, exactly as the unreadable file did: recovery must not mistake a
+   store it could not read for "no operation was running". */
 const fileClaudeLoginStore: ClaudeLoginStore = {
-  load: () => JSON.parse(fs.readFileSync(statePath("claude-auth-operations.json"), "utf8")) as PersistedOperation[],
-  save: (rows) => {
-    const file = statePath("claude-auth-operations.json");
-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    const tmp = `${file}.${process.pid}.tmp`;
-    try {
-      fs.writeFileSync(tmp, JSON.stringify(rows), { mode: 0o600 });
-      const fd = fs.openSync(tmp, "r");
-      try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-      fs.renameSync(tmp, file);
-      const directory = fs.openSync(path.dirname(file), "r");
-      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-    }
-    finally { fs.rmSync(tmp, { force: true }); }
+  load: () => {
+    const read = readAccountSource(CLAUDE_LOGIN_SOURCE);
+    if (read.kind === "legacy") return JSON.parse(fs.readFileSync(statePath(CLAUDE_LOGIN_SOURCE), "utf8")) as PersistedOperation[];
+    if (read.kind === "gap") throw new Error(`persisted Claude login operations could not be read: ${read.reason}`);
+    if (read.body === undefined) throw new Error("no persisted Claude login operations");
+    if (!Array.isArray(read.body)) throw new Error("persisted Claude login operations are malformed");
+    return read.body as PersistedOperation[];
   },
+  save: (rows) => writeAccountSource(CLAUDE_LOGIN_SOURCE, rows),
 };
 
 export function cleanClaudeLoginOutput(chunk: string): string { return chunk.replace(ANSI, "").replace(/\r/g, ""); }

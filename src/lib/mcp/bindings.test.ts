@@ -2030,7 +2030,22 @@ test("a stage completion call is attributed by the server, and a caller cannot n
        never as the actor: the actor below is the server's own attribution. */
     conversationId: "conversation_somebody_else",
   });
-  expect(accepted).toMatchObject({ ok: true, pipelineId: "pipeline_1", stageId: "build", attempt: 1, replaced: false, report });
+  expect(accepted).toMatchObject({
+    ok: true,
+    pipelineId: "pipeline_1",
+    stageId: "build",
+    attempt: 1,
+    replaced: false,
+    report: {
+      seq: 1,
+      at: "2026-09-18T00:00:00.000Z",
+      verdict: { status: "fail", findingCount: 1, severityCounts: { P0: 1, P1: 0, P2: 0, P3: 0 } },
+      provenance: { head: "0".repeat(40), branch: "pipeline/x", dirty: false, outputs: [] },
+      calls: 1,
+    },
+  });
+  expect(JSON.stringify(accepted)).not.toContain("the fence is missing");
+  expect(JSON.stringify(accepted)).not.toContain("One finding left.");
   expect(calls[0]![1]).toEqual({ kind: "agent", role: "builder", conversationId: "conversation_stage_1" });
 
   const refused = await service.callTool("stage_report", { clientRequestId: "report-2", verdict: "pass", stageId: "not-mine" });

@@ -20,6 +20,8 @@ afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 const { accountManager } = await import("@/lib/accounts/manager");
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } = await import("./engine");
 const { savePipelines } = await import("./store");
+const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+const { clearAccountFixture, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
 type PipelinePorts = import("./engine").PipelinePorts;
 
 const ATLAS = "project-atlas";
@@ -273,8 +275,7 @@ test("a damaged binding record parks the stage instead of launching it on any ac
      disk is what decides, and a record that cannot be read must refuse the
      launch rather than answer "this project is unbound" and hand the stage
      whichever account the engine happens to be pointing at. */
-  const record = path.join(process.env.LLV_STATE_DIR!, "account-project-bindings.json");
-  fs.writeFileSync(record, '{"schemaVersion":1,"bindings":[{"engine":"claude"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude" }] });
   const reservations: unknown[] = [];
   try {
     await expect(defaultPipelinePorts().spawnAgent(spawnInput(RESERVED), (reservation) => { reservations.push(reservation); }))
@@ -285,7 +286,7 @@ test("a damaged binding record parks the stage instead of launching it on any ac
     await expect(defaultPipelinePorts().spawnAgent(spawnInput(null), () => {}))
       .rejects.toThrow(/is unreadable/);
   } finally {
-    fs.rmSync(record, { force: true });
+    clearAccountFixture(BINDINGS_SOURCE);
   }
 });
 
@@ -295,7 +296,6 @@ test("a damaged binding record answers create and override with the same conflic
      500 on a request nothing is wrong with; the state is what needs repair, so
      it is the same 409 — with the same wording — the launch, the reseat and the
      binding route give, and one repair clears all of them. */
-  const record = path.join(process.env.LLV_STATE_DIR!, "account-project-bindings.json");
   const realPorts: PipelinePorts = {
     ...defaultPipelinePorts(),
     preflightRepo: () => ({ ok: true, repoDir: REPO, gitCommonDir: path.join(REPO, ".git"), worktreeParent: sandbox }),
@@ -308,7 +308,7 @@ test("a damaged binding record answers create and override with the same conflic
   });
   expect(stored.pipeline).toBeDefined();
 
-  fs.writeFileSync(record, '{"schemaVersion":1,"bindings":[{"engine":"claude"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude" }] });
   try {
     const created = await createPipelineFromRequest(draft(RESERVED), realPorts, {
       allowOperatorDraftWithoutLineage: true,
@@ -336,6 +336,6 @@ test("a damaged binding record answers create and override with the same conflic
     expect(unpinned.error).toBeUndefined();
     expect(unpinned.pipeline).toBeDefined();
   } finally {
-    fs.rmSync(record, { force: true });
+    clearAccountFixture(BINDINGS_SOURCE);
   }
 });

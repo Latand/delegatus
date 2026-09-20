@@ -816,10 +816,10 @@ test("request_attention admits every target shape the attention record accepts",
 
 import { RECOVERY_CONTRACT_DESCRIPTION, type McpRecoverableTool } from "./server";
 
-test("spawn_agent and send_message publish recoveryOnly and the recovery contract, and the flag never enters the digest", async () => {
+test("spawn_agent and both send tools publish recoveryOnly and the recovery contract, and the flag never enters the digest", async () => {
   await withProtocolClient(inertBindings(), async (client) => {
     const listed = await client.listTools();
-    for (const toolName of ["spawn_agent", "send_message"] as const) {
+    for (const toolName of ["spawn_agent", "send_message", "send_message_to_orchestrator"] as const) {
       const tool = listed.tools.find((candidate) => candidate.name === toolName)!;
       const schema = tool.inputSchema as { properties: Record<string, { type?: string; description?: string }>; required?: string[] };
       /* Captured before toMatchObject, which swaps the matched field for its matcher. */

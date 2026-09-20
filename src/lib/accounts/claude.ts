@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { stateDir, statePath } from "@/lib/configDir";
+import { CLAUDE_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { claudeCredentialFileState, readClaudeCredentials, type ClaudeCredentialRead } from "./claudeCredentials";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import { withAccountMutationLock } from "./accountMutation";
@@ -38,7 +39,6 @@ type RetiredAccount = { id: string; label: string; retiredAt: number; archived?:
 /** `removals` journals account removals in flight (issue #1857). */
 type Registry = { version: number; active: string; accounts: StoredAccount[]; retired: RetiredAccount[]; removals: AccountRemovalJournalEntry[] };
 type Loaded = { registry: Registry; corrupt: boolean };
-let cached: { key: string; loaded: Loaded } | null = null;
 
 export class UnknownClaudeAccountError extends Error { constructor(id: string) { super(`unknown Claude account: ${id}`); this.name = "UnknownClaudeAccountError"; } }
 export class InvalidClaudeAccountLabelError extends Error { constructor() { super("account label must contain visible text and be at most 80 characters"); this.name = "InvalidClaudeAccountLabelError"; } }
@@ -71,7 +71,6 @@ function projectsDirFor(home: string): string {
 }
 function managedHome(id: string): string { return path.join(claudeAccountsRoot(), id); }
 function defaults(): Registry { return { version: VERSION, active: DEFAULT_ID, accounts: [], retired: [], removals: [] }; }
-function key(file: string): string { try { const s = fs.statSync(file); return `${s.mtimeMs}:${s.size}`; } catch { return "missing"; } }
 function safeMode(mode: number, required: number): boolean { return (mode & 0o077) === 0 && (mode & 0o777) === required; }
 
 /** Never trust an on-disk registry path: ids derive the only valid managed home. */
@@ -123,13 +122,24 @@ function normalize(value: unknown): Loaded {
   return { registry: { version: VERSION, active: raw.active, accounts, retired, removals }, corrupt };
 }
 
+/* The registry is the `accounts` collection of state.sqlite (#1870, slice 7).
+   The rows hold what `claude-accounts.json` held, so every check below is the
+   one it always was, including what counts as corrupt. */
 function readRegistry(): Loaded {
-  const file = claudeRegistryPath(); const storeKey = `${file}:${key(file)}`;
-  if (cached?.key === storeKey) return cached.loaded;
-  let loaded: Loaded;
-  try { loaded = fs.existsSync(file) ? normalize(JSON.parse(fs.readFileSync(file, "utf8"))) : { registry: defaults(), corrupt: false }; }
-  catch { loaded = { registry: defaults(), corrupt: true }; }
-  cached = { key: storeKey, loaded }; return loaded;
+  const read = readAccountSource(CLAUDE_ACCOUNTS_SOURCE);
+  if (read.kind === "legacy") return readLegacyRegistryFile();
+  /* A registry whose record could not be read is corrupt, never empty: Main is
+     served and every mutation refuses, the same answer the unparseable file
+     always gave. */
+  if (read.kind === "gap") return { registry: defaults(), corrupt: true };
+  return read.body === undefined ? { registry: defaults(), corrupt: false } : normalize(read.body);
+}
+
+/** The pre-#1870 read, for a release that is not yet allowed to import. */
+function readLegacyRegistryFile(): Loaded {
+  const file = claudeRegistryPath();
+  try { return fs.existsSync(file) ? normalize(JSON.parse(fs.readFileSync(file, "utf8"))) : { registry: defaults(), corrupt: false }; }
+  catch { return { registry: defaults(), corrupt: true }; }
 }
 function mutable(): Registry { const loaded = readRegistry(); if (loaded.corrupt) throw new CorruptClaudeAccountsError(); return loaded.registry; }
 function sleep(ms: number): void { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
@@ -162,17 +172,11 @@ function withRegistryLock<T>(operation: () => T): T {
     }
   });
 }
+/** One transaction: the account rows, the retired records and the removal
+    journal step commit together, and the collection revision — the account
+    mutation revision — advances with them (#1870). */
 function write(registry: Registry): void {
-  const file = claudeRegistryPath(); fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(registry, null, 2) + "\n", { mode: 0o600 });
-    const fd = fs.openSync(tmp, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.renameSync(tmp, file);
-    const directory = fs.openSync(path.dirname(file), "r"); try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-    cached = null;
-  }
-  finally { fs.rmSync(tmp, { force: true }); }
+  writeAccountSource(CLAUDE_ACCOUNTS_SOURCE, registry);
 }
 
 export function managedClaudeCredentialIsSafe(home: string, required = false): boolean {
@@ -189,7 +193,7 @@ export function listClaudeAccounts(): ClaudeAccount[] { recoverRemovalsAtStartup
 export function activeClaudeAccountId(): string { const active = readRegistry().registry.active; return listClaudeAccounts().some((item) => item.id === active) ? active : DEFAULT_ID; }
 export function claudeAccountsMutationLocked(): boolean { return readRegistry().corrupt; }
 export function claudeAccountForSpawn(requested?: string | null): Pick<ClaudeAccount, "id" | "kind" | "home" | "projectsDir"> { const found = listClaudeAccounts().find((item) => item.id === (requested ?? activeClaudeAccountId())); if (!found) throw new UnknownClaudeAccountError(requested ?? ""); if (found.kind === "managed" && (!managedClaudeHomeIsSafe(found.id, true) || !managedClaudeCredentialIsSafe(found.home))) throw new UnsafeClaudeHomeError(); return { id: found.id, kind: found.kind, home: found.home, projectsDir: found.projectsDir }; }
-export function setActiveClaudeAccount(id: string): void { withRegistryLock(() => { cached = null; const registry = mutable(); if (!listClaudeAccounts().some((item) => item.id === id)) throw new UnknownClaudeAccountError(id); write({ ...registry, active: id }); }); }
+export function setActiveClaudeAccount(id: string): void { withRegistryLock(() => { const registry = mutable(); if (!listClaudeAccounts().some((item) => item.id === id)) throw new UnknownClaudeAccountError(id); write({ ...registry, active: id }); }); }
 /** Transcript trees kept by removed accounts: the shared archive (issue #1857),
     or the home itself for accounts retired in place before it (issue #643). */
 export function retiredClaudeProjectRoots(): string[] { return readRegistry().registry.retired.map((item) => projectsDirFor(item.archived ? retiredAccountArchive("claude", item.id) : managedHome(item.id))); }
@@ -325,7 +329,7 @@ export function claudeSettingsPath(): string | null { const file = path.join(cla
 export function createManagedClaudeAccount(label: string): ClaudeAccount {
   const clean = label.trim(); if (!clean || clean.length > 80 || /[\u0000-\u001f\u007f]/.test(clean)) throw new InvalidClaudeAccountLabelError();
   return withRegistryLock(() => {
-    cached = null; const registry = mutable(); const id = nextId(clean, new Set([...listClaudeAccounts().map((item) => item.id), ...registry.retired.map((item) => item.id)])); const home = managedHome(id); let made = false;
+    const registry = mutable(); const id = nextId(clean, new Set([...listClaudeAccounts().map((item) => item.id), ...registry.retired.map((item) => item.id)])); const home = managedHome(id); let made = false;
     // A removed directory does not prove its platform credential is gone.
     // Refuse adoption of a previous account's store under a reused label.
     if (readClaudeCredentials(home).state !== "absent") throw new UnsafeClaudeHomeError();
@@ -374,7 +378,7 @@ function claudeArchiveRewrites(home: string, archive: string): Array<{ from: str
 }
 
 function writeJournal(id: string, phase: AccountRemovalJournalPhase | null, rewrites?: readonly AccountPathRewrite[]): void {
-  cached = null; const current = mutable(); write({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
+  const current = mutable(); write({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
 }
 
 /** The registry once `id` is removed: it leaves, a retired record points at
@@ -391,7 +395,7 @@ function withAccountRetired(registry: Registry, id: string): Registry {
 }
 
 function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } {
-  cached = null; const registry = mutable();
+  const registry = mutable();
   const recovered: string[] = []; const unresolved: string[] = [];
   for (const entry of registry.removals) {
     if (accountRemovalInFlight("claude", entry.id)) continue;
@@ -403,7 +407,7 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
         home: managedHome(entry.id),
         entry,
         listed: registry.accounts.some((item) => item.id === entry.id),
-        commitRetired: () => { cached = null; write(withAccountRetired(mutable(), entry.id)); },
+        commitRetired: () => { write(withAccountRetired(mutable(), entry.id)); },
         clearJournal: () => writeJournal(entry.id, null),
       });
     } catch { /* stays journaled; one stuck record never blocks another account */ }
@@ -442,7 +446,7 @@ function recoverRemovalsAtStartup(): void {
 export function removeManagedClaudeAccount(id: string): AccountArchiveRemovalReport {
   return withRegistryLock(() => {
     recoverRemovalsLocked();
-    cached = null; const registry = mutable(); const existing = registry.accounts.find((item) => item.id === id); if (!existing) throw new UnknownClaudeAccountError(id);
+    const registry = mutable(); const existing = registry.accounts.find((item) => item.id === id); if (!existing) throw new UnknownClaudeAccountError(id);
     const before: Registry = { ...registry, removals: withAccountRemovalJournal(registry.removals, id, null) };
     const report = removeManagedAccountIntoArchive({
       engine: "claude",
@@ -469,7 +473,6 @@ export function cleanupOrphanedClaudeHomes(): AccountOrphanCleanupReport {
     /* A removal whose archive still holds its sign-in file stays journaled;
        it is named here so the dialog never reports that file deleted. */
     const recovery = recoverRemovalsLocked();
-    cached = null;
     const registry = mutable();
     const registered = new Set(registry.accounts.map((account) => account.id));
     const retired = new Set(registry.retired.map((account) => account.id));

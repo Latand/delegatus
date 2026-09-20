@@ -31,6 +31,8 @@ process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 const claude = await import("@/lib/accounts/claude");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { sendToImplementer } = await import("./engine");
+const { BINDINGS_SOURCE, resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
+const { clearAccountFixture, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
 
 afterAll(() => {
   fs.rmSync(SANDBOX, { recursive: true, force: true });
@@ -85,10 +87,10 @@ const PROJECT = "project-atlas";
 /** The project's pool, as the accounts panel writes it. */
 function bind(accountId: string): void {
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{ engine: "claude", accountId, project: PROJECT, createdAt: new Date(Date.now() - 60_000).toISOString() }],
-  }), "utf8");
+  });
 }
 
 /** A fresh, live, believed sample with `usedPercent` already burned. */
@@ -199,7 +201,8 @@ test("a legacy relay on an unbound project keeps the fallback it always had (#12
   const routed = accounts[0]!;
   claude.setActiveClaudeAccount(routed.id);
   agentRegistry().setEngineRouting("claude", routed.id);
-  fs.rmSync(RECORD, { force: true });
+  resetAccountCollectionsForTests();
+  clearAccountFixture(BINDINGS_SOURCE);
 
   const command = await relaySpecFor(transcript, PROJECT);
 
@@ -230,9 +233,10 @@ test("a damaged binding record refuses a legacy relay before it delivers anythin
   claude.setActiveClaudeAccount(routed.id);
   agentRegistry().setEngineRouting("claude", routed.id);
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"claude"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude" }] });
 
   const refused = await relaySpecFor(transcript, PROJECT).then(() => null, (error: unknown) => error);
   expect((refused as Error).name).toBe("AccountProjectBindingsUnreadableError");
-  fs.rmSync(RECORD, { force: true });
+  resetAccountCollectionsForTests();
+  clearAccountFixture(BINDINGS_SOURCE);
 });
