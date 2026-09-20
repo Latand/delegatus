@@ -19,12 +19,12 @@ const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pat
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { newRound, setRelayDeliveryForTest, tickFlow } = await import("@/lib/flows/engine");
-const { isRecoverableLegacyRelayFailurePause } = await import("@/lib/flows/commands");
+const { isRecoverableLegacyRelayFailurePause, MAX_FLOW_NOTE_LENGTH } = await import("@/lib/flows/commands");
 const rawCreatePipelineFromRequest = engineModule.createPipelineFromRequest;
 const createPipelineFromRequest: typeof rawCreatePipelineFromRequest = async (request, ports, options) =>
   await rawCreatePipelineFromRequest({ src: "/codex/creator.jsonl", ...request }, ports, options);
 const { registerPipelineTick } = await import("./controllerSignal");
-const { loadPipelines, savePipelines } = await import("./store");
+const { loadPipelines, savePipelines, pipelineIdentity } = await import("./store");
 const { durableStageTurnEvidence } = await import("./durableEvidence");
 const { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed } = await import("./failEdgeBudget");
 const { saveTasks } = await import("@/lib/tasks/store");
@@ -556,6 +556,63 @@ function harness() {
 
 /** Publication is opt-in (#1692): the tests of the remote-branch contract ask for it. */
 const REMOTE_BRANCH = { publication: "remote-branch" } as const;
+
+test("delivery creation clamps the second target lane and replays its original key before provisioning", async () => {
+  const h = harness();
+  const request = { task: "Delivery owner", repoDir: "/repo", stages: RUN_STAGES as never, autoStart: false,
+    ...REMOTE_BRANCH, delivery: { branch: "refs/heads/shared-review", rejectedHead: "a".repeat(40), pr: 637 } };
+  const first = await createPipelineFromRequest(request, h.ports, { creationRequest: { key: "delivery-first", digest: "first" } });
+  const second = await createPipelineFromRequest({ ...request, task: "Comparison", delivery: { ...request.delivery, remote: "origin", rejectedHead: "b".repeat(40) } }, h.ports,
+    { creationRequest: { key: "delivery-second", digest: "second" } });
+  expect(first.pipeline?.delivery).toMatchObject({ disposition: "owner", active: true, epoch: 1 });
+  expect(second.pipeline).toMatchObject({ publication: "internal", delivery: { disposition: "comparison", publish: "disabled", ownerId: first.pipeline!.id, epoch: 1 } });
+  const replay = await createPipelineFromRequest(request, h.ports, { creationRequest: { key: "delivery-first", digest: "first" } });
+  expect(replay.pipeline?.id).toBe(first.pipeline?.id);
+  expect(loadPipelines()).toHaveLength(2);
+  expect(h.calls.some((call) => call.includes("worktree add"))).toBe(false);
+  const denied = await patchPipeline(second.pipeline!.id, { action: "publish", acceptedSha: ORIGIN_MAIN_SHA }, h.ports);
+  expect(denied.error).toContain(first.pipeline!.id);
+  expect(h.calls.some((call) => call.startsWith("git push"))).toBe(false);
+  const takeover = await patchPipeline(second.pipeline!.id, { action: "takeover", expectedOwner: first.pipeline!.id, expectedEpoch: 1, reason: "comparison selected" }, h.ports,
+    { kind: "agent", role: "builder", conversationId: "conversation_requester" });
+  expect(takeover.pipeline?.delivery).toMatchObject({ disposition: "owner", active: true, epoch: 2 });
+  expect(takeover.pipeline?.delivery?.journal.at(-1)?.conversationId).toBe("conversation_requester");
+  expect((await patchPipeline(first.pipeline!.id, { action: "publish", acceptedSha: ORIGIN_MAIN_SHA }, h.ports)).error).toContain(second.pipeline!.id);
+});
+
+test("legacy publication admission processes bounded batches before provisioning and never strands the next batch", async () => {
+  const h = harness();
+  const template = await create(h.ports, RUN_STAGES as never, REMOTE_BRANCH);
+  const legacy = Array.from({ length: 17 }, (_, index) => {
+    const record = structuredClone(template);
+    record.id = `legacy-${index.toString().padStart(2, "0")}`;
+    Object.assign(record, pipelineIdentity(record.id, record.task, record.repoDir));
+    delete record.delivery;
+    return record;
+  });
+  savePipelines(legacy);
+  await tickPipelines([], h.ports);
+  const first = loadPipelines();
+  expect(first.filter((pipeline) => pipeline.delivery)).toHaveLength(16);
+  expect(first.at(-1)).toMatchObject({ state: "provisioning" });
+  expect(first.some((pipeline) => pipeline.state === "needs_decision")).toBe(false);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines().every((pipeline) => pipeline.delivery?.disposition === "owner")).toBe(true);
+  expect(loadPipelines().some((pipeline) => pipeline.state === "needs_decision")).toBe(false);
+});
+
+test("a terminal failing verdict releases ownership and explicit takeover acknowledges that failure", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail")], h.ports);
+  expect(loadPipelines()[0]?.delivery).toMatchObject({ active: false, publish: "disabled", epoch: 1 });
+  const taken = await patchPipeline(pipeline.id, { action: "takeover", expectedOwner: pipeline.id, expectedEpoch: 1, reason: "retry the failed attempt" }, h.ports,
+    { kind: "agent", role: "builder", conversationId: "conversation_retry" });
+  expect(taken.pipeline?.delivery).toMatchObject({ active: true, publish: "enabled", epoch: 2 });
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).pipeline?.delivery?.active).toBe(true);
+});
 
 async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch" } = {}) {
   savePipelines([]);
@@ -2416,6 +2473,8 @@ test("a due busy wait survives a restarted controller race with one fresh host c
     const fs = await import("node:fs");
     const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(enginePath)});
     const ports = defaultPipelinePorts();
+    // This child models admission and a fake spawn, just like the parent harness.
+    ports.engineReadiness = () => "connected";
     ports.structuredDeliveryPublication = () => "ready";
     ports.conversationAgentActive = async () => true;
     ports.spawnAgent = async (input, onReserved) => {
@@ -2432,7 +2491,10 @@ test("a due busy wait survives a restarted controller race with one fresh host c
   let second: ReturnType<typeof Bun.spawn> | null = null;
   const waitFor = async (filename: string): Promise<void> => {
     for (let attempt = 0; attempt < 400 && !fs.existsSync(filename); attempt += 1) await Bun.sleep(5);
-    if (!fs.existsSync(filename)) throw new Error(`timed out waiting for ${path.basename(filename)}`);
+    if (!fs.existsSync(filename)) {
+      const childError = first?.exitCode !== null && first?.stderr ? await new Response(first.stderr as ReadableStream<Uint8Array>).text() : "";
+      throw new Error(`timed out waiting for ${path.basename(filename)}: ${childError || JSON.stringify(loadPipelines().map((pipeline) => ({ state: pipeline.state, detail: pipeline.stateDetail })))}`);
+    }
   };
   try {
     first = Bun.spawn({ cmd: [process.execPath, "-e", childScript(false)], env: childEnv, stdout: "ignore", stderr: "pipe" });
@@ -6111,6 +6173,7 @@ test("issue 533: retry replays the pipeline launch contract from durable stage s
     state: "failed", launchId: firstAttempt.launchId!, conversationId: firstAttempt.conversationId!,
     sessionId: firstAttempt.sessionId, "transcript": firstAttempt.agentPath, paneId: firstAttempt.paneId,
   } : null;
+  expect((await patchPipeline(pipeline.id, { action: "takeover", expectedOwner: pipeline.id, expectedEpoch: 1, reason: "resume the original publication lane" }, h.ports)).pipeline?.delivery?.active).toBe(true);
   await patchPipeline(pipeline.id, {
     action: "retry-stage", stageId: "plan", launchId: firstAttempt.launchId!,
   }, h.ports);
@@ -7504,6 +7567,20 @@ test("creation caps task, spec, and stage prompt sizes", async () => {
 const reviewPipeline = { task: "ship the widget", cursor: null, stages: [], runs: [] } as unknown as Parameters<typeof reviewNote>[0];
 const reviewStage = (prompt: string) => ({ id: "review", kind: "review-loop", prompt, next: null } as unknown as Parameters<typeof reviewNote>[1]);
 const noteOf = (result: ReturnType<typeof reviewNote>) => ("note" in result ? result.note : "");
+
+test("comparison review notes preserve owner guidance within the flow-note budget", () => {
+  const pipeline = { ...reviewPipeline, delivery: {
+    target: { repository: "repo-fixture", remote: "", branch: "refs/heads/review" },
+    disposition: "comparison" as const, publish: "disabled" as const, active: false, ownerId: "publishing-lane", epoch: 4, journal: [],
+  } };
+  const role = { roleId: "reviewer" as const, engine: "codex" as const, model: null, effort: null,
+    access: "read-only" as const, promptScaffold: "review guidance ".repeat(400) };
+  const note = noteOf(reviewNote(pipeline, reviewStage("Check acceptance criteria"), role));
+  expect(note).toContain("owned by publishing-lane at epoch 4");
+  expect(note).toContain("Do not push to that branch");
+  expect(note.length).toBeLessThanOrEqual(MAX_FLOW_NOTE_LENGTH);
+  expect(reviewNote(pipeline, reviewStage("x".repeat(MAX_FLOW_NOTE_LENGTH)), role)).toHaveProperty("error");
+});
 
 test("reviewNote fits the flow-note cap while preserving the directive and safety fences", () => {
   /* A long role scaffold + fences would blow past the flow note's 2,000-char cap.

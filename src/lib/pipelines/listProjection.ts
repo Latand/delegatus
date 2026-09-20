@@ -23,7 +23,7 @@ import type { FlowEngine } from "@/lib/flows/types";
 
 import { latestOperationalStageAttempt } from "./attemptSelection";
 import { failEdgeExhaustion } from "./failEdgeBudget";
-import { loadArchivedPipelines, loadPipelinesForList } from "./store";
+import { loadArchivedPipelines, loadPipelinesForList, withDeliveryPublicationDetail } from "./store";
 import type {
   Pipeline,
   PipelineAccess,
@@ -93,6 +93,7 @@ export type PipelineListStage = {
 };
 
 export type PipelineListRow = {
+  delivery?: Pick<NonNullable<Pipeline["delivery"]>, "target" | "disposition" | "publish" | "ownerId" | "epoch" | "active">;
   id: string;
   /** Clamped title. */
   task: string;
@@ -131,6 +132,12 @@ export type PipelineListProjectionOptions = {
   /** Record source; defaults to the bounded, cached store read. */
   source?: () => readonly Pipeline[];
 };
+
+function deliveryProjection(pipeline: Pipeline): NonNullable<PipelineListRow["delivery"]> {
+  const delivery = pipeline.delivery!;
+  return { target: { ...delivery.target }, disposition: delivery.disposition, publish: delivery.publish,
+    ownerId: delivery.ownerId, epoch: delivery.epoch, active: delivery.active };
+}
 
 function clampText(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
@@ -224,6 +231,7 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     attemptCount += attempts.length;
   }
   return {
+    ...(pipeline.delivery ? { delivery: deliveryProjection(pipeline) } : {}),
     id: pipeline.id,
     task: clampText(pipeline.task) ?? "",
     taskIds: [...(pipeline.taskIds ?? [])],
@@ -234,7 +242,7 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     baseBranch: pipeline.baseBranch,
     state: pipeline.state,
     pausedState: pipeline.pausedState ?? null,
-    stateDetail: clampText(pipeline.stateDetail),
+    stateDetail: clampText(withDeliveryPublicationDetail(pipeline).stateDetail),
     hasSpec: typeof pipeline.spec === "string" && pipeline.spec.length > 0,
     createdAt: pipeline.createdAt,
     closedAt: pipeline.closedAt ?? null,
@@ -251,6 +259,7 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     where it stands, and how each stage's latest attempt ended. Everything else
     on the card is one `get_pipeline` away. */
 export type PipelineCompactRow = {
+  delivery?: PipelineListRow["delivery"];
   id: string;
   /** First line of the title, clamped. */
   task: string;
@@ -281,11 +290,12 @@ export function clampChars(value: string | null | undefined, limit: number): str
 export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
   const pipeline: Pipeline = record.runs ? record : { ...record, runs: [] };
   return {
+    ...(pipeline.delivery ? { delivery: deliveryProjection(pipeline) } : {}),
     id: pipeline.id,
     task: clampLine(pipeline.task, COMPACT_TASK_CHARS) ?? "",
     state: pipeline.state,
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
-    stateDetail: clampChars(pipeline.stateDetail, COMPACT_DETAIL_CHARS),
+    stateDetail: clampChars(withDeliveryPublicationDetail(pipeline).stateDetail, COMPACT_DETAIL_CHARS),
     stages: (pipeline.stages ?? []).map((stage) => {
       const attempt = latestOperationalStageAttempt(pipeline, stage.id);
       return {
