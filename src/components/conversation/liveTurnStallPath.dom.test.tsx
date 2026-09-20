@@ -28,14 +28,17 @@ import { LONG_TURN_CALLS, longTurnPrefix } from "./liveTurnLongTurn.fixture";
  *
  * The report came with a banner reading "Runtime degraded · polling", and the
  * first explanation offered for the stall was that transport. This file tests
- * that explanation rather than assuming it, and it does not hold:
+ * that explanation rather than assuming it, as far as a harness can:
  *
  *   - The two buses share nothing. `runtimeBus` polls `/api/runtime/snapshot`
  *     when its stream is down; `logBus` polls `/api/logs` when ITS stream is
- *     down. Neither pauses the other, and the transcript window keeps
- *     advancing on the polling fallback — proven below with the runtime bus
- *     held in `degraded` for the whole test. So the banner the report arrived
- *     with does not explain the stale window.
+ *     down. Neither pauses the other, and with the runtime bus held in
+ *     `degraded` for the whole test the transcript window keeps advancing on
+ *     the log bus's polling fallback. That fallback runs against this file's
+ *     own mocked `/api/logs`, which answers every poll, so what is shown is
+ *     that runtime degradation alone did not stall a healthy transcript
+ *     transport. Whether the operator's own transcript transport was healthy
+ *     at the time, this cannot say.
  *   - A tail that is paused does stall it, and the pause is an ordinary input
  *     rather than a failure: `LogFeed` passes `paused` to `useLogTail`, and a
  *     paused tail UNSUBSCRIBES from the log bus — by design, so the server
@@ -52,8 +55,10 @@ import { LONG_TURN_CALLS, longTurnPrefix } from "./liveTurnLongTurn.fixture";
  * decides it, from its own IntersectionObserver, and
  * `liveTurnPaneVisibility.dom.test.tsx` drives the mounted pane through that —
  * including the frame where the pane is back on screen and still holds the
- * window it had while it was away. Neither file claims the pane's pause is the
- * only way a window can fall behind its live turn.
+ * window it had while it was away. Together the two files establish one
+ * reproduced path from a paused tail to a wall of live rows and back. Neither
+ * claims it is the only way a window can fall behind its live turn, and
+ * neither proves it is the way the reported one did.
  *
  * The bound in `LiveTurnRows` is what makes such a gap survivable however it
  * opened, so the last phases below also assert what the pane paints across it.
@@ -309,9 +314,11 @@ test(
     expect(opened.unclaimed).toBe(0);
     expect(opened.painted).toBe(0);
 
-    /* (2) The turn runs on, and the pane is still open. The transcript window
-       advances on the polling fallback: this is hypothesis (a) as it was first
-       stated — "degraded/polling stalls the feed" — and it is REFUTED. */
+    /* (2) The turn runs on, and the pane is still open. With the runtime bus
+       held degraded, the transcript window advances on the log bus's own
+       polling fallback and nothing is left unclaimed: hypothesis (a) as it was
+       first stated — "degraded/polling stalls the feed" — does not hold for
+       this pair of transports. */
     projected = 40;
     serveTranscript(40);
     await pollRuntimeSnapshot();

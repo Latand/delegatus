@@ -55,11 +55,13 @@ import { summarizeTool } from "@/components/feed/tools";
  * `liveTurnPaneVisibility.dom.test.tsx` drives that through the mounted pane
  * and its own IntersectionObserver, including the frame where the pane is back
  * on screen with the window it had while it was away.
- * `liveTurnStallPath.dom.test.tsx` takes the explanation the banner suggested
- * — "degraded/polling stalls the feed" — and refutes it: held degraded the
- * whole time, the transcript window advances on its own polling fallback.
- * Neither test claims the pane's pause is the only way a window can fall
- * behind, and the bound does not depend on which way it did.
+ * `liveTurnStallPath.dom.test.tsx` tests the explanation the banner suggested
+ * — "degraded/polling stalls the feed" — as far as a harness can: with the
+ * runtime bus held degraded the whole time, the mocked transcript transport
+ * beside it still advances on its own polling fallback, so runtime degradation
+ * alone did not stall it there. Pause and resume is one reproduced path, not
+ * the proven production cause, and the bound does not depend on which path
+ * opened the gap.
  *
  * Eight is the tail an operator can actually read: at 390 px a quiet row is
  * ~20 px, so eight rows are the ~160 px that fit between the last transcript
@@ -121,9 +123,21 @@ function listable(item: RuntimeLiveTurnItem): boolean {
 
 /** How many steps of the turn one item stands for: the items an explicit
     omission descriptor already folded, plus itself when it carries a call or a
-    written line. An empty streaming placeholder stands for nothing yet. */
+    written line.
+ *
+ * Two empty-text descriptors have to be told apart here. The window's 64 KiB
+ * text bound trims prose from the START, so an older message can be left with
+ * `text: ""` and its whole length in `omittedChars` — a step that happened and
+ * that the transcript carries, which `listable` rightly keeps out of the list
+ * and which must still be counted. A streaming placeholder no character has
+ * arrived in yet has neither, and stands for nothing. An aggregate omission
+ * descriptor stands for exactly the items it folded — its own `omittedChars`
+ * are theirs, so it never adds one for itself. */
 function steps(item: RuntimeLiveTurnItem): number {
-  return (item.omittedItems ?? 0) + (item.tool || item.text.trim() ? 1 : 0);
+  const folded = item.omittedItems ?? 0;
+  if (item.tool || item.text.trim()) return folded + 1;
+  if (folded) return folded;
+  return item.omittedChars ? 1 : 0;
 }
 
 export interface LiveTurnTail {

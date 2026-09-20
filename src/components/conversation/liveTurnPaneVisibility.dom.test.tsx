@@ -21,12 +21,14 @@
  *   - when the observer reports the pane back on screen, the pane paints
  *     BEFORE its tail can fetch anything: its window is still the one it had
  *     while it was away. That frame — on screen, stale window, full unclaimed
- *     live turn — is the one the overlay has to survive, and the bound is what
+ *     live turn — is a frame the overlay has to survive, and the bound is what
  *     makes it readable.
  *
  * What this does NOT claim: that the pane's pause is the only way a window can
- * fall behind its live turn. It is the one this pane produces by itself, with
- * every transport healthy, which is enough to fix the rendering at the bound.
+ * fall behind its live turn, or that it is how the reported window fell behind.
+ * It is one path, reproduced end to end, that this pane produces by itself with
+ * every transport healthy — enough to fix the rendering at the bound, whatever
+ * opened the gap.
  */
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -318,13 +320,15 @@ test(
     expect(away.requests).toBe(requestsWhenAway);
     expect(away.canonical).toBe(onScreen.canonical);
 
-    /* (4) THE FRAME THE OPERATOR SEES. The observer reports the pane back on
-       screen and React paints it before its tail can fetch anything, so the
-       window is still the one it had while it was away while the live turn is
-       the whole sixty calls. Everything projected into that gap is unclaimed —
-       forty calls of it, five times the tail the overlay may paint — and this
-       is where the wall was. What is on screen now is the bound: a readable
-       tail, one counted line, and no third thing. */
+    /* (4) THE RESUME FRAME. The observer reports the pane back on screen and
+       React paints it before its tail can fetch anything, so the window is
+       still the one it had while it was away while the live turn is the whole
+       sixty calls. Everything projected into that gap is unclaimed — forty
+       calls of it, five times the tail the overlay may paint — which is a
+       frame shaped like the wall the report carries. This file constructed it;
+       it does not establish that the operator's own wall opened this way.
+       What is on screen now is the bound: a readable tail, one counted line,
+       and no third thing. */
     await reportVisible(true);
 
     const resumed = reading();

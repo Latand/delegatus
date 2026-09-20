@@ -30,10 +30,14 @@ import {
  *   (a) a canonical window that is not current claims nothing: no live row is
  *       older than the newest transcript instant, so `transcriptMovedPast`
  *       never fires either and every unclaimed row is returned. That is the
- *       CONSEQUENCE of a stalled window; what stalls one is a paused pane, and
- *       the proof of that runs through the real transports in
- *       `liveTurnStallPath.dom.test.tsx` — the degraded runtime bus named on
- *       the operator's banner is not it.
+ *       CONSEQUENCE of a stalled window. What stalls one in production is NOT
+ *       established anywhere in this lane. Two things are:
+ *       `liveTurnPaneVisibility.dom.test.tsx` reproduces the stall end to end
+ *       along one path — a pane paused by its own IntersectionObserver and
+ *       resumed — and `liveTurnStallPath.dom.test.tsx` shows that holding the
+ *       runtime bus degraded did not by itself stall the mocked transcript
+ *       transport beside it. Neither says which path produced the window the
+ *       report arrived with.
  *   (c) the amount is the overflow: `runtimeLiveTurnItems` hands the renderer
  *       the overflow buffer as well as the hot window.
  *
@@ -172,6 +176,54 @@ test("the tail never pulls an older row forward to fill a slot", () => {
   const { rows: kept } = liveTurnTail(items);
   const windowStart = items.length - LIVE_TURN_VISIBLE_ROWS;
   for (const row of kept) expect(items.indexOf(row)).toBeGreaterThanOrEqual(windowStart);
+});
+
+test("prose the window's text bound shed entirely is counted, not lost", () => {
+  /* The descriptor comes from the real bound, not from a literal written here:
+     `normalizeRuntimeLiveTurn` trims prose from the START across the whole
+     window, so two 64 KiB messages leave the older one with `text: ""` and its
+     whole length in `omittedChars`. A step happened there — the transcript
+     carries that message — and before this it counted as nothing, so the tail
+     painted one row and claimed there was nothing earlier. */
+  const KIB_64 = 64 * 1024;
+  const paragraph = (mark: string) => `${mark} `.repeat(Math.ceil(KIB_64 / (mark.length + 1))).slice(0, KIB_64);
+  const turn = normalizeRuntimeLiveTurn({
+    turnId: "turn-long-prose",
+    text: "",
+    items: [
+      { itemId: "msg_prose_old", text: paragraph("older"), phase: "awaiting-echo", startedAt: null, completedAt: null },
+      { itemId: "msg_prose_new", text: paragraph("newer"), phase: "streaming", startedAt: null, completedAt: null },
+    ],
+  });
+  const items = runtimeLiveTurnItems(turn!);
+  expect(items).toHaveLength(2);
+  /* The shape the bound really produced: empty text, a character count, and no
+     folded-items count of its own. */
+  expect(items[0]!.text).toBe("");
+  expect(items[0]!.omittedChars).toBeGreaterThan(0);
+  expect(items[0]!.omittedItems).toBeUndefined();
+  expect(items[1]!.text.length).toBeGreaterThan(0);
+
+  const { rows: kept, earlier } = liveTurnTail(items);
+  expect(kept.map((item) => item.itemId)).toEqual(["msg_prose_new"]);
+  expect(earlier).toBe(1);
+
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const host = mount(<LiveTurnRows items={items} />);
+    expect(rows(host)).toHaveLength(1);
+    const collapsed = earlierLine(host)!;
+    expect(collapsed.getAttribute("data-live-turn-earlier")).toBe("1");
+    expect(collapsed.textContent).toBe(translate(lang, "feed.liveEarlierSteps", { count: 1 }));
+  }
+});
+
+test("a streaming placeholder no character has reached yet still counts nothing", () => {
+  const { rows: kept, earlier } = liveTurnTail([
+    { itemId: "msg_pending", text: "", phase: "streaming", startedAt: null, completedAt: null },
+  ]);
+  expect(kept).toEqual([]);
+  expect(earlier).toBe(0);
 });
 
 test("an explicit omission descriptor is the count, not a row of its own", () => {
