@@ -183,6 +183,12 @@ export function loadFlows(): Flow[] {
   return rememberFlowSnapshot(reviveCachedFlows(parsed));
 }
 
+/** Keyed full reads for the bounded MCP flow list projection. */
+export function flowSelectionSource() {
+  const collection = flowStore();
+  return { filename: stateDatabaseFile(), read: (id: string) => collection.get(id) };
+}
+
 export function loadFlow(flowId: string): Flow | null {
   return flowStore().get(flowId);
 }

@@ -1,0 +1,102 @@
+{
+  "source": "bounded current manager transcript sample; unique tool_use ids; no message bodies retained",
+  "bytesRead": 4732750,
+  "callCount": 135,
+  "first": "2026-09-20T09:03:23.080Z",
+  "last": "2026-09-20T12:18:19.883Z",
+  "counts": {
+    "update_task": 22,
+    "get_pipeline": 19,
+    "pipeline_action": 11,
+    "list_pipelines": 9,
+    "seat_tick_settings": 9,
+    "send_message": 9,
+    "get_task": 8,
+    "create_pipeline": 8,
+    "create_task": 7,
+    "agent_activity": 6,
+    "conversation_messages": 5,
+    "search_transcripts": 4,
+    "bridge_report": 4,
+    "deployment_status": 4,
+    "suggest_replies": 2,
+    "spawn_agent": 2,
+    "request_attention": 2,
+    "list_tasks": 1,
+    "deploy_exact_sha": 1,
+    "account_limits": 1,
+    "account_project_binding": 1
+  },
+  "variants": [
+    {
+      "tool": "get_pipeline",
+      "arguments": "full-default,stageId",
+      "calls": 16
+    },
+    {
+      "tool": "get_task",
+      "arguments": "default",
+      "calls": 8
+    },
+    {
+      "tool": "seat_tick_settings",
+      "arguments": "write-note",
+      "calls": 8
+    },
+    {
+      "tool": "list_pipelines",
+      "arguments": "compact",
+      "calls": 7
+    },
+    {
+      "tool": "agent_activity",
+      "arguments": "compact,liveOnly",
+      "calls": 4
+    },
+    {
+      "tool": "get_pipeline",
+      "arguments": "compact",
+      "calls": 3
+    },
+    {
+      "tool": "list_pipelines",
+      "arguments": "full-default",
+      "calls": 2
+    },
+    {
+      "tool": "agent_activity",
+      "arguments": "compact",
+      "calls": 2
+    },
+    {
+      "tool": "list_tasks",
+      "arguments": "default",
+      "calls": 1
+    },
+    {
+      "tool": "seat_tick_settings",
+      "arguments": "read-or-schedule",
+      "calls": 1
+    }
+  ],
+  "scenarioCounts": {
+    "list_pipelines|open,compact": 7,
+    "list_tasks|limit=200": 1,
+    "get_task|default": 8,
+    "agent_activity|liveOnly,compact": 4,
+    "update_task|other-write": 16,
+    "get_pipeline|stageId": 16,
+    "get_pipeline|compact": 3,
+    "list_pipelines|completed,limit=200": 1,
+    "seat_tick_settings|write-note": 8,
+    "create_task|details": 7,
+    "pipeline_action|resume": 1,
+    "agent_activity|other-compact": 2,
+    "list_pipelines|default": 1,
+    "update_task|status": 6,
+    "pipeline_action|skip-stage": 2,
+    "pipeline_action|retry-stage": 7,
+    "seat_tick_settings|read": 1,
+    "pipeline_action|override-stage": 1
+  }
+}

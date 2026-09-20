@@ -41,7 +41,7 @@ async function protocol() {
   await Promise.all([client.connect(a), server.connect(b)]);
   let sequence = 0;
   const call = async (name: string, args: Record<string, unknown>) =>
-    (await client.callTool({ name, arguments: { clientRequestId: `k4a-${Math.random().toString(36).slice(2)}-${++sequence}`, ...args } })).structuredContent as
+    (await client.callTool({ name, arguments: { full: true, clientRequestId: `k4a-${Math.random().toString(36).slice(2)}-${++sequence}`, ...args } })).structuredContent as
       { ok: boolean; task: TaskWithRevision; code?: string; details?: { field?: string; code?: string } };
   return { client, call, close: async () => { await client.close(); await server.close(); receipts.close(); } };
 }

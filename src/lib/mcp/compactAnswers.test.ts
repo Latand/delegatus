@@ -138,7 +138,8 @@ test("create_pipeline answers an acknowledgement, and get_pipeline still reads t
   const createdDigests = { ...created.stageDigests };
   expectNoBodies(created);
   expect(JSON.stringify(created)).not.toContain("promptScaffold");
-  expect(bytes(created)).toBeLessThan(800);
+  // Includes the delivery ownership acknowledgement already present on main.
+  expect(bytes(created)).toBeLessThan(1_600);
 
   expect(created).toMatchObject({
     pipelineId: expect.any(String),
@@ -278,7 +279,7 @@ test("list_pipelines state open and compact answer small rows for the lanes that
   for (const row of open.pipelines) expect(bytes(row)).toBeLessThan(400);
 
   /* The bounded card rows are unchanged without compact. */
-  const cards = await bindings.list_pipelines({ clientRequestId: "list-cards", state: "open" }) as { pipelines: Array<Record<string, unknown>> };
+  const cards = await bindings.list_pipelines({ clientRequestId: "list-cards", state: "open", compact: false }) as { pipelines: Array<Record<string, unknown>> };
   expect(cards.pipelines[0]).toHaveProperty("worktreeDir");
   expect(cards.pipelines[0]).toHaveProperty("hasSpec");
 });
@@ -296,8 +297,8 @@ test("pipeline_action answers the acknowledgement for every accepted action (#18
   for (const action of ["retry-stage", "close", "resume", "skip-stage"]) {
     const answer = await bindings.pipeline_action({ clientRequestId: `ack-${action}`, pipelineId: pipeline.id, action, stageId: "build" });
     expectNoBodies(answer);
-    expect(bytes(answer)).toBeLessThan(400);
-    expect(Object.keys(answer).sort()).toEqual(["closedAt", "cursor", "graphDigest", "pipelineId", "stageDigests", "state"]);
+    expect(bytes(answer)).toBeLessThan(1_000);
+    expect(Object.keys(answer).sort()).toEqual(["changedFields", "closedAt", "cursor", "graphDigest", "omittedRecordCount", "pipelineId", "readMore", "revision", "stageDigests", "state", "taskIds"]);
     expect(answer).toMatchObject({
       pipelineId: pipeline.id,
       state: "running",
