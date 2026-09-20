@@ -575,7 +575,10 @@ describe("CodexAppServerHost", () => {
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(readWriteServer, readWriteCapture),
     });
-    expect(readWriteCapture.options?.env?.GH_CONFIG_DIR).toBeUndefined();
+    /* The agent no longer inherits XDG_CONFIG_HOME, which is where `gh` found
+       its configuration, so the boundary pins it instead of forwarding it
+       (#1905). A source value still wins where the caller forwards one. */
+    expect(readWriteCapture.options?.env?.GH_CONFIG_DIR).toBe(path.join(os.homedir(), ".config", "gh"));
     await readWriteHost.release();
   });
 
@@ -1487,11 +1490,18 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server, captured),
     });
     /* The allowlisted env, plus the provenance stamp the resources rail needs
-       to tell this host from any other process wearing the same argv (#1199). */
+       to tell this host from any other process wearing the same argv (#1199),
+       plus the agent's own config and state root (#1905): the commands it runs
+       resolve those, never the operator's, and `gh` is pinned to the
+       operator's configuration because it used to read XDG_CONFIG_HOME. */
+    const sandboxConfig = path.join(os.tmpdir(), "llv-spawn-sandbox", "codex-home", "config");
     expect(captured.options?.env).toEqual({
       NODE_ENV: "test",
       PATH: process.env.PATH,
       CODEX_HOME: "/codex-home",
+      XDG_CONFIG_HOME: sandboxConfig,
+      LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
+      GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
     expect(host.identity).toEqual({ threadId: "thread-149", path: "/sessions/thread-149.jsonl" });
@@ -1941,8 +1951,12 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server, captured),
     });
 
+    /* The re-hosted agent runs under its own state root; the Viewer MCP
+       connector below is what keeps the real one, so the link still resolves
+       this machine's release (#1905). */
     expect(captured.options?.env).toMatchObject({
-      LLV_STATE_DIR: "fixture-state",
+      XDG_CONFIG_HOME: path.join(os.tmpdir(), "llv-spawn-sandbox", "default", "config"),
+      LLV_STATE_DIR: path.join(os.tmpdir(), "llv-spawn-sandbox", "default", "config", "agent-log-viewer", "state"),
       LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
       LLV_VIEWER_PORT: "8898",
     });

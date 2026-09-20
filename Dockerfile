@@ -39,9 +39,13 @@ RUN chmod -R u=rwX,go=rX /app
 FROM node:22.16.0-bookworm-slim AS runtime
 ARG LLV_RUNTIME_HOME=/home/user
 WORKDIR /app
+# Every first-party process in this stage is the serving Viewer, the runtime
+# host or the deploy adapter — the owners that may resolve the operator's state
+# directory (#1905). The build stage above deliberately carries no such claim.
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     NEXT_PUBLIC_RUNTIME_UI=1 \
+    LLV_STATE_OWNER=viewer \
     HOME=${LLV_RUNTIME_HOME} \
     HOSTNAME=127.0.0.1 \
     PORT=8898 \

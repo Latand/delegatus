@@ -1,4 +1,4 @@
-import { CODEX_VIEWER_SPAWN_FEATURES, viewerMcpServerEntry } from "@/lib/agent/spawnPolicy";
+import { CODEX_VIEWER_SPAWN_FEATURES, viewerMcpServerEntry, viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
 import { grantedMcpServers } from "@/lib/agent/mcpAllowlist";
 import { grantedPlugins } from "@/lib/agent/pluginAllowlist";
 
@@ -70,6 +70,13 @@ export function headlessCodexThreadConfig(
            Its predecessor owned the stdio child, so an enable flag alone
            leaves a resumed thread with no connector process to call (#1346). */
         ...(name === "viewer" ? withoutUnsetFields(server as JsonObject) : {}),
+        /* The thread runs under the agent's own config and state root
+           (#1905); the Viewer server keeps the real ones, so the MCP link
+           still finds this machine's release. A value already configured for
+           the server wins. */
+        ...(name === "viewer"
+          ? { env: { ...viewerMcpServerEnv(), ...record(record(server)?.env) } }
+          : {}),
         enabled: enabled.has(name),
         ...(approval ? { default_tools_approval_mode: approval } : {}),
       }];

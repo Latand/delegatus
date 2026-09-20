@@ -22,6 +22,12 @@ import {
 
 discardWakatimeEnvironmentCredential();
 
+/* The launcher is one of the process kinds that may resolve the operator's own
+   config and state directories (#1905); everything it starts inherits the
+   claim, and the Viewer child below upgrades it to `viewer`. Set it before any
+   state is read so the claim is never late. */
+if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "launcher";
+
 const DEFAULT_PORT = 8898;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 const READINESS_TIMEOUT_MS = 15_000;
@@ -296,6 +302,9 @@ function resolveServer(packageRoot, hostname) {
 function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment) {
   const env = {
     ...runtimeHostEnvironment,
+    /* This child IS the serving Viewer: it alone may run the state-mutating
+       startup steps (imports, migrations, backups) that #1905 fenced off. */
+    LLV_STATE_OWNER: "viewer",
     PORT: String(options.port),
     // zsh exports HOSTNAME with the machine name on this user's machine; setting it here keeps standalone bound to the requested address.
     HOSTNAME: options.hostname,

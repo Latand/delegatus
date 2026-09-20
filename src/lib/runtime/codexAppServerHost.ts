@@ -27,6 +27,7 @@ import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./
 import { CodexReplayFrameReducer, ReplayFrameOverflowError, sanitizeCodexImageFrame, shrinkReducedReplayFrame, type ImageSink, type ReplayFrameBudgets } from "./codexImageFrames";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
+import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { withTelegramConnectorGrant } from "./telegramConnectorEnv";
 import {
   normalizeVoiceDeliveries,
@@ -483,6 +484,10 @@ function subscriptionEnv(
   }
   if (forwardGitHubConfig && source.GH_CONFIG_DIR !== undefined) env.GH_CONFIG_DIR = source.GH_CONFIG_DIR;
   if (codexHome) env.CODEX_HOME = codexHome;
+  /* The commands this agent runs resolve their own config and state root, not
+     the operator's (#1905). The account home above and the Viewer MCP server's
+     own environment are what keep pointing at the real installation. */
+  withAgentConfigSandbox(env, source, codexHome);
   /* Provenance the resources rail can verify later: `codex app-server` is a
      public command line, so only this stamp says the process is a host of
      ours rather than someone else's client (#1199). */

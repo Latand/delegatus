@@ -2,6 +2,8 @@ import type { Database as BunDatabase } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
+
 import { databaseFileIdentity, databaseSwapMarker } from "./currentDatabase";
 import { fsyncPath, writeJsonDurably } from "./durableJson";
 
@@ -518,6 +520,9 @@ export function checkStateDatabasesAtActivation(
   stateDirectory: string,
   options: { now?: Date; backupDirectory?: string; beforeSwapStep?: SwapStepHook } = {},
 ): StorageIncident[] {
+  /* Swapping a damaged database aside is a startup mutation: against the
+     operator's own directory it belongs to the activating Viewer (#1905). */
+  assertStateStartupMutation(stateDirectory, "state database activation check");
   const incidents: StorageIncident[] = [];
   for (const database of stateDatabases(stateDirectory)) {
     try {
@@ -773,6 +778,7 @@ export function runBackupPass(
   lastRevisions: Map<string, string>,
   options: { now?: Date; freeBytes?: (directory: string) => number | null; budgetBytes?: number } = {},
 ): Map<string, BackupOutcome> {
+  assertStateStartupMutation(stateDirectory, "state backup pass");
   const databases = stateDatabases(stateDirectory);
   const backupDirectory = path.join(stateDirectory, BACKUP_DIRECTORY);
   const outcomes = new Map<string, BackupOutcome>();
@@ -967,6 +973,7 @@ export function startStateDurability(options: {
   /** Test seam; the Viewer runs each pass in the backup worker. */
   runPass?: (stateDirectory: string, lastRevisions: Map<string, string>) => Promise<unknown>;
 }): { stop(): void } {
+  assertStateStartupMutation(options.stateDirectory, "state durability sweep");
   const store = globalThis as DurabilityTimerStore;
   if (store.__llvStateDurabilityTimer) clearInterval(store.__llvStateDurabilityTimer);
   try {
