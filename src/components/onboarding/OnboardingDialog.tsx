@@ -11,11 +11,12 @@ import type { OnboardingMarker, OnboardingStepId } from "@/lib/onboarding/marker
 import type { RoleEngine } from "@/lib/roles/types";
 
 import { AgentMappingTable, type EngineStatus } from "./AgentMappingTable";
+import { CheckStep } from "./CheckStep";
 import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./EnginesStep";
 import { putOnboarding, useOnboarding, type OnboardingMode } from "./useOnboarding";
 
 /**
- * The setup guide (#1876, design §2–§3), slice 1: Engines and Agents. One
+ * The setup guide (#1876, design §2–§3): Engines, Agents and Check. One
  * dialog, one job per step, no welcome or finish screen. Nothing is gated:
  * steps are freely navigable, every step closes by Escape, ✕ or "Close,
  * finish later", and nothing in the app waits on it — the launch refusal works
@@ -23,21 +24,25 @@ import { putOnboarding, useOnboarding, type OnboardingMode } from "./useOnboardi
  * table alone in the same shell.
  */
 
-const STEPS: readonly OnboardingStepId[] = ["engines", "agents"];
+const STEPS: readonly OnboardingStepId[] = ["engines", "agents", "check"];
 
 const STEP_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   engines: "onboarding.step.engines",
   agents: "onboarding.step.agents",
+  check: "onboarding.step.check",
 };
 
 const HEADING_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   engines: "onboarding.engines.heading",
   agents: "onboarding.agents.heading",
+  check: "onboarding.check.heading",
 };
 
-const LEAD_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
+/* The Check step writes its own lead: it names the model the run will use. */
+const LEAD_KEY: Record<OnboardingStepId, Parameters<TFunction>[0] | null> = {
   engines: "onboarding.engines.lead",
   agents: "onboarding.agents.lead",
+  check: null,
 };
 
 /** `/api/accounts` also says whether each engine's command resolves; the
@@ -90,8 +95,9 @@ export function OnboardingDialog({ mode, marker, onClose }: {
   const now = useNow();
   const [view, setView] = useState<OnboardingMode>(mode);
   const [step, setStep] = useState(() => mode === "mapping" ? 1 : firstOpenStep(marker));
-  const [steps, setSteps] = useState<Record<OnboardingStepId, "done" | "skipped" | null>>(() => marker?.steps ?? { engines: null, agents: null });
+  const [steps, setSteps] = useState<Record<OnboardingStepId, "done" | "skipped" | null>>(() => marker?.steps ?? { engines: null, agents: null, check: null });
   const [stepListOpen, setStepListOpen] = useState(false);
+  const [checkOwnsPrimary, setCheckOwnsPrimary] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -174,13 +180,17 @@ export function OnboardingDialog({ mode, marker, onClose }: {
     goTo(0);
   };
   const dismiss = () => onClose("dismissed");
+  const skipCheck = () => {
+    setSteps((value) => ({ ...value, check: "skipped" }));
+    void putOnboarding({ steps: { check: "skipped" } }).then(() => onClose("completed"));
+  };
   useEffect(() => { dismissRef.current = dismiss; });
 
   const title = view === "mapping" ? t("onboarding.mappingTitle") : t("onboarding.title");
   const heading = view === "mapping" ? null : (
     <>
       <h2 className="text-title font-bold text-primary">{t(HEADING_KEY[current])}</h2>
-      <p className="mt-2 text-body leading-[1.45] text-secondary">{t(LEAD_KEY[current])}</p>
+      {LEAD_KEY[current] ? <p className="mt-2 text-body leading-[1.45] text-secondary">{t(LEAD_KEY[current]!)}</p> : null}
     </>
   );
   const content = view === "mapping" || current === "agents" ? (
@@ -188,6 +198,8 @@ export function OnboardingDialog({ mode, marker, onClose }: {
       {view === "mapping" ? <p className="mb-4 text-body leading-[1.45] text-secondary">{t("onboarding.agents.leadStandalone")}</p> : null}
       <AgentMappingTable statuses={statuses} layout={isMobile ? "card" : "table"} onConnect={onConnect} />
     </>
+  ) : current === "check" ? (
+    <CheckStep noEngine={noEngine} onGoEngines={() => goTo(0)} onLeave={dismiss} onSkip={skipCheck} onOwnsPrimary={setCheckOwnsPrimary} />
   ) : (
     <EnginesStep claude={claude} codex={codex} cli={cli} now={now} onRecheck={recheckAll} />
   );
@@ -222,6 +234,8 @@ export function OnboardingDialog({ mode, marker, onClose }: {
     </ol>
   );
 
+  /* The Check step's rows open in place with a failure; the dialog takes the height it needs, up to the viewport. */
+  const checkTall = view === "guide" && current === "check";
   const counter = t("onboarding.stepCounter", { n: step + 1, total: STEPS.length });
   const footerButtons = view === "mapping" ? null : (
     <>
@@ -230,7 +244,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
           {t("onboarding.back")}
         </button>
       ) : null}
-      <button type="button" data-onboarding-primary="" onClick={next} className="inline-flex h-8 items-center justify-center rounded-[8px] bg-accent px-4 text-ui font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2]">
+      <button type="button" data-onboarding-primary="" onClick={next} className={`inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2] ${current === "check" && checkOwnsPrimary ? "border border-border bg-card text-primary hover:bg-sunken" : "bg-accent text-white hover:opacity-90"}`}>
         {last ? t("onboarding.finish") : t("onboarding.continue")}
       </button>
     </>
@@ -255,7 +269,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
               </button>
             ) : <span className="w-3 shrink-0" />}
             {view === "guide" ? (
-              <button type="button" aria-expanded={stepListOpen} onClick={() => setStepListOpen((value) => !value)} className="flex min-h-11 min-w-0 flex-1 items-center truncate text-left text-body font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <button type="button" data-onboarding-step-list-toggle="" aria-expanded={stepListOpen} onClick={() => setStepListOpen((value) => !value)} className="flex min-h-11 min-w-0 flex-1 items-center truncate text-left text-body font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 <span className="truncate">{counter} · {t(STEP_KEY[current])}</span>
               </button>
             ) : (
@@ -272,7 +286,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
           ) : null}
         </header>
         {stepListOpen ? <div className="shrink-0 border-b border-border bg-sunken p-2">{stepList}</div> : null}
-        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-4">
+        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto scroll-pb-6 px-4 pb-6 pt-4">
           {heading}
           <div className={heading ? "mt-4" : ""}>{content}</div>
         </div>
@@ -294,7 +308,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
         aria-label={title}
         tabIndex={-1}
         data-onboarding-dialog={view}
-        className="flex h-[640px] max-h-[calc(100vh-96px)] w-[920px] max-w-full flex-col overflow-hidden rounded-[12px] border border-border bg-card shadow-2 outline-none"
+        className={`flex ${checkTall ? "h-[820px]" : "h-[640px]"} max-h-[calc(100vh-96px)] w-[920px] max-w-full flex-col overflow-hidden rounded-[12px] border border-border bg-card shadow-2 outline-none`}
       >
         <header className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-raised px-4">
           <span className="min-w-0 flex-1 truncate text-title font-bold text-primary">{title}</span>
@@ -309,7 +323,9 @@ export function OnboardingDialog({ mode, marker, onClose }: {
         </header>
         <div className="flex min-h-0 flex-1">
           {view === "guide" ? <nav className="w-[200px] shrink-0 border-r border-border bg-sunken p-2">{stepList}</nav> : null}
-          <div ref={bodyRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-card p-6">
+          {/* scroll-pb-6: what a step scrolls into view keeps the body's own
+            breathing room above the fixed footer, rather than ending flush. */}
+          <div ref={bodyRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto scroll-pb-6 bg-card p-6">
             {heading}
             <div className={heading ? "mt-4" : ""}>{content}</div>
           </div>
