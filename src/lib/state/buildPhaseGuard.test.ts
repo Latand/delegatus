@@ -102,11 +102,13 @@ function snapshot(root: string): Record<string, string> {
 
 async function loadModules(
   root: string,
-  options: { buildPhase: boolean; activated: boolean; mode?: string },
+  options: { buildPhase: boolean; activated: boolean; mode?: string; owner?: string },
 ): Promise<{ exit: number; out: string; error: string }> {
   const env: Record<string, string> = { ...process.env as Record<string, string>, XDG_CONFIG_HOME: root };
   delete env.LLV_STATE_DIR;
   delete env.NEXT_PHASE;
+  delete env.LLV_STATE_OWNER;
+  if (options.owner) env.LLV_STATE_OWNER = options.owner;
   if (options.buildPhase) env.NEXT_PHASE = "phase-production-build";
   env.NEXT_RUNTIME = "nodejs";
   const proc = Bun.spawn({
@@ -155,6 +157,26 @@ describe("a build-phase module load never mutates state (#1905)", () => {
     expect(JSON.parse(run.out.trim()) as { kind: string }).toEqual({ kind: "collection" });
     expect(fs.existsSync(path.join(state, "state.sqlite"))).toBe(true);
     expect(fs.lstatSync(path.join(state, "claude-accounts.json")).isDirectory()).toBe(true);
+  }, 30_000);
+
+  /*
+   * main's general guard for #1905 (`@/lib/stateOwnership`) asks a different
+   * question than the barrier: whether the process declares an owner that may
+   * run a startup mutation. Inside the serving container `LLV_STATE_OWNER` is
+   * already set in the environment, so a `bun run build` run THERE answers
+   * that question yes while still being the module load that took production
+   * down. The barrier is checked first for exactly this process: it is a
+   * declared owner, its activation gate is open, and it is still refused,
+   * because a module load may never rename live state away.
+   */
+  test("a declared owner with an open gate writes nothing during a build either", async () => {
+    const { root, state } = seededRoot();
+    const before = snapshot(root);
+    const run = await loadModules(root, { buildPhase: true, activated: true, owner: "viewer" });
+    expect(run.exit).toBe(0);
+    expect(snapshot(root)).toEqual(before);
+    expect(fs.existsSync(path.join(state, "state.sqlite"))).toBe(false);
+    expect(fs.lstatSync(path.join(state, "claude-accounts.json")).isFile()).toBe(true);
   }, 30_000);
 
   test("an opened gate does not survive the build phase: the build still writes nothing", async () => {
