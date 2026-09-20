@@ -3,7 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { mergeRuntimeReceipts } from "@/components/TmuxComposer";
@@ -2046,6 +2046,229 @@ test("successor spawn preserves one canonical lineage edge and rejects self line
     childConversationId: child,
   })]);
   journal.close();
+});
+
+test("engine output acknowledges before a slow unrelated consumer and checkpoints once in order", async () => {
+  const journal = new RuntimeJournal(path.join(sandbox("output-ack"), "events.sqlite"));
+  const checkpoints: string[] = [];
+  const markCompleted = journal.markConsumerCompleted.bind(journal);
+  const checkpoint = spyOn(journal, "markConsumerCompleted").mockImplementation((id, consumer) => {
+    checkpoints.push(id);
+    markCompleted(id, consumer);
+  });
+  let started!: () => void;
+  const consumerStarted = new Promise<void>((resolve) => { started = resolve; });
+  let unrelatedFinished = false;
+  const host = new RuntimeHost(journal, {
+    flowReady: () => undefined,
+    workflowStageCompleted: async () => {
+      started();
+      await Bun.sleep(500);
+      unrelatedFinished = true;
+    },
+    taskDeliveryAcknowledged: () => undefined,
+  });
+  const unrelated = host.handle({ id: "unrelated", method: "append", params: { event: {
+    scope: runtimeScope("workflow", "other"), kind: "workflow.stage.completed",
+    payload: { workflowId: "other", stage: 0 },
+  } } });
+  await consumerStarted;
+  const event = projectEngineHostEvent("worker", "codex:worker", {
+    kind: "delta", seq: 1, turnId: "turn-one", text: "first",
+  })!;
+  const start = performance.now();
+  const first = await host.handle({ id: "first", method: "append", params: { event } });
+  const acknowledgementMs = performance.now() - start;
+  const acknowledgedWhileBlocked = !unrelatedFinished;
+  const retry = await host.handle({ id: "retry", method: "append", params: { event } });
+  const second = await host.handle({ id: "second", method: "append", params: { event:
+    projectEngineHostEvent("worker", "codex:worker", {
+      kind: "delta", seq: 2, turnId: "turn-one", text: " second",
+    })!,
+  } });
+  await unrelated;
+  await host.recoverConsumers();
+  const events = journal.replay(0).events;
+  checkpoint.mockRestore();
+  journal.close();
+
+  console.info(`[output acknowledgement] slow consumer=500ms acknowledgement=${acknowledgementMs.toFixed(2)}ms`);
+  expect([first.ok, retry.ok, second.ok]).toEqual([true, true, true]);
+  expect(retry.result).toEqual(first.result);
+  expect(events.map((item) => item.kind)).toEqual(["workflow.stage.completed", "delta", "delta"]);
+  expect(checkpoints).toEqual(events.map((item) => item.eventId));
+  expect(acknowledgedWhileBlocked).toBe(true);
+  expect(acknowledgementMs).toBeLessThan(250);
+});
+
+test("engine publication allowlist preserves terminal, operation and unknown-event barriers", async () => {
+  const journal = new RuntimeJournal(path.join(sandbox("engine-barriers"), "events.sqlite"));
+  let started!: () => void;
+  let release!: () => void;
+  const consumerStarted = new Promise<void>((resolve) => { started = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const host = new RuntimeHost(journal, {
+    flowReady: () => undefined,
+    workflowStageCompleted: async () => { started(); await gate; },
+    taskDeliveryAcknowledged: () => undefined,
+  });
+  const unrelated = host.handle({ id: "unrelated", method: "append", params: { event: {
+    scope: runtimeScope("workflow", "other"), kind: "workflow.stage.completed",
+    payload: { workflowId: "other", stage: 0 },
+  } } });
+  await consumerStarted;
+  const pending: Promise<unknown>[] = [unrelated];
+  const settled: string[] = [];
+  const expectedPrompt: string[] = [];
+  let eventSeq = 0;
+  const send = (kind: string, producerKind = "codex-app-server", method: "append" | "operation" = "append",
+    extra: Partial<import("@/lib/runtime/contracts").RuntimeEventInput> = {}) => {
+    const id = `${producerKind}:${kind}:${++eventSeq}`;
+    pending.push(host.handle({ id, method, params: { event: {
+      scope: runtimeScope("session", "worker"), kind, payload: {},
+      producer: { kind: producerKind, eventKey: `engine-host:worker:${eventSeq}` }, ...extra,
+    } } }).then((response) => { expect(response.ok).toBe(true); settled.push(id); }));
+    return id;
+  };
+  try {
+    for (const producer of ["codex-app-server", "claude-broker"]) {
+      for (const kind of ["turn-started", "delta", "item", "attention", "attention-resolved", "limits",
+        "voice-transcript", "voice-chunk", "native-queue-changed", "voice-delivery-progress", "voice-delivery-acknowledged"]) {
+        expectedPrompt.push(send(kind, producer));
+      }
+    }
+    for (const kind of ["turn-ended", "turn.completed", "workflow.stage.completed", "task.delivery.acked", "future-engine-event", "session-status"]) send(kind);
+    send("delta", "viewer-compat");
+    send("delta", "codex-app-server", "operation");
+    send("delta", "codex-app-server", "append", { operationId: "operation-one" });
+    send("delta", "codex-app-server", "append", { effect: { id: "effect-one", kind: "test", payload: {} } });
+    send("delta", "codex-app-server", "append", { scope: runtimeScope("system", "worker") });
+    send("delta", "codex-app-server", "append", { producer: { kind: "codex-app-server", eventKey: "projection:one" } });
+    await Bun.sleep(20);
+    expect(settled).toEqual(expectedPrompt);
+  } finally {
+    release();
+    await Promise.all(pending);
+    await host.recoverConsumers();
+    journal.close();
+  }
+});
+
+test("a serial engine producer waits for its terminal projection before publishing the next turn", async () => {
+  const journal = new RuntimeJournal(path.join(sandbox("engine-terminal-barrier"), "events.sqlite"));
+  let started!: () => void;
+  let release!: () => void;
+  const consumerStarted = new Promise<void>((resolve) => { started = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const host = new RuntimeHost(journal, {
+    flowReady: async (id) => { started(); await gate; return { id, state: "spawn_pending" } as unknown as Flow; },
+    workflowStageCompleted: () => undefined,
+    taskDeliveryAcknowledged: () => undefined,
+  });
+  const events = [
+    projectEngineHostEvent("worker", "claude:worker", { kind: "delta", seq: 1, turnId: "one", text: "first" })!,
+    { ...projectEngineHostEvent("worker", "claude:worker", { kind: "turn-ended", seq: 2, turnId: "one", status: "completed" })!, payload: { flowId: "flow-one" } },
+    projectEngineHostEvent("worker", "claude:worker", { kind: "turn-started", seq: 3, turnId: "two" })!,
+  ];
+  const acknowledged: string[] = [];
+  const pump = (async () => {
+    for (const event of events) {
+      const response = await host.handle({ id: event.kind, method: "append", params: { event } });
+      expect(response.ok).toBe(true);
+      if (event.kind === "turn-ended") expect(journal.snapshot().flows[0]?.value).toMatchObject({ id: "flow-one" });
+      acknowledged.push(event.kind);
+    }
+  })();
+  await consumerStarted;
+  try {
+    expect(acknowledged).toEqual(["delta"]);
+    expect(journal.replay(0).events.map((event) => event.kind)).toEqual(["delta", "turn-ended"]);
+  } finally {
+    release();
+    await pump;
+    await host.recoverConsumers();
+  }
+  expect(acknowledged).toEqual(["delta", "turn-ended", "turn-started"]);
+  expect(journal.replay(0).events.map((event) => event.kind)).toEqual(["delta", "turn-ended", "flow.state", "turn-started"]);
+  journal.close();
+});
+
+test.each([20_000, 2])("acknowledged engine events survive a crash with a %i-event retention window", async (maxEvents) => {
+  const filename = path.join(sandbox("engine-ack-crash"), "events.sqlite");
+  // The child holds unrelated work forever, acknowledges output, then is killed
+  // through its own process handle. Only this private journal is opened.
+  const child = Bun.spawn([process.execPath, "--eval", `
+    import { RuntimeHost } from "./src/runtime-host/host.ts";
+    import { RuntimeJournal } from "./src/runtime-host/journal.ts";
+    const journal = new RuntimeJournal(process.env.TEST_JOURNAL, { maxEvents: Number(process.env.TEST_MAX_EVENTS) });
+    let started;
+    const ready = new Promise(resolve => { started = resolve; });
+    const host = new RuntimeHost(journal, {
+      flowReady: () => undefined,
+      workflowStageCompleted: async () => { started(); await new Promise(() => {}); },
+      taskDeliveryAcknowledged: () => undefined,
+    });
+    void host.handle({ id: "unrelated", method: "append", params: { event: {
+      scope: "workflow:other", kind: "workflow.stage.completed", payload: { workflowId: "other", stage: 0 },
+    } } });
+    await ready;
+    let response;
+    for (let seq = 1; seq <= 3; seq += 1) {
+      response = await host.handle({ id: "output", method: "append", params: { event: {
+        scope: "session:worker", kind: "delta", payload: { turnId: "one", text: "first" },
+        producer: { kind: "codex-app-server", eventKey: "engine-host:codex:worker:" + seq },
+      } } });
+    }
+    console.log(JSON.stringify({ response, completed: journal.consumerCompleted(response.result.eventId, "orchestration") }));
+    setInterval(() => {}, 1000);
+  `], { cwd: process.cwd(), env: { ...process.env, TEST_JOURNAL: filename, TEST_MAX_EVENTS: String(maxEvents) }, stdout: "pipe", stderr: "pipe" });
+  const reader = child.stdout.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const chunk = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("child did not acknowledge output")), 2000); }),
+    ]);
+    const evidence = JSON.parse(new TextDecoder().decode(chunk.value));
+    expect(evidence.response.ok).toBe(true);
+    expect(evidence.completed).toBe(false);
+  } finally {
+    clearTimeout(timer);
+    child.kill("SIGKILL");
+    await child.exited;
+    reader.releaseLock();
+  }
+  const journal = new RuntimeJournal(filename, { maxEvents });
+  const events = journal.replay(0).events;
+  const checkpoints: string[] = [];
+  const markCompleted = journal.markConsumerCompleted.bind(journal);
+  const checkpoint = spyOn(journal, "markConsumerCompleted").mockImplementation((id, consumer) => {
+    checkpoints.push(id); markCompleted(id, consumer);
+  });
+  let workflowCalls = 0;
+  const host = new RuntimeHost(journal, {
+    flowReady: () => undefined,
+    workflowStageCompleted: () => { workflowCalls += 1; },
+    taskDeliveryAcknowledged: () => undefined,
+  });
+  try {
+    expect(events.map((event) => event.kind)).toEqual(["workflow.stage.completed", "delta", "delta", "delta"]);
+    expect(journal.unconsumedEvents("orchestration")).toHaveLength(4);
+    expect(await host.recoverConsumers()).toBe(4);
+    expect(await host.recoverConsumers()).toBe(0);
+    const retry = await host.handle({ id: "retry", method: "append", params: { event: {
+      scope: "session:worker", kind: "delta", payload: { turnId: "one", text: "first" },
+      producer: { kind: "codex-app-server", eventKey: "engine-host:codex:worker:3" },
+    } } });
+    await host.recoverConsumers();
+    expect(retry.result).toEqual(events[3]);
+    expect(journal.publishedSeq()).toBe(events.at(-1)!.seq);
+    expect(checkpoints).toEqual(events.map((event) => event.eventId));
+    expect(workflowCalls).toBe(1);
+  } finally {
+    checkpoint.mockRestore();
+    journal.close();
+  }
 });
 
 test("runtime host advances and publishes a flow from a terminal event without file polling", async () => {

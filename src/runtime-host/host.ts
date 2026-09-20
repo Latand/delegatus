@@ -11,6 +11,14 @@ import type { RuntimeHostReadyEvidence } from "./runtimeHostStartup";
 
 export { RuntimeHostFence } from "./runtimeHostFence";
 
+// These engine publications have no orchestration effect in consumeRuntimeEvent.
+// Keep this allowlist explicit: new kinds and terminal events retain the barrier.
+const DURABLE_ENGINE_PUBLICATIONS = new Set([
+  "turn-started", "delta", "item", "attention", "attention-resolved", "limits",
+  "voice-transcript", "voice-chunk", "native-queue-changed",
+  "voice-delivery-progress", "voice-delivery-acknowledged",
+]);
+
 export class RuntimeHost {
   private consumerQueue: Promise<void> = Promise.resolve();
   private readonly consumerFailures = new Map<string, number>();
@@ -104,8 +112,18 @@ export class RuntimeHost {
           try { this.signalFlowPipelineProgress?.(); }
           catch { console.error("[flow pipeline controller] committed terminal wake failed"); }
         }
-        try { await this.consumeExclusive(appended); }
-        catch { console.error("[runtime consumer] committed event will retry asynchronously"); }
+        // Enqueue before answering, on the same FIFO as terminal/operation work.
+        // The journal's durable checkpoints still own completion and replay.
+        const consumption = this.consumeExclusive(appended).catch(() => {
+          console.error("[runtime consumer] committed event will retry asynchronously");
+        });
+        const durableEnginePublication = request.method === "append"
+          && event.effect === undefined && event.operationId === undefined
+          && appended.scope.type === "session"
+          && (appended.producer.kind === "codex-app-server" || appended.producer.kind === "claude-broker")
+          && appended.producer.eventKey?.startsWith("engine-host:") === true
+          && DURABLE_ENGINE_PUBLICATIONS.has(appended.kind);
+        if (!durableEnginePublication) await consumption;
         result = request.method === "operation" && event.operationId
           ? { operationId: event.operationId, state: "accepted", seq: appended.seq, revision: appended.revision }
           : appended;
