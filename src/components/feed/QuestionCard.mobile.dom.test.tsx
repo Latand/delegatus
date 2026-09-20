@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } from "@/lib/attention/eligibility";
 import { en } from "@/lib/i18n/en";
 import { translate } from "@/lib/i18n";
 import type { FileEntry, PendingQuestion } from "@/lib/types";
@@ -19,11 +20,19 @@ import { QuestionCard, answerPendingQuestionWithText, subscribeQuestionAnswers, 
  * Transport words are a caption, never the headline (audit finding 6).
  */
 
-let narrowViewport = false;
+const VIEWPORTS = {
+  narrowPhone: { width: 390, height: 844 },
+  desktop: { width: 1280, height: 800 },
+  shortLandscape: { width: 844, height: 390 },
+} as const;
+type ViewportName = keyof typeof VIEWPORTS;
+let viewport: { width: number; height: number } = VIEWPORTS.desktop;
+
+const setViewport = (name: ViewportName) => { viewport = VIEWPORTS[name]; };
 
 const normalize = (query: string) => String(query).replace(/\s+/g, "");
 const matchMediaStub = (query: string) => ({
-  matches: normalize(query) === "(max-width:767px)" ? narrowViewport : false,
+  matches: normalize(query) === normalize(MOBILE_LAYOUT_QUERY) ? mobileLayoutViewport(viewport) : false,
   media: String(query),
   onchange: null,
   addEventListener() {},
@@ -68,7 +77,7 @@ let root: Root | null = null;
 afterEach(() => {
   if (root) flushSync(() => root!.unmount());
   root = null;
-  narrowViewport = false;
+  setViewport("desktop");
   posted.length = 0;
   answerResponse = () => ({ status: 200, body: { ok: true } });
   dom.document.body.replaceChildren();
@@ -137,7 +146,7 @@ function questionFile(): FileEntry {
 }
 
 test("phone: the card leads with the question, 44 px option rows and a 16 px own-answer field", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<QuestionCard file={questionFile()} />);
   const card = host.querySelector('[data-mobile-question="pending"]')!;
   expect(card).toBeTruthy();
@@ -177,7 +186,7 @@ test("phone: the card leads with the question, 44 px option rows and a 16 px own
 });
 
 test("phone: an option sends on tap, the reply is the user bubble, the card folds and expands with the pick marked", async () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<QuestionCard file={questionFile()} />);
   const option = [...host.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes(OPTIONS[2]!))!;
   click(option);
@@ -221,7 +230,7 @@ test("phone: an option sends on tap, the reply is the user bubble, the card fold
 });
 
 test("phone: an option answer goes out on the chip seam with its picks, so the chip row can retire", async () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const heard: QuestionAnswerEvent[] = [];
   const unsubscribe = subscribeQuestionAnswers((event) => { heard.push(event); });
   try {
@@ -241,7 +250,7 @@ test("phone: an option answer goes out on the chip seam with its picks, so the c
 });
 
 test("phone: a typed own answer sends and becomes the bubble", async () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<QuestionCard file={questionFile()} />);
   const input = host.querySelector("input") as HTMLInputElement;
   /* Typing into a controlled input: focus first, then the value through the
@@ -264,7 +273,7 @@ test("phone: a typed own answer sends and becomes the bubble", async () => {
 });
 
 test("phone: a chip's text answers through the card's seam and the card folds the same way", async () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<QuestionCard file={questionFile()} />);
   const event = await answerPendingQuestionWithText(pendingQuestion(), "Both, by header");
   expect(event.ok).toBe(true);
@@ -277,7 +286,7 @@ test("phone: a chip's text answers through the card's seam and the card folds th
 });
 
 test("phone: a chip answer that fails shows the failure with a retry that resends the text", async () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   answerResponse = () => ({ status: 502, body: { ok: false, delivered: false, error: "screen does not match this question: " } });
   const host = mount(<QuestionCard file={questionFile()} />);
   const event = await answerPendingQuestionWithText(pendingQuestion(), "Both, by header");
@@ -300,7 +309,7 @@ test("phone: a chip answer that fails shows the failure with a retry that resend
 });
 
 test("phone: without a pane the transport state is a caption under the question, not the headline", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const file = questionFile();
   file.pendingQuestion!.paneTarget = null;
   const host = mount(<QuestionCard file={file} />);
@@ -327,7 +336,7 @@ test("phone: without a pane the transport state is a caption under the question,
 });
 
 test("desktop: the card keeps its waiting chip, numbered options and green answered band", async () => {
-  narrowViewport = false;
+  setViewport("desktop");
   const host = mount(<QuestionCard file={questionFile()} />);
   expect(host.querySelector("[data-mobile-question]")).toBeNull();
   expect(host.textContent).toContain(en["question.waiting"]);
@@ -340,3 +349,8 @@ test("desktop: the card keeps its waiting chip, numbered options and green answe
   expect(classOf(host.querySelector("#question"))).toContain("bg-success-soft");
 });
 
+test("short landscape: the height side of the production query selects the phone card", () => {
+  setViewport("shortLandscape");
+  const host = mount(<QuestionCard file={questionFile()} />);
+  expect(host.querySelector('[data-mobile-question="pending"]')).toBeTruthy();
+});

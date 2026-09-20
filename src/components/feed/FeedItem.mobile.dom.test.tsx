@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
-import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
+import { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } from "@/lib/attention/eligibility";
 import { en } from "@/lib/i18n/en";
 import { setLocale, translate } from "@/lib/i18n";
 
@@ -22,11 +22,19 @@ import type { FileEntry } from "@/lib/types";
  * held at fine so the copy control's own sizing does not enter the picture.
  */
 
-let narrowViewport = false;
+const VIEWPORTS = {
+  narrowPhone: { width: 390, height: 844 },
+  desktop: { width: 1280, height: 800 },
+  shortLandscape: { width: 844, height: 390 },
+} as const;
+type ViewportName = keyof typeof VIEWPORTS;
+let viewport: { width: number; height: number } = VIEWPORTS.desktop;
+
+const setViewport = (name: ViewportName) => { viewport = VIEWPORTS[name]; };
 
 const normalize = (query: string) => String(query).replace(/\s+/g, "");
 const matchMediaStub = (query: string) => ({
-  matches: normalize(query) === "(max-width:767px)" ? narrowViewport : false,
+  matches: normalize(query) === normalize(MOBILE_LAYOUT_QUERY) ? mobileLayoutViewport(viewport) : false,
   media: String(query),
   onchange: null,
   addEventListener() {},
@@ -57,7 +65,7 @@ let root: Root | null = null;
 afterEach(() => {
   if (root) flushSync(() => root!.unmount());
   root = null;
-  narrowViewport = false;
+  setViewport("desktop");
   dom.document.body.replaceChildren();
 });
 
@@ -104,7 +112,7 @@ function tmsg(): Item {
 }
 
 test("phone: an agent message has no avatar column and its content reads at 15 px", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<FeedItem item={prose()} />);
   const message = host.querySelector('[data-mobile-message="agent"]');
   expect(message).toBeTruthy();
@@ -124,7 +132,7 @@ test("phone: an agent message has no avatar column and its content reads at 15 p
 });
 
 test("phone: the message header is a 44 px target above the prose, never over it", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<FeedItem item={prose()} speakText="The projection lives in one module." />);
   const message = host.querySelector('[data-mobile-message="agent"]')!;
   const header = host.querySelector("[data-mobile-message-header]")!;
@@ -142,7 +150,8 @@ test("phone: the message header is a 44 px target above the prose, never over it
   /* No vertical margin of its own: the header's height is the gap. */
   expect(classOf(message)).not.toContain("my-3");
   /* The engine mark is the one avatar left: a 16 px glyph beside the name. */
-  const glyph = header.querySelector("svg");
+  const glyph = header.querySelector('[data-engine-mark="claude"]');
+  expect(glyph).toBeTruthy();
   expect(classOf(glyph)).toContain("h-4");
   expect(header.textContent).toContain("Claude");
   /* The phone's clock is HH:MM (README §5): no seconds anywhere on the line. */
@@ -158,7 +167,7 @@ test("phone: the message header is a 44 px target above the prose, never over it
 });
 
 test("phone: the user keeps the bubble at 86% and 15 px", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<FeedItem item={user()} />);
   const bubble = host.querySelector(".bg-user")!;
   expect(classOf(bubble)).toContain("max-w-[86%]");
@@ -167,7 +176,7 @@ test("phone: the user keeps the bubble at 86% and 15 px", () => {
 });
 
 test("phone: a lone tool call is one 44 px line with no chrome indent, and says when it runs", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(
     <>
       <FeedItem item={tool()} />
@@ -192,26 +201,26 @@ test("phone: a lone tool call is one 44 px line with no chrome indent, and says 
 
 test("phone: the running question tool renders no line, the card under it is that line; the desktop keeps it", () => {
   const asking = () => tool({ id: "call-q", tool: "AskUserQuestion", family: "other", icon: "note", status: "run", statusLabel: "running", summary: "Which format should the export endpoint default to?" });
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const phone = mount(<FeedItem item={asking()} />);
   expect(phone.querySelector("details")).toBeNull();
   expect(phone.textContent).toBe("");
   flushSync(() => root!.unmount());
   root = null;
-  narrowViewport = false;
+  setViewport("desktop");
   const desktop = mount(<FeedItem item={asking()} />);
   expect(desktop.querySelector("details")).toBeTruthy();
   expect(desktop.textContent).toContain("Which format");
 });
 
 test("phone: internal relay cards drop the avatar-column indent too", () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<FeedItem item={tmsg()} />);
   expect(classOf(host.firstElementChild)).not.toContain("ml-9");
 });
 
 test("desktop: every message keeps its avatar column, indent, 75% bubble and margins", () => {
-  narrowViewport = false;
+  setViewport("desktop");
   const host = mount(
     <>
       <FeedItem item={prose()} />
@@ -229,6 +238,13 @@ test("desktop: every message keeps its avatar column, indent, 75% bubble and mar
   expect(classOf(host.querySelector(".bg-user"))).toContain("max-w-[75%]");
   expect(classOf(host.querySelector("details"))).toContain("ml-9");
   expect(classOf(host.querySelector(".bg-accent-soft"))).toContain("my-3 ml-9 overflow-hidden");
+});
+
+test("short landscape: the height side of the production query selects the phone layout", () => {
+  setViewport("shortLandscape");
+  const host = mount(<FeedItem item={prose()} />);
+  expect(host.querySelector('[data-mobile-message="agent"]')).toBeTruthy();
+  expect(host.querySelector(".bg-claude")).toBeNull();
 });
 
 /*
@@ -258,52 +274,29 @@ function authTerminalRow(overrides: Record<string, unknown> = {}): Item {
   return row;
 }
 
-/**
- * Phone-ness for these cases comes from the PRODUCTION media query rather than
- * from the stub above, which still keys on a width this layout stopped using;
- * that staleness is why the file's older phone cases are red at the merge base
- * too, and it is not this increment's to repair.
- */
-function withViewport<T>(phone: boolean, body: () => T): T {
-  const stub = (query: string) => ({
-    ...matchMediaStub(query),
-    matches: normalize(query) === normalize(MOBILE_LAYOUT_QUERY) ? phone : false,
-  });
-  (dom as unknown as { matchMedia: unknown }).matchMedia = stub;
-  Object.assign(globalThis, { matchMedia: stub });
-  try {
-    return body();
-  } finally {
-    (dom as unknown as { matchMedia: unknown }).matchMedia = matchMediaStub;
-    Object.assign(globalThis, { matchMedia: matchMediaStub });
-  }
-}
-
-for (const phone of [true, false]) {
-  const surface = phone ? "phone" : "desktop";
+for (const [surface, viewportName] of [["phone", "narrowPhone"], ["desktop", "desktop"]] as const) {
   test(`${surface}: an unauthorized first turn reads as a failure, not as a completion`, () => {
-    withViewport(phone, () => {
-      const host = mount(<FeedItem item={authTerminalRow()} />);
-      const row = host.querySelector('[data-turn-error="auth"]')!;
-      expect(row).toBeTruthy();
-      /* Danger hue, and the title says what happened with no assistant prose
-         to lean on. */
-      expect(classOf(row)).toContain("border-danger/40");
-      expect(classOf(row)).toContain("bg-danger-soft");
-      expect(row.querySelector(".text-danger")).toBeTruthy();
-      expect(row.textContent).toContain(en["render.turnFailedAuth"]);
-      expect(row.textContent).not.toContain(en["render.taskComplete"]);
-      /* The Viewer's own explanation and the action the operator can take —
-         the provider's sentence is withheld, never echoed. */
-      expect(row.textContent).toContain(en["render.turnFailedAuthBody"]);
-      expect(row.textContent).toContain(en["render.turnFailedAuthHint"]);
-      expect(row.textContent).not.toContain(EXPIRED);
-      /* The feed's own clock: HH:MM on the phone, the full time on the desktop. */
-      expect(row.textContent).toContain("02:49");
-      expect(/\d{2}:\d{2}:\d{2}/.test(row.textContent ?? "")).toBe(!phone);
-      /* The phone spends no column on the avatar indent; the desktop keeps it. */
-      expect(classOf(row).includes("ml-9")).toBe(!phone);
-    });
+    setViewport(viewportName);
+    const host = mount(<FeedItem item={authTerminalRow()} />);
+    const row = host.querySelector('[data-turn-error="auth"]')!;
+    expect(row).toBeTruthy();
+    /* Danger hue, and the title says what happened with no assistant prose
+       to lean on. */
+    expect(classOf(row)).toContain("border-danger/40");
+    expect(classOf(row)).toContain("bg-danger-soft");
+    expect(row.querySelector(".text-danger")).toBeTruthy();
+    expect(row.textContent).toContain(en["render.turnFailedAuth"]);
+    expect(row.textContent).not.toContain(en["render.taskComplete"]);
+    /* The Viewer's own explanation and the action the operator can take —
+       the provider's sentence is withheld, never echoed. */
+    expect(row.textContent).toContain(en["render.turnFailedAuthBody"]);
+    expect(row.textContent).toContain(en["render.turnFailedAuthHint"]);
+    expect(row.textContent).not.toContain(EXPIRED);
+    /* The feed's own clock: HH:MM on the phone, the full time on the desktop. */
+    expect(row.textContent).toContain("02:49");
+    expect(/\d{2}:\d{2}:\d{2}/.test(row.textContent ?? "")).toBe(surface === "desktop");
+    /* The phone spends no column on the avatar indent; the desktop keeps it. */
+    expect(classOf(row).includes("ml-9")).toBe(surface === "desktop");
   });
 }
 

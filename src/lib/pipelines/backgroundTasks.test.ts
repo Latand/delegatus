@@ -41,6 +41,15 @@ function delivered(ts: number, taskId: string, status: string | null) {
   return { type: "user", timestamp: iso(ts), message: { role: "user", content: notice(taskId, status) } };
 }
 
+function expiredMonitorNotice(taskId: string) {
+  return [
+    "<task-notification>",
+    `<task-id>${taskId}</task-id>`,
+    "<summary>[Monitor expired after 5m with no events delivered]</summary>",
+    "</task-notification>",
+  ].join("\n");
+}
+
 function queuedMidTurn(ts: number, taskId: string, status: string) {
   return { type: "attachment", timestamp: iso(ts), attachment: { type: "queued_command", prompt: notice(taskId, status) } };
 }
@@ -85,9 +94,29 @@ test("a monitor's event notices end nothing; its status notice or its own timeou
   };
   expect(runningBackgroundTasks([start, delivered(T0 + 1_000, "bm1", null)], "claude", T0 + 60_000)).toHaveLength(1);
   expect(runningBackgroundTasks([start, delivered(T0 + 1_000, "bm1", "completed")], "claude", T0 + 60_000)).toEqual([]);
-  expect(runningBackgroundTasks([start], "claude", T0 + 600_000 + 3 * 60_000)).toEqual([]);
+  expect(runningBackgroundTasks([start], "claude", T0 + 600_000)).toEqual([]);
   const persistent = { ...start, toolUseResult: { taskId: "bm1", timeoutMs: 600_000, persistent: true } };
   expect(runningBackgroundTasks([persistent], "claude", T0 + 5 * 3_600_000)).toHaveLength(1);
+});
+
+test("a monitor expiry notice ends only the named watch while its source can still run", () => {
+  const expired = {
+    type: "user",
+    timestamp: iso(T0),
+    message: { role: "user", content: [{ tool_use_id: "toolu_expired", type: "tool_result", content: "Monitor started (task bm-expired)." }] },
+    toolUseResult: { taskId: "bm-expired", timeoutMs: 300_000, persistent: false },
+  };
+  const live = {
+    type: "user",
+    timestamp: iso(T0 + 1),
+    message: { role: "user", content: [{ tool_use_id: "toolu_live", type: "tool_result", content: "Monitor started (task bm-live)." }] },
+    toolUseResult: { taskId: "bm-live", timeoutMs: 300_000, persistent: true },
+  };
+  const expiry = { type: "user", timestamp: iso(T0 + 300_000), message: { role: "user", content: expiredMonitorNotice("bm-expired") } };
+
+  expect(runningBackgroundTasks([expired, live, expiry], "claude", T0 + 300_001)).toEqual([
+    { id: "bm-live", kind: "monitor", startedAt: T0 + 1, expiresAt: null },
+  ]);
 });
 
 /* After a restart the harness reports every task the previous process left
@@ -122,6 +151,68 @@ test("TaskStop ends the task it names", () => {
   const ledger = foldBackgroundTaskRecords(emptyBackgroundTaskLedger(), [bashStart(T0, "bq1"), stop]);
   expect(pendingBackgroundTasks(ledger, T0 + 2_000)).toEqual([]);
   expect(ledger.lastReportedAt).toBe(T0 + 1_000);
+});
+
+test("a TaskStop no-task result ends only the printed monitor id", () => {
+  const started = [
+    {
+      type: "user", timestamp: iso(T0),
+      message: { role: "user", content: [{ tool_use_id: "toolu_old", type: "tool_result", content: "Monitor started (task bm-old)." }] },
+      toolUseResult: { taskId: "bm-old", timeoutMs: 300_000, persistent: true },
+    },
+    {
+      type: "user", timestamp: iso(T0 + 1),
+      message: { role: "user", content: [{ tool_use_id: "toolu_current", type: "tool_result", content: "Monitor started (task bm-current)." }] },
+      toolUseResult: { taskId: "bm-current", timeoutMs: 300_000, persistent: true },
+    },
+  ];
+  const stop = {
+    type: "assistant", timestamp: iso(T0 + 1_500),
+    message: { role: "assistant", content: [{ id: "toolu_stop", type: "tool_use", name: "TaskStop", input: { task_id: "bm-old" } }] },
+  };
+  const stopMiss = {
+    type: "user", timestamp: iso(T0 + 2_000),
+    message: { role: "user", content: [{ tool_use_id: "toolu_stop", type: "tool_result", content: "<tool_use_error>No task found with ID: bm-old</tool_use_error>" }] },
+    toolUseResult: { stderr: "No task found with ID: bm-old" },
+  };
+
+  expect(runningBackgroundTasks([...started, stop, stopMiss], "claude", T0 + 3_000)).toEqual([
+    { id: "bm-current", kind: "monitor", startedAt: T0 + 1, expiresAt: null },
+  ]);
+});
+
+test("an unrelated tool error cannot retire a monitor by repeating a TaskStop phrase", () => {
+  const monitor = {
+    type: "user", timestamp: iso(T0),
+    message: { role: "user", content: [{ tool_use_id: "toolu_monitor", type: "tool_result", content: "Monitor started (task bm-live)." }] },
+    toolUseResult: { taskId: "bm-live", timeoutMs: 300_000, persistent: true },
+  };
+  const quoted = {
+    type: "user", timestamp: iso(T0 + 1_000),
+    message: { role: "user", content: [{ tool_use_id: "toolu_bash", type: "tool_result", content: "No task found with ID: bm-live" }] },
+    toolUseResult: { stderr: "No task found with ID: bm-live" },
+  };
+
+  expect(runningBackgroundTasks([monitor, quoted], "claude", T0 + 2_000)).toMatchObject([{ id: "bm-live" }]);
+});
+
+test("duplicate or late terminal records cannot reopen a monitor or clear its neighbour", () => {
+  const terminal = { type: "user", timestamp: iso(T0), message: { role: "user", content: expiredMonitorNotice("bm-old") } };
+  const lateStart = {
+    type: "user", timestamp: iso(T0 + 1_000),
+    message: { role: "user", content: [{ tool_use_id: "toolu_old", type: "tool_result", content: "Monitor started (task bm-old)." }] },
+    toolUseResult: { taskId: "bm-old", timeoutMs: 300_000, persistent: true },
+  };
+  const neighbour = {
+    type: "user", timestamp: iso(T0 + 2_000),
+    message: { role: "user", content: [{ tool_use_id: "toolu_neighbour", type: "tool_result", content: "Monitor started (task bm-neighbour)." }] },
+    toolUseResult: { taskId: "bm-neighbour", timeoutMs: 300_000, persistent: true },
+  };
+  const duplicate = { type: "user", timestamp: iso(T0 + 3_000), message: { role: "user", content: expiredMonitorNotice("bm-old") } };
+
+  expect(runningBackgroundTasks([terminal, lateStart, neighbour, duplicate], "claude", T0 + 4_000)).toEqual([
+    { id: "bm-neighbour", kind: "monitor", startedAt: T0 + 2_000, expiresAt: null },
+  ]);
 });
 
 test("a scheduled wakeup is held until it is due, and a later ScheduleWakeup call replaces it", () => {
@@ -172,4 +263,33 @@ test("the transcript reader folds the whole file incrementally and waits for a l
   fs.writeFileSync(file, `${JSON.stringify(bashStart(T0, "bq2"))}\n`);
   expect(pendingBackgroundTasks((await readBackgroundTaskLedger(file))!, T0 + 60_000).map((task) => task.id)).toEqual(["bq2"]);
   expect(await readBackgroundTaskLedger(path.join(ROOT, "missing.jsonl"))).toBeNull();
+});
+
+test("the transcript reader applies a text-only TaskStop miss incrementally to only its requested monitor", async () => {
+  const file = path.join(ROOT, "incremental-task-stop-miss.jsonl");
+  const old = {
+    type: "user", timestamp: iso(T0),
+    message: { role: "user", content: [{ tool_use_id: "toolu_old", type: "tool_result", content: "Monitor started (task bm-old)." }] },
+    toolUseResult: { taskId: "bm-old", timeoutMs: 300_000, persistent: true },
+  };
+  const live = {
+    type: "user", timestamp: iso(T0 + 1),
+    message: { role: "user", content: [{ tool_use_id: "toolu_live", type: "tool_result", content: "Monitor started (task bm-live)." }] },
+    toolUseResult: { taskId: "bm-live", timeoutMs: 300_000, persistent: true },
+  };
+  const stop = {
+    type: "assistant", timestamp: iso(T0 + 2),
+    message: { role: "assistant", content: [{ id: "toolu_stop", type: "tool_use", name: "TaskStop", input: { task_id: "bm-old" } }] },
+  };
+  const miss = {
+    type: "user", timestamp: iso(T0 + 3),
+    message: { role: "user", content: [{ tool_use_id: "toolu_stop", type: "tool_result", content: "<tool_use_error>No task found with ID: bm-old</tool_use_error>" }] },
+    toolUseResult: "No task found with ID: bm-old",
+  };
+
+  fs.writeFileSync(file, `${JSON.stringify(old)}\n${JSON.stringify(live)}\n${JSON.stringify(stop)}\n`);
+  expect(pendingBackgroundTasks((await readBackgroundTaskLedger(file))!, T0 + 10).map((task) => task.id)).toEqual(["bm-old", "bm-live"]);
+
+  fs.appendFileSync(file, `${JSON.stringify(miss)}\n`);
+  expect(pendingBackgroundTasks((await readBackgroundTaskLedger(file))!, T0 + 10).map((task) => task.id)).toEqual(["bm-live"]);
 });

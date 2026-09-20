@@ -21,6 +21,11 @@
  * running across all three modes.
  */
 
+/* FIRST, and before every other import: the claim has to precede the modules
+   below, which resolve the operator's state directory while they load (#1905).
+   See `src/lib/state/owner/tool.ts`. */
+import "../src/lib/state/owner/tool";
+
 import fs from "node:fs";
 import path from "node:path";
 
