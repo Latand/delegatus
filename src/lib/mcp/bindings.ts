@@ -82,7 +82,7 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTickFence";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
-import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
 import { projectSuccessionFor } from "@/lib/projects/succession";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
@@ -3509,6 +3509,18 @@ async function deploymentStatus(
       authentication = { conversationId: caller.conversationId, seatProject: seat.project };
     } else {
       const snapshot = dependencies.registrySnapshot();
+      const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+      // An adopted seat keeps its spawn receipt after replacement. Its current
+      // revocation must fence that receipt; a newer designation lifts the fence.
+      const revoked = revokedOrchestratorSeatConversationsOrUnknown(
+        id => lookup.canonicalConversationId(id as `conversation_${string}`),
+      );
+      if (revoked === null) {
+        throw new McpToolRefusal("retirement observation cannot establish seat revocations", { code: "retirement_authority_unavailable" });
+      }
+      if (revoked.has(lookup.canonicalConversationId(caller.conversationId as `conversation_${string}`))) {
+        throw new McpToolRefusal("retirement observation is refused for a revoked seat", { code: "retirement_seat_revoked" });
+      }
       const conversation = snapshot.conversations[caller.conversationId];
       const ownProject = conversation?.projectOwnership?.project;
       if (!ownProject || canonicalOrchestratorProject(ownProject) !== project) {

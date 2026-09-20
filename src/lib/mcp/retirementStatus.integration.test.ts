@@ -18,7 +18,7 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 
 const { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { SqliteAgentRegistryStore } = await import("@/lib/agent/sqliteRegistryStore");
-const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, revokedOrchestratorSeatConversationsOrUnknown } = await import("@/lib/orchestrator/seats");
 const { POST } = await import("@/app/api/runtime/deployments/route");
 const { viewerMcpBindings, productionViewerControlDependencies, productionDomainDependencies } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } = await import("./server");
@@ -203,6 +203,60 @@ test("a seat whose designation was replaced is refused on the next read", async 
     completeOrchestratorSeatIntent({ project: "project-a", clientRequestId: "replace-seat", conversationId: "conversation_replacement", path: null });
     expect(await f.call()).toMatchObject({ ok: false });
     expect(f.requests).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+for (const alias of [false, true]) for (const explicit of [false, true]) test(`a revoked seat cannot reuse its worker receipt with ${explicit ? "explicit" : "automatic"} launch identity${alias ? " through a conversation alias" : ""}`, async () => {
+  const f = await fixture("worker");
+  const read = () => f.call(explicit ? { callerLaunchId: f.launchId } : {});
+  const designate = (conversationId: string, clientRequestId: string) => {
+    beginOrchestratorSeatIntent({ project: "project-a", mandate: "Own project", clientRequestId, mode: "existing", conversationId });
+    completeOrchestratorSeatIntent({ project: "project-a", clientRequestId, conversationId, path: null });
+  };
+  try {
+    const seatId = alias ? "conversation_former_identity" : f.callerId;
+    if (alias) {
+      const store = new SqliteAgentRegistryStore(path.join(process.env.LLV_STATE_DIR!, "agent-registry.sqlite"), {
+        initialSnapshot: f.registry.readOnlySnapshot(), normalize: normalizeRegistry,
+      });
+      try { store.mutate(snapshot => { snapshot.conversationAliases[seatId] = f.callerId as `conversation_${string}`; }); }
+      finally { store.close(); }
+    }
+    const resolveAlias = (id: string) => f.registry.canonicalConversationId(id as `conversation_${string}`);
+    // A Viewer-spawned worker may be adopted as the project's seat.
+    expect(await read()).toMatchObject({ ok: true });
+    designate(seatId, "adopt-worker");
+    expect(productionDomainDependencies.callerAttribution?.()).toMatchObject({ kind: "manager", conversationId: f.callerId });
+    expect(await read()).toMatchObject({ ok: true });
+
+    designate("conversation_replacement", "replace-adopted-seat");
+    expect(revokedOrchestratorSeatConversationsOrUnknown(resolveAlias)?.has(f.callerId)).toBe(true);
+    expect(f.registry.snapshot().receipts[f.launchId]).toMatchObject({ conversationId: f.callerId });
+    const refused = await read();
+    expect(refused).toMatchObject({ ok: false, details: { code: "retirement_seat_revoked" } });
+    expect(refused.items).toBeUndefined();
+    expect(JSON.stringify(refused)).not.toContain("event tail unavailable");
+    expect(f.requests).toHaveLength(2);
+
+    // Deliberate re-designation advances the epoch beyond the revocation.
+    designate(f.callerId, "redesignate-worker");
+    expect(revokedOrchestratorSeatConversationsOrUnknown(resolveAlias)?.has(f.callerId)).toBe(false);
+    expect(await read()).toMatchObject({ ok: true, items: [expect.objectContaining({ conversationId: f.callerId })] });
+    expect(f.requests).toHaveLength(3);
+  } finally { await f.close(); }
+});
+
+test("a worker discloses no observations while the revocation store is unreadable", async () => {
+  const f = await fixture("worker");
+  try {
+    fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), "{broken");
+    expect(revokedOrchestratorSeatConversationsOrUnknown()).toBeNull();
+    for (const args of [{}, { callerLaunchId: f.launchId }]) {
+      const refused = await f.call(args);
+      expect(refused).toMatchObject({ ok: false, details: { code: "retirement_authority_unavailable" } });
+      expect(refused.items).toBeUndefined();
+    }
+    expect(f.requests).toHaveLength(0);
   } finally { await f.close(); }
 });
 
