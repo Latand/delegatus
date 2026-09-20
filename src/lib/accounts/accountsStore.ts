@@ -543,24 +543,83 @@ export function readAccountSource(name: AccountSourceName, directory = accountsS
   return { kind: "collection", body: sourceBody(collection, spec) };
 }
 
+/** What the registry can say about retirement: the ids it records, or that it
+    could not be read at all. An empty set is an answer; `unknown` is not, and
+    the caller that refuses a launch on a retired account refuses on it too. */
+export type RetiredAccountIdsRead =
+  | { kind: "known"; ids: Set<string> }
+  | { kind: "unknown"; reason: string };
+
 /**
  * Ids the engine's registry records as retired. Read here rather than by
  * parsing the registry file, which is the one reader outside this module's
  * owners (`AgentRegistry.beginSpawnRequest`, which refuses a launch on a
  * retired account) and would see the tombstone after the move.
+ *
+ * A registry nobody could read never answers "nothing is retired": a recorded
+ * gap, a file that will not parse and a file that will not open are all
+ * `unknown`, which is the refusal the direct file read gave by rethrowing
+ * anything that was not ENOENT.
  */
-export function retiredAccountIds(engine: "claude" | "codex", directory = accountsStateDirectory()): Set<string> {
-  const read = readAccountSource(engine === "claude" ? CLAUDE_ACCOUNTS_SOURCE : CODEX_ACCOUNTS_SOURCE, directory);
-  const body = read.kind === "collection" ? read.body : readLegacyRegistryFile(engine, directory);
+export function readRetiredAccountIds(engine: "claude" | "codex", directory = accountsStateDirectory()): RetiredAccountIdsRead {
+  const name = engine === "claude" ? CLAUDE_ACCOUNTS_SOURCE : CODEX_ACCOUNTS_SOURCE;
+  const read = readAccountSource(name, directory);
+  if (read.kind === "gap") {
+    return {
+      kind: "unknown",
+      reason: read.preservedAs ? `${read.reason}; kept as ${path.basename(read.preservedAs)}` : read.reason,
+    };
+  }
+  let body: unknown;
+  if (read.kind === "collection") body = read.body;
+  else {
+    const legacy = readLegacyRegistryFile(engine, directory);
+    if (legacy.kind === "unreadable") return { kind: "unknown", reason: legacy.reason };
+    body = legacy.body;
+  }
   const retired = isRecord(body) ? body.retired : null;
-  if (!Array.isArray(retired)) return new Set();
-  return new Set(retired.flatMap((entry) => (isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [])));
+  if (!Array.isArray(retired)) return { kind: "known", ids: new Set() };
+  return {
+    kind: "known",
+    ids: new Set(retired.flatMap((entry) => (isRecord(entry) && typeof entry.id === "string" ? [entry.id] : []))),
+  };
 }
 
-function readLegacyRegistryFile(engine: "claude" | "codex", directory: string): unknown {
+/** Thrown for a registry that could not be read, where the ids it records
+    decide whether a launch may proceed. */
+export class AccountRegistryUnreadableError extends Error {
+  constructor(engine: "claude" | "codex", reason: string) {
+    super(`${engine} account registry could not be read: ${reason}`);
+    this.name = "AccountRegistryUnreadableError";
+  }
+}
+
+/** The recorded retirements, for the caller that only knows how to refuse.
+    An unreadable registry throws rather than answering with an empty set:
+    `AgentRegistry.beginSpawnRequest` refuses the launch on it, which is what
+    the direct file read did by rethrowing anything that was not ENOENT. */
+export function retiredAccountIds(engine: "claude" | "codex", directory = accountsStateDirectory()): Set<string> {
+  const read = readRetiredAccountIds(engine, directory);
+  if (read.kind === "unknown") throw new AccountRegistryUnreadableError(engine, read.reason);
+  return read.ids;
+}
+
+/** The registry file itself, for a store whose import has not run. Absent is a
+    registry with nothing retired; anything else is a registry that did not
+    answer. */
+function readLegacyRegistryFile(
+  engine: "claude" | "codex",
+  directory: string,
+): { kind: "body"; body: unknown } | { kind: "unreadable"; reason: string } {
   const file = accountSourcePath(engine === "claude" ? CLAUDE_ACCOUNTS_SOURCE : CODEX_ACCOUNTS_SOURCE, directory);
-  try { return JSON.parse(fs.readFileSync(file, "utf8")) as unknown; }
-  catch { return null; }
+  let raw: string;
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "body", body: null };
+    return { kind: "unreadable", reason: (error as Error).message };
+  }
+  try { return { kind: "body", body: JSON.parse(raw) as unknown }; }
+  catch (error) { return { kind: "unreadable", reason: (error as Error).message }; }
 }
 
 function legacyFileStillHoldsTheRecord(name: AccountSourceName, directory: string): boolean {

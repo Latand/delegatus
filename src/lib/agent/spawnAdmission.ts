@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { FENCES_SOURCE, mutateAccountSource, readAccountSource } from "@/lib/accounts/accountsStore";
@@ -129,6 +130,14 @@ function readSpawnAdmissionFenceFile(requestedClientAttemptId?: string): SpawnAd
     return read.body === undefined
       ? emptySpawnAdmissionFenceFile()
       : normalizeSpawnAdmissionFenceFile(read.body, requestedClientAttemptId);
+  }
+  /* A recorded gap is the fence store's contents never having been recovered.
+     Reading the path instead would open the tombstone the import left and
+     answer EISDIR, which says nothing; the recorded reason and the file that
+     was kept aside say what happened and what to look at. */
+  if (read.kind === "gap") {
+    throw new Error(`spawn admission fence store could not be read: ${read.reason}`
+      + (read.preservedAs ? `; kept as ${path.basename(read.preservedAs)}` : ""));
   }
   let raw: string;
   try {

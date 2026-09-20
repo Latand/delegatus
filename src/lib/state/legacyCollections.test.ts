@@ -332,3 +332,65 @@ test("the conversation-migration journals import at activation and mirror back f
   expect(persistedCodexOperationJournal(root, "op-one")?.fork?.id).toBe(INVENTED_FORK_ID);
   expect(persistedCodexOperationJournal(root, "op-two")?.conversationId).toBe("conversation_op_two");
 });
+
+/* The other side of that fold: a mirror written for a handover that never
+   completed. `onFenceWithdrawn` (src/runtime-host adapter, and the deployment
+   adapter when `acknowledgeHotStateFence` fails) restores this release's
+   authority with the mirror files already on disk, and this release keeps
+   serving and keeps advancing journals in SQLite beside them. The next import
+   must fold back only what SQLite has not rewritten since that mirror. */
+test("the journal fold-back keeps a row this release rewrote after its own rollback mirror", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-legacy-collections-migration-ops-stale-"));
+  sandboxes.push(sandbox);
+  const revision = "4".repeat(40);
+  process.env.LLV_STATE_DIR = sandbox;
+  process.env.PORT = "19074";
+  resetMigrationOperationStoreForTests();
+  fs.writeFileSync(path.join(sandbox, "viewer-release.json"), JSON.stringify({
+    endpoint: "http://127.0.0.1:19074",
+    revision,
+    hotStateBackend: HOT_STATE_BACKEND,
+  }));
+  const root = path.join(sandbox, "migration-provider-operations");
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const journalFile = (operationId: string) =>
+    path.join(root, `${crypto.createHash("sha256").update(operationId).digest("hex")}.json`);
+  fs.writeFileSync(journalFile("op-one"), JSON.stringify(journalBody("op-one", { forkRequestedAtMs: 1_700_000_000_500 })));
+  fs.writeFileSync(journalFile("op-two"), JSON.stringify(journalBody("op-two", { forkRequestedAtMs: 1_700_000_000_700 })));
+
+  const boundary = await establishHotStateCutoverBoundary(() => true, {
+    pollMs: 0,
+    stablePolls: 1,
+    maxPolls: 2,
+    schedule: (callback) => { callback(); return { unref() {} }; },
+  });
+  await initializeHotStateStoresAtStartup(boundary);
+  expect((await ensureLegacyCollectionsImported()).get(MIGRATION_OPS_COLLECTION)).toMatchObject({ state: "imported" });
+
+  await checkpointHotStateRollbackMirrorsForDemotion();
+  expect(fs.statSync(journalFile("op-one")).isFile()).toBe(true);
+
+  /* The handover fails, this release stays the writer, and it finishes the
+     fork authorization op-one was waiting on. Its journal file still holds the
+     request the mirror wrote. */
+  expect(await authorizeCodexForkRetry("op-one", "conversation_op_one", root, () => [])).toBe("reauthorized");
+  expect(persistedCodexOperationJournal(root, "op-one")?.forkRequestedAtMs).toBeNull();
+  expect(JSON.parse(fs.readFileSync(journalFile("op-one"), "utf8")).forkRequestedAtMs).toBe(1_700_000_000_500);
+
+  /* op-two is the row SQLite has not rewritten since the mirror, so what a
+     rollback release wrote into its file is still the newer version. */
+  fs.writeFileSync(journalFile("op-two"), JSON.stringify(journalBody("op-two", {
+    forkRequestedAtMs: 1_700_000_000_700,
+    fork: { id: INVENTED_FORK_ID, path: "/source/sessions/rollout.jsonl" },
+  })));
+
+  resetMigrationOperationStoreForTests();
+  expect((await ensureLegacyCollectionsImported()).get(MIGRATION_OPS_COLLECTION))
+    .toMatchObject({ state: "already-imported" });
+
+  // The advance survives the fold; the file that predates it never wins.
+  expect(persistedCodexOperationJournal(root, "op-one")?.forkRequestedAtMs).toBeNull();
+  expect(persistedCodexOperationJournal(root, "op-two")?.fork?.id).toBe(INVENTED_FORK_ID);
+  expect(fs.statSync(journalFile("op-one")).isDirectory()).toBe(true);
+  expect(fs.statSync(journalFile("op-two")).isDirectory()).toBe(true);
+});

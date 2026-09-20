@@ -16,7 +16,7 @@ import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
 import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
-import { legacyImportAllowed, type LegacyImportOutcome } from "@/lib/state/legacyImport";
+import { legacyBaselineRevision, legacyImportAllowed, type LegacyImportOutcome } from "@/lib/state/legacyImport";
 import { importStateCollection, readStateImport, recordStateImportMirror, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
@@ -757,7 +757,10 @@ export function resetMigrationOperationStoreForTests(): void {
 function journalFileNames(root: string): string[] {
   let names: string[];
   try { names = fs.readdirSync(root); } catch { return []; }
-  return names.filter((name) => name.endsWith(".json") && !name.endsWith(".lock.json"))
+  /* `<sha>.json` only. The per-operation lease writes `<sha>.json.lock` and a
+     `<sha>.json.locks` directory of tickets; neither ends in `.json`, and the
+     tickets live a level down that this readdir never reaches. */
+  return names.filter((name) => name.endsWith(".json"))
     .filter((name) => {
       try { return fs.lstatSync(path.join(root, name)).isFile(); } catch { return false; }
     })
@@ -795,7 +798,9 @@ function retireJournalFiles(root: string, names: readonly string[], stamp: strin
  * rollback window closing: {@link checkpointMigrationOperationJournalMirrorForDemotion}
  * wrote those files for a release that predates the move, and that release has
  * been the writer since. Its writes are folded into the collection before the
- * tombstones return — dropping them would lose one fork recovery per journal.
+ * tombstones return — dropping them would lose one fork recovery per journal —
+ * except where this release rewrote the row itself after that mirror, which is
+ * the newer version and keeps its place.
  */
 export function importMigrationOperationJournals(root: string): { imported: boolean; rows: number } {
   const database = migrationOpsDatabase(root);
@@ -831,15 +836,32 @@ export function importMigrationOperationJournals(root: string): { imported: bool
     const held = readStateImport(database, collection);
     if (held) {
       const store = openMigrationOps(root);
-      const changed = parsed.filter((row) => {
-        const current = store.get(row.k);
-        return !current || JSON.stringify(current.v) !== JSON.stringify(row.v);
-      });
+      /* Which side of a differing row is the newer one is decided the way every
+         other moved store decides it (`mergeRows`, `mergeLegacyTasks`): a row
+         SQLite has not rewritten since the recorded mirror is one those files
+         were written from, so the file's version is folded in; a row rewritten
+         after the mirror is this release's own progress and the file beside it
+         is stale, so the row stays. Without that asymmetry a mirror a demotion
+         left on disk — the handover it was written for then failed, and the
+         same release kept serving and kept advancing journals — folds back over
+         every journal written after it and loses one fork recovery each. */
+      const since = legacyBaselineRevision(held);
+      let folded = 0;
       /* `fenceOwner`, because the roll-forward activation can still hold this
          release's own rollback fence, exactly as the legacy reconcile does. */
-      if (changed.length > 0) store.patchSync(() => ({ records: changed }), { fenceOwner: true });
+      store.patchSync(() => {
+        const revisions = store.rowRevisions();
+        const records = parsed.filter((row) => {
+          const current = store.get(row.k);
+          if (!current) return true;
+          if (JSON.stringify(current.v) === JSON.stringify(row.v)) return false;
+          return (revisions.get(row.k) ?? 0) <= since;
+        });
+        folded = records.length;
+        return { records };
+      }, { fenceOwner: true });
       retireJournalFiles(root, names, new Date().toISOString());
-      return { imported: false, rows: changed.length };
+      return { imported: false, rows: folded };
     }
     const { record } = importStateCollection(database, {
       collection,

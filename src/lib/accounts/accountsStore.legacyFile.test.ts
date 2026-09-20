@@ -22,6 +22,8 @@ const { accountMutationRevisionForTests, withAccountMutationLock } = await impor
 const { setAccountRemovalCheckpointForTests } = await import("./removal");
 const { accountsCollectionRevision, accountsDatabasePath, resetAccountCollectionsForTests } = await import("./accountsStore");
 const { readStateCollectionRows } = await import("@/lib/state/sqliteStateStore");
+const { agentRegistry } = await import("@/lib/agent/registry");
+const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 
 function stateDirectory(): string {
   return process.env.LLV_STATE_DIR!;
@@ -223,4 +225,39 @@ test("a #1857 removal commits the account row and its journal step in one transa
 
   expect(claude.listClaudeAccounts().map((row) => row.id)).not.toContain(account.id);
   expect(persistedRows().some((row) => row.k === `removal:claude:${account.id}`)).toBe(false);
+});
+
+/* A registry the store could not recover is a gap row, and a gap is never
+   "nothing is retired": the spawn path refuses the launch on it, the way the
+   direct file read refused by rethrowing anything that was not ENOENT. */
+test("a registry recorded as a gap refuses a launch that names an account", () => {
+  fs.mkdirSync(stateDirectory(), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(statePath("claude-accounts.json"), Buffer.alloc(4096, 0));
+
+  // The import records the gap and keeps the bytes aside.
+  claude.listClaudeAccounts();
+
+  expect(() => beginLegacySpawnFixture(agentRegistry(), {
+    engine: "claude",
+    cwd: "/repo",
+    accountId: "lane-one",
+  })).toThrow(/claude account registry could not be read/);
+});
+
+/* The fence store's own gap: the refusal was always right, but reading the
+   path instead opened the tombstone and answered EISDIR, which named nothing.
+   The recorded reason and the kept file name the cause. */
+test("a fence store recorded as a gap names its reason instead of answering EISDIR", () => {
+  fs.mkdirSync(stateDirectory(), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(statePath("spawn-admission-fences.json"), Buffer.alloc(2048, 0));
+  seed("claude-accounts.json", { version: 1, active: "default", accounts: [], retired: [], removals: [] });
+
+  claude.listClaudeAccounts();
+
+  let thrown: Error | null = null;
+  try { admission.readSpawnAdmissionFence("attempt-after-the-gap"); }
+  catch (error) { thrown = error as Error; }
+  expect(thrown?.message).toContain("spawn admission fence store could not be read");
+  expect(thrown?.message).toContain("spawn-admission-fences.json.unreadable-");
+  expect(thrown?.message).not.toContain("EISDIR");
 });
