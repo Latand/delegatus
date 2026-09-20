@@ -3,11 +3,15 @@ import path from "node:path";
 
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { readStableTailRecords } from "@/lib/scanner/activity";
+import { globalCache } from "@/lib/scanner/caches";
 import { describe } from "@/lib/scanner/describe";
 import { scanRootEntries } from "@/lib/scanner/roots";
 import type { Engine, RootKey } from "@/lib/types";
 
 import type { LifecycleTurnState } from "./vocabulary";
+
+const PROVIDER_PROGRESS_CACHE_CAP = 4_096;
+const providerProgressCache = globalCache<number>("liveness-provider-progress-v1");
 
 /**
  * The two transcript reads a liveness poll actually needs, each done once and
@@ -105,6 +109,25 @@ function newestProviderProgressTimestamp(records: Record<string, unknown>[], eng
   return newest;
 }
 
+/** A tail can roll past the provider record while a tool stretch continues.
+ * Keep only the greatest observed provider timestamp per active transcript;
+ * this is a bounded projection cache, never a provider or account status
+ * store. A later rejection still wins because liveness compares its own
+ * `throttleAt` against this watermark. */
+function rememberProviderProgress(transcriptPath: string, observed: number | null): number | null {
+  const cached = providerProgressCache.get(transcriptPath) ?? null;
+  const watermark = observed === null ? cached : Math.max(cached ?? Number.NEGATIVE_INFINITY, observed);
+  if (watermark === null || !Number.isFinite(watermark)) return null;
+  providerProgressCache.delete(transcriptPath);
+  while (providerProgressCache.size >= PROVIDER_PROGRESS_CACHE_CAP) {
+    const oldest = providerProgressCache.keys().next().value;
+    if (oldest === undefined) break;
+    providerProgressCache.delete(oldest);
+  }
+  providerProgressCache.set(transcriptPath, watermark);
+  return watermark;
+}
+
 /**
  * Turn state and record freshness from a single identity-verified tail read.
  * The durable evidence path used to answer these with two separate reads of the
@@ -120,7 +143,7 @@ export async function readLivenessTranscriptEvidence(
   return {
     turn: turn.state === "terminal" ? "idle" : turn.state === "busy" ? "busy" : "unknown",
     lastRecordTs: newestRecordTimestamp(read.records),
-    providerProgressAt: newestProviderProgressTimestamp(read.records, engine),
+    providerProgressAt: rememberProviderProgress(transcriptPath, newestProviderProgressTimestamp(read.records, engine)),
   };
 }
 

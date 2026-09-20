@@ -126,10 +126,7 @@ export function selectConversationEntries(
        different project is still a row the caller need not recover. */
     if (request.hostedPaths?.has(entry.path)) hostedSeen.add(entry.path);
     if (request.project && entry.project !== request.project) continue;
-    if (request.liveOnly
-      && entry.activity !== "live"
-      && entry.activity !== "stalled"
-      && !request.hostedPaths?.has(entry.path)) continue;
+    if (request.liveOnly && entry.activity !== "live" && !request.hostedPaths?.has(entry.path)) continue;
     if (query && !`${entry.title}\n${entry.project}\n${entry.path}`.toLocaleLowerCase().includes(query)) continue;
     matched += 1;
     if (entries.length < limit) entries.push(entry);

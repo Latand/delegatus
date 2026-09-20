@@ -377,10 +377,22 @@ function headlessHostEvidence(
       && (!conversationId || round.reviewerConversationId !== conversationId)) continue;
     const pid = round.reviewerPid;
     const identity = round.reviewerIdentity;
-    if (pid === null || pid === undefined || !identityAlive({ pid, startIdentity: identity ?? null }, probe)) continue;
+    if (!exactHeadlessIdentityAlive(pid, identity, probe)) continue;
     return { state: "alive", kind: "headless", pid };
   }
   return null;
+}
+
+/** Headless reviewer ownership is an actuation-grade claim. Unlike the shared
+ * liveness helper, both start identities must be present and exactly equal. */
+function exactHeadlessIdentityAlive(
+  pid: number | null | undefined,
+  savedIdentity: string | null | undefined,
+  probe: LivenessProbe,
+): pid is number {
+  if (!Number.isInteger(pid) || pid <= 0 || !savedIdentity || !probe.pidAlive(pid)) return false;
+  const currentIdentity = probe.processIdentity(pid);
+  return Boolean(currentIdentity) && currentIdentity === savedIdentity;
 }
 
 function turnStateFromEvidence(evidence: LivenessTranscriptEvidence | null, entry: LivenessTranscript): LifecycleTurnState {
@@ -506,11 +518,10 @@ function conversationIdForPath(
     generation can predate a launch by its whole refresh cadence, so liveness
     filtered on the scan projection alone would drop a conversation that started
     a minute ago — the correctness half of not sweeping the corpus (#860). */
-function hostedTranscriptPaths(snapshot: Pick<RegistryFile, "entries">): Set<string> {
+function hostedTranscriptPaths(snapshot: Pick<RegistryFile, "entries">, probe: LivenessProbe): Set<string> {
   const hosted = new Set<string>();
   for (const entry of Object.values(snapshot.entries)) {
-    if (entry.status !== "starting" && entry.status !== "live" && entry.status !== "idle" && entry.status !== "handoff") continue;
-    if (entry.artifactPath) hosted.add(entry.artifactPath);
+    if (entry.artifactPath && hostEvidence(entry, probe).state === "alive") hosted.add(entry.artifactPath);
   }
   return hosted;
 }
@@ -518,6 +529,7 @@ function hostedTranscriptPaths(snapshot: Pick<RegistryFile, "entries">): Set<str
 function activeHeadlessTranscriptPaths(
   flows: readonly Flow[],
   conversations: Pick<RegistryFile, "conversations">["conversations"],
+  probe: LivenessProbe,
 ): Set<string> {
   const paths = new Set<string>();
   for (const flow of flows) {
@@ -525,7 +537,7 @@ function activeHeadlessTranscriptPaths(
     const round = flow.rounds.at(-1);
     const path = round?.reviewerPath
       ?? (round?.reviewerConversationId ? conversations[round.reviewerConversationId]?.generations.at(-1)?.path : null);
-    if (path) paths.add(path);
+    if (path && exactHeadlessIdentityAlive(round?.reviewerPid, round?.reviewerIdentity, probe)) paths.add(path);
   }
   return paths;
 }
@@ -625,7 +637,10 @@ export async function agentLivenessSnapshot(
   const registry = sources.registrySnapshot();
   const pipelines = pipelineIndex(sources.pipelines());
   const flows = sources.flows?.() ?? [];
-  const hostedPaths = new Set([...hostedTranscriptPaths(registry), ...activeHeadlessTranscriptPaths(flows, registry.conversations)]);
+  const hostedPaths = new Set([
+    ...hostedTranscriptPaths(registry, sources.probe),
+    ...activeHeadlessTranscriptPaths(flows, registry.conversations, sources.probe),
+  ]);
   const indexProjectionMs = performance.now() - projectionStartedAt;
 
   /* A conversation id names its current generation's transcript; that is the
