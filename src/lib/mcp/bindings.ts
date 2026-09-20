@@ -22,6 +22,7 @@ import {
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { procBackend } from "@/lib/proc";
+import { readRetirementStatus } from "@/lib/runtime/structuredHostRetirementStatus";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -100,7 +101,7 @@ import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
 import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan } from "@/lib/scanner/scanCache";
-import { readResources } from "@/lib/resources";
+import { readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
 import { listRoles, resolveSpawnRole } from "@/lib/roles/registry";
 import type { RoleDefinition, RoleParameter } from "@/lib/roles/types";
@@ -613,6 +614,7 @@ export interface ViewerMcpDomainDependencies {
   loadTasks: typeof loadTasks;
   collectSnapshot: typeof collectSnapshot;
   readResources: typeof readResources;
+  readResourcesWithDiagnostic?: typeof readResourcesWithDiagnostic;
   /** Sources for the liveness read. The catalog seam travels in (#860) so a
       project-scoped `agent_activity` consumes the SAME completed generation
       `board_snapshot` reads instead of forcing a private whole-corpus sweep.
@@ -665,6 +667,7 @@ export interface ViewerMcpDomainDependencies {
       Null means the invariant "a registered session has a canonical project"
       is violated, and unscoped directive routing fails closed diagnostically. */
   callerProject?(): string | null;
+  readRetirementStatus?: typeof readRetirementStatus;
   /** The canonical project of the repository this Viewer deploys (#1321) — the
       only project whose designated seat may execute a deploy. Production derives
       it from the canonical Viewer remote, never from the caller's working
@@ -1037,6 +1040,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   loadTasks,
   collectSnapshot,
   readResources,
+  readResourcesWithDiagnostic,
   livenessSources: productionLivenessSources,
   queryLifecycleEvents,
   pollLifecycleDigest,
@@ -3355,7 +3359,20 @@ function deploymentList(result: Record<string, unknown>): {
 async function deploymentStatus(
   args: McpToolArgs,
   control: ViewerControlDependencies,
+  dependencies: ViewerMcpDomainDependencies,
 ): Promise<McpToolPayload> {
+  if (args.kind === "host-retirement") {
+    if (args.operationId !== undefined || args.deploymentId !== undefined) {
+      throw new Error("retirement observation cannot be combined with an operation or deployment lookup");
+    }
+    const project = required(args, "project");
+    const launchId = required(args, "callerLaunchId");
+    return redactPayload((dependencies.readRetirementStatus ?? readRetirementStatus)({
+      project, limit: Math.max(1, Math.min(100, integer(args.limit, 25))),
+      ...(text(args.cursor) ? { cursor: text(args.cursor) } : {}),
+    }, { launchId, capability: process.env[VIEWER_SPAWN_CAPABILITY_ENV]?.trim() ?? "" }));
+  }
+  if (args.kind !== undefined || args.cursor !== undefined) throw new Error("unsupported deployment status query");
   const deploymentId = text(args.deploymentId);
   if (deploymentId) {
     const deployment = await readViewerControl(
@@ -3416,7 +3433,19 @@ async function deploymentStatus(
 }
 
 async function resources(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  return redactPayload({ ...await dependencies.readResources(args.fresh === true) });
+  const requestedAt = new Date().toISOString();
+  const fresh = args.fresh === true;
+  const result = dependencies.readResourcesWithDiagnostic ? await dependencies.readResourcesWithDiagnostic(fresh) : null;
+  const payload = result?.payload ?? await dependencies.readResources(fresh);
+  const capturedAt = payload.system?.capturedAt ?? null;
+  const capturedMs = capturedAt === null ? NaN : Date.parse(capturedAt);
+  return redactPayload({ ...payload, freshness: {
+    requestedAt, capturedAt, capturedAtScope: "system", ageMs: Number.isFinite(capturedMs) ? Math.max(0, Date.now() - capturedMs) : null,
+    refreshRequested: fresh,
+    refreshSucceeded: fresh && result ? result.diagnostic.status === "complete" && result.diagnostic.cache.status === "miss" : null,
+    cache: result?.diagnostic.cache.status ?? "unknown",
+    reason: result?.diagnostic.degradedReason ?? null,
+  } });
 }
 
 type ConversationArchiveInput = {
@@ -4718,7 +4747,7 @@ export function viewerMcpBindings(
     list_tasks: (args) => Promise.resolve(listTasks(args, domainDependencies)),
     get_task: (args) => Promise.resolve(getTask(args, domainDependencies)),
     operator_snapshot: (args) => operatorSnapshot(args, domainDependencies),
-    deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context)),
+    deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     resources: (args) => resources(args, domainDependencies),
     conversation_action: (args, context) => conversationAction(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     conversation_migration: (args, context) => conversationMigration(args, viewerControlForCall(controlDependencies, context)),
