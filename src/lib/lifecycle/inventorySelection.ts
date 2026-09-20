@@ -115,7 +115,8 @@ export function selectConversationEntries(
 ): Pick<ConversationSelection, "entries" | "matched" | "scanned" | "hostedSeen"> {
   const limit = Math.max(0, Math.floor(request.limit));
   const query = request.query ? request.query.toLocaleLowerCase() : "";
-  const entries: FileEntry[] = [];
+  const owned: FileEntry[] = [];
+  const scanLive: FileEntry[] = [];
   const hostedSeen = new Set<string>();
   let matched = 0;
   let scanned = 0;
@@ -126,11 +127,17 @@ export function selectConversationEntries(
        different project is still a row the caller need not recover. */
     if (request.hostedPaths?.has(entry.path)) hostedSeen.add(entry.path);
     if (request.project && entry.project !== request.project) continue;
-    if (request.liveOnly && entry.activity !== "live" && !request.hostedPaths?.has(entry.path)) continue;
+    const currentlyOwned = request.hostedPaths?.has(entry.path) ?? false;
+    if (request.liveOnly && entry.activity !== "live" && !currentlyOwned) continue;
     if (query && !`${entry.title}\n${entry.project}\n${entry.path}`.toLocaleLowerCase().includes(query)) continue;
     matched += 1;
-    if (entries.length < limit) entries.push(entry);
+    /* The completed scan can call a dead transcript `live` until its next
+       refresh. Verified current owners must therefore take the bounded slots
+       first; scan-only activity remains useful after them. */
+    if (currentlyOwned) owned.push(entry);
+    else scanLive.push(entry);
   }
+  const entries = [...owned, ...scanLive].slice(0, limit);
   return { entries, matched, scanned, hostedSeen };
 }
 

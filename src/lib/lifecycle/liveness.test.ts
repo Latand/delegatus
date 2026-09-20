@@ -922,8 +922,10 @@ test("a project-scoped live read serves one completed generation, hydrates only 
 test("liveOnly limit skips stale headless history and keeps the current exact-identity reviewer", async () => {
   const dir = sandbox();
   const historical = path.join(dir, "historical-review.jsonl");
+  const staleLive = path.join(dir, "stale-live-review.jsonl");
   const current = path.join(dir, "current-review.jsonl");
   const generation = publishedGeneration([
+    fileEntry({ path: staleLive, project: PROJECT, conversationId: "conversation_stale_live", activity: "live", activityReason: "jsonl_turn_open", mtime: Math.floor((NOW - 90_000) / 1000) }),
     fileEntry({ path: historical, project: PROJECT, conversationId: "conversation_historical", activity: "stalled", activityReason: "jsonl_turn_stalled", mtime: Math.floor((NOW - 60_000) / 1000) }),
     fileEntry({ path: current, project: PROJECT, conversationId: "conversation_current", activity: "idle", activityReason: "mtime_old", mtime: Math.floor((NOW - 1_000) / 1000) }),
   ]);
@@ -936,6 +938,7 @@ test("liveOnly limit skips stale headless history and keeps the current exact-id
     probe: { now: () => NOW, pidAlive: (pid) => pid === 4245, processIdentity: () => "current-start" },
     registrySnapshot: () => ({ entries: {}, conversations: {
       conversation_historical: { id: "conversation_historical", generations: [{ path: historical }], continuityPaths: [] },
+      conversation_stale_live: { id: "conversation_stale_live", generations: [{ path: staleLive }], continuityPaths: [] },
       conversation_current: { id: "conversation_current", generations: [{ path: current }], continuityPaths: [] },
     } }) as unknown as RegistryFile,
     transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 1_000 }),
