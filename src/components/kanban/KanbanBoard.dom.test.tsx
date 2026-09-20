@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 
-import { KanbanBoard, kanbanLayoutMode } from "./KanbanBoard";
+import { KanbanBoard, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanBoardProps } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
 
 /* The board rendered by React against invented tasks and scripted task ports.
@@ -53,7 +53,7 @@ function task(id: string, status: TaskStatus, text: string, extra: Partial<Board
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
-function mount(tasks: BoardTask[], ports: TaskMutationPorts) {
+function mount(tasks: BoardTask[], ports: TaskMutationPorts, extra: Partial<KanbanBoardProps> = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -76,6 +76,7 @@ function mount(tasks: BoardTask[], ports: TaskMutationPorts) {
       onOpenConversations={() => {}}
       seatRefs={null}
       mutationPorts={ports}
+      {...extra}
     />,
   ));
   render(tasks);
@@ -97,6 +98,17 @@ test("the layout mode follows the board's own width, tabbed from 640 px up to 76
   expect(kanbanLayoutMode(1200)).toBe("narrow");
   expect(kanbanLayoutMode(1399)).toBe("narrow");
   expect(kanbanLayoutMode(1400)).toBe("wide");
+});
+
+test("a seat docked at the side never costs the columns: what it leaves scrolls instead of folding into tabs (#1841)", () => {
+  /* 1280 window: 1032 px of board, a 380 px seat leaves 652. */
+  expect(kanbanLayoutModeBeside(1032, 380)).toBe("scroll");
+  expect(kanbanLayoutModeBeside(1192, 380)).toBe("scroll");
+  expect(kanbanLayoutModeBeside(1880, 380)).toBe("wide");
+  expect(kanbanLayoutModeBeside(1032, 0)).toBe("scroll");
+  /* A board already too narrow for columns stays tabbed. */
+  expect(kanbanLayoutModeBeside(700, 380)).toBe("tabs");
+  expect(kanbanLayoutModeBeside(700, 0)).toBe("tabs");
 });
 
 test("four columns hold every task; an empty task taken off the board is counted, never dropped", () => {
@@ -242,4 +254,119 @@ test("U undoes only while the move's receipt is on screen", async () => {
   await tick();
   expect(patches).toHaveLength(1);
   expect(columnOf(host, "a")).toBe("assigned");
+});
+
+/* ── #1841: a column can take the wide share; `O` folds the seat ─────────── */
+
+const NO_PORTS: TaskMutationPorts = { patch: async () => ({ ok: false, status: 500, error: "unused" }), read: async () => null, changed: () => {} };
+const column = (host: HTMLElement, status: TaskStatus) => host.querySelector<HTMLElement>(`.column[data-status="${status}"]`)!;
+const widthButton = (host: HTMLElement, status: TaskStatus) => host.querySelector<HTMLElement>(`[data-col-width="${status}"]`);
+const wideColumns = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.column[data-wide="1"]')].map((node) => node.dataset.status);
+
+/* happy-dom lays nothing out; the board is given a 1440 px desktop so it
+   takes its four-column grid instead of tabs. */
+function atDesktopWidth<T>(run: () => T): T {
+  const prototype = dom.HTMLElement.prototype as unknown as { getBoundingClientRect: () => DOMRect };
+  const original = prototype.getBoundingClientRect;
+  prototype.getBoundingClientRect = function (this: HTMLElement) {
+    const wide = this.classList?.contains("kb");
+    return { x: 0, y: 0, top: 0, left: 0, bottom: 900, right: wide ? 1440 : 0, width: wide ? 1440 : 0, height: 900, toJSON() {} } as DOMRect;
+  };
+  try { return run(); } finally { prototype.getBoundingClientRect = original; }
+}
+
+test("a shelf takes the wide share, one at a time, and gives it back when work resumes in Assigned unless pinned", () => atDesktopWidth(() => {
+  localStorage.clear();
+  const tasks = [task("a", "assigned", "Repair old links"), task("d", "done", "Merge the approved queue adapter"), task("b", "blocked", "Waiting on a review")];
+  const { host } = mount(tasks, NO_PORTS);
+  /* Assigned already is the wide one: no button draws on it. */
+  expect(widthButton(host, "assigned")).toBeNull();
+  expect(wideColumns(host)).toEqual(["assigned"]);
+  expect(widthButton(host, "done")?.getAttribute("aria-label")).toBe("Widen Done");
+
+  click(widthButton(host, "done"));
+  expect(wideColumns(host)).toEqual(["done"]);
+  expect(column(host, "done").className).toContain("wide");
+  expect(column(host, "assigned").className).toContain("shelf");
+  expect(host.querySelector<HTMLElement>("[data-board]")!.style.getPropertyValue("--c-done")).toContain("1fr");
+  expect(widthButton(host, "done")?.getAttribute("aria-label")).toBe("Back to narrow");
+  expect(widthButton(host, "assigned")?.getAttribute("data-col-width-action")).toBe("widen");
+
+  /* Widening another narrows the previous one. */
+  click(widthButton(host, "blocked"));
+  expect(wideColumns(host)).toEqual(["blocked"]);
+
+  /* Reading inside the wide column keeps it wide; a focus on a card in Assigned gives the space back. */
+  flushSync(() => host.querySelector<HTMLElement>('.card[data-id="task:b"]')!.dispatchEvent(new dom.FocusEvent("focusin", { bubbles: true }) as unknown as Event));
+  expect(wideColumns(host)).toEqual(["blocked"]);
+  flushSync(() => host.querySelector<HTMLElement>('.card[data-id="task:a"]')!.dispatchEvent(new dom.FocusEvent("focusin", { bubbles: true }) as unknown as Event));
+  expect(wideColumns(host)).toEqual(["assigned"]);
+
+  /* Pinned, it stays wide through work in Assigned and across a remount. */
+  click(widthButton(host, "done"));
+  const pin = () => host.querySelector<HTMLElement>('[data-col-pin="done"]');
+  expect(pin()?.getAttribute("aria-pressed")).toBe("false");
+  click(pin());
+  expect(pin()?.getAttribute("aria-pressed")).toBe("true");
+  expect(localStorage.getItem("llv:kanban-wide:v1")).toBe("done");
+  flushSync(() => host.querySelector<HTMLElement>('.card[data-id="task:a"]')!.dispatchEvent(new dom.PointerEvent("pointerdown", { bubbles: true }) as unknown as Event));
+  expect(wideColumns(host)).toEqual(["done"]);
+
+  const again = mount(tasks, NO_PORTS);
+  expect(wideColumns(again.host)).toEqual(["done"]);
+
+  /* Back to narrow unpins. */
+  click(widthButton(again.host, "done"));
+  expect(localStorage.getItem("llv:kanban-wide:v1")).toBeNull();
+  expect(wideColumns(again.host)).toEqual(["assigned"]);
+  localStorage.clear();
+}));
+
+test("the Overview keeps its fixed shares: no width control and no read of a project's pin", () => atDesktopWidth(() => {
+  localStorage.clear();
+  localStorage.setItem("llv:kanban-wide:v1", "blocked");
+  const tasks = [task("a", "assigned", "Repair old links"), task("b", "blocked", "Waiting on a review")];
+  const { host } = mount(tasks, NO_PORTS, { project: "__overview__", overview: { names: { fixture: "fixture" }, onOpenProject: () => {}, keep: () => true } });
+  expect(host.querySelector("[data-board]")?.getAttribute("data-mode")).toBe("wide");
+  expect(host.querySelector("[data-col-width], [data-col-pin]")).toBeNull();
+  expect(host.querySelector('.column[data-wide]')).toBeNull();
+  expect(host.querySelector<HTMLElement>("[data-board]")!.style.getPropertyValue("--c-blocked")).toBe("");
+  /* The project board still reads the pin. */
+  const project = mount(tasks, NO_PORTS);
+  expect(wideColumns(project.host)).toEqual(["blocked"]);
+  localStorage.clear();
+}));
+
+test("in tabs every column is already full width, so no column draws the control", () => {
+  const { host } = mount([task("d", "done", "Merge the approved queue adapter")], NO_PORTS);
+  expect(host.querySelector("[data-board]")?.getAttribute("data-mode")).toBe("tabs");
+  expect(host.querySelector("[data-col-width]")).toBeNull();
+});
+
+test("O folds and unfolds the orchestrator seat while no field holds the keys", () => {
+  localStorage.clear();
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  roots.push(root);
+  flushSync(() => root.render(
+    <KanbanBoard
+      project="fixture" groups={[]} manual={[]} files={[]} flows={[]} pipelines={[]} tasks={[]} allTasks={[]} drafts={[]}
+      now={1_800_000_000} loaded catalogFailures={0} selection={new Set()} onOpenConversations={() => {}}
+      seatRefs={null} mutationPorts={NO_PORTS}
+      seat={() => <section data-fake-seat="" />}
+    />,
+  ));
+  const folded = () => JSON.parse(localStorage.getItem("llv:kanban-seat:v2") ?? "{}").collapsed?.fixture;
+  const press = (target: EventTarget) => flushSync(() => target.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "o", bubbles: true }) as unknown as Event));
+  /* A short test window starts the seat folded; each press flips it. */
+  press(document.body);
+  const first = folded();
+  expect(typeof first).toBe("boolean");
+  press(document.body);
+  expect(folded()).toBe(!first);
+  /* Typing an «o» into the find field is typing. */
+  press(host.querySelector("[data-kanban-search]")!);
+  expect(folded()).toBe(!first);
+  localStorage.clear();
 });

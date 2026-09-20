@@ -54,6 +54,24 @@ export type RoleDefinition = {
   variants?: Record<BuilderVariantId, RoleConfig>;
 };
 
+/** A settings/manager snapshot identifies validated content independently from
+    the on-disk file schema. */
+export type RoleRegistryHealth =
+  | { state: "healthy" }
+  | { state: "degraded"; reason: "preset unavailable" };
+
+export type RoleRegistrySnapshot = {
+  roles: RoleDefinition[];
+  revision: string;
+  health: RoleRegistryHealth;
+};
+
+/** Existing manager-table callers retain registry provenance on the list they
+    already persist for delivery retries. */
+export type RegistryRoleDefinitions = RoleDefinition[] & {
+  registry?: Pick<RoleRegistrySnapshot, "revision" | "health">;
+};
+
 /** The builder's two parameter combinations that run on their own runtime:
     `domain=frontend` and `mode=apply-fixes`. */
 export const BUILDER_VARIANT_IDS = ["frontend", "apply-fixes"] as const;

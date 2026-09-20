@@ -9,6 +9,9 @@ import {
   attributeNamedAccountChoice,
 } from "./accountOverrides";
 import { bindAccountToProject } from "./projectBindings";
+import { OVERRIDES_SOURCE, resetAccountCollectionsForTests } from "./accountsStore";
+import { persistedAccountRows, seedAccountSource } from "./accountsStoreFixture";
+import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { resetProjectAliasesForTests } from "@/lib/projects/aliases";
 
 /**
@@ -31,8 +34,29 @@ const BEACON = "project-beacon";
 beforeEach(() => {
   process.env.LLV_STATE_DIR = STATE;
   fs.rmSync(STATE, { recursive: true, force: true });
+  resetAccountCollectionsForTests();
   resetProjectAliasesForTests();
 });
+
+/** Every override on record, since #1870 rows rather than a file. */
+function recordedOverrides(): unknown[] {
+  return persistedAccountRows().filter((row) => row.k.startsWith("override:"));
+}
+
+/** Refuse the NEXT durable state write, so a journal that will not take the
+    record can be exercised without a pathname trick. */
+function denyNextStateWrite(): () => void {
+  const original = SqliteStateCollection.prototype.patchSync;
+  let pending = true;
+  SqliteStateCollection.prototype.patchSync = function patchSync(this: unknown, ...args: unknown[]) {
+    if (pending) {
+      pending = false;
+      throw new Error("the journal could not be written");
+    }
+    return (original as (...rest: unknown[]) => void).apply(this, args);
+  } as typeof SqliteStateCollection.prototype.patchSync;
+  return () => { SqliteStateCollection.prototype.patchSync = original; };
+}
 
 afterAll(() => {
   if (ORIGINAL_STATE === undefined) delete process.env.LLV_STATE_DIR;
@@ -56,7 +80,7 @@ test("a choice inside the pool, and one on an unbound project, are not overrides
   /* Nothing to attribute, and nothing written: the two cases that must stay
      exactly what they always were. */
   expect(choice({ accountId: OUTSIDE })).toBeNull();
-  expect(fs.existsSync(JOURNAL)).toBe(false);
+  expect(recordedOverrides()).toEqual([]);
 
   expect(bindAccountToProject("claude", RESERVED, ATLAS).ok).toBe(true);
   expect(choice({ accountId: RESERVED })).toBeNull();
@@ -137,8 +161,7 @@ test("the journal reads newest first, and narrows by project, engine and convers
 
 test("a damaged journal reports nothing and blocks nothing", () => {
   expect(bindAccountToProject("claude", RESERVED, ATLAS).ok).toBe(true);
-  fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(JOURNAL, "{ not json", "utf8");
+  seedAccountSource(OVERRIDES_SOURCE, "{ not json");
 
   /* Deliberately the OPPOSITE of the binding record's rule: nothing reads this
      file to decide whether an account may be used, so an unreadable one can
@@ -161,10 +184,10 @@ test("the journal is bounded, keeping the newest entries", () => {
 
 test("a journal that cannot take the record says so, and still does not refuse the choice", () => {
   expect(bindAccountToProject("claude", RESERVED, ATLAS).ok).toBe(true);
-  /* Nothing can be appended at a pathname that is a directory. */
-  fs.mkdirSync(JOURNAL, { recursive: true });
+  /* The append is one transaction, and this is a store that will not take it. */
+  const restoreWrites = denyNextStateWrite();
 
-  const notice = choice({ now: () => "2026-08-30T09:00:00.000Z" });
+  const notice = (() => { try { return choice({ now: () => "2026-08-30T09:00:00.000Z" }); } finally { restoreWrites(); } })();
 
   /* Both halves of the same rule. The switch stands, because a record that
      would not write is not a decision anybody made — and the answer carries

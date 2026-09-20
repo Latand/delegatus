@@ -101,7 +101,8 @@ function isProvenance(value: unknown): value is { claude: LimitsProvenance; code
     return (meta.source === "live" || meta.source === "transcript" || meta.source === "cache" || meta.source === "unavailable") &&
       (typeof meta.reason === "string" || meta.reason === null) &&
       (typeof meta.staleSince === "string" || meta.staleSince === null) &&
-      (meta.retryAt === undefined || typeof meta.retryAt === "string" || meta.retryAt === null);
+      (meta.retryAt === undefined || typeof meta.retryAt === "string" || meta.retryAt === null) &&
+      (meta.throttleAt === undefined || typeof meta.throttleAt === "string" || meta.throttleAt === null);
   };
   return valid(record.claude) && valid(record.codex);
 }
@@ -119,6 +120,7 @@ function safeCacheEntry(value: unknown): EngineCacheEntry | null {
       (typeof provenance.reason !== "string" && provenance.reason !== null) ||
       (typeof provenance.staleSince !== "string" && provenance.staleSince !== null) ||
       (provenance.retryAt !== undefined && typeof provenance.retryAt !== "string" && provenance.retryAt !== null) ||
+      (provenance.throttleAt !== undefined && typeof provenance.throttleAt !== "string" && provenance.throttleAt !== null) ||
       (entry.baseData !== undefined && entry.baseData !== null && typeof entry.baseData !== "object") ||
       (entry.retryAt !== undefined && entry.retryAt !== null && typeof entry.retryAt !== "number") ||
       (entry.consecutive429s !== undefined && (!Number.isInteger(entry.consecutive429s) || entry.consecutive429s < 0)) ||
@@ -325,7 +327,7 @@ function resolveRead(read: LimitRead, cached: EngineCacheEntry | null, staleSinc
     return {
       data: cachedRejection,
       observedAt: cached ? snapshotObservedAt(cached) : null,
-      meta: { source: "transcript", reason: read.reason, staleSince: null, retryAt: new Date(retryAt).toISOString() },
+      meta: { source: "transcript", reason: read.reason, staleSince: null, retryAt: new Date(retryAt).toISOString(), throttleAt: new Date(now).toISOString() },
       retryAt,
       consecutive429s,
       consecutiveInitializeTimeouts,
@@ -337,6 +339,7 @@ function resolveRead(read: LimitRead, cached: EngineCacheEntry | null, staleSinc
     reason: read.reason,
     staleSince: cached?.provenance.staleSince ?? staleSince,
     retryAt: new Date(retryAt).toISOString(),
+    throttleAt: new Date(now).toISOString(),
   };
   return { data: base, observedAt: base && cached ? snapshotObservedAt(cached) : null, meta, retryAt, consecutive429s, consecutiveInitializeTimeouts };
 }

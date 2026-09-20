@@ -59,6 +59,7 @@ function publishReceipts(next: RuntimeReceipt[]): void {
 import { TmuxComposer } from "./TmuxComposer";
 import { readOutbox, resetOutboxForTests, retryOutbox, useOutbox } from "./conversation/outbox";
 import { OutboxBubbles } from "./conversation/OutboxBubbles";
+import { resetManagerIdentityForTest } from "./voice/managerIdentity";
 import { attachModeFor, capabilitiesFor } from "./agentCapabilities";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 
@@ -1278,6 +1279,99 @@ function ComposerWithOutbox({ file }: { file: FileEntry }) {
   const entries = useOutbox(file.conversationId!);
   return <><OutboxBubbles cardId={file.conversationId!} entries={entries} /><TmuxComposer file={file} /></>;
 }
+
+test.each([
+  ["headers", false], ["body", false], ["headers", true], ["body", true],
+] as const)("an idle conversation drains when the seat lookup loses its %s response (image=%s)", async (lost, attachment) => {
+  setLocale("en");
+  mobileViewport = true;
+  resetManagerIdentityForTest();
+  // Real conversation ids enter the manager lookup; the older conv-* fixtures
+  // skipped it before reaching the transport admission deadline.
+  const conversationId = `conversation_seat_lookup_${lost}_${attachment}`;
+  const prompt = "keep the original queued message";
+  const sends: { text: string; idempotencyKey: string; images: { base64: string }[] }[] = [];
+  let seatReads = 0;
+  let releaseSeat!: () => void;
+  const lateSeat = new Promise<void>(resolve => { releaseSeat = resolve; });
+  const view = {
+    session: { conversationId, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      capabilities: { imageInput: { supported: true } }, recentReceipts: [] },
+    uiState: {}, attentions: [], receipts: [], legacy: false, structuredControlsEnabled: true,
+  } as unknown as RuntimeSessionView;
+  setTmuxComposerRuntimeDependenciesForTests({
+    useAgentCapabilities: candidate => {
+      const options = { runtimeEnabled: true };
+      return { caps: capabilitiesFor(candidate, view, options), runtime: view,
+        structuredSession: view, runtimeEnabled: true, attachMode: attachModeFor(candidate, view, options) };
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url === "/api/tmux/targets") return Response.json({ targets: {} });
+    if (url.startsWith("/api/bridge?")) return Response.json({ prelude: null });
+    if (url.startsWith("/api/orchestrator/seat?")) {
+      seatReads += 1;
+      if (lost === "headers") await lateSeat;
+      return { ok: true, json: async () => {
+        if (lost === "body") await lateSeat;
+        return { exists: true, seat: { conversationId } };
+      } } as Response;
+    }
+    if (url === "/api/runtime/send") {
+      const body = JSON.parse(String(init?.body));
+      sends.push(body);
+      return Response.json({ receipt: {
+        operationId: "operation-seat-lookup", idempotencyKey: body.idempotencyKey,
+        conversationId, kind: "send", status: "delivered", text: body.text,
+        at: new Date().toISOString(), revision: 1,
+      } });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  }) as typeof fetch;
+  sessionStorage.setItem(`llvDraft:${conversationId}`, prompt);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<ComposerWithOutbox file={fileFor(conversationId)} />));
+    await untilSendEnabled(host);
+    if (attachment) {
+      const textarea = host.querySelector("textarea")!;
+      const propsKey = Object.keys(textarea).find(key => key.startsWith("__reactProps$"))!;
+      const props = (textarea as unknown as Record<string, { onPaste(event: unknown): void }>)[propsKey]!;
+      props.onPaste({ clipboardData: { items: [{ type: "image/png",
+        getAsFile: () => new dom.File(["original-image"], "image.png", { type: "image/png" }) }] }, preventDefault() {} });
+      await until(() => host.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]').length === 1);
+    }
+    flushSync(() => host.querySelector("form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+    await until(() => readOutbox(conversationId).length === 1);
+    expect(readOutbox(conversationId)).toHaveLength(1);
+    const key = readOutbox(conversationId)[0]!.id;
+    await until(() => sends.length === 1);
+    expect(seatReads).toBe(1);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({ text: prompt, idempotencyKey: key });
+    expect(sends[0]!.images.map(image => image.base64)).toEqual(attachment ? [btoa("original-image")] : []);
+    await until(() => readOutbox(conversationId)[0]?.state === "delivered");
+    expect(readOutbox(conversationId)[0]?.state).toBe("delivered");
+    // The late optional read cannot dispatch again or change the sealed send.
+    releaseSeat();
+    await sleep(20);
+    expect(sends).toHaveLength(1);
+  } finally {
+    releaseSeat();
+    flushSync(() => root.unmount());
+    publishReceipts([]);
+    sessionStorage.clear();
+    resetOutboxForTests();
+    resetManagerIdentityForTest();
+    globalThis.fetch = originalFetch;
+    mobileViewport = false;
+    host.remove();
+  }
+});
 
 test.each([
   ["missing", "retry", "text"], ["disconnected", "retry", "text"], ["missing", "discard", "text"], ["missing", "receipt", "text"],

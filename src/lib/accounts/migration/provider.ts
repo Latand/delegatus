@@ -14,6 +14,11 @@ import { sessionKey, sessionKeyId } from "@/lib/agent/sessionKey";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
+import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
+import { legacyBaselineRevision, legacyImportAllowed, type LegacyImportOutcome } from "@/lib/state/legacyImport";
+import { importStateCollection, readStateImport, recordStateImportMirror, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
 import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { StructuredHostAdoptionCleanupError } from "@/lib/runtime/engineHost";
@@ -647,24 +652,341 @@ function mergeForkRecords(...groups: readonly (readonly CodexForkArtifact[])[]):
   return [...merged.values()];
 }
 
+/* ── Operation journals in SQLite (#1870, slice 7) ────────────────────────
+   `migration-provider-operations/` and `migration-provider-claude-operations/`
+   were one small JSON file per operation, written by temp file and rename.
+   Each root now becomes one collection of the `state.sqlite` beside it, keyed
+   `op:<sha256(operationId)>` — the name the file carried — with the journal as
+   the row exactly as the file held it.
+
+   The roots THEMSELVES stay directories: `withCodexOperationLease` keeps its
+   per-operation lock and ticket queue in them, and a cross-process lease has
+   to be claimable while the database is busy (design §2.2). Only the journals
+   move, and each imported journal leaves the tombstone directory the rest of
+   #1870 leaves, so a MANUAL downgrade fails with EISDIR rather than writing a
+   file nothing reads.
+
+   A release rolled back through the fence is not left with that tombstone: the
+   demotion checkpoint writes every row back as its `<sha>.json` (§6.4), the
+   rolled-back release runs on those files, and the next activation folds what
+   it wrote there back into the collection before the tombstones return.
+
+   One collection per root, rather than one for both: the import evidence in
+   `state_imports` is per collection, and these are two independent directories
+   (plus whatever root a test injects). */
+
+interface MigrationOpRow {
+  k: string;
+  v: unknown;
+}
+
+function migrationOpsCollectionName(root: string): string {
+  return `account_migration_ops:${path.basename(root)}`;
+}
+
+function migrationOpsDatabase(root: string): string {
+  return path.join(path.dirname(root), "state.sqlite");
+}
+
+function migrationOpKey(operationId: string): string {
+  return `op:${crypto.createHash("sha256").update(operationId).digest("hex")}`;
+}
+
+function isMigrationOpRow(value: unknown): value is MigrationOpRow {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && typeof (value as MigrationOpRow).k === "string" && Boolean((value as MigrationOpRow).k);
+}
+
+const migrationOpCollections = new Map<string, { identity: string; collection: SqliteStateCollection<MigrationOpRow> }>();
+
+function databaseIdentity(database: string): string {
+  try {
+    const stat = fs.statSync(database);
+    return `${stat.dev}:${stat.ino}`;
+  } catch {
+    return "absent";
+  }
+}
+
+function openMigrationOps(root: string): SqliteStateCollection<MigrationOpRow> {
+  const database = migrationOpsDatabase(root);
+  const cacheKey = `${database}\u0000${root}`;
+  const held = migrationOpCollections.get(cacheKey);
+  if (held && held.identity === databaseIdentity(database)) return held.collection;
+  const collection = new SqliteStateCollection<MigrationOpRow>(database, {
+    collection: migrationOpsCollectionName(root),
+    schemaVersion: 1,
+    busyMessage: "conversation migration journals are busy",
+    key: (row) => row.k,
+    decode: (value) => (isMigrationOpRow(value) ? value : null),
+    clone: (row) => structuredClone(row),
+    strictDecode: true,
+  });
+  migrationOpCollections.set(cacheKey, { identity: databaseIdentity(database), collection });
+  return collection;
+}
+
+/** The collection for `root`, importing its journal files on first use. Null
+    only for a read before the import may run (an unpromoted release), where
+    the caller reads the files as it always did. */
+function migrationOps(root: string, purpose: "read" | "write"): SqliteStateCollection<MigrationOpRow> | null {
+  const database = migrationOpsDatabase(root);
+  const cacheKey = `${database}\u0000${root}`;
+  const held = migrationOpCollections.get(cacheKey);
+  if (held && held.identity === databaseIdentity(database)) return held.collection;
+  if (!readStateImport(database, migrationOpsCollectionName(root))) {
+    /* The database's own directory is the state directory, which is where the
+       release target lives. Asking about the journal root instead found no
+       release target there and read as "any process may import", so a release
+       that was not yet promoted retired the journals of the one that was. */
+    if (!legacyImportAllowed(database)) {
+      if (purpose === "read") return null;
+      throw new FileTransactionBusyError("conversation migration journals are waiting for release promotion");
+    }
+    importMigrationOperationJournals(root);
+  }
+  return openMigrationOps(root);
+}
+
+/** Drops this process's cached handles; tests that rebuild a state directory
+    under one path call it, nothing in the product does. */
+export function resetMigrationOperationStoreForTests(): void {
+  migrationOpCollections.clear();
+}
+
+function journalFileNames(root: string): string[] {
+  let names: string[];
+  try { names = fs.readdirSync(root); } catch { return []; }
+  /* `<sha>.json` only. The per-operation lease writes `<sha>.json.lock` and a
+     `<sha>.json.locks` directory of tickets; neither ends in `.json`, and the
+     tickets live a level down that this readdir never reaches. */
+  return names.filter((name) => name.endsWith(".json"))
+    .filter((name) => {
+      try { return fs.lstatSync(path.join(root, name)).isFile(); } catch { return false; }
+    })
+    .sort();
+}
+
+function retireJournalFile(file: string, tag: string): void {
+  const kept = `${file}.imported-${tag}`;
+  fs.renameSync(file, fs.existsSync(kept) ? `${kept}-${process.pid}` : kept);
+  fs.mkdirSync(file, { recursive: true, mode: 0o700 });
+  fsyncDirectory(path.dirname(file));
+}
+
+function fsyncDirectory(directory: string): void {
+  const descriptor = fs.openSync(directory, "r");
+  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+}
+
+function retireJournalFiles(root: string, names: readonly string[], stamp: string): void {
+  const tag = stamp.replace(/[:.]/g, "-");
+  for (const name of names) {
+    const file = path.join(root, name);
+    try { if (fs.lstatSync(file).isFile()) retireJournalFile(file, tag); }
+    catch { /* another importer retired it first */ }
+  }
+}
+
+/**
+ * Import one journal root once, verified, then retire each file behind a
+ * tombstone. Runs under the root's own write-transaction lock, so two new-code
+ * importers cannot both retire, and the import itself is idempotent: the
+ * evidence row is re-checked inside the transaction that writes it.
+ *
+ * A record that already stands with journal files back beside it is the
+ * rollback window closing: {@link checkpointMigrationOperationJournalMirrorForDemotion}
+ * wrote those files for a release that predates the move, and that release has
+ * been the writer since. Its writes are folded into the collection before the
+ * tombstones return — dropping them would lose one fork recovery per journal —
+ * except where this release rewrote the row itself after that mirror, which is
+ * the newer version and keeps its place.
+ */
+export function importMigrationOperationJournals(root: string): { imported: boolean; rows: number } {
+  const database = migrationOpsDatabase(root);
+  const collection = migrationOpsCollectionName(root);
+  /* Retiring live journal files is a state mutation, whoever asked (#1905). */
+  assertStateMutationAllowed(path.dirname(root));
+  return withFileTransactionSync(root, "conversation migration journals are busy", () => {
+    const names = journalFileNames(root);
+    const parsed: MigrationOpRow[] = [];
+    const seen = new Set<string>();
+    let bytes = 0;
+    const digest = crypto.createHash("sha256");
+    for (const name of names) {
+      let raw: Buffer;
+      try { raw = fs.readFileSync(path.join(root, name)); }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "EISDIR") continue;
+        throw new FileTransactionBusyError(`a conversation migration journal is unreadable for now: ${(error as Error).message}`);
+      }
+      bytes += raw.length;
+      digest.update(name).update(raw);
+      let stored: CodexProviderOperationJournal | null = null;
+      try { stored = normalizeCodexOperationJournal(JSON.parse(raw.toString("utf8"))); } catch { stored = null; }
+      /* A journal whose bytes no reader could use imports as nothing: the file
+         is kept beside the tombstone either way, so it is never destroyed. */
+      if (!stored) continue;
+      const key = migrationOpKey(stored.operationId);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      parsed.push({ k: key, v: stored });
+    }
+    const held = readStateImport(database, collection);
+    if (held) {
+      const store = openMigrationOps(root);
+      /* Which side of a differing row is the newer one is decided the way every
+         other moved store decides it (`mergeRows`, `mergeLegacyTasks`): a row
+         SQLite has not rewritten since the recorded mirror is one those files
+         were written from, so the file's version is folded in; a row rewritten
+         after the mirror is this release's own progress and the file beside it
+         is stale, so the row stays. Without that asymmetry a mirror a demotion
+         left on disk — the handover it was written for then failed, and the
+         same release kept serving and kept advancing journals — folds back over
+         every journal written after it and loses one fork recovery each. */
+      const since = legacyBaselineRevision(held);
+      let folded = 0;
+      /* `fenceOwner`, because the roll-forward activation can still hold this
+         release's own rollback fence, exactly as the legacy reconcile does. */
+      store.patchSync(() => {
+        const revisions = store.rowRevisions();
+        const records = parsed.filter((row) => {
+          const current = store.get(row.k);
+          if (!current) return true;
+          if (JSON.stringify(current.v) === JSON.stringify(row.v)) return false;
+          return (revisions.get(row.k) ?? 0) <= since;
+        });
+        folded = records.length;
+        return { records };
+      }, { fenceOwner: true });
+      retireJournalFiles(root, names, new Date().toISOString());
+      return { imported: false, rows: folded };
+    }
+    const { record } = importStateCollection(database, {
+      collection,
+      schemaVersion: 1,
+      migrationId: "migration-provider-operations-v1",
+      rows: parsed.map((row) => ({ key: row.k, value: row, controllerActive: true })),
+      sourceName: path.basename(root),
+      sourceSha256: names.length > 0 ? digest.digest("hex") : null,
+      sourceBytes: bytes,
+      gap: null,
+      release: hotStateWriterRevision(path.dirname(root))?.slice(0, 12) ?? null,
+    });
+    retireJournalFiles(root, names, record.importedAt);
+    return { imported: true, rows: parsed.length };
+  });
+}
+
+/** The journal root's activation import, reported the way every other moved
+    store reports it, so it joins `LEGACY_COLLECTIONS` (#1870, slice 7). */
+export function importMigrationOperationJournalsAtActivation(root: string): LegacyImportOutcome {
+  const { imported } = importMigrationOperationJournals(root);
+  const record = readStateImport(migrationOpsDatabase(root), migrationOpsCollectionName(root))!;
+  return { state: imported ? "imported" : "already-imported", record, incident: null };
+}
+
+/**
+ * Write every journal back as the file a rollback release reads (§6.4).
+ *
+ * The root keeps its per-operation leases, so only the journals are restored:
+ * each row's tombstone directory goes and its `<sha>.json` lands through a temp
+ * file and a rename, all from ONE collection revision. Without this, a release
+ * rolled back through the fence found a directory where every journal belonged
+ * and threw EISDIR on every conversation migration it tried to resume.
+ */
+export function checkpointMigrationOperationJournalMirrorForDemotion(root: string): void {
+  const database = migrationOpsDatabase(root);
+  const collection = migrationOpsCollectionName(root);
+  if (!readStateImport(database, collection)) return;
+  assertStateMutationAllowed(path.dirname(root));
+  ensureDurableDirectory(root);
+  withFileTransactionSync(root, "conversation migration journals are busy", () => {
+    const store = openMigrationOps(root);
+    const revision = store.checkpointMirrorForDemotion((records) => {
+      for (const row of records) {
+        const journal = normalizeCodexOperationJournal(row.v);
+        if (!journal) continue;
+        writeJournalFileDurably(operationJournalPath(root, journal.operationId), journal);
+      }
+    });
+    /* Evidence only; the fold-back compares row by row rather than by digest,
+       because one mirror is many files. */
+    recordStateImportMirror(database, collection, null, revision);
+  });
+}
+
+/** One journal back as the file the rollback release knows: the tombstone goes,
+    the bytes land through a temp file and a rename, and the directory entry is
+    fsynced so the name survives a crash. */
+function writeJournalFileDurably(file: string, journal: CodexProviderOperationJournal): void {
+  const directory = path.dirname(file);
+  const text = `${JSON.stringify(journal, null, 2)}\n`;
+  const temp = path.join(directory, `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  const descriptor = fs.openSync(temp, "wx", 0o600);
+  try {
+    fs.writeFileSync(descriptor, text, "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  try {
+    try { if (fs.lstatSync(file).isDirectory()) fs.rmSync(file, { recursive: true, force: true }); }
+    catch { /* nothing stands at the path */ }
+    fs.renameSync(temp, file);
+    fsyncDirectory(directory);
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
+}
+
+/** One operation journal exactly as stored, for tests that used to read its
+    file and now read the rows the move put in its place (#1870, slice 7). */
+export function persistedCodexOperationJournal(root: string, operationId: string): CodexProviderOperationJournal | null {
+  return readCodexOperationJournal(root, operationId);
+}
+
+function readCodexOperationJournal(root: string, operationId: string): CodexProviderOperationJournal | null {
+  const collection = migrationOps(root, "read");
+  if (!collection) {
+    try { return normalizeCodexOperationJournal(JSON.parse(fs.readFileSync(operationJournalPath(root, operationId), "utf8"))); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+  const row = collection.get(migrationOpKey(operationId));
+  return row ? normalizeCodexOperationJournal(row.v) : null;
+}
+
+function listCodexOperationJournals(root: string): CodexProviderOperationJournal[] {
+  const collection = migrationOps(root, "read");
+  if (!collection) {
+    return journalFileNames(root).flatMap((name) => {
+      try {
+        const stored = normalizeCodexOperationJournal(JSON.parse(fs.readFileSync(path.join(root, name), "utf8")));
+        return stored ? [stored] : [];
+      } catch { return []; }
+    });
+  }
+  return collection.snapshot().flatMap((row) => {
+    const stored = normalizeCodexOperationJournal(row.v);
+    return stored ? [stored] : [];
+  });
+}
+
 function operationJournalPath(root: string, operationId: string): string {
   return path.join(root, `${crypto.createHash("sha256").update(operationId).digest("hex")}.json`);
 }
 
+/** One row, one transaction. The lease around every caller already serializes
+    the read-modify-write this belongs to. */
 function writeCodexOperationJournal(root: string, journal: CodexProviderOperationJournal): void {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  const filename = operationJournalPath(root, journal.operationId);
-  const temp = `${filename}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  try {
-    fs.writeFileSync(temp, JSON.stringify(journal, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-    const descriptor = fs.openSync(temp, "r");
-    try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-    fs.renameSync(temp, filename);
-    const directory = fs.openSync(root, "r");
-    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-  } finally {
-    fs.rmSync(temp, { force: true });
-  }
+  const collection = migrationOps(root, "write")!;
+  const key = migrationOpKey(journal.operationId);
+  collection.patchSync(() => ({ records: [{ k: key, v: journal }] }));
 }
 
 function normalizeCodexOperationJournal(value: unknown): CodexProviderOperationJournal | null {
@@ -717,16 +1039,13 @@ function prepareCodexOperationJournal(
   sourceRoot: string,
   targetRoot: string,
 ): { journal: CodexProviderOperationJournal; fresh: boolean } {
-  const filename = operationJournalPath(root, operationId);
-  try {
-    const stored = normalizeCodexOperationJournal(JSON.parse(fs.readFileSync(filename, "utf8")));
-    if (!stored || stored.operationId !== operationId || stored.sourceNativeId !== sourceNativeId
+  const stored = readCodexOperationJournal(root, operationId);
+  if (stored) {
+    if (stored.operationId !== operationId || stored.sourceNativeId !== sourceNativeId
       || stored.sourceRoot !== sourceRoot || stored.targetRoot !== targetRoot) {
       throw new Error("Codex provider operation journal does not match");
     }
     return { journal: { ...stored, conversationId: stored.conversationId ?? conversationId }, fresh: false };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const journal: CodexProviderOperationJournal = {
     version: 1,
@@ -759,19 +1078,13 @@ function prepareCodexOperationJournal(
  * place — additively, and best-effort, since recovery must not depend on it.
  */
 function siblingCodexOperationJournals(root: string, journal: CodexProviderOperationJournal): CodexProviderOperationJournal[] {
-  let names: string[];
-  try { names = fs.readdirSync(root); } catch { return []; }
   const siblings: CodexProviderOperationJournal[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".json")) continue;
-    let stored: CodexProviderOperationJournal | null = null;
-    try { stored = normalizeCodexOperationJournal(JSON.parse(fs.readFileSync(path.join(root, name), "utf8"))); }
-    catch { continue; }
-    if (!stored || stored.operationId === journal.operationId) continue;
+  for (let stored of listCodexOperationJournals(root)) {
+    if (stored.operationId === journal.operationId) continue;
     if (stored.sourceNativeId !== journal.sourceNativeId || stored.sourceRoot !== journal.sourceRoot
       || stored.targetRoot !== journal.targetRoot) continue;
     if (stored.conversationId && journal.conversationId && stored.conversationId !== journal.conversationId) continue;
-    if (!stored.conversationId && journal.conversationId && path.join(root, name) === operationJournalPath(root, stored.operationId)) {
+    if (!stored.conversationId && journal.conversationId) {
       const backfilled = { ...stored, conversationId: journal.conversationId };
       try { writeCodexOperationJournal(root, backfilled); stored = backfilled; }
       catch { /* the match already stands; naming it durably is a courtesy */ }
@@ -913,20 +1226,14 @@ export async function authorizeCodexForkRetry(
   journalRoot = statePath("migration-provider-operations"),
   scan: NonNullable<ProviderDependencies["scanCodexForkArtifacts"]> = codexForkArtifacts,
 ): Promise<CodexForkRetryAuthorization> {
-  const filename = operationJournalPath(journalRoot, operationId);
-  let initial: CodexProviderOperationJournal | null;
-  try {
-    initial = normalizeCodexOperationJournal(JSON.parse(fs.readFileSync(filename, "utf8")));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "not-needed";
-    throw error;
-  }
-  if (!initial || initial.operationId !== operationId
+  const initial = readCodexOperationJournal(journalRoot, operationId);
+  if (!initial) return "not-needed";
+  if (initial.operationId !== operationId
     || (initial.conversationId && initial.conversationId !== conversationId)) {
     throw new Error("Codex provider operation journal does not match");
   }
   return withCodexOperationLease(journalRoot, `move:${initial.sourceNativeId}`, async (assertLeaseOwned) => {
-    const journal = normalizeCodexOperationJournal(JSON.parse(fs.readFileSync(filename, "utf8")));
+    const journal = readCodexOperationJournal(journalRoot, operationId);
     if (!journal || journal.operationId !== operationId
       || (journal.conversationId && journal.conversationId !== conversationId)) {
       throw new Error("Codex provider operation journal does not match");

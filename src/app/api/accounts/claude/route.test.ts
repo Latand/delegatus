@@ -15,6 +15,9 @@ process.env.LLV_CLAUDE_HOME = path.join(sandbox, "legacy");
 const { ClaudeLoginSupervisor, setClaudeLoginSupervisorForTests } = await import("@/lib/accounts/claudeLogin");
 const { claudeProjectRoots, claudeRegistryPath, createManagedClaudeAccount, listClaudeAccounts } = await import("@/lib/accounts/claude");
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+const { resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
+const { seedAccountRegistry } = await import("@/lib/accounts/accountsStoreFixture");
+const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { retiredAccountArchive, setAccountRemovalCheckpointForTests } = await import("@/lib/accounts/removal");
 
@@ -38,6 +41,7 @@ let child: FakeChild;
 
 beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+  resetAccountCollectionsForTests();
   fs.rmSync(path.join(sandbox, "accounts"), { recursive: true, force: true });
   fs.rmSync(path.join(sandbox, "shared"), { recursive: true, force: true });
   child = new FakeChild();
@@ -271,16 +275,18 @@ test("managed Claude removal restores routing and the home when the accounts reg
   const registry = agentRegistry();
   registry.setEngineRouting("claude", account.id);
   const before = registry.snapshot();
-  const originalRename = fs.renameSync;
+  /* Since #1870 the accounts registry commit is one SQLite transaction, so the
+     write that can fail is that commit. */
+  const originalPatch = SqliteStateCollection.prototype.patchSync;
   let retired = false;
   setAccountRemovalCheckpointForTests((reached) => { if (reached === "registry-retired") retired = true; });
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    if (retired && path.resolve(String(destination)) === path.resolve(claudeRegistryPath())) {
+  SqliteStateCollection.prototype.patchSync = function patchSync(this: { signature(): string }, ...args: unknown[]) {
+    if (retired && this.signature().includes(":accounts:")) {
       retired = false;
       throw Object.assign(new Error("registry write denied"), { code: "EACCES" });
     }
-    return originalRename(source, destination);
-  }) as typeof fs.renameSync;
+    return (originalPatch as (...rest: unknown[]) => void).apply(this, args);
+  } as typeof SqliteStateCollection.prototype.patchSync;
 
   try {
     const response = await remove(deleteRequest({ id: account.id }));
@@ -290,7 +296,7 @@ test("managed Claude removal restores routing and the home when the accounts reg
     expect(fs.existsSync(account.home)).toBe(true);
     expect(listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
   } finally {
-    fs.renameSync = originalRename;
+    SqliteStateCollection.prototype.patchSync = originalPatch;
     setAccountRemovalCheckpointForTests(null);
   }
 });
@@ -426,9 +432,9 @@ test("managed Claude removal proceeds over dead history and keeps its transcript
 });
 
 test("managed Claude removal reports a corrupt registry as locked", async () => {
-  const file = claudeRegistryPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, "{ corrupt");
+  /* A record the store cannot turn into an account list; since #1870 that is a
+     row it refuses on rather than bytes that will not parse. */
+  seedAccountRegistry("claude", { version: 1, active: "default", accounts: [{ id: "phantom", label: "Phantom", kind: "managed" }], retired: [], removals: [] });
 
   const response = await remove(new NextRequest("http://127.0.0.1/api/accounts/claude", {
     method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id: "missing" }),

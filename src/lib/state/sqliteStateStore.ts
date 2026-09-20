@@ -600,6 +600,93 @@ export function importStateCollection(filename: string, input: {
   }
 }
 
+/**
+ * Rebuild a collection from its legacy source, replacing the rows and the
+ * import record an earlier, stale import left (#1905). Same verified,
+ * single-transaction shape as {@link importStateCollection}: the rows are read
+ * back and compared before the commit, so a mismatch rolls the replacement
+ * back and leaves the stale rows exactly as they were.
+ *
+ * The collection revision moves forward rather than restarting, and the change
+ * log is cleared up to it, so every reader holding an older revision — in this
+ * process or another — takes a full snapshot instead of replaying changes
+ * against rows that are no longer there.
+ */
+export function reimportStateCollection(filename: string, input: {
+  collection: string;
+  schemaVersion: number;
+  migrationId: string;
+  rows: readonly StateImportRow[];
+  sourceName: string;
+  sourceSha256: string | null;
+  sourceBytes: number;
+  gap: string | null;
+  release: string | null;
+  /** Test seam: runs inside the transaction after the rows are written. */
+  beforeVerify?: (execute: (sql: string, ...bindings: SQLQueryBindings[]) => void) => void;
+}): { record: StateImportRecord } {
+  const encoded = input.rows.map((row) => ({ ...row, valueJson: JSON.stringify(row.value) }));
+  const seen = new Set<string>();
+  for (const row of encoded) {
+    if (!row.key || seen.has(row.key)) throw new Error(`duplicate or empty ${input.collection} import key: ${row.key}`);
+    seen.add(row.key);
+  }
+  const expectedDigest = stateRowDigest(encoded.map((row) => row.valueJson));
+  const db = openDatabase(filename);
+  try {
+    const outcome = withImmediateTransaction(db, `${input.collection} import is busy`, () => {
+      assertSqliteWriteAuthority(filename);
+      const held = selectStateImport(db, input.collection);
+      if (!held) throw new StateImportVerificationError(`${input.collection} has no import record to replace`);
+      if (held.mirrorSha256 !== null || held.mirrorRevision !== null) {
+        throw new StateImportVerificationError(`${input.collection} carries a rollback mirror and may not be re-imported`);
+      }
+      const previous = db.query<{ revision: number }, [string]>(
+        "SELECT revision FROM state_collections WHERE collection = ?",
+      ).get(input.collection)?.revision ?? 0;
+      const revision = previous + 1;
+      const importedAt = new Date().toISOString();
+      db.query("DELETE FROM state_changes WHERE collection = ?").run(input.collection);
+      db.query("DELETE FROM state_rows WHERE collection = ?").run(input.collection);
+      db.query(`
+        UPDATE state_collections
+        SET schema_version = ?, revision = ?, change_floor = ?, migration_id = ?, imported_at = ?
+        WHERE collection = ?
+      `).run(input.schemaVersion, revision, revision, input.migrationId, importedAt, input.collection);
+      const insert = db.query(`
+        INSERT INTO state_rows(collection, row_key, value_json, row_order, row_revision, controller_active)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      encoded.forEach((row, index) => {
+        insert.run(input.collection, row.key, row.valueJson, index, revision, row.controllerActive ? 1 : 0);
+      });
+      input.beforeVerify?.((sql, ...bindings) => { db.query(sql).run(...bindings); });
+      const stored = db.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM state_rows WHERE collection = ? ORDER BY row_order, row_key",
+      ).all(input.collection).map((row) => row.value_json);
+      const storedDigest = stateRowDigest(stored);
+      if (stored.length !== encoded.length || storedDigest !== expectedDigest) {
+        throw new StateImportVerificationError(
+          `${input.collection} re-import verification failed: ${stored.length}/${encoded.length} rows, digest mismatch=${storedDigest !== expectedDigest}`,
+        );
+      }
+      db.query(`
+        UPDATE state_imports
+        SET source_name = ?, source_sha256 = ?, source_bytes = ?, row_count = ?, row_digest = ?,
+            gap = ?, release = ?, imported_at = ?
+        WHERE collection = ?
+      `).run(input.sourceName, input.sourceSha256, input.sourceBytes, encoded.length, storedDigest,
+        input.gap, input.release, importedAt, input.collection);
+      assertSqliteWriteAuthority(filename);
+      return { record: selectStateImport(db, input.collection)! };
+    });
+    secureDatabaseFiles(filename);
+    return outcome;
+  } finally {
+    db.close();
+  }
+}
+
 /** Record the rollback mirror last written for a collection. Evidence only, so
     it is written during a release fence, when collection writes are refused. */
 export function recordStateImportMirror(filename: string, collection: string, mirrorSha256: string | null, mirrorRevision: number | null): void {
