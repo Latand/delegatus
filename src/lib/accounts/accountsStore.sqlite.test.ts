@@ -77,6 +77,19 @@ function siblings(directory: string, prefix: string): string[] {
   return fs.readdirSync(directory).filter((name) => name.startsWith(prefix)).sort();
 }
 
+/** A state directory of a deployed machine: a release target, and the
+    authority that admits an unidentified local client's writes. */
+function deployedRelease(directory: string): void {
+  const revision = "b".repeat(40);
+  fs.writeFileSync(path.join(directory, "viewer-release.json"), JSON.stringify({
+    endpoint: "http://127.0.0.1:8898", revision, hotStateBackend: "sqlite-v1",
+  }));
+  fs.writeFileSync(path.join(directory, "hot-state-authority.json"), JSON.stringify({
+    schemaVersion: 1, epoch: 1, mode: "sqlite", releaseRevision: revision,
+    updatedAt: "2026-09-20T00:00:00.000Z", activationReadyAt: "2026-09-20T00:00:00.000Z",
+  }));
+}
+
 function isTombstone(directory: string, name: AccountSourceName): boolean {
   try { return fs.lstatSync(accountSourcePath(name, directory)).isDirectory(); }
   catch { return false; }
@@ -424,5 +437,96 @@ describe("a release that may not import yet", () => {
     expect(() => writeAccountSource(CLAUDE_ACCOUNTS_SOURCE, registry("other"), directory))
       .toThrow(/waiting for release promotion/);
     expect(fs.readFileSync(accountSourcePath(CLAUDE_ACCOUNTS_SOURCE, directory), "utf8")).toContain("work");
+  });
+});
+
+describe("an import record a stray process wrote is not evidence the move happened (#1905)", () => {
+  /** What #1905 left on the production machine: a collection and a
+      `state_imports` row a lane's `next build` wrote from the live files, the
+      eight files restored beside it from their `.imported-*` copies, and the
+      release still on the JSON readers ever since. */
+  function strayImportThenRestore(directory: string, restored: unknown): void {
+    /* The stray import ran with no PORT and no release revision, so it
+       recorded no release — while the machine's release target stood right
+       beside it. That pair is what marks the record as not the release's. */
+    importLegacyAccounts(directory, { reconcile: true });
+    deployedRelease(directory);
+    for (const name of ACCOUNT_SOURCE_NAMES) fs.rmSync(accountSourcePath(name, directory), { recursive: true, force: true });
+    seed(directory, CLAUDE_ACCOUNTS_SOURCE, restored);
+    resetAccountCollectionsForTests();
+  }
+
+  test("an account the release removed after the stray import does not come back", () => {
+    const directory = sandbox();
+    seed(directory, CLAUDE_ACCOUNTS_SOURCE, registry("work", ["work", "spare"]));
+    /* The release kept running on its JSON files after the stray import and
+       removed `spare`. Merging the file into the stray rows would spare what
+       the file no longer has and hand the operator a deleted account back. */
+    strayImportThenRestore(directory, registry("work", ["work"]));
+    const stale = readStateImport(accountsDatabasePath(directory), "accounts")!;
+
+    const outcome = importLegacyAccounts(directory, { reconcile: true });
+
+    expect((body(directory, CLAUDE_ACCOUNTS_SOURCE) as { accounts: { id: string }[] }).accounts.map((row) => row.id))
+      .toEqual(["work"]);
+    expect(rows(directory).map((row) => row.k)).not.toContain("claude:spare");
+    expect(outcome.state).toBe("reimported");
+    for (const name of ACCOUNT_SOURCE_NAMES) expect([name, isTombstone(directory, name)]).toEqual([name, true]);
+    const record = readStateImport(accountsDatabasePath(directory), "accounts")!;
+    expect(record.rowCount).toBeLessThan(stale.rowCount);
+    expect(record.importedAt >= stale.importedAt).toBe(true);
+  });
+
+  test("the siblings are re-read too, so a binding the stale record never saw survives the move", () => {
+    const directory = sandbox();
+    seed(directory, CLAUDE_ACCOUNTS_SOURCE, registry("work"));
+    seed(directory, BINDINGS_SOURCE, { schemaVersion: 1, bindings: [] });
+    strayImportThenRestore(directory, registry("work"));
+    seed(directory, BINDINGS_SOURCE, {
+      schemaVersion: 1,
+      bindings: [{ engine: "claude", accountId: "work", project: "repo-after", createdAt: "2026-01-01T00:00:00.000Z" }],
+    });
+
+    expect(importLegacyAccounts(directory, { reconcile: true }).state).toBe("reimported");
+
+    expect((body(directory, BINDINGS_SOURCE) as { bindings: { project: string }[] }).bindings.map((row) => row.project))
+      .toEqual(["repo-after"]);
+  });
+
+  test("a file the release deliberately mirrored for a rollback still merges rather than replacing", () => {
+    const directory = sandbox();
+    seed(directory, CLAUDE_ACCOUNTS_SOURCE, registry("work", ["work", "spare"]));
+    importLegacyAccounts(directory, { reconcile: true });
+    checkpointAccountRollbackMirrorsForDemotion(directory);
+    deployedRelease(directory);
+    resetAccountCollectionsForTests();
+    /* The rollback release added an account to the mirror it was handed. */
+    const mirrored = JSON.parse(fs.readFileSync(accountSourcePath(CLAUDE_ACCOUNTS_SOURCE, directory), "utf8")) as {
+      accounts: { id: string }[];
+    };
+    seed(directory, CLAUDE_ACCOUNTS_SOURCE, {
+      ...mirrored,
+      accounts: [...mirrored.accounts, { id: "added", label: "added", kind: "managed", createdAt: 2 }],
+    });
+
+    const outcome = importLegacyAccounts(directory, { reconcile: true });
+
+    expect(outcome.state).toBe("already-imported");
+    expect((body(directory, CLAUDE_ACCOUNTS_SOURCE) as { accounts: { id: string }[] }).accounts.map((row) => row.id).sort())
+      .toEqual(["added", "spare", "work"]);
+  });
+
+  test("a file that no longer parses leaves the stale rows and the database exactly as they were", () => {
+    const directory = sandbox();
+    seed(directory, CLAUDE_ACCOUNTS_SOURCE, registry("work"));
+    strayImportThenRestore(directory, registry("work"));
+    fs.writeFileSync(accountSourcePath(CLAUDE_ACCOUNTS_SOURCE, directory), Buffer.alloc(16));
+    const before = readStateImport(accountsDatabasePath(directory), "accounts")!;
+
+    const outcome = importLegacyAccounts(directory, { reconcile: true });
+
+    expect(outcome.state).toBe("already-imported");
+    expect(readStateImport(accountsDatabasePath(directory), "accounts")).toEqual(before);
+    expect(siblings(directory, `${CLAUDE_ACCOUNTS_SOURCE}.unreadable-`)).toHaveLength(1);
   });
 });

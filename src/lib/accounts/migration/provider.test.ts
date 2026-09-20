@@ -737,6 +737,7 @@ test("Codex successor provider accepts authenticated ChatGPT account responses a
     startCodex: async (home) => client(home),
     claudeStatus: async () => ({ loggedIn: false }),
     now: () => "2026-07-10T12:00:00.000Z",
+    journalRoot: path.join(base, "provider-journal"),
   });
   const profile = migrationSuccessorLaunchProfile(emptyLaunchProfile({ cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, permissionMode: "never", readOnly: true, title: "Codex", goal: { objective: "Ship", status: "active", tokensUsed: null, timeUsedSeconds: null } }));
   const recorded: string[] = [];
@@ -1161,6 +1162,7 @@ test("Codex successor provider rejects an unregistered fork path before recordin
     startCodex: async () => client,
     claudeStatus: async () => ({ loggedIn: false }),
     now: () => "2026-07-10T12:00:00.000Z",
+    journalRoot: path.join(base, "provider-journal"),
   });
   const recorded: string[] = [];
 

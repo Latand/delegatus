@@ -18,6 +18,7 @@ import {
   type LegacyReconcileSummary,
 } from "@/lib/state/legacyImport";
 import { readStateImport, recordStateImportMirror, SqliteStateCollection, type StateImportRecord, type StateImportRow } from "@/lib/state/sqliteStateStore";
+import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 
 /**
  * Every account store in one `accounts` collection of `state.sqlite` (#1870,
@@ -471,13 +472,16 @@ function accountCollection(directory: string, purpose: "read" | "write"): Sqlite
   const database = accountsDatabasePath(directory);
   const cached = cachedCollection(database);
   if (cached) return cached;
-  ensureStateDirectory(directory);
   const primary = accountSourcePath(PRIMARY_ACCOUNT_SOURCE, directory);
   if (!readStateImport(database, ACCOUNTS_COLLECTION)) {
+    /* Nothing above this line writes: a read that arrives here from a module
+       load the barrier refuses (#1905) must leave the state directory exactly
+       as it found it, down to the directory itself. */
     if (!legacyImportAllowed(primary)) {
       if (purpose === "read") return null;
       throw new FileTransactionBusyError("account state is waiting for release promotion");
     }
+    ensureStateDirectory(directory);
     importLegacyAccounts(directory, { reconcile: lazyReconcileAllowed(primary) });
   }
   return openAccountCollection(database);
@@ -809,6 +813,9 @@ export function importLegacyAccounts(
   directory = accountsStateDirectory(),
   options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true },
 ): LegacyImportOutcome {
+  /* Before any lock directory is created: taking the eight sibling locks is
+     itself a write into the state directory (#1905). */
+  assertStateMutationAllowed(directory);
   ensureStateDirectory(directory);
   return withSiblingLocks(directory, () => {
     const database = accountsDatabasePath(directory);
@@ -820,7 +827,11 @@ export function importLegacyAccounts(
        a second import: the helper's own crash seams, applied to the other
        seven. A lazy open under a release target does not retire, because the
        rollback release is running on those files. */
-    if (!imported || options.reconcile) settleSiblings(directory, outcome.record, !imported);
+    /* A re-import rebuilt the collection from the files (#1905): the siblings
+       were read by `toRows` inside that same verified transaction, so they are
+       settled exactly as they are after a first import. */
+    const firstImport = !imported || outcome.state === "reimported";
+    if (firstImport || options.reconcile) settleSiblings(directory, outcome.record, firstImport);
     return outcome;
   });
 }
