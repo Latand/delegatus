@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { reviewOutcomeFor } from "./reviewOutcome";
+import { reviewOutcomeFor } from "@/lib/review/reviewOutcome";
 
 /*
  * Issue #325: direct one-shot reviewers have no flow engine watching them, so

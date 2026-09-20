@@ -1,5 +1,5 @@
 import type { Flow, Round } from "@/lib/flows/types";
-import { groupDirectReviewers } from "@/lib/flows/directReviewGrouping";
+import { groupDirectReviewers } from "@/lib/review/directReviewGrouping";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { conversationFileIndex, withoutArchivedPredecessors } from "@/lib/accounts/identity";

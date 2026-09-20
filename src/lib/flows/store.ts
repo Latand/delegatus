@@ -12,7 +12,7 @@ import { resolveRole } from "@/lib/roles/registry";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import type { RoleDefinition } from "@/lib/roles/types";
 
-import type { Flow, FlowPreset, ReviewVerdict, Round } from "./types";
+import type { Flow, FlowPreset, Round } from "./types";
 
 /* Resolve on every call, never bake at module load: a test that pins
    LLV_STATE_DIR after this module is first imported (import order across a
@@ -22,7 +22,6 @@ import type { Flow, FlowPreset, ReviewVerdict, Round } from "./types";
 const flowsFile = () => statePath("flows.json");
 const stateDatabaseFile = () => statePath("state.sqlite");
 const presetsFile = () => statePath("review-loop-presets.json");
-const flowArtifactDir = () => statePath("flows");
 
 /** A role override that passes the store's shape check can still fail the
     registry's semantic validation (e.g. a codex model not prefixed `gpt-`).
@@ -68,13 +67,6 @@ function atomicWriteJson(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", "utf8");
-  fs.renameSync(tmp, filePath);
-}
-
-export function atomicWriteText(filePath: string, text: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(tmp, text, "utf8");
   fs.renameSync(tmp, filePath);
 }
 
@@ -562,27 +554,6 @@ export function savePresets(presets: FlowPreset[]): void {
   atomicWriteJson(presetsFile(), { presets });
 }
 
-export function flowArtifactsDir(flowId: string): string {
-  return path.join(flowArtifactDir(), flowId);
-}
-
-export function findingsPathFor(flowId: string, round: number): string {
-  return path.join(flowArtifactsDir(flowId), `round-${round}-review.md`);
-}
-
-export function outputPathFor(flowId: string, round: number): string {
-  return path.join(flowArtifactsDir(flowId), `round-${round}-last-message.md`);
-}
-
-export function stderrPathFor(flowId: string, round: number): string {
-  return path.join(flowArtifactsDir(flowId), `round-${round}-stderr.txt`);
-}
-
-export function stdoutPathFor(flowId: string, round: number): string {
-  return path.join(flowArtifactsDir(flowId), `round-${round}-stdout.log`);
-}
-
-export function normalizeFindings(verdict: ReviewVerdict, markdown: string): string {
-  const body = markdown.replace(/^\s*VERDICT:\s*(APPROVE|REQUEST_CHANGES|COMMENT)\s*$/im, "").trim();
-  return `VERDICT: ${verdict}\n${body ? "\n" + body + "\n" : "\n"}`;
-}
+export { flowArtifactsDir, findingsPathFor, outputPathFor, stderrPathFor, stdoutPathFor } from "@/lib/reviewHistory/artifacts";
+export { atomicWriteText } from "@/lib/agent/artifacts";
+export { normalizeFindings } from "@/lib/review/findings";
