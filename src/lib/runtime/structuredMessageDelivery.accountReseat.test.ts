@@ -93,7 +93,7 @@ function deliveredClient(
   turn: RuntimeTurnAxis = "idle",
 ): RuntimeHostClient {
   return {
-    snapshot: async () => snapshot(conversationId, "codex", "hosted", turn),
+    readSession: sessionReader(async () => snapshot(conversationId, "codex", "hosted", turn)),
     command: async (command: { operationId: string; idempotencyKey: string; conversationId: string }) => {
       onCommand();
       return {
@@ -181,7 +181,7 @@ test("a pinned first prompt bypasses selected-account migration and terminal del
   registry.setEngineRouting("codex", "selected");
 
   const client: RuntimeHostClient = {
-    snapshot: async () => snapshot(staged.conversation.id),
+    readSession: sessionReader(async () => snapshot(staged.conversation.id)),
     command: async (command: { operationId: string; idempotencyKey: string; conversationId: string }) => ({
       operationId: command.operationId,
       replayed: false,
@@ -276,7 +276,7 @@ test("simultaneous pinned first prompts deliver independently after the selected
   const staged = [first, second];
   const commands: string[] = [];
   const client: RuntimeHostClient = {
-    snapshot: async () => {
+    readSession: sessionReader(async () => {
       const result = snapshot(first.conversation.id);
       result.sessions = staged.map((item) => ({
         ...result.sessions[0]!,
@@ -285,7 +285,7 @@ test("simultaneous pinned first prompts deliver independently after the selected
         artifactPath: item.path,
       }));
       return result;
-    },
+    }),
     command: async (command: { operationId: string; idempotencyKey: string; conversationId: string }) => {
       commands.push(command.conversationId);
       return {
@@ -347,9 +347,9 @@ function synchronizationClient(
     case "absent-client":
       return null;
     case "snapshot-failure":
-      return { snapshot: async () => { throw new Error("runtime snapshot failed"); } } as unknown as RuntimeHostClient;
+      return { readSession: sessionReader(async () => { throw new Error("runtime snapshot failed"); }) } as unknown as RuntimeHostClient;
     case "missing-session":
-      return { snapshot: async () => ({ ...snapshot(conversationId), sessions: [] }) } as unknown as RuntimeHostClient;
+      return { readSession: sessionReader(async () => ({ ...snapshot(conversationId), sessions: [] })) } as unknown as RuntimeHostClient;
   }
 }
 
@@ -521,7 +521,7 @@ test("a live structured send starts an active-account reseat and holds the opera
   let commands = 0;
   let migrationTicks = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id),
+    readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async () => {
       commands += 1;
       throw new Error("the predecessor host received a fenced message");
@@ -571,7 +571,7 @@ test("a mismatched-account image rejection leaves migration state untouched", as
     imageRefs: [imageRef],
   }, {
     enabled: () => true,
-    client: () => ({ snapshot: async () => snapshot(conversation.id) }) as unknown as RuntimeHostClient,
+    client: () => ({ readSession: sessionReader(async () => snapshot(conversation.id)) }) as unknown as RuntimeHostClient,
     registry: () => registry,
     requestMigrationTick: () => { migrationTicks += 1; },
   });
@@ -684,7 +684,7 @@ test("a dead structured send is durable before predecessor recovery", async () =
   let storedImages = 0;
   let migrationTicks = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id, "claude", "dead"),
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude", "dead")),
     command: async () => {
       commands += 1;
       throw new Error("the predecessor received the held message");
@@ -1050,7 +1050,7 @@ test("an exact retry reuses one account migration and one held delivery", async 
   let commands = 0;
   let migrationTicks = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id),
+    readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async () => {
       commands += 1;
       throw new Error("a held retry reached the predecessor");
@@ -1094,7 +1094,7 @@ test("restart preserves one Viewer conversation and retains old held input as ca
   registry.setEngineRouting("codex", "seat-active");
   const sourceGeneration = conversation.generations.at(-1)!;
   const client = {
-    snapshot: async () => snapshot(conversation.id),
+    readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async () => { throw new Error("a held delivery reached the source host"); },
   } as unknown as RuntimeHostClient;
 
@@ -1258,3 +1258,11 @@ test("controller startup retry publishes one selected-account successor and canc
     }]);
   }
 });
+
+function sessionReader(read: () => Promise<RuntimeSnapshot>): NonNullable<RuntimeHostClient["readSession"]> {
+  return async identity => {
+    const state = await read();
+    return state.sessions.find(row => row.conversationId === identity.conversationId)
+      ?? state.sessions.find(row => row.artifactPath === identity.artifactPath) ?? null;
+  };
+}

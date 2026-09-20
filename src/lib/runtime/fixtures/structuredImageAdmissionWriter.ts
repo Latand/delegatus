@@ -72,7 +72,7 @@ const runtimeSnapshot: RuntimeSnapshot = {
 };
 
 const client = {
-  snapshot: async () => runtimeSnapshot,
+  readSession: async () => runtimeSnapshot.sessions[0] ?? null,
   command: async (command: { operationId: string; idempotencyKey: string }) => ({
     operationId: command.operationId,
     replayed: false,

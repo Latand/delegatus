@@ -47,6 +47,34 @@ const META_FIELDS = [
 ] as const satisfies ReadonlyArray<keyof RegistryFile>;
 
 export type RowCollection = (typeof ROW_COLLECTIONS)[number];
+type LookupValue = string | readonly string[];
+type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "alias";
+const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", alias: "$" };
+const keyedReaders = new WeakMap<RegistryFile, (collection: RowCollection, field: LookupField, value: LookupValue) => string[]>();
+const pathReaders = new WeakMap<RegistryFile, (path: string) => string[]>();
+
+/** Indexed selection inside the same lazy transaction, including pending writes. */
+export function registryRowsMatching<C extends RowCollection>(file: RegistryFile, collection: C, field: LookupField, value: LookupValue): RegistryFile[C][string][] {
+  const keys = registryKeysMatching(file, collection, field, value);
+  const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+  return keys.map(key => rows[key]!).filter(Boolean);
+}
+
+export function registryKeysMatching(file: RegistryFile, collection: RowCollection, field: LookupField, value: LookupValue): string[] {
+  return keyedReaders.get(file)?.(collection, field, value) ?? Object.entries(file[collection]).filter(([, row]) => (typeof value === "string" ? [value] : value).includes(lookupValue(row, field) as string)).map(([key]) => key);
+}
+
+function lookupValue(row: unknown, field: LookupField): unknown {
+  if (field === "alias") return row;
+  return field.split(".").reduce<unknown>((value, part) => value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined, row);
+}
+
+export function registryConversationsForPath(file: RegistryFile, path: string): RegistryFile["conversations"][string][] {
+  const keys = pathReaders.get(file)?.(path);
+  return keys ? keys.map(key => file.conversations[key]!).filter(Boolean) : Object.values(file.conversations).filter(row =>
+    row.generations.some(generation => generation.path === path) || row.continuityPaths.includes(path));
+}
+
 type StoredRow = { collection: string; row_key: string; value_json: string; row_order: number };
 type MetaRow = { key: string; value: string };
 type CachedRow = { valueJson: string; parsed: unknown };
@@ -261,6 +289,35 @@ export class SqliteAgentRegistryStore {
       ON registry_rows(json_extract(value_json, '$.parentConversationId'), row_order)
       WHERE collection = 'lineageEdges' AND json_extract(value_json, '$.source') = 'viewer-spawn';
     `);
+    for (const [field, jsonPath] of Object.entries(LOOKUP_PATHS)) {
+      this.db.exec(`CREATE INDEX IF NOT EXISTS registry_lookup_${field.replaceAll(".", "_")} ON registry_rows(collection, json_extract(value_json, '${jsonPath}'), row_order)${field === 'alias' ? " WHERE collection = 'conversationAliases'" : ''}`);
+    }
+    // Array paths need a relational index. Triggers cover every writer,
+    // including older releases sharing this journal during handover.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS registry_conversation_paths (
+        path TEXT NOT NULL, conversation_id TEXT NOT NULL, PRIMARY KEY(path, conversation_id)
+      );
+      CREATE INDEX IF NOT EXISTS registry_conversation_paths_owner ON registry_conversation_paths(conversation_id);
+      CREATE TRIGGER IF NOT EXISTS registry_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
+        INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL;
+        INSERT OR IGNORE INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths');
+      END;
+      CREATE TRIGGER IF NOT EXISTS registry_paths_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
+        DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
+        INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL;
+        INSERT OR IGNORE INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths');
+      END;
+      CREATE TRIGGER IF NOT EXISTS registry_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'conversations' BEGIN
+        DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
+      END;
+    `);
+    if (this.meta("conversation_paths_ready") !== "1") {
+      this.db.exec(`BEGIN IMMEDIATE;
+        INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(g.value, '$.path'), r.row_key FROM registry_rows r, json_each(r.value_json, '$.generations') g WHERE r.collection = 'conversations' AND json_extract(g.value, '$.path') IS NOT NULL;
+        INSERT OR IGNORE INTO registry_conversation_paths SELECT p.value, r.row_key FROM registry_rows r, json_each(r.value_json, '$.continuityPaths') p WHERE r.collection = 'conversations';
+        INSERT OR REPLACE INTO registry_meta(key, value) VALUES ('conversation_paths_ready', '1'); COMMIT;`);
+    }
     this.secureFiles();
     this.importFirstBoot(options.initialSnapshot, options.verifyImport);
   }
@@ -325,6 +382,19 @@ export class SqliteAgentRegistryStore {
     if (this.readOnlyCache?.revision === revision) return this.readOnlyCache;
     this.readOnlyCache = this.loadSnapshot(true);
     return this.readOnlyCache;
+  }
+
+  /** The callback must finish inside the transaction; no lazy object escapes. */
+  read<T>(reader: (file: RegistryFile) => T): T {
+    this.db.exec("BEGIN");
+    try {
+      const result = reader(this.loadLazyInTransaction().file);
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      throw error;
+    }
   }
 
   /** One transaction and keyed row reads for the at-most-bounded spawn paths in
@@ -636,7 +706,7 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true): SqliteRegistryMutation<T> {
+  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { updateSnapshotCache?: boolean } = {}): SqliteRegistryMutation<T> {
     for (;;) {
       this.db.exec("BEGIN");
       let current: LazyRegistrySnapshot;
@@ -670,6 +740,8 @@ export class SqliteAgentRegistryStore {
       }
       if (changed) {
         this.secureFiles();
+        // A narrow delivery commit must not clone populated snapshot maps.
+        if (options.updateSnapshotCache === false) this.readOnlyCache = null;
         this.updateCachesAfterCommit(current.file, changes, revision);
         this.rememberRevision(revision);
       }
@@ -807,6 +879,32 @@ export class SqliteAgentRegistryStore {
     const baselineCollections = new Map<RowCollection, Map<string, string | null>>();
     const dirtyRows = new Map<RowCollection, Set<string>>();
     const reorderedCollections = new Set<RowCollection>();
+    keyedReaders.set(file, (collection, field, value) => {
+      const values = typeof value === "string" ? [value] : value;
+      if (values.length === 0) return [];
+      if (reorderedCollections.has(collection)) return Object.entries(file[collection])
+        .filter(([, row]) => values.includes(lookupValue(row, field) as string)).map(([key]) => key);
+      const keys = new Set(this.db.query<{ row_key: string }, string[]>(
+        `SELECT row_key FROM registry_rows WHERE collection = ? AND json_extract(value_json, '${LOOKUP_PATHS[field]}') IN (${values.map(() => "?").join(",")}) ORDER BY row_order`,
+      ).all(collection, ...values).map(row => row.row_key));
+      for (const key of dirtyRows.get(collection) ?? []) {
+        const row = (file[collection] as Record<string, unknown>)[key];
+        if (values.includes(lookupValue(row, field) as string)) keys.add(key); else keys.delete(key);
+      }
+      return [...keys];
+    });
+    pathReaders.set(file, path => {
+      if (reorderedCollections.has("conversations")) return Object.values(file.conversations)
+        .filter(row => row.generations.some(generation => generation.path === path) || row.continuityPaths.includes(path)).map(row => row.id);
+      const keys = new Set(this.db.query<{ conversation_id: string }, [string]>(
+        "SELECT p.conversation_id FROM registry_conversation_paths p JOIN registry_rows r ON r.collection = 'conversations' AND r.row_key = p.conversation_id WHERE p.path = ? ORDER BY r.row_order",
+      ).all(path).map(row => row.conversation_id));
+      for (const key of dirtyRows.get("conversations") ?? []) {
+        const row = file.conversations[key];
+        if (row && (row.generations.some(generation => generation.path === path) || row.continuityPaths.includes(path))) keys.add(key); else keys.delete(key);
+      }
+      return [...keys];
+    });
     for (const collection of ROW_COLLECTIONS) {
       let loaded = false;
       let value = file[collection];
@@ -815,7 +913,7 @@ export class SqliteAgentRegistryStore {
         if (loaded) return;
         const dirty = new Set<string>();
         const baseline = new Map<string, string | null>();
-        if (!trackMutations || collection === "deliveryOperationOwners") {
+        if (!trackMutations) {
           const storedValue = {} as typeof value;
           const storedRows = this.db.query<Pick<StoredRow, "row_key" | "value_json">, [string]>(
             "SELECT row_key, value_json FROM registry_rows WHERE collection = ? ORDER BY row_order",
@@ -902,9 +1000,19 @@ export class SqliteAgentRegistryStore {
             if (!Object.hasOwn(rows, key)) {
               if (deleted.has(key)) return undefined;
               const stored = readBaseline(key);
-              if (stored === null) return undefined;
+              if (stored === null && collection !== "deliveryOperationOwners") return undefined;
               const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
-              input[collection] = { [key]: structuredClone(this.parseRow(collection, key, stored, useRowCache)) };
+              input[collection] = stored === null ? {} : { [key]: structuredClone(this.parseRow(collection, key, stored, useRowCache)) };
+              if (stored === null && collection === "deliveryOperationOwners") {
+                const delivery = registryRowsMatching(file, "heldDeliveries", "command.operationId", key)[0];
+                if (!delivery) return undefined;
+                input.heldDeliveries = { [delivery.id]: delivery };
+              }
+              if (collection === "deliveryOperationOwners") {
+                const owner = (input[collection] as Record<string, { deliveryId?: string }>)[key];
+                const delivery = owner?.deliveryId ? file.heldDeliveries[owner.deliveryId] : undefined;
+                if (delivery) input.heldDeliveries = { [delivery.id]: delivery };
+              }
               const normalized = this.normalize(input)[collection] as Record<string, unknown>;
               if (!Object.hasOwn(normalized, key)) return undefined;
               rows[key] = normalized[key];
@@ -929,8 +1037,14 @@ export class SqliteAgentRegistryStore {
             }
             const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
             input[collection] = unloaded;
+            if (collection === "deliveryOperationOwners") input.heldDeliveries = file.heldDeliveries;
             const normalized = this.normalize(input)[collection] as Record<string, unknown>;
-            for (const [key, row] of Object.entries(normalized)) rows[key] = row;
+            for (const [key, row] of Object.entries(normalized)) {
+              // Owner normalization can synthesize rows from held deliveries.
+              // Those defaults must preserve the transaction's loaded evidence
+              // and must never resurrect a row deleted in this transaction.
+              if (!Object.hasOwn(rows, key) && !deleted.has(key)) rows[key] = row;
+            }
             allRowsLoaded = true;
           };
           const keys = (): string[] => {
