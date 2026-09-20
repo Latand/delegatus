@@ -34,6 +34,8 @@ const { accountManager, resolveContinuityAccount, resolveHealthySpawnAccount, re
 const { AccountProjectBindingsUnreadableError } = await import("./projectBindings");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
+const { BINDINGS_SOURCE, resetAccountCollectionsForTests } = await import("./accountsStore");
+const { clearAccountFixture, seedAccountSource } = await import("./accountsStoreFixture");
 
 const ATLAS = "project-atlas";
 const NOW = Date.now();
@@ -107,11 +109,10 @@ function registryWith(
 }
 
 function bind(accountId: string, project = ATLAS, engine: "codex" | "claude" = "codex"): void {
-  fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{ engine, accountId, project, createdAt: new Date(NOW - 60_000).toISOString() }],
-  }), "utf8");
+  });
 }
 
 beforeEach(() => {
@@ -119,6 +120,7 @@ beforeEach(() => {
   fs.rmSync(path.join(SANDBOX, "accounts"), { recursive: true, force: true });
   setAgentRegistryForTests(null);
   resetProjectAliasesForTests();
+  resetAccountCollectionsForTests();
   seedAccounts();
 });
 
@@ -183,7 +185,7 @@ test("a binding record that cannot be read refuses both automatic seams", () => 
      to repair. */
   registryWith(spare, []);
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 
   expect(() => accountManager.resolveProjectSpawn("codex", { project: ATLAS }))
     .toThrow(AccountProjectBindingsUnreadableError);
@@ -222,7 +224,7 @@ test("the direct launch seam draws its automatic pick from the pool, not the eng
   expect((await resolveHealthySpawnAccount("codex", undefined, ATLAS)).accountId).toBe(reserved);
   /* Unbound, the same call answers with the routing, exactly as it always did
      — so the line above is the pool overriding it, not a coincidence. */
-  fs.rmSync(RECORD, { force: true });
+  clearAccountFixture(BINDINGS_SOURCE);
   expect((await resolveHealthySpawnAccount("codex", undefined, ATLAS)).accountId).toBe(spare);
 });
 
@@ -247,7 +249,7 @@ test("the direct launch seam refuses an allowed account that is out of capacity,
 
   /* The same shortage on an UNBOUND project changes nothing: no boundary was
      drawn, so the routing account is resolved exactly as it always was. */
-  fs.rmSync(RECORD, { force: true });
+  clearAccountFixture(BINDINGS_SOURCE);
   expect((await resolveHealthySpawnAccount("codex", undefined, ATLAS)).accountId).toBe(spare);
 });
 
@@ -267,7 +269,7 @@ test("the direct launch's health pass considers the pool's accounts and no other
      message rather than asserted about the seam's inputs. */
   expect((fenced as Error).message).not.toContain(claudeSpare);
 
-  fs.rmSync(RECORD, { force: true });
+  clearAccountFixture(BINDINGS_SOURCE);
   const unbound = await resolveHealthySpawnAccount("claude", undefined, ATLAS)
     .then(() => null, (error: unknown) => error);
   /* Unbound, every Claude account in the catalogue is a candidate, and the
@@ -348,7 +350,7 @@ test("an explicitly named Claude account outside the pool goes THROUGH the healt
 test("a damaged binding record refuses the AUTOMATIC pick and stands out of an explicit choice's way", async () => {
   registryWith(spare, []);
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 
   /* Nothing named: no pool can be seen, so nothing may be picked. */
   expect(resolveHealthySpawnAccount("codex", undefined, ATLAS))
@@ -368,7 +370,7 @@ test("an unbound project with nothing routed keeps the engine-default fallback f
   const registry = new AgentRegistry(path.join(SANDBOX, "unrouted-registry.json"), undefined, undefined, { sqliteMode: "off" });
   setAgentRegistryForTests(registry);
   expect(registry.engineRouting("codex").activeAccountId).toBeNull();
-  fs.rmSync(RECORD, { force: true });
+  clearAccountFixture(BINDINGS_SOURCE);
 
   const resolved = await resolveHealthySpawnAccount("codex", "codex-account-that-was-deleted", ATLAS);
   expect(listCodexAccounts().some((account) => account.id === resolved.accountId)).toBe(true);
@@ -386,7 +388,7 @@ test("a damaged record leaves a named CLAUDE account nowhere to degrade onto eit
      either way; what this asserts is which account it was ASKED about. */
   registryWith(spare, [], claudeSpare);
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 
   const refused = await resolveHealthySpawnAccount("claude", claudeReserved, ATLAS)
     .then(() => null, (error: unknown) => error);
@@ -403,7 +405,7 @@ test("a damaged record and a named account that is GONE answers about the record
      in. Both engines name the thing that is actually wrong. */
   registryWith(spare, [], claudeSpare);
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 
   const claude = await resolveHealthySpawnAccount("claude", "claude-account-that-was-deleted", ATLAS)
     .then(() => null, (error: unknown) => error);
@@ -424,7 +426,7 @@ test("a damaged record leaves a named account that does NOT exist with nowhere t
      exists to prevent, arrived at through the explicit path. */
   registryWith(spare, []);
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 
   expect(resolveHealthySpawnAccount("codex", "codex-account-that-was-deleted", ATLAS))
     .rejects.toThrow();
@@ -458,7 +460,7 @@ test("a resume of work that records no account draws from the pool, not the engi
 
   /* Unbound, the same call answers with the routing account exactly as it
      always did, so the line above is the pool deciding rather than agreeing. */
-  fs.rmSync(RECORD, { force: true });
+  clearAccountFixture(BINDINGS_SOURCE);
   expect(resolveContinuityAccount("codex", null, ATLAS).accountId).toBe(spare);
 });
 
@@ -475,7 +477,7 @@ test("a resume that has to pick reports an exhausted pool instead of the idle ac
 test("a damaged binding record refuses a resume that has to pick, and only that one (#1279)", () => {
   registryWith(spare, []);
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 
   expect(() => resolveContinuityAccount("codex", null, ATLAS)).toThrow(AccountProjectBindingsUnreadableError);
   /* A record nobody can read never vetoes continuity: the conversation is
@@ -529,7 +531,7 @@ test("a resume-spec pick reports an exhausted pool rather than the idle account 
 test("a damaged binding record refuses a resume-spec pick before any spec is built (#1279)", () => {
   registryWith(spare, []);
   fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(RECORD, '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
 
   expect(() => resolveResumeAccountId("codex", null, ATLAS)).toThrow(AccountProjectBindingsUnreadableError);
   /* Continuity is never vetoed by a record nobody can read. */

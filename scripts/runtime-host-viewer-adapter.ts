@@ -982,7 +982,11 @@ async function checkpointHotStateFence(
   process.env[HOT_STATE_RELEASE_REVISION_ENV] = revision;
   try {
     const { checkpointHotStateRollbackMirrorsForDemotion } = await import("../src/lib/viewerInstrumentation");
-    const revisions = await checkpointHotStateRollbackMirrorsForDemotion();
+    const { withStateMutationActivation } = await import("../src/lib/state/stateMutationBarrier");
+    /* The adapter reaches this only for a Viewer it has established is dead,
+       carrying that release's own revision. It owns the fence for this step,
+       so the barrier (#1905) admits the mirror writes — and only these. */
+    const revisions = await withStateMutationActivation(checkpointHotStateRollbackMirrorsForDemotion);
     const current = readHotStateAuthority(stateDir);
     if (current?.mode === "fencing"
       && current.epoch === request.epoch
