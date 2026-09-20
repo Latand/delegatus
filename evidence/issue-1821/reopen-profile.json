@@ -1,0 +1,200 @@
+{
+  "issue": 1821,
+  "what": "Time from opening a conversation to its first painted feed row, on a production build, before and after the persisted tail cache.",
+  "driver": "bun scripts/profile-reopen.ts --repeat 3",
+  "runtime": "the Bun pinned in the Dockerfile, serving `next start` (never `next dev`)",
+  "browser": "headless Chrome over raw CDP; desktop 1280x800 and phone 390x844",
+  "corpus": {
+    "seededTranscripts": 183,
+    "projects": 10,
+    "smallTargetRecords": 12,
+    "largeTargetRecords": 12000,
+    "largeTargetKb": 3546,
+    "note": "Invented transcripts in a throwaway home under the temp root; no account, no operator state."
+  },
+  "samplesPerCase": 3,
+  "statistic": "median of 3, with the min-max spread in the attribution string",
+  "cases": [
+    {
+      "surface": "desktop",
+      "step": "cold open, small transcript (12 records, 3 kB) (empty storage, since navigation start)",
+      "before": {
+        "medianMs": "484.2",
+        "attribution": "353\u2013497.2 ms over 3 runs; document 9.2ms; /api/files answered 182.5ms; no log request before the paint; rows 12"
+      },
+      "after": {
+        "medianMs": "380.1",
+        "attribution": "274.3\u2013408.6 ms over 3 runs; document 5.9ms; /api/files answered 115.9ms; no log request before the paint; rows 12"
+      }
+    },
+    {
+      "surface": "desktop",
+      "step": "reopen after reload, small transcript (12 records, 3 kB) (new document, storage kept)",
+      "before": {
+        "medianMs": "461.2",
+        "attribution": "338.9\u201357686.1 ms over 3 runs; document 6.1ms; /api/files answered 146.4ms; no log request before the paint; rows 12"
+      },
+      "after": {
+        "medianMs": "197.5",
+        "attribution": "194.2\u2013269.8 ms over 3 runs; document 6.2ms; /api/files answered 107.5ms; no log request before the paint; rows 12"
+      }
+    },
+    {
+      "surface": "desktop",
+      "step": "reopen in the same session, small transcript (12 records, 3 kB) (in-app, since the gesture)",
+      "before": {
+        "medianMs": "1",
+        "attribution": "0.8\u20131.6 ms over 3 runs; no /api/files before the paint; no log request before the paint; rows 12"
+      },
+      "after": {
+        "medianMs": "0.6",
+        "attribution": "0.6\u20130.8 ms over 3 runs; no /api/files before the paint; no log request before the paint; rows 12"
+      }
+    },
+    {
+      "surface": "desktop",
+      "step": "cold open, large transcript (12000 records, 3546 kB) (empty storage, since navigation start)",
+      "before": {
+        "medianMs": "611.8",
+        "attribution": "471.6\u2013801 ms over 3 runs; document 7.3ms; /api/files answered 162.8ms; no log request before the paint; rows 300"
+      },
+      "after": {
+        "medianMs": "681.9",
+        "attribution": "424.4\u2013772.5 ms over 3 runs; document 10.8ms; /api/files answered 139.5ms; no log request before the paint; rows 300"
+      }
+    },
+    {
+      "surface": "desktop",
+      "step": "reopen after reload, large transcript (12000 records, 3546 kB) (new document, storage kept)",
+      "before": {
+        "medianMs": "632.3",
+        "attribution": "467.5\u201357384.2 ms over 3 runs; document 17.1ms; /api/files answered 260.4ms; no log request before the paint; rows 300"
+      },
+      "after": {
+        "medianMs": "367.8",
+        "attribution": "227.7\u201357122.3 ms over 3 runs; document 19.1ms; /api/files answered 176.2ms; no log request before the paint; rows 60"
+      }
+    },
+    {
+      "surface": "desktop",
+      "step": "reopen in the same session, large transcript (12000 records, 3546 kB) (in-app, since the gesture)",
+      "before": {
+        "medianMs": "1.7",
+        "attribution": "1.4\u20132.2 ms over 3 runs; no /api/files before the paint; no log request before the paint; rows 300"
+      },
+      "after": {
+        "medianMs": "0.9",
+        "attribution": "0.9\u20131 ms over 3 runs; no /api/files before the paint; no log request before the paint; rows 300"
+      }
+    },
+    {
+      "surface": "desktop",
+      "step": "revalidate after a reopen: fresh record on disk \u2192 appended row",
+      "before": {
+        "medianMs": "83",
+        "attribution": "rows 12 \u2192 13; first row node preserved yes"
+      },
+      "after": {
+        "medianMs": "10",
+        "attribution": "rows 12 \u2192 13; first row node preserved yes"
+      }
+    },
+    {
+      "surface": "phone",
+      "step": "cold open, small transcript (12 records, 3 kB) (empty storage, since navigation start)",
+      "before": {
+        "medianMs": "310.1",
+        "attribution": "293\u2013370.5 ms over 3 runs; document 10.9ms; /api/files answered 123.8ms; no log request before the paint; rows 13"
+      },
+      "after": {
+        "medianMs": "334.5",
+        "attribution": "326\u2013334.7 ms over 3 runs; document 5.5ms; /api/files answered 109.4ms; no log request before the paint; rows 13"
+      }
+    },
+    {
+      "surface": "phone",
+      "step": "reopen after reload, small transcript (12 records, 3 kB) (new document, storage kept)",
+      "before": {
+        "medianMs": "245.5",
+        "attribution": "235.7\u2013274 ms over 3 runs; document 5.7ms; /api/files answered 131.2ms; no log request before the paint; rows 13"
+      },
+      "after": {
+        "medianMs": "224.1",
+        "attribution": "215.1\u2013283.4 ms over 3 runs; document 4.2ms; /api/files answered 109.2ms; no log request before the paint; rows 13"
+      }
+    },
+    {
+      "surface": "phone",
+      "step": "reopen in the same session, small transcript (12 records, 3 kB) (in-app, since the gesture)",
+      "before": {
+        "medianMs": "27.1",
+        "attribution": "22.6\u201336.7 ms over 3 runs; no /api/files before the paint; first log bytes 26.9ms; rows 13"
+      },
+      "after": {
+        "medianMs": "27.3",
+        "attribution": "22.8\u201331.5 ms over 3 runs; no /api/files before the paint; first log bytes 27ms; rows 13"
+      }
+    },
+    {
+      "surface": "phone",
+      "step": "cold open, large transcript (12000 records, 3546 kB) (empty storage, since navigation start)",
+      "before": {
+        "medianMs": "471.5",
+        "attribution": "384.9\u2013488.7 ms over 3 runs; document 5.9ms; /api/files answered 121ms; no log request before the paint; rows 300"
+      },
+      "after": {
+        "medianMs": "408.7",
+        "attribution": "394.2\u2013439.8 ms over 3 runs; document 5.9ms; /api/files answered 127.4ms; no log request before the paint; rows 300"
+      }
+    },
+    {
+      "surface": "phone",
+      "step": "reopen after reload, large transcript (12000 records, 3546 kB) (new document, storage kept)",
+      "before": {
+        "medianMs": "350.5",
+        "attribution": "346.3\u2013364 ms over 3 runs; document 5.4ms; /api/files answered 138.6ms; no log request before the paint; rows 300"
+      },
+      "after": {
+        "medianMs": "234.2",
+        "attribution": "233.3\u2013276.3 ms over 3 runs; document 6.7ms; /api/files answered 142.3ms; no log request before the paint; rows 60"
+      }
+    },
+    {
+      "surface": "phone",
+      "step": "reopen in the same session, large transcript (12000 records, 3546 kB) (in-app, since the gesture)",
+      "before": {
+        "medianMs": "68.6",
+        "attribution": "63.7\u201378.6 ms over 3 runs; no /api/files before the paint; first log bytes 68.4ms; rows 60"
+      },
+      "after": {
+        "medianMs": "41.5",
+        "attribution": "33.4\u201348 ms over 3 runs; no /api/files before the paint; first log bytes 41ms; rows 60"
+      }
+    },
+    {
+      "surface": "phone",
+      "step": "revalidate after a reopen: fresh record on disk \u2192 appended row",
+      "before": {
+        "medianMs": "14",
+        "attribution": "rows 13 \u2192 14; first row node preserved yes"
+      },
+      "after": {
+        "medianMs": "14",
+        "attribution": "rows 13 \u2192 14; first row node preserved yes"
+      }
+    }
+  ],
+  "server": {
+    "before": [
+      "GET /api/files?view=summary: median 36.2 ms (6\u201350.1 ms over 5 runs)",
+      "POST /api/logs, small transcript (3 kB on disk): median 4.3 ms (3.6\u201312.9 ms over 5 runs)",
+      "POST /api/logs, large transcript (3546 kB on disk): median 8.1 ms (7.6\u201310.3 ms over 5 runs)"
+    ],
+    "after": [
+      "GET /api/files?view=summary: median 32.8 ms (5.4\u201337 ms over 5 runs)",
+      "POST /api/logs, small transcript (3 kB on disk): median 3.1 ms (2.7\u201312 ms over 5 runs)",
+      "POST /api/logs, large transcript (3546 kB on disk): median 7.1 ms (6.5\u20137.6 ms over 5 runs)"
+    ]
+  },
+  "knownArtifact": "Some reopen samples show the document itself taking ~57 s. Chrome holds six HTTP/1.1 sockets per origin and the Viewer log stream never ends, so a driven sequence of documents can find every socket held; the median is unaffected and the spread shows it."
+}
