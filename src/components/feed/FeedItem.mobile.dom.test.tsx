@@ -332,3 +332,59 @@ test("a turn that really completed keeps its quiet completion note", () => {
   expect(host.querySelector("[data-turn-error]")).toBeNull();
   expect(host.textContent).toContain(en["render.taskComplete"]);
 });
+
+/*
+ * Rendered sentinels (review round 1). A provider can put a JSON body, an
+ * `Authorization` header or a whole payload behind an error code into what
+ * this row displays. What matters is not that the parser returns a clean
+ * string but that nothing credential-shaped is ever painted, so these read the
+ * mounted row's text rather than the item.
+ *
+ * Sentinels are assembled from parts, so no credential-shaped literal is
+ * committed.
+ */
+const JSON_SENTINEL = ["sk", "live", "9f4c2ab77d31e05c86f0"].join("_");
+const BEARER_SENTINEL = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "dBjftJeZ4CVPmB92K27u"].join(".");
+
+for (const probe of [
+  {
+    name: "a JSON body the provider quoted",
+    sentinel: JSON_SENTINEL,
+    payload: { error: { message: `request rejected: {"${["access", "token"].join("_")}": "${JSON_SENTINEL}"}`, codex_error_info: "unauthorized" } },
+    reads: "request rejected",
+  },
+  {
+    name: "an Authorization header the provider quoted",
+    sentinel: BEARER_SENTINEL,
+    payload: { error: { message: `upstream refused Bearer ${BEARER_SENTINEL} for this turn`, codex_error_info: "unauthorized" } },
+    reads: "upstream refused",
+  },
+  {
+    name: "a payload behind the error code the row falls back to",
+    sentinel: BEARER_SENTINEL,
+    /* No `error` at all: the row falls back to the code, which carries the
+       payload here. */
+    payload: { error: undefined, last_agent_message: null, codex_error_info: `unauthorized Bearer ${BEARER_SENTINEL}` },
+    reads: "[redacted]",
+  },
+]) {
+  test(`${probe.name} is never painted onto the row`, () => {
+    const host = mount(<FeedItem item={authTerminalRow(probe.payload)} />);
+    const row = host.querySelector("[data-turn-error]")!;
+    expect(row).toBeTruthy();
+    expect(row.textContent).not.toContain(probe.sentinel);
+    expect(row.textContent).toContain(probe.reads);
+    /* The failure still reads as one: a sanitized row is not a blank row. */
+    expect(row.textContent).toContain(en["render.turnFailedAuth"]);
+  });
+}
+
+test("the expired-sign-in explanation survives redaction word for word", () => {
+  /* The sentence that makes the row useful mentions two credential words in
+     prose. Redaction that ate it would trade one defect for another. */
+  const host = mount(<FeedItem item={authTerminalRow()} />);
+  const row = host.querySelector('[data-turn-error="auth"]')!;
+  expect(row.textContent).toContain(EXPIRED);
+  expect(row.textContent).toContain(en["render.turnFailedAuthHint"]);
+  expect(row.textContent).not.toContain("[redacted]");
+});

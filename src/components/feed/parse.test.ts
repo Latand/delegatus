@@ -2850,3 +2850,77 @@ describe("a first turn that died unauthorized (#1846 recurrence)", () => {
     }
   });
 });
+
+describe("the failed terminal never carries a credential onto the screen", () => {
+  /*
+   * The row shows the provider's own sentence, and a provider writes whatever
+   * it likes into one — a rejected JSON body, the `Authorization` header it
+   * refused, an error code with a payload glued to it. Round 1 of review found
+   * `redactSecrets` alone blind to the JSON and `Bearer` shapes, and the
+   * `codex_error_info` fallback neither sanitized nor bounded.
+   *
+   * Sentinels are assembled from parts: a credential-shaped literal in a
+   * committed file is what the publication gate exists to reject.
+   */
+  const SENTINEL = ["sk", "live", "9f4c2ab77d31e05c86f0"].join("_");
+  const BEARER_SENTINEL = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "dBjftJeZ4CVPmB92K27u"].join(".");
+  const taskComplete = (payload: Record<string, unknown>) =>
+    JSON.stringify({ type: "event_msg", timestamp: "2026-09-20T02:49:12.136Z", payload: { type: "task_complete", ...payload } });
+
+  function failureRow(payload: Record<string, unknown>) {
+    const row = buildFeed(codexFile, [taskComplete(payload)], false, "").items.find((item) => item.kind === "turn-error");
+    if (row?.kind !== "turn-error") throw new Error("expected a failed-turn row");
+    return row;
+  }
+
+  test("a JSON body quoted in the provider message keeps its keys and loses its values", () => {
+    const row = failureRow({
+      error: {
+        message: `request rejected: {"model": "gpt-5", "${["access", "token"].join("_")}": "${SENTINEL}"}`,
+        codex_error_info: "unauthorized",
+      },
+    });
+    expect(row.detail).not.toContain(SENTINEL);
+    expect(row.detail).toContain("[redacted]");
+    /* What the operator needs to read survives the redaction. */
+    expect(row.detail).toContain("request rejected");
+  });
+
+  test("an Authorization header quoted in the provider message loses its credential", () => {
+    const row = failureRow({
+      error: { message: `upstream refused Bearer ${BEARER_SENTINEL} for this turn`, codex_error_info: "unauthorized" },
+    });
+    expect(row.detail).not.toContain(BEARER_SENTINEL);
+    expect(row.detail).toContain("[redacted]");
+    expect(row.detail).toContain("upstream refused");
+  });
+
+  test("an error code with a payload glued behind it is still an expired sign-in", () => {
+    /* The code leads the value; what follows it is the provider's payload, not
+       a different kind of failure. */
+    expect(failureRow({ codex_error_info: `unauthorized Bearer ${BEARER_SENTINEL}` }).reason).toBe("auth");
+  });
+
+  test("the error-code fallback is sanitized too, not only the message", () => {
+    /* No message at all: the row falls back to `codex_error_info`, which a
+       provider can write a whole payload into. */
+    const row = failureRow({ codex_error_info: `unauthorized Bearer ${BEARER_SENTINEL}` });
+    expect(row.detail).not.toContain(BEARER_SENTINEL);
+    expect(row.detail).toContain("[redacted]");
+  });
+
+  test("the error-code fallback is bounded like the message is", () => {
+    const row = failureRow({ codex_error_info: `unauthorized ${"x".repeat(5_000)}` });
+    expect(row.detail.length).toBeLessThanOrEqual(600);
+  });
+
+  test("a bounded message is cut after redaction, never through a credential", () => {
+    /* The credential sits inside the bound, with more message behind it:
+       redaction has to happen on the whole string before the cut. */
+    const row = failureRow({
+      error: { message: `unauthorized Bearer ${BEARER_SENTINEL} ${"padding ".repeat(120)}`, codex_error_info: "unauthorized" },
+    });
+    expect(row.detail).not.toContain(BEARER_SENTINEL);
+    expect(row.detail.length).toBeLessThanOrEqual(600);
+  });
+});

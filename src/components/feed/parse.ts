@@ -476,25 +476,44 @@ function base64DecodedLength(base64: string): number {
   return Math.floor((base64.length * 3) / 4) - padding;
 }
 
+const TURN_ERROR_DETAIL_MAX = 600;
+
+/**
+ * Bound a diagnostic value for the screen — after the transcript redactor has
+ * been over it, never before. A provider writes whatever it likes into an
+ * error: the JSON body it rejected, the `Authorization` header it refused. Cut
+ * first and a credential sitting before the cut survives whole, while one
+ * straddling it is merely halved; redact first and the cut can only ever fall
+ * through `[redacted]`.
+ */
+function boundedDiagnostic(value: string): string {
+  const safe = redactTranscriptText(value).trim();
+  return safe.length > TURN_ERROR_DETAIL_MAX ? safe.slice(0, TURN_ERROR_DETAIL_MAX - 1) + "…" : safe;
+}
+
 /**
  * The provider failure a Codex turn-end record carries, or null when the turn
  * simply ended. A clean completion has no `error` and no `codex_error_info` at
  * all, so anything read here is a real failure — including the observed
  * `unauthorized` first turn, which returned no assistant message whatsoever.
  *
- * The message is the provider's own prose, which is what makes it useful; it
- * goes through the feed's existing redaction so a credential quoted inside it
- * cannot ride onto the screen.
+ * The message is the provider's own prose, which is what makes it useful.
+ * Every value that can reach the screen — the message AND the error code the
+ * row falls back to — passes through {@link boundedDiagnostic} first: the
+ * transcript redactor catches the JSON and `Bearer` credential shapes plain
+ * `redactSecrets` does not. The classification below reads the RAW record,
+ * because what a turn died of is not a thing being displayed.
  */
 function codexTurnFailure(payload: Record<string, unknown>): { reason: TurnErrorReason; detail: string } | null {
   const error = rec(payload.error);
   const info = (textPart(payload.codex_error_info) || textPart(error.codex_error_info)).trim();
   const message = textPart(error.message) || textPart(payload.error) || (info ? textPart(payload.message) : "");
   if (!info && !message) return null;
-  const detail = redactSecrets(message).trim().slice(0, 600);
-  const auth = /^(?:unauthorized|unauthenticated|auth(?:_error)?)$/i.test(info)
+  /* The code leads the value; a provider may glue a payload behind it, and
+     `unauthorized <payload>` is still an expired sign-in. */
+  const auth = /^(?:unauthorized|unauthenticated|auth(?:_error)?)\b/i.test(info)
     || /\b(?:unauthorized|refresh token|access token|sign ?in again|log ?out and sign)\b/i.test(message);
-  return { reason: auth ? "auth" : "other", detail: detail || info };
+  return { reason: auth ? "auth" : "other", detail: boundedDiagnostic(message) || boundedDiagnostic(info) };
 }
 
 function codexImageFromDataUrl(value: string): Extract<Item, { kind: "image" }> | null {
