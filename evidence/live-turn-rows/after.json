@@ -1,0 +1,98 @@
+{
+  "phase": "after",
+  "shots": [
+    "stale-390-dark-en-after.png",
+    "current-390-dark-en-after.png",
+    "stale-390-dark-uk-after.png",
+    "current-390-dark-uk-after.png"
+  ],
+  "frames": {
+    "390-dark-en": {
+      "cases": {
+        "stale": {
+          "rows": 8,
+          "height": 201,
+          "toolRows": 8,
+          "mcpRows": 1,
+          "mcpChips": 2,
+          "argsOmittedRows": 0,
+          "argsOmittedMentions": 0,
+          "collapsed": {
+            "count": 55,
+            "text": "55 earlier steps"
+          },
+          "collapsedLines": 1,
+          "duplicates": 0,
+          "ids": [
+            "toolu_demo_052",
+            "toolu_demo_053",
+            "toolu_demo_054",
+            "toolu_demo_055",
+            "toolu_demo_056",
+            "toolu_demo_057",
+            "toolu_demo_058",
+            "toolu_demo_059"
+          ]
+        },
+        "current": {
+          "rows": 0,
+          "height": 0,
+          "toolRows": 0,
+          "mcpRows": 0,
+          "mcpChips": 0,
+          "argsOmittedRows": 0,
+          "argsOmittedMentions": 0,
+          "collapsed": null,
+          "collapsedLines": 0,
+          "duplicates": 0,
+          "ids": []
+        }
+      },
+      "scrollWidth": 390
+    },
+    "390-dark-uk": {
+      "cases": {
+        "stale": {
+          "rows": 8,
+          "height": 201,
+          "toolRows": 8,
+          "mcpRows": 1,
+          "mcpChips": 2,
+          "argsOmittedRows": 0,
+          "argsOmittedMentions": 0,
+          "collapsed": {
+            "count": 55,
+            "text": "55 попередніх кроків"
+          },
+          "collapsedLines": 1,
+          "duplicates": 0,
+          "ids": [
+            "toolu_demo_052",
+            "toolu_demo_053",
+            "toolu_demo_054",
+            "toolu_demo_055",
+            "toolu_demo_056",
+            "toolu_demo_057",
+            "toolu_demo_058",
+            "toolu_demo_059"
+          ]
+        },
+        "current": {
+          "rows": 0,
+          "height": 0,
+          "toolRows": 0,
+          "mcpRows": 0,
+          "mcpChips": 0,
+          "argsOmittedRows": 0,
+          "argsOmittedMentions": 0,
+          "collapsed": null,
+          "collapsedLines": 0,
+          "duplicates": 0,
+          "ids": []
+        }
+      },
+      "scrollWidth": 390
+    }
+  },
+  "failures": []
+}

@@ -6518,3 +6518,125 @@ describe("codex tool rows on a phone", () => {
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+
+/* #1959: the live-turn overlay at phone width, against the two transcript
+   states that decide what it paints. The defect the operator photographed is a
+   rendering one — dozens of "Bash · arguments omitted" and "viewer ·
+   create_pipeline · arguments omitted" rows under the canonical cards — so it
+   is measured where rows have geometry, over the same long turn the DOM tests
+   use (`liveTurnLongTurn.fixture.ts`): sixty calls, long Viewer MCP names,
+   failures, shed arguments, one still running.
+
+     CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+       bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "live turn rows"
+
+   `LIVE_ROWS_CAPTURE_PHASE=before` records the wall without asserting it (run
+   it against the overlay as it was); the default `after` phase holds the
+   verdicts. PNGs go to the directory named by `LIVE_ROWS_PNG_DIR` — they are
+   never committed — and the readings to `evidence/live-turn-rows/<phase>.json`. */
+describe("live turn rows on a phone", () => {
+  /* What the operator can see of the overlay: how many rows it paints, what
+     the collapsed line says, whether any row is a bare "arguments omitted",
+     and whether a live row repeats a call the transcript below already shows. */
+  const measureOverlay = `(() => {
+    const phrases = ${JSON.stringify([en["feed.liveToolArgsOmitted"], translate("uk", "feed.liveToolArgsOmitted")])};
+    const read = (section) => {
+      const overlay = section.querySelector("[data-live-rows-overlay]");
+      const transcript = section.querySelector("[data-live-rows-transcript]");
+      const rows = [...overlay.querySelectorAll("[data-live-turn]")];
+      const collapsed = overlay.querySelector("[data-live-turn-earlier]");
+      const text = overlay.textContent || "";
+      const ids = rows.map(row => row.getAttribute("data-live-turn-item-id")).filter(Boolean);
+      const canonical = new Set([...transcript.querySelectorAll("[data-tool-row], [data-testid=mcp-call-card]")]
+        .flatMap(node => (node.textContent || "").trim() ? [(node.textContent || "").trim()] : []));
+      const box = overlay.getBoundingClientRect();
+      return {
+        rows: rows.length,
+        height: Math.round(box.height),
+        toolRows: rows.filter(row => row.hasAttribute("data-live-tool")).length,
+        mcpRows: overlay.querySelectorAll("[data-live-mcp]").length,
+        mcpChips: overlay.querySelectorAll("[data-live-mcp-link]").length,
+        argsOmittedRows: rows.filter(row => phrases.some(phrase => (row.textContent || "").includes(phrase))).length,
+        argsOmittedMentions: phrases.reduce((total, phrase) => total + text.split(phrase).length - 1, 0),
+        collapsed: collapsed ? { count: Number(collapsed.getAttribute("data-live-turn-earlier")), text: (collapsed.textContent || "").trim() } : null,
+        collapsedLines: overlay.querySelectorAll("[data-live-turn-earlier]").length,
+        /* A live row that repeats a canonical row is the duplicate the
+           operator reads as junk: both name the same call. */
+        duplicates: rows.filter(row => canonical.has((row.textContent || "").trim())).length,
+        ids,
+      };
+    };
+    const out = {};
+    for (const section of document.querySelectorAll("[data-live-rows-case]")) {
+      out[section.getAttribute("data-live-rows-case")] = read(section);
+    }
+    return { cases: out, scrollWidth: document.documentElement.scrollWidth };
+  })()`;
+
+  browserTest("the overlay is a bounded tail, and nothing at all once the transcript carries the calls", async () => {
+    const phase = process.env.LIVE_ROWS_CAPTURE_PHASE === "before" ? "before" : "after";
+    const out = path.resolve(`.artifacts/live-turn-rows/${phase}`);
+    const pngDir = process.env.LIVE_ROWS_PNG_DIR ?? "/var/tmp/llv-live-rows-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/liveTurnRowsEvidence.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const shots: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 390, height: 1400 }, "dark", lang);
+        try {
+          await page.locator("[data-live-turn-evidence]").waitFor();
+          await page.waitForTimeout(150);
+          const reading = await page.evaluate(measureOverlay) as {
+            cases: Record<string, { rows: number; argsOmittedRows: number; argsOmittedMentions: number; mcpRows: number; mcpChips: number; collapsed: { count: number; text: string } | null; collapsedLines: number; duplicates: number }>;
+            scrollWidth: number;
+          };
+          const label = `390-dark-${lang}`;
+          frames[label] = reading;
+          for (const section of ["stale", "current"] as const) {
+            const name = `${section}-${label}-${phase}.png`;
+            await page.locator(`[data-live-rows-case=${section}]`).screenshot({ path: path.join(pngDir, name) });
+            shots.push(name);
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          if (phase !== "after") continue;
+          const stale = reading.cases.stale!;
+          const current = reading.cases.current!;
+          /* The tail is bounded, and what it drops it counts — once. */
+          if (stale.rows > 8) failures.push(`${label}: the overlay painted ${stale.rows} rows`);
+          if (!stale.rows) failures.push(`${label}: the overlay painted no tail at all`);
+          if (stale.collapsedLines !== 1) failures.push(`${label}: ${stale.collapsedLines} collapsed lines`);
+          if (!stale.collapsed?.count) failures.push(`${label}: the collapsed line counts nothing`);
+          /* No wall of "arguments omitted", in either language. */
+          if (stale.argsOmittedRows || stale.argsOmittedMentions) {
+            failures.push(`${label}: ${stale.argsOmittedRows} rows / ${stale.argsOmittedMentions} mentions of shed arguments`);
+          }
+          /* A Viewer MCP row reads like its canonical card, chips and all. */
+          if (!stale.mcpRows) failures.push(`${label}: no MCP row survived into the tail`);
+          if (!stale.mcpChips) failures.push(`${label}: the MCP rows carry no entity chips`);
+          /* And once the transcript carries the calls, the overlay is silent. */
+          if (current.rows || current.collapsedLines) {
+            failures.push(`${label}: the overlay painted ${current.rows} rows beside a current transcript`);
+          }
+          if (stale.duplicates || current.duplicates) {
+            failures.push(`${label}: ${stale.duplicates + current.duplicates} live rows repeat a canonical row`);
+          }
+          if (reading.scrollWidth > 390) failures.push(`${label}: the document scrolls sideways (${reading.scrollWidth} > 390)`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/live-turn-rows", { recursive: true });
+    fs.writeFileSync(`evidence/live-turn-rows/${phase}.json`, `${JSON.stringify({ phase, shots, frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
+});

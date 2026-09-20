@@ -8,6 +8,9 @@ import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { hhmm } from "@/components/utils";
 import { formatDuration } from "@/components/feed/duration";
 
+import { createFeedSession, type ToolEvent } from "@/components/feed/parse";
+import { McpCallCard } from "@/components/runtime/McpCallCard";
+
 import { LiveTurnRows } from "./LiveTurnRows";
 
 /**
@@ -111,17 +114,81 @@ test("a Codex file change reads like its canonical apply_patch row: the touched 
   expect(row.textContent).toContain("a.ts");
 });
 
-test("a tool row whose arguments were bounded away still names the tool and says so", () => {
+test("a tool row whose arguments were bounded away is counted, never listed", () => {
+  /* It has nothing left but its own name, and a list of those is the wall the
+     operator photographed. The collapsed line is where such a call belongs. */
   const host = mount([
     {
       itemId: "toolu_old", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: AT,
       tool: { name: "Grep", engine: "claude", status: "ok", args: {}, argsOmitted: true },
     },
   ]);
-  const row = host.querySelector<HTMLElement>("[data-live-tool]")!;
-  expect(row.dataset.liveTool).toBe("Grep");
-  expect(row.textContent).toContain("arguments omitted");
+  expect(host.querySelector("[data-live-tool]")).toBeNull();
+  expect(host.textContent).not.toContain("arguments omitted");
+  expect(host.querySelector("[data-live-turn-earlier]")?.getAttribute("data-live-turn-earlier")).toBe("1");
 });
+
+/* Issue #1959, acceptance 3: a Viewer MCP call's canonical row is an
+   McpCallCard, not a ToolLine, so the live row has to read like that card and
+   not like "viewer · create_pipeline". Both surfaces are rendered here over the
+   SAME call, in the state the card is in while the call is still out (no result
+   yet), and compared line for line. */
+const MCP_CASES = [
+  /* A call whose entity ids only the RESULT will carry: neither surface can
+     link one yet, and both show none. */
+  { tool: "create_pipeline", args: { task: "Bound the live overlay to its tail", repoDir: "/workspace/demo/viewer" }, chips: 0 },
+  /* Calls whose arguments already name the entities: both surfaces link them. */
+  { tool: "link_task_to_pipeline", args: { taskId: "task-demo-4417", pipelineId: "pipeline-demo-2208" }, chips: 2 },
+  { tool: "update_task", args: { taskId: "task-demo-4417", status: "assigned" }, chips: 1 },
+] as const;
+
+function canonicalMcpEvent(tool: string, args: Record<string, unknown>): ToolEvent {
+  const line = JSON.stringify({
+    type: "assistant",
+    timestamp: AT,
+    message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_${tool}`, name: `mcp__viewer__${tool}`, input: args }] },
+  });
+  const items = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" }).feed([line], 0, true).items;
+  const event = items.map(({ item }) => item).find((item): item is ToolEvent => item.kind === "tool");
+  if (!event?.mcp) throw new Error(`the parser produced no MCP row for ${tool}`);
+  return event;
+}
+
+const chipsOf = (host: HTMLElement, selector: string) => {
+  const found = host.querySelectorAll(selector);
+  const out: string[] = [];
+  for (let index = 0; index < found.length; index += 1) {
+    const chip = found[index] as unknown as HTMLElement;
+    out.push(`${chip.textContent}@${chip.getAttribute("href") ?? ""}`);
+  }
+  return out;
+};
+
+for (const { tool, args, chips } of MCP_CASES) {
+  test(`a live ${tool} row carries the canonical card's own summary and entity chips`, () => {
+    const event = canonicalMcpEvent(tool, args);
+    const card = document.createElement("div");
+    document.body.append(card);
+    const cardRoot = createRoot(card);
+    roots.add(cardRoot);
+    flushSync(() => { cardRoot.render(<McpCallCard event={event} availableConversationIds={new Set()} />); });
+    const cardTitle = card.querySelector("[data-testid=mcp-call-card] summary > span.flex-1")!.textContent;
+
+    const live = mount([{
+      itemId: `toolu_${tool}`, text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,
+      tool: { name: `mcp__viewer__${tool}`, engine: "claude", status: "run", args },
+    }]);
+    const row = live.querySelector<HTMLElement>("[data-live-mcp]")!;
+    expect(row.dataset.liveMcp).toBe(tool);
+    expect(row.querySelector("span.flex-1")!.textContent).toBe(cardTitle);
+    expect(row.textContent).toContain("MCP · viewer");
+    /* The same entity chips, with the same labels and the same targets. */
+    expect(chipsOf(live, "[data-live-mcp-link]")).toEqual(chipsOf(card, "[data-testid^=mcp-link-]"));
+    expect(chipsOf(live, "[data-live-mcp-link]")).toHaveLength(chips);
+    /* And never the generic summarizer's line, which is what it used to read. */
+    expect(row.textContent).not.toContain(`viewer · ${tool}`);
+  });
+}
 
 test("a call whose result the journal's bound dropped reads as finished with its outcome omitted: no spinner, no check, no error styling", () => {
   const host = mount([
