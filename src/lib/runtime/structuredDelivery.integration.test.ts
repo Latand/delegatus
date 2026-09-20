@@ -2196,7 +2196,7 @@ test("runtime recovery drains one durable synchronization hold into one engine c
     },
   }, registry);
   expect(registry.snapshot().heldDeliveries[held[0]!.id]).toMatchObject({
-    state: "delivery-uncertain",
+    state: "assigned",
     clientMessageId: request.clientMessageId,
     text: request.text,
   });
@@ -2209,16 +2209,14 @@ test("runtime recovery drains one durable synchronization hold into one engine c
     host: observableFakeHost(new FakeEngineHost(ledger)),
   }], { registry, client });
 
-  await client.command({
-    kind: held[0]!.command.kind,
-    operationId: held[0]!.command.operationId,
-    conversationId: conversation.id,
-    idempotencyKey: request.clientMessageId,
-    text: request.text,
-    contentDigest: structuredContentDigest({ text: request.text, images: [] }),
-    policy: held[0]!.command.policy,
-    turnId: held[0]!.command.turnId,
-  });
+  await drainHeldDeliveries(conversation.id, {
+    async deliver({ delivery, path: deliveryPath, clientMessageId }) {
+      return await deliverHeldStructuredMessage({
+        conversationId: conversation.id, path: deliveryPath, deliveryId: delivery.id,
+        clientMessageId, text: delivery.text, command: delivery.command,
+      }, { enabled: () => true, client: () => client, registry: () => registry, kick: kickStructuredDeliveryQueue }) ?? "delivery-uncertain";
+    },
+  }, registry);
   await kickStructuredDeliveryQueue();
 
   expect(ledger.writes).toMatchObject([{

@@ -282,7 +282,12 @@ function heldOutcomeDuringRuntimeSynchronization(
   request: HeldStructuredMessageRequest,
   registry: AgentRegistry,
 ): HeldStructuredMessageOutcome {
-  if (persistedCurrentOwner(request, registry)?.kind !== "legacy") return "delivery-uncertain";
+  const owner = persistedCurrentOwner(request, registry);
+  // This path runs before command dispatch. Let the coordinator requeue a
+  // newly claimed attempt; when reconciling an older uncertain attempt it
+  // retains that uncertainty instead of treating a failed read as a retry.
+  if (owner?.kind === "structured") return "held";
+  if (owner?.kind !== "legacy") return "delivery-uncertain";
   return requiresStructuredHeldCommand(request) ? "failed" : null;
 }
 
