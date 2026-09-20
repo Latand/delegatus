@@ -27,6 +27,8 @@ bun scripts/role-eval.ts score "$RUN_ROOT" quota-window-A
 
 Preparation/init refuse existing artifacts. Plan validates current dataset bytes and durably reserves one intent/receipt before exporting a Viewer request. Planned, admitted and unknown receipts fence every next request. Replanning yields only the original payload with `recoveryOnly:true`. Root dispatches and recovers through Viewer; the harness never dispatches or schedules models. Ingest forbids outcome regression and changes to key, payload, observed model, conversation or completed head. Every stage needs a fresh conversation.
 
+Initialization persists a unique run ID once; every planner, assessor, builder and reviewer request key includes it. Independent runs remain distinct even with identical workspaces, dataset and harness head. Reopening a run retains its ID, keys and payloads. Preserve older ledgers without a run ID for original-key Viewer readback; initialize a separate run for new work.
+
 Request JSON contains `models`, `identity:{taskId,parentConversationId,src,cwd}` and optional `stage`. Model entries follow `ModelEvidence`; their root-produced discovery file contains `engine`, `runtimeVersion`, `models:[{launchAlias,resolvedModel,effort}]`. Missing supported exact-model evidence blocks planning. Sonnet uses engine `claude`, launch alias `sonnet`, requested/observed model `sonnet-5`; registry labels alone cannot prove runtime identity.
 
 Generate all briefs before candidate work:

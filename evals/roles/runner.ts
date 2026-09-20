@@ -132,7 +132,7 @@ export function initRun(dataset: PilotDataset, root: string, harnessHead: string
     privateRoot(root);
     if (!COMMIT.test(harnessHead) || git(path.resolve(ROOT,"../.."),["rev-parse","HEAD"]) !== harnessHead)
         throw new Error("exact harness head required");
-    const run: RootRun = { version: "role-eval.run.v1", datasetHash: hash(dataset), harnessHead, intents: [], receipts: [] };
+    const run: RootRun = { version: "role-eval.run.v1", runId: crypto.randomBytes(16).toString("hex"), datasetHash: hash(dataset), harnessHead, intents: [], receipts: [] };
     fs.writeFileSync(path.join(root, "run.json"), JSON.stringify(run, null, 2), { flag: "wx", mode: 0o600 });
     fs.writeFileSync(path.join(root, "artifact.key"), crypto.randomBytes(32), { flag: "wx", mode: 0o600 });
     return run;
@@ -148,6 +148,7 @@ function withRunLock<T>(root:string,operation:()=>T):T {
 }
 function sameRun(dataset: PilotDataset, run: RootRun) { requireValid(dataset); if (run.datasetHash !== hash(dataset))
     throw new Error("run dataset bytes changed"); if(git(path.resolve(ROOT,"../.."),["rev-parse","HEAD"])!==run.harnessHead)throw new Error("run harness head changed");
+    if(!/^[a-f0-9]{32}$/.test(run.runId??""))throw new Error("run identity missing; preserve old receipts and initialize a separate run");
     if(run.intents.length!==run.receipts.length || run.intents.some(i=>!run.receipts.some(r=>r.cellId===i.cellId&&r.clientRequestId===i.clientRequestId&&r.payloadHash===i.payloadHash)))throw new Error("run contains an intent without its original receipt"); }
 export function recover(prior: TrialReceipt[], receipt: TrialReceipt, intent: LaunchIntent): TrialReceipt[] {
     if(!["planned","unknown","admitted","blocked","completed"].includes(receipt.status))throw new Error("unknown receipt outcome");
@@ -293,7 +294,7 @@ function planUnlocked(dataset: PilotDataset, root: string, models: ModelEvidence
     }
     if (git(identity.cwd, ["rev-parse", "HEAD"]) !== (stage?.kind === "reviewer" ? run.receipts.find(r => r.cellId === stage.candidateCellId)!.candidateHead : f.baseCommit) || git(identity.cwd, ["status", "--porcelain"]))
         throw new Error("launch workspace differs from pinned base");
-    const clientRequestId = "role-eval-" + hash([run.datasetHash, run.harnessHead, cellId]).slice(0, 40);
+    const clientRequestId = "role-eval-" + hash([run.runId, run.datasetHash, run.harnessHead, cellId]).slice(0, 40);
     const role = stage?.kind === "planner" ? "architect" : stage ? "reviewer" : "builder";
     const roleParams = role === "reviewer" ? { mode: "fresh", parallelN: 1, lens: "correctness", diffSource: stage?.kind === "brief-assessor" ? "Frozen brief " + briefHash : "Committed candidate " + git(identity.cwd, ["rev-parse", "HEAD"]) } : role === "architect" ? { mode: "design" } : { mode: "plain" };
     const payload = { clientRequestId, cwd: identity.cwd, prompt, title: "Role evaluation " + cellId, taskId: identity.taskId, parentConversationId: identity.parentConversationId, ...(identity.src ? { src: identity.src } : {}), engine: model.engine, model: model.launchAlias, effort: model.effort, role, roleParams, ...(stage?.kind === "reviewer" ? { reviews: run.receipts.find(r => r.cellId === stage.candidateCellId)!.conversationId } : {}), allowSubagents: false };

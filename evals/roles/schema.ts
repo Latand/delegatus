@@ -76,6 +76,8 @@ export interface TrialReceipt {
 }
 export interface RootRun {
     version: "role-eval.run.v1";
+    /** Created once by initRun; all launches in this run retain this identity. */
+    runId: string;
     datasetHash: string;
     harnessHead: string;
     intents: LaunchIntent[];

@@ -12,8 +12,11 @@ export async function gradeRendered(workspace: string, output: string) {
     if (!Number.isInteger(count) || count < 2 || count > 40)
         throw new Error("invalid UI vector");
     const target = String(count - 1);
-    fs.writeFileSync(entry, `import React, {useState} from ${JSON.stringify(path.resolve("node_modules/react"))};
-import {createRoot} from ${JSON.stringify(path.resolve("node_modules/react-dom/client"))};
+    // The candidate may own copied dependencies. Use that same React identity
+    // for the renderer and its JSX runtime, including the committed-export path.
+    const candidateLink = path.join(workspace, "node_modules");
+    fs.writeFileSync(entry, `import React, {useState} from ${JSON.stringify(path.join(candidateLink, "react"))};
+import {createRoot} from ${JSON.stringify(path.join(candidateLink, "react-dom/client"))};
 import {ErrorRow} from ${JSON.stringify(path.join(workspace, "case/ErrorRow.tsx"))};
 const uk=new URLSearchParams(location.search).get("lang")==="uk";
 const labels=uk?{action:"Закрити",retry:"Повторити",error:"Дію відхилено. Спробуйте ще раз."}:{action:"Close",retry:"Retry",error:"Action rejected. Please retry."};
@@ -22,10 +25,9 @@ window.probe={calls:[], resolve:null,reject:null,reorder:null};
 function App(){const [rows,setRows]=useState(initial);window.probe.reorder=()=>setRows(old=>[...old].reverse());return <ErrorRow rows={rows} labels={labels} perform={id=>{window.probe.calls.push(id);return new Promise((resolve,reject)=>{window.probe.resolve=resolve;window.probe.reject=reject;});}}/>;}
 createRoot(document.getElementById("root")).render(<App/>);`);
     const dependencyLink = path.join(output, "node_modules");
-    const candidateLink=path.join(workspace,"node_modules");
     const suppliedDependencies=fs.existsSync(candidateLink);
     if(!suppliedDependencies)fs.symlinkSync(path.resolve("node_modules"),candidateLink,"dir");
-    fs.symlinkSync(path.resolve("node_modules"), dependencyLink, "dir");
+    fs.symlinkSync(fs.realpathSync(candidateLink), dependencyLink, "dir");
     let server: Awaited<ReturnType<typeof serveEvidenceFixture>>;
     try {
         server = await serveEvidenceFixture(output, entry);
