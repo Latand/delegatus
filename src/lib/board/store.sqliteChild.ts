@@ -44,6 +44,19 @@ if (mode === "import") {
       },
     },
   });
+} else if (mode === "hold-database-lock") {
+  // Holds the SQLite file lock the way a writer mid-checkpoint does: a
+  // read-only connection opened against it raises SQLITE_BUSY at once, which
+  // is what the board's import-marker probe meets under cross-process load.
+  const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+  const held = new Database(filePath, { strict: true });
+  held.exec("PRAGMA locking_mode = EXCLUSIVE;");
+  held.exec("BEGIN IMMEDIATE");
+  held.exec("UPDATE state_collections SET revision = revision WHERE collection = 'board'");
+  fs.writeFileSync(arg!, "held");
+  Bun.sleepSync(Number(gate ?? 0));
+  held.exec("ROLLBACK");
+  held.close();
 } else {
   throw new Error(`unknown board store child mode: ${mode}`);
 }

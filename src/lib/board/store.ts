@@ -169,6 +169,42 @@ function isBoardRow(value: unknown): value is BoardRow {
   return typeof row.project === "string" && row.project.length > 0 && projectState(row.state);
 }
 
+/* The shared import reader opens read-only with `busy_timeout = 0` and runs
+   its SELECT once (sqliteStateStore.ts), so a writer holding the file lock
+   makes the import-marker probe below raise SQLITE_BUSY on the first touch of
+   the board in a process. The board.json store queued on its own write lock
+   and never dropped that write, so the probe retries on the same bounded
+   schedule the collection's own writes use, in application code, with the
+   connection's timeout left at zero. */
+const BOARD_BUSY_ATTEMPTS = 6_000;
+const BOARD_BUSY_WAIT_MS = 5;
+const BOARD_BUSY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+let boardBusyAttemptsForTests: number | null = null;
+
+/** Test seam: bounds the probe's retry so a lock nobody releases fails fast. */
+export function setBoardBusyRetryForTests(attempts: number | null): void {
+  boardBusyAttemptsForTests = attempts;
+}
+
+function isBusyError(error: unknown): boolean {
+  return /database is (?:locked|busy)|SQLITE_BUSY/i.test(error instanceof Error ? error.message : String(error));
+}
+
+function readBoardImportMarker(database: string): StateImportRecord | null {
+  const attempts = boardBusyAttemptsForTests ?? BOARD_BUSY_ATTEMPTS;
+  let busy: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return readStateImport(database, BOARD_COLLECTION);
+    } catch (error) {
+      if (!isBusyError(error)) throw error;
+      busy = error;
+      Atomics.wait(BOARD_BUSY_SLEEP, 0, 0, BOARD_BUSY_WAIT_MS);
+    }
+  }
+  throw new BoardStoreError(BOARD_BUSY, { cause: busy });
+}
+
 const boardCollections = new Map<string, SqliteStateCollection<BoardRow>>();
 
 function openBoardCollection(database: string): SqliteStateCollection<BoardRow> {
@@ -347,6 +383,10 @@ function asBoardStoreError<R>(operation: () => R): R {
   } catch (error) {
     if (error instanceof BoardStoreError) throw error;
     if (error instanceof FileTransactionBusyError) throw new BoardStoreError(error.message, { cause: error });
+    /* A SQLITE_BUSY that escaped the collection is that same failure wearing
+       another class: the board route answers the store's documented error for
+       it, never a raw SQLiteError the caller cannot classify. */
+    if (isBusyError(error)) throw new BoardStoreError(BOARD_BUSY, { cause: error });
     throw error;
   }
 }
@@ -357,7 +397,7 @@ function asBoardStoreError<R>(operation: () => R): R {
 function boardCollection(filePath: string, purpose: "read" | "write"): SqliteStateCollection<BoardRow> | null {
   const database = legacyDatabasePath(filePath);
   if (boardCollections.has(database)) return boardCollections.get(database)!;
-  if (!readStateImport(database, BOARD_COLLECTION)) {
+  if (!readBoardImportMarker(database)) {
     if (!legacyImportAllowed(filePath)) {
       if (purpose === "read") return null;
       throw new BoardStoreError("board state is waiting for release promotion");
@@ -649,6 +689,45 @@ function mergedBoards(states: readonly BoardProjectStateV1[]): BoardProjectState
   return { ...ordered.at(-1)!, pathAliases: normalizedAliases, explicitManual, prefs };
 }
 
+/** Group a catalog's migrations by the project each source finally lands on.
+
+    The catalog hands this store chains: `migrationPlan` stops walking one at
+    an intermediate that has conversations of its own, and durable alias
+    candidates are merged into the same map afterwards, so a single call can
+    carry both `A -> B` and `B -> C`. Every source has to reach the END of its
+    chain before the groups are formed. Folding group by group over a snapshot
+    that never sees the earlier groups' edits strands A's placements on a
+    project the catalog just migrated away from, and it can name B in the same
+    patch as both a written row and a deleted one, which the collection rejects
+    outright. Resolving first also makes the outcome independent of the map's
+    iteration order.
+
+    A cycle names no final target, so its members — and anything whose chain
+    runs into it — are left intact and the call reports incomplete, which is
+    the store's standing answer when a fold cannot preserve its invariants. */
+function resolvedMigrations(migrations: ReadonlyMap<string, string>): {
+  sourcesByTarget: Map<string, string[]>;
+  complete: boolean;
+} {
+  const moves = new Map([...migrations].filter(([source, target]) => source !== target));
+  const sourcesByTarget = new Map<string, string[]>();
+  let complete = true;
+  for (const source of moves.keys()) {
+    let target = moves.get(source)!;
+    const seen = new Set([source]);
+    while (moves.has(target) && !seen.has(target)) {
+      seen.add(target);
+      target = moves.get(target)!;
+    }
+    if (moves.has(target)) {
+      complete = false;
+      continue;
+    }
+    sourcesByTarget.set(target, [...(sourcesByTarget.get(target) ?? []), source]);
+  }
+  return { sourcesByTarget, complete };
+}
+
 /** Move durable board preferences along with catalog project-key repairs.
     Sources remain intact whenever a merge cannot preserve board invariants. */
 export function migrateBoardProjects(
@@ -658,22 +737,19 @@ export function migrateBoardProjects(
   filePath = boardFileForTests ?? statePath("board.json"),
 ): boolean {
   if (migrations.size === 0) return true;
+  const plan = resolvedMigrations(migrations);
   return writeBoardState(filePath, (value) => {
     const changed: Record<string, BoardProjectStateV1> = {};
     const deleted: string[] = [];
-    let complete = true;
-    const sourcesByTarget = new Map<string, string[]>();
-    for (const [sourceProject, targetProject] of migrations) {
-      if (sourceProject === targetProject) continue;
-      sourcesByTarget.set(targetProject, [...(sourcesByTarget.get(targetProject) ?? []), sourceProject]);
-    }
-    for (const [targetProject, sourceProjects] of sourcesByTarget) {
-      const sources = sourceProjects.flatMap((project) => value.projects[project] ? [value.projects[project]!] : []);
+    let complete = plan.complete;
+    for (const [targetProject, sourceProjects] of plan.sourcesByTarget) {
+      const present = sourceProjects.filter((project) => value.projects[project]);
+      const sources = present.map((project) => value.projects[project]!);
       if (sources.length === 0) continue;
       const target = value.projects[targetProject];
       if (!target && sources.length === 1) {
         changed[targetProject] = sources[0]!;
-        deleted.push(...sourceProjects);
+        deleted.push(...present);
         continue;
       }
       try {
@@ -693,7 +769,7 @@ export function migrateBoardProjects(
           sources,
         );
         if (!(target && sameReduced(target, next) && sameCausalHistory(target, next))) changed[targetProject] = next;
-        deleted.push(...sourceProjects);
+        deleted.push(...present);
       } catch {
         complete = false;
         continue;

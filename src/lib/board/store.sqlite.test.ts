@@ -19,6 +19,7 @@ import {
   migrateBoardProjects,
   mutateBoard,
   patchBoard,
+  setBoardBusyRetryForTests,
 } from "./store";
 
 /* #1870 slice 3: the board store runs on the `board` collection of the
@@ -245,6 +246,48 @@ describe("writes after the import", () => {
     expect(boardFor("legacy", file).revision).toBe(0);
   });
 
+  /* The catalog hands this store chains: migrationPlan stops walking at an
+     intermediate that has conversations of its own, so one plan holds both
+     `source -> middle` and `middle -> final`. Every placement has to reach the
+     end of the chain, and no project may be written and deleted in the same
+     patch — the collection rejects that outright. */
+  test("a chained migration folds through to the final target, with and without a row on the intermediate", () => {
+    for (const middleHasRow of [true, false]) {
+      const { file, db } = sandbox();
+      const projects: Record<string, unknown> = {
+        source: projectState(["/from-source"]),
+        final: projectState(["/held"]),
+        bystander: projectState(["/untouched"]),
+        ...(middleHasRow ? { middle: projectState(["/from-middle"]) } : {}),
+      };
+      writeLegacy(file, { projects });
+      boardFor("final", file);
+      const bystander = storedRow(db, "bystander")!;
+
+      expect(migrateBoardProjects(new Map([["source", "middle"], ["middle", "final"]]), file)).toBe(true);
+
+      expect(boardFor("final", file).prefs.manual.sort()).toEqual(
+        middleHasRow ? ["/from-middle", "/from-source", "/held"] : ["/from-source", "/held"],
+      );
+      expect(storedRow(db, "source")).toBeNull();
+      expect(storedRow(db, "middle")).toBeNull();
+      expect(storedRow(db, "bystander")).toEqual(bystander);
+    }
+  });
+
+  /* A cycle names no final target, so nothing is folded and the call reports
+     incomplete rather than picking a winner by iteration order. */
+  test("a migration cycle leaves both projects intact and reports incomplete", () => {
+    const { file, db } = sandbox();
+    writeLegacy(file, { projects: { one: projectState(["/one"]), two: projectState(["/two"]) } });
+    boardFor("one", file);
+    const before = [storedRow(db, "one")!, storedRow(db, "two")!];
+
+    expect(migrateBoardProjects(new Map([["one", "two"], ["two", "one"]]), file)).toBe(false);
+
+    expect([storedRow(db, "one"), storedRow(db, "two")]).toEqual(before);
+  });
+
   test("the retired-key history cap holds across a reload from SQLite", () => {
     const { file } = sandbox();
     writeLegacy(file, { projects: {} });
@@ -366,6 +409,50 @@ describe("cross-process durability", () => {
     }));
 
     expect(outputs.map((output) => output.manual)).toEqual([12, 12]);
+  });
+
+  /* The import-marker probe runs on a read-only connection opened with
+     `busy_timeout = 0`, so a writer that holds the file lock makes it raise
+     SQLITE_BUSY on the first touch of the board in a process. The pre-#1870
+     store queued on its own write lock and never dropped that write, so the
+     probe retries the same bounded way every other write here does. */
+  test("a write whose import probe meets a held file lock waits for it instead of failing", async () => {
+    const { dir, file } = sandbox();
+    writeLegacy(file, { projects: { repo: projectState(["/a"]) } });
+    // Imported by a child, so this process has never opened the collection.
+    expect(await spawnChild(["import", file]).exited).toBe(0);
+    const held = path.join(dir, "held");
+    const holder = spawnChild(["hold-database-lock", path.join(dir, "state.sqlite"), held, "400"]);
+    await waitForFile(held);
+
+    // Blocks inside the probe's retry until the holder above lets go.
+    expect(mutateBoard("repo", 3, [{ kind: "restore", path: "/b", placement: "manual" }], file))
+      .toMatchObject({ ok: true, applied: true });
+
+    expect(await holder.exited).toBe(0);
+    expect(boardFor("repo", file).prefs.manual).toEqual(["/a", "/b"]);
+  });
+
+  test("a probe that never gets the file lock reports the store's busy failure, not a raw SQLite error", async () => {
+    const { dir, file } = sandbox();
+    writeLegacy(file, { projects: { repo: projectState(["/a"]) } });
+    expect(await spawnChild(["import", file]).exited).toBe(0);
+    const held = path.join(dir, "held");
+    const holder = spawnChild(["hold-database-lock", path.join(dir, "state.sqlite"), held, "4000"]);
+    await waitForFile(held);
+
+    setBoardBusyRetryForTests(3);
+    try {
+      let raised: unknown;
+      try { boardFor("repo", file); } catch (error) { raised = error; }
+      expect(raised).toBeInstanceOf(BoardStoreError);
+      expect((raised as BoardStoreError).message).toBe("board state is busy");
+      expect(String((raised as BoardStoreError).cause)).toMatch(/database is locked|SQLITE_BUSY/i);
+    } finally {
+      setBoardBusyRetryForTests(null);
+      holder.kill();
+      await holder.exited;
+    }
   });
 });
 
