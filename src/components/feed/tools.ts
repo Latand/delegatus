@@ -100,9 +100,23 @@ function chip(value: string, label?: string): ArgChip {
   return label ? { label, value: redacted } : { value: redacted };
 }
 
-/* Strips launcher boilerplate (PATH exports, `cd … &&`, the zsh wrapper, an
-   outer quote pair, heredoc bodies) from a shell command for the summary line.
-   The full command is retained separately by the caller for the expanded view. */
+/* The leading boilerplate a one-line label folds away so the real command reads
+   first (#1938): PATH exports, `cd … &&`, a shell wrapper (`sh -c`, `bash -lc`,
+   `/usr/bin/zsh -lc`), a proxy in front of one (`<tool> proxy sh -c '…'`), the
+   outer quote pair such a wrapper leaves behind, and the environment
+   assignments in front of the program (`env A=1 B=2 cmd`, `A=1 cmd`).
+
+   Purely lexical and bounded: nothing here evaluates a shell, every pattern is
+   anchored at the start, and the loop ends as soon as a pass changes nothing,
+   which it must because every pass only ever shortens the string. */
+const SHELL_WRAPPER = /^\/?(?:[\w.-]+\/)*(?:ba|z|da|k|c)?sh\s+-[a-zA-Z]*c\s+/;
+const PROXY_WRAPPER = /^[\w.@-]+\s+proxy\s+(?=\/?(?:[\w.-]+\/)*(?:ba|z|da|k|c)?sh\s+-[a-zA-Z]*c\s)/;
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s'"]*)\s+/;
+
+/* Strips that boilerplate from a shell command for the summary line. The full
+   command is retained separately by the caller for the expanded view, and a
+   fold that consumes everything (an unfamiliar shape the patterns read wrong)
+   falls back to the raw command rather than to an empty label. */
 export function cleanShellCommand(cmd: string): string {
   let body = cmd;
   let prev: string;
@@ -110,14 +124,18 @@ export function cleanShellCommand(cmd: string): string {
     prev = body;
     body = body.replace(/^export PATH=[^;]+;\s*/, "");
     body = body.replace(/^cd\s+\S+\s*&&\s*/, "");
-    body = body.replace(/^\/usr\/bin\/zsh -lc\s+/, "");
+    body = body.replace(PROXY_WRAPPER, "");
+    body = body.replace(SHELL_WRAPPER, "");
     body = body.replace(/^(["'])([\s\S]*)\1$/, (whole: string, quote: string, inner: string) =>
       new RegExp(`(?<!\\\\)${quote}`).test(inner) ? whole : inner,
     );
+    // `env` counts as boilerplate only when assignments actually follow it.
+    if (ENV_ASSIGNMENT.test(body.replace(/^env\s+/, ""))) body = body.replace(/^env\s+/, "");
+    body = body.replace(ENV_ASSIGNMENT, "");
   } while (body !== prev);
   const heredoc = body.match(/^([\w./-]+(?:\s+-)?)\s*<<\s*['"]?(\w+)['"]?/);
   if (heredoc) body = `${heredoc[1].trim()} «heredoc»`;
-  return body.replace(/\s+/g, " ").trim();
+  return body.replace(/\s+/g, " ").trim() || cmd.replace(/\s+/g, " ").trim();
 }
 
 const SHELL_TOOLS = new Set(["Bash", "exec_command", "shell", "local_shell", "run_command"]);
