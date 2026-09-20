@@ -6355,3 +6355,166 @@ describe("readable tool rows", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+
+/* #1938: Codex tool rows at phone width, beside Claude rows, in a real browser.
+   happy-dom lays nothing out, so the defect this case exists for — a row whose
+   label wrapped out of its own fixed-height box and painted over the row under
+   it — is only visible where boxes have geometry. The fixture
+   (`codexPhoneRows.fixture.tsx`) carries the same eight tool cases under both
+   engines: clean, failed, heredoc, wrapper-prefixed, env-prefixed, very long,
+   MCP and still running.
+
+     CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+       bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "codex tool rows"
+
+   `TOOL_ROW_CAPTURE_PHASE=before` records the defect without asserting it;
+   the default `after` phase holds the verdicts. PNGs go to the directory named
+   by `TOOL_ROW_PNG_DIR` so the pixels can be looked at before merging. */
+describe("codex tool rows on a phone", () => {
+  /* One row must contain its own text and never touch another row. Returned as
+     data (not thrown) so every frame is measured and the evidence file records
+     the whole matrix rather than the first failure. */
+  const measureRows = `(() => {
+    const rows = [...document.querySelectorAll("[data-tool-row]")];
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({
+      top: Math.max(a.top, b.top), left: Math.max(a.left, b.left),
+      right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom),
+    });
+    const empty = r => r.right - r.left < 0.5 || r.bottom - r.top < 0.5;
+    /* A clipped label is not an escape: \`truncate\` hides the overflow, but a
+       Range's rect ignores that, so each text rect is first cut down by every
+       ancestor that clips it. What survives is what the operator can see. */
+    const visible = (node, row) => {
+      let clip = null;
+      for (let el = node.parentElement; el; el = el.parentElement) {
+        const style = getComputedStyle(el);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = clip ? intersect(clip, box(el)) : box(el);
+        if (el === row) break;
+      }
+      return clip;
+    };
+    const textRects = row => {
+      const out = [];
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const clip = visible(node, row);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) {
+          if (raw.width === 0 || raw.height === 0) continue;
+          const rect = clip ? intersect(clip, raw) : { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom };
+          if (empty(rect)) continue;
+          out.push({ text: node.nodeValue.trim().slice(0, 60), rect });
+        }
+      }
+      return out;
+    };
+    /* What the operator sees is ink, not the layout box: a label that wraps out
+       of a fixed-height row keeps its row's box small and paints over the row
+       below it. So each row is measured by the union of its box and every
+       visible text rect inside it. */
+    const inked = rows.map(row => {
+      const base = box(row);
+      const ink = { ...base };
+      for (const { rect } of textRects(row)) {
+        ink.top = Math.min(ink.top, rect.top); ink.left = Math.min(ink.left, rect.left);
+        ink.right = Math.max(ink.right, rect.right); ink.bottom = Math.max(ink.bottom, rect.bottom);
+      }
+      return { base, ink, text: (row.textContent || "").trim().slice(0, 60) };
+    });
+    const disjoint = (a, b) => a.right <= b.left + 0.5 || b.right <= a.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5;
+    const overlaps = [];
+    for (let i = 0; i < inked.length; i++) for (let j = i + 1; j < inked.length; j++) {
+      if (disjoint(inked[i].ink, inked[j].ink)) continue;
+      overlaps.push({ a: i, b: j, aText: inked[i].text, bText: inked[j].text });
+    }
+    const escapes = [];
+    for (const [index, row] of rows.entries()) {
+      const r = box(row);
+      for (const { text, rect } of textRects(row)) {
+        if (rect.top >= r.top - 1 && rect.bottom <= r.bottom + 1 && rect.left >= r.left - 1 && rect.right <= r.right + 1) continue;
+        escapes.push({
+          row: index, text,
+          overflowY: Math.round(Math.max(0, rect.bottom - r.bottom, r.top - rect.top)),
+          overflowX: Math.round(Math.max(0, rect.right - r.right, r.left - rect.left)),
+        });
+        break;
+      }
+    }
+    const lineHeight = parseFloat(getComputedStyle(document.body).lineHeight) || 16;
+    const tall = inked.filter(row => row.ink.bottom - row.ink.top > lineHeight * 2.6)
+      .map(row => ({ text: row.text, height: Math.round(row.ink.bottom - row.ink.top) }));
+    return { rows: rows.length, overlaps, escapes, tall, scrollWidth: document.documentElement.scrollWidth };
+  })()`;
+
+  browserTest("rows stay one compact line and never overlap", async () => {
+    const phase = process.env.TOOL_ROW_CAPTURE_PHASE === "before" ? "before" : "after";
+    const out = path.resolve(`.artifacts/codex-phone-rows/${phase}`);
+    const pngDir = process.env.TOOL_ROW_PNG_DIR ?? "/var/tmp/llv-codex-rows-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/feed/__fixtures__/codexPhoneRows.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const shots: string[] = [];
+    try {
+      for (const width of [390, 1280]) {
+        for (const scheme of ["dark", "light"] as const) {
+          for (const lang of ["en", "uk"] as const) {
+            const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 1400 }, scheme, lang);
+            try {
+              await page.locator("[data-codex-phone-rows]").waitFor();
+              for (const state of ["collapsed", "expanded"] as const) {
+                if (state === "expanded") {
+                  /* Open every disclosure with real pointer input. Each node is
+                     pinned before the click: a live `:not([open])` locator can
+                     retarget between Playwright's check and the native toggle. */
+                  for (let round = 0; round < 10; round++) {
+                    for (const summary of await page.locator("details:not([open]) > summary").elementHandles()) {
+                      if (await summary.evaluate(el => !el.parentElement?.hasAttribute("open"))) await summary.click();
+                    }
+                    const folds = page.locator("[data-mobile-run-fold][aria-expanded=false], [data-mobile-run] > button[aria-expanded=false]");
+                    for (const fold of await folds.elementHandles()) await fold.click();
+                    await page.waitForTimeout(80);
+                    if (!(await page.locator("details:not([open]), [aria-expanded=false]").count())) break;
+                  }
+                }
+                await page.waitForTimeout(80);
+                const reading = await page.evaluate(measureRows) as {
+                  rows: number; overlaps: unknown[]; escapes: unknown[]; tall: unknown[]; scrollWidth: number;
+                };
+                const label = `${width}-${scheme}-${lang}-${state}`;
+                frames[label] = reading;
+                for (const engine of ["codex", "claude"] as const) {
+                  const name = `${engine}-${label}.png`;
+                  await page.locator(`[data-rows-engine=${engine}]`).screenshot({ path: path.join(pngDir, name) });
+                  shots.push(name);
+                }
+                if (phase !== "after") continue;
+                if (!reading.rows) failures.push(`${label}: the fixture rendered no tool rows`);
+                if (reading.overlaps.length) failures.push(`${label}: ${reading.overlaps.length} row pairs overlap — ${JSON.stringify(reading.overlaps[0])}`);
+                if (reading.escapes.length) failures.push(`${label}: ${reading.escapes.length} text runs escape their row — ${JSON.stringify(reading.escapes[0])}`);
+                if (reading.tall.length) failures.push(`${label}: ${reading.tall.length} rows are taller than one line — ${JSON.stringify(reading.tall[0])}`);
+                if (reading.scrollWidth > width) failures.push(`${label}: the document scrolls sideways (${reading.scrollWidth} > ${width})`);
+              }
+              if (pageErrors.length) failures.push(`${width}-${scheme}-${lang}: page errors ${pageErrors.join(" | ")}`);
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/codex-phone-rows", { recursive: true });
+    fs.writeFileSync(`evidence/codex-phone-rows/${phase}.json`, `${JSON.stringify({ phase, shots, frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});

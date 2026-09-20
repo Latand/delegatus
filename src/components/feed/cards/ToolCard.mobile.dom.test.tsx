@@ -127,11 +127,22 @@ test("phone: a lone failed exec renders closed with no body until tapped", () =>
   expect(isOpen(details)).toBe(false);
   expect(body(host)).toBeNull();
   expect(host.textContent).not.toContain("expected true to be false");
-  /* The line is still never quiet about the failure itself. */
+  /* The line is still never quiet about the failure itself — but it says so
+     with a left rule and a small chip carrying the exit code, not by colouring
+     and emboldening the command over four wrapped lines (#1938). */
   const line = host.querySelector("[data-mobile-tool-line]")!;
+  const cls = (el: Element | null) => el?.getAttribute("class") ?? "";
   expect(line.getAttribute("data-mobile-tool-line")).toBe("failed");
-  expect(line.getAttribute("class")).toContain("text-danger");
+  expect(cls(line)).toContain("border-l-2");
+  expect(cls(line)).toContain("border-danger");
+  expect(cls(line)).not.toContain("text-danger");
   expect(line.textContent).toContain("exit 3");
+  const label = line.querySelector("span.flex-1")!;
+  expect(cls(label)).toContain("truncate");
+  expect(cls(label)).toContain("text-secondary");
+  expect(cls(label)).not.toContain("font-semibold");
+  /* One trailing verdict: the exit code, carried by the danger chip itself. */
+  expect(line.querySelectorAll("span.text-danger")).toHaveLength(1);
   toggle(details, true);
   expect(body(host)).toBeTruthy();
   expect(host.textContent).toContain("expected true to be false");
