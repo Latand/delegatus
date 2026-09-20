@@ -137,3 +137,64 @@ test("startup adoption repairs a stale completed structured launch before draini
     await bindStructuredDeliveryQueue([], { registry, client: null });
   }
 });
+
+
+test("an unpublished staged host stays out of delivery resolution and is released on demotion", async () => {
+  const { retainUnpublishedStructuredLaunchHost, releaseStructuredDeliveryHostsForDemotion, hasStructuredDeliveryHost } = await import("./structuredDeliveryController");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-unpublished-release-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const key = { engine: "codex" as const, sessionId: crypto.randomUUID() };
+  let released = 0;
+  const host = { health: async () => ({ status: "idle" }) } as unknown as import("./structuredDeliveryController").StructuredDeliveryHost["host"];
+  const forget = retainUnpublishedStructuredLaunchHost({ key, host, registry, release: async () => { released++; } });
+  try {
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+    await releaseStructuredDeliveryHostsForDemotion();
+    await releaseStructuredDeliveryHostsForDemotion();
+    expect(released).toBe(1);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+  } finally {
+    forget();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("concurrent unpublished releases run once while runtime projection is unavailable", async () => {
+  const { retainUnpublishedStructuredLaunchHost, releaseStructuredDeliveryHost } = await import("./structuredDeliveryController");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-unpublished-outage-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const key = { engine: "codex" as const, sessionId: crypto.randomUUID() };
+  const owner = captureProcessIdentity(process.pid);
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: directory, transport: "structured", accountId: "test", launchProfile: emptyLaunchProfile({ cwd: directory, title: "Recover staged publication" }) });
+  if (begun.kind !== "created") throw new Error("fixture reservation failed");
+  registry.stageStructuredSpawn(begun.receipt.launchId, {
+    key, artifactPath: path.join(directory, "session.jsonl"), cwd: directory, accountId: "test",
+    status: "idle", host: null, claimEpoch: 1, claimOwner: `structured-host:${JSON.stringify(owner)}`, pendingAction: "spawn",
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:pending", process: owner, eventCursor: 0,
+      protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+  });
+  const client = {
+    snapshot: async () => { throw new Error("runtime host request timed out"); },
+    append: async () => { throw new Error("runtime host request timed out"); },
+  } as unknown as RuntimeHostClient;
+  await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+  let released = 0;
+  let resolve!: () => void;
+  const blocked = new Promise<void>((done) => { resolve = done; });
+  const host = { health: async () => ({ status: "idle" }) } as unknown as import("./structuredDeliveryController").StructuredDeliveryHost["host"];
+  const forget = retainUnpublishedStructuredLaunchHost({ key, host, registry, release: async () => { released++; await blocked; } });
+  try {
+    const first = releaseStructuredDeliveryHost(key);
+    const second = releaseStructuredDeliveryHost(key);
+    await Promise.resolve();
+    expect(released).toBe(1);
+    resolve();
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+  } finally {
+    resolve();
+    forget();
+    await bindStructuredDeliveryQueue([]);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

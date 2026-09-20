@@ -1158,6 +1158,7 @@ export async function bindStructuredDeliveryQueue(
       ?? { key: item.key, host: item.host, attachment: null, cancelled: false };
     registration.attachment = { unsubscribe, stopEvents };
     seatRegistration(key, registration);
+    if (unpublishedLaunchHosts.get(key)?.host === item.host) unpublishedLaunchHosts.delete(key);
     requestDrain();
     return () => unregisterHost(key, item.host);
   };
@@ -1406,6 +1407,24 @@ export function structuredDeliveryLastError(conversationId: string): string | nu
   return state.activeQueue?.lastTargetError(conversationId) ?? state.lastDrainError ?? null;
 }
 
+type UnpublishedLaunchHost = StructuredDeliveryHost & { registry: AgentRegistry; release: () => Promise<void> };
+const unpublishedStore = process as typeof process & {
+  __llvUnpublishedLaunchHosts?: Map<string, UnpublishedLaunchHost>;
+  __llvUnpublishedLaunchReleases?: Map<string, Promise<boolean>>;
+};
+const unpublishedLaunchHosts = unpublishedStore.__llvUnpublishedLaunchHosts ??= new Map<string, UnpublishedLaunchHost>();
+const unpublishedLaunchReleases = unpublishedStore.__llvUnpublishedLaunchReleases ??= new Map<string, Promise<boolean>>();
+
+/** Lifecycle ownership only: an unpublished host must be releasable across
+ * controller succession, but cannot resolve as a first-message destination. */
+export function retainUnpublishedStructuredLaunchHost(item: UnpublishedLaunchHost): () => void {
+  const id = sessionKeyId(item.key);
+  const prior = unpublishedLaunchHosts.get(id);
+  if (prior && prior.host !== item.host) throw new Error("staged launch host already has a lifecycle owner");
+  unpublishedLaunchHosts.set(id, item);
+  return () => { if (unpublishedLaunchHosts.get(id) === item) unpublishedLaunchHosts.delete(id); };
+}
+
 export async function publishStructuredDeliveryHost(
   item: StructuredDeliveryHost,
   ownsOperation?: () => Promise<boolean>,
@@ -1427,7 +1446,24 @@ export async function republishStructuredDeliveryHost(key: SessionKey): Promise<
 }
 
 export async function releaseStructuredDeliveryHost(key: SessionKey): Promise<boolean> {
-  return await state.releaseActiveHost?.(key) ?? false;
+  const id = sessionKeyId(key);
+  const inFlight = unpublishedLaunchReleases.get(id);
+  if (inFlight) return inFlight;
+  const pending = unpublishedLaunchHosts.get(id);
+  if (!pending) return await state.releaseActiveHost?.(key) ?? false;
+  // Claim before awaiting. Pending lifecycle release does not depend on the
+  // runtime projection whose outage prevented publication in the first place.
+  unpublishedLaunchHosts.delete(id);
+  const release = Promise.resolve().then(async () => {
+    try { await pending.release(); return true; }
+    catch (error) {
+      if (!unpublishedLaunchHosts.has(id)) unpublishedLaunchHosts.set(id, pending);
+      throw error;
+    }
+  });
+  unpublishedLaunchReleases.set(id, release);
+  try { return await release; }
+  finally { if (unpublishedLaunchReleases.get(id) === release) unpublishedLaunchReleases.delete(id); }
 }
 
 export interface DemotionInterruptionOptions {
@@ -1522,15 +1558,17 @@ export async function recordDemotionInterruption(
 export async function releaseStructuredDeliveryHostsForDemotion(
   options: DemotionInterruptionOptions = {},
 ): Promise<void> {
-  const registrations = state.activeRegistrations?.() ?? [];
-  const release = state.releaseActiveHost;
-  if (!release || registrations.length === 0) return;
-  const registry = state.activeRegistry;
+  const registered = state.activeRegistrations?.() ?? [];
+  const ids = new Set(registered.map(({ key }) => sessionKeyId(key)));
+  const registrations = [...registered, ...[...unpublishedLaunchHosts.values()].filter(({ key }) => !ids.has(sessionKeyId(key)))];
+  const release = releaseStructuredDeliveryHost;
+  if (registrations.length === 0) return;
   const recordFailures: unknown[] = [];
   const unrecorded = new Set<string>();
   /* Settled, not raced: one host whose health, handoff or record fails must
      not end the demotion while the others' records are still being written. */
   await Promise.allSettled(registrations.map(async ({ key, host }) => {
+    const registry = unpublishedLaunchHosts.get(sessionKeyId(key))?.registry ?? state.activeRegistry;
     try {
       const current = await host.health();
       if ((current.status !== "active" && current.status !== "attention")
