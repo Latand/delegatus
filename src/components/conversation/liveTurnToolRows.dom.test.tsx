@@ -173,7 +173,11 @@ for (const { tool, args, chips } of MCP_CASES) {
     const cardRoot = createRoot(card);
     roots.add(cardRoot);
     flushSync(() => { cardRoot.render(<McpCallCard event={event} availableConversationIds={new Set()} />); });
-    const cardTitle = card.querySelector("[data-testid=mcp-call-card] summary > span.flex-1")!.textContent;
+    /* Both surfaces name their action title, and both give it a flex basis of
+       its own so chips wrap rather than squeeze it (#1955). */
+    const cardTitleNode = card.querySelector<HTMLElement>("[data-testid=mcp-call-card] summary > [data-mcp-title]")!;
+    const cardTitle = cardTitleNode.textContent;
+    expect(cardTitleNode.className).toContain("basis-[10rem]");
 
     const live = mount([{
       itemId: `toolu_${tool}`, text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,

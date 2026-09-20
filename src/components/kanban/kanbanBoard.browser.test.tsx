@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type LaunchOptions, type Page } from "playwright-core";
@@ -6599,18 +6600,26 @@ describe("live turn rows on a phone", () => {
         };
       });
       /* The canonical McpCallCard the live row hands over to, measured in the
-         same units. Recorded, not asserted: that card is another lane's file,
-         and a live row that reads better than the card it becomes is a gap
-         worth a number rather than a silent one. */
+         same units and held to the same bounds (#1955). A handoff is only
+         invisible if the card the transcript writes reads at least as well as
+         the live row it replaces, so both sides of it are asserted here. */
       const canonicalMcp = transcript
         ? [...transcript.querySelectorAll("[data-testid=mcp-call-card]")].map(card => {
-          const title = card.querySelector("summary > span.flex-1");
+          /* A bare flex-1 span is where this title lived before it was given a
+             basis of its own, so an earlier phase measures the same thing. */
+          const title = card.querySelector("[data-mcp-title]") || card.querySelector("summary > span.flex-1");
           const summary = card.querySelector("summary");
           if (!title || !summary) return null;
+          const rowBox = summary.getBoundingClientRect();
+          const chips = [...card.querySelectorAll("[data-testid^=mcp-link-]")];
           return {
-            rowWidth: Math.round(summary.getBoundingClientRect().width),
+            tool: (title.textContent || "").trim().slice(0, 40),
+            rowWidth: Math.round(rowBox.width),
             titleWidth: Math.round(title.getBoundingClientRect().width * 100) / 100,
-            chips: card.querySelectorAll("[data-testid^=mcp-link-]").length,
+            titleShare: rowBox.width ? Math.round((title.getBoundingClientRect().width / rowBox.width) * 100) : 0,
+            chips: chips.length,
+            minChipWidth: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().width))) : 0,
+            minChipHeight: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().height))) : 0,
           };
         }).filter(Boolean)
         : [];
@@ -6646,6 +6655,15 @@ describe("live turn rows on a phone", () => {
        overlay whose MCP row still squeezed its title and called an unknown
        outcome a success. */
     const phase = (process.env.LIVE_ROWS_CAPTURE_PHASE ?? "after").replace(/[^a-z0-9-]/gi, "") || "after";
+    /* Which tree rendered these readings. An earlier phase is captured from an
+       exported checkout of the revision being measured, which carries no git
+       metadata of its own, so the runner names it — and a phase whose PNGs and
+       JSON disagree about their source cannot go unnoticed again. */
+    const source = process.env.LIVE_ROWS_SOURCE_REV
+      ?? (() => {
+        try { return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(); }
+        catch { return "unrecorded"; }
+      })();
     const out = path.resolve(`.artifacts/live-turn-rows/${phase}`);
     const pngDir = process.env.LIVE_ROWS_PNG_DIR ?? "/var/tmp/llv-live-rows-evidence";
     fs.mkdirSync(out, { recursive: true });
@@ -6666,8 +6684,12 @@ describe("live turn rows on a phone", () => {
             minChipWidth: number; minChipHeight: number; rowWidth: number; rowHeight: number;
             titleWidth: number; titleShare: number; titleFullWidth: number; titleText: string;
           };
+          type CanonicalReading = {
+            tool: string; rowWidth: number; titleWidth: number; titleShare: number;
+            chips: number; minChipWidth: number; minChipHeight: number;
+          };
           const reading = await page.evaluate(measureOverlay) as {
-            cases: Record<string, { rows: number; argsOmittedRows: number; argsOmittedMentions: number; mcpRows: number; mcpChips: number; collapsed: { count: number; text: string } | null; collapsedLines: number; duplicates: number; mcp: McpReading[] }>;
+            cases: Record<string, { rows: number; argsOmittedRows: number; argsOmittedMentions: number; mcpRows: number; mcpChips: number; collapsed: { count: number; text: string } | null; collapsedLines: number; duplicates: number; mcp: McpReading[]; canonicalMcp: CanonicalReading[] }>;
             scrollWidth: number;
           };
           const label = `390-dark-${lang}`;
@@ -6716,6 +6738,29 @@ describe("live turn rows on a phone", () => {
             }
           }
 
+          /* Round-3 P2, the other half of the handoff: the canonical card the
+             live row becomes. A row that reads well only until the transcript
+             claims it is not a handoff, and this card squeezed its own title
+             to 1.27 px with two chips (#1955) — the same construction the live
+             row was fixed for. Both are held to one bound now, in the same
+             units, over the same calls. */
+          const canonical = current.canonicalMcp;
+          if (!canonical.length) failures.push(`${label}: the current transcript carries no canonical MCP card`);
+          if (!canonical.some((card) => card.chips >= 2)) {
+            failures.push(`${label}: no canonical MCP card carries two entity chips`);
+          }
+          for (const card of canonical) {
+            if (card.titleWidth < MIN_MCP_TITLE_PX) {
+              failures.push(`${label}: canonical "${card.tool}" title is ${card.titleWidth}px of a ${card.rowWidth}px row`);
+            }
+            if (card.titleShare < MIN_MCP_TITLE_SHARE) {
+              failures.push(`${label}: canonical "${card.tool}" title holds only ${card.titleShare}% of its row`);
+            }
+            if (card.chips && (card.minChipWidth < MIN_CHIP_PX || card.minChipHeight < MIN_CHIP_PX)) {
+              failures.push(`${label}: canonical "${card.tool}" chips squeezed to ${card.minChipWidth}x${card.minChipHeight}px`);
+            }
+          }
+
           /* Round-2 P1, the outcome vocabulary: a call whose result the
              journal dropped is never painted as a success. */
           const marks = Object.fromEntries(reading.cases.states!.mcp.map((row) => [row.status, row.mark]));
@@ -6741,7 +6786,7 @@ describe("live turn rows on a phone", () => {
       server.stop();
     }
     fs.mkdirSync("evidence/live-turn-rows", { recursive: true });
-    fs.writeFileSync(`evidence/live-turn-rows/${phase}.json`, `${JSON.stringify({ phase, shots, frames, failures }, null, 2)}\n`);
+    fs.writeFileSync(`evidence/live-turn-rows/${phase}.json`, `${JSON.stringify({ phase, source, shots, frames, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 300_000);

@@ -34,22 +34,29 @@ import { LONG_TURN_CALLS, longTurnPrefix } from "./liveTurnLongTurn.fixture";
  *     when its stream is down; `logBus` polls `/api/logs` when ITS stream is
  *     down. Neither pauses the other, and the transcript window keeps
  *     advancing on the polling fallback — proven below with the runtime bus
- *     held in `degraded` for the whole test.
- *   - What freezes the window is the pane, not the network. `BranchPane` sets
- *     `feedPaused` when a pane is dormant or offscreen, `LogFeed` passes it to
- *     `useLogTail`, and a paused tail UNSUBSCRIBES from the log bus — by
- *     design, so the server stops re-reading bytes nobody is looking at. The
- *     runtime session hook has no such input: the live turn keeps being
- *     projected into the same store while the transcript that would retire its
- *     rows stands still. Every item projected in that gap is unclaimed, and
- *     before the bound they were all painted.
- *   - Resuming the pane heals it: the tail re-subscribes, the bus kicks an
- *     immediate catch-up poll, and the claims land. The wall is what the
- *     operator sees WHILE the pane is away, which is exactly when a phone is
- *     scrolled elsewhere or the screen has just come back on.
+ *     held in `degraded` for the whole test. So the banner the report arrived
+ *     with does not explain the stale window.
+ *   - A tail that is paused does stall it, and the pause is an ordinary input
+ *     rather than a failure: `LogFeed` passes `paused` to `useLogTail`, and a
+ *     paused tail UNSUBSCRIBES from the log bus — by design, so the server
+ *     stops re-reading bytes nobody is looking at. The runtime session hook has
+ *     no such input: the live turn keeps being projected into the same store
+ *     while the transcript that would retire its rows stands still. Every item
+ *     projected in that gap is unclaimed, and before the bound they were all
+ *     painted.
+ *   - Resuming heals it: the tail re-subscribes, the bus kicks an immediate
+ *     catch-up poll, and the claims land.
  *
- * The bound in `LiveTurnRows` is what makes that gap survivable, so the last
- * phase below also asserts what the pane paints while it is open.
+ * What this file does NOT establish is where that `paused` comes from on a real
+ * surface, because it hands the input to a pane of its own. `BranchPane` is what
+ * decides it, from its own IntersectionObserver, and
+ * `liveTurnPaneVisibility.dom.test.tsx` drives the mounted pane through that —
+ * including the frame where the pane is back on screen and still holds the
+ * window it had while it was away. Neither file claims the pane's pause is the
+ * only way a window can fall behind its live turn.
+ *
+ * The bound in `LiveTurnRows` is what makes such a gap survivable however it
+ * opened, so the last phases below also assert what the pane paints across it.
  */
 
 const dom = new Window({ url: "http://localhost/" });
@@ -284,7 +291,7 @@ afterEach(async () => {
 });
 
 test(
-  "a degraded runtime does not stall the transcript; a paused pane does, and the overlay stays bounded through it",
+  "a degraded runtime does not stall the transcript; a paused tail does, and the overlay stays bounded through it",
   async () => {
     await startDegradedRuntimeBus();
 
@@ -319,9 +326,9 @@ test(
     expect(polling.painted).toBe(0);
     expect(bus!.getState().connection).toBe("degraded");
 
-    /* (3) The pane goes dormant or offscreen — `feedPaused`. Its tail
-       unsubscribes, so the window freezes where it stood, while the runtime
-       store keeps projecting into the same turn. This is the real trigger. */
+    /* (3) The pane's tail is paused — the input `BranchPane` sets while a pane
+       is dormant or offscreen. It unsubscribes, so the window freezes where it
+       stood, while the runtime store keeps projecting into the same turn. */
     await setPaused(true);
     const requestsWhenPaused = logRequests;
     projected = LONG_TURN_CALLS;
@@ -335,7 +342,8 @@ test(
     expect(away.lines).toBe(polling.lines);
     /* The live turn grew anyway: the runtime session hook takes no pause. */
     expect(away.projected).toBeGreaterThan(polling.projected);
-    /* And every item projected into that gap is unclaimed — the wall. */
+    /* And every item projected into that gap is unclaimed — the wall, out of
+       a pause alone, with both transports answering every request made. */
     expect(away.unclaimed).toBe(away.projected - polling.projected);
     expect(away.unclaimed).toBeGreaterThan(LIVE_TURN_VISIBLE_ROWS);
 

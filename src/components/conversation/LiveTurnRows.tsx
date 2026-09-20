@@ -43,15 +43,23 @@ import { summarizeTool } from "@/components/feed/tools";
  * the canonical feed carries — every row it shows is a row that feed is about
  * to carry anyway. Its only bound used to be the canonical claim, which is a condition
  * OUTSIDE this component — the transcript window has to be current for a row to
- * be claimed or to fall behind the #674 fence. A pane whose tail is paused
- * (`BranchPane`: dormant or offscreen) unsubscribes from the log bus, so its
- * transcript window stands still while the runtime store — which takes no such
- * pause — keeps projecting items into the same turn. Every item projected into
- * that gap is unclaimed, up to 544 of them (32 active plus 512 overflow), and
- * before this bound the renderer painted all of them. That is the reported
- * wall, and `liveTurnStallPath.dom.test.tsx` drives it through both real
- * transports: the polling fallback keeps the window current by itself, and
- * only the pane's own pause freezes it.
+ * be claimed or to fall behind the #674 fence. Whenever that window falls
+ * behind the live turn, every item projected into the gap is unclaimed, up to
+ * 544 of them (32 active plus 512 overflow), and before this bound the
+ * renderer painted all of them. That is the reported wall.
+ *
+ * One such gap is the pane's own, and it needs nothing to go wrong:
+ * `BranchPane` pauses a pane's tail while the pane is dormant or offscreen,
+ * and a paused tail unsubscribes from the log bus, while the runtime store
+ * takes no such pause and keeps projecting into the same turn.
+ * `liveTurnPaneVisibility.dom.test.tsx` drives that through the mounted pane
+ * and its own IntersectionObserver, including the frame where the pane is back
+ * on screen with the window it had while it was away.
+ * `liveTurnStallPath.dom.test.tsx` takes the explanation the banner suggested
+ * — "degraded/polling stalls the feed" — and refutes it: held degraded the
+ * whole time, the transcript window advances on its own polling fallback.
+ * Neither test claims the pane's pause is the only way a window can fall
+ * behind, and the bound does not depend on which way it did.
  *
  * Eight is the tail an operator can actually read: at 390 px a quiet row is
  * ~20 px, so eight rows are the ~160 px that fit between the last transcript
