@@ -16,7 +16,7 @@ export class BoardSelection {
   private db = new Database(":memory:");
   private revision = -1;
   readonly work = { metadataRows: 0, recordReads: 0, rebuilds: 0 };
-  constructor(private filename: string, private collection: "tasks" | "pipelines") {
+  constructor(private filename: string, private collection: "tasks" | "pipelines" | "flows") {
     this.db.exec(`CREATE TABLE rows(id TEXT PRIMARY KEY, time TEXT, project TEXT, status TEXT, placement TEXT, hidden INTEGER, text TEXT);
       CREATE INDEX row_time ON rows(time DESC,id DESC);
       CREATE INDEX row_project ON rows(project,time DESC,id DESC);
@@ -34,8 +34,8 @@ export class BoardSelection {
       json_extract(value_json,'$.project') AS project,
       json_extract(value_json,'$.${task ? "status" : "state"}') AS status,
       CASE WHEN COALESCE(json_extract(value_json,'$.placement'),'pinned') = 'pinned' AND json_type(value_json,'$.pos.x') IN ('integer','real') AND json_type(value_json,'$.pos.y') IN ('integer','real') THEN 'pinned' ELSE 'unplaced' END AS placement,
-      (json_extract(value_json,'$.hiddenAt') IS NOT NULL) AS hidden,
-      json_extract(value_json,'$.${task ? "text" : "task"}') AS text,
+      (json_extract(value_json,'$.${this.collection === "flows" ? "closedAt" : "hiddenAt"}') IS NOT NULL) AS hidden,
+      ${this.collection === "flows" ? "''" : `json_extract(value_json,'$.${task ? "text" : "task"}')`} AS text,
       COALESCE(json_extract(value_json,'$.taskIds'),'[]') AS links
       FROM state_rows WHERE collection = ? ${task ? "AND row_key GLOB 't:*'" : ""}`;
   }
@@ -144,7 +144,7 @@ export class BoardSelection {
     set("status", scope.statuses ?? expandStates(scope.states ?? []));
     if (scope.placement) set("placement", [scope.placement]);
     if (scope.openOnly) clauses.push("status != 'done'");
-    if (this.collection === "pipelines" && !scope.includeClosed) clauses.push("status != 'closed' AND hidden=0");
+    if (this.collection !== "tasks" && !scope.includeClosed) clauses.push("status != 'closed' AND hidden=0");
     if (scope.updatedSince) { clauses.push("time >= ?"); values.push(scope.updatedSince); }
     if (scope.query) {
       const terms = [...grams(scope.query, Math.min(3, scope.query.length))];
@@ -167,12 +167,12 @@ function matches(row: Record<string, any>, scope: BoardScope, collection: string
   return (!scope.project || canonicalProject(row.project) === scope.project)
     && (!states.length || states.includes(task ? row.status : row.state))
     && (!scope.openOnly || row.status !== "done") && (!scope.placement || row.placement === scope.placement)
-    && (task || scope.includeClosed || (row.state !== "closed" && !row.hiddenAt))
+    && (task || scope.includeClosed || (row.state !== "closed" && !(collection === "flows" ? row.closedAt : row.hiddenAt)))
     && (!scope.updatedSince || (task ? row.updatedAt : row.createdAt) >= scope.updatedSince)
     && (!scope.query || (task ? row.text : row.task).toLowerCase().includes(scope.query));
 }
 function compare(a: { time: string; id: string }, b: { time: string; id: string }) { return a.time === b.time ? (a.id > b.id ? -1 : a.id === b.id ? 0 : 1) : a.time > b.time ? -1 : 1; }
-export function boardSelection(filename: string, collection: "tasks" | "pipelines") {
+export function boardSelection(filename: string, collection: "tasks" | "pipelines" | "flows") {
   const key = `${filename}:${collection}`;
   let projection = projections.get(key);
   if (!projection) { projection = new BoardSelection(filename, collection); projections.set(key, projection); }

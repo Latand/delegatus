@@ -1,10 +1,22 @@
 import { createHash } from "node:crypto";
 import { taskRevision } from "@/lib/tasks/revision";
+import type { Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
 export const LIST_ANSWER_BYTES = 24_000;
 export const fullAnswer = (args: Record<string, unknown>) => args.full === true || args.compact === false;
 export const firstLine = (value: string, max = 160) => value.split("\n", 1)[0]!.slice(0, max);
+
+export function compactFlow(flow: Flow) {
+  return {
+    id: flow.id, project: flow.project, state: flow.state, revision: flow.revision ?? 0,
+    createdAt: flow.createdAt, closedAt: flow.closedAt, mode: flow.mode,
+    title: firstLine(flow.spec ?? ""), specLength: flow.spec?.length ?? 0,
+    stateDetail: flow.stateDetail ? firstLine(flow.stateDetail) : null,
+    stateDetailLength: flow.stateDetail?.length ?? 0,
+    roundCount: flow.rounds?.length ?? 0, roundLimit: flow.roundLimit,
+  };
+}
 
 export function compactTask(task: BoardTask & { pipelineIds?: string[] }) {
   return {

@@ -21,11 +21,24 @@ const { saveTasks, loadTasks, loadTasksForList, taskSelectionSource, mutateTasks
 const { savePipelines, pipelineSelectionSource } = await import("@/lib/pipelines/store");
 const { pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
 const { defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+const { saveFlows, loadFlows, flowSelectionSource } = await import("@/lib/flows/store");
 type Args = Record<string, unknown>;
+
+function flowCorpus(count: number, now: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `size-flow-${i}`, template: "implement-review-loop" as const, project: "size-board",
+    cwd: "/repo", implementerPath: `sessions/implementer-${i}.jsonl`,
+    roles: { implementer: { engine: "codex" as const, model: null, effort: null }, reviewer: { engine: "claude" as const, model: null, effort: null } },
+    baseRef: "base", baseMode: "head" as const, mode: "auto" as const, reviewerMode: "headless" as const,
+    roundLimit: 5, state: "waiting_ready" as const, stateDetail: null, rounds: [],
+    spec: `Flow work ${i}\n${"s".repeat(6000)}`, createdAt: new Date(now + i * 1000).toISOString(), closedAt: null,
+  }));
+}
 
 test("measure every tool through the MCP service and budget common board answers", async () => {
   const now = Date.parse("2026-09-20T09:00:00.000Z");
   const pipelines = pipelineCorpus(240, 2);
+  saveFlows(flowCorpus(240, now));
   for (const [i, pipeline] of pipelines.entries()) {
     pipeline.project = "size-board";
     pipeline.createdAt = new Date(now + i * 1000).toISOString();
@@ -49,9 +62,9 @@ test("measure every tool through the MCP service and budget common board answers
   }));
   let settings = { ...defaultSeatTickSettings("size-board"), monitorPrompt: "Monitor open work. ".repeat(200) };
   const domain = {
-    taskSelectionSource, pipelineSelectionSource,
+    taskSelectionSource, pipelineSelectionSource, flowSelectionSource,
     loadTasks, listTaskRecords: loadTasksForList, getPipelines: () => ({ pipelines }), listPipelineRecords: () => pipelines,
-    getFlowsWithPresets: () => ({ flows: [], presets: [] }),
+    getFlowsWithPresets: () => ({ flows: loadFlows(), presets: [] }),
     callerAttribution: () => ({ kind: "unidentified", conversationId: null }),
     authorizedSeats: () => [], callerProject: () => null,
     readTickSettings: () => settings, writeTickSettings: (_project: string, value: typeof settings) => { settings = value; },
@@ -74,6 +87,9 @@ test("measure every tool through the MCP service and budget common board answers
   } as never, domain as never);
   const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
   const cases: Array<[typeof MCP_TOOL_NAMES[number], string, Args]> = [
+    ["list_flows", "default", { project: "size-board" }],
+    ["list_flows", "limit=200", { project: "size-board", limit: 200 }],
+    ["list_flows", "compact", { project: "size-board", compact: true }],
     ["list_tasks", "default", { project: "size-board" }],
     ["list_tasks", "limit=200", { project: "size-board", limit: 200 }],
     ["list_tasks", "openOnly", { project: "size-board", openOnly: true }],
@@ -100,7 +116,7 @@ test("measure every tool through the MCP service and budget common board answers
   const rows = [];
   const frequencySample = JSON.parse(fs.readFileSync(new URL("./answerSizes.frequency.json", import.meta.url), "utf8")) as { counts: Record<string, number>; scenarioCounts: Record<string, number> };
   const frequencies = frequencySample.counts;
-  const budgets: Record<string, number> = { list_tasks: 26000, list_pipelines: 26000, agent_activity: 24000, create_task: 2000, update_task: 1200, get_task: 10000, get_pipeline: 150000, link_task_to_pipeline: 1800, pipeline_action: 1500, seat_tick_settings: 1800, list_conversations: 12000 };
+  const budgets: Record<string, number> = { list_flows: 26000, list_tasks: 26000, list_pipelines: 26000, agent_activity: 24000, create_task: 2000, update_task: 1200, get_task: 10000, get_pipeline: 150000, link_task_to_pipeline: 1800, pipeline_action: 1500, seat_tick_settings: 1800, list_conversations: 12000 };
   for (const [tool, scenario, args] of cases) {
     const result = await service.callTool(tool, { clientRequestId: `size-${rows.length}`, ...args });
     const bytes = Buffer.byteLength(JSON.stringify(result));
@@ -199,12 +215,92 @@ test("measure every tool through the MCP service and budget common board answers
     expect(protocol.isError).not.toBe(true);
     const tools = (await client.listTools()).tools;
     expect(tools.find(tool => tool.name === "list_tasks")?.description).toContain("compact by default");
+    expect(tools.find(tool => tool.name === "list_flows")?.description).toContain("compact by default");
+    const flowProtocol = await client.callTool({ name: "list_flows", arguments: { clientRequestId: "flow-schema-additive", state: ["waiting_ready", "unknown"], limit: "999", compact: true } });
+    expect(flowProtocol.isError).not.toBe(true);
   } finally { await client.close(); await server.close(); }
   const { persistProjectAliases } = await import("@/lib/projects/aliases");
   persistProjectAliases([{ source: "size-board", target: "size-board-successor", displayName: "Size board" }]);
   const successor = await call("list_tasks", { project: "size-board-successor", ids: ["task-0"] });
   expect(successor.count).toBe(1);
   expect(successor.tasks[0].project).toBe("size-board-successor");
+});
+
+test("flow pages reach every stored row newest first within budget, using keyed reads and incremental selection", async () => {
+  const { boardSelection } = await import("./boardSelection");
+  const { saveFlowRows } = await import("@/lib/flows/store");
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(sandbox, "flow-pagination");
+  try {
+    const flows = flowCorpus(240, Date.parse("2026-09-20T09:00:00Z"));
+    // Long multibyte titles and diagnostics must also obey the serialized budget.
+    for (const flow of flows) {
+      flow.spec = "Робота".repeat(300) + "\n" + flow.spec;
+      (flow as { stateDetail: string | null }).stateDetail = "Перевірка".repeat(300);
+    }
+    saveFlows(flows);
+    const source = flowSelectionSource();
+    let reads = 0;
+    const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
+      flowSelectionSource: () => ({ ...source, read: (id: string) => { reads++; return source.read(id); } }),
+      getFlowsWithPresets: () => { throw new Error("whole flow collection read"); },
+      callerAttribution: () => ({ kind: "unidentified", conversationId: null }),
+    } as never), new MemoryMcpReceiptStore());
+    let sequence = 0;
+    const call = (tool: "list_flows" | "get_flow", args: Args = {}) => service.callTool(tool, { clientRequestId: `flow-page-${++sequence}`, ...args }) as Promise<any>;
+    const index = boardSelection(source.filename, "flows");
+    const cold = await call("list_flows", { ids: [flows[0]!.id] });
+    expect(cold.ok).toBe(true); expect(cold.count).toBe(1);
+    expect(reads).toBe(1); expect(index.work.metadataRows).toBe(0);
+    for (const options of [{}, { limit: 200 }, { compact: true }, { limit: "999999", state: "unknown" }]) {
+      const ids: string[] = [];
+      let cursor: string | null = null;
+      do {
+        const beforeReads = reads;
+        const page = await call("list_flows", { ...options, cursor });
+        expect(page.ok).toBe(true);
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(26000);
+        expect(page.count).toBeGreaterThan(0);
+        expect(reads - beforeReads).toBeLessThanOrEqual(page.count + 1);
+        expect(page.total).toBe(240);
+        expect(page.omittedCount).toBe(240 - page.count);
+        expect(page.omittedRecordCount).toBe(page.count);
+        expect(page.flows[0]).not.toHaveProperty("spec");
+        expect(page.flows[0]).not.toHaveProperty("rounds");
+        ids.push(...page.flows.map((flow: any) => flow.id));
+        expect(page.remainingCount).toBe(240 - ids.length);
+        expect(page.hasMore).toBe(page.remainingCount > 0);
+        cursor = page.nextCursor;
+        expect(ids.length).toBeLessThanOrEqual(240);
+      } while (cursor);
+      expect(ids).toEqual([...flows].reverse().map(flow => flow.id));
+      expect(new Set(ids).size).toBe(240);
+    }
+    const detail = await call("get_flow", { flowId: flows[0]!.id });
+    expect(detail.flow).toEqual(source.read(flows[0]!.id));
+    for (const options of [{ full: true }, { compact: false }]) {
+      const page = await call("list_flows", { ...options, ids: [flows[0]!.id] });
+      expect(page.flows).toEqual([detail.flow]);
+      expect(page.omittedRecordCount).toBe(0);
+    }
+    const first = await call("list_flows", { limit: 1 });
+    const reset = await call("list_flows", { cursor: first.nextCursor, state: "paused" });
+    expect(reset.cursorReset).toBe(true); expect(reset.count).toBe(0);
+    const beforeMetadata = index.work.metadataRows;
+    const changed = { ...source.read(flows[100]!.id)!, state: "paused" as const, closedAt: "2026-09-20T10:00:00Z" };
+    saveFlowRows([changed]);
+    const hidden = await call("list_flows", { state: "paused" });
+    expect(hidden.total).toBe(0);
+    expect(index.work.metadataRows - beforeMetadata).toBe(1);
+    const closed = await call("list_flows", { state: ["paused", "unknown"], includeClosed: true });
+    expect(closed.flows.map((flow: any) => flow.id)).toEqual([changed.id]);
+    const keyedClosed = await call("list_flows", { ids: [changed.id] });
+    expect(keyedClosed.count).toBe(0);
+    expect((await call("list_flows", { ids: [changed.id], includeClosed: true })).count).toBe(1);
+    const narrow = await call("list_flows", { limit: -10 });
+    expect(narrow.count).toBe(1);
+    expect((await call("list_flows", { project: "another-board" })).count).toBe(0);
+  } finally { process.env.LLV_STATE_DIR = previousState; }
 });
 
 test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeGone restores idle history", async () => {

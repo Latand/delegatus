@@ -52,6 +52,7 @@ import { MAX_BOARD_MUTATIONS_PER_REQUEST, MAX_BOARD_PATH_LIST_ITEMS } from "@/li
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { backoffDelayMs, DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { cancelRound, closeFlow, patchFlow } from "@/lib/flows/commands";
+import { flowSelectionSource } from "@/lib/flows/store";
 import { getFlowsWithPresets } from "@/lib/flows/engine";
 import type { PatchFlowRequest } from "@/lib/flows/types";
 import { pollLifecycleDigest, type LifecycleDigestRequest } from "@/lib/lifecycle/digest";
@@ -181,7 +182,7 @@ import {
   stageReportAcknowledgement,
   type AccountLimitsInput,
 } from "./compactAnswers";
-import { changedFieldNames, fieldValues, compactTask, firstLine, fullAnswer, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
+import { changedFieldNames, fieldValues, compactFlow, compactTask, firstLine, fullAnswer, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
 
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import {
@@ -605,6 +606,7 @@ export interface ViewerMcpDomainDependencies {
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
+  flowSelectionSource?: typeof flowSelectionSource;
   patchFlow: typeof patchFlow;
   cancelRound: typeof cancelRound;
   closeFlow: typeof closeFlow;
@@ -1039,6 +1041,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   boardFor,
   applyBoardCommand: (input, snapshot) => applyBoardCommand(input, { registrySnapshot: () => snapshot }),
   getFlowsWithPresets,
+  flowSelectionSource,
   patchFlow,
   cancelRound,
   closeFlow,
@@ -3202,21 +3205,32 @@ async function boardSnapshot(
 }
 
 function listFlows(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  const project = text(args.project);
-  const state = text(args.state);
-  const includeClosed = args.includeClosed === true;
+  const states = stringSet(args.state, ["waiting_ready", "spawn_pending", "spawning", "reviewing", "relay_pending", "relaying", "fixing", "approved", "done_comment", "needs_decision", "paused", "closed"]);
+  const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
+    ids: stringSet(args.ids), query: "", updatedSince: "" };
+  const source = dependencies.flowSelectionSource?.();
   const limit = Math.max(1, Math.min(200, integer(args.limit, 100)));
-  const flows = dependencies.getFlowsWithPresets().flows
-    .filter((flow) => !project || flow.project === project)
-    .filter((flow) => !state || flow.state === state)
-    .filter((flow) => includeClosed || (flow.state !== "closed" && flow.closedAt === null))
-    .slice(0, limit);
-  return redactPayload({ count: flows.length, flows });
+  const project = (flow: import("@/lib/flows/types").Flow) => fullAnswer(args) ? flow : compactFlow(flow);
+  const page = source ? boardSelection(source.filename, "flows").page(source, scope, args.cursor, limit, project)
+    : listPage(dependencies.getFlowsWithPresets().flows, {
+      scope, cursor: args.cursor, limit,
+      identity: flow => ({ id: flow.id, time: flow.createdAt ?? "" }),
+      matches: flow => (!scope.project || flow.project === scope.project)
+        && (!states.length || states.includes(flow.state))
+        && (scope.includeClosed || (flow.state !== "closed" && !flow.closedAt))
+        && (!scope.ids.length || scope.ids.includes(flow.id)),
+      project,
+    });
+  const { rows: flows, ...pagination } = page;
+  return redactPayload({ ...pagination, flows, compact: !fullAnswer(args),
+    omittedRecordCount: fullAnswer(args) ? 0 : flows.length,
+    readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true, compact:false or get_flow(flowId) reads complete records." });
 }
 
 async function getFlow(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const flowId = required(args, "flowId");
-  const flow = dependencies.getFlowsWithPresets().flows.find((candidate) => candidate.id === flowId);
+  const source = dependencies.flowSelectionSource?.();
+  const flow = source ? source.read(flowId) : dependencies.getFlowsWithPresets().flows.find((candidate) => candidate.id === flowId);
   if (!flow) throw new Error("flow not found");
   const { flowDecisionContext } = await import("@/lib/flows/decisions");
   const caller = attributionOf(dependencies);
