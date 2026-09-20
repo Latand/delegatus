@@ -24,6 +24,7 @@ globalThis.fetch = (async () => {
 }) as unknown as typeof globalThis.fetch;
 const { claudeValidityFromLimitRead, NoHealthyClaudeAccountError, selectHealthyClaudeAccount } = await import("./spawnHealth");
 const { withAccountMutationLockAsync } = await import("./accountMutation");
+const { seedAccountRegistry } = await import("./accountsStoreFixture");
 const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 /* The process-wide registry keeps its SQLite store open; close it before the
    store's directory goes, or macOS answers the next query with
@@ -387,7 +388,7 @@ test("Claude provider checks waiting behind deletion re-resolve retired accounts
     retired: [expired, currentAccount].map(({ id, label }) => ({ id, label, retiredAt: 2 })),
   };
   fs.mkdirSync(path.dirname(stateFile), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(stateFile, JSON.stringify(activeRegistry), { mode: 0o600 });
+  seedAccountRegistry("claude", activeRegistry);
   providerReads = 0;
   let release!: () => void;
   let entered!: () => void;
@@ -396,7 +397,7 @@ test("Claude provider checks waiting behind deletion re-resolve retired accounts
   const holder = withAccountMutationLockAsync(async () => {
     entered();
     await held;
-    fs.writeFileSync(stateFile, JSON.stringify(retiredRegistry), { mode: 0o600 });
+    seedAccountRegistry("claude", retiredRegistry);
   });
   await acquired;
 

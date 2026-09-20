@@ -655,10 +655,10 @@ export async function executeSpawnRequest(
       title: requestProfileTitle,
       ...(explicitProject ? { project: explicitProject } : {}),
     });
-    const terminalizePinnedAccountFailure = (failure: unknown): NextResponse<SpawnResponse | ApiError> => {
+    const terminalizePinnedAccountFailure = async (failure: unknown): Promise<NextResponse<SpawnResponse | ApiError>> => {
       const accountId = body.accountId as string;
       const reason = (failure instanceof Error ? failure.message : String(failure)).slice(0, 240);
-      const begun = registry.beginSpawnRequest(canonicalSpawnRequest(
+      const begun = await registry.beginSpawnRequestAsync(canonicalSpawnRequest(
         accountId,
         preflightLaunchProfile,
         /* The digest binds this terminal preflight to the same canonical public
@@ -682,7 +682,7 @@ export async function executeSpawnRequest(
       && body.accountId !== undefined
       && existingAttempt.accountPin
       && (existingAttempt.state === "failed" || existingAttempt.state === "conflicted")) {
-      return terminalizePinnedAccountFailure(
+      return await terminalizePinnedAccountFailure(
         new Error(existingAttempt.error ?? "the requested account is not available for this launch"),
       );
     }
@@ -722,13 +722,13 @@ export async function executeSpawnRequest(
           if (admission.kind === "retry-at" || admission.kind === "admissible") {
             account = { ...pinned, admission, requestedAdmission: admission };
           } else {
-            return terminalizePinnedAccountFailure(error);
+            return await terminalizePinnedAccountFailure(error);
           }
         } catch {
-          return terminalizePinnedAccountFailure(error);
+          return await terminalizePinnedAccountFailure(error);
         }
       } else {
-        return terminalizePinnedAccountFailure(error);
+        return await terminalizePinnedAccountFailure(error);
       }
     }
     const requestedRetryAt = requestedAccountId && account.requestedAdmission?.kind === "retry-at"
@@ -838,7 +838,7 @@ export async function executeSpawnRequest(
         digest,
         existingAttempt?.accountPin ?? (body.accountId !== undefined),
       ));
-    });
+    }, { holder: "spawn admission", caller: "spawn" });
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created") launchId = begun.receipt.launchId;
     /* ATTRIBUTION, not a gate (#1279's rule, launch seam). The binding no
