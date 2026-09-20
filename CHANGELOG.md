@@ -7,6 +7,26 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Changed
+- Board placements are stored in SQLite (`state.sqlite`, collection `board`),
+  one row per project, instead of `board.json`. A pin, a hidden group or a
+  view-mode change commits only that project's row in one transaction, so a
+  crash can no longer leave the whole board zero-filled or half-written, and one
+  project's write never rewrites another's bytes. On first start the existing
+  `board.json` is imported and verified by row count and digest, then kept as
+  `board.json.imported-<release>`; a directory with a README takes its place
+  (#1870).
+- A `board.json` that cannot be parsed at all (empty, NUL-filled or truncated)
+  is kept as `board.json.unreadable-<time>` and the board starts empty with a
+  logged incident, instead of every board request failing.
+
+### Downgrading
+- A version older than this one cannot read the SQLite board and fails on the
+  `board.json` directory, naming the path. Upgrade again to recover. Replacing
+  the directory with the `board.json.imported-*` copy also works, but loses
+  board changes made since the upgrade. Deployed releases rolled back through
+  the release fence get a fresh `board.json` written for them automatically.
+
 ## [1.2.2] — 2026-09-19
 
 ### Changed

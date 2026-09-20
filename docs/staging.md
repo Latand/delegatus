@@ -104,7 +104,7 @@ untouched.
    `http://127.0.0.1:8899` shows the staging badge with that sha prefix.
 2. **Prod untouched** — the deploy script fingerprints (sha256 + mtime)
    prod's `viewer-release.json`, `agent-registry.sqlite`,
-   `runtime-events.sqlite`, `board.json`, `pipelines.json`, `flows.json`
+   `runtime-events.sqlite`, `state.sqlite`, `pipelines.json`, `flows.json`
    before and after, prints the diff, and **fails** if
    `viewer-release.json` changed (only deploy machinery writes it; the
    other files keep changing while live prod works — they are reported for
