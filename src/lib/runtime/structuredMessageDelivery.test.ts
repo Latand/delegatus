@@ -3041,6 +3041,345 @@ for (const engine of ["claude", "codex"] as const) {
   });
 }
 
+/**
+ * THE WHOLE MESSAGE SURVIVES A FAILED RESUME — text and photo, under one key.
+ *
+ * The dead-host composer offers images now, so the send path has to be able to
+ * hold them. It could not: the pre-recovery reservation required `!wantsImages`,
+ * so a message with a photo reached the resume with nothing durable behind it.
+ * A resume that then failed answered 503 with no operation id, and the queue
+ * had nothing to retry with — the operator's photo existed only in a browser
+ * tab.
+ *
+ * Every clause of the contract is asserted here against ONE message: the whole
+ * payload is durable before recovery is attempted, the failure names the
+ * operation so the browser can follow it, the key and the image bytes read back
+ * identically from a registry opened again from disk (the reload), and the
+ * later drain delivers it exactly once.
+ */
+test("a dead-host send of text AND an image is durable before a failing resume, survives reload, and delivers once", async () => {
+  const registryFile = path.join(sandbox, `registry-${registryNumber += 1}.json`);
+  const registry = new AgentRegistry(registryFile);
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: artifactPath,
+    accountId: "default",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }),
+    turn: { state: "idle", source: "empty", terminalAt: null },
+    observedAt: "2026-07-13T00:00:00.000Z",
+  }]);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  const imageRef: StructuredImageRef = { sha256: "d".repeat(64), mime: "image/png", bytes: 67 };
+  const deadSnapshot = snapshot(conversation.id);
+  deadSnapshot.sessions[0] = { ...deadSnapshot.sessions[0]!, host: "dead" };
+
+  let stores = 0;
+  let reservedBeforeRecovery: HeldDelivery | undefined;
+  let hosted = false;
+  const commands: { idempotencyKey: string; images?: readonly StructuredImageRef[] }[] = [];
+  const client = {
+    snapshot: async () => (hosted ? snapshot(conversation.id) : deadSnapshot),
+    command: async (command: { operationId: string; idempotencyKey: string; conversationId: string; kind: string; images?: StructuredImageRef[] }) => {
+      commands.push({ idempotencyKey: command.idempotencyKey, images: command.images });
+      return {
+        operationId: command.operationId,
+        replayed: false,
+        receipt: {
+          operationId: command.operationId,
+          idempotencyKey: command.idempotencyKey,
+          conversationId: command.conversationId,
+          kind: command.kind,
+          status: "delivered" as const,
+          text: "look at this",
+          imageCount: 1,
+          queuePosition: null,
+          at: "2026-07-17T00:00:00.000Z",
+          revision: 1,
+        },
+      };
+    },
+    operationStatus: async (operationId: string) => ({
+      operationId,
+      replayed: false,
+      receipt: {
+        operationId,
+        idempotencyKey: "dead-host-whole-message",
+        conversationId: conversation.id,
+        kind: "send" as const,
+        status: "delivered" as const,
+        queuePosition: null,
+        at: "2026-07-17T00:00:01.000Z",
+        revision: 2,
+      },
+    }),
+  } as unknown as RuntimeHostClient;
+
+  const dependencies = {
+    enabled: () => true,
+    client: () => client,
+    registry: () => registry,
+    storeImages: () => { stores += 1; return [imageRef]; },
+    previewImageRefs: () => [imageRef],
+    kick: () => {},
+  };
+
+  // ── The resume fails before the host ever starts ──────────────────────────
+  const refused = await enqueueStructuredMessage({
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "dead-host-whole-message",
+    text: "look at this",
+    images: [{ base64: PNG_BASE64, mime: "image/png" }],
+  }, {
+    ...dependencies,
+    recover: async () => {
+      reservedBeforeRecovery = registry.pendingDeliveries(conversation.id)
+        .find((delivery) => delivery.clientMessageId === "dead-host-whole-message");
+      throw new Error("account lock is busy");
+    },
+  } as never);
+
+  // The whole payload was durable BEFORE the resume was attempted.
+  expect(reservedBeforeRecovery).toBeDefined();
+  expect(reservedBeforeRecovery).toMatchObject({
+    clientMessageId: "dead-host-whole-message",
+    text: "look at this",
+    payloadKind: "runtime-images",
+  });
+  expect(reservedBeforeRecovery!.runtimeImages).toEqual([imageRef]);
+  expect(stores).toBe(1);
+  // The failure names the operation, so the browser can follow this message
+  // instead of being told only that something went wrong.
+  expect(refused).toMatchObject({ ok: false, outcome: "failed", status: 503 });
+  expect((refused as { operationId?: string }).operationId)
+    .toBe(reservedBeforeRecovery!.command.operationId);
+  expect(commands).toHaveLength(0);
+
+  // ── Reload: a registry opened again from disk holds the same key and bytes ─
+  const reopened = new AgentRegistry(registryFile);
+  const afterReload = reopened.pendingDeliveries(conversation.id)
+    .find((delivery) => delivery.clientMessageId === "dead-host-whole-message")!;
+  expect(afterReload.text).toBe("look at this");
+  expect(afterReload.runtimeImages).toEqual([imageRef]);
+  expect(afterReload.command.operationId).toBe(reservedBeforeRecovery!.command.operationId);
+
+  // ── Backoff: the same key is retried automatically, and this time it lands ─
+  hosted = true;
+  recordStructuredOwner(registry, conversation);
+  const delivered = await deliverHeldStructuredMessage({
+    conversationId: conversation.id,
+    path: artifactPath,
+    deliveryId: afterReload.command.operationId,
+    clientMessageId: "dead-host-whole-message",
+    text: "look at this",
+    imageRefs: afterReload.runtimeImages,
+    command: afterReload.command,
+  }, {
+    enabled: () => true,
+    client: () => client,
+    registry: () => registry,
+    kick: () => {},
+  } as never);
+
+  expect(delivered).toBe("delivered");
+  // Exactly one delivery, carrying the image the first attempt reserved.
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toMatchObject({ idempotencyKey: "dead-host-whole-message" });
+  expect(commands[0]!.images).toEqual([imageRef]);
+  // And the bytes were published once, not once per attempt.
+  expect(stores).toBe(1);
+});
+
+/**
+ * A RECLAIMED CONVERSATION HOLDS THE PHOTO TOO.
+ *
+ * The dead-host composer offers attachments, and a reclaimed conversation is
+ * precisely where it offers them: the host record is gone, so the runtime
+ * snapshot has no session for it at all. That send went down the hold path,
+ * which refused every image payload outright — "structured host image delivery
+ * is unavailable", 409, nothing reserved, nothing published, no operation id.
+ * The operator pressed Send once and the message stayed in a browser tab.
+ *
+ * The whole payload is admitted here, through the same publication and the
+ * same lock the live path takes, BEFORE the host is raised. Asserted on both
+ * roads into that path — a conversation with no session at all, and one whose
+ * projection is `unhosted` — and across the failure the operator actually hit:
+ * the resume fails, and the reservation with its bytes is still there for the
+ * retry that lands.
+ */
+for (const projection of ["missing-session", "unhosted-projection"] as const) {
+  test(`a reclaimed ${projection} send of text AND an image reserves the whole message before recovery, and delivers it once`, async () => {
+    const { registry, conversation } = registryWithConversation();
+    const generation = conversation.generations.at(-1)!;
+    registry.upsert({
+      key: { engine: conversation.engine, sessionId: generation.id },
+      artifactPath: generation.path,
+      cwd: generation.launchProfile.cwd,
+      accountId: generation.accountId,
+      launchProfile: generation.launchProfile,
+      status: "idle",
+      host: null,
+      structuredHost: {
+        kind: "codex-app-server",
+        endpoint: "stdio:released",
+        process: null,
+        eventCursor: 11,
+        protocolVersion: "v2",
+        writerClaimEpoch: 8,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 8,
+      claimOwner: "structured-host:stale-owner",
+      pendingAction: null,
+    });
+    expect(conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
+      conversationId: conversation.id,
+      transcriptPath: artifactPath,
+    }).condition).toBe("reclaimed");
+
+    const imageRef: StructuredImageRef = { sha256: "e".repeat(64), mime: "image/png", bytes: 67 };
+    const reclaimedSnapshot = () => {
+      const projected = snapshot(conversation.id, "codex", true);
+      if (projection === "missing-session") return { ...projected, sessions: [] };
+      projected.sessions[0] = { ...projected.sessions[0]!, hostKind: "unhosted", host: "unhosted" };
+      return projected;
+    };
+
+    let hosted = false;
+    let stores = 0;
+    let recoveryCalls = 0;
+    const reservedBeforeRecovery: HeldDelivery[] = [];
+    const commands: Array<{ idempotencyKey: string; images?: readonly StructuredImageRef[] }> = [];
+    const client = {
+      snapshot: async () => (hosted ? snapshot(conversation.id, "codex", true) : reclaimedSnapshot()),
+      command: async (command: { operationId: string; idempotencyKey: string; conversationId: string; kind: string; images?: StructuredImageRef[] }) => {
+        commands.push({ idempotencyKey: command.idempotencyKey, images: command.images });
+        return {
+          operationId: command.operationId,
+          replayed: false,
+          receipt: {
+            operationId: command.operationId,
+            idempotencyKey: command.idempotencyKey,
+            conversationId: command.conversationId,
+            kind: command.kind,
+            status: "delivered" as const,
+            queuePosition: null,
+            at: "2026-09-19T00:00:00.000Z",
+            revision: 1,
+          },
+        };
+      },
+      operationStatus: async (operationId: string) => ({
+        operationId,
+        replayed: false,
+        receipt: {
+          operationId,
+          idempotencyKey: "reclaimed-whole-message",
+          conversationId: conversation.id,
+          kind: "send" as const,
+          status: "delivered" as const,
+          queuePosition: null,
+          at: "2026-09-19T00:00:01.000Z",
+          revision: 2,
+        },
+      }),
+    } as unknown as RuntimeHostClient;
+
+    const dependencies = {
+      enabled: () => true,
+      client: () => client,
+      registry: () => registry,
+      storeImages: () => { stores += 1; return [imageRef]; },
+      previewImageRefs: () => [imageRef],
+      kick: () => {},
+    };
+    const message = {
+      path: artifactPath,
+      conversationId: conversation.id,
+      clientMessageId: "reclaimed-whole-message",
+      text: "look at this before you continue",
+      images: [{ base64: PNG_BASE64, mime: "image/png" }],
+    };
+
+    // ── The resume fails: the account lock is busy ────────────────────────────
+    const refused = await enqueueStructuredMessage(message, {
+      ...dependencies,
+      recover: async () => {
+        recoveryCalls += 1;
+        reservedBeforeRecovery.push(...registry.pendingDeliveries(conversation.id));
+        throw new Error("account lock is busy");
+      },
+    } as never);
+
+    // The whole payload was durable BEFORE the host was raised.
+    expect(recoveryCalls).toBe(1);
+    expect(reservedBeforeRecovery).toHaveLength(1);
+    expect(reservedBeforeRecovery[0]).toMatchObject({
+      clientMessageId: "reclaimed-whole-message",
+      text: "look at this before you continue",
+      payloadKind: "runtime-images",
+      recoveryIntent: "reclaimed-host",
+    });
+    expect(reservedBeforeRecovery[0]!.runtimeImages).toEqual([imageRef]);
+    expect(stores).toBe(1);
+    // The failure names the reason and the operation, so the browser can show
+    // one retry against this message rather than a bare 503.
+    expect(refused).toMatchObject({ ok: false, outcome: "failed", status: 503 });
+    expect((refused as { error: string }).error).toContain("account lock is busy");
+    expect((refused as { operationId?: string }).operationId)
+      .toBe(reservedBeforeRecovery[0]!.command.operationId);
+    expect(commands).toHaveLength(0);
+
+    // ── The failure preserved it: same key, same bytes, still the only row ────
+    const preserved = registry.pendingDeliveries(conversation.id);
+    expect(preserved).toHaveLength(1);
+    expect(preserved[0]!.runtimeImages).toEqual([imageRef]);
+    expect(preserved[0]!.command.operationId).toBe(reservedBeforeRecovery[0]!.command.operationId);
+
+    // ── The retry resumes the host, and the message lands exactly once ────────
+    const accepted = await enqueueStructuredMessage(message, {
+      ...dependencies,
+      recover: async () => {
+        recoveryCalls += 1;
+        recordStructuredOwner(registry, conversation);
+        hosted = true;
+        return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true };
+      },
+    } as never);
+    expect(accepted).toMatchObject({ ok: true, outcome: "held" });
+    /* One reservation, still the first one: a retry under the same key adopts
+       the row that already exists rather than minting a second message. The
+       bytes may be re-offered to the store, which is content-addressed and
+       answers with the same refs, but nothing new is reserved. */
+    expect(registry.pendingDeliveries(conversation.id)).toHaveLength(1);
+    expect(registry.pendingDeliveries(conversation.id)[0]!.command.operationId)
+      .toBe(reservedBeforeRecovery[0]!.command.operationId);
+    expect(registry.pendingDeliveries(conversation.id)[0]!.runtimeImages).toEqual([imageRef]);
+
+    const reservation = registry.pendingDeliveries(conversation.id)[0]!;
+    const delivered = await deliverHeldStructuredMessage({
+      conversationId: conversation.id,
+      path: artifactPath,
+      deliveryId: reservation.command.operationId,
+      clientMessageId: "reclaimed-whole-message",
+      text: reservation.text,
+      imageRefs: reservation.runtimeImages,
+      command: reservation.command,
+    }, {
+      enabled: () => true,
+      client: () => client,
+      registry: () => registry,
+      kick: () => {},
+    });
+
+    expect(delivered).toBe("delivered");
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ idempotencyKey: "reclaimed-whole-message" });
+    expect(commands[0]!.images).toEqual([imageRef]);
+  });
+}
 
 for (const withImage of [false, true]) {
   test(`send admission waits for a short account mutation (${withImage ? "image" : "text"})`, async () => {

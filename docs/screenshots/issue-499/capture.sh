@@ -146,16 +146,16 @@ shot dead-390-en-light      390 844  dead en light
 shot dead-390x600-en-light  390 600  dead en light
 shot dead-390-uk-light      390 844  dead uk light
 shot dead-390x600-uk-light  390 600  dead uk light
-DEAD_EN_BODY='saved durably and delivered after the host recovers'
-DEAD_EN_IMAGES='staged ones stay selected and are delivered after recovery'
-DEAD_UK_BODY='надійно зберігається і буде доставлений після відновлення хоста'
-DEAD_UK_IMAGES='будуть доставлені після відновлення'
+DEAD_EN_BODY='text and images together'
+DEAD_EN_IMAGES='started again'
+DEAD_UK_BODY='і текст, і зображення'
+DEAD_UK_IMAGES='запускається знову'
 for geometry in "844" "600"; do
   verify "dead-en-$geometry" 390 "$geometry" "view=dead&lang=en&theme=light" \
     '"bannerVisible":true' \
     '"recoveryActions":3' \
     '"sendAriaDisabled":"false"' \
-    '"imagesNotice":true' \
+    '"imagesOffered":true' \
     '"pillVisible":false' \
     "$DEAD_EN_BODY" \
     "$DEAD_EN_IMAGES"
@@ -163,7 +163,7 @@ for geometry in "844" "600"; do
     '"bannerVisible":true' \
     '"recoveryActions":3' \
     '"sendAriaDisabled":"false"' \
-    '"imagesNotice":true' \
+    '"imagesOffered":true' \
     '"pillVisible":false' \
     "$DEAD_UK_BODY" \
     "$DEAD_UK_IMAGES"

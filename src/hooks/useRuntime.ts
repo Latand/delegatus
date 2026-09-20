@@ -349,6 +349,69 @@ export function sendRuntimeMessage(options: SendOptions): Promise<CommandResult>
   });
 }
 
+/**
+ * What became of a message whose send response never arrived, asked under the
+ * ORIGINAL key and answered without sending anything.
+ *
+ * A lost response is not evidence of a lost message. Posting the send again to
+ * find out is the one recovery that is never allowed: under a key the server
+ * already admitted, a second POST is a second request against a message that
+ * is already on its way. So this is a GET, and the three answers it can give
+ * are the three the caller must distinguish —
+ *
+ * - `admitted`: a durable record exists under the key. The operation id, and
+ *   whatever is known of its fate, come back with it. Nothing may be resent.
+ * - `not-executed`: the record was READ and holds nothing under the key, which
+ *   is affirmative evidence the message never started. Only this answer
+ *   authorizes a later attempt.
+ * - `unknown`: nothing could be read. The attempt keeps its uncertainty and
+ *   all its bytes, and the caller may simply ask again.
+ *
+ * A transport failure is `unknown` too: a lookup that could not be made has
+ * observed nothing, and reading it as absence is how a delivered message gets
+ * sent twice.
+ */
+export type RuntimeAdmissionOutcome = "admitted" | "not-executed" | "unknown";
+
+export interface RuntimeAdmissionLookup {
+  outcome: RuntimeAdmissionOutcome;
+  operationId?: string;
+  receipt?: RuntimeReceipt;
+  reason?: string;
+}
+
+export async function lookupRuntimeAdmission(
+  conversationId: string,
+  clientMessageId: string,
+): Promise<RuntimeAdmissionLookup> {
+  try {
+    const response = await fetch(`/api/runtime/send?conversationId=${encodeURIComponent(conversationId)}`
+      + `&clientMessageId=${encodeURIComponent(clientMessageId)}`);
+    const payload: unknown = await response.json().catch(() => null);
+    const json = payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as Record<string, unknown> : {};
+    if (!response.ok) return { outcome: "unknown", reason: typeof json.error === "string" ? json.error : undefined };
+    if (json.outcome === "admitted") {
+      const candidate = json.receipt;
+      const receipt = candidate && typeof candidate === "object" && !Array.isArray(candidate)
+        && "operationId" in candidate && typeof candidate.operationId === "string"
+        && "idempotencyKey" in candidate && typeof candidate.idempotencyKey === "string"
+        && "conversationId" in candidate && typeof candidate.conversationId === "string"
+        && "status" in candidate && typeof candidate.status === "string"
+        ? candidate as RuntimeReceipt : undefined;
+      return {
+        outcome: "admitted",
+        ...(typeof json.operationId === "string" ? { operationId: json.operationId } : {}),
+        ...(receipt ? { receipt } : {}),
+      };
+    }
+    if (json.outcome === "not-executed") return { outcome: "not-executed" };
+    return { outcome: "unknown", reason: typeof json.reason === "string" ? json.reason : undefined };
+  } catch {
+    return { outcome: "unknown" };
+  }
+}
+
 export interface InjectOptions {
   conversationId: string;
   text: string;

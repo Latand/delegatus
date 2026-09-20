@@ -25,7 +25,7 @@ import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { readStructuredHostRecords, terminateStructuredHostTree } from "./structuredHostControl";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
-import { INITIAL_MESSAGE_TIMEOUT_MS, STALE_STRUCTURED_SPAWN_TIMEOUT_MS, STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS, reconcileStructuredSpawnReplay, recoverPendingStructuredSpawns, spawnStructuredConversation, StructuredInitialMessageTimeoutError, claudeHostLaunchPaths, structuredClaudeLaunchForm, structuredClaudePermissionMode, structuredClaudeSpawnPolicyBaseSettingsPath, waitForStructuredInitialMessage, withRuntimeAdmissionRetry, type SpawnedStructuredHost } from "./structuredSpawn";
+import { INITIAL_MESSAGE_TIMEOUT_MS, STALE_STRUCTURED_SPAWN_TIMEOUT_MS, stagedLaunchRecovery, STAGED_RECOVERY_BUDGET_MS, STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS, reconcileStructuredSpawnReplay, recoverPendingStructuredSpawns, spawnStructuredConversation, StructuredInitialMessageTimeoutError, claudeHostLaunchPaths, structuredClaudeLaunchForm, structuredClaudePermissionMode, structuredClaudeSpawnPolicyBaseSettingsPath, waitForStructuredInitialMessage, withRuntimeAdmissionRetry, type SpawnedStructuredHost } from "./structuredSpawn";
 import { materializeStructuredTerminal } from "./structuredTerminal";
 import { structuredContentDigest } from "./structuredContent";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
@@ -470,7 +470,7 @@ test("issue 533: matching runtime and transcript evidence preserves a claimed pa
 
   expect(recovered).toMatchObject({ state: "completed", initialMessage: "delivered" });
   expect(registry.snapshot().entries[`codex:${id}`]).toMatchObject({
-    claimOwner: "claim-runtime-owner", claimEpoch: 7, pendingAction: "spawn",
+    claimOwner: "claim-runtime-owner", claimEpoch: 7, pendingAction: null,
     structuredHost: {
       endpoint: "stdio:claimed",
       process: { pid: process.pid, startIdentity: "claimed-runtime-host" },
@@ -1846,7 +1846,7 @@ test("a runtime synchronization hold preserves the staged spawn until recovery d
     state: "path-pending",
     key: { engine: "codex", sessionId: id },
     artifactPath,
-    error: null,
+    error: expect.stringContaining("structured launch recovery: "),
   });
   expect(registry.snapshot().entries[`codex:${id}`]).toMatchObject({
     pendingAction: "spawn",
@@ -1877,7 +1877,8 @@ test("a runtime synchronization hold preserves the staged spawn until recovery d
   });
 
   await recoverPendingStructuredSpawns(registry, client);
-  await recoverPendingStructuredSpawns(registry, client);
+  const wait = stagedLaunchRecovery(registry.snapshot().receipts[begun.receipt.launchId])!;
+  await reconcileStructuredSpawnReplay(begun.receipt.launchId, registry, client, { now: () => wait.nextTryAt });
   await waitFor(() => host.sent.length === 1);
 
   expect(host.sent.map((entry) => ({ id: entry.id, text: entry.text }))).toEqual([{
@@ -1970,7 +1971,7 @@ test("issue 533: an initial-message status timeout releases admission ownership 
   expect(registry.snapshot().entries[`codex:${id}`]).toMatchObject({
     claimOwner: claimedBeforeRecovery.claimOwner,
     claimEpoch: claimedBeforeRecovery.claimEpoch,
-    pendingAction: claimedBeforeRecovery.pendingAction,
+    pendingAction: null,
     structuredHost: { process: claimedBeforeRecovery.structuredHost!.process },
   });
   expect(host.releaseCount).toBe(0);
@@ -2053,7 +2054,7 @@ test("issue 533: transport-uncertain initial-message admission preserves the sta
   expect(host.releaseCount).toBe(0);
 });
 
-test("issue 533: replay re-admits a first message lost before runtime journal admission", async () => {
+test("an uncertain first-message admission stays lookup-only until its budget is exhausted", async () => {
   const id = crypto.randomUUID();
   const cwd = path.join(sandbox, `pre-admission-timeout-${id}`);
   fs.mkdirSync(cwd, { recursive: true });
@@ -2126,18 +2127,15 @@ test("issue 533: replay re-admits a first message lost before runtime journal ad
   await bindStructuredDeliveryQueue([{ key: { engine: "codex", sessionId: id }, host }], { registry, client: durableClient });
   await reconcileStructuredSpawnReplay(begun.receipt.launchId, registry, durableClient);
   await kickStructuredDeliveryQueue();
-  await waitFor(() => registry.snapshot().receipts[begun!.receipt.launchId]?.state === "completed");
-
-  expect(host.sent.map((entry) => entry.text)).toEqual(["replay immutable first message"]);
-  expect(registry.snapshot().receipts[begun.receipt.launchId]).toMatchObject({
-    state: "completed",
-    completionMode: "route-recovered",
+  expect(host.sent).toEqual([]);
+  const wait = stagedLaunchRecovery(registry.snapshot().receipts[begun.receipt.launchId])!;
+  await reconcileStructuredSpawnReplay(begun.receipt.launchId, registry, durableClient, {
+    now: () => wait.startedAt + STAGED_RECOVERY_BUDGET_MS,
   });
-  expect((await durableClient.operationStatus(`spawn_message_${begun.receipt.launchId}`))?.receipt.status).toBe("delivered");
+  expect(stagedLaunchRecovery(registry.snapshot().receipts[begun.receipt.launchId])).toMatchObject({ stopped: true, phase: "uncertain" });
+  expect(await durableClient.operationStatus(`spawn_message_${begun.receipt.launchId}`)).toBeNull();
+  expect(host.sent).toEqual([]);
   expect(host.releaseCount).toBe(0);
-  await reconcileStructuredSpawnReplay(begun.receipt.launchId, registry, durableClient);
-  await kickStructuredDeliveryQueue();
-  expect(host.sent.map((entry) => entry.text)).toEqual(["replay immutable first message"]);
 });
 
 test("a failed resume before identity staging projects dead ownership so the following send recovers", async () => {
@@ -5670,4 +5668,82 @@ test("issue 1071: a stage retry supersedes its queued predecessor even though it
   } finally {
     journal.close();
   }
+});
+
+
+test.each(["healthy", "uncertain acknowledgement", "payload timeout"] as const)("a recreated controller recovers durable identity without its continuation closure (%s)", async (fault) => {
+  const id = crypto.randomUUID();
+  const cwd = path.join(sandbox, `durable-staged-${id}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const host = new RoundTripHost("codex", artifactPath, id);
+  const key = { engine: "codex" as const, sessionId: id };
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", accountId: "work" });
+  if (begun.kind !== "created") throw new Error("fixture reservation failed");
+  let starts = 0;
+  const stages = spyOn(registry, "stageStructuredSpawn");
+  const response = await spawnStructuredConversation({
+    engine: "codex", receipt: begun.receipt, registry, client, prompt: "recover this original first message",
+    spec: { engine: "codex", command: "codex", cwd, windowName: "recovery" },
+    account: { engine: "codex", accountId: "work", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+  }, {
+    startHost: async () => { starts++; return host; },
+    bindHost: async (store, target, running, owner, epoch) => {
+      const state = await running.health();
+      store.setStructuredHostClaimed(target, {
+        kind: "codex-app-server", endpoint: state.endpoint,
+        process: { pid: process.pid, startIdentity: "recovered-test-host" },
+        eventCursor: state.eventCursor, protocolVersion: state.protocolVersion, writerClaimEpoch: epoch,
+        activeTurnRef: state.activeTurnRef, pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
+      }, "idle", owner, epoch);
+      return () => {};
+    },
+    publishHost: async () => { throw new RuntimeHostUnavailableError("runtime host request timed out"); },
+  });
+  expect(response).toMatchObject({ state: "path-pending", initialMessage: "queued" });
+  expect(host.sent).toEqual([]);
+  // Lose every launch-local closure, as a replaced Viewer does. The host here
+  // stands for startup's adopted host of the SAME session; recovery cannot start one.
+  (process as typeof process & { __llvStagedContinuations?: Map<string, unknown> }).__llvStagedContinuations?.delete(begun.receipt.launchId);
+  const reopened = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
+  await bindStructuredDeliveryQueue([ { key, host } ], { registry: reopened, client });
+  const { recoverStagedStructuredLaunch } = await import("./structuredSpawn");
+  const originalCommand = client.command.bind(client);
+  if (fault === "uncertain acknowledgement") {
+    client.command = async (command) => {
+      const accepted = await originalCommand(command);
+      if (command.kind === "send") throw new RuntimeHostUnavailableError("runtime host request timed out");
+      return accepted;
+    };
+  }
+  if (fault === "payload timeout") {
+    const readPayload = client.effectBatch.bind(client);
+    let reads = 0;
+    client.effectBatch = async (...args) => {
+      if (reads++ === 0) throw new RuntimeHostUnavailableError("runtime host request timed out");
+      return readPayload(...args);
+    };
+    await recoverStagedStructuredLaunch(begun.receipt.launchId, reopened, client);
+    expect(host.sent).toEqual([]);
+    expect(stagedLaunchRecovery(reopened.snapshot().receipts[begun.receipt.launchId])?.phase).toBe("unpublished");
+    client.effectBatch = readPayload;
+  }
+  const firstRecovery = stagedLaunchRecovery(reopened.snapshot().receipts[begun.receipt.launchId])!;
+  await recoverStagedStructuredLaunch(begun.receipt.launchId, reopened, client, { now: () => firstRecovery.nextTryAt });
+  await kickStructuredDeliveryQueue();
+  await waitFor(() => host.sent.length === 1);
+  const recovery = stagedLaunchRecovery(reopened.snapshot().receipts[begun.receipt.launchId])!;
+  await recoverStagedStructuredLaunch(begun.receipt.launchId, reopened, client, { now: () => recovery.nextTryAt });
+  expect(reopened.snapshot().receipts[begun.receipt.launchId]).toMatchObject({ state: "completed", key });
+  expect(starts).toBe(1);
+  expect(stages).toHaveBeenCalledTimes(1);
+  expect(Object.keys(reopened.snapshot().receipts)).toEqual([begun.receipt.launchId]);
+  expect(host.sent.map((entry) => entry.id)).toEqual([`spawn_message_${begun.receipt.launchId}`]);
+  expect(host.sent[0]?.text).toBe("recover this original first message");
+  await bindStructuredDeliveryQueue([]);
+  journal.close();
 });
