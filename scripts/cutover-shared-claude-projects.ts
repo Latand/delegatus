@@ -21,6 +21,11 @@ import path from "node:path";
 import { legacyClaudeHome, claudeAccountsRoot, sharedClaudeProjectsRoot } from "../src/lib/accounts/claude";
 import { stateDir } from "../src/lib/configDir";
 
+/* This script administers the operator's live state, which is what the `tool`
+   owner is for (#1905). A script that only needs *a* state directory sets
+   LLV_STATE_DIR instead. */
+if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "tool";
+
 const EXECUTE = process.argv.includes("--execute");
 const ALLOW_LIVE = process.argv.includes("--allow-live");
 

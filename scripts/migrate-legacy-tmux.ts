@@ -4,6 +4,11 @@ import { createLegacyMigration, persistLegacyMigration } from "@/lib/agent/migra
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
 
+/* This script administers the operator's live state, which is what the `tool`
+   owner is for (#1905). A script that only needs *a* state directory sets
+   LLV_STATE_DIR instead. */
+if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "tool";
+
 function arg(name: string): string | null {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] ?? null : null;
