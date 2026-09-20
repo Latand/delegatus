@@ -1,5 +1,5 @@
 {
-  "commit": "4f6950639e91fb8428a71fc642021ff93d4d3a5a",
+  "commit": "6114f02f276e955e3c132ec068c5bd26d511c0d0",
   "case": "seats",
   "seeded": {
     "productTasks": 5,
@@ -235,7 +235,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 19:57",
+          "span": "since 19 Sep 20:49",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -243,7 +243,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 06:49 – 19 Sep 19:57 · 13 h",
+          "span": "19 Sep 07:41 – 19 Sep 20:49 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -251,13 +251,20 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 02:49 – 19 Sep 06:49 · 28 h",
+          "span": "18 Sep 03:41 – 19 Sep 07:41 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
         }
       ],
-      "openNotes": 1
+      "openNotes": 1,
+      "notesPaint": {
+        "fill": "rgb(243, 243, 246)",
+        "border": "rgb(230, 230, 234)",
+        "borderWidth": 1,
+        "rowHoverFill": "#f0f0f4",
+        "rowFill": "rgb(240, 240, 244)"
+      }
     },
     "head": [
       {
@@ -323,7 +330,45 @@
           "h": 28
         }
       }
-    ]
+    ],
+    "hidden": {
+      "count": 0,
+      "tasks": []
+    },
+    "overview": {
+      "columns": [
+        {
+          "status": "inbox",
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "cards": [
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "cards": [],
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "seatCards": 0
+        }
+      ],
+      "hidden": {
+        "count": 0,
+        "tasks": []
+      }
+    }
   },
   "seats-1440-en-dark": {
     "base": {
@@ -551,7 +596,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 19:57",
+          "span": "since 19 Sep 20:49",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -559,7 +604,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 06:49 – 19 Sep 19:57 · 13 h",
+          "span": "19 Sep 07:41 – 19 Sep 20:49 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -567,13 +612,20 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 02:49 – 19 Sep 06:49 · 28 h",
+          "span": "18 Sep 03:41 – 19 Sep 07:41 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
         }
       ],
-      "openNotes": 1
+      "openNotes": 1,
+      "notesPaint": {
+        "fill": "rgb(13, 13, 17)",
+        "border": "rgb(38, 38, 46)",
+        "borderWidth": 1,
+        "rowHoverFill": "#131318",
+        "rowFill": "rgb(19, 19, 24)"
+      }
     },
     "head": [
       {
@@ -639,7 +691,45 @@
           "h": 28
         }
       }
-    ]
+    ],
+    "hidden": {
+      "count": 0,
+      "tasks": []
+    },
+    "overview": {
+      "columns": [
+        {
+          "status": "inbox",
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "cards": [
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "cards": [],
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "seatCards": 0
+        }
+      ],
+      "hidden": {
+        "count": 0,
+        "tasks": []
+      }
+    }
   },
   "seats-1440-uk-light": {
     "base": {
@@ -858,7 +948,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 19:57",
+          "span": "з 19 вер. 20:49",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -866,7 +956,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 06:49 – 19 вер. 19:57 · 13 год",
+          "span": "19 вер. 07:41 – 19 вер. 20:49 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -874,13 +964,20 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 02:49 – 19 вер. 06:49 · 28 год",
+          "span": "18 вер. 03:41 – 19 вер. 07:41 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
         }
       ],
-      "openNotes": 1
+      "openNotes": 1,
+      "notesPaint": {
+        "fill": "rgb(243, 243, 246)",
+        "border": "rgb(230, 230, 234)",
+        "borderWidth": 1,
+        "rowHoverFill": "#f0f0f4",
+        "rowFill": "rgb(240, 240, 244)"
+      }
     },
     "head": [
       {
@@ -937,7 +1034,45 @@
           "h": 28
         }
       }
-    ]
+    ],
+    "hidden": {
+      "count": 0,
+      "tasks": []
+    },
+    "overview": {
+      "columns": [
+        {
+          "status": "inbox",
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "cards": [
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "cards": [],
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "seatCards": 0
+        }
+      ],
+      "hidden": {
+        "count": 0,
+        "tasks": []
+      }
+    }
   },
   "seats-1440-uk-dark": {
     "base": {
@@ -1156,7 +1291,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 19:57",
+          "span": "з 19 вер. 20:49",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1164,7 +1299,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 06:49 – 19 вер. 19:57 · 13 год",
+          "span": "19 вер. 07:41 – 19 вер. 20:49 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -1172,13 +1307,20 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 02:49 – 19 вер. 06:49 · 28 год",
+          "span": "18 вер. 03:41 – 19 вер. 07:41 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
         }
       ],
-      "openNotes": 1
+      "openNotes": 1,
+      "notesPaint": {
+        "fill": "rgb(13, 13, 17)",
+        "border": "rgb(38, 38, 46)",
+        "borderWidth": 1,
+        "rowHoverFill": "#131318",
+        "rowFill": "rgb(19, 19, 24)"
+      }
     },
     "head": [
       {
@@ -1235,7 +1377,45 @@
           "h": 28
         }
       }
-    ]
+    ],
+    "hidden": {
+      "count": 0,
+      "tasks": []
+    },
+    "overview": {
+      "columns": [
+        {
+          "status": "inbox",
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "cards": [
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "cards": [],
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "seatCards": 0
+        }
+      ],
+      "hidden": {
+        "count": 0,
+        "tasks": []
+      }
+    }
   },
   "seats-1280-en-light": {
     "base": {
@@ -1454,7 +1634,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 19:57",
+          "span": "since 19 Sep 20:49",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1462,7 +1642,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 06:49 – 19 Sep 19:57 · 13 h",
+          "span": "19 Sep 07:41 – 19 Sep 20:49 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -1470,13 +1650,20 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 02:49 – 19 Sep 06:49 · 28 h",
+          "span": "18 Sep 03:41 – 19 Sep 07:41 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
         }
       ],
-      "openNotes": 1
+      "openNotes": 1,
+      "notesPaint": {
+        "fill": "rgb(243, 243, 246)",
+        "border": "rgb(230, 230, 234)",
+        "borderWidth": 1,
+        "rowHoverFill": "#f0f0f4",
+        "rowFill": "rgb(240, 240, 244)"
+      }
     },
     "head": [
       {
@@ -1533,7 +1720,45 @@
           "h": 28
         }
       }
-    ]
+    ],
+    "hidden": {
+      "count": 0,
+      "tasks": []
+    },
+    "overview": {
+      "columns": [
+        {
+          "status": "inbox",
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "cards": [
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "cards": [],
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "seatCards": 0
+        }
+      ],
+      "hidden": {
+        "count": 0,
+        "tasks": []
+      }
+    }
   },
   "seats-1280-en-dark": {
     "base": {
@@ -1752,7 +1977,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 19:57",
+          "span": "since 19 Sep 20:49",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1760,7 +1985,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 06:49 – 19 Sep 19:57 · 13 h",
+          "span": "19 Sep 07:41 – 19 Sep 20:49 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -1768,13 +1993,20 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 02:49 – 19 Sep 06:49 · 28 h",
+          "span": "18 Sep 03:41 – 19 Sep 07:41 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
         }
       ],
-      "openNotes": 1
+      "openNotes": 1,
+      "notesPaint": {
+        "fill": "rgb(13, 13, 17)",
+        "border": "rgb(38, 38, 46)",
+        "borderWidth": 1,
+        "rowHoverFill": "#131318",
+        "rowFill": "rgb(19, 19, 24)"
+      }
     },
     "head": [
       {
@@ -1831,7 +2063,45 @@
           "h": 28
         }
       }
-    ]
+    ],
+    "hidden": {
+      "count": 0,
+      "tasks": []
+    },
+    "overview": {
+      "columns": [
+        {
+          "status": "inbox",
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "cards": [
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "cards": [],
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "seatCards": 0
+        }
+      ],
+      "hidden": {
+        "count": 0,
+        "tasks": []
+      }
+    }
   },
   "seats-1280-uk-light": {
     "base": {
@@ -2050,7 +2320,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 19:57",
+          "span": "з 19 вер. 20:49",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -2058,7 +2328,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 06:49 – 19 вер. 19:57 · 13 год",
+          "span": "19 вер. 07:41 – 19 вер. 20:49 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -2066,13 +2336,20 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 02:49 – 19 вер. 06:49 · 28 год",
+          "span": "18 вер. 03:41 – 19 вер. 07:41 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
         }
       ],
-      "openNotes": 1
+      "openNotes": 1,
+      "notesPaint": {
+        "fill": "rgb(243, 243, 246)",
+        "border": "rgb(230, 230, 234)",
+        "borderWidth": 1,
+        "rowHoverFill": "#f0f0f4",
+        "rowFill": "rgb(240, 240, 244)"
+      }
     },
     "head": [
       {
@@ -2129,7 +2406,45 @@
           "h": 28
         }
       }
-    ]
+    ],
+    "hidden": {
+      "count": 0,
+      "tasks": []
+    },
+    "overview": {
+      "columns": [
+        {
+          "status": "inbox",
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "cards": [
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "cards": [],
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "seatCards": 0
+        }
+      ],
+      "hidden": {
+        "count": 0,
+        "tasks": []
+      }
+    }
   },
   "seats-1280-uk-dark": {
     "base": {
@@ -2348,7 +2663,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 19:57",
+          "span": "з 19 вер. 20:49",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -2356,7 +2671,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 06:49 – 19 вер. 19:57 · 13 год",
+          "span": "19 вер. 07:41 – 19 вер. 20:49 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -2364,13 +2679,20 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 02:49 – 19 вер. 06:49 · 28 год",
+          "span": "18 вер. 03:41 – 19 вер. 07:41 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
         }
       ],
-      "openNotes": 1
+      "openNotes": 1,
+      "notesPaint": {
+        "fill": "rgb(13, 13, 17)",
+        "border": "rgb(38, 38, 46)",
+        "borderWidth": 1,
+        "rowHoverFill": "#131318",
+        "rowFill": "rgb(19, 19, 24)"
+      }
     },
     "head": [
       {
@@ -2427,7 +2749,45 @@
           "h": 28
         }
       }
-    ]
+    ],
+    "hidden": {
+      "count": 0,
+      "tasks": []
+    },
+    "overview": {
+      "columns": [
+        {
+          "status": "inbox",
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "cards": [
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "cards": [],
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "seatCards": 0
+        }
+      ],
+      "hidden": {
+        "count": 0,
+        "tasks": []
+      }
+    }
   },
   "seats-390-en-light": {
     "row": {
@@ -2444,19 +2804,19 @@
       {
         "current": true,
         "h": 56,
-        "text": "Orchestrator seat, board batchsince 19 Sep 19:57Notes",
+        "text": "Orchestrator seat, board batchsince 19 Sep 20:49Notes",
         "notes": 44
       },
       {
         "current": false,
         "h": 56,
-        "text": "Manager seat, release week19 Sep 06:49 – 19 Sep 19:57 · 13 hNotes",
+        "text": "Manager seat, release week19 Sep 07:41 – 19 Sep 20:49 · 13 hNotes",
         "notes": 44
       },
       {
         "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 Sep 02:49 – 19 Sep 06:49 · 28 hNotes",
+        "text": "Orchestrator seat, launch week18 Sep 03:41 – 19 Sep 07:41 · 28 hNotes",
         "notes": 44
       }
     ],
@@ -2478,19 +2838,19 @@
       {
         "current": true,
         "h": 56,
-        "text": "Orchestrator seat, board batchsince 19 Sep 19:57Notes",
+        "text": "Orchestrator seat, board batchsince 19 Sep 20:49Notes",
         "notes": 44
       },
       {
         "current": false,
         "h": 56,
-        "text": "Manager seat, release week19 Sep 06:49 – 19 Sep 19:57 · 13 hNotes",
+        "text": "Manager seat, release week19 Sep 07:41 – 19 Sep 20:49 · 13 hNotes",
         "notes": 44
       },
       {
         "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 Sep 02:49 – 19 Sep 06:49 · 28 hNotes",
+        "text": "Orchestrator seat, launch week18 Sep 03:41 – 19 Sep 07:41 · 28 hNotes",
         "notes": 44
       }
     ],
@@ -2512,19 +2872,19 @@
       {
         "current": true,
         "h": 56,
-        "text": "Orchestrator seat, board batchз 19 вер. 19:57Нотатки",
+        "text": "Orchestrator seat, board batchз 19 вер. 20:49Нотатки",
         "notes": 44
       },
       {
         "current": false,
         "h": 56,
-        "text": "Manager seat, release week19 вер. 06:49 – 19 вер. 19:57 · 13 годНотатки",
+        "text": "Manager seat, release week19 вер. 07:41 – 19 вер. 20:49 · 13 годНотатки",
         "notes": 44
       },
       {
         "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 вер. 02:49 – 19 вер. 06:49 · 28 годНотатки",
+        "text": "Orchestrator seat, launch week18 вер. 03:41 – 19 вер. 07:41 · 28 годНотатки",
         "notes": 44
       }
     ],
@@ -2546,19 +2906,19 @@
       {
         "current": true,
         "h": 56,
-        "text": "Orchestrator seat, board batchз 19 вер. 19:57Нотатки",
+        "text": "Orchestrator seat, board batchз 19 вер. 20:49Нотатки",
         "notes": 44
       },
       {
         "current": false,
         "h": 56,
-        "text": "Manager seat, release week19 вер. 06:49 – 19 вер. 19:57 · 13 годНотатки",
+        "text": "Manager seat, release week19 вер. 07:41 – 19 вер. 20:49 · 13 годНотатки",
         "notes": 44
       },
       {
         "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 вер. 02:49 – 19 вер. 06:49 · 28 годНотатки",
+        "text": "Orchestrator seat, launch week18 вер. 03:41 – 19 вер. 07:41 · 28 годНотатки",
         "notes": 44
       }
     ],
