@@ -331,7 +331,7 @@ async function postTaskSpawn(
      is minted and a missing target aborts the launch before any actuation. */
   let begun: SpawnBeginResult;
   try {
-    begun = registry.beginSpawnRequest({
+    begun = await registry.beginSpawnRequestAsync({
       engine,
       cwd: cwdResult.cwd,
       transport: "tmux",

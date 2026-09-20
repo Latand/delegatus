@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
+import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 
 import { activeClaudeAccountId, listClaudeAccounts, type ClaudeAccount } from "@/lib/accounts/claude";
 import { realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
-import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountProbeIdentity, claudeProbeCredentialIdentity, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { activeCodexAccountId, listCodexAccounts, type CodexAccount } from "@/lib/accounts/codex";
 import { managedCodexRuntime, type CodexQuotaProbe } from "@/lib/accounts/codexRuntime";
 import type { AppServerResetCredits } from "@/lib/accounts/codexAppServer";
@@ -16,6 +17,8 @@ import type { QuotaObservation, QuotaResetCredits } from "./quotaPolicy";
 export interface QuotaProbePort {
   list(engine: MigrationEngine): Array<ClaudeAccount | CodexAccount>;
   active(engine: MigrationEngine): string;
+  /** Optional backend-aware credential fingerprint; evaluated outside the lease. */
+  credentialIdentity?(engine: MigrationEngine, account: ClaudeAccount | CodexAccount): string | null;
   probe(engine: MigrationEngine, account: ClaudeAccount | CodexAccount, now: number, options?: QuotaProbeOptions): Promise<QuotaObservation>;
 }
 
@@ -123,6 +126,7 @@ export async function claudeQuotaObservation(
 const productionProbe: QuotaProbePort = {
   list: (engine) => engine === "claude" ? listClaudeAccounts() : listCodexAccounts(),
   active: (engine) => engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId(),
+  credentialIdentity: (engine, account) => engine === "claude" ? claudeProbeCredentialIdentity(account.home) : accountProbeIdentity(account),
   async probe(engine, account, now, options) {
     if (engine === "claude") return await claudeQuotaObservation(account as ClaudeAccount, now, options);
     const candidate = account as CodexAccount;
@@ -212,38 +216,75 @@ export class QuotaController {
   }
 
   async tick(engine: MigrationEngine): Promise<void> {
-    await withAccountMutationLockAsync(async () => this.tickLocked(engine));
-  }
-
-  private async tickLocked(engine: MigrationEngine): Promise<void> {
+    // Snapshot only bounded account metadata under the lease. Provider calls,
+    // child startup and transcript fallback reads belong outside it.
+    const snapshot = await withAccountMutationLockAsync(() => ({
+      accounts: this.probe.list(engine).map((account) => ({
+        account, identity: accountProbeIdentity(account),
+      })),
+      revision: accountsCollectionRevision(),
+      routing: this.registry.engineRouting(engine).revision,
+      active: this.probe.active(engine),
+    }), { holder: "quota snapshot" });
     const now = this.now();
-    const accounts = this.probe.list(engine);
-    const observations = await Promise.all(accounts.map(async (account) => {
+    const results = await Promise.all(snapshot.accounts.map(async ({ account }) => {
+      const credentialIdentity = this.probe.credentialIdentity?.(engine, account);
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const observation = await Promise.race([this.probe.probe(engine, account, now), probeTimeout(this.probeTimeoutMs)]);
-        /* An authenticated account whose limits fetch came back empty-handed
-           (rate-limited, provider hiccup) keeps its last known numbers. A live
-           `authenticated: false` answer is a real state change — sign-out must
-           surface, so it records as returned. */
-        if (observation.authenticated && !observation.limits) {
-          return this.carryForward(engine, account.id, observation.provenance.reason ?? "quota-probe-empty", now);
-        }
-        /* The freshest snapshot wins (issue #1849): numbers the provider
-           answered earlier than the ones already recorded — a snapshot served
-           from the shared cache under a backoff — never replace them, so an
-           older reading with no tiers cannot hide a newer one with a tier. */
-        const previous = this.registry.readOnlySnapshot().quotaObservations[engine][account.id];
-        if (observation.authenticated && previous?.limits && Date.parse(previous.observedAt) > observation.observedAt) {
-          return this.carryForward(engine, account.id, observation.provenance.reason ?? "quota-probe-older", now);
-        }
-        return observation;
+        const observation = await Promise.race([
+          this.probe.probe(engine, account, now),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("quota-probe-timeout")), this.probeTimeoutMs);
+            timer.unref?.();
+          }),
+        ]);
+        return { account, observation, reason: null, credentialIdentity };
       } catch (error) {
-        const reason = error instanceof Error && error.message === "quota-probe-timeout" ? "quota-probe-timeout" : "quota-probe-failed";
-        return this.carryForward(engine, account.id, reason, now);
+        return { account, observation: null, credentialIdentity, reason: error instanceof Error && error.message === "quota-probe-timeout" ? "quota-probe-timeout" : "quota-probe-failed" };
+      } finally {
+        clearTimeout(timer);
       }
     }));
-    observations.forEach((observation, index) => {
-      const account = accounts[index]!;
+    // Keychain reads may start a child; do them before admission. A Viewer
+    // login during admission is also fenced by the collection revision below.
+    const credentialsUnchanged = results.map(({ account, credentialIdentity }) => credentialIdentity !== null
+      && credentialIdentity === this.probe.credentialIdentity?.(engine, account));
+    const accepted = await withAccountMutationLockAsync(() => {
+      // A switch (including switch-away-and-back), removal or login mutation
+      // invalidates the read. Never let an old probe restore retired state.
+      if (snapshot.revision !== accountsCollectionRevision()
+        || snapshot.routing !== this.registry.engineRouting(engine).revision
+        || snapshot.active !== this.probe.active(engine)) return [];
+      const current = new Map(this.probe.list(engine).map((account) => [account.id, account]));
+      const observations: QuotaObservation[] = [];
+      for (const [index, result] of results.entries()) {
+        const account = current.get(result.account.id);
+        if (!credentialsUnchanged[index] || !account || snapshot.accounts[index]!.identity !== accountProbeIdentity(account)) continue;
+        const previous = this.registry.readOnlySnapshot().quotaObservations[engine][account.id];
+        // Another read may have committed while this one waited for its provider.
+        if (previous && Date.parse(previous.authCheckedAt) > now) continue;
+        const observation = result.observation;
+        if (!observation || (observation.authenticated && (!observation.limits
+          || (previous?.limits && Date.parse(previous.observedAt) > observation.observedAt)))) {
+          observations.push(this.carryForward(engine, account.id, result.reason ?? observation?.provenance.reason ?? "quota-probe-empty", now));
+        } else {
+          observations.push(observation);
+        }
+      }
+      if (observations.length) {
+        this.registry.recordQuotaEvaluation({
+          engine,
+          observations: observations.map((observation) => durableQuotaObservation({ ...observation, engine }, this.bootId)),
+          signature: null, evidence: null, bootId: this.bootId,
+          now: new Date(now).toISOString(), minimumGapMs: 60_000,
+        });
+      }
+      return observations;
+    }, { holder: "quota commit" });
+    const observations = accepted;
+    const accounts = new Map(snapshot.accounts.map(({ account }) => [account.id, account]));
+    observations.forEach((observation) => {
+      const account = accounts.get(observation.accountId)!;
       logQuotaEvent({
         engine,
         accountId: observation.accountId,
@@ -262,15 +303,5 @@ export class QuotaController {
         if (observation.limits) adoptClaudeLimitsSnapshot(observation.accountId, observation.limits, observation.observedAt, now);
       }
     }
-    const recorded: DurableQuotaObservation[] = observations.map((observation) => durableQuotaObservation({ ...observation, engine }, this.bootId));
-    this.registry.recordQuotaEvaluation({
-      engine,
-      observations: recorded,
-      signature: null,
-      evidence: null,
-      bootId: this.bootId,
-      now: new Date(now).toISOString(),
-      minimumGapMs: 60_000,
-    });
   }
 }

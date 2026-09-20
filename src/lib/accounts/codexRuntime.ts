@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { listCodexAccounts, UnknownAccountError, type CodexAccount } from "./codex";
-import { AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "./accountMutation";
+import { accountProbeIdentity, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "./accountMutation";
 import { statePath } from "../configDir";
 import { CODEX_ACCOUNTS_SOURCE, CODEX_LOGIN_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import {
@@ -278,17 +278,30 @@ export class ManagedCodexRuntime {
   }
 
   async loginSnapshot(account: CodexAccount): Promise<ManagedLoginSnapshot> {
-    return await withAccountMutationLockAsync(async () => this.loginSnapshotLocked(currentCodexAccount(account)));
+    const snapshot = await withAccountMutationLockAsync(() => {
+      const current = currentCodexAccount(account);
+      const home = canonicalHome(current.home);
+      return { account: current, home, identity: accountProbeIdentity(current),
+        active: this.active.get(home), stored: readStoredAttempts(this.stateFile).get(home) };
+    }, { holder: "Codex login snapshot" });
+    if (snapshot.account.kind !== "managed") return { state: snapshot.account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
+    const status = await this.readAccount(snapshot.active?.client ?? null, snapshot.account.home)
+      .then((value) => ({ value, failed: false as const }), () => ({ value: null, failed: true as const }));
+    return await withAccountMutationLockAsync(() => {
+      const current = currentCodexAccount(snapshot.account);
+      const active = this.active.get(snapshot.home);
+      const stored = readStoredAttempts(this.stateFile).get(snapshot.home);
+      if (accountProbeIdentity(current) !== snapshot.identity
+        || active !== snapshot.active || JSON.stringify(stored) !== JSON.stringify(snapshot.stored)) return this.peekLogin(current);
+      return this.commitLoginSnapshot(snapshot.home, active, stored, status);
+    }, { holder: "Codex login commit" });
   }
 
-  private async loginSnapshotLocked(account: CodexAccount): Promise<ManagedLoginSnapshot> {
-    if (account.kind !== "managed") return { state: account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
-    const home = canonicalHome(account.home);
-    const active = this.active.get(home);
-    const stored = readStoredAttempts(this.stateFile).get(home);
+  private commitLoginSnapshot(home: string, active: ActiveAttempt | undefined, stored: PersistedAttempt | undefined,
+    read: { value: AppServerAccountRead | null; failed: boolean }): ManagedLoginSnapshot {
     try {
-      const status = await this.readAccount(active?.client ?? null, account.home);
-      if (isSupportedChatGptAccount(status)) {
+      if (read.failed || !read.value) throw new Error("account read failed");
+      if (isSupportedChatGptAccount(read.value)) {
         if (active) this.settle(active, "completed", null, true);
         else if (stored) this.record(home, { ...stored, state: "completed", updatedAt: this.now(), reason: null });
         return { state: "authenticated", attemptState: "completed", deviceAuth: null };
@@ -351,10 +364,18 @@ export class ManagedCodexRuntime {
 
   /** Performs the two read-only account calls on one app-server client. */
   async probeQuota(account: CodexAccount): Promise<CodexQuotaProbe> {
-    return await withAccountMutationLockAsync(async () => this.probeQuotaLocked(currentCodexAccount(account)));
+    const snapshot = await withAccountMutationLockAsync(() => {
+      const current = currentCodexAccount(account);
+      return { account: current, identity: accountProbeIdentity(current) };
+    }, { holder: "Codex quota snapshot" });
+    const result = await this.probeQuotaUnlocked(snapshot.account);
+    await withAccountMutationLockAsync(() => {
+      if (accountProbeIdentity(currentCodexAccount(snapshot.account)) !== snapshot.identity) throw new Error("Codex account changed during quota probe");
+    }, { holder: "Codex quota recheck" });
+    return result;
   }
 
-  private async probeQuotaLocked(account: CodexAccount): Promise<CodexQuotaProbe> {
+  private async probeQuotaUnlocked(account: CodexAccount): Promise<CodexQuotaProbe> {
     const active = this.active.get(canonicalHome(account.home));
     if (active?.client) return this.probeQuotaFrom(active.client);
     const client = await this.startClient(account.home);
@@ -380,22 +401,32 @@ export class ManagedCodexRuntime {
       shows zero available credits refuses locally and sends nothing — the
       backend is only asked to spend when the account is known to hold one. */
   async redeemResetCredit(account: CodexAccount, idempotencyKey: string): Promise<CodexResetCreditRedemption> {
-    return await withAccountMutationLockAsync(async () => this.redeemResetCreditLocked(currentCodexAccount(account), idempotencyKey));
+    const snapshot = await withAccountMutationLockAsync(() => {
+      const current = currentCodexAccount(account);
+      return { account: current, identity: accountProbeIdentity(current) };
+    }, { holder: "Codex credit admission" });
+    const recheck = () => withAccountMutationLockAsync(() => {
+      if (accountProbeIdentity(currentCodexAccount(snapshot.account)) !== snapshot.identity) throw new Error("Codex account changed during credit redemption");
+    }, { holder: "Codex credit recheck" });
+    const result = await this.redeemResetCreditUnlocked(snapshot.account, idempotencyKey, recheck);
+    await recheck();
+    return result;
   }
 
-  private async redeemResetCreditLocked(account: CodexAccount, idempotencyKey: string): Promise<CodexResetCreditRedemption> {
+  private async redeemResetCreditUnlocked(account: CodexAccount, idempotencyKey: string, recheck: () => Promise<void>): Promise<CodexResetCreditRedemption> {
     const active = this.active.get(canonicalHome(account.home));
-    if (active?.client) return this.redeemResetCreditFrom(active.client, idempotencyKey);
+    if (active?.client) return this.redeemResetCreditFrom(active.client, idempotencyKey, recheck);
     const client = await this.startClient(account.home);
-    try { return await this.redeemResetCreditFrom(client, idempotencyKey); }
+    try { return await this.redeemResetCreditFrom(client, idempotencyKey, recheck); }
     finally { client.close(); }
   }
 
-  private async redeemResetCreditFrom(client: CodexAppServerClient, idempotencyKey: string): Promise<CodexResetCreditRedemption> {
+  private async redeemResetCreditFrom(client: CodexAppServerClient, idempotencyKey: string, recheck: () => Promise<void>): Promise<CodexResetCreditRedemption> {
     const before = await this.probeQuotaFrom(client);
     if (before.resetCredits !== null && before.resetCredits.availableCount === 0) {
       return { outcome: "noCredit", refusedLocally: true, before, after: before };
     }
+    await recheck();
     const outcome = await client.consumeRateLimitResetCredit({ idempotencyKey });
     const after = await this.probeQuotaFrom(client);
     return { outcome, refusedLocally: false, before, after };

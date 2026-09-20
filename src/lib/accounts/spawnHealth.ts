@@ -1,4 +1,5 @@
 import path from "node:path";
+import { accountsCollectionRevision } from "./accountsStore";
 
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { gatingWindows } from "@/lib/accounts/migration/quotaPolicy";
@@ -7,7 +8,7 @@ import { LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits } from "@/lib/types";
 
 import { listClaudeAccounts, UnknownClaudeAccountError, type ClaudeAccount } from "./claude";
 import { claudeOauthMetadata, refreshClaudeOauth } from "./claudeOauth";
-import { withAccountMutationLockAsync } from "./accountMutation";
+import { accountProbeIdentity, claudeProbeCredentialIdentity, AccountMutationBusyError, withAccountMutationLockAsync } from "./accountMutation";
 
 export type ClaudeValidityProbeResult = SpawnAccountAdmission & {
   /** Shared provider read; each waiter applies its own model without another probe. */
@@ -48,7 +49,7 @@ function refreshSingleFlight(
   const pending = Promise.resolve()
     .then(() => refresh(account))
     .catch((error: unknown) => {
-      if (error instanceof UnknownClaudeAccountError || error instanceof ClaudeCredentialUnavailableError) throw error;
+      if (error instanceof AccountMutationBusyError || error instanceof UnknownClaudeAccountError || error instanceof ClaudeCredentialUnavailableError) throw error;
       return classifySpawnAccountAdmission({
         enabled: true,
         authentication: "unknown",
@@ -146,30 +147,29 @@ function currentClaudeAccount(account: ClaudeAccount): ClaudeAccount {
 }
 
 async function fencedLiveValidityProbe(account: ClaudeAccount): Promise<ClaudeValidityProbeResult> {
-  return await withAccountMutationLockAsync(async () => {
+  const snapshot = await withAccountMutationLockAsync(() => {
     const current = currentClaudeAccount(account);
-    return await liveValidityProbe(current);
-  });
+    return { account: current, identity: accountProbeIdentity(current), revision: accountsCollectionRevision() };
+  }, { holder: "Claude validity snapshot" });
+  const credentialIdentity = claudeProbeCredentialIdentity(snapshot.account.home);
+  const result = await liveValidityProbe(snapshot.account);
+  if (credentialIdentity === null || credentialIdentity !== claudeProbeCredentialIdentity(snapshot.account.home)) throw new ClaudeCredentialUnavailableError();
+  await withAccountMutationLockAsync(() => {
+    if (snapshot.revision !== accountsCollectionRevision() || accountProbeIdentity(currentClaudeAccount(snapshot.account)) !== snapshot.identity) throw new ClaudeCredentialUnavailableError();
+  }, { holder: "Claude validity recheck" });
+  return result;
 }
 
 async function refreshValidityProbe(account: ClaudeAccount): Promise<ClaudeValidityProbeResult> {
-  return await withAccountMutationLockAsync(async () => {
-    const current = currentClaudeAccount(account);
-    const refreshed = await refreshClaudeOauth(current);
-    if (refreshed === "invalid") {
-      return classifySpawnAccountAdmission({
-        enabled: true,
-        authentication: "failed",
-        limits: "unknown",
-        stale: false,
-        retryAt: null,
-      });
-    }
-    if (refreshed === "unknown") {
-      throw new ClaudeCredentialUnavailableError();
-    }
-    return await liveValidityProbe(current);
-  });
+  const current = await withAccountMutationLockAsync(() => currentClaudeAccount(account), { holder: "Claude refresh admission" });
+  // The existing OAuth refresh fence compares the credential read before its
+  // network request with the current credential at replacement time.
+  const refreshed = await refreshClaudeOauth(current);
+  if (refreshed === "invalid") {
+    return classifySpawnAccountAdmission({ enabled: true, authentication: "failed", limits: "unknown", stale: false, retryAt: null });
+  }
+  if (refreshed === "unknown") throw new ClaudeCredentialUnavailableError();
+  return await fencedLiveValidityProbe(current);
 }
 
 const productionDependencies: ClaudeSpawnHealthDependencies = {

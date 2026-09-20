@@ -76,7 +76,7 @@ test("a real registry spawn sees same-process contention before allocating, whil
   expect(JSON.parse(fs.readFileSync(result, "utf8"))).toEqual({
     syncError: {
       name: "AccountMutationBusyError",
-      message: "account mutation is busy in this process; retry shortly",
+      message: expect.stringMatching(/account mutation is busy; held by .+pid/),
     },
     syncElapsedMs: expect.any(Number),
     receiptsBeforeRelease: 0,
@@ -386,4 +386,94 @@ test("a duplicated module copy joins the transaction instead of failing busy", a
 
   expect({ completed, error }).toEqual({ completed: true, error: "" });
   expect(JSON.parse(fs.readFileSync(result, "utf8"))).toEqual({ nestedRan: true, nestedError: null });
+});
+
+
+test("async admission has one deadline, names the holder and removes a timed-out local waiter", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(sandbox, "bounded-wait");
+  const { withAccountMutationLockAsync, AccountMutationBusyError } = await import("./accountMutation");
+  let release!: () => void;
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const holder = withAccountMutationLockAsync(async () => {
+    entered();
+    await new Promise<void>((resolve) => { release = resolve; });
+  }, { holder: "quota commit fixture" });
+  await ready;
+  const lines: string[] = [];
+  const warn = console.warn;
+  console.warn = (line) => { lines.push(String(line)); };
+  let ran = false;
+  const start = performance.now();
+  try {
+    const error = await withAccountMutationLockAsync(() => { ran = true; }, { caller: "resume", waitMs: 40 })
+      .then(() => null, (error: unknown) => error);
+    expect(error).toBeInstanceOf(AccountMutationBusyError);
+    expect((error as Error).message).toContain("quota commit fixture");
+    expect(performance.now() - start).toBeLessThan(250);
+    expect(ran).toBeFalse();
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ event: "account-mutation-refused", caller: "resume", holder: "quota commit fixture", holderPid: process.pid, waitMs: expect.any(Number), lockAgeMs: expect.any(Number) });
+    expect(JSON.parse(lines[0]!).waitMs).toBeGreaterThanOrEqual(30);
+    release();
+    await holder;
+    await withAccountMutationLockAsync(() => undefined, { waitMs: 100 });
+    expect(ran).toBeFalse();
+    expect(fs.readdirSync(path.join(process.env.LLV_STATE_DIR!, "account-selection.lock.queue"))).toEqual([]);
+  } finally {
+    console.warn = warn;
+    release();
+    await holder;
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
+
+test("cross-process admission times out with the file owner's pid and age, then recovers", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  const state = path.join(sandbox, "async-cross-process");
+  process.env.LLV_STATE_DIR = state;
+  const ready = path.join(sandbox, "async-cross-process-ready");
+  const release = path.join(sandbox, "async-cross-process-release");
+  const modulePath = path.join(import.meta.dir, "accountMutation.ts");
+  const child = Bun.spawn({
+    cmd: [process.execPath, "-e", `
+      const fs = await import("node:fs");
+      const { withAccountMutationLockAsync } = await import(${JSON.stringify(modulePath)});
+      await withAccountMutationLockAsync(async () => {
+        fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+        while (!fs.existsSync(${JSON.stringify(release)})) await Bun.sleep(5);
+      }, { holder: "remote mutation fixture" });
+    `], env: { ...process.env, LLV_STATE_DIR: state }, stdout: "ignore", stderr: "pipe",
+  });
+  const { withAccountMutationLockAsync, AccountMutationBusyError } = await import("./accountMutation");
+  try {
+    for (let attempt = 0; attempt < 100 && !fs.existsSync(ready); attempt += 1) await Bun.sleep(10);
+    expect(fs.existsSync(ready)).toBeTrue();
+    const error = await withAccountMutationLockAsync(() => undefined, { waitMs: 50 }).then(() => null, (error: unknown) => error);
+    expect(error).toBeInstanceOf(AccountMutationBusyError);
+    expect((error as InstanceType<typeof AccountMutationBusyError>).owner.ageMs).toBeGreaterThanOrEqual(40);
+    expect((error as InstanceType<typeof AccountMutationBusyError>).owner).toMatchObject({ operation: "remote mutation fixture", pid: child.pid, ageMs: expect.any(Number) });
+    const waiting = withAccountMutationLockAsync(() => "admitted", { waitMs: 500 });
+    fs.writeFileSync(release, "release");
+    expect(await waiting).toBe("admitted");
+    expect(await child.exited).toBe(0);
+  } finally {
+    fs.writeFileSync(release, "release");
+    const exited = await Promise.race([child.exited.then(() => true), Bun.sleep(1000).then(() => false)]);
+    if (!exited) { child.kill(); await child.exited; }
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
+
+test("credential fingerprints include Keychain contents without exposing them", async () => {
+  const { claudeProbeCredentialIdentity } = await import("./accountMutation");
+  const fingerprint = (value: string) => claudeProbeCredentialIdentity("/fixture/home", () => ({ state: "present", source: "keychain", document: { fixture: value } }));
+  expect(fingerprint("before")).not.toBe(fingerprint("after"));
+  expect(fingerprint("before")).toMatch(/^[a-f0-9]{64}$/);
+  expect(claudeProbeCredentialIdentity("/fixture/home", () => ({ state: "unknown" }))).toBeNull();
 });
