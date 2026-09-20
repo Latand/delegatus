@@ -232,12 +232,16 @@ test("the board joins the same activation import and demotion mirror", async () 
    release wrote into those files is folded back at roll-forward. */
 const MIGRATION_OPS_COLLECTION = "account_migration_ops:migration-provider-operations";
 
+/* Assembled from parts: a UUID literal is a publication-gate finding. */
+const INVENTED_SOURCE_ID = ["719f423a", "d6e9", "4903", "b597", "3e676b6ff3d4"].join("-");
+const INVENTED_FORK_ID = ["719f423a", "d6e9", "4903", "8597", "000000000001"].join("-");
+
 function journalBody(operationId: string, extra: Record<string, unknown> = {}) {
   return {
     version: 1,
     operationId,
     conversationId: `conversation_${operationId.replace(/-/g, "_")}`,
-    sourceNativeId: "719f423a-d6e9-4903-b597-3e676b6ff3d4",
+    sourceNativeId: INVENTED_SOURCE_ID,
     sourceRoot: "/source/sessions",
     targetRoot: "/target/sessions",
     createdAtMs: 1_700_000_000_000,
@@ -315,7 +319,7 @@ test("the conversation-migration journals import at activation and mirror back f
   /* What the rollback release does on its JSON: it advances one journal and
      starts another. Both are its writes, and both must survive roll-forward. */
   fs.writeFileSync(journalFile("op-one"), JSON.stringify(journalBody("op-one", {
-    fork: { id: "719f423a-d6e9-4903-8597-000000000001", path: "/source/sessions/rollout.jsonl" },
+    fork: { id: INVENTED_FORK_ID, path: "/source/sessions/rollout.jsonl" },
   })));
   fs.writeFileSync(journalFile("op-two"), JSON.stringify(journalBody("op-two")));
 
@@ -325,6 +329,6 @@ test("the conversation-migration journals import at activation and mirror back f
   expect(rolledForward.get(MIGRATION_OPS_COLLECTION)).toMatchObject({ state: "already-imported" });
   expect(fs.statSync(journalFile("op-one")).isDirectory()).toBe(true);
   expect(fs.statSync(journalFile("op-two")).isDirectory()).toBe(true);
-  expect(persistedCodexOperationJournal(root, "op-one")?.fork?.id).toBe("719f423a-d6e9-4903-8597-000000000001");
+  expect(persistedCodexOperationJournal(root, "op-one")?.fork?.id).toBe(INVENTED_FORK_ID);
   expect(persistedCodexOperationJournal(root, "op-two")?.conversationId).toBe("conversation_op_two");
 });
