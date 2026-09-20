@@ -1,5 +1,5 @@
 {
-  "commit": "6114f02f276e955e3c132ec068c5bd26d511c0d0",
+  "commit": "45a1fe3ac3df6f23e868f319408802caa5f0bac4",
   "case": "seats",
   "seeded": {
     "productTasks": 5,
@@ -235,7 +235,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 20:49",
+          "span": "since 19 Sep 22:47",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -243,7 +243,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 07:41 – 19 Sep 20:49 · 13 h",
+          "span": "19 Sep 09:39 – 19 Sep 22:47 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -251,7 +251,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 03:41 – 19 Sep 07:41 · 28 h",
+          "span": "18 Sep 05:39 – 19 Sep 09:39 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -596,7 +596,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 20:49",
+          "span": "since 19 Sep 22:47",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -604,7 +604,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 07:41 – 19 Sep 20:49 · 13 h",
+          "span": "19 Sep 09:39 – 19 Sep 22:47 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -612,7 +612,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 03:41 – 19 Sep 07:41 · 28 h",
+          "span": "18 Sep 05:39 – 19 Sep 09:39 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -948,7 +948,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 20:49",
+          "span": "з 19 вер. 22:47",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -956,7 +956,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 07:41 – 19 вер. 20:49 · 13 год",
+          "span": "19 вер. 09:39 – 19 вер. 22:47 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -964,7 +964,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 03:41 – 19 вер. 07:41 · 28 год",
+          "span": "18 вер. 05:39 – 19 вер. 09:39 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1291,7 +1291,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 20:49",
+          "span": "з 19 вер. 22:47",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1299,7 +1299,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 07:41 – 19 вер. 20:49 · 13 год",
+          "span": "19 вер. 09:39 – 19 вер. 22:47 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -1307,7 +1307,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 03:41 – 19 вер. 07:41 · 28 год",
+          "span": "18 вер. 05:39 – 19 вер. 09:39 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1634,7 +1634,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 20:49",
+          "span": "since 19 Sep 22:47",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1642,7 +1642,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 07:41 – 19 Sep 20:49 · 13 h",
+          "span": "19 Sep 09:39 – 19 Sep 22:47 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -1650,7 +1650,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 03:41 – 19 Sep 07:41 · 28 h",
+          "span": "18 Sep 05:39 – 19 Sep 09:39 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1977,7 +1977,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 20:49",
+          "span": "since 19 Sep 22:47",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1985,7 +1985,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 07:41 – 19 Sep 20:49 · 13 h",
+          "span": "19 Sep 09:39 – 19 Sep 22:47 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -1993,7 +1993,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 03:41 – 19 Sep 07:41 · 28 h",
+          "span": "18 Sep 05:39 – 19 Sep 09:39 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -2320,7 +2320,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 20:49",
+          "span": "з 19 вер. 22:47",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -2328,7 +2328,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 07:41 – 19 вер. 20:49 · 13 год",
+          "span": "19 вер. 09:39 – 19 вер. 22:47 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -2336,7 +2336,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 03:41 – 19 вер. 07:41 · 28 год",
+          "span": "18 вер. 05:39 – 19 вер. 09:39 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -2663,7 +2663,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 20:49",
+          "span": "з 19 вер. 22:47",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -2671,7 +2671,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 07:41 – 19 вер. 20:49 · 13 год",
+          "span": "19 вер. 09:39 – 19 вер. 22:47 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -2679,7 +2679,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 03:41 – 19 вер. 07:41 · 28 год",
+          "span": "18 вер. 05:39 – 19 вер. 09:39 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -2804,19 +2804,19 @@
       {
         "current": true,
         "h": 56,
-        "text": "Orchestrator seat, board batchsince 19 Sep 20:49Notes",
+        "text": "Orchestrator seat, board batchsince 19 Sep 22:47Notes",
         "notes": 44
       },
       {
         "current": false,
         "h": 56,
-        "text": "Manager seat, release week19 Sep 07:41 – 19 Sep 20:49 · 13 hNotes",
+        "text": "Manager seat, release week19 Sep 09:39 – 19 Sep 22:47 · 13 hNotes",
         "notes": 44
       },
       {
         "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 Sep 03:41 – 19 Sep 07:41 · 28 hNotes",
+        "text": "Orchestrator seat, launch week18 Sep 05:39 – 19 Sep 09:39 · 28 hNotes",
         "notes": 44
       }
     ],
@@ -2838,19 +2838,19 @@
       {
         "current": true,
         "h": 56,
-        "text": "Orchestrator seat, board batchsince 19 Sep 20:49Notes",
+        "text": "Orchestrator seat, board batchsince 19 Sep 22:47Notes",
         "notes": 44
       },
       {
         "current": false,
         "h": 56,
-        "text": "Manager seat, release week19 Sep 07:41 – 19 Sep 20:49 · 13 hNotes",
+        "text": "Manager seat, release week19 Sep 09:39 – 19 Sep 22:47 · 13 hNotes",
         "notes": 44
       },
       {
         "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 Sep 03:41 – 19 Sep 07:41 · 28 hNotes",
+        "text": "Orchestrator seat, launch week18 Sep 05:39 – 19 Sep 09:39 · 28 hNotes",
         "notes": 44
       }
     ],
@@ -2872,19 +2872,19 @@
       {
         "current": true,
         "h": 56,
-        "text": "Orchestrator seat, board batchз 19 вер. 20:49Нотатки",
+        "text": "Orchestrator seat, board batchз 19 вер. 22:47Нотатки",
         "notes": 44
       },
       {
         "current": false,
         "h": 56,
-        "text": "Manager seat, release week19 вер. 07:41 – 19 вер. 20:49 · 13 годНотатки",
+        "text": "Manager seat, release week19 вер. 09:39 – 19 вер. 22:47 · 13 годНотатки",
         "notes": 44
       },
       {
         "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 вер. 03:41 – 19 вер. 07:41 · 28 годНотатки",
+        "text": "Orchestrator seat, launch week18 вер. 05:39 – 19 вер. 09:39 · 28 годНотатки",
         "notes": 44
       }
     ],
@@ -2906,19 +2906,19 @@
       {
         "current": true,
         "h": 56,
-        "text": "Orchestrator seat, board batchз 19 вер. 20:49Нотатки",
+        "text": "Orchestrator seat, board batchз 19 вер. 22:47Нотатки",
         "notes": 44
       },
       {
         "current": false,
         "h": 56,
-        "text": "Manager seat, release week19 вер. 07:41 – 19 вер. 20:49 · 13 годНотатки",
+        "text": "Manager seat, release week19 вер. 09:39 – 19 вер. 22:47 · 13 годНотатки",
         "notes": 44
       },
       {
         "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 вер. 03:41 – 19 вер. 07:41 · 28 годНотатки",
+        "text": "Orchestrator seat, launch week18 вер. 05:39 – 19 вер. 09:39 · 28 годНотатки",
         "notes": 44
       }
     ],
