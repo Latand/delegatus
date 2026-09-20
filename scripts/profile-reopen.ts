@@ -72,7 +72,12 @@ const SURFACES = (args.get("surface") ?? "both") === "both" ? (["desktop", "phon
 
 /* ── throwaway home ─────────────────────────────────────────────────────── */
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-1821-profile-"));
+/* The seeded home holds a multi-megabyte corpus and a Chrome profile, and the
+   /tmp tmpfs here runs under a per-user quota that other tooling shares — an
+   exhausted quota shows up as unrelated commands failing with no output. So
+   the run builds under /var/tmp unless the caller named a scratch root. */
+const scratchRoot = process.env.LLV_PROFILE_TMPDIR?.trim() || (fs.existsSync("/var/tmp") ? "/var/tmp" : os.tmpdir());
+const root = fs.mkdtempSync(path.join(scratchRoot, "llv-reopen-profile-"));
 const home = path.join(root, "home");
 const slug = (value: string) => value.replace(/[^A-Za-z0-9]/g, "-");
 const cwdFor = (project: string) => path.join(home, "Projects", project);
