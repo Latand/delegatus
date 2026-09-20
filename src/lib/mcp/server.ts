@@ -161,6 +161,11 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
  * content-idempotent, so a retry after the board write converges without
  * another revision. Other conversation actions still require live runtime
  * ownership and remain outside interrupted recovery.
+ *
+ * Resolving a pipeline decision persists its request key, actor, answer and
+ * stage fences alongside the new attempt. Re-running that action either admits
+ * the answer once or returns the saved answer, including after a process exit
+ * between pipeline persistence and receipt completion.
  */
 const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolName>([
   "request_attention",
@@ -175,6 +180,7 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
 
 function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs): boolean {
   if (INTERRUPTED_RECOVERABLE_TOOLS.has(toolName)) return true;
+  if (toolName === "pipeline_action") return args.action === "resolve-decision";
   if (toolName !== "conversation_action") return false;
   return args.action === "archive" || args.action === "unarchive";
 }

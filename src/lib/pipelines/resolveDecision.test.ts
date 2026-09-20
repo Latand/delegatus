@@ -11,6 +11,10 @@ process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-decision-
 const { createPipelineFromRequest, reportStageCompletion, tickPipelines, patchPipeline } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, pipelineRevision } = await import("./store");
+const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
+type McpReceiptStore = import("@/lib/mcp/server").McpReceiptStore;
+type ViewerMcpDomainDependencies = import("@/lib/mcp/bindings").ViewerMcpDomainDependencies;
 type PipelinePorts = import("./engine").PipelinePorts;
 type StageCompletionRequest = import("./engine").StageCompletionRequest;
 type Pipeline = import("./types").Pipeline;
@@ -210,6 +214,86 @@ test("identical replay returns its durable answer after restart and rollback wit
   // Rollback continues draining already admitted work.
   await tickPipelines([], h.ports);
   expect(h.spawnedStages).toEqual(["build", "build"]);
+});
+
+/** Leave a real file receipt claimed at either crash boundary, then reopen it. */
+async function interruptedAnswer(boundary: "before-admission" | "after-answer", patch = {}) {
+  const h = await parked();
+  const args = { ...h.request, ...patch, pipelineId: h.id };
+  const filename = path.join(process.env.LLV_STATE_DIR!, `receipts-${h.id}.json`);
+  const receipts = new FileMcpReceiptStore(filename);
+  let admissions = 0;
+  const bindingsFor = (conversationId = manager.conversationId) => {
+    const dependencies: Partial<ViewerMcpDomainDependencies> = {
+      readPipelineRecord: () => current(),
+      patchPipeline: async (id, request, _ports, actor) => {
+        admissions += 1;
+        return patchPipeline(id, request, h.ports, actor);
+      },
+      callerAttribution: () => ({ kind: "manager", conversationId, role: "orchestrator" }),
+    };
+    return viewerMcpBindings(undefined, undefined, dependencies as ViewerMcpDomainDependencies);
+  };
+  const stoppedReceipts: McpReceiptStore = {
+    claim: async (...input) => {
+      const claimed = await receipts.claim(...input);
+      if (boundary === "before-admission") throw new Error("simulated process exit after claim");
+      return claimed;
+    },
+    complete: async () => { throw new Error("simulated process exit before response persistence"); },
+  };
+  await expect(createMcpToolService(bindingsFor(), stoppedReceipts).callTool("pipeline_action", args))
+    .rejects.toThrow("simulated process exit");
+  expect(admissions).toBe(boundary === "before-admission" ? 0 : 1);
+  expect(current().decisionAnswers?.length ?? 0).toBe(boundary === "before-admission" ? 0 : 1);
+  return {
+    ...h, args,
+    reopen: (conversationId?: string) => createMcpToolService(bindingsFor(conversationId), new FileMcpReceiptStore(filename)),
+  };
+}
+
+test.each(["before-admission", "after-answer"] as const)("MCP restart %s recovers one durable answer and continuation", async (boundary) => {
+  const h = await interruptedAnswer(boundary);
+  const original = structuredClone(attemptsOf("build")[0]);
+  const service = h.reopen();
+  // Digest conflicts must not consume or replace the interrupted original request.
+  for (const patch of [{ answer: "Use HTML." }, { expectedStageId: "verify" }, { expectedAttempt: 2 }, { expectedRevision: "0".repeat(64) }]) {
+    expect(await service.callTool("pipeline_action", { ...h.args, ...patch }))
+      .toMatchObject({ ok: false, code: "idempotency_conflict" });
+  }
+  const answer = await service.callTool("pipeline_action", h.args);
+  expect(answer).toMatchObject({ ok: true, decisionAnswer: { clientRequestId: h.request.clientRequestId, stageId: "build", attempt: 1, nextAttempt: 2 } });
+  expect(current().decisionAnswers).toHaveLength(1);
+  expect(current().decisionAnswers![0]).toMatchObject({ answer: h.request.answer, actor: { kind: "agent", conversationId: manager.conversationId } });
+  expect(attemptsOf("build")).toHaveLength(2);
+  expect(attemptsOf("build")[0]).toEqual(original);
+  expect(h.spawnedStages).toEqual(["build"]);
+  expect(await h.reopen().callTool("pipeline_action", h.args)).toEqual({ ...answer, replayed: true });
+  await tickPipelines([], h.ports);
+  expect(h.spawnedStages).toEqual(["build", "build"]);
+  expect(h.prompts[1]).toContain(h.request.answer);
+  expect(await h.reopen().callTool("pipeline_action", h.args)).toEqual({ ...answer, replayed: true });
+  expect(current().decisionAnswers).toHaveLength(1);
+  expect(attemptsOf("build")).toHaveLength(2);
+});
+
+test.each(["before-admission", "after-answer"] as const)("MCP restart %s rechecks the server-attributed actor", async (boundary) => {
+  const h = await interruptedAnswer(boundary);
+  const before = current();
+  const result = await h.reopen("conversation_other").callTool("pipeline_action", h.args);
+  expect(result).toMatchObject({ ok: false });
+  expect(result.error).toContain("only the pipeline creator conversation");
+  expect(current()).toEqual(before);
+});
+
+test.each([
+  { expectedStageId: "verify" }, { expectedAttempt: 2 }, { expectedRevision: "0".repeat(64) },
+])("MCP restart before admission retains the pipeline fence %j", async (patch) => {
+  const h = await interruptedAnswer("before-admission", patch);
+  const before = current();
+  const result = await h.reopen().callTool("pipeline_action", h.args);
+  expect(result).toMatchObject({ ok: false, code: "tool_failed" });
+  expect(current()).toEqual(before);
 });
 
 test("concurrent answers admit one winner under the same revision", async () => {
