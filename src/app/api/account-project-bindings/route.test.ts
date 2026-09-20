@@ -17,6 +17,8 @@ process.env.LLV_STATE_DIR = STATE;
 process.env.HOME = path.join(SANDBOX, "home");
 
 const { GET, POST } = await import("./route");
+const { BINDINGS_SOURCE, resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
+const { clearAccountFixture, persistedAccountSource, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
 const { accountProjectBindings } = await import("@/lib/accounts/projectBindings");
 
 const ATLAS = "project-atlas";
@@ -25,7 +27,8 @@ const ATLAS = "project-atlas";
 const MAIN = "default";
 
 beforeEach(() => {
-  fs.rmSync(path.join(STATE, "account-project-bindings.json"), { force: true });
+  resetAccountCollectionsForTests();
+  clearAccountFixture(BINDINGS_SOURCE);
 });
 
 afterAll(() => {
@@ -102,8 +105,10 @@ test("a malformed mutation is refused and writes nothing", async () => {
 
 test("a damaged record answers with the repair it needs, and never with an empty relation", async () => {
   await mutate({ action: "add", engine: "claude", accountId: MAIN, project: ATLAS });
-  const damaged = '{"schemaVersion":1,"bindings":[{"engine":"claude","accountId"';
-  fs.writeFileSync(path.join(STATE, "account-project-bindings.json"), damaged, "utf8");
+  /* Since #1870 the record is rows, so damage is a row no reader can turn into
+     a binding rather than bytes that will not parse. */
+  const damaged = { schemaVersion: 1, bindings: [{ engine: "claude", accountId: MAIN }] };
+  seedAccountSource(BINDINGS_SOURCE, damaged);
 
   /* Both reads: an empty `bindings` list with a 200 would tell the panel that
      nothing is restricted, which is the fence disappearing from the view of the
@@ -122,5 +127,5 @@ test("a damaged record answers with the repair it needs, and never with an empty
   expect(removed.status).toBe(409);
 
   /* Neither mutation wrote over the record the operator still has to repair. */
-  expect(fs.readFileSync(path.join(STATE, "account-project-bindings.json"), "utf8")).toBe(damaged);
+  expect(persistedAccountSource(BINDINGS_SOURCE)).toEqual(damaged);
 });

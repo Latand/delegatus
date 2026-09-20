@@ -15,6 +15,30 @@ process.env.LLV_STATE_DIR = path.join(RUNTIME_SANDBOX, "state");
 const { CodexAppServerClient } = await import("./codexAppServer");
 const { ManagedCodexRuntime } = await import("./codexRuntime");
 const { withAccountMutationLockAsync } = await import("./accountMutation");
+const { clearAccountFixture, persistedCodexLoginAttempts, seedAccountRegistry } = await import("./accountsStoreFixture");
+const { CODEX_ACCOUNTS_SOURCE } = await import("./accountsStore");
+const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+
+/** The persisted attempt state for one login store, since #1870 rows in the
+    `accounts` collection of the state.sqlite beside `stateFile`. */
+function persistedAttemptStates(stateFile: string): string[] {
+  return Object.values(persistedCodexLoginAttempts(path.dirname(stateFile))).map((attempt) => attempt.state ?? "");
+}
+
+/** Refuse the next `count` durable state writes, the way a state store that
+    will not take a write behaves. */
+function denyStateWrites(count: number): () => void {
+  const original = SqliteStateCollection.prototype.patchSync;
+  let remaining = count;
+  SqliteStateCollection.prototype.patchSync = function patchSync(this: unknown, ...args: unknown[]) {
+    if (remaining > 0) {
+      remaining -= 1;
+      throw new Error("state store unavailable");
+    }
+    return (original as (...rest: unknown[]) => void).apply(this, args);
+  } as typeof SqliteStateCollection.prototype.patchSync;
+  return () => { SqliteStateCollection.prototype.patchSync = original; };
+}
 
 afterAll(() => {
   if (PREVIOUS_STATE === undefined) delete process.env.LLV_STATE_DIR;
@@ -79,14 +103,12 @@ test("Codex provider probes wait behind account deletion mutations", async () =>
 });
 
 test("provider probes re-resolve a waiting account after deletion wins the fence", async () => {
-  const stateFile = path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json");
   const home = path.join(path.dirname(process.env.LLV_STATE_DIR!), "accounts", "codex", "stale");
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   fs.chmodSync(home, 0o700);
   const activeRegistry = { version: 1, active: "default", accounts: [{ id: "stale", label: "Stale", kind: "managed", createdAt: 1, loginPane: null }], retired: [] };
   const retiredRegistry = { version: 1, active: "default", accounts: [], retired: [{ id: "stale", label: "Stale", retiredAt: 2 }] };
-  fs.mkdirSync(path.dirname(stateFile), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(stateFile, JSON.stringify(activeRegistry), { mode: 0o600 });
+  seedAccountRegistry("codex", activeRegistry);
   let starts = 0;
   const runtime = new ManagedCodexRuntime({ startClient: async () => { starts += 1; throw new Error("must stay fenced"); } });
   const stale = account("stale", home);
@@ -97,7 +119,7 @@ test("provider probes re-resolve a waiting account after deletion wins the fence
   const holder = withAccountMutationLockAsync(async () => {
     entered();
     await held;
-    fs.writeFileSync(stateFile, JSON.stringify(retiredRegistry), { mode: 0o600 });
+    seedAccountRegistry("codex", retiredRegistry);
   });
   await acquired;
 
@@ -109,7 +131,7 @@ test("provider probes re-resolve a waiting account after deletion wins the fence
   expect(await quota).toBeInstanceOf(Error);
   await expect(runtime.loginSnapshot(stale)).rejects.toThrow("unknown Codex account: stale");
   expect(starts).toBe(0);
-  fs.rmSync(stateFile, { force: true });
+  clearAccountFixture(CODEX_ACCOUNTS_SOURCE);
   fs.rmSync(path.join(path.dirname(process.env.LLV_STATE_DIR!), "accounts"), { recursive: true, force: true });
 });
 
@@ -161,13 +183,13 @@ test("lock contention defers Codex completion persistence and still closes the c
     await holder;
 
     expect(killsAfterCompletion).toBe(1);
-    let persisted = "";
+    let persisted: string[] = [];
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      persisted = fs.readFileSync(stateFile, "utf8");
-      if (persisted.includes('"state": "completed"')) break;
+      persisted = persistedAttemptStates(stateFile);
+      if (persisted.includes("completed")) break;
       await Bun.sleep(10);
     }
-    expect(persisted).toContain('"state": "completed"');
+    expect(persisted).toContain("completed");
   } finally {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousState;
@@ -186,29 +208,21 @@ test("Codex completion write failures log with backoff and eventually persist", 
   });
   const work = account("retry-write", path.join(dir, "account"));
   const login = await runtime.startLogin(work);
-  const originalRename = fs.renameSync.bind(fs);
   const originalError = console.error;
   const messages: string[] = [];
-  let failures = 0;
-  fs.renameSync = ((source: fs.PathLike, target: fs.PathLike) => {
-    if (target === stateFile && failures < 2) {
-      failures += 1;
-      throw new Error("state file unavailable");
-    }
-    return originalRename(source, target);
-  }) as typeof fs.renameSync;
+  const restoreWrites = denyStateWrites(2);
   console.error = (message?: unknown) => { messages.push(String(message)); };
   try {
     child.completed(login.loginId);
     await Bun.sleep(25);
   } finally {
-    fs.renameSync = originalRename;
+    restoreWrites();
     console.error = originalError;
   }
 
   expect(messages).toEqual([expect.stringContaining("Codex login outcome persistence failed")]);
-  for (let attempt = 0; attempt < 30 && !fs.readFileSync(stateFile, "utf8").includes('"state": "completed"'); attempt += 1) await Bun.sleep(10);
-  expect(fs.readFileSync(stateFile, "utf8")).toContain('"state": "completed"');
+  for (let attempt = 0; attempt < 30 && !persistedAttemptStates(stateFile).includes("completed"); attempt += 1) await Bun.sleep(10);
+  expect(persistedAttemptStates(stateFile)).toContain("completed");
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -344,23 +358,29 @@ test("account/read owns authentication independently from auth.json diagnostics"
 test("batched Codex login projection reads durable state once", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-batch-"));
   const stateFile = path.join(dir, "attempts.json");
-  fs.writeFileSync(stateFile, JSON.stringify({ version: 1, attempts: {} }));
-  const originalRead = fs.readFileSync.bind(fs);
-  let reads = 0;
   const runtime = new ManagedCodexRuntime({ stateFile });
-  fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
-    if (file === stateFile) reads += 1;
-    return originalRead(file, ...(args as [never]));
-  }) as typeof fs.readFileSync;
+  /* Since #1870 the durable read is a collection snapshot rather than a file
+     read, so the projection is measured the way it matters: the number of
+     durable reads does not grow with the batch. */
+  const original = SqliteStateCollection.prototype.snapshot;
+  const reads = (accounts: number): number => {
+    let count = 0;
+    SqliteStateCollection.prototype.snapshot = function snapshot(this: never, ...args: never[]) {
+      count += 1;
+      return (original as (...rest: never[]) => never[]).apply(this, args);
+    } as typeof SqliteStateCollection.prototype.snapshot;
+    try {
+      const names = Array.from({ length: accounts }, (_value, index) => `account-${index}`);
+      const snapshots = runtime.peekLogins(names.map((name) => account(name, path.join(dir, name))));
+      expect([...snapshots.keys()]).toEqual(names);
+      return count;
+    } finally {
+      SqliteStateCollection.prototype.snapshot = original;
+    }
+  };
   try {
-    const snapshots = runtime.peekLogins([
-      account("one", path.join(dir, "one")),
-      account("two", path.join(dir, "two")),
-    ]);
-    expect([...snapshots.keys()]).toEqual(["one", "two"]);
-    expect(reads).toBe(1);
+    expect(reads(6)).toBe(reads(2));
   } finally {
-    fs.readFileSync = originalRead;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

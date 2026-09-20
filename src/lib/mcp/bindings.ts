@@ -1260,6 +1260,7 @@ async function sendMessage(
   dependencies: Pick<ViewerMcpDomainDependencies, "registrySnapshot"> &
     Partial<Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">>,
   context?: McpToolCallContext,
+  downstreamKey = sendDownstreamKey(requestId(args)),
 ): Promise<McpToolPayload> {
   const conversationId = text(args.conversationId);
   const transcriptPath = text(args.transcriptPath) || text(args.path);
@@ -1269,7 +1270,7 @@ async function sendMessage(
     pid: null,
     path: transcriptPath,
     ...(conversationId ? { conversationId } : {}),
-    clientMessageId: context?.binding?.downstreamKey ?? sendDownstreamKey(requestId(args)),
+    clientMessageId: context?.binding?.downstreamKey ?? downstreamKey,
     text: message,
     images: [],
     /* #1117: an MCP send is inter-agent traffic by definition; the sender role
@@ -2951,60 +2952,66 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
   });
 }
 
-/**
- * send_message_to_orchestrator: the selected session is resolved SERVER-SIDE.
- * A dead selected conversation is resumed by the delivery seam (the same
- * resume path the composer uses); with none designated, one is created via the
- * seat route first and the message delivered after. Both side effects derive
- * their idempotency keys from this call's, so a retry replays instead of
- * duplicating, and the response says which path ran.
- */
+/** Resolve once at claim time and dispatch through the shared send receipt path.
+    An existing claim always recovers its recorded recipient, including after
+    the project's seat rotates. Creating a missing seat is a separate effect;
+    any failure after that dispatch stays uncertain. */
 async function sendMessageToOrchestrator(
   args: McpToolArgs,
   control: ViewerControlDependencies,
-  dependencies: Partial<Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">> = {},
+  dependencies: ViewerMcpDomainDependencies,
+  context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
-  const message = requiredMessageText(args);
+  requiredMessageText(args);
   const key = requestId(args);
-
-  let seat: OrchestratorSeat | null = orchestratorSeatFor(project).active;
+  const bound = context?.binding;
+  let seat = orchestratorSeatFor(project).active;
+  let recipient = bound ? bound.target.identity : seat?.conversationId;
   let created = false;
-  if (!seat?.conversationId) {
-    const outcome = await control.post("/api/orchestrator/seat", {
-      project,
-      mandate: ORCHESTRATOR_SYSTEM_PROMPT,
-      promptVersion: ORCHESTRATOR_PROMPT_VERSION,
-      clientRequestId: derivedRequestId(key, "create"),
-    }, callerCapabilityHeaders());
-    created = true;
-    seat = (outcome.seat as OrchestratorSeat | undefined) ?? orchestratorSeatFor(project).active;
-    if (!seat?.conversationId) throw new Error("orchestrator creation did not settle a conversation to deliver to");
+  if (!recipient) {
+    try {
+      const outcome = await dispatchControl(control)("/api/orchestrator/seat", {
+        project,
+        mandate: ORCHESTRATOR_SYSTEM_PROMPT,
+        promptVersion: ORCHESTRATOR_PROMPT_VERSION,
+        clientRequestId: derivedRequestId(key, "create"),
+      }, callerCapabilityHeaders());
+      created = true;
+      // Never substitute the current seat for an absent creation response:
+      // that could be a rotation unrelated to this logical request.
+      seat = (outcome.seat as OrchestratorSeat | undefined) ?? null;
+      recipient = seat?.conversationId;
+      if (!recipient) throw new McpDispatchUncertainError("orchestrator creation has not returned a recipient; recover the original key");
+      if (bound) {
+        if (!context?.bindCreatedTarget) throw new McpDispatchUncertainError("the created recipient cannot be persisted; no message was dispatched");
+        await context.bindCreatedTarget(recipient);
+      }
+    } catch (error) {
+      if (error instanceof McpDispatchNotExecutedError && !created) throw error;
+      throw new McpDispatchUncertainError(error instanceof Error ? error.message : String(error));
+    }
   }
-
-  const outcome = await control.post("/api/tmux", {
-    pid: null,
-    path: seat.path,
-    conversationId: seat.conversationId,
-    clientMessageId: key,
-    text: message,
-    images: [],
-    origin: mcpSenderOrigin(dependencies),
-  }, callerCapabilityHeaders());
-  return redactPayload({
-    project,
-    conversationId: seat.conversationId,
-    transcriptPath: seat.path,
-    created,
-    seatEpoch: seat.seatEpoch,
-    predecessorConversationId: seat.predecessorConversationId,
-    operationId: outcome.operationId ?? (outcome.receipt as { operationId?: unknown } | undefined)?.operationId ?? null,
-    outcome: outcome.outcome ?? "delivered",
-    /* #1131: the same control path as `send_message`, so the same contract —
-       acceptance is not arrival, and `message_receipt` over the operation id is
-       what says which. */
-    settled: (outcome.outcome ?? "delivered") === "delivered",
-  });
+  try {
+    const outcome = await sendMessage({
+      ...args,
+      conversationId: recipient,
+      transcriptPath: seat?.conversationId === recipient ? seat.path : undefined,
+      path: undefined,
+    }, control, dependencies, context, orchestratorSendDownstreamKey(key));
+    return redactPayload({
+      ...outcome, project, created,
+      // Seat metadata describes only the recipient this dispatch actually used.
+      ...(seat?.conversationId === recipient ? {
+        seatEpoch: seat.seatEpoch,
+        predecessorConversationId: seat.predecessorConversationId,
+      } : {}),
+    });
+  } catch (error) {
+    // A refused second POST cannot prove the preceding creation had no effect.
+    if (created) throw new McpDispatchUncertainError(error instanceof Error ? error.message : String(error));
+    throw error;
+  }
 }
 
 /** rotate_orchestrator: explicit handoff to a successor. Never called by any
@@ -4401,6 +4408,22 @@ function conversationProject(conversation: { projectOwnership?: { project?: stri
   return cwd ? projectForCwd(cwd) : null;
 }
 
+function orchestratorSendDownstreamKey(key: string): string {
+  return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
+}
+
+function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
+  const project = canonicalOrchestratorProject(required(args, "project"));
+  requiredMessageText(args);
+  return {
+    caller: recoveryCaller(dependencies),
+    target: { project, identity: orchestratorSeatFor(project).active?.conversationId ?? null },
+    // Separate from direct send: equal client keys on different tools are
+    // different logical instructions, even when their message text is equal.
+    downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
+  };
+}
+
 function bindSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
   const conversationId = text(args.conversationId);
   const transcriptPath = text(args.transcriptPath) || text(args.path);
@@ -4651,6 +4674,10 @@ export function viewerMcpRecoverableTools(
       bind: (args) => bindSpawn(args, domainDependencies),
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
     },
+    send_message_to_orchestrator: {
+      bind: (args) => bindOrchestratorSend(args, domainDependencies),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
+    },
     send_message: {
       bind: (args) => bindSend(args, domainDependencies),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
@@ -4707,7 +4734,7 @@ export function viewerMcpBindings(
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)),
-    send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     rotate_orchestrator: (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context)),
   };
 }

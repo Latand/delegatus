@@ -44,10 +44,14 @@ const { AccountProjectBindingsUnreadableError } = await import("@/lib/accounts/p
 const { ProjectAccountRefusedError } = await import("@/lib/accounts/manager");
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { productionSpawnCommandDependencies } = await import("@/lib/agent/spawnCommand");
+const { BINDINGS_SOURCE, resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
+const { clearAccountFixture, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
 
 beforeEach(() => {
   process.env.LLV_STATE_DIR = STATE;
-  fs.rmSync(RECORD, { force: true });
+  resetAccountCollectionsForTests();
+  clearAccountFixture(BINDINGS_SOURCE);
 });
 
 afterAll(() => {
@@ -291,10 +295,10 @@ test("a bound pool with no capacity refuses the launch as a conflict, and the id
 
   const cwd = fs.mkdtempSync(path.join(SANDBOX, "pool-capacity-"));
   const project = projectForCwd(cwd)!;
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{ engine: "codex", accountId: reserved, project, createdAt: "2026-08-30T00:00:00.000Z" }],
-  }), "utf8");
+  });
 
   const store = new AgentRegistry(path.join(SANDBOX, "pool-capacity-registry.json"));
   const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
@@ -344,10 +348,10 @@ test("a bound pool with no capacity refuses the launch as a conflict, and the id
 test("a launch onto an account outside the project's pool is recorded in the override journal", async () => {
   const cwd = fs.mkdtempSync(path.join(SANDBOX, "named-outside-pool-"));
   const project = projectForCwd(cwd)!;
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{ engine: "claude", accountId: "acct-reserved", project, createdAt: "2026-09-10T00:00:00.000Z" }],
-  }), "utf8");
+  });
 
   const attempt = await spawn(cwd, "binding_named_outside_20260910", undefined, "acct-chosen-by-hand");
 
@@ -370,10 +374,10 @@ test("a launch onto an account the pool already contains records nothing", async
      record of every launch would bury the crossings it exists to show. */
   const cwd = fs.mkdtempSync(path.join(SANDBOX, "named-inside-pool-"));
   const project = projectForCwd(cwd)!;
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{ engine: "claude", accountId: "acct-reserved", project, createdAt: "2026-09-10T00:00:00.000Z" }],
-  }), "utf8");
+  });
 
   const attempt = await spawn(cwd, "binding_named_inside_20260910", undefined, "acct-reserved");
 
@@ -398,10 +402,10 @@ test("a second request under the same attempt id appends no second crossing", as
      one. So this asserts the property, not the branch. */
   const cwd = fs.mkdtempSync(path.join(SANDBOX, "named-replayed-"));
   const project = projectForCwd(cwd)!;
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{ engine: "claude", accountId: "acct-reserved", project, createdAt: "2026-09-10T00:00:00.000Z" }],
-  }), "utf8");
+  });
   const store = new AgentRegistry(path.join(SANDBOX, "replayed-registry.json"));
 
   const first = await spawn(cwd, "binding_named_replay_20260910", undefined, "acct-chosen-by-hand", store);
@@ -428,10 +432,10 @@ test("a second request under the same attempt id appends no second crossing", as
 test("an out-of-pool launch carries its notice on the route's own answer", async () => {
   const cwd = fs.mkdtempSync(path.join(SANDBOX, "notice-recorded-"));
   const project = projectForCwd(cwd)!;
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{ engine: "claude", accountId: "acct-reserved", project, createdAt: "2026-09-10T00:00:00.000Z" }],
-  }), "utf8");
+  });
   const retryAt = new Date(Date.now() + 600_000).toISOString();
 
   const attempt = await spawn(cwd, "binding_notice_recorded_20260910", undefined, "acct-chosen-by-hand", undefined, retryAt);
@@ -447,15 +451,17 @@ test("an out-of-pool launch carries its notice on the route's own answer", async
 test("a record the journal REFUSED says so on the answer rather than only in a server log", async () => {
   const cwd = fs.mkdtempSync(path.join(SANDBOX, "notice-unrecordable-"));
   const project = projectForCwd(cwd)!;
-  fs.writeFileSync(RECORD, JSON.stringify({
+  seedAccountSource(BINDINGS_SOURCE, {
     schemaVersion: 1,
     bindings: [{ engine: "claude", accountId: "acct-reserved", project, createdAt: "2026-09-10T00:00:00.000Z" }],
-  }), "utf8");
-  /* A DIRECTORY where the journal's file belongs: the durable write cannot
-     rename over it, so the record is refused while the launch is not. */
-  const journal = path.join(STATE, "account-project-overrides.json");
-  fs.rmSync(journal, { recursive: true, force: true });
-  fs.mkdirSync(journal, { recursive: true });
+  });
+  /* A state store that refuses the append (#1870): the record is refused while
+     the launch is not. */
+  const original = SqliteStateCollection.prototype.patchSync;
+  SqliteStateCollection.prototype.patchSync = function patchSync(this: { signature(): string }, ...args: unknown[]) {
+    if (this.signature().includes(":accounts:")) throw new Error("the journal could not be written");
+    return (original as (...rest: unknown[]) => void).apply(this, args);
+  } as typeof SqliteStateCollection.prototype.patchSync;
   const retryAt = new Date(Date.now() + 600_000).toISOString();
   try {
     const attempt = await spawn(cwd, "binding_notice_refused_20260910", undefined, "acct-chosen-by-hand", undefined, retryAt);
@@ -466,6 +472,6 @@ test("a record the journal REFUSED says so on the answer rather than only in a s
     expect(attempt.accountOverride).toMatchObject({ accountId: "acct-chosen-by-hand", recorded: false });
     expect(attempt.accountOverride?.recordFailure).toBeTruthy();
   } finally {
-    fs.rmSync(journal, { recursive: true, force: true });
+    SqliteStateCollection.prototype.patchSync = original;
   }
 });

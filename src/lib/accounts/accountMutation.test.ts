@@ -139,26 +139,45 @@ test("same-process contenders leave an async transaction holder runnable", async
   expect((JSON.parse(fs.readFileSync(result, "utf8")) as { syncElapsedMs: number }).syncElapsedMs).toBeLessThan(100);
 });
 
-test("revision admission failure prevents the durable mutation callback", async () => {
+test("a mutation the store refuses advances neither the revision nor the rows", async () => {
+  /* Transaction admission used to be a durable write of its own, advanced
+     before the callback so a fence that would not write blocked it (#1870
+     replaced that with one transaction). The guarantee it bought is now
+     stronger and is what this proves: the admission IS the write, so a store
+     that refuses leaves the revision exactly where it was and nothing on
+     record half-committed. */
   const state = path.join(sandbox, "revision-state");
   const result = path.join(sandbox, "revision-result.json");
+  const storePath = path.join(import.meta.dir, "accountsStore.ts");
   const modulePath = path.join(import.meta.dir, "accountMutation.ts");
   const child = Bun.spawn({
     cmd: [process.execPath, "-e", `
       process.env.LLV_STATE_DIR = ${JSON.stringify(state)};
       const fsModule = await import("node:fs");
       const fs = fsModule.default;
-      const originalRename = fs.renameSync.bind(fs);
-      fs.renameSync = (source, target) => {
-        if (String(target).endsWith("account-mutation-revision.json")) throw new Error("revision unavailable");
-        return originalRename(source, target);
-      };
-      const { withAccountMutationLock } = await import(${JSON.stringify(modulePath)});
+      const store = await import(${JSON.stringify(storePath)});
+      const { accountMutationRevisionForTests, withAccountMutationLock } = await import(${JSON.stringify(modulePath)});
+      const registry = (active) => ({ version: 1, active, accounts: [], retired: [], removals: [] });
+      store.writeAccountSource(store.CLAUDE_ACCOUNTS_SOURCE, registry("before"));
+      const before = accountMutationRevisionForTests();
+      const database = store.accountsDatabasePath();
+      for (const suffix of ["", "-wal", "-shm"]) { try { fs.chmodSync(database + suffix, 0o400); } catch {} }
       let callbackRan = false;
       let failed = false;
-      try { withAccountMutationLock(() => { callbackRan = true; }); }
-      catch { failed = true; }
-      fs.writeFileSync(${JSON.stringify(result)}, JSON.stringify({ callbackRan, failed }));
+      try {
+        withAccountMutationLock(() => {
+          callbackRan = true;
+          store.writeAccountSource(store.CLAUDE_ACCOUNTS_SOURCE, registry("after"));
+        });
+      } catch { failed = true; }
+      for (const suffix of ["", "-wal", "-shm"]) { try { fs.chmodSync(database + suffix, 0o600); } catch {} }
+      const read = store.readAccountSource(store.CLAUDE_ACCOUNTS_SOURCE);
+      fs.writeFileSync(${JSON.stringify(result)}, JSON.stringify({
+        callbackRan,
+        failed,
+        revisionMoved: accountMutationRevisionForTests() !== before,
+        active: read.kind === "collection" ? read.body.active : null,
+      }));
     `],
     stdout: "ignore",
     stderr: "pipe",
@@ -167,7 +186,12 @@ test("revision admission failure prevents the durable mutation callback", async 
   const exit = await child.exited;
   const error = await new Response(child.stderr).text();
   expect({ exit, error }).toEqual({ exit: 0, error: "" });
-  expect(JSON.parse(fs.readFileSync(result, "utf8"))).toEqual({ callbackRan: false, failed: true });
+  expect(JSON.parse(fs.readFileSync(result, "utf8"))).toEqual({
+    callbackRan: true,
+    failed: true,
+    revisionMoved: false,
+    active: "before",
+  });
 });
 
 test("a sync contender fails quickly while another process owns the file lock", async () => {

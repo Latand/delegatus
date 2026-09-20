@@ -1,11 +1,10 @@
 import fs from "node:fs";
-import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { writeJsonDurably } from "@/lib/state/durableJson";
 
 import { AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
+import { BINDINGS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import type { ProjectSpawnResolution } from "./contracts";
 
 /**
@@ -133,7 +132,31 @@ function bindingPathnameAbsence(file: string): { absent: true } | { absent: fals
  * Absent means unbound. Anything else that stops this function from producing a
  * list is a refusal.
  */
+/* The record is the `accounts` collection of state.sqlite (#1870, slice 7).
+   The rows hold what `account-project-bindings.json` held, so every refusal
+   below is the one it always was; only the read before the import can run —
+   a release that has not been promoted — still goes to the file. */
 function readBindings(): AccountProjectBinding[] {
+  let read;
+  try {
+    read = readAccountSource(BINDINGS_SOURCE);
+  } catch (error) {
+    /* Anything that stops the store from producing a list is a refusal, never
+       an empty list: an unreadable state store answered as "nobody bound
+       anything" is every fence disappearing at once. */
+    const code = (error as NodeJS.ErrnoException).code;
+    throw new AccountProjectBindingsUnreadableError(code
+      ? `the read failed with ${code}`
+      : `the read failed (${error instanceof Error ? error.message : String(error)})`);
+  }
+  if (read.kind === "legacy") return readLegacyBindingsFile();
+  if (read.kind === "gap") throw new AccountProjectBindingsUnreadableError(read.preservedAs
+    ? `${read.reason}; it is kept as ${read.preservedAs}`
+    : read.reason);
+  return bindingsFromBody(read.body === undefined ? { schemaVersion: 1, bindings: [] } : read.body);
+}
+
+function readLegacyBindingsFile(): AccountProjectBinding[] {
   const file = bindingsFile();
   let raw: string;
   try {
@@ -160,6 +183,11 @@ function readBindings(): AccountProjectBinding[] {
   } catch {
     throw new AccountProjectBindingsUnreadableError("the record is not valid JSON");
   }
+  return bindingsFromBody(parsed);
+}
+
+/** Validate a record body, whatever it was read from. */
+function bindingsFromBody(parsed: unknown): AccountProjectBinding[] {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new AccountProjectBindingsUnreadableError("the record is not a binding file");
   }
@@ -203,13 +231,8 @@ export function accountProjectBindings(): AccountProjectBinding[] {
 }
 
 function writeBindings(bindings: AccountProjectBinding[]): boolean {
-  const file = bindingsFile();
   try {
-    /* The state directory is the operator's; keep it 0700 when this write is
-       the one that creates it. The record itself lands 0600 through the shared
-       durable write. */
-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    writeJsonDurably(file, { schemaVersion: 1, bindings } satisfies BindingFile);
+    writeAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings } satisfies BindingFile);
     return true;
   } catch {
     return false;
