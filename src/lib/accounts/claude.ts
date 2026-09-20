@@ -473,7 +473,6 @@ export function cleanupOrphanedClaudeHomes(): AccountOrphanCleanupReport {
     /* A removal whose archive still holds its sign-in file stays journaled;
        it is named here so the dialog never reports that file deleted. */
     const recovery = recoverRemovalsLocked();
-   
     const registry = mutable();
     const registered = new Set(registry.accounts.map((account) => account.id));
     const retired = new Set(registry.retired.map((account) => account.id));

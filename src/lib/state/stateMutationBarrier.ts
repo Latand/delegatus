@@ -83,13 +83,27 @@ function inside(root: string, candidate: string): boolean {
   return to === from || to.startsWith(`${from}${path.sep}`);
 }
 
-/** The roots a process resolves its state directory to when nobody named one.
-    Read straight from the environment: `stateDir()` would run the legacy-dir
-    migration, and a guard may not have side effects. */
+/** The app dirs `stateDir()` resolves into under the config root. Spelled out
+    here rather than imported from `@/lib/configDir`, which imports this module. */
+const CONFIG_APP_DIRS = ["agent-log-viewer", "live-log-viewer"];
+
+/**
+ * The roots a process resolves its state directory to when nobody named one.
+ * Read straight from the environment: `stateDir()` would run the legacy-dir
+ * migration, and a guard may not have side effects.
+ *
+ * Only the app dirs, never the whole config root. A test or a script that
+ * isolates itself the way #1905 prescribes — `XDG_CONFIG_HOME=$(mktemp -d)`
+ * with `LLV_STATE_DIR=$XDG_CONFIG_HOME/state` — names a directory that sits
+ * inside its own config root, and a module that captured that path before the
+ * process repointed `LLV_STATE_DIR` elsewhere would find it refused. Punishing
+ * the prescribed isolation is how the next lane ends up running unisolated.
+ */
 function defaultStateRoots(env: Env): string[] {
   const home = os.homedir();
+  const configRoot = env.XDG_CONFIG_HOME?.trim() || path.join(home, ".config");
   return [
-    env.XDG_CONFIG_HOME?.trim() || path.join(home, ".config"),
+    ...CONFIG_APP_DIRS.map((app) => path.join(configRoot, app)),
     path.join(home, ".claude", "viewer-state"),
   ];
 }

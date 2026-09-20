@@ -15,8 +15,10 @@ import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
 import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
-import { legacyImportAllowed } from "@/lib/state/legacyImport";
-import { importStateCollection, readStateImport, SqliteStateCollection, type StateImportRow } from "@/lib/state/sqliteStateStore";
+import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
+import { legacyImportAllowed, type LegacyImportOutcome } from "@/lib/state/legacyImport";
+import { importStateCollection, readStateImport, recordStateImportMirror, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
 import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { StructuredHostAdoptionCleanupError } from "@/lib/runtime/engineHost";
@@ -661,8 +663,13 @@ function mergeForkRecords(...groups: readonly (readonly CodexForkArtifact[])[]):
    per-operation lock and ticket queue in them, and a cross-process lease has
    to be claimable while the database is busy (design §2.2). Only the journals
    move, and each imported journal leaves the tombstone directory the rest of
-   #1870 leaves, so an old release fails with EISDIR rather than writing a file
-   nothing reads.
+   #1870 leaves, so a MANUAL downgrade fails with EISDIR rather than writing a
+   file nothing reads.
+
+   A release rolled back through the fence is not left with that tombstone: the
+   demotion checkpoint writes every row back as its `<sha>.json` (§6.4), the
+   rolled-back release runs on those files, and the next activation folds what
+   it wrote there back into the collection before the tombstones return.
 
    One collection per root, rather than one for both: the import evidence in
    `state_imports` is per collection, and these are two independent directories
@@ -728,7 +735,11 @@ function migrationOps(root: string, purpose: "read" | "write"): SqliteStateColle
   const held = migrationOpCollections.get(cacheKey);
   if (held && held.identity === databaseIdentity(database)) return held.collection;
   if (!readStateImport(database, migrationOpsCollectionName(root))) {
-    if (!legacyImportAllowed(path.join(root, "unused"))) {
+    /* The database's own directory is the state directory, which is where the
+       release target lives. Asking about the journal root instead found no
+       release target there and read as "any process may import", so a release
+       that was not yet promoted retired the journals of the one that was. */
+    if (!legacyImportAllowed(database)) {
       if (purpose === "read") return null;
       throw new FileTransactionBusyError("conversation migration journals are waiting for release promotion");
     }
@@ -757,8 +768,21 @@ function retireJournalFile(file: string, tag: string): void {
   const kept = `${file}.imported-${tag}`;
   fs.renameSync(file, fs.existsSync(kept) ? `${kept}-${process.pid}` : kept);
   fs.mkdirSync(file, { recursive: true, mode: 0o700 });
-  const descriptor = fs.openSync(path.dirname(file), "r");
+  fsyncDirectory(path.dirname(file));
+}
+
+function fsyncDirectory(directory: string): void {
+  const descriptor = fs.openSync(directory, "r");
   try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+}
+
+function retireJournalFiles(root: string, names: readonly string[], stamp: string): void {
+  const tag = stamp.replace(/[:.]/g, "-");
+  for (const name of names) {
+    const file = path.join(root, name);
+    try { if (fs.lstatSync(file).isFile()) retireJournalFile(file, tag); }
+    catch { /* another importer retired it first */ }
+  }
 }
 
 /**
@@ -766,13 +790,21 @@ function retireJournalFile(file: string, tag: string): void {
  * tombstone. Runs under the root's own write-transaction lock, so two new-code
  * importers cannot both retire, and the import itself is idempotent: the
  * evidence row is re-checked inside the transaction that writes it.
+ *
+ * A record that already stands with journal files back beside it is the
+ * rollback window closing: {@link checkpointMigrationOperationJournalMirrorForDemotion}
+ * wrote those files for a release that predates the move, and that release has
+ * been the writer since. Its writes are folded into the collection before the
+ * tombstones return — dropping them would lose one fork recovery per journal.
  */
 export function importMigrationOperationJournals(root: string): { imported: boolean; rows: number } {
   const database = migrationOpsDatabase(root);
   const collection = migrationOpsCollectionName(root);
+  /* Retiring live journal files is a state mutation, whoever asked (#1905). */
+  assertStateMutationAllowed(path.dirname(root));
   return withFileTransactionSync(root, "conversation migration journals are busy", () => {
     const names = journalFileNames(root);
-    const rows: StateImportRow[] = [];
+    const parsed: MigrationOpRow[] = [];
     const seen = new Set<string>();
     let bytes = 0;
     const digest = crypto.createHash("sha256");
@@ -794,28 +826,97 @@ export function importMigrationOperationJournals(root: string): { imported: bool
       const key = migrationOpKey(stored.operationId);
       if (seen.has(key)) continue;
       seen.add(key);
-      rows.push({ key, value: { k: key, v: stored } satisfies MigrationOpRow, controllerActive: true });
+      parsed.push({ k: key, v: stored });
     }
-    const outcome = readStateImport(database, collection)
-      ? { imported: false, record: readStateImport(database, collection)! }
-      : importStateCollection(database, {
-        collection,
-        schemaVersion: 1,
-        migrationId: "migration-provider-operations-v1",
-        rows,
-        sourceName: path.basename(root),
-        sourceSha256: names.length > 0 ? digest.digest("hex") : null,
-        sourceBytes: bytes,
-        gap: null,
-        release: null,
+    const held = readStateImport(database, collection);
+    if (held) {
+      const store = openMigrationOps(root);
+      const changed = parsed.filter((row) => {
+        const current = store.get(row.k);
+        return !current || JSON.stringify(current.v) !== JSON.stringify(row.v);
       });
-    for (const name of names) {
-      const file = path.join(root, name);
-      try { if (fs.lstatSync(file).isFile()) retireJournalFile(file, outcome.record.importedAt.replace(/[:.]/g, "-")); }
-      catch { /* another importer retired it first */ }
+      /* `fenceOwner`, because the roll-forward activation can still hold this
+         release's own rollback fence, exactly as the legacy reconcile does. */
+      if (changed.length > 0) store.patchSync(() => ({ records: changed }), { fenceOwner: true });
+      retireJournalFiles(root, names, new Date().toISOString());
+      return { imported: false, rows: changed.length };
     }
-    return { imported: outcome.imported, rows: rows.length };
+    const { record } = importStateCollection(database, {
+      collection,
+      schemaVersion: 1,
+      migrationId: "migration-provider-operations-v1",
+      rows: parsed.map((row) => ({ key: row.k, value: row, controllerActive: true })),
+      sourceName: path.basename(root),
+      sourceSha256: names.length > 0 ? digest.digest("hex") : null,
+      sourceBytes: bytes,
+      gap: null,
+      release: hotStateWriterRevision(path.dirname(root))?.slice(0, 12) ?? null,
+    });
+    retireJournalFiles(root, names, record.importedAt);
+    return { imported: true, rows: parsed.length };
   });
+}
+
+/** The journal root's activation import, reported the way every other moved
+    store reports it, so it joins `LEGACY_COLLECTIONS` (#1870, slice 7). */
+export function importMigrationOperationJournalsAtActivation(root: string): LegacyImportOutcome {
+  const { imported } = importMigrationOperationJournals(root);
+  const record = readStateImport(migrationOpsDatabase(root), migrationOpsCollectionName(root))!;
+  return { state: imported ? "imported" : "already-imported", record, incident: null };
+}
+
+/**
+ * Write every journal back as the file a rollback release reads (§6.4).
+ *
+ * The root keeps its per-operation leases, so only the journals are restored:
+ * each row's tombstone directory goes and its `<sha>.json` lands through a temp
+ * file and a rename, all from ONE collection revision. Without this, a release
+ * rolled back through the fence found a directory where every journal belonged
+ * and threw EISDIR on every conversation migration it tried to resume.
+ */
+export function checkpointMigrationOperationJournalMirrorForDemotion(root: string): void {
+  const database = migrationOpsDatabase(root);
+  const collection = migrationOpsCollectionName(root);
+  if (!readStateImport(database, collection)) return;
+  assertStateMutationAllowed(path.dirname(root));
+  ensureDurableDirectory(root);
+  withFileTransactionSync(root, "conversation migration journals are busy", () => {
+    const store = openMigrationOps(root);
+    const revision = store.checkpointMirrorForDemotion((records) => {
+      for (const row of records) {
+        const journal = normalizeCodexOperationJournal(row.v);
+        if (!journal) continue;
+        writeJournalFileDurably(operationJournalPath(root, journal.operationId), journal);
+      }
+    });
+    /* Evidence only; the fold-back compares row by row rather than by digest,
+       because one mirror is many files. */
+    recordStateImportMirror(database, collection, null, revision);
+  });
+}
+
+/** One journal back as the file the rollback release knows: the tombstone goes,
+    the bytes land through a temp file and a rename, and the directory entry is
+    fsynced so the name survives a crash. */
+function writeJournalFileDurably(file: string, journal: CodexProviderOperationJournal): void {
+  const directory = path.dirname(file);
+  const text = `${JSON.stringify(journal, null, 2)}\n`;
+  const temp = path.join(directory, `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  const descriptor = fs.openSync(temp, "wx", 0o600);
+  try {
+    fs.writeFileSync(descriptor, text, "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  try {
+    try { if (fs.lstatSync(file).isDirectory()) fs.rmSync(file, { recursive: true, force: true }); }
+    catch { /* nothing stands at the path */ }
+    fs.renameSync(temp, file);
+    fsyncDirectory(directory);
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
 }
 
 /** One operation journal exactly as stored, for tests that used to read its

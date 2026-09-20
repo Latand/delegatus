@@ -15,6 +15,11 @@ interface LegacyCollectionEntry {
   checkpointMirrorForDemotion(): Promise<void>;
 }
 
+const MIGRATION_OPERATION_JOURNAL_ROOTS = [
+  "migration-provider-operations",
+  "migration-provider-claude-operations",
+] as const;
+
 export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
   {
     collection: "tasks",
@@ -31,6 +36,16 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/accounts/accountsStore")).importLegacyAccounts(undefined, { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/accounts/accountsStore")).checkpointAccountRollbackMirrorsForDemotion(),
   },
+  /* The conversation-migration journal roots: a directory of per-operation
+     files rather than one file, so the entry names the root and the store keys
+     its collection off the root's basename. */
+  ...MIGRATION_OPERATION_JOURNAL_ROOTS.map((root) => ({
+    collection: `account_migration_ops:${root}`,
+    importAtActivation: async () => (await import("@/lib/accounts/migration/provider"))
+      .importMigrationOperationJournalsAtActivation(statePath(root)),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/accounts/migration/provider"))
+      .checkpointMigrationOperationJournalMirrorForDemotion(statePath(root)),
+  })),
 ];
 
 /** Import (or finish importing, or reconcile) every moved store. One store's

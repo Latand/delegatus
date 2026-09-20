@@ -207,6 +207,20 @@ describe("the barrier's own rules", () => {
     expect(stateMutationRefusal(stateDirectory, env({ LLV_STATE_DIR: "/tmp/llv-named/state" }))).toContain("serving Viewer");
   });
 
+  /* The isolation #1905 prescribes is XDG_CONFIG_HOME=$(mktemp -d) with
+     LLV_STATE_DIR=$XDG_CONFIG_HOME/state. That state dir sits inside its own
+     config root, and a module that captured it before the process repointed
+     LLV_STATE_DIR at a second sandbox must still be allowed to import it. */
+  test("a state directory beside the app dir is the caller's own, not a default root", () => {
+    const sandbox = path.join(configRoot, "state");
+    expect(stateMutationRefusal(sandbox, env())).toBeNull();
+    expect(stateMutationRefusal(sandbox, env({ LLV_STATE_DIR: "/tmp/llv-second-sandbox" }))).toBeNull();
+    /* The incident's own directory, and the dir name it used before the
+       rename, stay refused. */
+    expect(stateMutationRefusal(stateDirectory, env())).toContain("serving Viewer");
+    expect(stateMutationRefusal(path.join(configRoot, "live-log-viewer", "state"), env())).toContain("serving Viewer");
+  });
+
   test("the legacy viewer-state directory counts as a default root", () => {
     const legacy = path.join(os.homedir(), ".claude", "viewer-state");
     expect(stateMutationRefusal(legacy, env())).toContain("serving Viewer");

@@ -37,7 +37,9 @@ guarantees for the 1.x series.
 - Conversation-migration operation journals move into the same database, one
   collection per journal root. The roots stay directories, because the
   per-operation lease that guards them has to be claimable while the database
-  is busy (#1870).
+  is busy (#1870). A release rolled back through the fence gets every journal
+  written back as the file it knows, and whatever it journals while it runs is
+  folded back into the collection at roll-forward.
 - An account store whose file could not be read at the import is recorded as a
   gap rather than imported as empty, and each owner answers as it always did: a
   binding record refuses every read and names the file that was kept, a
@@ -62,7 +64,8 @@ guarantees for the 1.x series.
   to recover. Replacing a directory with its `<name>.imported-*` copy also
   works, but loses account changes made since the upgrade. Deployed releases
   rolled back through the release fence get every file written back for them
-  automatically, and the changes they make are merged at roll-forward.
+  automatically — the eight account stores and each conversation-migration
+  journal alike — and the changes they make are merged at roll-forward.
 - A version older than this one cannot read the SQLite board and fails on the
   `board.json` directory, naming the path. Upgrade again to recover. Replacing
   the directory with the `board.json.imported-*` copy also works, but loses
