@@ -153,12 +153,12 @@ test("a collapsed cmd-group defers all child rendering until it is expanded", ()
     <CmdGroupCard
       item={cmdGroup([
         toolEvent({ id: "a", summary: "ls -la", outputPreview: "total 8\nfile.ts" }),
-        toolEvent({ id: "b", tool: "Read", icon: "file", summary: "Read a.ts", outputPreview: "line-a\nline-b" }),
+        toolEvent({ id: "b", tool: "Read", family: "read", icon: "file", summary: "Read a.ts", outputPreview: "line-a\nline-b" }),
       ])}
     />,
   );
   // The header renders...
-  expect(html).toContain(en("render.actions", { count: 2 }));
+  expect(html).toContain("ran 1 command · read 1 file");
   // ...but no child summary or body is in the DOM until the group is expanded.
   expect(html).not.toContain("ls -la");
   expect(html).not.toContain("Read a.ts");
@@ -189,7 +189,7 @@ test("a collapsed cmd-group does not mount a diff-backed child's diff body", () 
     body: { type: "diff", files: model.files, filesTruncated: model.filesTruncated },
   });
   const html = renderToStaticMarkup(<CmdGroupCard item={cmdGroup([diffEvent, toolEvent({ id: "e2", summary: "echo done" })])} />);
-  expect(html).toContain(en("render.actions", { count: 2 }));
+  expect(html).toContain("patched 1 file · ran 1 command");
   // The successful (no-error) group is collapsed, so the child's diff DOM is absent.
   expect(html).not.toContain("bg-diff-add-soft");
   expect(html).not.toContain("src/edit-x.ts");

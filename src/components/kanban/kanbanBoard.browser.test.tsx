@@ -6291,3 +6291,67 @@ describe("role evaluation mounted candidate", () => {
     await gradeRendered(path.resolve(process.env.ROLE_EVAL_CANDIDATE!), path.resolve(process.env.ROLE_EVAL_OUTPUT!));
   }, 180_000);
 });
+
+
+describe("readable tool rows", () => {
+  browserTest("Codex feed at phone and desktop widths", async () => {
+    const phase = process.env.TOOL_CAPTURE_PHASE === "before" ? "before" : "after";
+    const out = path.resolve(`.artifacts/readable-tools/${phase}`);
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/feed/__fixtures__/readableTools.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const readings: object[] = [];
+    try {
+      for (const width of [390, 1280]) for (const lang of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 1000 }, "dark", lang);
+        await page.locator("[data-readable-tools]").waitFor();
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-closed.png`), fullPage: true });
+        // Open the existing tool/group disclosures with real pointer input.
+        for (let round = 0; round < 8; round++) {
+          // Pin each node while clicking: a live :not([open]) locator can
+          // retarget between Playwright's checks and the native toggle event.
+          const details = await page.locator("details:not([open]) > summary").elementHandles();
+          for (const summary of details) {
+            if (await summary.evaluate(el => !el.parentElement?.hasAttribute("open"))) await summary.click();
+            await page.waitForTimeout(100);
+          }
+          const folds = page.locator("[data-mobile-run-fold][aria-expanded=false]");
+          if (await folds.count()) {
+            await folds.first().click();
+            await page.waitForTimeout(100);
+          }
+          await page.waitForTimeout(100);
+          if (!await page.locator("details:not([open]), [data-mobile-run-fold][aria-expanded=false]").count()) break;
+        }
+        expect(await page.locator("details:not([open]), [data-mobile-run-fold][aria-expanded=false]").count()).toBe(0);
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-open.png`), fullPage: true });
+        const reading = await page.locator("[data-readable-tools]").evaluate(el => ({
+          text: el.textContent, scrollWidth: document.documentElement.scrollWidth,
+          viewport: innerWidth, rows: el.querySelectorAll("details").length,
+        }));
+        expect(pageErrors).toEqual([]);
+        expect(reading.scrollWidth).toBeLessThanOrEqual(width);
+        if (phase === "after") {
+          expect(reading.text).toContain("git status --short");
+          expect(reading.text).toContain("Check retry behaviour");
+          expect(reading.text).toContain("+1");
+          expect(reading.text).not.toContain("Text absent");
+          expect(reading.text).not.toContain("Extension");
+          expect(await page.locator("[data-readable-tools]").innerHTML()).not.toContain("invented-review-value");
+          expect(reading.text).toContain("application/json");
+          const clippedChips = await page.locator("[data-tool-chip]").evaluateAll(chips =>
+            chips.filter(el => el.scrollWidth > el.clientWidth + 1).length);
+          expect(clippedChips).toBe(0);
+          // Short labels stay on one line even next to a one-character value.
+          const wrappedLabels = await page.locator("[data-tool-chip] > span:first-child").evaluateAll(labels =>
+            labels.filter(el => el.getClientRects().length > 1).length);
+          expect(wrappedLabels).toBe(0);
+        }
+        readings.push({ width, lang, ...reading });
+        await context.close();
+      }
+      fs.mkdirSync("evidence/readable-tools", { recursive: true });
+      fs.writeFileSync(`evidence/readable-tools/${phase}.json`, JSON.stringify({ phase, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});

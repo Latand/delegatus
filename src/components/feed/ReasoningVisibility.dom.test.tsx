@@ -53,15 +53,12 @@ function render(lines: string[], start = 0) {
   return feed;
 }
 
-test("one accessible unavailable disclosure retains every source anchor without empty children", () => {
+test("empty reasoning retains hidden anchors without a visible row or disclosure", () => {
   const feed = render(Array.from({ length: 20 }, (_, i) => record(`reason-${i}`)));
-  expect(host.querySelectorAll("details")).toHaveLength(1);
-  expect(host.querySelector("summary")?.getAttribute("aria-label")).toBe("Reasoning · 20 · Text unavailable");
-  expect(host.textContent).toContain("No reasoning text was provided.");
+  expect(host.querySelectorAll("details")).toHaveLength(0);
+  expect(host.textContent).toBe("");
   expect(host.querySelectorAll("[data-feed-key]")).toHaveLength(20);
-  for (let i = 0; i < 20; i++) {
-    expect(host.querySelector(`[data-feed-key="row:${i}:0"]`)?.getAttribute("data-feed-source-id")).toBe(`reason-${i}`);
-  }
+  expect(host.querySelector("[data-empty-reasoning]")?.hasAttribute("hidden")).toBe(true);
   expect(feed.items).toHaveLength(1);
 });
 
@@ -78,12 +75,12 @@ test("short and long provider text are fully present in the expandable body", ()
 test("locale changes update availability and count without changing provider text", () => {
   render([record("empty")]);
   flushSync(() => setLocale("uk"));
-  expect(host.querySelector("summary")?.getAttribute("aria-label")).toBe("Міркування · 1 · Текст відсутній");
-  expect(host.textContent).toContain("Доступний текст міркувань не надано.");
+  expect(host.querySelector("summary")).toBeNull();
+  expect(host.textContent).toBe("");
 });
 
 test("prepending across the middle retains every previously addressable member", () => {
-  const lines = Array.from({ length: 20 }, (_, i) => record(`reason-${i}`));
+  const lines = Array.from({ length: 20 }, (_, i) => record(`reason-${i}`, "Exposed explanation"));
   render(lines.slice(10), 10);
   const anchors = Array.from(host.querySelectorAll("[data-feed-key]")).map((el) => el.getAttribute("data-feed-key"));
   render(lines);
@@ -127,7 +124,7 @@ test("mounted LogFeed upgrades a delayed supplied overlay in the canonical slot 
 });
 
 for (const start of [1, 10]) test(`mounted prepend across reasoning member ${start} preserves the current offset`, () => {
-  const lines = Array.from({ length: 20 }, (_, i) => record(`reason-${i}`));
+  const lines = Array.from({ length: 20 }, (_, i) => record(`reason-${i}`, "Exposed explanation"));
   const feed = mountFeed(lines.slice(start), start);
   const scroller = host.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
   Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => 1000 });
@@ -171,9 +168,9 @@ test.skipIf(!process.env.LLV_REASONING_RECORDS)("captured native run through nor
   expect(new Set(item.members?.map((member) => member.anchorKey)).size).toBe(20);
   expect(item.availability).toBe("unavailable");
   flushSync(() => root.render(<FeedItem item={item} />));
-  expect(host.querySelectorAll("details")).toHaveLength(1);
+  expect(host.querySelectorAll("details")).toHaveLength(0);
   expect(host.querySelectorAll("[data-feed-source-id]")).toHaveLength(20);
-  expect(host.textContent).toContain("No reasoning text was provided.");
+  expect(host.textContent).toBe("");
 });
 
 

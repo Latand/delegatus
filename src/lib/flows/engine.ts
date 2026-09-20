@@ -1,3 +1,4 @@
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -1230,7 +1231,10 @@ export async function tickFlow(
       const prepared = prepareReviewerLaunch(flow, round);
       captureReviewHead(flow, round);
       round.spawnStartedAt = isoNow();
-      const reservation = reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId);
+      const reservation = await withAccountMutationLockAsync(
+        () => reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId),
+        { holder: "reviewer spawn admission", caller: "reviewer spawn admission" },
+      );
       round.launchLeaseUntil = new Date(Date.now() + REVIEWER_LAUNCH_LEASE_MS).toISOString();
       persistCheckpoint();
       /* launchReviewer persists again after spawning (for the ownership/orphan
