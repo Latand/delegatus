@@ -1,4 +1,4 @@
-export const ROLE_EVAL_SCHEMA_VERSION = "role-eval.v1";
+export const ROLE_EVAL_SCHEMA_VERSION = "role-eval.v2";
 export const PILOT_SEED = "20260920";
 
 export type Arm = "A" | "B" | "C";
@@ -7,11 +7,14 @@ export type TrialStatus = "planned" | "blocked" | "admitted" | "completed" | "un
 
 export interface Fixture {
   id: CaseId;
+  /** Deterministic commit created from fixtures/<id>/base by prepare. */
   baseCommit: string;
   treeHash: string;
   supportHash: string;
+  taskHash: string;
   candidateFiles: string[];
   forbiddenFiles: string[];
+  requiresRenderedEvidence: boolean;
   hiddenCommitment: string;
   holdoutCommitment: string;
 }
@@ -46,25 +49,51 @@ export interface ModelEvidence {
   admitted: boolean;
 }
 
-export interface TrialReceipt {
+export interface LaunchIntent {
   cellId: string;
   clientRequestId: string;
   payloadHash: string;
   taskId: string;
   parentConversationId: string;
+  cwd: string;
+  "prompt": string;
+  model: ModelEvidence;
+}
+
+export interface TrialReceipt extends LaunchIntent {
   conversationId?: string;
   launchId?: string;
   status: TrialStatus;
-  model: ModelEvidence;
   candidateHead?: string;
   reviewedHead?: string;
   publishedHead?: string;
-  usage?: Record<string, number>;
-  evidenceHashes?: string[];
+  evidence?: EvidenceBundle;
+  measurement?: RunMeasurement;
 }
 
-export interface Score {
-  cellId: string;
-  verdict: "pass" | "fail" | "blocked" | "incomplete";
-  reasons: string[];
+export interface EvidenceRecord { digest: string; passed: boolean; source: "local-grader" | "sealed-grader" | "audit"; }
+export interface RenderedEvidence { viewport: "desktop" | "phone"; geometryDigest: string; pixelDigest: string; inspectedBy: string; }
+export interface IndependentAssessment { reviewerId: string; reviewedHead: string; verdict: "APPROVE" | "REQUEST_CHANGES"; evidenceDigest: string; }
+export interface EvidenceBundle {
+  publicGrader: EvidenceRecord;
+  hiddenGrader: EvidenceRecord;
+  rendered?: RenderedEvidence[];
+  forbiddenAction: EvidenceRecord;
+  assessment: IndependentAssessment;
 }
+
+export interface StageMeasurement {
+  role: "planner" | "builder" | "reviewer" | "repair";
+  round: number;
+  usage: { inputTokens?: number; outputTokens?: number; cachedTokens?: number; source: "provider" | "unknown" };
+  timing: { startedAt?: string; endedAt?: string; queueMs?: number; providerMs?: number; toolBuildMs?: number; source: "measured" | "unknown" };
+  environment: { rolePromptHash: string; runtimeHash: string; dependencyHash: string; browserHash?: string };
+}
+
+export interface RunMeasurement {
+  schemaVersion: "role-eval.result.v1";
+  stages: StageMeasurement[];
+  cost: { amount?: number; currency?: string; priceSource?: string; status: "verified" | "unknown" };
+}
+
+export interface Score { cellId: string; verdict: "pass" | "fail" | "blocked" | "incomplete"; reasons: string[]; }

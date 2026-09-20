@@ -1,0 +1,1 @@
+Behavior: redact sensitive-shaped fragments before applying the display bound. Diagnosis: the formatter truncates the raw input first. Reuse the existing formatter boundary. Preserve input immutability and Unicode safety. Files: `case/diagnosticSummary.ts` and its test. Check the public grader. Escalate if the redaction contract is absent.

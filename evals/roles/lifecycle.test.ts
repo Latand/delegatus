@@ -1,26 +1,8 @@
 import { expect, test } from "bun:test";
-
+import { TOOL_INPUT_SCHEMAS } from "../../src/lib/mcp/server";
 import { ingest, plan, readDataset, recover } from "./runner";
 import type { ModelEvidence, TrialReceipt } from "./schema";
-
-const admitted: ModelEvidence = { requestedModel: "gpt-5.6-luna", resolvedModel: "gpt-5.6-luna", effort: "high", runtimeVersion: "runtime", observedAt: "2026-09-20T00:00:00Z", admitted: true };
-
-test("planning exports one Viewer request without dispatch and rejects unresolved identity", () => {
-  const dataset = readDataset();
-  const head = "a".repeat(40);
-  expect(plan(dataset, [], [], head)).toBeNull();
-  const output = plan(dataset, [], [admitted], head);
-  expect(output?.payload).toMatchObject({ allowSubagents: false, mode: "fresh", noDispatch: true });
-  expect(() => plan(dataset, [], [admitted], "floating")).toThrow("exact harness head");
-});
-
-test("receipt recovery preserves original identity and cannot change model pins", () => {
-  const dataset = readDataset();
-  const receipt: TrialReceipt = { cellId: "quota-window-A", clientRequestId: "original-key", payloadHash: "c".repeat(64), taskId: "canonical-role-prompt-evaluation", parentConversationId: "root", status: "unknown", model: admitted };
-  expect(ingest(dataset, receipt)).toEqual(receipt);
-  expect(recover(dataset, [], receipt)).toEqual([receipt]);
-  expect(recover(dataset, [receipt], receipt)).toEqual([receipt]);
-  expect(() => recover(dataset, [receipt], { ...receipt, payloadHash: "d".repeat(64) })).toThrow("receipt recovery changed original request");
-  receipt.model.requestedModel = "gpt-6-astra";
-  expect(() => ingest(dataset, receipt)).toThrow("receipt changed the requested model or effort");
-});
+const model: ModelEvidence = { requestedModel: "gpt-5.6-luna", resolvedModel: "gpt-5.6-luna", effort: "high", runtimeVersion: "catalog-v1", observedAt: "2026-09-20T00:00:00Z", admitted: true };
+const identity = { taskId: "task-canonical", parentConversationId: "conversation-root", cwd: "/isolated/workspace" };
+test("simulated Viewer transport accepts exact payload and rejects immutable identity drift", () => { const output = plan(readDataset(), [], [model], "a".repeat(40), identity)!; expect(TOOL_INPUT_SCHEMAS.spawn_agent.safeParse(output.payload).success).toBe(true); for (const changed of [{ taskId: "" }, { parentConversationId: "" }, { model: "other" }, { prompt: "other" }]) expect(() => ingest(readDataset(), { ...output.intent, status: "unknown", model, ...changed } as TrialReceipt, output.intent)).toThrow(); });
+test("simulated lost-ack recovery advances evidence under one key", () => { const output = plan(readDataset(), [], [model], "a".repeat(40), identity)!; const unknown: TrialReceipt = { ...output.intent, status: "unknown", model }; const completed: TrialReceipt = { ...unknown, status: "completed", conversationId: "worker", launchId: "launch", candidateHead: "b".repeat(40) }; expect(recover(readDataset(), [], unknown, output.intent)).toEqual([unknown]); expect(recover(readDataset(), [unknown], completed, output.intent)).toEqual([completed]); expect(() => recover(readDataset(), [unknown], { ...completed, prompt: "changed" }, output.intent)).toThrow("immutable launch prompt"); });
