@@ -488,7 +488,6 @@ export const en = {
   "composer.structuredImagesUnavailable": "Image delivery is unavailable for structured conversations",
   "composer.codexImagesTextOnly": "The selected Codex model accepts text input only.",
   "composer.structuredImagesProtocol": "This structured host has no negotiated image capability.",
-  "composer.imagesBlockedDuringRecovery": "Drafted images will be sent after the host recovers; text can be sent right away.",
   "composer.imageCapabilityLoading": "Image capability is loading.",
   "composer.imageCapabilityError": "Image capability could not be loaded.",
   "composer.imageCapabilityRetry": "Retry image check",
@@ -557,8 +556,8 @@ export const en = {
   "strip.resolving": "resolving the agent host…",
 
   // Dead-host banner (issue #247)
-  "deadHost.title": "Agent inactive · {since} — messages will queue",
-  "deadHost.body": "Text you send now is saved durably and delivered after the host recovers. Images can't be attached until then. Pending approvals expired — recover with the controls below.",
+  "deadHost.title": "Agent inactive · {since} — sending brings it back",
+  "deadHost.body": "Write and send as usual. Your message is saved first, text and images together, then the agent is started again and the message is delivered. Pending approvals expired. The controls below are optional.",
   "deadHost.respawn": "Respawn conversation",
   "deadHost.attach": "Open in terminal",
   "deadHost.recheck": "Re-check",
@@ -566,6 +565,7 @@ export const en = {
   "strip.recheckHint": "Re-check the runtime host",
   "deadHost.respawnFailed": "Respawn failed — try again.",
   "deadHost.sendBlocked": "host is dead — respawn to continue",
+  "deadHost.notResumable": "This conversation has no session of its own to resume. Continue in its root conversation, or open it in your terminal.",
   "deadHost.expiredCard": "expired — the host died before this was answered",
 
   // Superseded-round banner (issue #383)
@@ -2440,6 +2440,7 @@ export const en = {
   "runtime.receipt.awaitingTurnFor": "waiting for the agent to finish its turn · {waited}",
   "runtime.receipt.awaitingTurnPos": "waiting for the agent to finish its turn · #{position} · {waited}",
   "runtime.receipt.awaitingHostFor": "waiting for the agent’s window to come back · {waited}",
+  "runtime.receipt.resumingHostFor": "the agent’s window is starting · {waited}",
   "runtime.receipt.awaitingHandoverFor": "waiting to be handed to the agent · {waited}",
   "runtime.receipt.handingOverFor": "still handing this over to the agent · {waited}",
   "runtime.receipt.admissionUnconfirmed": "never confirmed as sent · {waited}",

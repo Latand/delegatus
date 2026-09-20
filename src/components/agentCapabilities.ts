@@ -368,10 +368,23 @@ export function capabilitiesFor(file: FileEntry, rv: RuntimeSessionView | null, 
           runtime: HIDDEN,
           kill: HIDDEN,
           terminal: ENABLED, // the dead-host escape hatch (§5/§6)
-          // Text has a durable pre-recovery hold. Images remain in the local
-          // draft until a live host can reserve their runtime-store bytes.
-          images: disabled("composer.imagesBlockedDuringRecovery"),
-          send: ENABLED,
+          // The WHOLE message is admitted here, images included. The send path
+          // reserves text and attachment bytes under one key, raises the host
+          // itself, and judges the payload against the host that came back —
+          // so this projection, which by definition describes a host that is
+          // gone, is not the authority on what that host will accept. Holding
+          // images back only split one message into two and made the operator
+          // press a recovery button before the half that mattered could go.
+          images: ENABLED,
+          // A SUBAGENT transcript has no session of its own — the root's
+          // process writes it — so sending here raises nothing. Say that, and
+          // name the root, instead of offering a Send with nothing behind it.
+          // Every other dead conversation keeps Send: raising its host is what
+          // the send does. The predicate is the transcript kind deliberately,
+          // not `isResumableConversation`, which also answers false for whole
+          // roots (`claude-tasks`, `openclaw-sessions`) whose dead sends the
+          // runtime plane handles exactly like any other.
+          send: isSubagent(file) ? disabled("deadHost.notResumable") : ENABLED,
         },
       };
     case "superseded":

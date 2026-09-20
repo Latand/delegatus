@@ -479,7 +479,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "composer.structuredImagesUnavailable": "Структуровані розмови поки не підтримують картинки",
   "composer.codexImagesTextOnly": "Обрана модель Codex приймає лише текст.",
   "composer.structuredImagesProtocol": "Цей структурований хост не узгодив підтримку зображень.",
-  "composer.imagesBlockedDuringRecovery": "Зображення з чернетки буде надіслано після відновлення хоста; текст можна надіслати вже зараз.",
   "composer.imageCapabilityLoading": "Завантажуємо дані про підтримку зображень.",
   "composer.imageCapabilityError": "Не вдалося завантажити дані про підтримку зображень.",
   "composer.imageCapabilityRetry": "Повторити перевірку зображень",
@@ -579,8 +578,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "strip.resolving": "визначаємо середовище агента…",
 
   // Dead-host banner (issue #247)
-  "deadHost.title": "Агент неактивний · {since} — повідомлення підуть у чергу",
-  "deadHost.body": "Текст, надісланий зараз, надійно зберігається і буде доставлений після відновлення хоста. Зображення не можна додати, доки хост не повернеться. Очікувані підтвердження застаріли — відновіть роботу елементами керування нижче.",
+  "deadHost.title": "Агент неактивний · {since} — надсилання поверне його",
+  "deadHost.body": "Пишіть і надсилайте як завжди. Повідомлення спершу зберігається цілком — і текст, і зображення, — потім агент запускається знову й повідомлення доставляється. Очікувані підтвердження застаріли. Елементи керування нижче — необовʼязкові.",
   "deadHost.respawn": "Відновити розмову",
   "deadHost.attach": "Відкрити в терміналі",
   "deadHost.recheck": "Перевірити знову",
@@ -588,6 +587,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "strip.recheckHint": "Перевірити хост середовища ще раз",
   "deadHost.respawnFailed": "Не вдалося перезапустити — спробуйте ще раз.",
   "deadHost.sendBlocked": "хост мертвий — відновіть, щоб продовжити",
+  "deadHost.notResumable": "Ця розмова не має власної сесії, яку можна відновити. Продовжте в кореневій розмові або відкрийте її в терміналі.",
   "deadHost.expiredCard": "застаріло — хост помер, перш ніж на це відповіли",
 
   // Банер заміненого раунду (issue #383)
@@ -2369,6 +2369,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "runtime.receipt.awaitingTurnFor": "чекає, поки агент завершить хід · {waited}",
   "runtime.receipt.awaitingTurnPos": "чекає, поки агент завершить хід · #{position} · {waited}",
   "runtime.receipt.awaitingHostFor": "чекає на повернення вікна агента · {waited}",
+  "runtime.receipt.resumingHostFor": "вікно агента запускається · {waited}",
   "runtime.receipt.awaitingHandoverFor": "чекає на передачу агентові · {waited}",
   "runtime.receipt.handingOverFor": "усе ще передає це агентові · {waited}",
   "runtime.receipt.admissionUnconfirmed": "надсилання не підтверджено · {waited}",

@@ -52,10 +52,20 @@ export interface ComposerSendSlot {
 }
 
 /**
- * Which kind the slot takes. Killed outranks offline: a queued message needs
- * an agent to arrive at, so a killed conversation offers the respawn that gets
- * one rather than a queue that cannot drain. Below those, a running turn with
- * an empty draft is the Stop case, and everything else is an ordinary send.
+ * Which kind the slot takes.
+ *
+ * A stopped conversation with NOTHING typed offers the respawn: there is no
+ * message to carry, and asking for an agent back is the only useful action.
+ * With a draft in the field it is an ordinary send, because that send is what
+ * raises the host — it admits the whole message durably and the server starts
+ * the agent again on its way to delivering it. Offering Respawn there put a
+ * button between the operator and a message already written, and made pressing
+ * it a precondition for sending; it never was one.
+ *
+ * A runtime bus that is down is different in kind: nothing can be admitted at
+ * all, so the queue stays the honest word for what happens to the draft.
+ * Below those, a running turn with an empty draft is the Stop case, and
+ * everything else is an ordinary send.
  */
 export function composerSlotKind({ killed, offline, working, hasDraft }: {
   killed: boolean;
@@ -63,8 +73,9 @@ export function composerSlotKind({ killed, offline, working, hasDraft }: {
   working: boolean;
   hasDraft: boolean;
 }): ComposerSlotKind {
-  if (killed) return "respawn";
+  if (killed && !hasDraft) return "respawn";
   if (offline) return "queue";
+  if (killed) return "send";
   if (working && !hasDraft) return "stop";
   return "send";
 }
@@ -109,8 +120,9 @@ export interface ComposerBarProps {
   onAttachFiles?: (files: File[]) => void;
   imageDisabled?: boolean;
   imageDisabledReason?: string;
-  /** When set, Send is disabled with this tooltip and no submit is attempted
-      (issue #247 §5: a dead host blocks sends so no rejected receipts stack).
+  /** When set, Send is disabled with this tooltip and no submit is attempted.
+      Reserved for a surface with nowhere to send at all — never for a host that
+      is only stopped, which the send path raises on its way to delivering.
       The reason also renders as inline status text (issue #499): a phone has
       no hover, so a tooltip-only explanation leaves the blocked action mute. */
   sendDisabledReason?: string;
@@ -345,7 +357,9 @@ export function ComposerBar({
 
   /* The phone's send slot (§2 rule 8). `stop` and `respawn` act instead of
      submitting, so they stay live exactly where an ordinary send is not: Stop
-     with an empty field, Respawn with a dead host that blocks every send. */
+     with an empty field, Respawn with an empty one on a stopped host. With a
+     draft in the field the slot is an ordinary Send, because that send raises
+     the host itself — Respawn never stands between the operator and it. */
   const slotKind: ComposerSlotKind = isMobile && sendSlot && !dictationRecording ? sendSlot.kind : "send";
   const slotActs = slotKind === "stop" || slotKind === "respawn";
   const slotWide = slotKind === "queue" || slotKind === "respawn";
@@ -492,9 +506,11 @@ export function ComposerBar({
      the controls sit inline at the field's right edge as before. */
   const controls = (
     <>
-      {/* Dictation is inert while the host is dead (§5): a spoken message could
-          never be delivered, so the mic disables alongside Send — no half-open
-          affordance that records into a void. */}
+      {/* Dictation follows Send, and Send is no longer blocked by a host that
+          is merely gone — sending is what brings it back — so a dictated
+          message is as deliverable there as a typed one. The mic still goes
+          inert where Send is genuinely blocked (a superseded round, an
+          unresolved host): no affordance that records into a void. */}
       {voiceControl}
       {micControl}
       {sendControl}

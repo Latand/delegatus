@@ -344,14 +344,41 @@ test("resume: runtime picks the on-resume profile, stop/compact/kill hidden", ()
   expect(state("send", f, null)).toBe("enabled");
 });
 
-test("dead structured host keeps durable text send available and disables images until recovery", () => {
+test("dead structured host admits the whole message: send AND images stay open", () => {
   const f = genuinelyDeadFile();
   const view = rv("claude-broker", "dead");
   expect(state("terminal", f, view)).toBe("enabled");
   expect(state("send", f, view)).toBe("enabled");
-  expect(reason("images", f, view)).toBe("composer.imagesBlockedDuringRecovery");
+  /* The send path raises the host and judges the payload against the host that
+     came back, so this projection — of a host that is gone — withholds nothing
+     and the operator's images ride with their text under one key. */
+  expect(state("images", f, view)).toBe("enabled");
   for (const c of ["stop", "compact", "runtime", "kill"] as ControlName[]) {
     expect(state(c, f, view)).toBe("hidden");
+  }
+});
+
+test("a dead conversation with no session of its own says so instead of offering Send", () => {
+  /* A subagent transcript has no session of its own: its root owns the process
+     that writes it. Sending cannot raise anything, so the cell names the real
+     alternative rather than leaving a live-looking input. */
+  const f = { ...genuinelyDeadFile(), root: "claude-projects", kind: "subagent", parent: "/root.jsonl" } as FileEntry;
+  const view = rv("claude-broker", "dead");
+  expect(state("send", f, view)).toBe("disabled");
+  expect(reason("send", f, view)).toBe("deadHost.notResumable");
+  expect(state("terminal", f, view)).toBe("enabled");
+});
+
+test("a dead conversation on a root with no resume command of its own still sends", () => {
+  /* `isResumableConversation` answers false for whole roots — a broader
+     predicate here would have taken Send away from every dead OpenClaw or
+     Claude-task conversation, whose host the runtime plane raises exactly like
+     any other. Only the subagent case above loses it. */
+  for (const root of ["claude-tasks", "openclaw-sessions"] as const) {
+    const f = { ...genuinelyDeadFile(), root, kind: "session" } as unknown as FileEntry;
+    const view = rv("claude-broker", "dead");
+    expect(state("send", f, view)).toBe("enabled");
+    expect(state("images", f, view)).toBe("enabled");
   }
 });
 
