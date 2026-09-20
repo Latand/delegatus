@@ -1275,6 +1275,13 @@ export async function adoptStructuredHostsAtStartup(
       assertActive();
       markStructuredHostStartupProgress({ phase, completedHosts, totalHosts });
     };
+    // A later row may throw after earlier hosts have launched and acquired
+    // writer claims. Keep each handle before the batch can reject, so the
+    // retry can publish it instead of waiting on its own engine forever.
+    const onAdopted = (item: AdoptedStructuredHost) => {
+      nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, [item]);
+      rememberStructuredStartupRetry(nextAdoptedHosts, orchestratorRecoveries);
+    };
     reportProgress("adopting Codex hosts");
     const resolveCodexOwner = dependencies.resolveCodexOwner ?? ((entry: AgentRegistryEntry) =>
       accountManager.resolveTranscriptOwner("codex", entry.artifactPath));
@@ -1314,6 +1321,7 @@ export async function adoptStructuredHostsAtStartup(
         totalHosts = Math.max(totalHosts, completedHosts);
         markStructuredHostStartupProgress({ phase: "adopting Codex hosts", completedHosts, totalHosts });
       },
+      { onAdopted },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, codex);
@@ -1349,6 +1357,7 @@ export async function adoptStructuredHostsAtStartup(
         totalHosts = Math.max(totalHosts, completedHosts);
         markStructuredHostStartupProgress({ phase: "adopting Claude hosts", completedHosts, totalHosts });
       },
+      { onAdopted },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount + claudeCandidateCount);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, claude);

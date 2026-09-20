@@ -299,19 +299,33 @@ export class SqliteAgentRegistryStore {
         path TEXT NOT NULL, conversation_id TEXT NOT NULL, PRIMARY KEY(path, conversation_id)
       );
       CREATE INDEX IF NOT EXISTS registry_conversation_paths_owner ON registry_conversation_paths(conversation_id);
-      CREATE TRIGGER IF NOT EXISTS registry_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
-        INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL;
-        INSERT OR IGNORE INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths');
-      END;
-      CREATE TRIGGER IF NOT EXISTS registry_paths_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
-        DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
-        INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL;
-        INSERT OR IGNORE INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths');
-      END;
-      CREATE TRIGGER IF NOT EXISTS registry_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'conversations' BEGIN
-        DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
-      END;
     `);
+    // The outer UPSERT's conflict policy overrides a trigger's OR IGNORE.
+    // Explicit UPSERT clauses keep overlapping generation/continuity paths
+    // harmless, including writes from a predecessor release during handover.
+    if (this.meta("conversation_paths_trigger_version") !== "2") {
+      this.db.transaction(() => {
+        this.db.exec(`
+          DROP TRIGGER IF EXISTS registry_paths_insert;
+          DROP TRIGGER IF EXISTS registry_paths_update;
+          DROP TRIGGER IF EXISTS registry_paths_delete;
+          CREATE TRIGGER registry_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
+            INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
+            INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+          END;
+          CREATE TRIGGER registry_paths_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
+            DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
+            INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
+            INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+          END;
+          CREATE TRIGGER registry_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'conversations' BEGIN
+            DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
+          END;
+          INSERT INTO registry_meta(key, value) VALUES ('conversation_paths_trigger_version', '2')
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+        `);
+      }).immediate();
+    }
     if (this.meta("conversation_paths_ready") !== "1") {
       this.db.exec(`BEGIN IMMEDIATE;
         INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(g.value, '$.path'), r.row_key FROM registry_rows r, json_each(r.value_json, '$.generations') g WHERE r.collection = 'conversations' AND json_extract(g.value, '$.path') IS NOT NULL;
