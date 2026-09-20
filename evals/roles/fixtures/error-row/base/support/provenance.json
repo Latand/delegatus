@@ -1,0 +1,14 @@
+[
+  {
+    "source": "src/components/mobile/MobileSwipeRow.tsx",
+    "sourceHash": "8affce45028e821bf469aec0599a5386c4d9c6e8573aeac42dd7dbc66d289247",
+    "export": "MobileSwipeRow.tsx",
+    "exportHash": "d8ca8e27e66880eaa009e2da7fb481afe4298e9167cdf6d6832abe06a700cf29"
+  },
+  {
+    "source": "src/components/mobile/swipeIntent.ts",
+    "sourceHash": "90c81869293f0ba53d279cdae58ef3b82ee21d1227c9a53ba7ea29a91a851a71",
+    "export": "swipeIntent.ts",
+    "exportHash": "90c81869293f0ba53d279cdae58ef3b82ee21d1227c9a53ba7ea29a91a851a71"
+  }
+]

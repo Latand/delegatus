@@ -60,8 +60,9 @@ test("a board file without the key, and one with a key this build does not know,
   /* The rollback property: an unknown optional prefs key is carried, never a
      reason to refuse the whole file. The same validator shape shipped before
      the kanban key existed, which is what makes rolling back past it safe. */
-  fs.writeFileSync(file, JSON.stringify({ projects: { fixture: { ...legacy, prefs: { ...legacy.prefs, desktopBoard: "kanban", someLaterKey: true } } } }));
-  const loaded = boardFor("fixture", file);
+  const carried = temporaryFile();
+  fs.writeFileSync(carried, JSON.stringify({ projects: { fixture: { ...legacy, prefs: { ...legacy.prefs, desktopBoard: "kanban", someLaterKey: true } } } }));
+  const loaded = boardFor("fixture", carried);
   expect(loaded.revision).toBe(3);
   expect(loaded.prefs.viewMode).toBe("list");
   expect(loaded.prefs.desktopBoard).toBe("kanban");

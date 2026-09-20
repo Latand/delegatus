@@ -2,12 +2,16 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { assertStateStartupMutation, isOperatorOwnedDirectory, ownsStateStartupMutation } from "@/lib/stateOwnership";
+
 import { FileTransactionBusyError, withFileTransactionSync } from "./fileTransaction";
+import { assertStateMutationAllowed, stateMutationRefusal } from "./stateMutationBarrier";
 import { hotStateSqliteWriterReady, hotStateWriterRevision, readHotStateReleaseTarget } from "./hotStateAuthority";
 import {
   importStateCollection,
   readStateImport,
   recordStateImportMirror,
+  reimportStateCollection,
   type StateImportRecord,
   type StateImportRow,
 } from "./sqliteStateStore";
@@ -57,7 +61,7 @@ export interface LegacyReconcileSummary {
 }
 
 export interface StateIncident {
-  kind: "legacy-unreadable" | "legacy-reconciled" | "legacy-repaired" | "tombstone-without-import";
+  kind: "legacy-unreadable" | "legacy-reconciled" | "legacy-repaired" | "tombstone-without-import" | "stale-import-replaced";
   collection: string;
   message: string;
   preservedAs?: string;
@@ -73,6 +77,11 @@ export interface LegacyImportHooks {
 
 export type LegacyImportOutcome =
   | { state: "imported"; record: StateImportRecord; incident: StateIncident | null }
+  /** The recorded import was stale — the legacy file stood where the tombstone
+      belongs and no rollback mirror ever put it there — so the collection was
+      rebuilt from the file. Treated as a first import by every caller that
+      settles siblings or records gaps. */
+  | { state: "reimported"; record: StateImportRecord; incident: StateIncident | null }
   | { state: "already-imported"; record: StateImportRecord; incident: StateIncident | null }
   | { state: "reconcile-deferred"; record: StateImportRecord; incident: null };
 
@@ -97,10 +106,26 @@ export function legacyDatabasePath(legacyPath: string): string {
   return path.join(path.dirname(legacyPath), "state.sqlite");
 }
 
-/** Whether this process may import: the activated release, or any process
-    when no release target exists (npm, source, tests). */
+/**
+ * Whether this process may import on the lazy path a store read takes.
+ *
+ * Three questions, and all three have to answer yes (#1905). The barrier asks
+ * whether this process may mutate state at all: never during a `next build`
+ * phase, whatever else is true, and outside the serving Viewer's activation
+ * only against a state directory the caller named. Ownership asks whether a
+ * process that declares no owner is reaching the operator's own directories.
+ * The hot-state writer asks whether this release is the one that may write —
+ * or whether there is no release target at all (npm, source, tests).
+ *
+ * A read that lands here while any of them says no returns "the import has not
+ * run" and falls back to the legacy file, which is what every reader did
+ * before the store existed.
+ */
 export function legacyImportAllowed(legacyPath: string): boolean {
-  return hotStateSqliteWriterReady(path.dirname(legacyPath));
+  const directory = path.dirname(legacyPath);
+  if (stateMutationRefusal(directory) !== null) return false;
+  if (!ownsStateStartupMutation() && isOperatorOwnedDirectory(directory)) return false;
+  return hotStateSqliteWriterReady(directory);
 }
 
 /** A reconcile renames the legacy file away. Only the activation of a release,
@@ -238,6 +263,15 @@ export function importLegacyCollection<P>(
 ): LegacyImportOutcome {
   const hooks = options.hooks ?? {};
   const database = legacyDatabasePath(spec.legacyPath);
+  /* The first-boot import is the state-mutating startup step that #1905 was
+     filed for: a lane's `next build` loaded a route module, the module reached
+     a store, and this ran against the operator's live account files. Both
+     gates apply, and the barrier goes first because its refusal holds for a
+     process that IS an owner: inside the serving container `LLV_STATE_OWNER`
+     is already set, so a `next build` run there would pass ownership while
+     still being a module load that may never rename live state away. */
+  assertStateMutationAllowed(path.dirname(spec.legacyPath));
+  assertStateStartupMutation(path.dirname(spec.legacyPath), `${spec.collection} import`);
   return withFileTransactionSync(spec.legacyPath, `${spec.collection} import is busy`, () => {
     const held = readStateImport(database, spec.collection);
     const legacy = readLegacy(spec.legacyPath);
@@ -318,6 +352,9 @@ function finishImported<P>(
     return { state: "already-imported", record, incident: null };
   }
   if (!reconcile) return { state: "reconcile-deferred", record, incident: null };
+  if (strayImportRecord(spec.legacyPath, record)) {
+    return replaceStaleImport(spec, record, legacy.bytes, hooks);
+  }
   const digest = sha256(legacy.bytes);
   if (digest === record.mirrorSha256) {
     retire(spec, "delete", hooks);
@@ -332,6 +369,90 @@ function finishImported<P>(
   const incident = reconcileChangedLegacy(spec, record, legacy.bytes, { fenceOwner: false }, hooks);
   writeTombstone(spec);
   return { state: "already-imported", record, incident };
+}
+
+/**
+ * Whether a recorded import was written by a process that did not own the
+ * release, so neither the record nor the rows behind it are evidence that the
+ * move happened.
+ *
+ * #1905: a lane's `next build` imported production's account files. It reached
+ * `hotStateSqliteWriterReady` through the branch that admits an unidentified
+ * local client — no `PORT`, no release revision — which is the same branch
+ * that leaves {@link releaseTag} null. So a record that names NO release, in a
+ * state directory that HAS a release target, was written by something that was
+ * not the release. The legacy file still standing beside it is what the
+ * release actually serving the machine has been reading and writing since, and
+ * the rows are rebuilt from it rather than merged into: a merge would spare
+ * every row the file no longer has, resurrecting state the operator deleted.
+ *
+ * A record that carries a rollback mirror is excluded whatever else is true:
+ * that file is one this release wrote back on purpose, and §6.4's merge owns
+ * it. So is any record made where no release target exists at all (an npm or
+ * source install, a test), where a null release means only that nobody
+ * deployed anything — and where an old writer that found the path empty may
+ * have made a fresh file out of nothing, which must never delete a board.
+ */
+function strayImportRecord(legacyPath: string, record: StateImportRecord): boolean {
+  if (record.release !== null) return false;
+  if (record.mirrorSha256 !== null || record.mirrorRevision !== null) return false;
+  try {
+    return readHotStateReleaseTarget(path.dirname(legacyPath)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rebuild the collection from a legacy file that outlived its own import
+ * record, replacing the rows the stale record covers. The file is parsed and
+ * verified before anything is deleted, so a file that no longer parses leaves
+ * both the database and the file exactly as they were.
+ */
+function replaceStaleImport<P>(
+  spec: LegacyCollectionSpec<P>,
+  stale: StateImportRecord,
+  bytes: Buffer,
+  hooks: LegacyImportHooks,
+): LegacyImportOutcome {
+  const parsed = parseJsonBytes(bytes);
+  if (!parsed.ok) {
+    const preservedAs = preserveUnreadable(spec);
+    const incident = raise({
+      kind: "legacy-unreadable",
+      collection: spec.collection,
+      preservedAs,
+      message: `${path.basename(spec.legacyPath)} stood beside a stale import record and could not be parsed; `
+        + `kept as ${path.basename(preservedAs)}, the recorded import is unchanged`,
+    });
+    writeTombstone(spec);
+    return { state: "already-imported", record: stale, incident };
+  }
+  const body = spec.parse(parsed.value);
+  const rows = spec.toRows(body);
+  const repaired = spec.repairs?.(body) ?? null;
+  const { record } = reimportStateCollection(legacyDatabasePath(spec.legacyPath), {
+    collection: spec.collection,
+    schemaVersion: spec.schemaVersion,
+    migrationId: spec.migrationId,
+    rows,
+    sourceName: path.basename(spec.legacyPath),
+    sourceSha256: sha256(bytes),
+    sourceBytes: bytes.length,
+    gap: null,
+    release: releaseTag(spec.legacyPath),
+    ...(hooks.beforeVerify ? { beforeVerify: hooks.beforeVerify } : {}),
+  });
+  hooks.afterCommit?.();
+  const incident = raise({
+    kind: "stale-import-replaced",
+    collection: spec.collection,
+    message: `${path.basename(spec.legacyPath)} was still a file beside an import recorded at ${stale.importedAt} `
+      + `with no rollback mirror; re-imported ${record.rowCount} row(s) over the ${stale.rowCount} stale one(s)`
+      + (repaired ? `; ${repaired}` : ""),
+  });
+  retire(spec, "keep", hooks);
+  return { state: "reimported", record, incident };
 }
 
 /** The baseline revision a legacy file was last written from: its mirror, or
@@ -388,6 +509,7 @@ function reconcileChangedLegacy<P>(
 export function writeLegacyRollbackMirror<P>(spec: LegacyCollectionSpec<P>): void {
   const database = legacyDatabasePath(spec.legacyPath);
   if (!readStateImport(database, spec.collection)) return;
+  assertStateMutationAllowed(path.dirname(spec.legacyPath));
   withFileTransactionSync(spec.legacyPath, `${spec.collection} import is busy`, () => {
     /* A writable legacy file outlives a fence that was withdrawn, and an older
        release's MCP process may have written it since. Fold those writes in

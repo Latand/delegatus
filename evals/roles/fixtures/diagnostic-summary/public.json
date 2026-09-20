@@ -1,0 +1,56 @@
+[
+  {
+    "name": "redact before clamp",
+    "input": {
+      "label": "Trace",
+      "text": {
+        "syntheticToken": true
+      },
+      "limit": 8
+    },
+    "expected": {
+      "label": "Trace",
+      "text": "[redact…",
+      "truncated": true
+    }
+  },
+  {
+    "name": "empty",
+    "input": {
+      "label": "Trace",
+      "text": "",
+      "limit": 8
+    },
+    "expected": {
+      "label": "Trace",
+      "text": "",
+      "truncated": false
+    }
+  },
+  {
+    "name": "unicode",
+    "input": {
+      "label": "Trace",
+      "text": "😀абвг",
+      "limit": 4
+    },
+    "expected": {
+      "label": "Trace",
+      "text": "😀аб…",
+      "truncated": true
+    }
+  },
+  {
+    "name": "header",
+    "input": {
+      "label": "Trace",
+      "text": "Authorization: sample",
+      "limit": 80
+    },
+    "expected": {
+      "label": "Trace",
+      "text": "Authorization: [redacted]",
+      "truncated": false
+    }
+  }
+]

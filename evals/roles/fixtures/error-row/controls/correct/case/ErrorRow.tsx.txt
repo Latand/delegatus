@@ -1,0 +1,31 @@
+import React, { useRef, useState } from "react";
+import { MobileSwipeRow } from "../support/MobileSwipeRow";
+export type Row = { id: string; title: string };
+export type Props = { rows: Row[]; perform: (id: string) => Promise<void>; labels: { action: string; retry: string; error: string } };
+export function ErrorRow({ rows, perform, labels }: Props) {
+  const [done, setDone] = useState<string[]>([]);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState<string[]>([]);
+  const active = useRef(new Set<string>());
+  const run = async (id: string) => {
+    if (active.current.has(id)) return;
+    active.current.add(id); setPending([...active.current]);
+    setErrors((old) => { const next = { ...old }; delete next[id]; return next; });
+    try { await perform(id); setDone((old) => [...old, id]); }
+    catch { setErrors((old) => ({ ...old, [id]: labels.error })); }
+    finally { active.current.delete(id); setPending([...active.current]); }
+  };
+  return <main aria-label="Actions" style={{ overflowY: "auto", padding: 12, flex: 1, minHeight: 0 }}>
+    {rows.filter((row) => !done.includes(row.id)).map((row) => <section key={row.id} data-row={row.id} style={{ marginBottom: 12 }}>
+      <MobileSwipeRow id={row.id} title={row.title} actions={[{ key: "act", label: labels.action, name: labels.action, hint: row.title, icon: "↻", tone: "neutral", run: () => { void run(row.id); } }]}>
+        <div style={{ background: "var(--color-raised)", color: "var(--color-primary)", padding: 12, display: "flex", gap: 8, alignItems: "center", minHeight: 64 }}>
+          <span style={{ overflowWrap: "anywhere", flex: 1 }}>{row.title}</span>
+          <button disabled={pending.includes(row.id)} aria-label={`${labels.action} ${row.id}`} onClick={() => { void run(row.id); }} style={{ minWidth: 64, minHeight: 44 }}>{labels.action}</button>
+        </div>
+      </MobileSwipeRow>
+      {errors[row.id] && <div role="alert" style={{ padding: 8, overflowWrap: "anywhere" }}>
+        <span>{errors[row.id]}</span><button aria-label={`${labels.retry} ${row.id}`} disabled={pending.includes(row.id)} onClick={() => { void run(row.id); }} style={{ display: "block", minWidth: 64, minHeight: 44 }}>{labels.retry}</button>
+      </div>}
+    </section>)}
+  </main>;
+}

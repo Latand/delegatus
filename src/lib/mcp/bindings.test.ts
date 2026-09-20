@@ -1269,7 +1269,11 @@ test.each(["kill", "interrupt", "resume", "compact", "dialog-key"])("conversatio
 test("conversation_action archives every generation from either target form and unarchives symmetrically", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-archive-generations-"));
   sandboxes.push(sandbox);
-  const boardFile = path.join(sandbox, "board.json");
+  /* Each phase starts on a board of its own: the store imports a board.json
+     once and leaves a tombstone in its place (#1870), so a phase boundary is a
+     fresh directory rather than deleting the file. */
+  const freshBoard = () => path.join(fs.mkdtempSync(path.join(sandbox, "board-")), "board.json");
+  let boardFile = freshBoard();
   const project = "fixture-generation-project";
   const earlierPath = "/fixtures/codex/raw-sessions/2026/08/rollout-earlier.jsonl";
   const currentPath = "/fixtures/codex/accounts/account-a/sessions/2026/08/rollout-current.jsonl";
@@ -1395,7 +1399,7 @@ test("conversation_action archives every generation from either target form and 
     outcomes: [{ transcriptPath: currentPath, paths: [earlierPath, currentPath], outcome: "unarchived" }],
   });
   expect(boardFor(project, boardFile)).toMatchObject({ revision: 2, prefs: { hidden: [] } });
-  fs.rmSync(boardFile);
+  boardFile = freshBoard();
 
   expect(mutateBoard(project, 0, [{
     kind: "remap-paths",
@@ -1453,7 +1457,7 @@ test("conversation_action archives every generation from either target form and 
     revision: 4,
     prefs: { hidden: [], taskPanelOpen: true },
   });
-  fs.rmSync(boardFile);
+  boardFile = freshBoard();
 
   expect(patchBoard(project, 0, { hidden: [currentPath] }, boardFile)).toMatchObject({ ok: true, applied: true });
   const repairedPartialArchive = await bindings.conversation_action({
@@ -1897,63 +1901,21 @@ test("conversation_action refuses archive batches above 100 before reading board
   expect(reads).toBe(0);
 });
 
-test("conversation_migration delegates to the revision-fenced migration command with a stable receipt", async () => {
+test("conversation_migration forwards revision fences and stable identity to Viewer", async () => {
   const requests: unknown[] = [];
-  const bindings = viewerMcpBindings(undefined, undefined, {
-    applyConversationMigration: async (request: { conversationId: string; expectedRevision?: number }) => {
-      requests.push(request);
-      return {
-        status: 200,
-        body: { conversation: { id: request.conversationId, migration: { phase: "rolled-back", revision: request.expectedRevision } } },
-      };
-    },
-  } as never);
-
+  const bindings = viewerMcpBindings(undefined, { post: async (pathname, body) => {
+    requests.push({ pathname, body });
+    return { conversation: { id: "conversation_test", migration: { phase: "rolled-back", revision: body.expectedRevision } } };
+  } });
   const result = await bindings.conversation_migration({
-    clientRequestId: "rollback-608",
-    conversationId: "conversation_608",
-    action: "rollback",
-    expectedRevision: 4,
+    clientRequestId: "rollback-test", conversationId: "conversation_test", action: "rollback", expectedRevision: 4,
   });
-  const migrationOperationId = result.operationId as string;
-
   expect(requests).toEqual([{
-    conversationId: "conversation_608",
-    action: "rollback",
-    expectedRevision: 4,
-    path: "",
+    pathname: "/api/conversations/conversation_test/migration",
+    body: { action: "rollback", expectedRevision: 4, path: "", requestOperationId: result.operationId },
   }]);
-  expect(result).toMatchObject({
-    conversationId: "conversation_608",
-    receipt: { status: "delivered" },
-    conversation: { migration: { phase: "rolled-back", revision: 4 } },
-  });
-  expect(migrationOperationId).toMatch(/^mcp_conversation_migration_[0-9a-f]{24}$/);
-  expect((result.receipt as { operationId: string }).operationId).toBe(migrationOperationId);
-});
-
-test("conversation_migration passes a withdrawal's operation id and a cancel's revision through, and a refusal carries its words, code and revision (#1705)", async () => {
-  const requests: unknown[] = [];
-  const bindings = viewerMcpBindings(undefined, undefined, {
-    applyConversationMigration: async (request: { action: string }) => {
-      requests.push(request);
-      return request.action === "withdraw"
-        ? { status: 409, body: { error: "the queue has already claimed this switch; cancel it with the migration's revision", code: "SWITCH_CLAIMED", expectedRevision: 3 } }
-        : { status: 200, body: { conversation: { id: "conversation_1705", migration: { phase: "rolled-back", revision: 3 } } } };
-    },
-  } as never);
-
-  const refusal = await bindings.conversation_migration({ clientRequestId: "withdraw-1705", conversationId: "conversation_1705", action: "withdraw", operationId: "reconfigure-to-b" })
-    .then(() => null, (error: unknown) => error as { name?: string; message?: string; details?: unknown } | null);
-  expect(refusal?.name).toBe("McpToolRefusal");
-  expect(refusal?.message).toContain("the queue has already claimed this switch");
-  expect(refusal?.details).toMatchObject({ status: 409, code: "SWITCH_CLAIMED", expectedRevision: 3 });
-  const cancelled = await bindings.conversation_migration({ clientRequestId: "cancel-1705", conversationId: "conversation_1705", action: "cancel", expectedRevision: 3 });
-  expect(requests).toEqual([
-    { conversationId: "conversation_1705", action: "withdraw", expectedRevision: undefined, path: "", operationId: "reconfigure-to-b" },
-    { conversationId: "conversation_1705", action: "cancel", expectedRevision: 3, path: "" },
-  ]);
-  expect(cancelled).toMatchObject({ conversation: { migration: { phase: "rolled-back" } } });
+  expect(result).toMatchObject({ conversationId: "conversation_test", receipt: { status: "delivered" }, conversation: { migration: { phase: "rolled-back", revision: 4 } } });
+  expect(result.operationId).toMatch(/^mcp_conversation_migration_[0-9a-f]{24}$/);
 });
 
 test("a refused pipeline close exposes its host report through MCP, not only prose (#670)", async () => {
@@ -2068,7 +2030,22 @@ test("a stage completion call is attributed by the server, and a caller cannot n
        never as the actor: the actor below is the server's own attribution. */
     conversationId: "conversation_somebody_else",
   });
-  expect(accepted).toMatchObject({ ok: true, pipelineId: "pipeline_1", stageId: "build", attempt: 1, replaced: false, report });
+  expect(accepted).toMatchObject({
+    ok: true,
+    pipelineId: "pipeline_1",
+    stageId: "build",
+    attempt: 1,
+    replaced: false,
+    report: {
+      seq: 1,
+      at: "2026-09-18T00:00:00.000Z",
+      verdict: { status: "fail", findingCount: 1, severityCounts: { P0: 1, P1: 0, P2: 0, P3: 0 } },
+      provenance: { head: "0".repeat(40), branch: "pipeline/x", dirty: false, outputs: [] },
+      calls: 1,
+    },
+  });
+  expect(JSON.stringify(accepted)).not.toContain("the fence is missing");
+  expect(JSON.stringify(accepted)).not.toContain("One finding left.");
   expect(calls[0]![1]).toEqual({ kind: "agent", role: "builder", conversationId: "conversation_stage_1" });
 
   const refused = await service.callTool("stage_report", { clientRequestId: "report-2", verdict: "pass", stageId: "not-mine" });

@@ -1,0 +1,20 @@
+[
+  {
+    "source": "src/lib/monitor/redact.ts",
+    "sourceHash": "cfc70fb5e20bb8f15c6868ac9d35c8bccf9c6660181246707f1b7f398c12ddcc",
+    "export": "redactMonitorText.ts",
+    "exportHash": "2803488d7c11022467497db87a7ff01c1cafc5354745e90977124ad16188eaa1"
+  },
+  {
+    "source": "src/lib/view/compactText.ts",
+    "sourceHash": "9c74c1fd0cbe3a80540ac5f521b366780b2649fa0b67a02d2bbd01cb7ce0c35c",
+    "export": "hardenedRedact.ts",
+    "exportHash": "d867838e57227997f466a8c8b5187ae02836abf5d436f43163a28e565600d280"
+  },
+  {
+    "source": "src/lib/review.ts",
+    "sourceHash": "031a25ff88429b3da3c3d1ef5fa84da073aa9198351b1cf78fd2f5df6c64df4f",
+    "export": "redactSecrets.ts",
+    "exportHash": "d946b2af73a10a7c4635f76d55cb9cba1d4e8b9da229437673766c43cbd12f69"
+  }
+]

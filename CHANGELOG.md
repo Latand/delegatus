@@ -7,6 +7,71 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Changed
+- Board placements are stored in SQLite (`state.sqlite`, collection `board`),
+  one row per project, instead of `board.json`. A pin, a hidden group or a
+  view-mode change commits only that project's row in one transaction, so a
+  crash can no longer leave the whole board zero-filled or half-written, and one
+  project's write never rewrites another's bytes. On first start the existing
+  `board.json` is imported and verified by row count and digest, then kept as
+  `board.json.imported-<release>`; a directory with a README takes its place
+  (#1870).
+- A `board.json` that cannot be parsed at all (empty, NUL-filled or truncated)
+  is kept as `board.json.unreadable-<time>` and the board starts empty with a
+  logged incident, instead of every board request failing.
+- Account state is stored in SQLite (`state.sqlite`, collection `accounts`)
+  instead of eight JSON files: the Claude and Codex account registries with
+  their retirement and removal journals, the account↔project bindings, the
+  out-of-pool choice journal, the spawn admission fences, the in-flight Claude
+  and Codex login operations, and the account mutation revision. A write
+  commits only the rows it changed, in one transaction, so a crash can no
+  longer leave a zero-filled or half-written registry. On first start the
+  existing files are imported and verified by row count and digest, then kept
+  as `<name>.imported-<release>`; a directory with a README takes each of their
+  places (#1870).
+- Removing an account now commits its registry row, its retirement record and
+  its removal journal step in ONE transaction, together with the mutation
+  revision that admits them. The revision is the collection's own, so
+  `account-mutation-revision.json` is gone and a crash can no longer leave a
+  fence that moved without the write it admitted (#1857, #1870).
+- Conversation-migration operation journals move into the same database, one
+  collection per journal root. The roots stay directories, because the
+  per-operation lease that guards them has to be claimable while the database
+  is busy (#1870). A release rolled back through the fence gets every journal
+  written back as the file it knows, and whatever it journals while it runs is
+  folded back into the collection at roll-forward.
+- An account store whose file could not be read at the import is recorded as a
+  gap rather than imported as empty, and each owner answers as it always did: a
+  binding record refuses every read and names the file that was kept, a
+  registry reports itself corrupt and refuses mutations, and the out-of-pool
+  journal — which nothing consults to decide anything — reports nothing. The
+  first successful write clears the gap.
+- A state-mutating startup step — the first-boot import of any moved store, its
+  rollback mirror, the copy-once move of the legacy state directory — runs only
+  in the serving Viewer's release activation, or against a state directory the
+  caller named itself. It never runs while Next.js collects page data for a
+  build, whatever else is true. A build in a checkout used to resolve whatever
+  state directory it found and import it out from under the running Viewer
+  (#1905).
+- An import record that names no release, in a state directory that has a
+  release target, was written by a process that did not own the release, so the
+  legacy file still standing beside it is re-imported over those rows rather
+  than merged into them (#1905).
+
+### Downgrading
+- A version older than this one cannot read the SQLite account state and fails
+  on the directories left where its files were, naming the path. Upgrade again
+  to recover. Replacing a directory with its `<name>.imported-*` copy also
+  works, but loses account changes made since the upgrade. Deployed releases
+  rolled back through the release fence get every file written back for them
+  automatically — the eight account stores and each conversation-migration
+  journal alike — and the changes they make are merged at roll-forward.
+- A version older than this one cannot read the SQLite board and fails on the
+  `board.json` directory, naming the path. Upgrade again to recover. Replacing
+  the directory with the `board.json.imported-*` copy also works, but loses
+  board changes made since the upgrade. Deployed releases rolled back through
+  the release fence get a fresh `board.json` written for them automatically.
+
 ## [1.2.2] — 2026-09-19
 
 ### Changed

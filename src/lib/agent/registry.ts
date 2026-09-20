@@ -4,6 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
+import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import {
   captureProcessIdentity,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import { admitAutomaticAccountTarget } from "@/lib/accounts/projectSelection";
@@ -3751,16 +3753,20 @@ export class AgentRegistry {
       : backend.pendingJsonImport
         ? this.migrateJsonRegistry(sqliteFilename, openStore, storage.afterRegistryJsonRetired)
         : openStore();
-    if (this.sqliteMode === "off") {
+    /* Every branch below includes a startup write: cleanup, compaction,
+       dual-write synchronization, or retirement of a JSON mirror. A reader
+       such as MCP stands down against the operator's state until the serving
+       Viewer or runtime host takes the release fence. */
+    const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
+    if (this.sqliteMode === "off" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.compactAtStartup();
     }
-    if (this.sqliteMode === "dual-write") {
+    if (this.sqliteMode === "dual-write" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.synchronizeDualWriteStartup(storage.beforeDualWriteStartupReplace);
     }
     if (this.sqliteMode === "read") {
-      this.cleanupStaleTempFiles();
       const sqlite = this.sqliteStore!.snapshot();
       const mirrorRevision = sqliteMirrorRevision(this.filename);
       /* `read` is the parity burn-in, so a same-revision mismatch must stop
@@ -3771,21 +3777,29 @@ export class AgentRegistry {
           `agent registry JSON revision ${mirrorRevision} is ahead of SQLite revision ${sqlite.revision}`,
         );
       }
-      this.mirrorSqliteSnapshot(sqlite);
+      if (mayRunStartupMaintenance) {
+        this.cleanupStaleTempFiles();
+        this.mirrorSqliteSnapshot(sqlite);
+      }
     }
     if (this.sqliteMode === "sqlite") {
       /* SQLite is the only store (#1870). A JSON file here is a mirror an
          older release wrote: it is kept renamed for one release, never read
          and never rewritten. */
-      this.cleanupStaleTempFiles();
-      this.retireJsonMirror();
-      this.removeDeadWriteLockResidue();
+      /* These are startup cleanups too. An MCP server may read the live
+         registry, but it holds no release fence and must leave legacy files
+         for the serving Viewer or runtime host to retire (#1905). */
+      if (mayRunStartupMaintenance) {
+        this.cleanupStaleTempFiles();
+        this.retireJsonMirror();
+        this.removeDeadWriteLockResidue();
+      }
     }
     /* Only the writer that was TOLD its mode publishes it, or the process-wide
        registry that resolved the SQLite default. Test and child constructions
        pass `sqliteMode` explicitly and stay silent, so a fixture can never
        install an identity a reader would then trust. */
-    if (backend.source === "environment" || backend.source === "default") {
+    if ((backend.source === "environment" || backend.source === "default") && mayRunStartupMaintenance) {
       publishRegistryBackendIdentity(filename, this.sqliteMode, sqliteFilename);
     }
   }
@@ -3804,6 +3818,20 @@ export class AgentRegistry {
     openStore: () => SqliteAgentRegistryStore,
     afterJsonRetired: (() => void) | undefined,
   ): SqliteAgentRegistryStore {
+    /* Retiring the JSON registry is a state-mutating startup step: against the
+       operator's own directory it belongs to the serving Viewer or the runtime
+       host, never to a build, a test run or a script (#1905).
+
+       The deliberate consequence: on an install whose agents.json is still
+       authoritative, an MCP server, a launcher or a tool script that opens the
+       registry first now throws where it used to migrate. That is the trade
+       taken on purpose — importing the operator's authoritative registry from a
+       process that holds no release fence is the incident's own shape — and it
+       is reached only when there IS a JSON to retire: `resolveRegistryBackend`
+       reports `pendingJsonImport` for a descriptor that still names the JSON or
+       for a JSON on disk, so a fresh install initialises its empty store here
+       as before. A Viewer boot clears it. */
+    assertStateStartupMutation(path.dirname(this.filename), "agent registry import");
     const claim = this.acquireLock(`${this.filename}.write-lock`, captureProcessIdentity(process.pid));
     try {
       const published = publishedRegistryBackendMode(this.filename);
@@ -4626,13 +4654,9 @@ export class AgentRegistry {
   beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
     const result = withAccountMutationLock(() => {
       if ((input.engine === "claude" || input.engine === "codex") && input.accountId && input.accountId !== "default") {
-        const filename = statePath(`${input.engine}-accounts.json`);
-        try {
-          const value = JSON.parse(fs.readFileSync(filename, "utf8")) as { retired?: Array<{ id?: unknown }> };
-          if (value.retired?.some((account) => account.id === input.accountId)) throw new Error(`${input.engine} account is retired`);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
+        /* The registry moved into state.sqlite (#1870, slice 7); its retired
+           list is read through the store rather than by parsing the file. */
+        if (retiredAccountIds(input.engine).has(input.accountId)) throw new Error(`${input.engine} account is retired`);
       }
       const result = this.mutate((file) => this.beginSpawnRequestInFile(file, input));
       if (result.kind === "rejected") throw new SpawnAdmissionError(result.receipt, result.receipt.rejection!);

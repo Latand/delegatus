@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } from "@/lib/attention/eligibility";
 import { en } from "@/lib/i18n/en";
 import type { FileEntry, PendingQuestion } from "@/lib/types";
 
@@ -15,11 +16,19 @@ import type { FileEntry, PendingQuestion } from "@/lib/types";
  * the composer (#1202).
  */
 
-let narrowViewport = false;
+const VIEWPORTS = {
+  narrowPhone: { width: 390, height: 844 },
+  desktop: { width: 1280, height: 800 },
+  shortLandscape: { width: 844, height: 390 },
+} as const;
+type ViewportName = keyof typeof VIEWPORTS;
+let viewport: { width: number; height: number } = VIEWPORTS.desktop;
+
+const setViewport = (name: ViewportName) => { viewport = VIEWPORTS[name]; };
 
 const normalize = (query: string) => String(query).replace(/\s+/g, "");
 const matchMediaStub = (query: string) => ({
-  matches: normalize(query) === "(max-width:767px)" ? narrowViewport : false,
+  matches: normalize(query) === normalize(MOBILE_LAYOUT_QUERY) ? mobileLayoutViewport(viewport) : false,
   media: String(query),
   onchange: null,
   addEventListener() {},
@@ -79,7 +88,7 @@ afterEach(() => {
   document.body.replaceChildren();
   sessionStorage.clear();
   requests.length = 0;
-  narrowViewport = false;
+  setViewport("desktop");
   resetOutboxForTests();
 });
 
@@ -136,7 +145,7 @@ async function settle(host: HTMLElement, selector: string, count: number, timeou
 const classOf = (el: Element | null) => el?.getAttribute("class") ?? "";
 
 test("phone: chips are 32 px inside 44 px targets on one swipeable row", async () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<SuggestedReplies file={file("conv_chips")} revision="1" />);
   await settle(host, "[data-reply-suggestion]", drafts.length);
   const row = host.querySelector("[data-mobile-chips]")!;
@@ -154,7 +163,7 @@ test("phone: chips are 32 px inside 44 px targets on one swipeable row", async (
 });
 
 test("phone: with no question pending a chip sends through the outbox and the row retires", async () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<SuggestedReplies file={file("conv_send")} revision="1" />);
   await settle(host, "[data-reply-suggestion]", drafts.length);
   const chip = host.querySelectorAll("[data-reply-suggestion]")[1] as HTMLButtonElement;
@@ -172,7 +181,7 @@ test("phone: with no question pending a chip sends through the outbox and the ro
 });
 
 test("phone: with a pane-backed question pending a chip answers it and the row retires", async () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<SuggestedReplies file={file("conv_answer", pendingQuestion("lanes:2.0"))} revision="1" />);
   await settle(host, "[data-reply-suggestion]", drafts.length);
   const chip = host.querySelectorAll("[data-reply-suggestion]")[0] as HTMLButtonElement;
@@ -187,7 +196,7 @@ test("phone: with a pane-backed question pending a chip answers it and the row r
 });
 
 test("phone: answering the question from the card retires the chips, so no chip can re-post", async () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const entry = file("conv_card_answer", pendingQuestion("lanes:2.0"));
   const host = mount(
     <>
@@ -210,7 +219,7 @@ test("phone: answering the question from the card retires the chips, so no chip 
 });
 
 test("phone: a question with no pane cannot take the chip, so the chip sends as a message", async () => {
-  narrowViewport = true;
+  setViewport("narrowPhone");
   const host = mount(<SuggestedReplies file={file("conv_nopane", pendingQuestion(null))} revision="1" />);
   await settle(host, "[data-reply-suggestion]", drafts.length);
   flushSync(() => { (host.querySelectorAll("[data-reply-suggestion]")[2] as HTMLButtonElement).click(); });
@@ -219,7 +228,7 @@ test("phone: a question with no pane cannot take the chip, so the chip sends as 
 });
 
 test("desktop: a chip still only fills the composer draft", async () => {
-  narrowViewport = false;
+  setViewport("desktop");
   const host = mount(<SuggestedReplies file={file("conv_desk")} revision="1" />);
   await settle(host, "[data-reply-suggestion]", drafts.length);
   expect(host.querySelector("[data-mobile-chips]")).toBeNull();
@@ -228,4 +237,11 @@ test("desktop: a chip still only fills the composer draft", async () => {
   expect(readOutbox("conv_desk")).toHaveLength(0);
   expect(requests.some((entry) => entry.url === "/api/answer")).toBe(false);
   expect(host.querySelectorAll("[data-reply-suggestion]")).toHaveLength(drafts.length);
+});
+
+test("short landscape: the height side of the production query selects the phone chip row", async () => {
+  setViewport("shortLandscape");
+  const host = mount(<SuggestedReplies file={file("conv_short_landscape")} revision="1" />);
+  await settle(host, "[data-reply-suggestion]", drafts.length);
+  expect(host.querySelector("[data-mobile-chips]")).toBeTruthy();
 });

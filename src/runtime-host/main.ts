@@ -2,6 +2,14 @@ import { discardWakatimeEnvironmentCredential } from "@/lib/wakatime/credential"
 
 discardWakatimeEnvironmentCredential();
 
+/* This process owns the stable listener and the release fence, so it is one of
+   the two that may resolve the operator's state directory and run a
+   state-mutating startup step (#1905). Claimed before the dynamic imports
+   below reach `@/lib/configDir`; the env name is written out rather than
+   imported because this entry keeps exactly one static import, so the
+   credential above is discarded before any child-capable module loads. */
+if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "runtime-host";
+
 const { stateDir, statePath } = await import("@/lib/configDir");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { procBackend } = await import("@/lib/proc");

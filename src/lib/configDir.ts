@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { isStagingMode, STAGING_STATE_DIRNAME } from "@/lib/staging";
+import { admitOperatorDirectory, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { stateMutationRefusal } from "@/lib/state/stateMutationBarrier";
 
 /** App dir that matches the npm package name; new installs land here. */
 const APP_DIR = "agent-log-viewer";
@@ -68,7 +70,19 @@ const MIGRATED_SENTINEL = ".migrated-from-legacy";
  */
 export function migrateLegacyDir(target: string, legacy: string): void {
   if (process.env.LLV_RESOURCE_OBSERVATION_WORKER === "1") return;
+  /* A migration is a state-mutating startup step (#1905): against the
+     operator's own directories only the serving Viewer or the runtime host
+     runs it. Everyone else reads what that migration already produced — the
+     sentinel has been in place since the move — so standing down is the
+     honest answer, never a refusal that would take a reader down with it. */
+  if (!mayRunStateStartupMutation(target)) return;
   if (migrated.has(target)) return;
+  /* A copy-once move of live state is a startup step, and this one is reached
+     from a module scope (`INBOX_DIR`) and from every `statePath()` call. A
+     `next build` worker loading route modules therefore ran it against the
+     operator's config dir (#1905). It is not memoized when refused: the
+     serving Viewer's activation performs it. */
+  if (stateMutationRefusal(target) !== null) return;
   const sentinel = path.join(target, MIGRATED_SENTINEL);
   const stamp = () => `${new Date().toISOString()} ${legacy}\n`;
   try {
@@ -119,7 +133,9 @@ export function stateDir(): string {
   const override = process.env.LLV_STATE_DIR;
   if (isStagingMode()) return stagingStateDir(override);
   if (override) return override;
-  const dir = path.join(configRoot(), APP_DIR, "state");
+  const resolved = path.join(configRoot(), APP_DIR, "state");
+  const dir = admitOperatorDirectory(resolved, "state");
+  if (dir !== resolved) return dir;
   migrateLegacyDir(dir, path.join(os.homedir(), ".claude", "viewer-state"));
   return dir;
 }
@@ -153,7 +169,9 @@ export function statePath(...segments: string[]): string {
     staging instance never land in (or migrate) the prod inbox. */
 export function inboxDir(): string {
   if (isStagingMode()) return statePath("inbox");
-  const dir = path.join(configRoot(), APP_DIR, "inbox");
+  const resolved = path.join(configRoot(), APP_DIR, "inbox");
+  const dir = admitOperatorDirectory(resolved, "inbox");
+  if (dir !== resolved) return dir;
   migrateLegacyDir(dir, path.join(os.homedir(), ".claude", "viewer-inbox"));
   return dir;
 }

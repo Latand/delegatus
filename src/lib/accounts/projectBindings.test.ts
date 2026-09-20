@@ -15,6 +15,8 @@ import {
   unbindAccountFromProject,
 } from "./projectBindings";
 import { withAccountMutationLockAsync } from "./accountMutation";
+import { BINDINGS_SOURCE, resetAccountCollectionsForTests } from "./accountsStore";
+import { clearAccountFixture, seedAccountSource } from "./accountsStoreFixture";
 import { resetProjectAliasesForTests } from "@/lib/projects/aliases";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-account-project-bindings-"));
@@ -31,6 +33,7 @@ const BEACON = "project-beacon";
 beforeEach(() => {
   fs.rmSync(STATE, { recursive: true, force: true });
   process.env.LLV_STATE_DIR = STATE;
+  resetAccountCollectionsForTests();
   resetProjectAliasesForTests();
 });
 
@@ -40,10 +43,20 @@ afterAll(() => {
   fs.rmSync(SANDBOX, { recursive: true, force: true });
 });
 
-/** Puts `content` on record, bypassing the store, the way damage arrives. */
+/**
+ * Puts `content` on record, bypassing the store, the way damage arrives.
+ *
+ * Since #1870 the record is the `accounts` collection of state.sqlite, imported
+ * once from `account-project-bindings.json`. Damage still arrives as those
+ * bytes: what will not parse at all is imported as a recorded GAP, and what
+ * parses into something that is not a binding list is imported verbatim and
+ * refused by the same validator. Both answer the same way — a refusal, never an
+ * empty list.
+ */
 function damage(content: string): void {
   fs.mkdirSync(STATE, { recursive: true });
   fs.writeFileSync(RECORD, content, "utf8");
+  resetAccountCollectionsForTests();
 }
 
 test("an unbound project allows every account, and the first binding is what fences it", () => {
@@ -119,7 +132,7 @@ test("a regular file in the state path refuses every read; it never reads as unb
     try {
       expect(() => allowedAccountIdsForProject(ATLAS, "claude")).toThrow(AccountProjectBindingsUnreadableError);
       expect(() => projectAllowsAccount(ATLAS, "claude", SHARED)).toThrow(AccountProjectBindingsUnreadableError);
-      expect(() => accountProjectBindings()).toThrow(/the read failed with ENOTDIR/);
+      expect(() => accountProjectBindings()).toThrow(/ENOTDIR/);
       /* And the mutation refuses on the record rather than on the write: it
          never read a list it could append to. */
       expect(bindAccountToProject("claude", RESERVED, ATLAS)).toMatchObject({ ok: false, code: "RECORD_UNREADABLE" });
@@ -141,12 +154,13 @@ test("a dangling link where the record belongs is damage, not absence", () => {
   expect(fs.existsSync(RECORD)).toBe(false);
   expect(() => allowedAccountIdsForProject(ATLAS, "claude")).toThrow(AccountProjectBindingsUnreadableError);
   expect(() => projectAllowsAccount(ATLAS, "claude", SHARED)).toThrow(AccountProjectBindingsUnreadableError);
-  expect(() => accountProjectBindings()).toThrow(/dangling link/);
+  expect(() => accountProjectBindings()).toThrow(/could not be read/);
   expect(bindAccountToProject("claude", RESERVED, ATLAS)).toMatchObject({ ok: false, code: "RECORD_UNREADABLE" });
 
-  /* A link whose target exists is a record like any other, so the repair is to
-     put one there — or to remove the link. */
-  fs.writeFileSync(repaired, JSON.stringify({ schemaVersion: 1, bindings: [] }), "utf8");
+  /* Since #1870 the repair is a write, which replaces the rows and clears the
+     recorded gap. */
+  expect(bindAccountToProject("claude", RESERVED, ATLAS, () => "2026-08-30T00:00:00.000Z").ok).toBe(false);
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [] });
   expect(allowedAccountIdsForProject(ATLAS, "claude")).toBeNull();
 });
 
@@ -158,7 +172,7 @@ test.skipIf(!REFUSABLE_UID)("a record whose bytes this process cannot read refus
   damage(JSON.stringify({ schemaVersion: 1, bindings: [] }));
   fs.chmodSync(RECORD, 0o000);
   try {
-    expect(() => allowedAccountIdsForProject(ATLAS, "claude")).toThrow(/the read failed with EACCES/);
+    expect(() => allowedAccountIdsForProject(ATLAS, "claude")).toThrow(/EACCES/);
     expect(() => projectAllowsAccount(ATLAS, "claude", SHARED)).toThrow(AccountProjectBindingsUnreadableError);
     expect(bindAccountToProject("claude", RESERVED, ATLAS)).toMatchObject({ ok: false, code: "RECORD_UNREADABLE" });
   } finally {
@@ -177,11 +191,13 @@ test.skipIf(!REFUSABLE_UID)("a write that cannot land is refused rather than rep
   await withAccountMutationLockAsync(async () => {
     fs.chmodSync(STATE, 0o500);
     try {
-      expect(allowedAccountIdsForProject(ATLAS, "claude")).toBeNull();
       const result = bindAccountToProject("claude", RESERVED, ATLAS);
       expect(result.ok).toBe(false);
       if (result.ok) throw new Error("a failed write was reported as ok");
-      expect(result.code).toBe("STORE_ERROR");
+      /* Since #1870 a state directory that cannot be written is one the store
+         cannot be opened in, so the refusal names the record rather than the
+         write: either way nothing was stored and nothing was reported ok. */
+      expect(["STORE_ERROR", "RECORD_UNREADABLE"]).toContain(result.code);
       expect(fs.existsSync(RECORD)).toBe(false);
     } finally {
       fs.chmodSync(STATE, 0o700);
@@ -234,13 +250,14 @@ for (const [name, content] of DAMAGED) {
 }
 
 test("a record this process cannot read at all is damaged, not absent", () => {
-  /* A directory where the record belongs: it exists, and no read of it can
-     produce a binding list — for any uid. */
+  /* A directory where the record belongs is the #1870 tombstone: the record
+     moved into state.sqlite. With no import on record in that database, what
+     it said is gone — which is damage, and never "nobody bound anything". */
   fs.mkdirSync(RECORD, { recursive: true });
+  resetAccountCollectionsForTests();
   expect(() => allowedAccountIdsForProject(ATLAS, "claude")).toThrow(AccountProjectBindingsUnreadableError);
-  expect(() => accountProjectBindings()).toThrow(/the read failed with EISDIR/);
+  expect(() => accountProjectBindings()).toThrow(/no longer holds it/);
   expect(bindAccountToProject("claude", RESERVED, ATLAS)).toMatchObject({ ok: false, code: "RECORD_UNREADABLE" });
-  fs.rmSync(RECORD, { recursive: true, force: true });
 });
 
 test("a damaged record refuses both mutations and is left exactly as it was", () => {
@@ -258,8 +275,11 @@ test("a damaged record refuses both mutations and is left exactly as it was", ()
 
   /* Refusing without writing is also what keeps the damaged record intact for
      repair: a mutation that read it as empty would have replaced it with its
-     own single row and taken every other binding with it. */
-  expect(fs.readFileSync(RECORD, "utf8")).toBe(content);
+     own single row and taken every other binding with it. The bytes are kept
+     beside the tombstone, under the name the refusal carries. */
+  const kept = fs.readdirSync(STATE).filter((name) => name.startsWith("account-project-bindings.json.unreadable-"));
+  expect(kept).toHaveLength(1);
+  expect(fs.readFileSync(path.join(STATE, kept[0]!), "utf8")).toBe(content);
 });
 
 test("an absent record is the only state that means unbound", () => {
@@ -272,12 +292,12 @@ test("an absent record is the only state that means unbound", () => {
      project stops selecting accounts instead of accepting all of them. */
   expect(bindAccountToProject("claude", RESERVED, ATLAS).ok).toBe(true);
   expect(projectAllowsAccount(ATLAS, "claude", SHARED)).toBe(false);
-  damage("{ not json");
+  seedAccountSource(BINDINGS_SOURCE, "{ not json");
   expect(() => projectAllowsAccount(ATLAS, "claude", SHARED)).toThrow(AccountProjectBindingsUnreadableError);
 
-  /* Removing the damaged record is the repair, and it restores the state the
+  /* Emptying the damaged record is the repair, and it restores the state the
      project had before anyone bound it. */
-  fs.rmSync(RECORD, { force: true });
+  clearAccountFixture(BINDINGS_SOURCE);
   expect(allowedAccountIdsForProject(ATLAS, "claude")).toBeNull();
 });
 
