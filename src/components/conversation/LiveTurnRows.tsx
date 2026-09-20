@@ -39,9 +39,9 @@ import { summarizeTool } from "@/components/feed/tools";
 /**
  * How many live rows the overlay may paint at once.
  *
- * The overlay is the in-flight tail of the turn, never a second copy of the
- * transcript: every row it shows is a row the canonical feed is about to carry
- * anyway. Its only bound used to be the canonical claim, which is a condition
+ * The overlay is the in-flight tail of the turn, never a second copy of what
+ * the canonical feed carries — every row it shows is a row that feed is about
+ * to carry anyway. Its only bound used to be the canonical claim, which is a condition
  * OUTSIDE this component — the transcript window has to be current for a row to
  * be claimed or to fall behind the #674 fence. A pane whose tail is paused
  * (`BranchPane`: dormant or offscreen) keeps its transcript window frozen while
