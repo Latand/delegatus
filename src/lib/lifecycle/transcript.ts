@@ -33,6 +33,10 @@ export interface LivenessTranscriptEvidence {
    * timestamp, which leaves the caller its file-mtime fallback.
    */
   lastRecordTs: number | null;
+  /** Newest evidence that the provider itself produced progress. Tool calls and
+      results deliberately do not qualify: they can occur while a provider
+      wait remains in force. */
+  providerProgressAt?: number | null;
 }
 
 /** One transcript, described without a discovery sweep. */
@@ -70,6 +74,37 @@ export function newestRecordTimestamp(records: Record<string, unknown>[]): numbe
   return newest;
 }
 
+function timestampMs(record: Record<string, unknown>): number | null {
+  const timestamp = record.timestamp;
+  const value = typeof timestamp === "string" ? Date.parse(timestamp) : Number.NaN;
+  return Number.isFinite(value) ? value : null;
+}
+
+function isProviderProgress(record: Record<string, unknown>, engine: "claude" | "codex"): boolean {
+  if (engine === "codex") {
+    const payload = record.payload;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const type = (payload as { type?: unknown }).type;
+    return type === "agent_message" || type === "reasoning";
+  }
+  if (record.type !== "assistant" || record.isApiErrorMessage === true) return false;
+  const message = record.message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) return false;
+  if ((message as { model?: unknown }).model === "<synthetic>") return false;
+  const content = (message as { content?: unknown }).content;
+  return !Array.isArray(content) || !content.some((part) => part && typeof part === "object" && (part as { type?: unknown }).type === "tool_use");
+}
+
+function newestProviderProgressTimestamp(records: Record<string, unknown>[], engine: "claude" | "codex"): number | null {
+  let newest: number | null = null;
+  for (const record of records) {
+    if (!isProviderProgress(record, engine)) continue;
+    const timestamp = timestampMs(record);
+    if (timestamp !== null && (newest === null || timestamp > newest)) newest = timestamp;
+  }
+  return newest;
+}
+
 /**
  * Turn state and record freshness from a single identity-verified tail read.
  * The durable evidence path used to answer these with two separate reads of the
@@ -85,6 +120,7 @@ export async function readLivenessTranscriptEvidence(
   return {
     turn: turn.state === "terminal" ? "idle" : turn.state === "busy" ? "busy" : "unknown",
     lastRecordTs: newestRecordTimestamp(read.records),
+    providerProgressAt: newestProviderProgressTimestamp(read.records, engine),
   };
 }
 

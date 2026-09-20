@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { PROVIDER_THROTTLE_GRACE_MS } from "@/lib/limitsThrottle";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
+import type { Flow } from "@/lib/flows/types";
 import type { FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 
@@ -320,6 +321,9 @@ test("a live agent deep in a tool stretch is running: freshness is the newest RE
   /* Twenty seconds old — the last tool result — and NOT the six-hour-old prose. */
   expect(evidence!.lastRecordTs).toBe(NOW - 20_000);
   expect(evidence!.lastRecordTs).not.toBe(FROZEN_AT);
+  /* The tool result is newer, while provider evidence remains at the assistant
+     record that requested the tool. */
+  expect(evidence!.providerProgressAt).toBe(FROZEN_AT);
 
   const registry = {
     entries: { "claude:session-tools": structuredEntry(agentPath, 4242) },
@@ -371,6 +375,32 @@ test("a Codex turn re-hosted after a severed tool call reports turnState idle (#
 
   expect(snapshot.conversations[0]).toMatchObject({ turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle" });
   expect(snapshot.stalledCount).toBe(0);
+});
+
+test("an active headless reviewer uses its exact persisted process identity without a structured host", async () => {
+  const agentPath = "/transcripts/headless-reviewer.jsonl";
+  const conversationId = "conversation_headless_reviewer";
+  const snapshot = await agentLivenessSnapshot({ conversationId }, sources({
+    probe: { now: () => NOW, pidAlive: (pid) => pid === 4244, processIdentity: () => "reviewer-start" },
+    describeTranscript: async () => ({
+      path: agentPath, project: "viewer", title: "review", engine: "codex", mtimeMs: NOW - 5_000,
+      conversationId, activity: null, activityReason: null,
+    }),
+    registrySnapshot: () => ({ entries: {}, conversations: {
+      [conversationId]: { id: conversationId, generations: [{ path: agentPath }], continuityPaths: [] },
+    } } as unknown as RegistryFile),
+    pipelines: () => [],
+    flows: () => [{
+      reviewerMode: "headless", state: "reviewing", rounds: [{ reviewerPath: agentPath, reviewerConversationId: conversationId, reviewerPid: 4244, reviewerIdentity: "reviewer-start" }],
+    } as unknown as Flow],
+    transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: NOW - 5_000, providerProgressAt: null }),
+  }));
+
+  expect(snapshot.conversations[0]).toMatchObject({
+    host: { state: "alive", kind: "headless", pid: 4244 },
+    lifecycle: "running",
+    reason: "host_alive_turn_active",
+  });
 });
 
 test("a single-conversation query does no inventory sweep and reads the tail once (#645)", async () => {
@@ -534,6 +564,44 @@ test("a live busy host follows its account throttle below the threshold and thro
     reason: "host_alive_transcript_silent",
     retryAt: null,
   });
+});
+
+test("newer provider progress supersedes an account throttle while tool-only traffic preserves the wait", () => {
+  const retryAt = new Date(NOW + 5 * 60_000).toISOString();
+  const throttledAt = NOW - 90_000;
+
+  expect(evaluateLiveness({
+    host: { state: "alive" },
+    turnState: "busy",
+    silentForMs: 5_000,
+    stallAfterMs: 10 * 60_000,
+    providerRetryAt: retryAt,
+    providerThrottleAt: throttledAt,
+    providerProgressAt: NOW - 5_000,
+  })).toEqual({ lifecycle: "running", reason: "host_alive_turn_active" });
+
+  expect(evaluateLiveness({
+    host: { state: "alive" },
+    turnState: "busy",
+    silentForMs: 5_000,
+    stallAfterMs: 10 * 60_000,
+    providerRetryAt: retryAt,
+    providerThrottleAt: throttledAt,
+    /* A newer tool result is ordinary activity, not proof the provider left
+       its wait. */
+    providerProgressAt: null,
+  })).toEqual({ lifecycle: "waiting", reason: "provider_throttled", retryAt });
+
+  expect(evaluateLiveness({
+    host: { state: "alive" },
+    turnState: "busy",
+    silentForMs: 5_000,
+    stallAfterMs: 10 * 60_000,
+    providerRetryAt: retryAt,
+    providerThrottleAt: throttledAt,
+    /* An older provider record cannot defeat a newer throttle observation. */
+    providerProgressAt: throttledAt - 1,
+  })).toEqual({ lifecycle: "waiting", reason: "provider_throttled", retryAt });
 });
 
 test("a liveness response resolves throttle provenance once per engine account", async () => {
