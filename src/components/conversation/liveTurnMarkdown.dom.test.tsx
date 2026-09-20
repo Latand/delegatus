@@ -205,7 +205,10 @@ test("the streaming caret and the omission notices survive the markdown pass", (
     />,
   );
   const row = liveRow(host);
-  expect(row.querySelector("[data-live-turn-omitted-items]")?.textContent).toContain("3");
+  /* The items the projection folded away are the overlay's collapsed count,
+     one quiet line above the tail — never a notice inside a row (#1959). */
+  expect(row.querySelector("[data-live-turn-omitted-items]")).toBeNull();
+  expect(host.querySelector("[data-live-turn-earlier]")?.getAttribute("data-live-turn-earlier")).toBe("3");
   expect(row.querySelector(".animate-pulse")).not.toBeNull();
   expect(row.querySelector("table")).not.toBeNull();
   expect(row.querySelector("b")?.textContent).toBe("items");

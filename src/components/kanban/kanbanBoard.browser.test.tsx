@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type LaunchOptions, type Page } from "playwright-core";
@@ -6517,4 +6518,276 @@ describe("codex tool rows on a phone", () => {
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 600_000);
+});
+
+
+/* #1959: the live-turn overlay at phone width, against the two transcript
+   states that decide what it paints. The defect the operator photographed is a
+   rendering one — dozens of "Bash · arguments omitted" and "viewer ·
+   create_pipeline · arguments omitted" rows under the canonical cards — so it
+   is measured where rows have geometry, over the same long turn the DOM tests
+   use (`liveTurnLongTurn.fixture.ts`): sixty calls, long Viewer MCP names,
+   failures, shed arguments, one still running.
+
+     CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+       bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "live turn rows"
+
+   `LIVE_ROWS_CAPTURE_PHASE=before` records the wall without asserting it (run
+   it against the overlay as it was); the default `after` phase holds the
+   verdicts. PNGs go to the directory named by `LIVE_ROWS_PNG_DIR` — they are
+   never committed — and the readings to `evidence/live-turn-rows/<phase>.json`. */
+describe("live turn rows on a phone", () => {
+  /* What a title has to hold to be worth reading. At 390 px an overlay row is
+     about 330 px wide, and the badge, the outcome mark and the row's own
+     indent take a fixed bite out of it; what is left is the title's, and a
+     title holding less than these is one the operator cannot use. The round-1
+     row gave it 1.27 px — 0 % — because the chips took the line and the title
+     was the only item left able to shrink. A chip smaller than `MIN_CHIP_PX`
+     in either direction has been squeezed rather than wrapped. */
+  const MIN_MCP_TITLE_PX = 140;
+  const MIN_MCP_TITLE_SHARE = 40;
+  const MIN_CHIP_PX = 24;
+
+  /* What the operator can see of the overlay: how many rows it paints, what
+     the collapsed line says, whether any row is a bare "arguments omitted",
+     and whether a live row repeats a call the transcript below already shows. */
+  const measureOverlay = `(() => {
+    const phrases = ${JSON.stringify([en["feed.liveToolArgsOmitted"], translate("uk", "feed.liveToolArgsOmitted")])};
+    const read = (section) => {
+      const overlay = section.querySelector("[data-live-rows-overlay]");
+      const transcript = section.querySelector("[data-live-rows-transcript]");
+      const rows = [...overlay.querySelectorAll("[data-live-turn]")];
+      const collapsed = overlay.querySelector("[data-live-turn-earlier]");
+      const text = overlay.textContent || "";
+      const ids = rows.map(row => row.getAttribute("data-live-turn-item-id")).filter(Boolean);
+      const canonical = new Set(transcript
+        ? [...transcript.querySelectorAll("[data-tool-row], [data-testid=mcp-call-card]")]
+          .flatMap(node => (node.textContent || "").trim() ? [(node.textContent || "").trim()] : [])
+        : []);
+      const box = overlay.getBoundingClientRect();
+      /* Round-2 P2: the action title is what the operator reads, so it is
+         measured. On one flex line it was the only item able to shrink and
+         two entity chips squeezed it to about a pixel; the readings below say
+         how much of the row it holds now, and how tall the row grew to keep
+         its chips whole. */
+      const mcp = [...overlay.querySelectorAll("[data-live-mcp]")].map(row => {
+        /* A bare flex-1 span is where the title lived before it was given a
+           basis of its own, so the before phase measures the same thing. */
+        const title = row.querySelector("[data-live-mcp-title]") || row.querySelector("span.flex-1");
+        const rowBox = row.getBoundingClientRect();
+        const titleBox = title.getBoundingClientRect();
+        const chips = [...row.querySelectorAll("[data-live-mcp-link]")];
+        const mark = row.querySelector("[data-live-mcp-outcome=omitted]") ? "omitted"
+          : row.querySelector("[aria-label=success]") ? "success"
+            : row.querySelector("[aria-label=error]") ? "error"
+              : row.querySelector("[role=status]") ? "pending" : "none";
+        return {
+          tool: row.getAttribute("data-live-mcp"),
+          status: row.getAttribute("data-live-tool-status"),
+          state: row.getAttribute("data-live-mcp-state"),
+          mark,
+          chips: chips.length,
+          /* A chip that had to shrink to fit is not a tappable chip. */
+          minChipWidth: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().width))) : 0,
+          minChipHeight: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().height))) : 0,
+          rowWidth: Math.round(rowBox.width),
+          rowHeight: Math.round(rowBox.height),
+          titleWidth: Math.round(titleBox.width * 100) / 100,
+          titleShare: rowBox.width ? Math.round((titleBox.width / rowBox.width) * 100) : 0,
+          /* How much of the action title survives before the ellipsis. */
+          titleFullWidth: title.scrollWidth,
+          titleText: (title.textContent || "").trim(),
+        };
+      });
+      /* The canonical McpCallCard the live row hands over to, measured in the
+         same units and held to the same bounds (#1955). A handoff is only
+         invisible if the card the transcript writes reads at least as well as
+         the live row it replaces, so both sides of it are asserted here. */
+      const canonicalMcp = transcript
+        ? [...transcript.querySelectorAll("[data-testid=mcp-call-card]")].map(card => {
+          /* A bare flex-1 span is where this title lived before it was given a
+             basis of its own, so an earlier phase measures the same thing. */
+          const title = card.querySelector("[data-mcp-title]") || card.querySelector("summary > span.flex-1");
+          const summary = card.querySelector("summary");
+          if (!title || !summary) return null;
+          const rowBox = summary.getBoundingClientRect();
+          const chips = [...card.querySelectorAll("[data-testid^=mcp-link-]")];
+          return {
+            tool: (title.textContent || "").trim().slice(0, 40),
+            rowWidth: Math.round(rowBox.width),
+            titleWidth: Math.round(title.getBoundingClientRect().width * 100) / 100,
+            titleShare: rowBox.width ? Math.round((title.getBoundingClientRect().width / rowBox.width) * 100) : 0,
+            chips: chips.length,
+            minChipWidth: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().width))) : 0,
+            minChipHeight: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().height))) : 0,
+          };
+        }).filter(Boolean)
+        : [];
+      return {
+        mcp,
+        canonicalMcp,
+        rows: rows.length,
+        height: Math.round(box.height),
+        toolRows: rows.filter(row => row.hasAttribute("data-live-tool")).length,
+        mcpRows: overlay.querySelectorAll("[data-live-mcp]").length,
+        mcpChips: overlay.querySelectorAll("[data-live-mcp-link]").length,
+        argsOmittedRows: rows.filter(row => phrases.some(phrase => (row.textContent || "").includes(phrase))).length,
+        argsOmittedMentions: phrases.reduce((total, phrase) => total + text.split(phrase).length - 1, 0),
+        collapsed: collapsed ? { count: Number(collapsed.getAttribute("data-live-turn-earlier")), text: (collapsed.textContent || "").trim() } : null,
+        collapsedLines: overlay.querySelectorAll("[data-live-turn-earlier]").length,
+        /* A live row that repeats a canonical row is the duplicate the
+           operator reads as junk: both name the same call. */
+        duplicates: rows.filter(row => canonical.has((row.textContent || "").trim())).length,
+        ids,
+      };
+    };
+    const out = {};
+    for (const section of document.querySelectorAll("[data-live-rows-case]")) {
+      out[section.getAttribute("data-live-rows-case")] = read(section);
+    }
+    return { cases: out, scrollWidth: document.documentElement.scrollWidth };
+  })()`;
+
+  browserTest("the overlay is a bounded tail, and nothing at all once the transcript carries the calls", async () => {
+    /* Any phase name but "after" records without asserting, so the overlay as
+       it was at an earlier commit can be measured in these same units: "before"
+       is the unbounded wall this issue started from, "round1" the bounded
+       overlay whose MCP row still squeezed its title and called an unknown
+       outcome a success. */
+    const phase = (process.env.LIVE_ROWS_CAPTURE_PHASE ?? "after").replace(/[^a-z0-9-]/gi, "") || "after";
+    /* Which tree rendered these readings. An earlier phase is captured from an
+       exported checkout of the revision being measured, which carries no git
+       metadata of its own, so the runner names it — and a phase whose PNGs and
+       JSON disagree about their source cannot go unnoticed again. */
+    const source = process.env.LIVE_ROWS_SOURCE_REV
+      ?? (() => {
+        try { return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(); }
+        catch { return "unrecorded"; }
+      })();
+    const out = path.resolve(`.artifacts/live-turn-rows/${phase}`);
+    const pngDir = process.env.LIVE_ROWS_PNG_DIR ?? "/var/tmp/llv-live-rows-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/liveTurnRowsEvidence.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const shots: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width: 390, height: 1400 }, "dark", lang);
+        try {
+          await page.locator("[data-live-turn-evidence]").waitFor();
+          await page.waitForTimeout(150);
+          type McpReading = {
+            tool: string; status: string; state: string; mark: string; chips: number;
+            minChipWidth: number; minChipHeight: number; rowWidth: number; rowHeight: number;
+            titleWidth: number; titleShare: number; titleFullWidth: number; titleText: string;
+          };
+          type CanonicalReading = {
+            tool: string; rowWidth: number; titleWidth: number; titleShare: number;
+            chips: number; minChipWidth: number; minChipHeight: number;
+          };
+          const reading = await page.evaluate(measureOverlay) as {
+            cases: Record<string, { rows: number; argsOmittedRows: number; argsOmittedMentions: number; mcpRows: number; mcpChips: number; collapsed: { count: number; text: string } | null; collapsedLines: number; duplicates: number; mcp: McpReading[]; canonicalMcp: CanonicalReading[] }>;
+            scrollWidth: number;
+          };
+          const label = `390-dark-${lang}`;
+          frames[label] = reading;
+          for (const section of ["stale", "current", "states"] as const) {
+            /* The before phase is rendered by the overlay as it was, which
+               has no section the fix added. */
+            if (!reading.cases[section]) continue;
+            const name = `${section}-${label}-${phase}.png`;
+            await page.locator(`[data-live-rows-case=${section}]`).screenshot({ path: path.join(pngDir, name) });
+            shots.push(name);
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          if (phase !== "after") continue;
+          const stale = reading.cases.stale!;
+          const current = reading.cases.current!;
+          /* The tail is bounded, and what it drops it counts — once. */
+          if (stale.rows > 8) failures.push(`${label}: the overlay painted ${stale.rows} rows`);
+          if (!stale.rows) failures.push(`${label}: the overlay painted no tail at all`);
+          if (stale.collapsedLines !== 1) failures.push(`${label}: ${stale.collapsedLines} collapsed lines`);
+          if (!stale.collapsed?.count) failures.push(`${label}: the collapsed line counts nothing`);
+          /* No wall of "arguments omitted", in either language. */
+          if (stale.argsOmittedRows || stale.argsOmittedMentions) {
+            failures.push(`${label}: ${stale.argsOmittedRows} rows / ${stale.argsOmittedMentions} mentions of shed arguments`);
+          }
+          /* A Viewer MCP row reads like its canonical card, chips and all. */
+          if (!stale.mcpRows) failures.push(`${label}: no MCP row survived into the tail`);
+          if (!stale.mcpChips) failures.push(`${label}: the MCP rows carry no entity chips`);
+
+          /* Round-2 P2, the readable title. The tail carries the two-chip
+             call (`link_task_to_pipeline`), which is where the title used to
+             lose its line entirely: 1.27 px of a 330 px row. A title has to
+             hold a readable share of its row, and the chips beside it have to
+             stay whole rather than shrink to fit. */
+          const chipped = stale.mcp.filter((row) => row.chips >= 2);
+          if (!chipped.length) failures.push(`${label}: the tail carries no MCP row with two entity chips`);
+          for (const row of [...stale.mcp, ...reading.cases.states!.mcp]) {
+            if (row.titleWidth < MIN_MCP_TITLE_PX) {
+              failures.push(`${label}: ${row.tool} title is ${row.titleWidth}px of a ${row.rowWidth}px row`);
+            }
+            if (row.titleShare < MIN_MCP_TITLE_SHARE) {
+              failures.push(`${label}: ${row.tool} title holds only ${row.titleShare}% of its row`);
+            }
+            if (row.chips && (row.minChipWidth < MIN_CHIP_PX || row.minChipHeight < MIN_CHIP_PX)) {
+              failures.push(`${label}: ${row.tool} chips squeezed to ${row.minChipWidth}x${row.minChipHeight}px`);
+            }
+          }
+
+          /* Round-3 P2, the other half of the handoff: the canonical card the
+             live row becomes. A row that reads well only until the transcript
+             claims it is not a handoff, and this card squeezed its own title
+             to 1.27 px with two chips (#1955) — the same construction the live
+             row was fixed for. Both are held to one bound now, in the same
+             units, over the same calls. */
+          const canonical = current.canonicalMcp;
+          if (!canonical.length) failures.push(`${label}: the current transcript carries no canonical MCP card`);
+          if (!canonical.some((card) => card.chips >= 2)) {
+            failures.push(`${label}: no canonical MCP card carries two entity chips`);
+          }
+          for (const card of canonical) {
+            if (card.titleWidth < MIN_MCP_TITLE_PX) {
+              failures.push(`${label}: canonical "${card.tool}" title is ${card.titleWidth}px of a ${card.rowWidth}px row`);
+            }
+            if (card.titleShare < MIN_MCP_TITLE_SHARE) {
+              failures.push(`${label}: canonical "${card.tool}" title holds only ${card.titleShare}% of its row`);
+            }
+            if (card.chips && (card.minChipWidth < MIN_CHIP_PX || card.minChipHeight < MIN_CHIP_PX)) {
+              failures.push(`${label}: canonical "${card.tool}" chips squeezed to ${card.minChipWidth}x${card.minChipHeight}px`);
+            }
+          }
+
+          /* Round-2 P1, the outcome vocabulary: a call whose result the
+             journal dropped is never painted as a success. */
+          const marks = Object.fromEntries(reading.cases.states!.mcp.map((row) => [row.status, row.mark]));
+          for (const [status, expected] of [["run", "pending"], ["ok", "success"], ["err", "error"], ["unknown", "omitted"]] as const) {
+            if (marks[status] !== expected) {
+              failures.push(`${label}: an MCP call with status ${status} is marked "${marks[status] ?? "nothing"}", not "${expected}"`);
+            }
+          }
+          /* And once the transcript carries the calls, the overlay is silent. */
+          if (current.rows || current.collapsedLines) {
+            failures.push(`${label}: the overlay painted ${current.rows} rows beside a current transcript`);
+          }
+          if (stale.duplicates || current.duplicates) {
+            failures.push(`${label}: ${stale.duplicates + current.duplicates} live rows repeat a canonical row`);
+          }
+          if (reading.scrollWidth > 390) failures.push(`${label}: the document scrolls sideways (${reading.scrollWidth} > 390)`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/live-turn-rows", { recursive: true });
+    fs.writeFileSync(`evidence/live-turn-rows/${phase}.json`, `${JSON.stringify({ phase, source, shots, frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
 });

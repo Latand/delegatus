@@ -1252,6 +1252,7 @@ export const en = {
   "feed.liveToolArgsOmitted": "arguments omitted",
   "feed.liveToolOutcomeOmitted": "outcome omitted",
   "feed.liveOmittedChars": "… (+{chars} characters)",
+  "feed.liveEarlierSteps": { one: "{count} earlier step", other: "{count} earlier steps" },
   "feed.backToLive": "Back to the live tail",
   "feed.newCount": "{count} new",
   "feed.down": "down",
