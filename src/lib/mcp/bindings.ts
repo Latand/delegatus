@@ -24,7 +24,6 @@ import {
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { procBackend } from "@/lib/proc";
-import { readRetirementStatus } from "@/lib/runtime/structuredHostRetirementStatus";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -83,7 +82,7 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTickFence";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
-import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
 import { projectSuccessionFor } from "@/lib/projects/succession";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
@@ -195,7 +194,7 @@ import {
   type VoiceUtteranceLookup,
   type VoiceWorkLookupIdentity,
 } from "./selectedContextTarget";
-import { mcpCallerIdentity, mcpToolPolicy, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
+import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
 const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision"]);
 const PIPELINE_GRAPH_EDIT_ACTIONS = new Set<PipelineAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
@@ -573,10 +572,15 @@ function viewerControlForCall(
   context?: McpToolCallContext,
 ): ViewerControlDependencies {
   if (!context) return control;
+  const timed = async (run: () => Promise<Record<string, unknown>>) => {
+    const startedAt = performance.now();
+    try { return await run(); }
+    finally { context.recordTiming?.("http", performance.now() - startedAt); }
+  };
   return {
-    ...(control.get ? { get: (pathname: string) => control.get!(pathname, context) } : {}),
-    post: (pathname, body, headers) => control.post(pathname, body, headers, context),
-    ...(control.dispatch ? { dispatch: (pathname, body, headers) => control.dispatch!(pathname, body, headers, context) } : {}),
+    ...(control.get ? { get: (pathname: string) => timed(() => control.get!(pathname, context)) } : {}),
+    post: (pathname, body, headers) => timed(() => control.post(pathname, body, headers, context)),
+    ...(control.dispatch ? { dispatch: (pathname, body, headers) => timed(() => control.dispatch!(pathname, body, headers, context)) } : {}),
   };
 }
 
@@ -678,7 +682,6 @@ export interface ViewerMcpDomainDependencies {
       Null means the invariant "a registered session has a canonical project"
       is violated, and unscoped directive routing fails closed diagnostically. */
   callerProject?(): string | null;
-  readRetirementStatus?: typeof readRetirementStatus;
   /** The canonical project of the repository this Viewer deploys (#1321) — the
       only project whose designated seat may execute a deploy. Production derives
       it from the canonical Viewer remote, never from the caller's working
@@ -3504,12 +3507,54 @@ async function deploymentStatus(
     if (args.operationId !== undefined || args.deploymentId !== undefined) {
       throw new Error("retirement observation cannot be combined with an operation or deployment lookup");
     }
-    const project = required(args, "project");
-    const launchId = required(args, "callerLaunchId");
-    return redactPayload((dependencies.readRetirementStatus ?? readRetirementStatus)({
+    const project = canonicalOrchestratorProject(required(args, "project"));
+    // The stdio server can attribute a session by ancestry even when the
+    // provider did not inherit LLV_SPAWN_CAPABILITY into its MCP environment.
+    const caller = attributionOf(dependencies);
+    if (!caller.conversationId || caller.kind === "unidentified") {
+      throw new McpToolRefusal("retirement observation requires an identified session", { code: "retirement_caller_unidentified" });
+    }
+    const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+    const seat = caller.kind === "manager" ? seats.find(candidate => candidate.conversationId === caller.conversationId) : undefined;
+    let authentication: { conversationId: string; seatProject: string } | { conversationId: string; launchId: string };
+    if (seat?.project) {
+      if (seat.project !== project) throw new McpToolRefusal("retirement observation is limited to the caller's own project", { code: "retirement_project_refused" });
+      authentication = { conversationId: caller.conversationId, seatProject: seat.project };
+    } else {
+      const snapshot = dependencies.registrySnapshot();
+      const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+      // An adopted seat keeps its spawn receipt after replacement. Its current
+      // revocation must fence that receipt; a newer designation lifts the fence.
+      const revoked = revokedOrchestratorSeatConversationsOrUnknown(
+        id => lookup.canonicalConversationId(id as `conversation_${string}`),
+      );
+      if (revoked === null) {
+        throw new McpToolRefusal("retirement observation cannot establish seat revocations", { code: "retirement_authority_unavailable" });
+      }
+      if (revoked.has(lookup.canonicalConversationId(caller.conversationId as `conversation_${string}`))) {
+        throw new McpToolRefusal("retirement observation is refused for a revoked seat", { code: "retirement_seat_revoked" });
+      }
+      const conversation = snapshot.conversations[caller.conversationId];
+      const ownProject = conversation?.projectOwnership?.project;
+      if (!ownProject || canonicalOrchestratorProject(ownProject) !== project) {
+        throw new McpToolRefusal("retirement observation is limited to the caller's own project", { code: "retirement_project_refused" });
+      }
+      const explicit = text(args.callerLaunchId);
+      const receipt = explicit ? snapshot.receipts[explicit] : Object.values(snapshot.receipts)
+        .filter(candidate => candidate.conversationId === caller.conversationId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.launchId.localeCompare(a.launchId))[0];
+      if (!receipt || receipt.conversationId !== caller.conversationId) {
+        throw new McpToolRefusal("retirement observation requires the authenticated caller's spawn receipt", { code: "retirement_receipt_refused" });
+      }
+      authentication = { conversationId: caller.conversationId, launchId: receipt.launchId };
+    }
+    // Only this server-derived identity crosses the trusted MCP control hop.
+    // The Viewer reads its own report; tool arguments cannot assert authority.
+    return redactPayload(await control.post("/api/runtime/deployments?kind=host-retirement", {
       project, limit: Math.max(1, Math.min(100, integer(args.limit, 25))),
       ...(text(args.cursor) ? { cursor: text(args.cursor) } : {}),
-    }, { launchId, capability: process.env[VIEWER_SPAWN_CAPABILITY_ENV]?.trim() ?? "" }));
+      authentication,
+    }, spawnControlHeaders()));
   }
   if (args.kind !== undefined || (args.cursor !== undefined && (args.deploymentId !== undefined || args.operationId !== undefined))) throw new Error("unsupported deployment status query");
   const deploymentId = text(args.deploymentId);
@@ -4530,11 +4575,20 @@ export function viewerMcpToolPolicy(
     seats: authorizedManagerSeats(managerAuthoritySources())
       .map((seat) => ({ conversationId: seat.conversationId, path: seat.path })),
   });
-  return mcpToolPolicy(
+  const policy = mcpToolPolicy(
     () => hostHealthProbe
       ? { kind: "health-probe" }
       : mcpCallerIdentity(domainDependencies.attentionAuthority(), callerManagerTarget()),
   );
+  return {
+    permit: (tool, args) => {
+      // An admitted agent's read surface is independent of role/seat identity.
+      // Resolve authority only where the policy uses it. Bindings still verify
+      // their own operation authority and recoverable receipts before dispatch.
+      if (!hostHealthProbe && !mcpToolNeedsCallerIdentity(tool, args)) return { allowed: true };
+      return policy.permit(tool, args);
+    },
+  };
 }
 
 /* ── ORIGINAL-KEY RECOVERY (#1490) ──────────────────────────────────────── */

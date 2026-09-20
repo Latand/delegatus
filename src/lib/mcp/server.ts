@@ -190,6 +190,8 @@ export type McpToolPayload = Record<string, unknown>;
 export interface McpToolCallContext {
   signal?: AbortSignal;
   deadlineAt?: number;
+  /** Numeric transport subphases, supplied by the service, never tool arguments. */
+  recordTiming?: (phase: "http", milliseconds: number) => void;
   /** #1490: the durable binding this call's dispatch must use. Present only on
       a recoverable mutation's single dispatch; the binding reads its downstream
       idempotency key from here rather than deriving one of its own. */
@@ -1973,7 +1975,7 @@ export interface McpToolService {
 }
 
 type McpTimingOutcome = "success" | "failure" | "replay" | "conflict" | "pending" | "deadline" | "cancelled";
-type McpTimingPhase = "claim" | "binding" | "completion" | "serialization" | "serviceTotal" | "replay";
+type McpTimingPhase = "caller" | "http" | "claim" | "binding" | "completion" | "serialization" | "serviceTotal" | "replay";
 
 interface McpToolTimingSample {
   toolName: McpToolName;
@@ -2054,7 +2056,7 @@ const MCP_TIMING_OUTCOMES: McpTimingOutcome[] = [
   "success", "failure", "replay", "conflict", "pending", "deadline", "cancelled",
 ];
 const MCP_TIMING_PHASES: McpTimingPhase[] = [
-  "claim", "binding", "completion", "serialization", "serviceTotal", "replay",
+  "caller", "http", "claim", "binding", "completion", "serialization", "serviceTotal", "replay",
 ];
 
 function mutableToolTiming(): MutableToolTiming {
@@ -2283,6 +2285,20 @@ export function createMcpToolService(
       const effectiveArgs = normalized.args;
       const callStartedAt = performance.now();
       const phaseDurations: Partial<Record<McpTimingPhase, number>> = {};
+      context = { ...context, recordTiming: (phase, milliseconds) => {
+        phaseDurations[phase] = (phaseDurations[phase] ?? 0) + milliseconds;
+      } };
+      const permit = () => {
+        const startedAt = performance.now();
+        try { return policy?.permit(typedTool, effectiveArgs); }
+        finally { phaseDurations.caller = (phaseDurations.caller ?? 0) + performance.now() - startedAt; }
+      };
+      const measure = async <T>(phase: McpTimingPhase, run: () => T | Promise<T>): Promise<T> => {
+        const startedAt = performance.now();
+        try { return await run(); }
+        finally { phaseDurations[phase] = (phaseDurations[phase] ?? 0) + performance.now() - startedAt; }
+      };
+      try {
       const deadlineBudgetMs = context.deadlineAt === undefined
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
@@ -2311,7 +2327,7 @@ export function createMcpToolService(
          binding so caller authority is checked before replay, including after
          restart; an MCP-cache hit must never disclose another owner's receipt. */
       if (typedTool === "flow_action" && effectiveArgs.action === "agent-decision") {
-        const verdict = policy?.permit(typedTool, effectiveArgs);
+        const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
         try {
           const payload = await bindings[typedTool](effectiveArgs, context);
@@ -2329,7 +2345,7 @@ export function createMcpToolService(
          property of who is calling, not of the operation, so it must not burn the
          clientRequestId — the same call becomes legitimate the moment the operator
          grants the tool, and a spent receipt would answer it with a stale no. */
-      const verdict = policy?.permit(typedTool, effectiveArgs);
+      const verdict = permit();
       if (verdict && !verdict.allowed) {
         return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
       }
@@ -2369,6 +2385,7 @@ export function createMcpToolService(
            what may be disclosed, so it cannot be learned from the answer. A
            refusal here burns nothing — no claim exists yet. */
         let bound: McpRequestBindingInput;
+        const callerStartedAt = performance.now();
         try {
           bound = await tool.bind(digestArgs);
         } catch (error) {
@@ -2382,6 +2399,8 @@ export function createMcpToolService(
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
+        } finally {
+          phaseDurations.caller = (phaseDurations.caller ?? 0) + performance.now() - callerStartedAt;
         }
         const binding: McpRequestBinding = {
           version: 1,
@@ -2746,9 +2765,7 @@ export function createMcpToolService(
       };
       const result = (async (): Promise<McpToolResult> => {
         if (recoverable && recoveryStore) return recoverableCall(recoverable, recoveryStore);
-        const claimStartedAt = performance.now();
-        const claim = await receipts.claim(key, digest, retention);
-        phaseDurations.claim = performance.now() - claimStartedAt;
+        const claim = await measure("claim", () => receipts.claim(key, digest, retention));
         if (claim.kind === "conflict") {
           outcome = "conflict";
           return failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
@@ -2845,9 +2862,7 @@ export function createMcpToolService(
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
-        const completionStartedAt = performance.now();
-        await receipts.complete(key, digest, settled, retention);
-        phaseDurations.completion = performance.now() - completionStartedAt;
+        await measure("completion", () => receipts.complete(key, digest, settled, retention));
         return settled;
       })();
       inFlight.set(key, { digest, result });
@@ -2855,6 +2870,16 @@ export function createMcpToolService(
         return finish(await result, outcome, unfinishedAgeMs);
       } finally {
         if (inFlight.get(key)?.result === result) inFlight.delete(key);
+      }
+      } finally {
+        const totalMs = performance.now() - callStartedAt;
+        if (totalMs >= 2_000) {
+          // Fixed vocabulary only: no keys, arguments, identities or error text.
+          // http is a subphase of binding; these wall times are not additive.
+          phaseDurations.serviceTotal = totalMs;
+          console.error(`[mcp slow] tool=${typedTool} ${MCP_TIMING_PHASES
+            .map(phase => `${phase}Ms=${Math.round(phaseDurations[phase] ?? 0)}`).join(" ")}`);
+        }
       }
     },
   };
@@ -2944,7 +2969,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   operator_snapshot: "Read the bounded, secret-redacted Viewer state currently visible to the operator.",
   list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
-  deployment_status: "Read Viewer deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project and callerLaunchId (your existing task-assignment spawn receipt, verified against the server-provided capability) reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
+  deployment_status: "Read Viewer deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project lets its designated seat and Viewer-spawned workers read their own project. The server attributes your session; workers resolve their own spawn receipt automatically. Optional callerLaunchId selects an explicit receipt belonging to your session; a designated seat needs no receipt. This reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
   resources: "Read system and Viewer-owned agent resource usage. freshness reports requestedAt, system capturedAt, ageMs, cache source and refreshSucceeded from the existing collector diagnostic. A failed refresh can serve an older capture; null means no refresh outcome was established.",
   conversation_migration: "Select an explicit account for a structured conversation, automatically reseat by quota, retry, roll back or cancel a migration, withdraw an unclaimed account switch, or send messages a failed switch held on the current account. Explicit selection uses the browser account picker's semantics and never substitutes another account.",
   agent_activity: "Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline} and drops the transcript paths, host detail and the selection and timing reports.",
@@ -3475,10 +3500,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   deployment_status: z.object({
     clientRequestId: clientRequestIdSchema,
-    kind: z.literal("host-retirement").optional(),
-    callerLaunchId: z.string().min(1).max(256).optional().describe("Required for host-retirement: your existing spawn receipt ID (launchId in your task assignment). It is verified against your server-provided capability, using one keyed receipt read."),
+    kind: z.literal("host-retirement").optional().describe("Read the latest bounded host retirement observations for your project; omit for deployment status."),
+    callerLaunchId: z.string().min(1).max(256).optional().describe("Optional for host-retirement: resolved server-side from your session. An explicit launchId from your task assignment must belong to you. A designated seat needs no spawn receipt."),
     project: z.string().min(1).max(256).optional().describe("Required for host-retirement; must match the authenticated caller's project."),
-    cursor: z.string().min(1).max(512).optional().describe("Opaque retirement page cursor; use unchanged and stop when hasMore is false."),
+    cursor: z.string().min(1).max(512).optional().describe("Opaque page cursor: host-retirement returns cursor; deployment lists return nextCursor. Pass unchanged with the same query and a fresh clientRequestId; stop when hasMore is false."),
     deploymentId: z.string().min(1).optional(),
     operationId: z.string().min(1).optional(),
     limit: boundedNumericInput("deployment_status", "limit"),

@@ -9,7 +9,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 
 import { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
 import { relayPrompt } from "./prompts";
-import { flowRelayedMessageOccurrences } from "./relayProvenance";
+import { flowRelayedMessageOccurrences } from "@/lib/reviewHistory/relayProvenance";
 import type { Flow, Round } from "./types";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-relay-provenance-"));
@@ -20,7 +20,7 @@ const FINDINGS = "P1 — the held command drops its origin across the migration 
 const DELIVERED_AT = "2026-08-24T09:00:00.000Z";
 
 test("relay provenance imports identity directly without importing the flow engine", () => {
-  const source = fs.readFileSync(new URL("./relayProvenance.ts", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../reviewHistory/relayProvenance.ts", import.meta.url), "utf8");
   const file = ts.createSourceFile("relayProvenance.ts", source, ts.ScriptTarget.Latest, true);
   const imports = file.statements.filter(ts.isImportDeclaration)
     .map((statement) => (statement.moduleSpecifier as ts.StringLiteral).text);

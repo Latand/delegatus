@@ -1,4 +1,4 @@
-import type { FlowEngine, RoleConfig } from "@/lib/flows/types";
+import type { RuntimeEngine as FlowEngine, RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import type { BackgroundWait } from "./backgroundTasks";
 
@@ -362,10 +362,10 @@ export type PipelineStageAttempt = {
     roundCount: number;
     implementerHeadSha: string | null;
     reviewerHeadSha: string | null;
-    verdict: import("@/lib/flows/types").ReviewVerdict | null;
-    relayState: import("@/lib/flows/types").FlowState;
-    terminalState: import("@/lib/flows/types").FlowState | null;
-    hostClaim?: import("@/lib/flows/types").FlowHostClaim | null;
+    verdict: import("@/lib/review/types").ReviewVerdict | null;
+    relayState: import("@/lib/reviewHistory/types").FlowState;
+    terminalState: import("@/lib/reviewHistory/types").FlowState | null;
+    hostClaim?: import("@/lib/reviewHistory/types").FlowHostClaim | null;
     synchronizedAt: string;
     sourceUpdatedAt: string | null;
     lagMs: number | null;

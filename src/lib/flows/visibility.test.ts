@@ -4,7 +4,7 @@ import type { DurableConversationMembership } from "@/lib/agent/registry";
 import type { FileEntry } from "@/lib/types";
 
 import type { Flow } from "./types";
-import { projectRestoredFlows } from "./visibility";
+import { projectRestoredFlows } from "@/lib/reviewHistory/visibility";
 
 test("a pinned reviewer restores its closed flow with every persisted round", () => {
   const implementerId = "conversation_019f4906-3f67-7b72-9fbc-9ec3b5ad1326";
