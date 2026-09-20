@@ -1,4 +1,4 @@
-import type { FlowEngine } from "@/lib/flows/types";
+import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 import { firstLineTitle } from "@/lib/tasks/helpers";
 import type { BoardTask } from "@/lib/tasks/types";
 

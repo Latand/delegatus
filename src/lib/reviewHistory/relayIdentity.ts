@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import type { Flow, Round } from "@/lib/flows/types";
+import type { Flow, Round } from "./types";
 
 /** The durable structured-delivery identity of a round's relay — the current
     round's by default, or any settled round's when given, so provenance can

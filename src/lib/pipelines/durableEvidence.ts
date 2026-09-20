@@ -1,8 +1,8 @@
 import fs from "node:fs";
 
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
-import type { FlowEngine } from "@/lib/flows/types";
-import { lastAssistantMessageFromRecords } from "@/lib/flows/findings";
+import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
+import { lastAssistantMessageFromRecords } from "@/lib/scanner/lastAssistantMessage";
 import { heldBackgroundTasks, readBackgroundTaskLedger, type RunningBackgroundTask } from "@/lib/pipelines/backgroundTasks";
 import { readStableTailRecords } from "@/lib/scanner/activity";
 import { numberValue, recordValue, recordsValue, stringValue } from "@/lib/scanner/json";
