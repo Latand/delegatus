@@ -1184,6 +1184,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "feed.liveToolArgsOmitted": "аргументи пропущено",
   "feed.liveToolOutcomeOmitted": "результат пропущено",
   "feed.liveOmittedChars": "… (+{chars} символів)",
+  "feed.liveEarlierSteps": { one: "{count} попередній крок", few: "{count} попередні кроки", many: "{count} попередніх кроків", other: "{count} попередніх кроків" },
   "feed.backToLive": "Повернутись до живого хвоста",
   "feed.newCount": "{count} нових",
   "feed.down": "вниз",

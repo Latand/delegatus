@@ -73,16 +73,17 @@ import {
   MIN_STARTED_PIPELINE_STAGES,
 } from "./limits";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
-import { pipelineDeliveryGuidance, renderStagePrompt } from "./prompts";
+import { pipelineDeliveryGuidance, renderDecisionInput, renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { collectStageProvenance } from "./stageProvenance";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
-import { assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
+import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import type {
   CreatePipelineRequest,
   EffectivePipelineRole,
@@ -102,6 +103,7 @@ import type {
   PipelineStage,
   PipelineStageInput,
   PipelineStageAttempt,
+  PipelineDecisionAnswer,
   PipelineStageReport,
   PipelineStageReportEntry,
   PipelineTerminalReap,
@@ -3253,7 +3255,7 @@ async function tickRunStage(
           parentConversationId: null,
         },
       };
-      if (process.env.LLV_PIPELINE_ACTIVATION_DRAIN === "1") {
+      if (process.env.LLV_PIPELINE_ACTIVATION_DRAIN === "1" || attempt.decisionAnswerId) {
         attempt.activation = {
           id: crypto.randomUUID(), phase: "reserved", input: spawnInput,
           clientAttemptId: spawnInput.clientAttemptId, startedAt: activationNow,
@@ -5406,13 +5408,16 @@ function replaceStartedStages(
  */
 function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
   const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt") => Object.hasOwn(req, field) && req[field] !== undefined;
-  const stageBound = req.action === "retry-stage" || req.action === "skip-stage";
+  if (req.expectedRevision !== undefined && req.action !== "resolve-decision") {
+    return { error: "expectedRevision applies only to resolve-decision", status: 400, field: "expectedRevision" };
+  }
+  const stageBound = req.action === "retry-stage" || req.action === "skip-stage" || req.action === "resolve-decision";
   if (stated("expectedStageDigest")) {
     if (!GRAPH_EDIT_ACTIONS.has(req.action)) return { error: `expectedStageDigest applies only to graph edits (${[...GRAPH_EDIT_ACTIONS].join(", ")})`, status: 400, field: "expectedStageDigest" };
     if (!isStageDigest(req.expectedStageDigest)) return { error: "expectedStageDigest must be a 64-character lowercase hex SHA-256 digest", status: 400, field: "expectedStageDigest" };
   }
   if (stated("expectedStageId")) {
-    if (!stageBound) return { error: "expectedStageId applies only to retry-stage and skip-stage", status: 400, field: "expectedStageId" };
+    if (!stageBound) return { error: "expectedStageId applies only to retry-stage, skip-stage and resolve-decision", status: 400, field: "expectedStageId" };
     if (typeof req.expectedStageId !== "string" || !req.expectedStageId.trim()) return { error: "expectedStageId must be a non-empty stage id", status: 400, field: "expectedStageId" };
   }
   if (stated("expectedAttempt")) {
@@ -6049,7 +6054,85 @@ export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field">
   field?: PipelineMutationResult["field"] | PipelineGuardField;
   /** The journal entry an accepted graph edit wrote (graph slice 1). */
   graphEdit?: PipelineGraphEdit;
+  decisionAnswer?: PipelineDecisionAnswer;
+  replayed?: boolean;
 };
+
+/** Also checked before MCP receipt access; authorization refusals must never spend an answer's key. */
+export function decisionAnswerActorRefusal(
+  pipeline: Pipeline, actor: PauseResumeActor | null, clientRequestId: unknown,
+): PipelinePatchResult | null {
+  if (!actor || (actor.kind === "agent" && (!actor.conversationId || actor.conversationId !== pipeline.srcConversationId))) {
+    return { error: "only the pipeline creator conversation or a direct user action can answer this decision", status: 403 };
+  }
+  const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === clientRequestId);
+  if (prior && (prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent"
+    && prior.actor.conversationId !== actor.conversationId))) {
+    return { error: "clientRequestId already belongs to a different decision answer", status: 409 };
+  }
+  return null;
+}
+
+/** No host or Git operations here: accepting an answer only reserves work. */
+function resolveDecision(
+  pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
+): PipelinePatchResult {
+  const refusal = decisionAnswerActorRefusal(pipeline, actor, req.clientRequestId);
+  if (refusal) return refusal;
+  if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
+    || typeof req.answer !== "string" || !req.answer.trim() || req.answer.length > MAX_DECISION_ANSWER_CHARS
+    || typeof req.expectedStageId !== "string" || !req.expectedStageId.trim()
+    || !Number.isSafeInteger(req.expectedAttempt) || req.expectedAttempt! < 1
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
+    return { error: `resolve-decision requires clientRequestId (up to 200 characters), answer (up to ${MAX_DECISION_ANSWER_CHARS} characters), expectedStageId, positive expectedAttempt and expectedRevision from get_pipeline`, status: 400 };
+  }
+  const guardShape = stageGuardShapeError(req);
+  if (guardShape) return guardShape;
+  const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === req.clientRequestId);
+  if (prior) {
+    if (prior.answer !== req.answer || prior.stageId !== req.expectedStageId
+      || prior.attempt !== req.expectedAttempt || prior.expectedRevision !== req.expectedRevision) {
+      return { error: "clientRequestId already belongs to a different decision answer", status: 409 };
+    }
+    return { pipeline, decisionAnswer: prior, replayed: true };
+  }
+  // Rollback disables admission; durable answers and pending attempts remain readable/drainable.
+  if (process.env.LLV_PIPELINE_RESOLVE_DECISION === "0") return { error: "resolve-decision is disabled", status: 409 };
+  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+    return { error: "the pipeline changed since it was read; read it again before answering", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
+  }
+  const expectation = expectedStageRefusal(pipeline, req);
+  if (expectation) return expectation;
+  const stage = currentStage(pipeline);
+  const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
+  if (stage?.kind !== "run" || !attempt || attempt.state !== "needs_decision"
+    || attempt.verdict?.status !== "needs_decision" || !attempt.completedAt) {
+    return { error: "resolve-decision requires a run attempt settled with a needs_decision verdict", status: 409 };
+  }
+  if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
+    return { error: "the original stage activation is still reconciling", status: 409 };
+  }
+  const survivor = pipelineSurvivorRefusal(pipeline);
+  if (survivor) return survivor;
+  const termination = unresolvedTerminationRefusal(attempt);
+  if (termination) return { error: termination, status: 409 };
+  const decision: PipelineDecisionAnswer = {
+    clientRequestId: req.clientRequestId, expectedRevision: req.expectedRevision,
+    stageId: stage.id, attempt: attempt.n, nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1,
+    question: attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
+    actor: structuredClone(actor!), at: ports.now(),
+  };
+  // Keep the settled attempt, its report and worktree untouched. A fresh identity owns the continuation.
+  setCursorState(pipeline, stage.id, "pending");
+  pipeline.cursor!.input = renderDecisionInput(attempt.input, decision);
+  const next = newAttempt(pipeline, stage)!;
+  next.decisionAnswerId = decision.clientRequestId;
+  pipeline.decisionAnswers = [...(pipeline.decisionAnswers ?? []), decision];
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = null;
+  return { pipeline, decisionAnswer: decision, replayed: false };
+}
 
 export async function patchPipeline(
   id: string,
@@ -6084,6 +6167,11 @@ export async function patchPipeline(
   const patched = await withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
+    if (req.action === "resolve-decision") {
+      const result = resolveDecision(pipeline, req, actor, ports);
+      if (result.pipeline && !result.replayed) persist();
+      return result;
+    }
     if (req.action === "retry-stage" && pipeline.delivery?.operation?.state === "settled") {
       delete pipeline.delivery.operation;
       pipeline.publishedCommit = null;
@@ -6885,7 +6973,7 @@ export async function patchPipeline(
     persist();
     return graphEdit ? { pipeline, graphEdit } : { pipeline };
   });
-  if (patched.pipeline?.delivery?.operation?.state === "pending") {
+  if (req.action !== "resolve-decision" && patched.pipeline?.delivery?.operation?.state === "pending") {
     const published = await publishPipelineBranch(patched.pipeline, ports.exec, { acceptedSha: patched.pipeline.delivery.operation.sha });
     if (!published.ok) return { error: published.error, status: 409 };
     return { ...patched, pipeline: findPipelineRecord(id)! };

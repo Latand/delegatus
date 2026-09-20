@@ -3,10 +3,13 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { hhmm } from "@/components/utils";
 import { formatDuration } from "@/components/feed/duration";
+
+import { createFeedSession, type ToolEvent } from "@/components/feed/parse";
+import { McpCallCard } from "@/components/runtime/McpCallCard";
 
 import { LiveTurnRows } from "./LiveTurnRows";
 
@@ -37,6 +40,7 @@ afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
   document.body.replaceChildren();
+  setLocale("en");
 });
 
 function mount(items: RuntimeLiveTurnItem[]): HTMLElement {
@@ -111,17 +115,85 @@ test("a Codex file change reads like its canonical apply_patch row: the touched 
   expect(row.textContent).toContain("a.ts");
 });
 
-test("a tool row whose arguments were bounded away still names the tool and says so", () => {
+test("a tool row whose arguments were bounded away is counted, never listed", () => {
+  /* It has nothing left but its own name, and a list of those is the wall the
+     operator photographed. The collapsed line is where such a call belongs. */
   const host = mount([
     {
       itemId: "toolu_old", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: AT,
       tool: { name: "Grep", engine: "claude", status: "ok", args: {}, argsOmitted: true },
     },
   ]);
-  const row = host.querySelector<HTMLElement>("[data-live-tool]")!;
-  expect(row.dataset.liveTool).toBe("Grep");
-  expect(row.textContent).toContain("arguments omitted");
+  expect(host.querySelector("[data-live-tool]")).toBeNull();
+  expect(host.textContent).not.toContain("arguments omitted");
+  expect(host.querySelector("[data-live-turn-earlier]")?.getAttribute("data-live-turn-earlier")).toBe("1");
 });
+
+/* Issue #1959, acceptance 3: a Viewer MCP call's canonical row is an
+   McpCallCard, not a ToolLine, so the live row has to read like that card and
+   not like "viewer · create_pipeline". Both surfaces are rendered here over the
+   SAME call, in the state the card is in while the call is still out (no result
+   yet), and compared line for line. */
+const MCP_CASES = [
+  /* A call whose entity ids only the RESULT will carry: neither surface can
+     link one yet, and both show none. */
+  { tool: "create_pipeline", args: { task: "Bound the live overlay to its tail", repoDir: "/workspace/demo/viewer" }, chips: 0 },
+  /* Calls whose arguments already name the entities: both surfaces link them. */
+  { tool: "link_task_to_pipeline", args: { taskId: "task-demo-4417", pipelineId: "pipeline-demo-2208" }, chips: 2 },
+  { tool: "update_task", args: { taskId: "task-demo-4417", status: "assigned" }, chips: 1 },
+] as const;
+
+function canonicalMcpEvent(tool: string, args: Record<string, unknown>): ToolEvent {
+  const line = JSON.stringify({
+    type: "assistant",
+    timestamp: AT,
+    message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_${tool}`, name: `mcp__viewer__${tool}`, input: args }] },
+  });
+  const items = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" }).feed([line], 0, true).items;
+  const event = items.map(({ item }) => item).find((item): item is ToolEvent => item.kind === "tool");
+  if (!event?.mcp) throw new Error(`the parser produced no MCP row for ${tool}`);
+  return event;
+}
+
+const chipsOf = (host: HTMLElement, selector: string) => {
+  const found = host.querySelectorAll(selector);
+  const out: string[] = [];
+  for (let index = 0; index < found.length; index += 1) {
+    const chip = found[index] as unknown as HTMLElement;
+    out.push(`${chip.textContent}@${chip.getAttribute("href") ?? ""}`);
+  }
+  return out;
+};
+
+for (const { tool, args, chips } of MCP_CASES) {
+  test(`a live ${tool} row carries the canonical card's own summary and entity chips`, () => {
+    const event = canonicalMcpEvent(tool, args);
+    const card = document.createElement("div");
+    document.body.append(card);
+    const cardRoot = createRoot(card);
+    roots.add(cardRoot);
+    flushSync(() => { cardRoot.render(<McpCallCard event={event} availableConversationIds={new Set()} />); });
+    /* Both surfaces name their action title, and both give it a flex basis of
+       its own so chips wrap rather than squeeze it (#1955). */
+    const cardTitleNode = card.querySelector<HTMLElement>("[data-testid=mcp-call-card] summary > [data-mcp-title]")!;
+    const cardTitle = cardTitleNode.textContent;
+    expect(cardTitleNode.className).toContain("basis-[10rem]");
+
+    const live = mount([{
+      itemId: `toolu_${tool}`, text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,
+      tool: { name: `mcp__viewer__${tool}`, engine: "claude", status: "run", args },
+    }]);
+    const row = live.querySelector<HTMLElement>("[data-live-mcp]")!;
+    expect(row.dataset.liveMcp).toBe(tool);
+    expect(row.querySelector("[data-live-mcp-title]")!.textContent).toBe(cardTitle);
+    expect(row.textContent).toContain("MCP · viewer");
+    /* The same entity chips, with the same labels and the same targets. */
+    expect(chipsOf(live, "[data-live-mcp-link]")).toEqual(chipsOf(card, "[data-testid^=mcp-link-]"));
+    expect(chipsOf(live, "[data-live-mcp-link]")).toHaveLength(chips);
+    /* And never the generic summarizer's line, which is what it used to read. */
+    expect(row.textContent).not.toContain(`viewer · ${tool}`);
+  });
+}
 
 test("a call whose result the journal's bound dropped reads as finished with its outcome omitted: no spinner, no check, no error styling", () => {
   const host = mount([
@@ -138,4 +210,91 @@ test("a call whose result the journal's bound dropped reads as finished with its
   expect(row.textContent).not.toContain("error");
   expect(row.querySelector(".animate-spin")).toBeNull();
   expect(row.className).not.toContain("border-danger");
+});
+
+/* Round-2 P1: the MCP row's own outcome vocabulary. `unknown` means the
+   runtime journal's bound dropped this call's result — the call may well have
+   FAILED — so the row must assert nothing about it: no check, no alert, no
+   spinner, and none of the tones that carry those meanings. It says what it
+   knows instead, in the reader's language, and keeps the summary and the
+   entity chips that make the row worth showing at all. */
+const MCP_STATES = [
+  /* `aria` is what the mark announces, `text` what the row actually prints. */
+  { status: "run", state: "pending", spinner: true, aria: "Linking…", text: null, tone: "text-accent" },
+  { status: "ok", state: "success", spinner: false, aria: "success", text: null, tone: "text-success" },
+  { status: "err", state: "error", spinner: false, aria: "error", text: null, tone: "text-danger" },
+  { status: "unknown", state: "outcome-omitted", spinner: false, aria: null, text: "outcome omitted", tone: "text-muted" },
+] as const;
+
+const LINK_ARGS = { taskId: "task-demo-4417", pipelineId: "pipeline-demo-2208" };
+
+function mcpRow(status: "run" | "ok" | "err" | "unknown"): HTMLElement {
+  const host = mount([{
+    itemId: `toolu_state_${status}`, text: "", phase: "awaiting-echo", startedAt: AT,
+    completedAt: status === "run" ? null : AT,
+    tool: { name: "mcp__viewer__link_task_to_pipeline", engine: "claude", status, args: LINK_ARGS },
+  }]);
+  return host.querySelector<HTMLElement>("[data-live-mcp]")!;
+}
+
+for (const lang of ["en", "uk"] as const) {
+  for (const { status, state, spinner, aria, text, tone } of MCP_STATES) {
+    test(`[${lang}] a live MCP row with status ${status} carries only the ${state} indicator`, () => {
+      setLocale(lang);
+      const row = mcpRow(status);
+      expect(row.dataset.liveToolStatus).toBe(status);
+      expect(row.dataset.liveMcpState).toBe(state);
+
+      /* Exactly one outcome mark, and it is this state's own. */
+      const marks = {
+        success: row.querySelector("[aria-label=success]"),
+        error: row.querySelector("[aria-label=error]"),
+        pending: row.querySelector("[role=status]"),
+        omitted: row.querySelector("[data-live-mcp-outcome=omitted]"),
+      };
+      const shown = Object.entries(marks).flatMap(([name, node]) => (node ? [name] : []));
+      expect(shown).toEqual([
+        state === "outcome-omitted" ? "omitted" : state === "pending" ? "pending" : state,
+      ]);
+      expect(Boolean(row.querySelector(".animate-spin"))).toBe(spinner);
+      /* An outcome nobody knows is announced by no assistive label at all —
+         the row prints the word instead, so the reader sees it too. */
+      const announced = row.querySelector("[aria-label]:not([aria-hidden])");
+      expect(announced?.getAttribute("aria-label") ?? "").toBe(aria ?? "");
+      if (text) {
+        expect(row.textContent).toContain(lang === "en" ? text : translate("uk", "feed.liveToolOutcomeOmitted"));
+      }
+
+      /* The tones are meanings too: success green and danger red are claims
+         about an outcome nobody knows, so an unknown row wears neither. */
+      expect(row.innerHTML).toContain(tone);
+      for (const other of ["text-success", "text-danger"]) {
+        if (other !== tone) expect(row.innerHTML).not.toContain(other);
+      }
+
+      /* And the row is still an MCP row: the card's summary and both chips.
+         The title's tooltip carries it in full, as the canonical card's does. */
+      const title = row.querySelector("[data-live-mcp-title]")!;
+      expect(title.textContent ?? "").toBe(title.getAttribute("title") ?? "");
+      expect((title.textContent ?? "").length).toBeGreaterThan(0);
+      expect(chipsOf(row, "[data-live-mcp-link]")).toHaveLength(2);
+      expect(row.textContent).toContain("MCP · viewer");
+    });
+  }
+}
+
+test("an MCP call whose outcome was dropped says so in the reader's language, and never 'success'", () => {
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const row = mcpRow("unknown");
+    expect(row.textContent).toContain(translate(lang, "feed.liveToolOutcomeOmitted"));
+    expect(row.querySelector("[aria-label=success]")).toBeNull();
+    /* The generic row and the MCP row agree on the word, so a call does not
+       change its story when it is routed to the other grammar. */
+    const generic = mount([{
+      itemId: "toolu_generic_unknown", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: AT,
+      tool: { name: "Bash", engine: "claude", status: "unknown", args: { command: "bun run build" } },
+    }]).querySelector<HTMLElement>("[data-live-tool]")!;
+    expect(generic.textContent).toContain(translate(lang, "feed.liveToolOutcomeOmitted"));
+  }
 });
