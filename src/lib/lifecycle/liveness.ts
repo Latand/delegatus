@@ -390,7 +390,7 @@ function exactHeadlessIdentityAlive(
   savedIdentity: string | null | undefined,
   probe: LivenessProbe,
 ): pid is number {
-  if (!Number.isInteger(pid) || pid <= 0 || !savedIdentity || !probe.pidAlive(pid)) return false;
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || !savedIdentity || !probe.pidAlive(pid)) return false;
   const currentIdentity = probe.processIdentity(pid);
   return Boolean(currentIdentity) && currentIdentity === savedIdentity;
 }
