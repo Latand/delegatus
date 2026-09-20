@@ -75,7 +75,9 @@ export function pipelineActionAcknowledgement(pipeline: Pipeline) {
 export function stageReportAcknowledgement(report: PipelineStageReport) {
   const findings = report.verdict.findings ?? [];
   const severityCounts = { P0: 0, P1: 0, P2: 0, P3: 0 };
-  for (const finding of report.verdict.rankedFindings ?? []) severityCounts[finding.severity] += 1;
+  for (const finding of report.verdict.rankedFindings ?? []) {
+    if (finding.severity) severityCounts[finding.severity] += 1;
+  }
   return {
     seq: report.seq,
     at: report.at,

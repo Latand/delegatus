@@ -52,7 +52,7 @@ function reviewedPipeline() {
   latest.report = {
     seq: 1,
     at: "2026-09-19T09:00:00.000Z",
-    actor: { kind: "agent", role: "builder", conversationId: "conversation_stage" },
+    actor: { kind: "agent" as const, role: "builder", conversationId: "conversation_stage" },
     verdict: latest.verdict,
     summary: "One finding left.",
     provenance: { head: "0".repeat(40), branch: "pipeline/x", uncommitted: [], pullRequest: null, outputs: [] },
@@ -66,7 +66,7 @@ test("stage_report acknowledgement is compact, while one stage read retains ever
   const report = {
     seq: 7,
     at: "2026-09-20T06:30:00.000Z",
-    actor: { kind: "agent", role: "builder", conversationId: "conversation_stage" },
+    actor: { kind: "agent" as const, role: "builder", conversationId: "conversation_stage" },
     verdict: {
       status: "fail" as const,
       findings: [
@@ -78,6 +78,7 @@ test("stage_report acknowledgement is compact, while one stage read retains ever
         { severity: "P0" as const, text: "critical" },
         { severity: "P1" as const, text: "important" },
         { severity: "P3" as const, text: "minor" },
+        { severity: null, text: "historical unranked finding" },
       ],
     },
     summary: "summary ".repeat(250),
