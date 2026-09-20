@@ -54,7 +54,7 @@ async function protocol() {
   await Promise.all([client.connect(a), server.connect(b)]);
   let sequence = 0;
   const call = async (name: string, args: Record<string, unknown>) =>
-    (await client.callTool({ name, arguments: { clientRequestId: `d1834-${Math.random().toString(36).slice(2)}-${++sequence}`, ...args } })).structuredContent as TaskAnswer;
+    (await client.callTool({ name, arguments: { ...(name === "create_task" || name === "update_task" ? { full: true } : {}), ...(name === "list_tasks" ? { compact: false } : {}), clientRequestId: `d1834-${Math.random().toString(36).slice(2)}-${++sequence}`, ...args } })).structuredContent as TaskAnswer;
   return { client, call, close: async () => { await client.close(); await server.close(); receipts.close(); } };
 }
 

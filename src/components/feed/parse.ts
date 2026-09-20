@@ -1,3 +1,4 @@
+import { redactTranscriptText, SENSITIVE_RECORD_KEY, SENSITIVE_RECORD_TEXT } from "./toolRedaction";
 import {
   debugRaw,
   parseReview,
@@ -22,6 +23,7 @@ import { hhmm } from "../utils";
 import { decodeTerminalText } from "./ansi";
 import { elapsedDurationMs, timestampMilliseconds } from "./duration";
 import { diffFromApplyPatch, diffFromCodexFileChange, normalizeEdit, type DiffModel, type FileDiff } from "./diff";
+import { feedCopy, taskText } from "./toolMeaning";
 import { familyOf, summarizeTool, type ArgChip, type FeedEngine, type ToolFamily } from "./tools";
 
 /* Feed labels resolve against the active locale at build/render time; a locale
@@ -308,6 +310,7 @@ export interface FeedSnapshot {
 export interface FeedSessionConfig {
   engine: string;
   fmt: string;
+  cwd?: string | null;
   showSvc: boolean;
   /** Lowercased needle; empty string disables filtering. */
   lineFilter: string;
@@ -755,16 +758,6 @@ function toolOutputFailed(text: string): boolean {
 
 const RECORD_FIELD_MAX = 4_000;
 const RECORD_SUMMARY_MAX = 160;
-const SENSITIVE_RECORD_KEY = /(?:api.?key|access.?token|refresh.?token|authorization|bearer|secret|password|passwd|pwd|token)/i;
-const SENSITIVE_RECORD_TEXT = /(?:api|token|authorization|bearer|secret|password|passwd|pwd)/i;
-const JSON_SECRET_VALUE = /("(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token)"\s*:\s*")[^"]*/gi;
-const INLINE_SECRET_VALUE = /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token)\s*[:=]\s*["']?)[^\s"',}]+/gi;
-const BEARER_SECRET_VALUE = /(\bbearer\s+)[^\s"',}]+/gi;
-
-function redactTranscriptText(value: string): string {
-  const bearerSafe = value.replace(BEARER_SECRET_VALUE, "$1[redacted]");
-  return redactSecrets(bearerSafe).replace(JSON_SECRET_VALUE, "$1[redacted]").replace(INLINE_SECRET_VALUE, "$1[redacted]");
-}
 
 /* Future rollout records stay diagnosable without allowing a new payload to
    inject an unbounded string, ciphertext, image data, or credential into the
@@ -971,6 +964,9 @@ const ORCH_HELPERS = new Set(["text", "image", "generatedImage", "store", "notif
 const ORCH_CALL_RE = /\btools\.([A-Za-z_]\w*)\s*\(/g;
 const ORCH_HELPER_RE = /(?:^|[^.\w])(text|image|generatedImage|store|notify)\s*\(/g;
 const ORCH_MAX_CALLS = 16;
+// Correlation inspects more than the display preview: an ordinary patch can
+// exceed 8 KiB. Still bounded per record, with no transcript reads or eval.
+const EXEC_PAIR_SOURCE_MAX = 128 * 1024;
 
 /* Reads a JS string/template literal that opens at `start` (its quote char) and
    returns the index of the matching close quote. Backslash escapes are skipped;
@@ -1415,10 +1411,18 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const jsonl = cfg.fmt === "claude" || cfg.fmt === "codex" || cfg.fmt === "openclaw";
 
   const entries: StoredEntry[] = [];
+  let conversationCwd = cfg.cwd ?? "";
   let reasoningBoundary = 0;
   let reasoningTurnId = "";
   const reasoningSeqs = new Map<string, number>();
   const calls = new Map<string, CallRec>();
+  // CLI 0.155 emits exec-* concrete operations between a wrapper and its result.
+  // No parent ID exists: only one unambiguous interval may claim children.
+  let execWindow: { id: string; remaining: string[]; seen: Set<string> } | null = null;
+  const pendingExecs = new Set<string>();
+  let execPairingOverflow = false;
+  const representedExecs = new Set<string>();
+  const agentCalls = new Map<string, string>();
   const sessionOwners = new Map<string, SessionOwner>();
   const sessionIdentity = (value: unknown): { label?: string; owner: SessionOwner } | undefined => {
     const raw = rawSessionId(value);
@@ -1757,7 +1761,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       outputTruncated: false,
       ...(s.family === "shell" ? (() => {
         const cwd = cwdOf(args, command);
-        return { ...(cwd ? { cwd } : {}), ...(session?.label !== undefined ? { session: session.label } : {}) };
+        return { ...(cwd && cwd !== conversationCwd ? { cwd } : {}), ...(session?.label !== undefined ? { session: session.label } : {}) };
       })() : {}),
       ...(poll ? { poll: true } : {}),
       /* An edit/write card opens its structured diff inline by default — a
@@ -1851,6 +1855,19 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const emitCustomTool = (ts: unknown, name: string, input: string, callId?: string): ToolEvent => {
     const id = callId || "plain-" + pushSeq + "-" + String(ts ?? "");
     const orch = parseOrchestration(input);
+    const methods: string[] = [];
+    for (const match of input.slice(0, EXEC_PAIR_SOURCE_MAX).matchAll(new RegExp(ORCH_CALL_RE.source, "g"))) {
+      methods.push(match[1]);
+      if (methods.length > ORCH_MAX_CALLS) break;
+    }
+    if (name === "exec" || name === "functions.exec") {
+      // A full set disables pairing until a turn boundary; never guess after
+      // dropping an unresolved owner just to admit another wrapper.
+      if (pendingExecs.size < ORCH_MAX_CALLS) pendingExecs.add(id);
+      else execPairingOverflow = true;
+    }
+    execWindow = !execPairingOverflow && pendingExecs.size === 1 && pendingExecs.has(id) && methods.length > 0 && methods.length <= ORCH_MAX_CALLS
+      && input.length <= EXEC_PAIR_SOURCE_MAX ? { id, remaining: methods, seen: new Set() } : null;
     const direct = orch?.directInteractive;
     const base = newToolEvent({ ts, id, tool: direct?.tool ?? name, args: direct?.args ?? { input }, engine: "codex", diff: orch?.diff });
     const event = orch
@@ -2003,6 +2020,14 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   };
   const addOutput = (callId: string | undefined, output: string, err?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[]) => {
     if (!callId) return;
+    pendingExecs.delete(callId);
+    if (execWindow?.id === callId) {
+      if (!execWindow.remaining.length && execWindow.seen.size && !err && !/^\s*(?:Script (?:running|failed)|\w*Error:)/i.test(output)) {
+        representedExecs.add(callId);
+        snapshot = null;
+      }
+      execWindow = null;
+    }
     const tseq = tmsgSeqs.get(callId);
     if (tseq !== undefined) {
       /* The routing echo repeats the whole message body; keep only the delivery state. */
@@ -2115,6 +2140,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const codexThreadArgs = (value: unknown): Record<string, unknown> => {
     if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
     if (value === undefined || value === null) return {};
+    if (typeof value === "string") {
+      try { const parsed = JSON.parse(value); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed; } catch { /* freeform input */ }
+    }
     return { input: typeof value === "string" ? value : JSON.stringify(value) };
   };
   const codexThreadPreview = (value: unknown): string => {
@@ -2210,6 +2238,14 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   ): boolean => {
     const kind = codexThreadItemKind(item.type);
     const id = textPart(item.id) || "plain-" + pushSeq + "-" + String(timing.ts ?? "");
+    if (execWindow && id.startsWith("exec-") && !execWindow.seen.has(id)) {
+      const method = kind === "commandexecution" ? "exec_command" : kind === "filechange" ? "apply_patch"
+        : kind === "mcptoolcall" ? `mcp__${textPart(item.server)}__${textPart(item.tool)}`
+        : kind === "extension" && textPart(item.kind).startsWith("web.") ? "web__run" : "";
+      const index = execWindow.remaining.indexOf(method);
+      if (index >= 0) { execWindow.remaining.splice(index, 1); execWindow.seen.add(id); }
+      else if (method) execWindow = null; // extra operations: preserve the wrapper
+    }
     const toolKind = ["functioncalloutput", "commandexecution", "filechange", "mcptoolcall", "dynamictoolcall", "collabagenttoolcall", "websearch", "imageview", "imagegeneration", "extension"].includes(kind);
     // Use the renderer's tool families for every lifecycle/envelope form.
     // A completion can update an earlier slot without appending a tool row.
@@ -2260,21 +2296,20 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     if (kind === "mcptoolcall") {
       const server = textPart(item.server) || "mcp";
       const tool = textPart(item.tool) || "tool";
-      emitCodexThreadTool({ item, timing, lifecycle, tool: `mcp__${server}__${tool}`, args: codexThreadArgs(item.arguments), output: item.error ?? item.result });
+      emitCodexThreadTool({ item, timing, lifecycle, tool: `mcp__${server}__${tool}`, args: codexThreadArgs(item.arguments), output: item.error ?? rec(item.result).content ?? item.result });
       return true;
     }
     if (kind === "extension") {
-      const extensionKind = textPart(item.kind) || codexThreadPreview(item.kind);
-      const action = textPart(item.action) || codexThreadPreview(item.action);
-      const query = textPart(item.query) || codexThreadPreview(item.query);
-      emitCodexThreadTool({
-        item,
-        timing,
-        lifecycle,
-        tool: "Extension",
-        args: { kind: item.kind, action: item.action, query: item.query },
-        summary: [extensionKind, action, query].filter(Boolean).join(" · ") || "Extension",
-        output: codexThreadPreview(item.results),
+      const extensionKind = textPart(item.kind);
+      const action = textPart(rec(item.action).type) || textPart(item.action);
+      const query = textPart(item.query) || textPart(rec(item.action).query);
+      const web = extensionKind.startsWith("web.");
+      const tool = web ? (action === "search" ? "WebSearch" : "WebFetch") : extensionKind || feedCopy("Extension action", "Дія розширення");
+      const results = arr(item.results).slice(0, 40).map(result => [textPart(result.title), textPart(result.url), textPart(result.snippet)].filter(Boolean).join("\n")).filter(Boolean).join("\n\n");
+      emitCodexThreadTool({ item, timing, lifecycle, tool,
+        args: web ? { query, url: query } : { action, query },
+        summary: web ? undefined : [tool, action, query].filter(Boolean).join(" · "),
+        output: results || toolOutputText(item.results),
       });
       return true;
     }
@@ -2295,13 +2330,34 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return true;
     }
     if (kind === "collabagenttoolcall") {
-      const tool = textPart(item.tool) || "collabAgentToolCall";
-      const args = { prompt: item.prompt, model: item.model, reasoningEffort: item.reasoningEffort };
-      emitCodexThreadTool({ item, timing, lifecycle, tool, args, summary: `Collab · ${tool}`, output: { status: item.status, agents: item.agentsStates } });
+      const tool = textPart(item.tool) || "spawn_agent";
+      const args = { prompt: taskText(item.prompt), target: item.receiverThreadIds ?? item.receiver_thread_ids, model: item.model };
+      emitCodexThreadTool({ item, timing, lifecycle, tool: "spawn_agent", args,
+        summary: [tool, taskText(item.prompt), textPart(item.status)].filter(Boolean).join(" · "),
+        output: { status: item.status, agents: item.agentsStates ?? item.agents_states } });
       return true;
     }
     if (kind === "subagentactivity") {
-      addNote(["Sub-agent", textPart(item.kind)].filter(Boolean).join(" · "));
+      const agent = textPart(item.agent_path) || textPart(item.agent_thread_id);
+      const activity = textPart(item.kind);
+      const label = activity === "completed" ? feedCopy("completed", "завершено")
+        : activity === "started" ? feedCopy("started", "запущено")
+        : activity === "interacted" ? feedCopy("task sent", "завдання надіслано")
+        : activity === "failed" ? feedCopy("failed", "помилка") : activity;
+      const paired = calls.get(id) ?? calls.get(agentCalls.get(agent) ?? "");
+      if (paired && paired.event.family === "spawn") {
+        agentCalls.set(agent, paired.event.id);
+        const baseSummary = paired.event.summary.replace(/ · (completed|завершено|started|запущено|task sent|завдання надіслано|failed|помилка)$/, "");
+        upsertCodexThreadTool({ ...paired.event,
+          summary: redactSecrets(`${baseSummary} · ${label}`).slice(0, 240),
+          chips: [{ value: redactSecrets(agent).slice(0, 120) }],
+          ...(["completed", "failed"].includes(activity) ? { status: activity === "failed" ? "err" as const : "ok" as const, statusLabel: label, endTs: timing.endTs ?? timing.ts } : {}),
+        });
+      } else if (agent) {
+        emitCodexThreadTool({ item, timing, lifecycle, tool: "subagent_activity", args: { agent_path: agent },
+          summary: `${feedCopy("Agent", "Агент")} · ${agent} · ${label}`, output: "" });
+        agentCalls.set(agent, id);
+      }
       return true;
     }
     if (kind === "websearch") {
@@ -2341,9 +2397,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return true;
     }
     if (kind === "commandexecution") {
-      const command = Array.isArray(item.command)
-        ? item.command.filter((part): part is string => typeof part === "string").join(" ")
-        : textPart(item.command);
+      const argv = Array.isArray(item.command) ? item.command.filter((part): part is string => typeof part === "string") : [];
+      const command = argv.length === 3 && /(?:^|\/)(?:ba|z|da)?sh$/.test(argv[0]) && /^-[a-z]*c$/.test(argv[1])
+        ? argv[2] : argv.length ? argv.join(" ") : textPart(item.command);
       const base = newToolEvent({
         ts: timing.ts,
         id,
@@ -2564,6 +2620,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const renderCodex = (obj: Record<string, unknown>) => {
     const p = rec(obj.payload);
     const ts = obj.timestamp;
+    if ((obj.type === "session_meta" || obj.type === "turn_context") && textPart(p.cwd)) conversationCwd = redactSecrets(textPart(p.cwd));
+    if (obj.type === "turn_context" || ["task_started", "task_complete", "turn_aborted"].includes(textPart(p.type))) {
+      execWindow = null;
+      pendingExecs.clear();
+      execPairingOverflow = false;
+    }
+    if (["function_call", "custom_tool_call"].includes(textPart(p.type))) execWindow = null;
     // Hidden lifecycle records must still separate adjacent reasoning runs.
     const turnId = textPart(p.turn_id) || textPart(p.turnId);
     if (turnId && reasoningTurnId && turnId !== reasoningTurnId) reasoningBoundary += 1;
@@ -2697,7 +2760,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
            opaque "session_id" service line (issue #141). summarizeTool owns their
            summary; attach() decodes and collapses their output. */
         if (name === "exec" || name === "functions.exec") return void emitCustomTool(ts, name, textPart(args.input), textPart(p.call_id));
-        return void registerCall(newToolEvent({ ts, id: textPart(p.call_id) || "plain-" + pushSeq + "-" + String(ts ?? ""), tool: name, args, engine: "codex" }));
+        const event = newToolEvent({ ts, id: textPart(p.call_id) || "plain-" + pushSeq + "-" + String(ts ?? ""), tool: name, args, engine: "codex" });
+        if (event.family === "spawn") {
+          const task = redactSecrets(taskText(args.message ?? args.prompt));
+          event.outputPreview = task.slice(0, COMMAND_MAX);
+          event.outputTruncated = task.length > COMMAND_MAX;
+        }
+        return void registerCall(event);
       }
       if (p.type === "function_call_output") {
         const rawSession = toolOutputSession(p.output);
@@ -3021,10 +3090,16 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const reset = () => {
     entries.length = 0;
+    conversationCwd = cfg.cwd ?? "";
     reasoningBoundary = 0;
     reasoningTurnId = "";
     reasoningSeqs.clear();
     calls.clear();
+    execWindow = null;
+    pendingExecs.clear();
+    execPairingOverflow = false;
+    representedExecs.clear();
+    agentCalls.clear();
     sessionOwners.clear();
     tmsgSeqs.clear();
     tmsgKeyBySeq.clear();
@@ -3085,6 +3160,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     const openclawBoundaryEvicted = openclawModelBoundaries.some((src) => src < start);
     openclawModelBoundaries = openclawModelBoundaries.filter((src) => src >= start);
     if (lastPlainCall && entryIndex(lastPlainCall.seq) < 0) lastPlainCall = null;
+    for (const id of pendingExecs) if (!calls.has(id)) pendingExecs.delete(id);
+    for (const id of representedExecs) if (!calls.has(id)) representedExecs.delete(id);
+    for (const [agent, id] of agentCalls) if (!calls.has(id)) agentCalls.delete(agent);
+    if (execWindow && !calls.has(execWindow.id)) execWindow = null;
     /* Drop wakeup calls whose entry slid out of the window; recompute so the
        active/superseded assignment matches a fresh parse of the shortened
        window. */
@@ -3109,6 +3188,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
      events are all identity-equal to the previous snapshot's — and whose active
      lifecycle matches — is reused as-is, keeping its card memoized. */
   const buildSnapshot = (isLive: boolean): FeedSnapshot => {
+    const visibleEntries = entries.filter(entry => !(entry.item.kind === "tool" && representedExecs.has(entry.item.id)));
     const out: FeedEntry[] = [];
     const nextGroups = new Map<number, CmdGroupItem>();
     const anchorOrdinals = new Map<string, number>();
@@ -3119,13 +3199,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return `${source}:${ordinal}`;
     };
     let i = 0;
-    while (i < entries.length) {
-      const head = entries[i];
+    while (i < visibleEntries.length) {
+      const head = visibleEntries[i];
       if (head.item.kind === "think" && head.item.sourceId) {
         const members: ReasoningMember[] = [];
         let j = i;
-        while (j < entries.length) {
-          const cur = entries[j];
+        while (j < visibleEntries.length) {
+          const cur = visibleEntries[j];
           if (cur.item.kind !== "think" || !cur.item.sourceId || cur.reasoningBoundary !== head.reasoningBoundary) break;
           members.push({ sourceId: cur.item.sourceId, anchorKey: anchorKey({ ...cur, src: cur.bornSrc }, "row"), text: cur.item.text,
             availability: cur.item.text ? "available" : "unavailable" });
@@ -3149,8 +3229,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
       let j = i;
       const toolEntries: { idx: number; seq: number; item: ToolEvent }[] = [];
-      while (j < entries.length) {
-        const cur = entries[j];
+      while (j < visibleEntries.length) {
+        const cur = visibleEntries[j];
         if (foldableTool(cur.item)) toolEntries.push({ idx: j, seq: cur.seq, item: cur.item });
         else if (cur.item.kind !== "think" || cur.item.sourceId) break;
         j += 1;
@@ -3160,7 +3240,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
          command and output shown at once (issue #475); an interior or settled
          run folds the same way but inactive, so the card auto-collapses it to
          the compact summary. */
-      const isLiveTail = isLive && j === entries.length;
+      const isLiveTail = isLive && j === visibleEntries.length;
       const foldCount = toolEntries.length;
       if (foldCount >= CMD_GROUP_MIN) {
         const grouped = toolEntries.slice(0, foldCount);
@@ -3253,7 +3333,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
 /** One-shot parse of a whole window — a fresh session fed once. */
 export function buildFeed(file: FileEntry, lines: string[], showSvc: boolean, lineFilter: string) {
-  const session = createFeedSession({ engine: file.engine, fmt: file.fmt, showSvc, lineFilter });
+  const session = createFeedSession({ engine: file.engine, fmt: file.fmt, cwd: file.cwd, showSvc, lineFilter });
   const snap = session.feed(lines, 0, file.activity === "live");
   return { items: snap.items.map((entry) => entry.item), hiddenServiceCount: snap.hiddenServiceCount };
 }

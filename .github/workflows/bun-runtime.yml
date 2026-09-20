@@ -143,6 +143,17 @@ jobs:
             exit 1
           fi
 
+      - name: Enforce MCP answer size budgets on an isolated board
+        env:
+          HOME: ${{ runner.temp }}/mcp-home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/mcp-config
+          LLV_STATE_DIR: ${{ runner.temp }}/mcp-state
+          TMPDIR: ${{ runner.temp }}/mcp-tmp
+        run: |
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
+          bun scripts/build-mcp.ts
+          bun test src/lib/mcp/answerSizes.test.ts
+
       - name: Install the pinned native Codex fixture CLI
         run: npm install --prefix "$RUNNER_TEMP/native-codex" --no-save --ignore-scripts @openai/codex@0.154.0
 
