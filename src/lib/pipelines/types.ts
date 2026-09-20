@@ -303,6 +303,19 @@ export type PipelineStageAttempt = {
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
   historical?: boolean;
   state: PipelineAttemptState;
+  /** Durable custody across the pipeline/registry boundary. Rollback keeps draining these. */
+  activation?: {
+    id: string;
+    phase: "reserved" | "reserving" | "dispatching" | "settled";
+    input: Parameters<import("./engine").PipelinePorts["spawnAgent"]>[0];
+    clientAttemptId: string;
+    startedAt: string;
+    fence: string;
+    owner?: import("@/lib/processIdentity").ProcessIdentity;
+    replay?: boolean;
+    closeRequested?: boolean;
+    cancelRequested?: boolean;
+  };
   effectiveRole: EffectivePipelineRole;
   /** Absent until the attempt leaves `pending`, and on attempts recorded
       before definitions were bound, which read the live stage. */
@@ -528,6 +541,8 @@ export type PipelineDelivery = {
 };
 
 export type Pipeline = {
+  /** Retained until a close requested during spawn has completed teardown. */
+  activationCloseRequested?: boolean;
   /** Viewer publication ownership. Agent tools remain unrestricted. */
   delivery?: PipelineDelivery;
   creationRequest?: { key: string; digest: string };

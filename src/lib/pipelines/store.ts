@@ -176,10 +176,32 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.budgetSpent === undefined || typeof attempt.budgetSpent === "boolean") &&
     isVerdictRecovery(attempt.verdictRecovery) &&
     isAttemptDefinition(attempt.definition) &&
+    isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
     isUnresolvedTermination(attempt.unresolvedTermination)
   );
+}
+
+function isSpawnActivation(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const activation = value as Record<string, unknown>;
+  const input = activation.input as Record<string, unknown> | undefined;
+  const owner = activation.owner as Record<string, unknown> | undefined;
+  return typeof activation.id === "string" && activation.id.length > 0
+    && ["reserved", "reserving", "dispatching", "settled"].includes(String(activation.phase))
+    && typeof activation.clientAttemptId === "string" && activation.clientAttemptId.length > 0
+    && typeof activation.startedAt === "string" && typeof activation.fence === "string"
+    && (activation.replay === undefined || typeof activation.replay === "boolean")
+    && (activation.cancelRequested === undefined || typeof activation.cancelRequested === "boolean")
+    && (activation.closeRequested === undefined || typeof activation.closeRequested === "boolean")
+    && (!owner || (Number.isSafeInteger(owner.pid) && Number(owner.pid) > 0
+      && isNullableString(owner.startIdentity) && isNullableString(owner.bootEpoch)))
+    && !!input && isEffectiveRole(input.role) && typeof input.prompt === "string"
+    && typeof input.cwd === "string" && typeof input.project === "string"
+    && typeof input.clientAttemptId === "string" && typeof input.title === "string"
+    && !!input.runtimeProfile && !!input.membership;
 }
 
 function isAttemptDefinition(value: unknown): boolean {
@@ -468,6 +490,7 @@ function isPipeline(value: unknown): value is Pipeline {
   const pipeline = value as Partial<Pipeline>;
   if (!(
     typeof pipeline.id === "string" &&
+    (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
     (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
     typeof pipeline.task === "string" &&
