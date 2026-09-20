@@ -11,7 +11,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -31,7 +31,7 @@ const { getPipelines } = await import("@/lib/pipelines/engine");
 const { isoNow } = await import("@/lib/tasks/helpers");
 const { mutateTasks } = await import("@/lib/tasks/store");
 const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
-const { viewerMcpBindings, viewerMcpRecoverableTools } = await import("./bindings");
+const { productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools } = await import("./bindings");
 const { SqliteMcpReceiptStore, createMcpToolService } = await import("./server");
 
 afterAll(() => {
@@ -74,11 +74,15 @@ function seedCaller(): { conversationId: ViewerConversationId; path: string } {
 const caller = seedCaller();
 const receiptsPath = path.join(sandbox, "mcp-receipts.sqlite");
 const receipts = new SqliteMcpReceiptStore(receiptsPath);
+const recovery = viewerMcpRecoverableTools({ ...productionDomainDependencies,
+  registrySnapshot: () => agentRegistry().readOnlySnapshot(),
+  attentionAuthority: () => ({ kind: "worker", role: "builder", conversationId: caller.conversationId }),
+});
 const service = createMcpToolService(
   viewerMcpBindings(),
   receipts,
   undefined,
-  { recovery: viewerMcpRecoverableTools() },
+  { recovery },
 );
 
 function createArgs(clientRequestId: string, task: string): Record<string, unknown> {
@@ -96,6 +100,25 @@ function createArgs(clientRequestId: string, task: string): Record<string, unkno
 function pipelinesNamed(task: string): string[] {
   return loadPipelines().filter((pipeline) => pipeline.task === task).map((pipeline) => pipeline.id);
 }
+
+test("original-key recovery reconstructs a creation committed before its MCP receipt settled", async () => {
+  const request = createArgs("creation-recovery", "recover committed creation");
+  const originalSettle = receipts.settle.bind(receipts);
+  const failSettlement = spyOn(receipts, "settle").mockImplementation((...args) => {
+    if (args[0] === "create_pipeline:creation-recovery") throw new Error("simulated receipt interruption");
+    return originalSettle(...args);
+  });
+  try { expect((await service.callTool("create_pipeline", request)).ok).toBe(true); }
+  finally { failSettlement.mockRestore(); }
+  const originalIds = pipelinesNamed("recover committed creation");
+  expect(originalIds).toHaveLength(1);
+  expect(receipts.lookup("create_pipeline:creation-recovery")?.stage).toBe("dispatching");
+  const restarted = createMcpToolService(viewerMcpBindings(), new SqliteMcpReceiptStore(receiptsPath), undefined, { recovery });
+  const replay = await restarted.callTool("create_pipeline", { ...request, recoveryOnly: true });
+  expect(replay).toMatchObject({ ok: true, replayed: true, outcome: "settled", pipelineId: originalIds[0] });
+  expect(pipelinesNamed("recover committed creation")).toEqual(originalIds);
+  expect(await restarted.callTool("create_pipeline", { ...request, task: "different request" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+});
 
 /** Hold the pipeline registry lease until the returned release is called. */
 async function holdRegistryLease(): Promise<() => Promise<void>> {
@@ -116,14 +139,18 @@ async function holdRegistryLease(): Promise<() => Promise<void>> {
 
 test("two creates racing on the registry lock both succeed under their own ids", async () => {
   const [first, second] = await Promise.all([
-    service.callTool("create_pipeline", createArgs(`race-a-${crypto.randomUUID()}`, "busy race a")),
-    service.callTool("create_pipeline", createArgs(`race-b-${crypto.randomUUID()}`, "busy race b")),
+    service.callTool("create_pipeline", { ...createArgs(`race-a-${crypto.randomUUID()}`, "busy race a"), delivery: { branch: "refs/heads/shared-review-target" } }),
+    service.callTool("create_pipeline", { ...createArgs(`race-b-${crypto.randomUUID()}`, "busy race b"), delivery: { branch: "refs/heads/shared-review-target" } }),
   ]);
 
   expect(first.ok).toBe(true);
   expect(second.ok).toBe(true);
   expect(pipelinesNamed("busy race a")).toHaveLength(1);
   expect(pipelinesNamed("busy race b")).toHaveLength(1);
+  const records = loadPipelines().filter((pipeline) => pipeline.delivery?.target.branch === "refs/heads/shared-review-target");
+  expect(records.filter((pipeline) => pipeline.delivery?.active)).toHaveLength(1);
+  const owner = records.find((pipeline) => pipeline.delivery?.active)!;
+  expect(records.find((pipeline) => pipeline.id !== owner.id)).toMatchObject({ publication: "internal", delivery: { ownerId: owner.id, epoch: 1, publish: "disabled" } });
   const firstId = first.ok ? first.pipelineId : null;
   const secondId = second.ok ? second.pipelineId : null;
   expect(firstId).not.toBe(secondId);
