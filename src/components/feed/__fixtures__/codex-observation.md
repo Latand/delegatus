@@ -38,3 +38,22 @@ body in the observed shape. Encrypted task text is explicitly unavailable.
 The existing shared browser driver is extended with a feed case; its fixture and
 product changes stay in the feed. Evidence JSON is committed, raster frames stay
 local. History also contained a token-volume audit; it had no tool-row repair.
+
+## Credential-chip observation before the review fix
+
+At `92db8083`, `tools.ts:317-318` serializes nested MCP values before
+`chip` at `tools.ts:96-99` applies assignment-text redaction. That redactor
+consumes only the first whitespace-delimited value: an authorization value
+containing a scheme and credential leaves the credential visible. Nested JSON
+also loses its key context. `parse.ts:1727-1729` trusts the summarizer's chips;
+both Claude tool-use and Codex typed MCP records reach this same path. The
+session reader is not responsible for the disclosure.
+
+The current rollout was read again through Viewer `conversation_messages`:
+an exec source record, typed CommandExecution and McpToolCall children, and
+the exec output remain the observed shape. Existing main only displays the
+first string argument, so a query followed by credentials did not expose the
+additional fields. Hand-assembled cases will exercise direct sensitive fields,
+nested objects and arrays, and Bearer text in ordinary fields for both engines.
+The fix must sanitize values before serialization with explicit traversal limits
+and reuse the feed's existing record-text redaction.

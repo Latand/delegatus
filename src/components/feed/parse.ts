@@ -1,3 +1,4 @@
+import { redactTranscriptText, SENSITIVE_RECORD_KEY, SENSITIVE_RECORD_TEXT } from "./toolRedaction";
 import {
   debugRaw,
   parseReview,
@@ -757,16 +758,6 @@ function toolOutputFailed(text: string): boolean {
 
 const RECORD_FIELD_MAX = 4_000;
 const RECORD_SUMMARY_MAX = 160;
-const SENSITIVE_RECORD_KEY = /(?:api.?key|access.?token|refresh.?token|authorization|bearer|secret|password|passwd|pwd|token)/i;
-const SENSITIVE_RECORD_TEXT = /(?:api|token|authorization|bearer|secret|password|passwd|pwd)/i;
-const JSON_SECRET_VALUE = /("(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token)"\s*:\s*")[^"]*/gi;
-const INLINE_SECRET_VALUE = /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token)\s*[:=]\s*["']?)[^\s"',}]+/gi;
-const BEARER_SECRET_VALUE = /(\bbearer\s+)[^\s"',}]+/gi;
-
-function redactTranscriptText(value: string): string {
-  const bearerSafe = value.replace(BEARER_SECRET_VALUE, "$1[redacted]");
-  return redactSecrets(bearerSafe).replace(JSON_SECRET_VALUE, "$1[redacted]").replace(INLINE_SECRET_VALUE, "$1[redacted]");
-}
 
 /* Future rollout records stay diagnosable without allowing a new payload to
    inject an unbounded string, ciphertext, image data, or credential into the

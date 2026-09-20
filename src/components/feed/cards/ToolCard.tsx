@@ -47,9 +47,9 @@ export function ToolChips({ chips }: { chips: ArgChip[] }) {
   return (
     <div className="mb-1 flex flex-wrap gap-1">
       {chips.map((chip, i) => (
-        <span key={i} className="inline-flex max-w-full items-center gap-1 truncate rounded-md bg-sunken px-1.5 py-0.5 font-mono text-[11px] text-primary">
-          {chip.label ? <span className="text-muted">{chip.label}</span> : null}
-          {chip.value}
+        <span key={i} data-tool-chip className="inline-block max-w-full [overflow-wrap:anywhere] rounded-md bg-sunken px-1.5 py-0.5 font-mono text-[11px] text-primary">
+          {chip.label ? <span className="mr-1 text-muted">{chip.label}</span> : null}
+          <span className="whitespace-pre-wrap">{chip.value}</span>
         </span>
       ))}
     </div>

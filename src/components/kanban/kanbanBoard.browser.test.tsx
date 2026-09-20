@@ -6307,18 +6307,23 @@ describe("readable tool rows", () => {
         await page.locator("[data-readable-tools]").waitFor();
         await page.screenshot({ path: path.join(out, `${width}-${lang}-closed.png`), fullPage: true });
         // Open the existing tool/group disclosures with real pointer input.
-        for (let round = 0; round < 4; round++) {
-          const details = page.locator("details:not([open]) > summary");
-          while (await details.count()) {
-            await details.first().click();
-            await page.waitForTimeout(60);
+        for (let round = 0; round < 8; round++) {
+          // Pin each node while clicking: a live :not([open]) locator can
+          // retarget between Playwright's checks and the native toggle event.
+          const details = await page.locator("details:not([open]) > summary").elementHandles();
+          for (const summary of details) {
+            if (await summary.evaluate(el => !el.parentElement?.hasAttribute("open"))) await summary.click();
+            await page.waitForTimeout(100);
           }
           const folds = page.locator("[data-mobile-run-fold][aria-expanded=false]");
           if (await folds.count()) {
             await folds.first().click();
-            await page.waitForTimeout(60);
+            await page.waitForTimeout(100);
           }
+          await page.waitForTimeout(100);
+          if (!await page.locator("details:not([open]), [data-mobile-run-fold][aria-expanded=false]").count()) break;
         }
+        expect(await page.locator("details:not([open]), [data-mobile-run-fold][aria-expanded=false]").count()).toBe(0);
         await page.screenshot({ path: path.join(out, `${width}-${lang}-open.png`), fullPage: true });
         const reading = await page.locator("[data-readable-tools]").evaluate(el => ({
           text: el.textContent, scrollWidth: document.documentElement.scrollWidth,
@@ -6332,6 +6337,15 @@ describe("readable tool rows", () => {
           expect(reading.text).toContain("+1");
           expect(reading.text).not.toContain("Text absent");
           expect(reading.text).not.toContain("Extension");
+          expect(await page.locator("[data-readable-tools]").innerHTML()).not.toContain("invented-review-value");
+          expect(reading.text).toContain("application/json");
+          const clippedChips = await page.locator("[data-tool-chip]").evaluateAll(chips =>
+            chips.filter(el => el.scrollWidth > el.clientWidth + 1).length);
+          expect(clippedChips).toBe(0);
+          // Short labels stay on one line even next to a one-character value.
+          const wrappedLabels = await page.locator("[data-tool-chip] > span:first-child").evaluateAll(labels =>
+            labels.filter(el => el.getClientRects().length > 1).length);
+          expect(wrappedLabels).toBe(0);
         }
         readings.push({ width, lang, ...reading });
         await context.close();

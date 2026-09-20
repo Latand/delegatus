@@ -54,5 +54,48 @@
     },
     "privacyPublication": "pass",
     "stateIsolation": "dedicated configuration and state roots; ephemeral probe ports"
+  },
+  "reviewFix": {
+    "baseline": "92db8083212aac5c34260d53b35cab3fbe1746dd",
+    "beforeEvidence": "redaction-before.json",
+    "afterEvidence": "after.json",
+    "negativeControl": {
+      "failed": 35,
+      "passed": 0,
+      "coverage": "hand-assembled summaries, parser events, ToolChips HTML, collapsed and expanded ToolCard HTML including title attributes"
+    },
+    "credentialRegressions": {
+      "passed": 37,
+      "failed": 0,
+      "engines": [
+        "codex function_call",
+        "codex McpToolCall",
+        "claude tool_use"
+      ]
+    },
+    "focusedTests": {
+      "passed": 394,
+      "skipped": 1,
+      "failed": 0,
+      "files": 14,
+      "execution": "one file per invocation with isolated configuration and state"
+    },
+    "independentReview": "no findings in redaction and final shared chip layout",
+    "visualInspection": {
+      "widths": [
+        390,
+        1280
+      ],
+      "locales": [
+        "en",
+        "uk"
+      ],
+      "observations": [
+        "Before: authorization leaves the invented credential visible; nested objects and arrays expose it in both engines.",
+        "After: complete sensitive values replaced with [redacted]; queries, public headers and format arguments remain readable.",
+        "Long nested chips wrap on phone; short argument labels remain intact. No horizontal document or chip clipping.",
+        "Existing browser driver now pins summary nodes during clicks and requires every disclosure to be expanded before capture."
+      ]
+    }
   }
 }

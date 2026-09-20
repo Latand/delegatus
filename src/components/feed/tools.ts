@@ -6,6 +6,7 @@ import type { GlyphName } from "../icons";
 import { feedCopy, taskText } from "./toolMeaning";
 import { formatStdinKeys } from "./ansi";
 import { normalizeEdit, type DiffModel } from "./diff";
+import { boundedToolArguments, SENSITIVE_RECORD_KEY } from "./toolRedaction";
 
 /* The source-agnostic tool taxonomy (issue #9 §3). One pure summarizer turns a
    raw (tool, args) pair from any engine into a canonical family, an icon, a
@@ -310,9 +311,9 @@ export function summarizeTool(
       const parts = tool.replace(/^mcp__/, "").split("__");
       const server = parts[0] ?? tool;
       const name = parts.slice(1).join("__") || tool;
-      const meaningful = Object.entries(args).filter(([key, value]) =>
+      const meaningful = Object.entries(boundedToolArguments(args)).filter(([key, value]) =>
         !["clientRequestId", "request_id", "call_id"].includes(key) && value !== null && value !== undefined);
-      const key = meaningful.find(([name, value]) => typeof value === "string" && !/token|password|secret|api.?key|authorization/i.test(name))?.[1];
+      const key = meaningful.find(([name, value]) => typeof value === "string" && !SENSITIVE_RECORD_KEY.test(name))?.[1];
       const summary = `${server} · ${name}${key ? ` · ${key}` : ""}`;
       return build(summary, meaningful.slice(0, 4).map(([key, value]) =>
         chip(typeof value === "string" ? value : JSON.stringify(value), key)));
