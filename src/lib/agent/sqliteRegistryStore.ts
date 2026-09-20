@@ -554,16 +554,19 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  /** The supplied receipt is a lookup key, never authority. The server's
-      capability must still match its live digest. Naming it avoids a registry-
-      wide capability/receipt search on an observation-only call. */
-  retirementCaller(launchId: string, digest: string): string | null {
+  /** The receipt is a lookup key. Match either the capability digest or the
+      session identity already attributed by the trusted MCP server. */
+  retirementCaller(launchId: string, authentication: string | { conversationId: string }): string | null {
     const row = this.db.query<{ value_json: string | null }, [string]>(
       "SELECT CASE WHEN length(CAST(value_json AS BLOB)) <= 262144 THEN value_json END AS value_json FROM registry_rows WHERE collection='receipts' AND row_key=?",
     ).get(launchId);
     this.onRowPayloadRead?.("receipts", row ? 1 : 0);
     if (!row?.value_json) return null;
     const receipt = JSON.parse(row.value_json) as { spawnCapabilityDigest?: unknown; conversationId?: unknown };
+    if (typeof authentication !== "string") {
+      return receipt.conversationId === authentication.conversationId ? authentication.conversationId : null;
+    }
+    const digest = authentication;
     if (typeof receipt.spawnCapabilityDigest !== "string" || !/^[a-f0-9]{64}$/.test(receipt.spawnCapabilityDigest)
       || !/^[a-f0-9]{64}$/.test(digest) || typeof receipt.conversationId !== "string") return null;
     return crypto.timingSafeEqual(Buffer.from(digest, "hex"), Buffer.from(receipt.spawnCapabilityDigest, "hex"))
