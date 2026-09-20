@@ -31,7 +31,9 @@ export class RuntimeHost {
     private readonly signalFlowPipelineProgress?: () => void,
     private readonly mcpHealthProbeAdmissions?: McpHealthProbeAdmissions,
     private readonly runtimeHostHealth?: () => RuntimeHostReadyEvidence,
-  ) {}
+  ) {
+    if (consumers) journal.registerConsumer("orchestration");
+  }
 
   async recoverConsumers(): Promise<number> {
     if (!this.consumers) return 0;
@@ -60,7 +62,7 @@ export class RuntimeHost {
   }
 
   private async consume(event: RuntimeEvent): Promise<void> {
-    if (!this.consumers || this.journal.consumerCompleted(event.eventId, "orchestration")) return;
+    if (!this.consumers || this.journal.consumerCompleted(event.eventId, "orchestration", event.seq)) return;
     const session = event.scope.type === "session" ? this.journal.sessionState(event.scope.id) : null;
     const consumerEvent = session?.flowId && event.kind === "turn-ended" && typeof event.payload.flowId !== "string"
       ? { ...event, payload: { ...event.payload, flowId: session.flowId } }

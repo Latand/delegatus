@@ -2219,6 +2219,10 @@ test.each([20_000, 2])("acknowledged engine events survive a crash with a %i-eve
         producer: { kind: "codex-app-server", eventKey: "engine-host:codex:worker:" + seq },
       } } });
     }
+    void host.handle({ id: "terminal", method: "append", params: { event: {
+      scope: "session:worker", kind: "turn-ended", payload: { turnId: "one" },
+      producer: { kind: "codex-app-server", eventKey: "engine-host:codex:terminal:1" },
+    } } });
     console.log(JSON.stringify({ response, completed: journal.consumerCompleted(response.result.eventId, "orchestration") }));
     setInterval(() => {}, 1000);
   `], { cwd: process.cwd(), env: { ...process.env, TEST_JOURNAL: filename, TEST_MAX_EVENTS: String(maxEvents) }, stdout: "pipe", stderr: "pipe" });
@@ -2252,9 +2256,9 @@ test.each([20_000, 2])("acknowledged engine events survive a crash with a %i-eve
     taskDeliveryAcknowledged: () => undefined,
   });
   try {
-    expect(events.map((event) => event.kind)).toEqual(["workflow.stage.completed", "delta", "delta", "delta"]);
-    expect(journal.unconsumedEvents("orchestration")).toHaveLength(4);
-    expect(await host.recoverConsumers()).toBe(4);
+    expect(events.map((event) => event.kind)).toEqual(["workflow.stage.completed", "delta", "delta", "delta", "turn-ended"]);
+    expect(journal.unconsumedEvents("orchestration")).toHaveLength(5);
+    expect(await host.recoverConsumers()).toBe(5);
     expect(await host.recoverConsumers()).toBe(0);
     const retry = await host.handle({ id: "retry", method: "append", params: { event: {
       scope: "session:worker", kind: "delta", payload: { turnId: "one", text: "first" },
@@ -2269,6 +2273,122 @@ test.each([20_000, 2])("acknowledged engine events survive a crash with a %i-eve
     checkpoint.mockRestore();
     journal.close();
   }
+});
+
+test("a blocked consumer B retains every event while A advances, including across a process crash", async () => {
+  const filename = path.join(sandbox("consumer-retention-crash"), "events.sqlite");
+  const child = Bun.spawn([process.execPath, "--eval", `
+    import { RuntimeJournal } from "./src/runtime-host/journal.ts";
+    const journal = new RuntimeJournal(process.env.TEST_JOURNAL, { maxEvents: 2 });
+    journal.registerConsumer("A");
+    journal.registerConsumer("B");
+    for (let n = 1; n <= 140; n++) {
+      const event = journal.append({ scope: "session:worker", kind: "delta", payload: { text: String(n) } });
+      journal.markConsumerCompleted(event.eventId, "A");
+      if (n <= 2) journal.markConsumerCompleted(event.eventId, "B");
+      journal.compact();
+    }
+    console.log("ready");
+    setInterval(() => {}, 1000);
+  `], { cwd: process.cwd(), env: { ...process.env, TEST_JOURNAL: filename }, stdout: "pipe", stderr: "pipe" });
+  const reader = child.stdout.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const chunk = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("producer did not finish")), 5000); }),
+    ]);
+    expect(new TextDecoder().decode(chunk.value).trim()).toBe("ready");
+  } finally {
+    clearTimeout(timer);
+    child.kill("SIGKILL");
+    await child.exited;
+    reader.releaseLock();
+  }
+  const journal = new RuntimeJournal(filename, { maxEvents: 2 });
+  try {
+    // Startup can append/compact before the host re-registers its consumers.
+    const startup = journal.append({ scope: "session:worker", kind: "delta", payload: { text: "141" } });
+    journal.compact();
+    journal.registerConsumer("A");
+    journal.registerConsumer("B");
+    expect(journal.unconsumedEvents("A").map((event) => event.seq)).toEqual([startup.seq]);
+    journal.markConsumerCompleted(startup.eventId, "A");
+    const received: number[] = [];
+    while (true) {
+      const batch = journal.unconsumedEvents("B");
+      if (batch.length === 0) break;
+      for (const event of batch) {
+        received.push(Number(event.payload.text));
+        journal.markConsumerCompleted(event.eventId, "B");
+        journal.compact();
+      }
+    }
+    expect(received).toEqual(Array.from({ length: 139 }, (_, i) => i + 3));
+    expect(journal.unconsumedEvents("A")).toEqual([]);
+    expect(journal.unconsumedEvents("B")).toEqual([]);
+    expect(journal.replay(139).events.map((event) => event.seq)).toEqual([140, 141]);
+  } finally { journal.close(); }
+  const restarted = new RuntimeJournal(filename, { maxEvents: 2 });
+  expect(restarted.isWritable()).toBe(true);
+  expect(restarted.unconsumedEvents("B")).toEqual([]);
+  restarted.close();
+});
+
+test("consumer acknowledgement and contiguous cursor roll back together without skipping gaps", () => {
+  const filename = path.join(sandbox("consumer-atomic-cursor"), "events.sqlite");
+  const journal = new RuntimeJournal(filename, { maxEvents: 2 });
+  journal.registerConsumer("B");
+  const events = Array.from({ length: 4 }, (_, n) => journal.append({ scope: "session:worker", kind: "delta", payload: { text: String(n) } }));
+  journal.markConsumerCompleted(events[2]!.eventId, "B");
+  const db = new Database(filename);
+  try {
+    db.exec("CREATE TRIGGER fail_cursor BEFORE UPDATE ON consumer_cursors BEGIN SELECT RAISE(ABORT, 'injected cursor failure'); END");
+    expect(() => journal.markConsumerCompleted(events[0]!.eventId, "B")).toThrow("injected cursor failure");
+    expect(journal.consumerCompleted(events[0]!.eventId, "B")).toBe(false);
+    journal.compact();
+    expect(journal.unconsumedEvents("B").map((event) => event.seq)).toEqual([1, 2, 4]);
+    db.exec("DROP TRIGGER fail_cursor");
+    journal.markConsumerCompleted(events[0]!.eventId, "B");
+    journal.compact();
+    expect(journal.replay(1).events.map((event) => event.seq)).toEqual([2, 3, 4]);
+    journal.markConsumerCompleted(events[1]!.eventId, "B");
+    journal.compact();
+    expect(journal.consumerCompleted(events[0]!.eventId, "B", events[0]!.seq)).toBe(true);
+    expect(journal.unconsumedEvents("B").map((event) => event.seq)).toEqual([4]);
+  } finally { db.close(); journal.close(); }
+});
+
+test("a compacted consumer checkpoint stays completed when its producer retries after restart", async () => {
+  const filename = path.join(sandbox("consumer-compacted-retry"), "events.sqlite");
+  let calls = 0;
+  const ports = {
+    flowReady: () => { calls += 1; },
+    workflowStageCompleted: () => undefined,
+    taskDeliveryAcknowledged: () => undefined,
+  };
+  const terminal = {
+    scope: runtimeScope("session", "worker"), kind: "turn-ended", payload: { flowId: "flow-one" },
+    producer: { kind: "codex-app-server" as const, eventKey: "engine-host:codex:worker:1" },
+  };
+  const journal = new RuntimeJournal(filename, { maxEvents: 2 });
+  const host = new RuntimeHost(journal, ports);
+  const first = await host.handle({ id: "terminal", method: "append", params: { event: terminal } });
+  for (let n = 0; n < 4; n++) {
+    await host.handle({ id: "advance", method: "append", params: { event: {
+      scope: "session:other", kind: "delta", payload: { text: String(n) },
+    } } });
+  }
+  expect(journal.replay(0).reset).toBe(true);
+  journal.close();
+  const restarted = new RuntimeJournal(filename, { maxEvents: 2 });
+  try {
+    const recovered = new RuntimeHost(restarted, ports);
+    expect(await recovered.recoverConsumers()).toBe(0);
+    const retry = await recovered.handle({ id: "retry", method: "append", params: { event: terminal } });
+    expect(retry.result).toEqual(first.result);
+    expect(calls).toBe(1);
+  } finally { restarted.close(); }
 });
 
 test("runtime host advances and publishes a flow from a terminal event without file polling", async () => {
