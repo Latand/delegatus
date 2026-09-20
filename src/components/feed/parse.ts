@@ -250,6 +250,10 @@ export interface ReasoningMember {
   availability: "available" | "unavailable";
 }
 
+/** What ended the turn, as far as the record says: an expired or rejected
+    sign-in the operator can act on, or any other provider failure. */
+export type TurnErrorReason = "auth" | "other";
+
 export type Item =
   | { kind: "prose"; ts: unknown; text: string; engine: "codex" | "claude" | "openclaw"; sourceId?: string }
   | { kind: "user"; ts: unknown; text: string; selectedContext?: SelectedContextRef }
@@ -257,6 +261,13 @@ export type Item =
   | VoiceTurnItem
   | { kind: "svc"; text: string }
   | { kind: "note"; text: string }
+  /* The turn ended on a provider failure instead of an answer (#1846
+     recurrence). Codex closes both with the same `task_complete` record, and
+     the completion note dropped its `error`, so a first turn that never ran
+     read as "Task completed" with nothing under it. `detail` is the provider's
+     own sentence after the feed's secret redaction; `reason` picks the line
+     that tells the operator what to do about it. */
+  | { kind: "turn-error"; ts: unknown; reason: TurnErrorReason; detail: string }
   | ToolEvent
   | CmdGroupItem
   | ReviewCardItem
@@ -463,6 +474,27 @@ function base64DecodedLength(base64: string): number {
   if (!base64.length) return 0;
   const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
   return Math.floor((base64.length * 3) / 4) - padding;
+}
+
+/**
+ * The provider failure a Codex turn-end record carries, or null when the turn
+ * simply ended. A clean completion has no `error` and no `codex_error_info` at
+ * all, so anything read here is a real failure — including the observed
+ * `unauthorized` first turn, which returned no assistant message whatsoever.
+ *
+ * The message is the provider's own prose, which is what makes it useful; it
+ * goes through the feed's existing redaction so a credential quoted inside it
+ * cannot ride onto the screen.
+ */
+function codexTurnFailure(payload: Record<string, unknown>): { reason: TurnErrorReason; detail: string } | null {
+  const error = rec(payload.error);
+  const info = (textPart(payload.codex_error_info) || textPart(error.codex_error_info)).trim();
+  const message = textPart(error.message) || textPart(payload.error) || (info ? textPart(payload.message) : "");
+  if (!info && !message) return null;
+  const detail = redactSecrets(message).trim().slice(0, 600);
+  const auth = /^(?:unauthorized|unauthenticated|auth(?:_error)?)$/i.test(info)
+    || /\b(?:unauthorized|refresh token|access token|sign ?in again|log ?out and sign)\b/i.test(message);
+  return { reason: auth ? "auth" : "other", detail: detail || info };
 }
 
 function codexImageFromDataUrl(value: string): Extract<Item, { kind: "image" }> | null {
@@ -1939,6 +1971,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const addNote = (text: string) => {
     push({ kind: "note", text });
   };
+  const addTurnError = (ts: unknown, failure: { reason: TurnErrorReason; detail: string }) => {
+    push({ kind: "turn-error", ts, reason: failure.reason, detail: failure.detail });
+  };
   const addThink = (text: string, sourceId?: string) => {
     const normalized = text.trim();
     if (sourceId) {
@@ -2509,7 +2544,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         return addCodexAssistant("event-agent", ts, textPart(p.message));
       }
       if (p.type === "task_started") return addSvc(textPart(p.type));
-      if (p.type === "task_complete") return addNote(tr("render.taskComplete") + (ts ? " · " + hhmm(ts) : ""));
+      if (p.type === "task_complete") {
+        /* A turn that died on the provider says so here and nowhere else: the
+           record that closed it is the only evidence in the transcript. */
+        const failure = codexTurnFailure(p);
+        if (failure) return addTurnError(ts, failure);
+        return addNote(tr("render.taskComplete") + (ts ? " · " + hhmm(ts) : ""));
+      }
       if (p.type === "context_compacted") {
         if (codexCompacted) return void (codexCompacted = null);
         return addCompact(ts);

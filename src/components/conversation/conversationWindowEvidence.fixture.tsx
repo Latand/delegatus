@@ -15,6 +15,10 @@
 import { createRoot } from "react-dom/client";
 
 import { setLocale, useLocale, type Locale } from "@/lib/i18n";
+import type { FileEntry } from "@/lib/types";
+
+import { FeedItem } from "@/components/feed/FeedItem";
+import { buildFeed, type Item } from "@/components/feed/parse";
 
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
@@ -48,7 +52,38 @@ const MANDATE = [
     is why the bubble's echo identity is never the text it displays. */
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
-export type ConversationWindowCase = "queued" | "receipt-delivered" | "retired-on-transcript";
+export type ConversationWindowCase =
+  | "queued"
+  | "receipt-delivered"
+  | "retired-on-transcript"
+  | "auth-terminal"
+  | "clean-terminal";
+
+/* #1846 recurrence: a first turn that died unauthorized produced no assistant
+   message at all, so the row the parser makes out of the turn-end record is
+   the whole of what the operator has to read. The record below is the observed
+   shape with an invented turn id. */
+const CODEX_FILE = { path: "/tmp/auth-terminal.jsonl", engine: "codex", fmt: "codex", activity: "recent" } as FileEntry;
+const EXPIRED = "Your access token could not be refreshed because your "
+  + "refresh token has expired. Please log out and sign in again.";
+const TURN_ID = ["6f2c41d8", "5b07", "4a19", "9e33", "0c7a51d64b28"].join("-");
+
+function terminalRow(failed: boolean): Item {
+  const line = JSON.stringify({
+    type: "event_msg",
+    timestamp: "2026-09-20T02:49:12.136Z",
+    payload: {
+      type: "task_complete",
+      turn_id: TURN_ID,
+      ...(failed
+        ? { last_agent_message: null, error: { message: EXPIRED, codex_error_info: "unauthorized" }, duration_ms: 1352 }
+        : { last_agent_message: "Ready in this project.", duration_ms: 42_100 }),
+    },
+  });
+  const row = buildFeed(CODEX_FILE, [line], false, "").items.at(-1);
+  if (!row) throw new Error("the parser produced no terminal row");
+  return row;
+}
 
 function visibleEntries(id: ConversationWindowCase): OutboxEntry[] {
   resetOutboxForTests();
@@ -74,8 +109,23 @@ function visibleEntries(id: ConversationWindowCase): OutboxEntry[] {
   return visibleOutbox(readOutbox(CARD), new Map(), at, OWNER);
 }
 
+function TerminalFixture({ id }: { id: "auth-terminal" | "clean-terminal" }) {
+  return (
+    <div data-evidence-case={id} className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      {/* The mandate the operator sent: the only other row in the window. */}
+      <div data-evidence-transcript className="my-3 flex justify-end">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5">
+          You are the Orchestrator. Drive work through the Viewer MCP tools.
+        </div>
+      </div>
+      <FeedItem item={terminalRow(id === "auth-terminal")} />
+    </div>
+  );
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
+  if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   const entries = visibleEntries(id);
   return (
     <div data-evidence-case={id} className="min-h-dvh bg-canvas px-4 py-6 text-primary">

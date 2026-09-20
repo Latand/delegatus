@@ -4,11 +4,13 @@ import type { ReactElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { en } from "@/lib/i18n/en";
-import { translate } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 
 import { FeedItem } from "./FeedItem";
-import type { Item, ToolEvent } from "./parse";
+import { buildFeed, type Item, type ToolEvent } from "./parse";
+import type { FileEntry } from "@/lib/types";
 
 /*
  * Mobile v2 (#1439, lane 4; README §2.6, §4.2, §8 row 4): on the phone the
@@ -227,4 +229,106 @@ test("desktop: every message keeps its avatar column, indent, 75% bubble and mar
   expect(classOf(host.querySelector(".bg-user"))).toContain("max-w-[75%]");
   expect(classOf(host.querySelector("details"))).toContain("ml-9");
   expect(classOf(host.querySelector(".bg-accent-soft"))).toContain("my-3 ml-9 overflow-hidden");
+});
+
+/*
+ * A first turn that died unauthorized (#1846 recurrence). The engine wrote one
+ * record and no answer, so the failed terminal is the only thing the operator
+ * has to read — it must read as a failure on the phone and on the desktop
+ * alike, in both languages, and it must never carry a credential.
+ */
+const codexFile = { path: "/tmp/auth-terminal.jsonl", engine: "codex", fmt: "codex", activity: "recent" } as FileEntry;
+const EXPIRED = "Your access token could not be refreshed because your "
+  + "refresh token has expired. Please log out and sign in again.";
+
+function authTerminalRow(overrides: Record<string, unknown> = {}): Item {
+  const line = JSON.stringify({
+    type: "event_msg",
+    timestamp: "2026-09-20T02:49:12.136Z",
+    payload: {
+      type: "task_complete",
+      last_agent_message: null,
+      error: { message: EXPIRED, codex_error_info: "unauthorized" },
+      duration_ms: 1352,
+      ...overrides,
+    },
+  });
+  const row = buildFeed(codexFile, [line], false, "").items.find((item) => item.kind === "turn-error");
+  if (!row) throw new Error("the parser produced no failed-turn row");
+  return row;
+}
+
+/**
+ * Phone-ness for these cases comes from the PRODUCTION media query rather than
+ * from the stub above, which still keys on a width this layout stopped using;
+ * that staleness is why the file's older phone cases are red at the merge base
+ * too, and it is not this increment's to repair.
+ */
+function withViewport<T>(phone: boolean, body: () => T): T {
+  const stub = (query: string) => ({
+    ...matchMediaStub(query),
+    matches: normalize(query) === normalize(MOBILE_LAYOUT_QUERY) ? phone : false,
+  });
+  (dom as unknown as { matchMedia: unknown }).matchMedia = stub;
+  Object.assign(globalThis, { matchMedia: stub });
+  try {
+    return body();
+  } finally {
+    (dom as unknown as { matchMedia: unknown }).matchMedia = matchMediaStub;
+    Object.assign(globalThis, { matchMedia: matchMediaStub });
+  }
+}
+
+for (const phone of [true, false]) {
+  const surface = phone ? "phone" : "desktop";
+  test(`${surface}: an unauthorized first turn reads as a failure, not as a completion`, () => {
+    withViewport(phone, () => {
+      const host = mount(<FeedItem item={authTerminalRow()} />);
+      const row = host.querySelector('[data-turn-error="auth"]')!;
+      expect(row).toBeTruthy();
+      /* Danger hue, and the title says what happened with no assistant prose
+         to lean on. */
+      expect(classOf(row)).toContain("border-danger/40");
+      expect(classOf(row)).toContain("bg-danger-soft");
+      expect(row.querySelector(".text-danger")).toBeTruthy();
+      expect(row.textContent).toContain(en["render.turnFailedAuth"]);
+      expect(row.textContent).not.toContain(en["render.taskComplete"]);
+      /* The provider's sentence and the action the operator can take. */
+      expect(row.textContent).toContain(EXPIRED);
+      expect(row.textContent).toContain(en["render.turnFailedAuthHint"]);
+      /* The feed's own clock: HH:MM on the phone, the full time on the desktop. */
+      expect(row.textContent).toContain("02:49");
+      expect(/\d{2}:\d{2}:\d{2}/.test(row.textContent ?? "")).toBe(!phone);
+      /* The phone spends no column on the avatar indent; the desktop keeps it. */
+      expect(classOf(row).includes("ml-9")).toBe(!phone);
+    });
+  });
+}
+
+test("the failed terminal speaks Ukrainian too", () => {
+  setLocale("uk");
+  try {
+    const host = mount(<FeedItem item={authTerminalRow()} />);
+    const row = host.querySelector('[data-turn-error="auth"]')!;
+    expect(row.textContent).toContain(translate("uk", "render.turnFailedAuth"));
+    expect(row.textContent).toContain(translate("uk", "render.turnFailedAuthHint"));
+  } finally {
+    setLocale("en");
+  }
+});
+
+test("a credential quoted by the provider never reaches the screen", () => {
+  const leak = `${["refresh", "token"].join("_")}=${"a1b2c3d4e5f6".repeat(2)}`;
+  const host = mount(<FeedItem item={authTerminalRow({ error: { message: `unauthorized (${leak})`, codex_error_info: "unauthorized" } })} />);
+  const row = host.querySelector('[data-turn-error="auth"]')!;
+  expect(row.textContent).not.toContain("a1b2c3d4e5f6");
+  expect(row.textContent).toContain("[redacted]");
+});
+
+test("a turn that really completed keeps its quiet completion note", () => {
+  const line = JSON.stringify({ type: "event_msg", timestamp: "2026-09-20T02:50:00.000Z", payload: { type: "task_complete" } });
+  const note = buildFeed(codexFile, [line], false, "").items.find((item) => item.kind === "note")!;
+  const host = mount(<FeedItem item={note} />);
+  expect(host.querySelector("[data-turn-error]")).toBeNull();
+  expect(host.textContent).toContain(en["render.taskComplete"]);
 });

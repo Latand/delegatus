@@ -2779,3 +2779,74 @@ describe("compact identified reasoning (#1534)", () => {
     expect(session().feed([reasoning("one", "", "turn-a"), reasoning("two", "", "turn-b")], 0, false).items).toHaveLength(2);
   });
 });
+
+describe("a first turn that died unauthorized (#1846 recurrence)", () => {
+  /*
+   * Codex closes a turn with the same `task_complete` record whether the turn
+   * produced an answer or never ran. The operator's first turn ended 1.3 s
+   * after the mandate reached the engine, with `last_agent_message: null` and
+   * an `unauthorized` error, and the feed drew "Task completed" over it: the
+   * record's `error` was dropped on the floor.
+   *
+   * The records below are the observed shape with invented identifiers.
+   */
+  const TURN = ["01a0bcb7", "b37b", "7212", "a545", "a5fd96753227"].join("-");
+  const EXPIRED = "Your access token could not be refreshed because your "
+    + "refresh token has expired. Please log out and sign in again.";
+  const taskComplete = (payload: Record<string, unknown>) =>
+    JSON.stringify({ type: "event_msg", timestamp: "2026-09-20T02:49:12.136Z", payload: { type: "task_complete", turn_id: TURN, ...payload } });
+  const authTerminal = taskComplete({
+    last_agent_message: null,
+    error: { message: EXPIRED, codex_error_info: "unauthorized" },
+    duration_ms: 1352,
+  });
+  const mandate = codexUserEvent("2026-09-20T02:49:11.400Z", "You are the Orchestrator. Drive work through the Viewer MCP tools.");
+
+  test("the failed terminal is visible and the completion note is gone", () => {
+    const items = buildFeed(codexFile, [mandate, authTerminal], false, "").items;
+    const failure = items.find((item) => item.kind === "turn-error");
+    if (failure?.kind !== "turn-error") throw new Error("expected a failed-turn row");
+    expect(failure.reason).toBe("auth");
+    expect(failure.detail).toBe(EXPIRED);
+    expect(items.some((item) => item.kind === "note" && item.text.includes("Task completed"))).toBe(false);
+  });
+
+  test("a turn that really completed still completes", () => {
+    const items = buildFeed(codexFile, [mandate, codexAssistantEvent("2026-09-20T02:50:00.000Z", "Ready."), taskComplete({})], false, "").items;
+    expect(items.some((item) => item.kind === "turn-error")).toBe(false);
+    expect(items.some((item) => item.kind === "note" && item.text.includes("Task completed"))).toBe(true);
+  });
+
+  test("a cancelled turn stays a cancellation", () => {
+    const aborted = JSON.stringify({ type: "event_msg", timestamp: "2026-09-20T02:49:20.000Z", payload: { type: "turn_aborted", reason: "interrupted" } });
+    const items = buildFeed(codexFile, [mandate, aborted], true, "").items;
+    expect(items.some((item) => item.kind === "turn-error")).toBe(false);
+    expect(items.some((item) => item.kind === "svc" && item.text.includes("turn_aborted"))).toBe(true);
+  });
+
+  test("a provider failure that is not an expired sign-in keeps its own reason", () => {
+    const items = buildFeed(codexFile, [mandate, taskComplete({ error: { message: "stream disconnected before completion", codex_error_info: "stream_error" } })], false, "").items;
+    const failure = items.find((item) => item.kind === "turn-error");
+    if (failure?.kind !== "turn-error") throw new Error("expected a failed-turn row");
+    expect(failure.reason).toBe("other");
+  });
+
+  test("a secret-shaped value inside the provider message never reaches the row", () => {
+    /* Assembled rather than written out: a credential-shaped literal in a
+       committed file is what the publication gate exists to reject. */
+    const leak = `${["refresh", "token"].join("_")}=${"a1b2c3d4e5f6".repeat(2)}`;
+    const items = buildFeed(codexFile, [mandate, taskComplete({ error: { message: `unauthorized (${leak})`, codex_error_info: "unauthorized" } })], false, "").items;
+    const failure = items.find((item) => item.kind === "turn-error");
+    if (failure?.kind !== "turn-error") throw new Error("expected a failed-turn row");
+    expect(failure.detail).not.toContain("a1b2c3d4e5f6");
+    expect(failure.detail).toContain("[redacted]");
+  });
+
+  test("a reparsed transcript carries exactly one failed terminal", () => {
+    const lines = [mandate, authTerminal];
+    const session = assertParity(codexFile, lines);
+    for (const pass of [session.feed(lines, 0, false), session.feed(lines, 0, false)]) {
+      expect(pass.items.filter((entry) => entry.item.kind === "turn-error")).toHaveLength(1);
+    }
+  });
+});

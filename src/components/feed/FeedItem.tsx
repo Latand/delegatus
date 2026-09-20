@@ -1,5 +1,6 @@
 "use client";
 
+import { TriangleAlert } from "lucide-react";
 import { memo, type CSSProperties } from "react";
 import { useLocale } from "@/lib/i18n";
 
@@ -346,6 +347,36 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
     );
   }
 
+  if (item.kind === "turn-error") {
+    /* The one row that must read as a failure with no assistant prose behind
+       it (#1846 recurrence): a turn that ended unauthorized produced nothing
+       else, so this row carries the whole story — what failed, what the
+       provider said, and what the operator can do next. Same alert anatomy the
+       question card uses, in the danger hue, and the phone drops the chrome
+       indent like every other card. */
+    /* Same clock the rest of the feed keeps: HH:MM on the phone, the full
+       time on the desktop. */
+    const clock = isMobile ? mobileClock(item.ts) : hhmm(item.ts);
+    return (
+      <div
+        data-turn-error={item.reason}
+        role="status"
+        className={`my-3 ${indent}rounded-surface border border-danger/40 bg-danger-soft px-3 pb-2.5 pt-1`}
+      >
+        <div className="flex min-h-11 items-center gap-1.5 text-label font-bold text-danger">
+          <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 break-words">{t(item.reason === "auth" ? "render.turnFailedAuth" : "render.turnFailed")}</span>
+          {clock ? <span className="ml-auto shrink-0 font-normal tabular-nums">{clock}</span> : null}
+        </div>
+        {item.detail ? (
+          <p className="whitespace-pre-wrap break-words text-[13px] text-primary [overflow-wrap:anywhere]">{item.detail}</p>
+        ) : null}
+        {item.reason === "auth" ? (
+          <p className="mt-1.5 break-words text-label text-secondary">{t("render.turnFailedAuthHint")}</p>
+        ) : null}
+      </div>
+    );
+  }
   if (item.kind === "svc") return <div className="my-1 break-words text-[11.5px] text-muted">{item.text}</div>;
   if (item.kind === "note") return <div className="my-2 break-words text-[12.5px] text-muted">{md(item.text)}</div>;
   return <div className={`my-0.5 break-words text-[12.5px] ${item.err ? "text-danger" : "text-secondary"}`}>{item.text}</div>;

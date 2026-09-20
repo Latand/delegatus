@@ -1,0 +1,94 @@
+{
+  "auth-terminal-phone-390-en": {
+    "turnError": "auth",
+    "rowText": "Authorization failed05:49Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.This account's sign-in has expired. Sign in to it again, or move the conversation to another account, then send the message again.",
+    "completionNotes": 0,
+    "danger": true,
+    "leaks": 0,
+    "box": {
+      "width": 358,
+      "height": 158
+    },
+    "overflowX": 0,
+    "viewportWidth": 390
+  },
+  "auth-terminal-phone-390-uk": {
+    "turnError": "auth",
+    "rowText": "Помилка авторизації05:49Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.Сесія входу цього акаунта закінчилася. Увійдіть у нього ще раз або переведіть розмову на інший акаунт і надішліть повідомлення знову.",
+    "completionNotes": 0,
+    "danger": true,
+    "leaks": 0,
+    "box": {
+      "width": 358,
+      "height": 174
+    },
+    "overflowX": 0,
+    "viewportWidth": 390
+  },
+  "clean-terminal-phone-390-en": {
+    "turnError": null,
+    "rowText": null,
+    "completionNotes": 1,
+    "danger": false,
+    "leaks": 0,
+    "box": null,
+    "overflowX": 0,
+    "viewportWidth": 390
+  },
+  "clean-terminal-phone-390-uk": {
+    "turnError": null,
+    "rowText": null,
+    "completionNotes": 1,
+    "danger": false,
+    "leaks": 0,
+    "box": null,
+    "overflowX": 0,
+    "viewportWidth": 390
+  },
+  "auth-terminal-desktop-1280-en": {
+    "turnError": "auth",
+    "rowText": "Authorization failed05:49:12Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.This account's sign-in has expired. Sign in to it again, or move the conversation to another account, then send the message again.",
+    "completionNotes": 0,
+    "danger": true,
+    "leaks": 0,
+    "box": {
+      "width": 1212,
+      "height": 102
+    },
+    "overflowX": 0,
+    "viewportWidth": 1280
+  },
+  "auth-terminal-desktop-1280-uk": {
+    "turnError": "auth",
+    "rowText": "Помилка авторизації05:49:12Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.Сесія входу цього акаунта закінчилася. Увійдіть у нього ще раз або переведіть розмову на інший акаунт і надішліть повідомлення знову.",
+    "completionNotes": 0,
+    "danger": true,
+    "leaks": 0,
+    "box": {
+      "width": 1212,
+      "height": 102
+    },
+    "overflowX": 0,
+    "viewportWidth": 1280
+  },
+  "clean-terminal-desktop-1280-en": {
+    "turnError": null,
+    "rowText": null,
+    "completionNotes": 1,
+    "danger": false,
+    "leaks": 0,
+    "box": null,
+    "overflowX": 0,
+    "viewportWidth": 1280
+  },
+  "clean-terminal-desktop-1280-uk": {
+    "turnError": null,
+    "rowText": null,
+    "completionNotes": 1,
+    "danger": false,
+    "leaks": 0,
+    "box": null,
+    "overflowX": 0,
+    "viewportWidth": 1280
+  }
+}
