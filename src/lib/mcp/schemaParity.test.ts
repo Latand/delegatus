@@ -265,6 +265,27 @@ test("operator mutations and identity-bearing numerics retain exact protocol val
   expect(calls).toEqual([]);
 });
 
+test("migration schema names explicit selection and preserves automatic reseat", async () => {
+  const calls: unknown[] = [];
+  await withProtocolClient(inertBindings({ conversation_migration: async args => { calls.push(args); return {}; } }), async client => {
+    const listed = await client.listTools();
+    const tool = listed.tools.find(tool => tool.name === "conversation_migration")!;
+    expect(JSON.stringify(tool.inputSchema)).toContain("select-account");
+    expect(JSON.stringify(tool.inputSchema)).toContain("accountId");
+    for (const action of ["reseat", "select-account"]) {
+      const result = await client.callTool({ name: "conversation_migration", arguments: {
+        clientRequestId: action, conversationId: "conversation_target", action,
+        ...(action === "select-account" ? { accountId: "account-b" } : {}),
+      } });
+      expect(result.isError).not.toBe(true);
+    }
+    expect((await client.callTool({ name: "conversation_migration", arguments: {
+      clientRequestId: "invalid-account", conversationId: "conversation_target", action: "select-account", accountId: 42,
+    } })).isError).toBe(true);
+  });
+  expect(calls).toHaveLength(2);
+});
+
 test("spawn_agent listTools publishes every registry role exactly once", async () => {
   const roleIds = listRoles().map((role) => role.id);
 
