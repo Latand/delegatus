@@ -100,24 +100,151 @@ function chip(value: string, label?: string): ArgChip {
   return label ? { label, value: redacted } : { value: redacted };
 }
 
-/* Strips launcher boilerplate (PATH exports, `cd … &&`, the zsh wrapper, an
-   outer quote pair, heredoc bodies) from a shell command for the summary line.
-   The full command is retained separately by the caller for the expanded view. */
+/* The leading boilerplate a one-line label folds away so the real command reads
+   first (#1938): PATH exports, `cd … &&`, a shell wrapper (`sh -c`, `bash -lc`,
+   `/usr/bin/zsh -lc`), a proxy in front of one (`<tool> proxy sh -c '…'`), the
+   outer quote pair such a wrapper leaves behind, and the environment
+   assignments in front of the program (`env A=1 B=2 cmd`, `A=1 cmd`).
+
+   Purely lexical: nothing here evaluates a shell, every pattern is anchored at
+   the head of what is left, and a value whose syntax the scanner cannot read
+   with certainty is refused outright, so `env T=$(mktemp -d) bun test` keeps
+   its whole label instead of being cut at the space inside the substitution.
+
+   Bounded by budget, not only by termination, because the caller hands this
+   uncapped commands and the display limits are applied after it: every prefix
+   pattern carries its own length bound, an assignment is scanned inside a
+   FOLD_PREFIX_WINDOW, at most FOLD_PASSES prefixes are folded in all, and the
+   one scan that can span a whole region — the outer quote pair — draws on a
+   single FOLD_CHAR_BUDGET. Exhausting a budget stops the fold where it stands:
+   what was folded before that point was read in full, and everything left is
+   kept verbatim. */
+const FOLD_PASSES = 24;
+const FOLD_PREFIX_WINDOW = 512;
+const FOLD_CHAR_BUDGET = 1 << 16;
+
+const EXPORT_PATH = /export PATH=[^;\n]{1,256};\s{0,8}/y;
+const CD_PREFIX = /cd\s{1,8}\S{1,256}\s{0,8}&&\s{0,8}/y;
+const SHELL_WRAPPER = /\/?(?:[\w.-]{1,64}\/){0,8}(?:ba|z|da|k|c)?sh\s{1,8}-[a-zA-Z]{0,8}c\s{1,8}/y;
+const PROXY_WRAPPER = /[\w.@-]{1,64}\s{1,8}proxy\s{1,8}(?=\/?(?:[\w.-]{1,64}\/){0,8}(?:ba|z|da|k|c)?sh\s{1,8}-[a-zA-Z]{0,8}c\s)/y;
+const ENV_KEYWORD = /env\s{1,8}/y;
+const ASSIGNMENT_NAME = /[A-Za-z_][A-Za-z0-9_]{0,255}=/y;
+const HEREDOC = /^([\w./-]{1,128}(?:\s+-)?)\s*<<\s*['"]?(\w{1,64})['"]?/;
+
+/** Index just past a sticky pattern matched at `at`, or -1 when it is not there. */
+function matchAt(pattern: RegExp, cmd: string, at: number): number {
+  pattern.lastIndex = at;
+  const hit = pattern.exec(cmd);
+  return hit ? at + hit[0].length : -1;
+}
+
+/** Index just past the quote run opened at `at`, or -1 when it never closes
+    inside the window — or when a backslash inside a double-quoted run makes the
+    next character's meaning an interpretation this scanner will not make. A
+    single-quoted run has no escapes in the shell, so a backslash inside one is
+    an ordinary character and the first `'` still closes it. */
+function quoteRunEnd(cmd: string, at: number, limit: number): number {
+  const quote = cmd[at];
+  for (let i = at + 1; i < limit; i += 1) {
+    if (quote === '"' && cmd[i] === "\\") return -1;
+    if (cmd[i] === quote) return i + 1;
+  }
+  return -1;
+}
+
+/** Index just past a balanced `(…)` or `{…}` opened at `at`, skipping quoted
+    runs, or -1 when it does not close inside the window or holds a backslash
+    escape or a backquote — the same syntax `envAssignmentEnd` refuses outside a
+    substitution, refused inside one too rather than counted as a bracket. */
+function balancedEnd(cmd: string, at: number, limit: number, open: string, close: string): number {
+  let depth = 0;
+  for (let i = at; i < limit; i += 1) {
+    const ch = cmd[i];
+    if (ch === open) depth += 1;
+    else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    } else if (ch === "\\" || ch === "`") return -1;
+    else if (ch === "'" || ch === '"') {
+      const closed = quoteRunEnd(cmd, i, limit);
+      if (closed < 0) return -1;
+      i = closed - 1;
+    }
+  }
+  return -1;
+}
+
+/** Index just past one `NAME=value` assignment and the whitespace behind it, or
+    -1 when there is no assignment at `at`, when its value uses syntax this
+    scanner will not guess at (a backquote, a backslash escape, an unterminated
+    quote, substitution or expansion), or when nothing follows it inside the
+    window. Refusing is what leaves the raw command as the label. */
+function envAssignmentEnd(cmd: string, at: number, limit: number): number {
+  const named = matchAt(ASSIGNMENT_NAME, cmd, at);
+  if (named < 0 || named > limit) return -1;
+  let i = named;
+  while (i < limit) {
+    const ch = cmd[i];
+    if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") break;
+    if (ch === "'" || ch === '"') {
+      const closed = quoteRunEnd(cmd, i, limit);
+      if (closed < 0) return -1;
+      i = closed;
+      continue;
+    }
+    if (ch === "$" && (cmd[i + 1] === "(" || cmd[i + 1] === "{")) {
+      const closed = cmd[i + 1] === "(" ? balancedEnd(cmd, i + 1, limit, "(", ")") : balancedEnd(cmd, i + 1, limit, "{", "}");
+      if (closed < 0) return -1;
+      i = closed;
+      continue;
+    }
+    if (ch === "`" || ch === "\\") return -1;
+    i += 1;
+  }
+  if (i >= limit) return -1;
+  let after = i;
+  while (after < limit && /\s/.test(cmd[after])) after += 1;
+  return after < limit ? after : -1;
+}
+
+/* Strips that boilerplate from a shell command for the summary line. The full
+   command is retained separately by the caller for the expanded view, and a
+   fold that consumes everything (an unfamiliar shape the patterns read wrong)
+   falls back to the raw command rather than to an empty label. */
 export function cleanShellCommand(cmd: string): string {
-  let body = cmd;
-  let prev: string;
-  do {
-    prev = body;
-    body = body.replace(/^export PATH=[^;]+;\s*/, "");
-    body = body.replace(/^cd\s+\S+\s*&&\s*/, "");
-    body = body.replace(/^\/usr\/bin\/zsh -lc\s+/, "");
-    body = body.replace(/^(["'])([\s\S]*)\1$/, (whole: string, quote: string, inner: string) =>
-      new RegExp(`(?<!\\\\)${quote}`).test(inner) ? whole : inner,
-    );
-  } while (body !== prev);
-  const heredoc = body.match(/^([\w./-]+(?:\s+-)?)\s*<<\s*['"]?(\w+)['"]?/);
-  if (heredoc) body = `${heredoc[1].trim()} «heredoc»`;
-  return body.replace(/\s+/g, " ").trim();
+  let start = 0;
+  let end = cmd.length;
+  let budget = FOLD_CHAR_BUDGET;
+  for (let pass = 0; pass < FOLD_PASSES; pass += 1) {
+    const fromStart = start;
+    const fromEnd = end;
+    for (const pattern of [EXPORT_PATH, CD_PREFIX, PROXY_WRAPPER, SHELL_WRAPPER]) {
+      const next = matchAt(pattern, cmd, start);
+      if (next > start && next <= end) start = next;
+    }
+    // The outer quote pair a wrapper leaves behind, dropped only when that
+    // quote never reappears unescaped inside it.
+    const quote = cmd[start];
+    if (end - start >= 2 && (quote === '"' || quote === "'") && cmd[end - 1] === quote && end - start <= budget) {
+      budget -= end - start;
+      let reopened = false;
+      for (let i = start + 1; i < end - 1 && !reopened; i += 1) reopened = cmd[i] === quote && cmd[i - 1] !== "\\";
+      if (!reopened) {
+        start += 1;
+        end -= 1;
+      }
+    }
+    // `env` counts as boilerplate only when assignments actually follow it.
+    const afterEnv = matchAt(ENV_KEYWORD, cmd, start);
+    if (afterEnv > start && afterEnv <= end && envAssignmentEnd(cmd, afterEnv, Math.min(end, afterEnv + FOLD_PREFIX_WINDOW)) > 0) start = afterEnv;
+    const afterAssignment = envAssignmentEnd(cmd, start, Math.min(end, start + FOLD_PREFIX_WINDOW));
+    if (afterAssignment > start && afterAssignment <= end) start = afterAssignment;
+    if (start === fromStart && end === fromEnd) break;
+  }
+  const body = cmd.slice(start, end);
+  const heredoc = body.match(HEREDOC);
+  const label = heredoc ? `${heredoc[1].trim()} «heredoc»` : body;
+  return label.replace(/\s+/g, " ").trim() || cmd.replace(/\s+/g, " ").trim();
 }
 
 const SHELL_TOOLS = new Set(["Bash", "exec_command", "shell", "local_shell", "run_command"]);
