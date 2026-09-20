@@ -104,6 +104,20 @@ const records = {
       { type: "user", timestamp: iso(ts + 10), message: { role: "user", content: body } },
     ];
   },
+  monitorExpiry(ts: number, taskId = MONITOR_ID, toolUseId = "toolu_monitor_1") {
+    const body = [
+      "<task-notification>",
+      `<task-id>${taskId}</task-id>`,
+      `<tool-use-id>${toolUseId}</tool-use-id>`,
+      "<summary>[Monitor expired after 5m with no events delivered]</summary>",
+      "</task-notification>",
+    ].join("\n");
+    return [
+      { type: "queue-operation", operation: "enqueue", timestamp: iso(ts), content: body },
+      { type: "queue-operation", operation: "dequeue", timestamp: iso(ts + 5) },
+      { type: "user", timestamp: iso(ts + 10), message: { role: "user", content: body } },
+    ];
+  },
   /** After a restart the harness reports every task the previous process
       left without a record in one notification: several ids, one status, and
       a scan marker that names no task. */
@@ -456,6 +470,24 @@ test("a monitor holds the stage through its event notices and releases it on its
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   expect(attempt().state).toBe("passed");
+});
+
+test("stage_report accepts after its monitor expires while the watched source remains alive", async () => {
+  const h = harness();
+  await runningStage(h);
+
+  append(records.monitorStart(h.now() + 2_000));
+  h.advance(3_000);
+  const refused = await reportStageCompletion({ verdict: "pass", summary: "the source is still running" }, agent, h.ports);
+  expect(refused.code).toBe("STAGE_REPORT_BACKGROUND_TASK_RUNNING");
+
+  /* The Monitor lifetime ends here; this does not claim its command/source
+     ended, so a separate live monitor would still hold the same stage. */
+  append(records.monitorExpiry(h.now() + 300_000));
+  h.advance(300_020);
+  const accepted = await reportStageCompletion({ verdict: "pass", summary: "the watch expired" }, agent, h.ports);
+  expect(accepted.code).toBeUndefined();
+  expect(accepted.report?.verdict).toMatchObject({ status: "pass" });
 });
 
 test("stage_report refuses a verdict while a background task runs, records nothing, and accepts it once the task reports", async () => {
