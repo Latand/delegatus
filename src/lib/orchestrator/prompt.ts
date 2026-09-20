@@ -53,7 +53,7 @@
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "@/lib/roles/paramConfig";
-import type { RoleConfig, RoleDefinition } from "@/lib/roles/types";
+import type { RegistryRoleDefinitions, RoleConfig, RoleDefinition } from "@/lib/roles/types";
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -307,7 +307,7 @@ function runtimeLabel(config: RoleConfig): string {
 function roleTableRow(role: RoleDefinition): string {
   const access = role.capabilities.includes("read-only") ? "read-only" : "read-write";
   const variants = role.id === "builder"
-    ? ` domain=frontend runs ${runtimeLabel(BUILDER_FRONTEND_CONFIG)}; mode=apply-fixes runs ${runtimeLabel(BUILDER_APPLY_FIXES_CONFIG)}.`
+    ? ` domain=frontend runs ${runtimeLabel(role.variants?.frontend ?? BUILDER_FRONTEND_CONFIG)}; mode=apply-fixes runs ${runtimeLabel(role.variants?.["apply-fixes"] ?? BUILDER_APPLY_FIXES_CONFIG)}.`
     : "";
   return `| ${role.id} | ${role.config.engine} | ${role.config.model} | ${role.config.effort} | ${access} | ${role.description}${variants} |`;
 }
@@ -315,12 +315,17 @@ function roleTableRow(role: RoleDefinition): string {
 /** The role table (#1880), rendered at delivery. It changes no default: it
     shows the ones a stage or spawn gets when it names no runtime. */
 export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string {
+  const registry = (roles as RegistryRoleDefinitions).registry;
+  const registryStatus = registry
+    ? `Registry revision: ${registry.revision}. Registry health: ${registry.health.state}${registry.health.state === "degraded" ? ` (${registry.health.reason}; shipped defaults shown)` : ""}.`
+    : "Registry health: unknown (caller did not provide a registry snapshot).";
   return [
     ORCHESTRATOR_ROLE_TABLE_HEADING,
     "Read from this install's role registry when this mandate was delivered. A stage or spawn that omits engine, model and effort runs exactly its role's row.",
     "| role | engine | model | effort | access | for |",
     "| --- | --- | --- | --- | --- | --- |",
     ...roles.map(roleTableRow),
+    `- ${registryStatus}`,
     "- Runtime overrides (engine, model, effort, access) go on the stage beside role, never inside it. A review-loop stage is always read-only.",
     "- Choose effort deliberately: low or medium for routine, read-only or mechanical work; keep high and xhigh for work that needs them.",
     "- Set the runtime at creation. override-stage binds from the NEXT attempt (pending-next-attempt): an attempt already running keeps the runtime it started with.",
