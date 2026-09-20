@@ -1,16 +1,19 @@
 /**
- * Issue #499 (repair round): the dead-host copy must be TRUTHFUL in both
- * locales. A dead STRUCTURED host still admits text durably (the composer's
- * Send stays enabled and the message is delivered after recovery), while
- * images cannot be attached until the host is back. The previous body —
- * "Messages can't be delivered." — contradicted the shipped behavior, so the
- * banner promised less than the product does.
+ * The dead-host copy must be TRUTHFUL in both locales.
  *
- * These tests pin the four facts the copy must state, per locale:
- *   1. durable text admission,
- *   2. delayed delivery after recovery,
- *   3. the image restriction,
- *   4. the recovery controls (Respawn / Terminal / Re-check).
+ * It has been wrong twice in opposite directions. It first said "Messages
+ * can't be delivered", which promised less than the product did; it was then
+ * repaired into a promise that text goes now and images wait for a manual
+ * recovery — which is what the composer used to do, and is no longer true.
+ * Sending admits the WHOLE message, text and attachment bytes under one key,
+ * and the send itself starts the agent again. The banner's controls became
+ * what they always should have been: optional.
+ *
+ * These tests pin the facts the copy must state, per locale:
+ *   1. the whole message is saved first, text and images together,
+ *   2. sending starts the agent again and delivers,
+ *   3. the controls below are optional, never a precondition,
+ *   4. the recovery controls are all still reachable.
  */
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -25,40 +28,36 @@ const LOCALES = ["en", "uk"] as const;
     copy states each fact without the test hard-coding one exact phrasing. */
 const FACTS = {
   en: {
-    durableAdmission: /durabl/i,
-    delayedDelivery: /delivered (?:after|once|when)/i,
-    recovery: /recover/i,
-    imageRestriction: /image/i,
-    falseClaims: [/can[’']t be delivered/i, /cannot be delivered/i],
+    wholeMessage: /text and images together/i,
+    resumes: /started again/i,
+    optional: /optional/i,
+    falseClaims: [
+      /can[’']t be delivered/i, /cannot be delivered/i,
+      /can[’']t be attached/i, /cannot be attached/i,
+      /messages will queue/i,
+    ],
   },
   uk: {
-    durableAdmission: /надійно збер/i,
-    delayedDelivery: /достав\p{L}+ після/iu,
-    recovery: /відновл/i,
-    imageRestriction: /зображенн/i,
-    falseClaims: [/не доставляються/i],
+    wholeMessage: /і текст, і зображення/i,
+    resumes: /запускається знову/i,
+    optional: /необовʼязков/i,
+    falseClaims: [/не доставляються/i, /не можна додати/i, /підуть у чергу/i],
   },
 } as const;
 
 for (const locale of LOCALES) {
-  test(`the ${locale} dead-host banner body states durable admission, delayed delivery, the image restriction, and recovery`, () => {
+  test(`the ${locale} dead-host banner body promises the whole message, the resume, and optional controls`, () => {
     const body = translate(locale, "deadHost.body");
     const facts = FACTS[locale];
-    expect(body).toMatch(facts.durableAdmission);
-    expect(body).toMatch(facts.delayedDelivery);
-    expect(body).toMatch(facts.recovery);
-    expect(body).toMatch(facts.imageRestriction);
+    expect(body).toMatch(facts.wholeMessage);
+    expect(body).toMatch(facts.resumes);
+    expect(body).toMatch(facts.optional);
     for (const falseClaim of facts.falseClaims) expect(body).not.toMatch(falseClaim);
   });
 
-  test(`the ${locale} composer image-restriction line explains the block and the after-recovery delivery`, () => {
-    const line = translate(locale, "composer.imagesBlockedDuringRecovery");
-    const facts = FACTS[locale];
-    // The line must state the restriction as a restriction (not merely that a
-    // selection persists) and tie its release to recovery.
-    // Drafting stays allowed while the host is down; the line only ties image
-    // delivery to recovery (compact-feed pass).
-    expect(line).toMatch(facts.recovery);
+  test(`the ${locale} dead-host title does not make the operator queue behind a restore`, () => {
+    const title = translate(locale, "deadHost.title");
+    for (const falseClaim of FACTS[locale].falseClaims) expect(title).not.toMatch(falseClaim);
   });
 
   test(`the ${locale} banner stays one compact row with all three recovery controls`, () => {

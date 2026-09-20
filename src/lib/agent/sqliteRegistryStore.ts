@@ -31,6 +31,7 @@ const ROW_COLLECTIONS = [
   "migrationIntents",
   "heldDeliveries",
   "deliveryOperationOwners",
+  "deliveryEvidenceCompactions",
   "pendingSuccessorCleanups",
   "pendingSupersedence",
 ] as const satisfies ReadonlyArray<keyof RegistryFile>;

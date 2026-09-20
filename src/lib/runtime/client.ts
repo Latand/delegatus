@@ -1,5 +1,10 @@
 import type { NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "./nativeQueueContracts";
 import net from "node:net";
+import fs from "node:fs";
+import { isNamedPipePath } from "./localEndpoint";
+import { parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit, viewerDeploymentStartedAt, viewerDeploymentSummary,
+  type ViewerDeploymentList, type ViewerDeploymentListOptions } from "./contracts";
+
 
 import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
 import { runtimeHostSocket } from "./flags";
@@ -116,8 +121,13 @@ export interface RuntimeHostClient {
   requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt>;
   cancelViewerDeployment?(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
+  listViewerDeployments?(options?: ViewerDeploymentListOptions): Promise<ViewerDeploymentList>;
   admitMcpHealthProbe?(capability: string): Promise<boolean>;
 }
+
+type DeploymentListCapability = { generation: string; supported?: boolean; probe?: Promise<void> };
+// Route handlers create fresh clients. Share only capability evidence, never data.
+const deploymentListCapabilities = new Map<string, DeploymentListCapability>();
 
 export class UnixRuntimeHostClient implements RuntimeHostClient {
   constructor(
@@ -188,6 +198,61 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs) as Promise<ViewerDeploymentReceipt>; }
   cancelViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-cancel", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-read", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
+  private async deploymentListGeneration(): Promise<string | null> {
+    try {
+      const stat = fs.statSync(this.socketPath, { bigint: true });
+      return `${stat.dev}:${stat.ino}:${stat.ctimeNs}`;
+    } catch {
+      // Named pipes have no filesystem inode. Use the existing host identity RPC.
+      if (!isNamedPipePath(this.socketPath)) return null;
+      const health = await this.call("runtime-host-health") as { pid: number; startIdentity: string; hostEpoch: number };
+      return JSON.stringify([health.pid, health.startIdentity, health.hostEpoch]);
+    }
+  }
+
+  async listViewerDeployments(options: ViewerDeploymentListOptions = {}): Promise<ViewerDeploymentList> {
+    const limit = viewerDeploymentListLimit(options.limit);
+    const cursor = parseViewerDeploymentListCursor(options.cursor);
+    const generation = await this.deploymentListGeneration();
+    let capability = deploymentListCapabilities.get(this.socketPath);
+    if (!generation || capability?.generation !== generation) {
+      capability = { generation: generation ?? "unknown" };
+      if (generation) {
+        if (deploymentListCapabilities.size >= 32) deploymentListCapabilities.delete(deploymentListCapabilities.keys().next().value!);
+        deploymentListCapabilities.set(this.socketPath, capability);
+      }
+    }
+    if (capability.probe) await capability.probe;
+    if (capability.supported !== false) {
+      let finishProbe: (() => void) | undefined;
+      if (capability.supported === undefined) capability.probe = new Promise<void>(resolve => { finishProbe = resolve; });
+      try {
+        const result = await this.call("viewer-deployment-list", { ...options, limit }) as ViewerDeploymentList;
+        capability.supported = true;
+        return result;
+      } catch (error) {
+        // Timeouts, malformed replies and domain refusals retain their meaning.
+        if (!(error instanceof RuntimeHostUnavailableError) || error.message !== "runtime request method is unsupported") throw error;
+        capability.supported = false;
+      } finally {
+        finishProbe?.();
+        capability.probe = undefined;
+      }
+    }
+    // A new-host cursor can name history the old snapshot never retained.
+    // Refuse that continuation instead of falsely reporting complete history.
+    if (cursor && !cursor[2]) throw new RuntimeHostUnavailableError("deployment list cursor requires the current host; restart the list after hand-over");
+    const rows = (await this.snapshot()).deployments
+      .sort((a, b) => viewerDeploymentStartedAt(b) - viewerDeploymentStartedAt(a) || b.deploymentId.localeCompare(a.deploymentId))
+      .filter(row => !cursor || viewerDeploymentStartedAt(row) < cursor[0]
+        || (viewerDeploymentStartedAt(row) === cursor[0] && row.deploymentId < cursor[1]));
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return { deployments: options.compact ? page.map(viewerDeploymentSummary) : page, legacySnapshot: true,
+      hasMore: rows.length > limit,
+      nextCursor: rows.length > limit && last ? viewerDeploymentListCursor(viewerDeploymentStartedAt(last), last.deploymentId, true) : null };
+  }
+
   admitMcpHealthProbe(capability: string): Promise<boolean> { return this.call("mcp-health-probe-admission", { capability }) as Promise<boolean>; }
 
   private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal): Promise<unknown> {

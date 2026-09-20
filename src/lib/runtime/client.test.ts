@@ -3,6 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { viewerDeploymentListCursor } from "./contracts";
 
 import {
   resetRuntimeHostRequestHealthForTests,
@@ -21,8 +22,7 @@ afterAll(async () => {
   fs.rmSync(SANDBOX, { recursive: true, force: true });
 });
 
-function serve(onRequest: (frame: string, socket: net.Socket) => void): string {
-  const socketPath = path.join(SANDBOX, `${crypto.randomUUID().slice(0, 8)}.sock`);
+function serve(onRequest: (frame: string, socket: net.Socket) => void, socketPath = path.join(SANDBOX, `${crypto.randomUUID().slice(0, 8)}.sock`)): string {
   const server = net.createServer((socket) => {
     connections.push(socket);
     socket.on("error", () => undefined);
@@ -186,3 +186,50 @@ test("snapshot accepts an upgrade-sized frame from the previous runtime host", a
 
   expect(snapshot.padding.length).toBe(padding.length);
 });
+
+
+test("deployment list remembers one unsupported probe across clients and concurrent polls until the socket generation changes", async () => {
+  const methods: string[] = [];
+  const deployments = ["a", "c", "b"].map(deploymentId => ({ deploymentId, createdAt: "2026-09-20T12:00:00Z", updatedAt: "2026-09-20T12:00:00Z",
+    phase: "succeeded", terminal: true, revision: "a".repeat(40), error: null }));
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    methods.push(request.method);
+    socket.end(JSON.stringify(request.method === "viewer-deployment-list"
+      ? { id: request.id, ok: false, error: "runtime request method is unsupported" }
+      : { id: request.id, ok: true, result: { deployments } }) + "\n");
+  });
+  const pages = await Promise.all(Array.from({ length: 5 }, () => new UnixRuntimeHostClient(socketPath).listViewerDeployments({ limit: 1 })));
+  expect(methods.filter(method => method === "viewer-deployment-list")).toHaveLength(1);
+  expect(methods.filter(method => method === "snapshot")).toHaveLength(5);
+  for (const page of pages) expect(page.deployments.map(row => row.deploymentId)).toEqual(["c"]);
+  expect(pages[0]!.legacySnapshot).toBe(true);
+  await expect(new UnixRuntimeHostClient(socketPath).listViewerDeployments({ cursor: viewerDeploymentListCursor(Date.parse(deployments[0]!.createdAt), "c") }))
+    .rejects.toThrow("restart the list after hand-over");
+  expect(methods.filter(method => method === "snapshot")).toHaveLength(5);
+  const second = await new UnixRuntimeHostClient(socketPath).listViewerDeployments({ limit: 1, cursor: pages[0]!.nextCursor!, compact: true });
+  expect(second.deployments).toEqual([{ deploymentId: "b", phase: "succeeded", terminal: true, sha: "a".repeat(40),
+    startedAt: "2026-09-20T12:00:00Z", finishedAt: "2026-09-20T12:00:00Z", error: null }]);
+  fs.unlinkSync(socketPath); // This test owns both listeners; a successor binds a new inode.
+  const nextMethods: string[] = [];
+  serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    nextMethods.push(request.method);
+    socket.end(JSON.stringify({ id: request.id, ok: true, result: { deployments: [], nextCursor: null, hasMore: false } }) + "\n");
+  }, socketPath);
+  expect(await new UnixRuntimeHostClient(socketPath).listViewerDeployments()).toEqual({ deployments: [], nextCursor: null, hasMore: false });
+  expect(nextMethods).toEqual(["viewer-deployment-list"]);
+});
+
+for (const failure of ["deployment list cursor is invalid", "viewer deployments are disabled", "runtime host is unavailable"]) {
+  test(`deployment list does not fall back on ${failure}`, async () => {
+    const methods: string[] = [];
+    const socketPath = serve((frame, socket) => {
+      const request = JSON.parse(frame);
+      methods.push(request.method);
+      socket.end(JSON.stringify({ id: request.id, ok: false, error: failure }) + "\n");
+    });
+    await expect(new UnixRuntimeHostClient(socketPath).listViewerDeployments()).rejects.toThrow(failure);
+    expect(methods).toEqual(["viewer-deployment-list"]);
+  });
+}

@@ -110,7 +110,7 @@ import { listRoles, resolveSpawnRole } from "@/lib/roles/registry";
 import type { RoleDefinition, RoleParameter } from "@/lib/roles/types";
 import { readSpawnAdmissionFence, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import type { RuntimeHostRequestHealth } from "@/lib/runtime/client";
-import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
+import type { ViewerDeploymentStatus, ViewerDeploymentSummary } from "@/lib/runtime/contracts";
 import { messageOriginRole, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { ledgerDeployment, ledgerDeployments } from "@/lib/runtime/deploymentLedger";
 import { resolveOriginalSend, resolveSendReceipt, type SendSettlementPorts } from "@/lib/runtime/sendSettlement";
@@ -3447,17 +3447,33 @@ function runtimeHostRequestHealth(value: unknown): RuntimeHostRequestHealth | nu
   };
 }
 
-function deploymentList(result: Record<string, unknown>): {
-  deployments: ViewerDeploymentStatus[];
+function isDeploymentSummary(value: unknown): value is ViewerDeploymentSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.deploymentId === "string" && typeof row.phase === "string" && typeof row.sha === "string"
+    && typeof row.terminal === "boolean" && (row.startedAt === null || typeof row.startedAt === "string")
+    && (row.finishedAt === null || typeof row.finishedAt === "string") && (row.error === null || typeof row.error === "string");
+}
+
+function deploymentList(result: Record<string, unknown>, compact = false): {
+  deployments: Array<ViewerDeploymentStatus | ViewerDeploymentSummary>;
+  nextCursor?: string | null;
+  hasMore?: boolean;
+  legacySnapshot?: true;
   runtimeHostRequests?: RuntimeHostRequestHealth;
 } {
   if (
     !Array.isArray(result.deployments)
-    || !result.deployments.every((deployment) => isDeploymentStatus(deployment))
+    || !result.deployments.every((deployment) => isDeploymentStatus(deployment) || (compact && isDeploymentSummary(deployment)))
     || !Number.isInteger(result.count)
     || result.count !== result.deployments.length
   ) {
     throw new ViewerControlResponseError("Viewer control returned a malformed deployment list");
+  }
+  if ((result.nextCursor !== undefined || result.hasMore !== undefined)
+    && (typeof result.hasMore !== "boolean" || !(result.nextCursor === null || typeof result.nextCursor === "string")
+      || result.hasMore !== (typeof result.nextCursor === "string" && result.nextCursor.length > 0))) {
+    throw new ViewerControlResponseError("Viewer control returned malformed deployment pagination");
   }
   const health = runtimeHostRequestHealth(result.runtimeHostRequests);
   if (result.runtimeHostRequests !== undefined && !health) {
@@ -3465,6 +3481,8 @@ function deploymentList(result: Record<string, unknown>): {
   }
   return {
     deployments: result.deployments,
+    ...(result.legacySnapshot === true ? { legacySnapshot: true } : {}),
+    ...(result.nextCursor !== undefined ? { nextCursor: result.nextCursor as string | null, hasMore: result.hasMore as boolean } : {}),
     ...(health ? { runtimeHostRequests: health } : {}),
   };
 }
@@ -3485,7 +3503,7 @@ async function deploymentStatus(
       ...(text(args.cursor) ? { cursor: text(args.cursor) } : {}),
     }, { launchId, capability: process.env[VIEWER_SPAWN_CAPABILITY_ENV]?.trim() ?? "" }));
   }
-  if (args.kind !== undefined || args.cursor !== undefined) throw new Error("unsupported deployment status query");
+  if (args.kind !== undefined || (args.cursor !== undefined && (args.deploymentId !== undefined || args.operationId !== undefined))) throw new Error("unsupported deployment status query");
   const deploymentId = text(args.deploymentId);
   if (deploymentId) {
     const deployment = await readViewerControl(
@@ -3526,21 +3544,27 @@ async function deploymentStatus(
     return redactPayload({ operationId, operation });
   }
   const limit = Math.max(1, Math.min(100, integer(args.limit, 25)));
-  const result = await readViewerControl(control, `/api/runtime/deployments?limit=${limit}`)
+  const cursor = text(args.cursor);
+  const query = `limit=${limit}${args.compact === true ? "&compact=true" : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+  const result = await readViewerControl(control, `/api/runtime/deployments?${query}`)
     .catch(async (error: unknown) => {
       if (!isUnservedControlRoute(error)) throw error;
+      if (cursor) throw new Error("Viewer deployment pagination is unavailable during hand-over; restart the list");
       const fromLedger = ledgerDeployments(limit);
       if (fromLedger.state === "unreadable") throw new Error(fromLedger.error);
       const deployments = fromLedger.value;
       return { count: deployments.length, deployments };
     });
-  const { deployments: listed, runtimeHostRequests } = deploymentList(result);
+  const { deployments: listed, runtimeHostRequests, nextCursor, hasMore, legacySnapshot } = deploymentList(result, args.compact === true);
+  if (cursor && nextCursor === undefined) throw new Error("Viewer deployment pagination is unavailable during hand-over; restart the list");
   /* #1845 defect C: newest first, whatever order the source answered in — a
      Viewer revision that still serves the id-ordered list included. */
-  const deployments = newestDeploymentsFirst(listed);
+  const deployments = listed.every(row => isDeploymentStatus(row)) ? newestDeploymentsFirst(listed) : listed;
   return redactPayload({
     count: deployments.length,
-    deployments: args.compact === true ? deployments.map(compactDeployment) : deployments,
+    deployments: args.compact === true ? deployments.map(row => isDeploymentSummary(row) ? row : compactDeployment(row)) : deployments,
+    ...(nextCursor !== undefined ? { nextCursor, hasMore } : {}),
+    ...(legacySnapshot ? { legacySnapshot } : {}),
     ...(runtimeHostRequests ? { runtimeHostRequests } : {}),
   });
 }

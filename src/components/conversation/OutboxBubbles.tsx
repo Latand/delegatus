@@ -65,7 +65,14 @@ function stateChip(
     icon: <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />,
     className: "text-warning", wait: "uncertain",
   };
-  if (entry.acceptedHeld && entry.state === "delivering") return {
+  /* A server-held admission with no receipt yet says only "held". That is the
+     honest answer while nothing else is known — but when the conversation's own
+     host axis says the window is gone or is being started again, the wait model
+     below knows MORE than "held", and the operator who sent into a dead host is
+     owed that. The generic wording stays for every other hold. */
+  const hostAxisSpeaks = session?.host === "dead" || session?.host === "unhosted"
+    || session?.host === "recovering" || session?.host === "registering";
+  if (entry.acceptedHeld && entry.state === "delivering" && !hostAxisSpeaks) return {
     label: t("composer.deliveryHeldWaiting"),
     icon: <Clock3 className="h-3 w-3" aria-hidden />,
     className: "text-warning",
@@ -85,7 +92,9 @@ function stateChip(
      will ever hand over. The bubble now says which, and how long it waited. */
   if (entry.state === "delivering") {
     const wait = deliveryWaitFor({
-      status: entry.awaitingTurn ? "queued" : "delivering",
+      /* A held admission is parked, not on the wire: reading it as `queued`
+         is what lets the model name the host wait it is actually in. */
+      status: entry.awaitingTurn || entry.acceptedHeld ? "queued" : "delivering",
       host: session?.host ?? null,
       turn: session?.turn ?? null,
       /* The enqueue stamp: written once when the operator pressed send and
@@ -98,9 +107,14 @@ function stateChip(
       return { label: waitLabel!, icon: <TriangleAlert className="h-3 w-3" aria-hidden />, className: "text-danger", wait: wait.phase };
     }
     if (waitLabel) {
+      /* A host being started again is progress, and it spins and reads like
+         progress; a host that is simply gone stays the red one. */
+      const resuming = wait!.phase === "resuming-host";
       return {
         label: waitLabel,
-        icon: <Clock3 className="h-3 w-3" aria-hidden />,
+        icon: resuming
+          ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden />
+          : <Clock3 className="h-3 w-3" aria-hidden />,
         className: wait!.phase === "awaiting-host" ? "text-danger" : "text-warning",
         wait: wait!.phase,
       };

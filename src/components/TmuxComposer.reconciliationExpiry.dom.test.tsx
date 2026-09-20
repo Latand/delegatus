@@ -1409,6 +1409,17 @@ test.each([
   // rejection above that helper misses the result the composer actually sees.
   globalThis.fetch = (async (input, init) => {
     if (String(input) === "/api/tmux/targets") return { ok: true, json: async () => ({ targets: {} }) } as Response;
+    /* The READ half of the send key. An attempt whose response was lost is
+       resolved through this and never by posting the send again, so the stub
+       answers it out of the same `admitted` map the POST half writes: the
+       server's own record of what it accepted. */
+    if (String(input).startsWith("/api/runtime/send?")) {
+      const key = new URL(String(input), "http://127.0.0.1").searchParams.get("clientMessageId") ?? "";
+      const record = admitted.get(key);
+      return Response.json(record
+        ? { outcome: "admitted", operationId: record.operationId, receipt: record }
+        : { outcome: "not-executed" });
+    }
     if (String(input) === "/api/runtime/send") {
       const options = JSON.parse(String(init?.body)) as typeof sends[number];
       sends.push(options);
@@ -1498,15 +1509,52 @@ test.each([
       expect(host.querySelector('[data-operation^="composer-unconfirmed:"]')).toBeNull();
       return;
     }
+    /* THE RECOVERY IS A LOOKUP. It used to POST the send a second time under
+       the original key, which is a second request against a message the server
+       may already be delivering. The control asks instead, and the send count
+       stays at the one attempt that was actually made. */
+    const key = sends[0]!.idempotencyKey;
     flushSync(() => host.querySelector<HTMLButtonElement>("[data-receipt-uncertain-retry]")!.click());
+    /* The reconciliation window may already have parked this entry as a
+       failure; what the LOOKUP settles is its uncertainty, so that is what the
+       wait watches. */
+    await until(() => readOutbox(conversationId)[0]?.deliveryUncertain === undefined);
+    expect(sends).toHaveLength(1);
+
+    if (transport === "disconnected-admitted") {
+      /* The server HAD admitted it before the socket dropped. The lookup finds
+         that operation, adopts it, and nothing is sent again — ever. */
+      await until(() => readOutbox(conversationId)[0]?.operationId !== undefined);
+      expect(readOutbox(conversationId)[0]?.operationId).toBe(admitted.get(key)!.operationId);
+      expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBeUndefined();
+      expect(sends).toHaveLength(1);
+      expect(admitted.size).toBe(1);
+      return;
+    }
+
+    /* Proven never executed. That AUTHORIZES a later attempt; it does not make
+       one. The message is an ordinary failed one now, with its own bytes. */
+    expect(readOutbox(conversationId)[0]?.state).toBe("failed");
+    expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBeUndefined();
+    expect(readOutbox(conversationId)[0]?.text).toBe(prompt);
+    if (attachment) expect(await retainedImages(conversationId, key)).toHaveLength(1);
+
+    /* And the operator's own Retry is what sends it — under the ORIGINAL key,
+       byte for byte the first attempt's payload. */
+    flushSync(() => retryOutbox(conversationId, key));
     await until(() => sends.length === 2);
     expect(sends).toHaveLength(2);
     expect(sends[1]).toEqual(sends[0]);
     if (recovery === "refused-retry") {
+      /* The authorized attempt was itself refused ABOVE the delivery attempt,
+         so nothing was journaled and the message goes back where it came from:
+         the draft returns whole and the bubble leaves with it, which is the
+         refusal contract (#1593). What must never survive is the unknown —
+         and nothing here is parked as one. */
       await untilSendEnabled(host);
-      expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBe(true);
-      expect(host.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
-      expect(host.querySelector("[data-receipt-discard]")).not.toBeNull();
+      await until(() => host.querySelector<HTMLTextAreaElement>("textarea")?.value === prompt);
+      expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(prompt);
+      expect(readOutbox(conversationId).some(entry => entry.deliveryUncertain)).toBe(false);
       return;
     }
     await until(() => readOutbox(conversationId)[0]?.awaitingTurn === true);
