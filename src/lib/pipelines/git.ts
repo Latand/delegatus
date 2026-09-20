@@ -283,6 +283,25 @@ export type PipelinePublishResult =
 
 const REMOTE_READ_TIMEOUT = "5s";
 
+/** The lock's mtime records publication progress across Viewer restarts. The
+    existing fetch and two remote-read budgets bound a silent operation. */
+export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublishResult {
+  const delivery = pipeline.delivery!;
+  const operation = delivery.operation!;
+  if (operation.epoch !== delivery.epoch) return { ok: false, error: "publication owner or epoch changed" };
+  let progressAt = Date.parse(pipeline.createdAt);
+  try {
+    const stat = fs.statSync(operation.executor!.lock);
+    if (`${stat.dev}:${stat.ino}` === operation.executor?.lockIdentity) progressAt = stat.mtimeMs;
+  } catch { /* A missing lock supplies no progress evidence. */ }
+  const age = Math.max(0, Date.now() - progressAt);
+  const bound = (parseInt(BASE_FETCH_TIMEOUT) + 2 * parseInt(REMOTE_READ_TIMEOUT)) * 1_000;
+  if (!Number.isFinite(age) || age > bound) return { ok: false,
+    error: `publication ${operation.id} has no progress for ${Number.isFinite(age) ? `${Math.floor(age / 1_000)}s` : "an unknown age"}; reconcile through takeover with expectedOwner ${delivery.ownerId} and expectedEpoch ${delivery.epoch} once the publisher exits` };
+  return { ok: true, sha: operation.sha, remote: "unreachable",
+    detail: `publishing the passed stage, in progress since ${new Date(progressAt).toISOString()} (operation ${operation.id})` };
+}
+
 /** A publication tick gets one bounded remote read. The engine tick is already
     the retry loop, so retrying or sleeping inside this synchronous adapter only
     multiplies event-loop stalls. `timeout` exists in both the runtime image and
@@ -370,7 +389,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
   fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
   const descriptor = acquirePublicationFileLock(lock);
-  if (descriptor === null) return { ok: false, error: `publisher ${pipeline.delivery?.ownerId ?? pipeline.id} is still in flight or kernel locking is unavailable` };
+  if (descriptor === null) {
+    const current = findPipelineRecord(pipeline.id);
+    const error = deliveryOwnerError(current ?? pipeline, current);
+    if (error) return { ok: false, error };
+    if (pipeline.delivery?.epoch !== current?.delivery?.epoch) return { ok: false, error: "publication owner or epoch changed" };
+    if (current?.delivery?.operation?.state === "running") return pipelinePublicationInFlight(current);
+    return { ok: false, error: `publisher ${pipeline.delivery?.ownerId ?? pipeline.id} is still in flight or kernel locking is unavailable` };
+  }
   const lockIdentity = publicationLockIdentity(descriptor);
   let descriptorOpen = true;
   let reserved = false;
@@ -388,24 +414,26 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (pipeline.delivery?.operation?.state === "pending" && previous?.id !== pipeline.delivery.operation.id) {
         return { error: `publisher ${current.id} at epoch ${current.delivery.epoch} has a newer reservation; reload before publishing` };
       }
-      if (previous?.state === "running") return { error: `publication for owner ${current.id} at epoch ${current.delivery.epoch} is in flight or uncertain` };
+      if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current) };
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
         ...(previous?.state === "pending" ? { requestKey: previous.requestKey } : {}), state: "running",
       executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
+      fs.futimesSync(descriptor, new Date(), new Date());
       tx.put(current);
       return { pipeline: current, operationId: current.delivery.operation.id };
     });
+    if (reservation.waiting) return reservation.waiting;
     if (!reservation.pipeline) return { ok: false, error: reservation.error! };
     reserved = true;
     // Git and network work deliberately run after boundedPatch released its lease.
     // Each real Git child inherits this kernel lock. If the Viewer dies, the
     // lock stays held until that child is gone; takeover must prove it is free.
-    const fencedExec: ExecPort = exec === realExec
-      ? (command, args, cwd) => {
-        const child = spawnSync(command, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", descriptor] });
-        return { code: child.status, stdout: child.stdout ?? "", stderr: child.stderr ?? String(child.error ?? ""), signal: child.signal };
-      }
-      : exec;
+    const fencedExec: ExecPort = (command, args, cwd) => {
+      fs.futimesSync(descriptor, new Date(), new Date());
+      if (exec !== realExec) return exec(command, args, cwd);
+      const child = spawnSync(command, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", descriptor] });
+      return { code: child.status, stdout: child.stdout ?? "", stderr: child.stderr ?? String(child.error ?? ""), signal: child.signal };
+    };
     let result: PipelinePublishResult;
     try { result = executePipelinePublication(reservation.pipeline, fencedExec, { acceptedSha: request.acceptedSha,
       publishedSha: request.publishedSha === reservation.pipeline.publishedCommit ? request.publishedSha : null }); }

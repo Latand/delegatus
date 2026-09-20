@@ -58,7 +58,7 @@ import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed } from "./failEdgeBudget";
-import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -2218,7 +2218,7 @@ function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: 
   const error = deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...delivery.target, active: true }) ?? pipeline);
   if (error) return { ok: false, error };
   const operation = delivery.operation;
-  if (operation?.state === "running") return { ok: false, error: `publisher ${delivery.ownerId} at epoch ${delivery.epoch} is in flight or uncertain` };
+  if (operation?.state === "running") return pipelinePublicationInFlight(pipeline);
   if (operation?.sha === request.acceptedSha && operation.requestKey === requestKey && operation.epoch === delivery.epoch && operation.state === "settled" && operation.result) {
     return operation.result as import("./git").PipelinePublishResult;
   }
@@ -2242,7 +2242,8 @@ function retryTerminalStagePublication(
     publishedSha: pipeline.publishedCommit ?? null,
   });
   if (!published.ok) {
-    park(pipeline, `publishing the passed stage: ${published.error}`, attempt);
+    attempt.error = `publishing the passed stage: ${published.error}`;
+    park(pipeline, attempt.error);
     return;
   }
   if (published.remote === "unreachable") {
@@ -4531,11 +4532,41 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     if (legacy.length === 16) followUp = true;
     /* Before the lease, never under it (#1799). */
     const provisioned = provisionPendingPipelines(ports);
+    // Reconcile only this owner's reservation, with the existing kernel fence.
+    // Remote reads must finish before entering the pipeline mutation lease.
+    for (const pipeline of loadPipelinesForProjection()) {
+      const delivery = pipeline.delivery;
+      if (publishesRemoteBranch(pipeline) && delivery?.active && delivery.ownerId === pipeline.id
+        && delivery.operation?.state === "running" && delivery.operation.epoch === delivery.epoch
+        && (pipeline.state === "running" || pipeline.state === "needs_decision")) {
+        await reconcilePipelinePublication(pipeline.id, delivery.epoch, ports.exec, null);
+      }
+    }
     const result = await withPipelineControllerMutation(async (pipelines, persist) => {
       let changed = reconcilePipelineFallbackTasks(pipelines, persist);
       await forEachCooperatively(pipelines, async (pipeline) => {
         if (publishesRemoteBranch(pipeline) && !pipeline.delivery) return;
         const persistPipeline = () => persist([pipeline]);
+        const operation = pipeline.delivery?.operation;
+        const passed = pipeline.cursor?.state === "committing" ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
+        if (pipeline.state === "needs_decision" && passed?.verdict?.status === "pass"
+          && operation?.sha === pipeline.lastPassedCommit
+          && (pipeline.stateDetail === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
+            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)))) {
+          passed.state = "passed";
+          passed.error = null;
+          pipeline.state = "running";
+          pipeline.stateDetail = null;
+          persistPipeline();
+        }
+        // A quiescent interrupted writer that did not land can safely reserve
+        // publication again. Its passed stage and accepted revision stay put.
+        if (operation?.state === "settled" && operation.result?.ok === false
+          && operation.result.error === "interrupted publication did not leave its accepted head on the remote"
+          && pipeline.state === "running") {
+          delete pipeline.delivery!.operation;
+          persistPipeline();
+        }
         if (publicationPass === 0 && pipeline.delivery?.operation?.state === "settled"
           && pipeline.delivery.operation.result?.ok && pipeline.delivery.operation.result.remote === "unreachable") {
           delete pipeline.delivery.operation;
