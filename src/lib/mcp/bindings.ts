@@ -175,6 +175,7 @@ import {
   pipelineAcknowledgement,
   pipelineActionAcknowledgement,
   pipelineStageRead,
+  stageReportAcknowledgement,
   type AccountLimitsInput,
 } from "./compactAnswers";
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
@@ -1488,7 +1489,7 @@ async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     stageId: result.stageId,
     attempt: result.attempt,
     replaced: result.replaced ?? false,
-    report: result.report,
+    report: stageReportAcknowledgement(result.report),
   };
 }
 

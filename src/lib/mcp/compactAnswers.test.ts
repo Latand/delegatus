@@ -24,7 +24,7 @@ afterAll(() => {
 });
 
 const { viewerMcpBindings } = await import("./bindings");
-const { compactLiveness } = await import("./compactAnswers");
+const { compactLiveness, stageReportAcknowledgement } = await import("./compactAnswers");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { CORPUS_BODY_MARKERS, pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
 const { savePipelines } = await import("@/lib/pipelines/store");
@@ -45,7 +45,10 @@ function reviewedPipeline() {
   const attempts = pipeline!.runs[0]!.attempts;
   const latest = attempts[attempts.length - 1]!;
   latest.state = "failed";
-  latest.verdict = { status: "fail", findings: ["P1 — the route ignores the project filter"] };
+  latest.verdict = {
+    status: "fail",
+    findings: ["P0 — the route permits an unsafe write", "P1 — the route ignores the project filter"],
+  };
   latest.report = {
     seq: 1,
     at: "2026-09-19T09:00:00.000Z",
@@ -58,6 +61,61 @@ function reviewedPipeline() {
   pipeline!.stateDetail = "the first stage failed; waiting on the fail edge";
   return pipeline!;
 }
+
+test("stage_report acknowledgement is compact, while one stage read retains every finding and summary (#1919)", async () => {
+  const report = {
+    seq: 7,
+    at: "2026-09-20T06:30:00.000Z",
+    actor: { kind: "agent", role: "builder", conversationId: "conversation_stage" },
+    verdict: {
+      status: "fail" as const,
+      findings: [
+        `P0 — ${"critical evidence ".repeat(90)}`,
+        `P1 — ${"important evidence ".repeat(90)}`,
+        `P3 — ${"minor evidence ".repeat(90)}`,
+      ],
+      rankedFindings: [
+        { severity: "P0" as const, text: "critical" },
+        { severity: "P1" as const, text: "important" },
+        { severity: "P3" as const, text: "minor" },
+      ],
+    },
+    summary: "summary ".repeat(250),
+    provenance: {
+      head: "a".repeat(40), branch: "pipeline/fixture", uncommitted: ["changed.ts"],
+      pullRequest: { url: "https://example.test/pr/1", number: 1, state: "OPEN" },
+      outputs: [{ path: "evidence.json", present: true }],
+    },
+    calls: 2,
+  };
+  const acknowledgement = stageReportAcknowledgement(report);
+  expect(acknowledgement).toMatchObject({
+    seq: 7,
+    verdict: { status: "fail", findingCount: 3, severityCounts: { P0: 1, P1: 1, P2: 0, P3: 1 } },
+    provenance: { head: "a".repeat(40), branch: "pipeline/fixture", dirty: true, outputs: [{ path: "evidence.json", present: true }] },
+    calls: 2,
+  });
+  expect(JSON.stringify(acknowledgement)).not.toContain("critical evidence");
+  expect(JSON.stringify(acknowledgement)).not.toContain("summary summary");
+  const oldSuccess = { pipelineId: "pipeline_fixture", stageId: "build", attempt: 1, replaced: false, report };
+  const compactSuccess = { pipelineId: "pipeline_fixture", stageId: "build", attempt: 1, replaced: false, report: acknowledgement };
+  const projectedOldOutput = 220 * bytes(oldSuccess);
+  const projectedCompactOutput = 220 * bytes(compactSuccess);
+  expect(projectedCompactOutput).toBeLessThan(projectedOldOutput);
+  const serialize = (value: unknown) => {
+    const started = performance.now();
+    for (let index = 0; index < 1_000; index += 1) JSON.stringify(value);
+    return performance.now() - started;
+  };
+  /* A local serialization timing only checks this projection's overhead. It
+     deliberately says nothing about provider or end-to-end tool latency. */
+  expect(serialize(compactSuccess)).toBeLessThan(serialize(oldSuccess));
+  /* Immediate acknowledgements shrink; reading the full report is deliberately
+     larger, so this is not a claim that every acknowledgement-plus-follow-up
+     interaction costs less. */
+  expect(bytes(acknowledgement)).toBeLessThan(bytes(report) / 4);
+  expect(bytes(acknowledgement) + bytes(report)).toBeGreaterThan(bytes(report));
+});
 
 test("create_pipeline answers an acknowledgement, and get_pipeline still reads the whole record (#1845)", async () => {
   const bindings = viewerMcpBindings();
@@ -119,7 +177,7 @@ test("get_pipeline with stageId answers one stage's conclusion without prompts o
       n: 6,
       state: "failed",
       verdict: "fail",
-      findings: ["P1 — the route ignores the project filter"],
+      findings: ["P0 — the route permits an unsafe write", "P1 — the route ignores the project filter"],
       summary: "One finding left.",
     },
   });

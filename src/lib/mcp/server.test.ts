@@ -617,6 +617,21 @@ describe("MCP tool service", () => {
     }
   });
 
+  test("a saved pre-compaction stage_report receipt still replays after a store reopen (#1919)", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-stage-report-legacy-"));
+    scratch.push(directory);
+    const receiptPath = path.join(directory, "receipts.json");
+    const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})])) as unknown as McpToolBindings;
+    const legacyReport = { seq: 1, verdict: { status: "fail", findings: ["P1 — retained old receipt"] }, summary: "retained old summary" };
+    bindings.stage_report = async () => ({ pipelineId: "pipeline_1", stageId: "build", attempt: 1, replaced: false, report: legacyReport });
+    const args = { clientRequestId: "legacy-stage-report", verdict: "fail" };
+    const first = await createMcpToolService(bindings, new FileMcpReceiptStore(receiptPath)).callTool("stage_report", args);
+    const reopenedBindings = { ...bindings, stage_report: async () => { throw new Error("a replay must not report again"); } };
+    const replay = await createMcpToolService(reopenedBindings, new FileMcpReceiptStore(receiptPath)).callTool("stage_report", args);
+    expect(replay).toEqual({ ...first, replayed: true });
+    expect(replay).toMatchObject({ report: legacyReport });
+  });
+
   test("a receipt left pending across process restart becomes a structured retryable error", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-receipts-"));
     scratch.push(directory);

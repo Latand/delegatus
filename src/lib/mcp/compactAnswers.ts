@@ -16,7 +16,7 @@ import type { AgentLivenessRecord, AgentLivenessSnapshot } from "@/lib/lifecycle
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { clampChars, clampLine } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
-import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
+import type { Pipeline, PipelineStageAttempt, PipelineStageReport } from "@/lib/pipelines/types";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { modelTierWindows, type LimitWindow } from "@/lib/types";
 
@@ -62,6 +62,37 @@ export function pipelineActionAcknowledgement(pipeline: Pipeline) {
     closedAt: pipeline.closedAt ?? null,
     stageDigests: stageDigests(pipeline.stages ?? []),
     graphDigest: graphDigest(pipeline.stages ?? []),
+  };
+}
+
+/**
+ * The durable stage report is the authority for findings and the narrative.
+ * A successful completion only needs enough metadata to identify that report;
+ * `get_pipeline` with `stageId` reads its complete bounded record. Keep this
+ * projection scalar/bounded so a large finding list cannot return through a
+ * second field in the acknowledgement.
+ */
+export function stageReportAcknowledgement(report: PipelineStageReport) {
+  const findings = report.verdict.findings ?? [];
+  const severityCounts = { P0: 0, P1: 0, P2: 0, P3: 0 };
+  for (const finding of report.verdict.rankedFindings ?? []) severityCounts[finding.severity] += 1;
+  return {
+    seq: report.seq,
+    at: report.at,
+    verdict: {
+      status: report.verdict.status,
+      findingCount: findings.length,
+      severityCounts,
+    },
+    provenance: {
+      head: report.provenance.head,
+      branch: report.provenance.branch,
+      dirty: report.provenance.uncommitted === null ? null : report.provenance.uncommitted.length > 0,
+      pullRequest: report.provenance.pullRequest,
+      /* Declared outputs are capped by the pipeline schema. */
+      outputs: report.provenance.outputs,
+    },
+    calls: report.calls,
   };
 }
 
