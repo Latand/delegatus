@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { hhmm } from "@/components/utils";
 import { formatDuration } from "@/components/feed/duration";
@@ -40,6 +40,7 @@ afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
   document.body.replaceChildren();
+  setLocale("en");
 });
 
 function mount(items: RuntimeLiveTurnItem[]): HTMLElement {
@@ -180,7 +181,7 @@ for (const { tool, args, chips } of MCP_CASES) {
     }]);
     const row = live.querySelector<HTMLElement>("[data-live-mcp]")!;
     expect(row.dataset.liveMcp).toBe(tool);
-    expect(row.querySelector("span.flex-1")!.textContent).toBe(cardTitle);
+    expect(row.querySelector("[data-live-mcp-title]")!.textContent).toBe(cardTitle);
     expect(row.textContent).toContain("MCP · viewer");
     /* The same entity chips, with the same labels and the same targets. */
     expect(chipsOf(live, "[data-live-mcp-link]")).toEqual(chipsOf(card, "[data-testid^=mcp-link-]"));
@@ -205,4 +206,90 @@ test("a call whose result the journal's bound dropped reads as finished with its
   expect(row.textContent).not.toContain("error");
   expect(row.querySelector(".animate-spin")).toBeNull();
   expect(row.className).not.toContain("border-danger");
+});
+
+/* Round-2 P1: the MCP row's own outcome vocabulary. `unknown` means the
+   runtime journal's bound dropped this call's result — the call may well have
+   FAILED — so the row must assert nothing about it: no check, no alert, no
+   spinner, and none of the tones that carry those meanings. It says what it
+   knows instead, in the reader's language, and keeps the summary and the
+   entity chips that make the row worth showing at all. */
+const MCP_STATES = [
+  /* `aria` is what the mark announces, `text` what the row actually prints. */
+  { status: "run", state: "pending", spinner: true, aria: "Linking…", text: null, tone: "text-accent" },
+  { status: "ok", state: "success", spinner: false, aria: "success", text: null, tone: "text-success" },
+  { status: "err", state: "error", spinner: false, aria: "error", text: null, tone: "text-danger" },
+  { status: "unknown", state: "outcome-omitted", spinner: false, aria: null, text: "outcome omitted", tone: "text-muted" },
+] as const;
+
+const LINK_ARGS = { taskId: "task-demo-4417", pipelineId: "pipeline-demo-2208" };
+
+function mcpRow(status: "run" | "ok" | "err" | "unknown"): HTMLElement {
+  const host = mount([{
+    itemId: `toolu_state_${status}`, text: "", phase: "awaiting-echo", startedAt: AT,
+    completedAt: status === "run" ? null : AT,
+    tool: { name: "mcp__viewer__link_task_to_pipeline", engine: "claude", status, args: LINK_ARGS },
+  }]);
+  return host.querySelector<HTMLElement>("[data-live-mcp]")!;
+}
+
+for (const lang of ["en", "uk"] as const) {
+  for (const { status, state, spinner, aria, text, tone } of MCP_STATES) {
+    test(`[${lang}] a live MCP row with status ${status} carries only the ${state} indicator`, () => {
+      setLocale(lang);
+      const row = mcpRow(status);
+      expect(row.dataset.liveToolStatus).toBe(status);
+      expect(row.dataset.liveMcpState).toBe(state);
+
+      /* Exactly one outcome mark, and it is this state's own. */
+      const marks = {
+        success: row.querySelector("[aria-label=success]"),
+        error: row.querySelector("[aria-label=error]"),
+        pending: row.querySelector("[role=status]"),
+        omitted: row.querySelector("[data-live-mcp-outcome=omitted]"),
+      };
+      const shown = Object.entries(marks).flatMap(([name, node]) => (node ? [name] : []));
+      expect(shown).toEqual([
+        state === "outcome-omitted" ? "omitted" : state === "pending" ? "pending" : state,
+      ]);
+      expect(Boolean(row.querySelector(".animate-spin"))).toBe(spinner);
+      /* An outcome nobody knows is announced by no assistive label at all —
+         the row prints the word instead, so the reader sees it too. */
+      const announced = row.querySelector("[aria-label]:not([aria-hidden])");
+      expect(announced?.getAttribute("aria-label") ?? null).toBe(aria);
+      if (text) {
+        expect(row.textContent).toContain(lang === "en" ? text : translate("uk", "feed.liveToolOutcomeOmitted"));
+      }
+
+      /* The tones are meanings too: success green and danger red are claims
+         about an outcome nobody knows, so an unknown row wears neither. */
+      expect(row.innerHTML).toContain(tone);
+      for (const other of ["text-success", "text-danger"]) {
+        if (other !== tone) expect(row.innerHTML).not.toContain(other);
+      }
+
+      /* And the row is still an MCP row: the card's summary and both chips. */
+      expect(row.querySelector("[data-live-mcp-title]")!.textContent)
+        .toBe(row.querySelector("[data-live-mcp-title]")!.getAttribute("title"));
+      expect(row.querySelector("[data-live-mcp-title]")!.textContent!.length).toBeGreaterThan(0);
+      expect(chipsOf(row, "[data-live-mcp-link]")).toHaveLength(2);
+      expect(row.textContent).toContain("MCP · viewer");
+    });
+  }
+}
+
+test("an MCP call whose outcome was dropped says so in the reader's language, and never 'success'", () => {
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const row = mcpRow("unknown");
+    expect(row.textContent).toContain(translate(lang, "feed.liveToolOutcomeOmitted"));
+    expect(row.querySelector("[aria-label=success]")).toBeNull();
+    /* The generic row and the MCP row agree on the word, so a call does not
+       change its story when it is routed to the other grammar. */
+    const generic = mount([{
+      itemId: "toolu_generic_unknown", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: AT,
+      tool: { name: "Bash", engine: "claude", status: "unknown", args: { command: "bun run build" } },
+    }]).querySelector<HTMLElement>("[data-live-tool]")!;
+    expect(generic.textContent).toContain(translate(lang, "feed.liveToolOutcomeOmitted"));
+  }
 });

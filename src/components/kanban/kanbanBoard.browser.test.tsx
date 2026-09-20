@@ -6536,6 +6536,17 @@ describe("codex tool rows on a phone", () => {
    verdicts. PNGs go to the directory named by `LIVE_ROWS_PNG_DIR` — they are
    never committed — and the readings to `evidence/live-turn-rows/<phase>.json`. */
 describe("live turn rows on a phone", () => {
+  /* What a title has to hold to be worth reading. At 390 px an overlay row is
+     about 330 px wide, and the badge, the outcome mark and the row's own
+     indent take a fixed bite out of it; what is left is the title's, and a
+     title holding less than these is one the operator cannot use. The round-1
+     row gave it 1.27 px — 0 % — because the chips took the line and the title
+     was the only item left able to shrink. A chip smaller than `MIN_CHIP_PX`
+     in either direction has been squeezed rather than wrapped. */
+  const MIN_MCP_TITLE_PX = 140;
+  const MIN_MCP_TITLE_SHARE = 40;
+  const MIN_CHIP_PX = 24;
+
   /* What the operator can see of the overlay: how many rows it paints, what
      the collapsed line says, whether any row is a bare "arguments omitted",
      and whether a live row repeats a call the transcript below already shows. */
@@ -6548,10 +6559,47 @@ describe("live turn rows on a phone", () => {
       const collapsed = overlay.querySelector("[data-live-turn-earlier]");
       const text = overlay.textContent || "";
       const ids = rows.map(row => row.getAttribute("data-live-turn-item-id")).filter(Boolean);
-      const canonical = new Set([...transcript.querySelectorAll("[data-tool-row], [data-testid=mcp-call-card]")]
-        .flatMap(node => (node.textContent || "").trim() ? [(node.textContent || "").trim()] : []));
+      const canonical = new Set(transcript
+        ? [...transcript.querySelectorAll("[data-tool-row], [data-testid=mcp-call-card]")]
+          .flatMap(node => (node.textContent || "").trim() ? [(node.textContent || "").trim()] : [])
+        : []);
       const box = overlay.getBoundingClientRect();
+      /* Round-2 P2: the action title is what the operator reads, so it is
+         measured. On one flex line it was the only item able to shrink and
+         two entity chips squeezed it to about a pixel; the readings below say
+         how much of the row it holds now, and how tall the row grew to keep
+         its chips whole. */
+      const mcp = [...overlay.querySelectorAll("[data-live-mcp]")].map(row => {
+        /* `span.flex-1` is where the title lived before it was given a basis
+           of its own, so the before phase measures the same thing. */
+        const title = row.querySelector("[data-live-mcp-title]") || row.querySelector("span.flex-1");
+        const rowBox = row.getBoundingClientRect();
+        const titleBox = title.getBoundingClientRect();
+        const chips = [...row.querySelectorAll("[data-live-mcp-link]")];
+        const mark = row.querySelector("[data-live-mcp-outcome=omitted]") ? "omitted"
+          : row.querySelector("[aria-label=success]") ? "success"
+            : row.querySelector("[aria-label=error]") ? "error"
+              : row.querySelector("[role=status]") ? "pending" : "none";
+        return {
+          tool: row.getAttribute("data-live-mcp"),
+          status: row.getAttribute("data-live-tool-status"),
+          state: row.getAttribute("data-live-mcp-state"),
+          mark,
+          chips: chips.length,
+          /* A chip that had to shrink to fit is not a tappable chip. */
+          minChipWidth: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().width))) : 0,
+          minChipHeight: chips.length ? Math.round(Math.min(...chips.map(chip => chip.getBoundingClientRect().height))) : 0,
+          rowWidth: Math.round(rowBox.width),
+          rowHeight: Math.round(rowBox.height),
+          titleWidth: Math.round(titleBox.width * 100) / 100,
+          titleShare: rowBox.width ? Math.round((titleBox.width / rowBox.width) * 100) : 0,
+          /* How much of the action title survives before the ellipsis. */
+          titleFullWidth: title.scrollWidth,
+          titleText: (title.textContent || "").trim(),
+        };
+      });
       return {
+        mcp,
         rows: rows.length,
         height: Math.round(box.height),
         toolRows: rows.filter(row => row.hasAttribute("data-live-tool")).length,
@@ -6591,13 +6639,21 @@ describe("live turn rows on a phone", () => {
         try {
           await page.locator("[data-live-turn-evidence]").waitFor();
           await page.waitForTimeout(150);
+          type McpReading = {
+            tool: string; status: string; state: string; mark: string; chips: number;
+            minChipWidth: number; minChipHeight: number; rowWidth: number; rowHeight: number;
+            titleWidth: number; titleShare: number; titleFullWidth: number; titleText: string;
+          };
           const reading = await page.evaluate(measureOverlay) as {
-            cases: Record<string, { rows: number; argsOmittedRows: number; argsOmittedMentions: number; mcpRows: number; mcpChips: number; collapsed: { count: number; text: string } | null; collapsedLines: number; duplicates: number }>;
+            cases: Record<string, { rows: number; argsOmittedRows: number; argsOmittedMentions: number; mcpRows: number; mcpChips: number; collapsed: { count: number; text: string } | null; collapsedLines: number; duplicates: number; mcp: McpReading[] }>;
             scrollWidth: number;
           };
           const label = `390-dark-${lang}`;
           frames[label] = reading;
-          for (const section of ["stale", "current"] as const) {
+          for (const section of ["stale", "current", "states"] as const) {
+            /* The before phase is rendered by the overlay as it was, which
+               has no section the fix added. */
+            if (!reading.cases[section]) continue;
             const name = `${section}-${label}-${phase}.png`;
             await page.locator(`[data-live-rows-case=${section}]`).screenshot({ path: path.join(pngDir, name) });
             shots.push(name);
@@ -6618,6 +6674,34 @@ describe("live turn rows on a phone", () => {
           /* A Viewer MCP row reads like its canonical card, chips and all. */
           if (!stale.mcpRows) failures.push(`${label}: no MCP row survived into the tail`);
           if (!stale.mcpChips) failures.push(`${label}: the MCP rows carry no entity chips`);
+
+          /* Round-2 P2, the readable title. The tail carries the two-chip
+             call (`link_task_to_pipeline`), which is where the title used to
+             lose its line entirely: 1.27 px of a 330 px row. A title has to
+             hold a readable share of its row, and the chips beside it have to
+             stay whole rather than shrink to fit. */
+          const chipped = stale.mcp.filter((row) => row.chips >= 2);
+          if (!chipped.length) failures.push(`${label}: the tail carries no MCP row with two entity chips`);
+          for (const row of [...stale.mcp, ...reading.cases.states!.mcp]) {
+            if (row.titleWidth < MIN_MCP_TITLE_PX) {
+              failures.push(`${label}: ${row.tool} title is ${row.titleWidth}px of a ${row.rowWidth}px row`);
+            }
+            if (row.titleShare < MIN_MCP_TITLE_SHARE) {
+              failures.push(`${label}: ${row.tool} title holds only ${row.titleShare}% of its row`);
+            }
+            if (row.chips && (row.minChipWidth < MIN_CHIP_PX || row.minChipHeight < MIN_CHIP_PX)) {
+              failures.push(`${label}: ${row.tool} chips squeezed to ${row.minChipWidth}x${row.minChipHeight}px`);
+            }
+          }
+
+          /* Round-2 P1, the outcome vocabulary: a call whose result the
+             journal dropped is never painted as a success. */
+          const marks = Object.fromEntries(reading.cases.states!.mcp.map((row) => [row.status, row.mark]));
+          for (const [status, expected] of [["run", "pending"], ["ok", "success"], ["err", "error"], ["unknown", "omitted"]] as const) {
+            if (marks[status] !== expected) {
+              failures.push(`${label}: an MCP call with status ${status} is marked "${marks[status] ?? "nothing"}", not "${expected}"`);
+            }
+          }
           /* And once the transcript carries the calls, the overlay is silent. */
           if (current.rows || current.collapsedLines) {
             failures.push(`${label}: the overlay painted ${current.rows} rows beside a current transcript`);

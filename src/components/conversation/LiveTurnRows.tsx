@@ -195,6 +195,38 @@ function LiveMcpLinkChip({
   );
 }
 
+/**
+ * What a live call's status says about its outcome.
+ *
+ * `unknown` is its own state, never `success`: the runtime journal's bound
+ * dropped that call's result, so what happened to it is not known and may have
+ * been a failure. Painting a green check there would assert something the
+ * Viewer does not know — and the generic row has always kept the distinction,
+ * so the MCP row has to as well.
+ */
+type LiveCallState = "pending" | "error" | "success" | "outcome-omitted";
+
+function liveCallState(status: RuntimeLiveTurnTool["status"]): LiveCallState {
+  return status === "run"
+    ? "pending"
+    : status === "err"
+      ? "error"
+      : status === "unknown"
+        ? "outcome-omitted"
+        : "success";
+}
+
+/** The tone of the row's own glyph. An outcome nobody knows is quiet. */
+function liveStateTone(state: LiveCallState): string {
+  return state === "error"
+    ? "text-danger"
+    : state === "success"
+      ? "text-success"
+      : state === "pending"
+        ? "text-accent"
+        : "text-muted";
+}
+
 /* A Viewer MCP call whose canonical row is an McpCallCard, so the live row
    reads through the SAME `describeMcpCall` the card does and wears the same
    summary grammar: the MCP · <server> mark, the call's meaning, and the entity
@@ -202,7 +234,15 @@ function LiveMcpLinkChip({
    which is exactly the card's own state while the call is still out, so the
    line does not change when the transcript row replaces it. The card's
    disclosure (ids, the whole payload) stays on the card: the live row is one
-   line, and what the call returned is not known yet. */
+   line, and what the call returned is not known yet.
+
+   The title is what the operator reads, so it is what gets the width. Badge,
+   chips and outcome are all intrinsically sized, and on one flex line the
+   title was the only thing left able to shrink — at 390 px with two entity
+   chips it collapsed to about a pixel of its own row. Giving it a flex basis
+   makes it the item that claims the line instead: a chip that no longer fits
+   beside it wraps to the next line of the same block, where it stays a full,
+   tappable chip. */
 function LiveMcpRow({
   item,
   tool,
@@ -212,12 +252,14 @@ function LiveMcpRow({
   tool: RuntimeLiveTurnTool;
   identity: { serverName: string; toolName: string };
 }) {
+  const { t } = useLocale();
   const availability = useConversationAvailability();
   const description = useMemo(
     () => describeMcpCall(identity.toolName, tool.args),
     [identity.toolName, tool.args],
   );
-  const state = tool.status === "run" ? "pending" : tool.status === "err" ? "error" : "success";
+  const state = liveCallState(tool.status);
+  const tone = liveStateTone(state);
   const Icon = MCP_ICONS[description.icon];
   return (
     <div
@@ -226,36 +268,49 @@ function LiveMcpRow({
       data-live-tool={tool.name}
       data-live-tool-status={tool.status}
       data-live-mcp={identity.toolName}
-      className="ml-9 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 rounded-control py-0.5 text-ui"
+      data-live-mcp-state={state}
+      className="ml-9 flex min-w-0 items-start gap-x-2 rounded-control py-0.5 text-ui"
     >
       <Icon
-        className={`h-3.5 w-3.5 shrink-0 ${
-          state === "error" ? "text-danger" : state === "success" ? "text-success" : "text-accent"
-        } ${state === "pending" ? "animate-pulse" : ""}`}
+        className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tone} ${state === "pending" ? "animate-pulse" : ""}`}
         aria-hidden
       />
-      <span className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted">
-        MCP · {identity.serverName}
-      </span>
-      <span className="min-w-0 flex-1 truncate font-semibold text-secondary" title={description.title}>
-        {description.title}
-      </span>
-      {description.links.map((link) => (
-        <LiveMcpLinkChip key={`${link.kind}:${link.id}`} link={link} availability={availability} />
-      ))}
-      <span
-        className={`inline-flex shrink-0 items-center ${
-          state === "error" ? "text-danger" : state === "success" ? "text-success" : "text-accent"
-        }`}
-        role={state === "pending" ? "status" : undefined}
-        aria-label={state === "pending" ? `${description.verb}…` : state}
-      >
-        {state === "pending"
-          ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden />
-          : state === "success"
-            ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-            : <CircleAlert className="h-3.5 w-3.5" aria-hidden />}
-      </span>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted">
+          MCP · {identity.serverName}
+        </span>
+        <span
+          data-live-mcp-title
+          className="min-w-0 grow basis-[10rem] truncate font-semibold text-secondary"
+          title={description.title}
+        >
+          {description.title}
+        </span>
+        {description.links.map((link) => (
+          <LiveMcpLinkChip key={`${link.kind}:${link.id}`} link={link} availability={availability} />
+        ))}
+        {/* The only outcome that is a word rather than a mark, so it wraps
+            with the chips instead of reserving a column of its own — holding
+            one would cost the title the line a second time. */}
+        {state === "outcome-omitted" ? (
+          <span data-live-mcp-outcome="omitted" className="shrink-0 text-caption font-semibold text-muted">
+            {t("feed.liveToolOutcomeOmitted")}
+          </span>
+        ) : null}
+      </div>
+      {state === "outcome-omitted" ? null : (
+        <span
+          className={`mt-0.5 inline-flex shrink-0 items-center ${tone}`}
+          role={state === "pending" ? "status" : undefined}
+          aria-label={state === "pending" ? `${description.verb}…` : state}
+        >
+          {state === "pending"
+            ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            : state === "success"
+              ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+              : <CircleAlert className="h-3.5 w-3.5" aria-hidden />}
+        </span>
+      )}
     </div>
   );
 }
@@ -269,15 +324,16 @@ function LiveMcpRow({
 function LiveToolRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeLiveTurnTool }) {
   const { t } = useLocale();
   const summary = useMemo(() => summarizeTool(tool.name, tool.args, tool.engine), [tool.name, tool.args, tool.engine]);
-  const isErr = tool.status === "err";
+  const state = liveCallState(tool.status);
+  const isErr = state === "error";
   /* `unknown` is a finished call whose result the journal's bound could not
      retain: no spinner (it is not running), no check (its outcome is not
      known), just the word for what happened to it. */
-  const label = tool.status === "run"
+  const label = state === "pending"
     ? t("render.executing")
-    : tool.status === "err"
+    : state === "error"
       ? t("render.error")
-      : tool.status === "unknown"
+      : state === "outcome-omitted"
         ? t("feed.liveToolOutcomeOmitted")
         : "";
   const files = tool.name === "apply_patch" && !summary.chips.length ? patchFileNames(tool.args.input) : "";
@@ -296,9 +352,9 @@ function LiveToolRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeL
       <span className={`min-w-0 flex-1 truncate ${isErr ? "font-semibold" : "text-secondary"}`} title={detail}>
         {detail}
       </span>
-      {tool.status !== "ok" ? (
+      {state !== "success" ? (
         <span className={`inline-flex shrink-0 items-center gap-1 text-caption font-semibold ${isErr ? "text-danger" : "text-muted"}`}>
-          {tool.status !== "unknown" ? <StatusIcon status={tool.status} className="h-3 w-3" /> : null}
+          {state !== "outcome-omitted" ? <StatusIcon status={tool.status} className="h-3 w-3" /> : null}
           {label}
         </span>
       ) : null}

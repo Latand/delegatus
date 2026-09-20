@@ -26,8 +26,12 @@ import {
               beside the canonical rows themselves: the overlay must paint
               nothing, because the cards below already say it.
 
+   A third section, `states`, is the same Viewer MCP call in each of the four
+   outcomes a live row can hold — including `unknown`, the call whose result the
+   runtime journal's bound dropped, which must not be painted as a success.
+
    The driver (`kanbanBoard.browser.test.tsx`, "live turn rows on a phone")
-   measures both sections at 390 px in both languages. */
+   measures every section at 390 px in both languages. */
 
 setLocale(localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
 
@@ -51,6 +55,26 @@ const sections = [
   { key: "current", feed: currentFeed, items: visibleRuntimeLiveTurnItems(live, currentFeed, undefined, "running") },
 ] as const;
 
+/* One Viewer MCP call in every outcome a live row can hold. It is the
+   two-chip call on purpose: the chips are what used to squeeze the action
+   title out of its own line at phone width. `unknown` is the call whose result
+   the journal's bound dropped — it is finished, and what it did is not
+   known. */
+const STATES = ["run", "ok", "err", "unknown"] as const;
+const stateItems = STATES.map((status) => ({
+  itemId: `toolu_state_${status}`,
+  text: "",
+  phase: "awaiting-echo" as const,
+  startedAt: "2026-09-20T09:19:00.000Z",
+  completedAt: status === "run" ? null : "2026-09-20T09:19:04.000Z",
+  tool: {
+    name: "mcp__viewer__link_task_to_pipeline",
+    engine: "claude" as const,
+    status,
+    args: { taskId: "task-demo-4417", pipelineId: "pipeline-demo-2208" },
+  },
+}));
+
 createRoot(document.getElementById("root")!).render(
   <main className="mx-auto w-full max-w-4xl p-3 text-primary" data-live-turn-evidence>
     {sections.map(({ key, feed, items }) => (
@@ -64,5 +88,11 @@ createRoot(document.getElementById("root")!).render(
         </div>
       </section>
     ))}
+    <section data-live-rows-case="states" className="mb-6">
+      <h2 className="mb-1 text-caption font-semibold uppercase tracking-wide text-muted">states</h2>
+      <div data-live-rows-overlay>
+        <LiveTurnRows items={stateItems} />
+      </div>
+    </section>
   </main>,
 );

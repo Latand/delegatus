@@ -3,15 +3,34 @@
   "shots": [
     "stale-390-dark-en-after.png",
     "current-390-dark-en-after.png",
+    "states-390-dark-en-after.png",
     "stale-390-dark-uk-after.png",
-    "current-390-dark-uk-after.png"
+    "current-390-dark-uk-after.png",
+    "states-390-dark-uk-after.png"
   ],
   "frames": {
     "390-dark-en": {
       "cases": {
         "stale": {
+          "mcp": [
+            {
+              "tool": "link_task_to_pipeline",
+              "status": "ok",
+              "state": "success",
+              "mark": "success",
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24,
+              "rowWidth": 330,
+              "rowHeight": 48,
+              "titleWidth": 200.47,
+              "titleShare": 61,
+              "titleFullWidth": 349,
+              "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
+            }
+          ],
           "rows": 8,
-          "height": 201,
+          "height": 221,
           "toolRows": 8,
           "mcpRows": 1,
           "mcpChips": 2,
@@ -35,6 +54,7 @@
           ]
         },
         "current": {
+          "mcp": [],
           "rows": 0,
           "height": 0,
           "toolRows": 0,
@@ -46,6 +66,86 @@
           "collapsedLines": 0,
           "duplicates": 0,
           "ids": []
+        },
+        "states": {
+          "mcp": [
+            {
+              "tool": "link_task_to_pipeline",
+              "status": "run",
+              "state": "pending",
+              "mark": "pending",
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24,
+              "rowWidth": 330,
+              "rowHeight": 48,
+              "titleWidth": 200.47,
+              "titleShare": 61,
+              "titleFullWidth": 349,
+              "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
+            },
+            {
+              "tool": "link_task_to_pipeline",
+              "status": "ok",
+              "state": "success",
+              "mark": "success",
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24,
+              "rowWidth": 330,
+              "rowHeight": 48,
+              "titleWidth": 200.47,
+              "titleShare": 61,
+              "titleFullWidth": 349,
+              "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
+            },
+            {
+              "tool": "link_task_to_pipeline",
+              "status": "err",
+              "state": "error",
+              "mark": "error",
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24,
+              "rowWidth": 330,
+              "rowHeight": 48,
+              "titleWidth": 200.47,
+              "titleShare": 61,
+              "titleFullWidth": 349,
+              "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
+            },
+            {
+              "tool": "link_task_to_pipeline",
+              "status": "unknown",
+              "state": "outcome-omitted",
+              "mark": "omitted",
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24,
+              "rowWidth": 330,
+              "rowHeight": 48,
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "titleFullWidth": 349,
+              "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
+            }
+          ],
+          "rows": 4,
+          "height": 192,
+          "toolRows": 4,
+          "mcpRows": 4,
+          "mcpChips": 8,
+          "argsOmittedRows": 0,
+          "argsOmittedMentions": 0,
+          "collapsed": null,
+          "collapsedLines": 0,
+          "duplicates": 0,
+          "ids": [
+            "toolu_state_run",
+            "toolu_state_ok",
+            "toolu_state_err",
+            "toolu_state_unknown"
+          ]
         }
       },
       "scrollWidth": 390
@@ -53,8 +153,25 @@
     "390-dark-uk": {
       "cases": {
         "stale": {
+          "mcp": [
+            {
+              "tool": "link_task_to_pipeline",
+              "status": "ok",
+              "state": "success",
+              "mark": "success",
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24,
+              "rowWidth": 330,
+              "rowHeight": 48,
+              "titleWidth": 200.47,
+              "titleShare": 61,
+              "titleFullWidth": 349,
+              "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
+            }
+          ],
           "rows": 8,
-          "height": 201,
+          "height": 221,
           "toolRows": 8,
           "mcpRows": 1,
           "mcpChips": 2,
@@ -78,6 +195,7 @@
           ]
         },
         "current": {
+          "mcp": [],
           "rows": 0,
           "height": 0,
           "toolRows": 0,
@@ -89,6 +207,86 @@
           "collapsedLines": 0,
           "duplicates": 0,
           "ids": []
+        },
+        "states": {
+          "mcp": [
+            {
+              "tool": "link_task_to_pipeline",
+              "status": "run",
+              "state": "pending",
+              "mark": "pending",
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24,
+              "rowWidth": 330,
+              "rowHeight": 48,
+              "titleWidth": 200.47,
+              "titleShare": 61,
+              "titleFullWidth": 349,
+              "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
+            },
+            {
+              "tool": "link_task_to_pipeline",
+              "status": "ok",
+              "state": "success",
+              "mark": "success",
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24,
+              "rowWidth": 330,
+              "rowHeight": 48,
+              "titleWidth": 200.47,
+              "titleShare": 61,
+              "titleFullWidth": 349,
+              "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
+            },
+            {
+              "tool": "link_task_to_pipeline",
+              "status": "err",
+              "state": "error",
+              "mark": "error",
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24,
+              "rowWidth": 330,
+              "rowHeight": 48,
+              "titleWidth": 200.47,
+              "titleShare": 61,
+              "titleFullWidth": 349,
+              "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
+            },
+            {
+              "tool": "link_task_to_pipeline",
+              "status": "unknown",
+              "state": "outcome-omitted",
+              "mark": "omitted",
+              "chips": 2,
+              "minChipWidth": 82,
+              "minChipHeight": 24,
+              "rowWidth": 330,
+              "rowHeight": 48,
+              "titleWidth": 222.47,
+              "titleShare": 67,
+              "titleFullWidth": 349,
+              "titleText": "Linking task to pipeline: task-demo-4417 → pipeline-demo-2208"
+            }
+          ],
+          "rows": 4,
+          "height": 192,
+          "toolRows": 4,
+          "mcpRows": 4,
+          "mcpChips": 8,
+          "argsOmittedRows": 0,
+          "argsOmittedMentions": 0,
+          "collapsed": null,
+          "collapsedLines": 0,
+          "duplicates": 0,
+          "ids": [
+            "toolu_state_run",
+            "toolu_state_ok",
+            "toolu_state_err",
+            "toolu_state_unknown"
+          ]
         }
       },
       "scrollWidth": 390
