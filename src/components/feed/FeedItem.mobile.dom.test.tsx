@@ -293,9 +293,11 @@ for (const phone of [true, false]) {
       expect(row.querySelector(".text-danger")).toBeTruthy();
       expect(row.textContent).toContain(en["render.turnFailedAuth"]);
       expect(row.textContent).not.toContain(en["render.taskComplete"]);
-      /* The provider's sentence and the action the operator can take. */
-      expect(row.textContent).toContain(EXPIRED);
+      /* The Viewer's own explanation and the action the operator can take —
+         the provider's sentence is withheld, never echoed. */
+      expect(row.textContent).toContain(en["render.turnFailedAuthBody"]);
       expect(row.textContent).toContain(en["render.turnFailedAuthHint"]);
+      expect(row.textContent).not.toContain(EXPIRED);
       /* The feed's own clock: HH:MM on the phone, the full time on the desktop. */
       expect(row.textContent).toContain("02:49");
       expect(/\d{2}:\d{2}:\d{2}/.test(row.textContent ?? "")).toBe(!phone);
@@ -304,26 +306,6 @@ for (const phone of [true, false]) {
     });
   });
 }
-
-test("the failed terminal speaks Ukrainian too", () => {
-  setLocale("uk");
-  try {
-    const host = mount(<FeedItem item={authTerminalRow()} />);
-    const row = host.querySelector('[data-turn-error="auth"]')!;
-    expect(row.textContent).toContain(translate("uk", "render.turnFailedAuth"));
-    expect(row.textContent).toContain(translate("uk", "render.turnFailedAuthHint"));
-  } finally {
-    setLocale("en");
-  }
-});
-
-test("a credential quoted by the provider never reaches the screen", () => {
-  const leak = `${["refresh", "token"].join("_")}=${"a1b2c3d4e5f6".repeat(2)}`;
-  const host = mount(<FeedItem item={authTerminalRow({ error: { message: `unauthorized (${leak})`, codex_error_info: "unauthorized" } })} />);
-  const row = host.querySelector('[data-turn-error="auth"]')!;
-  expect(row.textContent).not.toContain("a1b2c3d4e5f6");
-  expect(row.textContent).toContain("[redacted]");
-});
 
 test("a turn that really completed keeps its quiet completion note", () => {
   const line = JSON.stringify({ type: "event_msg", timestamp: "2026-09-20T02:50:00.000Z", payload: { type: "task_complete" } });
@@ -334,57 +316,90 @@ test("a turn that really completed keeps its quiet completion note", () => {
 });
 
 /*
- * Rendered sentinels (review round 1). A provider can put a JSON body, an
- * `Authorization` header or a whole payload behind an error code into what
- * this row displays. What matters is not that the parser returns a clean
- * string but that nothing credential-shaped is ever painted, so these read the
- * mounted row's text rather than the item.
+ * Rendered sentinels, review round 2. Round 1 answered a leak with more
+ * patterns and more shapes kept arriving, so the row stopped echoing the
+ * provider's text at all. These mount the row and read what is actually
+ * painted: for every shape that got through before, and for a shape nobody
+ * has classified, nothing of the record's bytes is on screen and the
+ * explanation is still there to read.
  *
  * Sentinels are assembled from parts, so no credential-shaped literal is
  * committed.
  */
-const JSON_SENTINEL = ["sk", "live", "9f4c2ab77d31e05c86f0"].join("_");
-const BEARER_SENTINEL = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "dBjftJeZ4CVPmB92K27u"].join(".");
+const SENTINEL = ["sk", "live", "9f4c2ab77d31e05c86f0"].join("_");
+const JWT = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "dBjftJeZ4CVPmB92K27u"].join(".");
+const secretKey = (...parts: string[]) => parts.join("_");
 
-for (const probe of [
+const PAINT_PROBES: Array<{ name: string; sentinel: string; payload: Record<string, unknown> }> = [
   {
-    name: "a JSON body the provider quoted",
-    sentinel: JSON_SENTINEL,
-    payload: { error: { message: `request rejected: {"${["access", "token"].join("_")}": "${JSON_SENTINEL}"}`, codex_error_info: "unauthorized" } },
-    reads: "request rejected",
+    name: "a token in single quotes",
+    sentinel: SENTINEL,
+    payload: { error: { message: `rejected {'${secretKey("refresh", "token")}': '${SENTINEL}'}`, codex_error_info: "unauthorized" } },
   },
   {
-    name: "an Authorization header the provider quoted",
-    sentinel: BEARER_SENTINEL,
-    payload: { error: { message: `upstream refused Bearer ${BEARER_SENTINEL} for this turn`, codex_error_info: "unauthorized" } },
-    reads: "upstream refused",
+    name: "a JSON body that arrived escaped",
+    sentinel: SENTINEL,
+    payload: { error: { message: `rejected {\\"${secretKey("access", "token")}\\": \\"${SENTINEL}\\"}`, codex_error_info: "unauthorized" } },
+  },
+  {
+    name: "a credential nested three levels down",
+    sentinel: SENTINEL,
+    payload: { error: { message: `rejected {"a": {"b": {"${secretKey("refresh", "token")}": "${SENTINEL}"}}}`, codex_error_info: "unauthorized" } },
+  },
+  {
+    name: "an id_token no pattern list knows",
+    sentinel: JWT,
+    payload: { error: { message: `rejected {"id_token": "${JWT}"}`, codex_error_info: "unauthorized" } },
   },
   {
     name: "a payload behind the error code the row falls back to",
-    sentinel: BEARER_SENTINEL,
-    /* No `error` at all: the row falls back to the code, which carries the
-       payload here. */
-    payload: { error: undefined, last_agent_message: null, codex_error_info: `unauthorized Bearer ${BEARER_SENTINEL}` },
-    reads: "[redacted]",
+    sentinel: JWT,
+    payload: { error: undefined, last_agent_message: null, codex_error_info: `unauthorized {'id_token': '${JWT}'}` },
   },
-]) {
+  {
+    name: "an unrecognized failure with a credential in its prose",
+    sentinel: SENTINEL,
+    payload: { error: { message: `quantum flux ${SENTINEL}`, codex_error_info: "quantum_flux" } },
+  },
+];
+
+for (const probe of PAINT_PROBES) {
   test(`${probe.name} is never painted onto the row`, () => {
     const host = mount(<FeedItem item={authTerminalRow(probe.payload)} />);
     const row = host.querySelector("[data-turn-error]")!;
     expect(row).toBeTruthy();
     expect(row.textContent).not.toContain(probe.sentinel);
-    expect(row.textContent).toContain(probe.reads);
-    /* The failure still reads as one: a sanitized row is not a blank row. */
-    expect(row.textContent).toContain(en["render.turnFailedAuth"]);
+    /* A sanitized row is not a blank row: it still says what happened and
+       says the provider's own words are being withheld. */
+    expect(row.textContent).toContain(en["render.turnFailedWithheld"]);
+    const reason = row.getAttribute("data-turn-error");
+    expect(row.textContent).toContain(en[reason === "auth" ? "render.turnFailedAuthBody" : "render.turnFailedBody"]);
   });
 }
 
-test("the expired-sign-in explanation survives redaction word for word", () => {
-  /* The sentence that makes the row useful mentions two credential words in
-     prose. Redaction that ate it would trade one defect for another. */
+test("only a recognized code is printed, and it is the Viewer's constant", () => {
+  const known = mount(<FeedItem item={authTerminalRow()} />);
+  expect(known.querySelector("[data-turn-error-code]")?.textContent).toBe("unauthorized");
+  flushSync(() => root!.unmount());
+  root = null;
+  const unknown = mount(<FeedItem item={authTerminalRow({ error: { message: "sideways", codex_error_info: `quantum_flux_${SENTINEL}` } })} />);
+  expect(unknown.querySelector("[data-turn-error-code]")).toBeNull();
+  expect(unknown.textContent).not.toContain(SENTINEL);
+});
+
+test("the expired-sign-in guidance reads in both languages", () => {
   const host = mount(<FeedItem item={authTerminalRow()} />);
   const row = host.querySelector('[data-turn-error="auth"]')!;
-  expect(row.textContent).toContain(EXPIRED);
+  expect(row.textContent).toContain(en["render.turnFailedAuthBody"]);
   expect(row.textContent).toContain(en["render.turnFailedAuthHint"]);
-  expect(row.textContent).not.toContain("[redacted]");
+  flushSync(() => root!.unmount());
+  root = null;
+  setLocale("uk");
+  try {
+    const ukRow = mount(<FeedItem item={authTerminalRow()} />).querySelector('[data-turn-error="auth"]')!;
+    expect(ukRow.textContent).toContain(translate("uk", "render.turnFailedAuthBody"));
+    expect(ukRow.textContent).toContain(translate("uk", "render.turnFailedAuthHint"));
+  } finally {
+    setLocale("en");
+  }
 });

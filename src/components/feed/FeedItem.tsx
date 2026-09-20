@@ -368,11 +368,23 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
           <span className="min-w-0 break-words">{t(item.reason === "auth" ? "render.turnFailedAuth" : "render.turnFailed")}</span>
           {clock ? <span className="ml-auto shrink-0 font-normal tabular-nums">{clock}</span> : null}
         </div>
-        {item.detail ? (
-          <p className="whitespace-pre-wrap break-words text-[13px] text-primary [overflow-wrap:anywhere]">{item.detail}</p>
-        ) : null}
+        {/* Every word here is the Viewer's own. A provider's error text is
+            arbitrary prose that can quote whatever it rejected, so the row
+            explains the failure rather than echoing it. */}
+        <p className="break-words text-[13px] text-primary">
+          {t(item.reason === "auth" ? "render.turnFailedAuthBody" : "render.turnFailedBody")}
+        </p>
         {item.reason === "auth" ? (
           <p className="mt-1.5 break-words text-label text-secondary">{t("render.turnFailedAuthHint")}</p>
+        ) : null}
+        {(item.code || item.withheld) ? (
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-label text-muted">
+            {item.code ? (
+              /* The recognized constant, never the record's bytes. */
+              <code data-turn-error-code className="rounded-control bg-sunken px-1 py-0.5 font-mono text-[11px]">{item.code}</code>
+            ) : null}
+            {item.withheld ? <span className="min-w-0 break-words">{t("render.turnFailedWithheld")}</span> : null}
+          </p>
         ) : null}
       </div>
     );

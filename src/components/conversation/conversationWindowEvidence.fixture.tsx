@@ -64,8 +64,12 @@ export type ConversationWindowCase =
    the whole of what the operator has to read. The record below is the observed
    shape with an invented turn id. */
 const CODEX_FILE = { path: "/tmp/auth-terminal.jsonl", engine: "codex", fmt: "codex", activity: "recent" } as FileEntry;
+/* What the provider actually wrote, quoting the body it rejected — the frame's
+   whole point is that none of this is painted. Assembled from parts so no
+   credential-shaped literal is committed. */
+const SENTINEL = ["sk", "live", "9f4c2ab77d31e05c86f0"].join("_");
 const EXPIRED = "Your access token could not be refreshed because your "
-  + "refresh token has expired. Please log out and sign in again.";
+  + `refresh token has expired. Please log out and sign in again. {'${["refresh", "token"].join("_")}': '${SENTINEL}'}`;
 const TURN_ID = ["6f2c41d8", "5b07", "4a19", "9e33", "0c7a51d64b28"].join("-");
 
 function terminalRow(failed: boolean): Item {

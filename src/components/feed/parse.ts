@@ -264,10 +264,12 @@ export type Item =
   /* The turn ended on a provider failure instead of an answer (#1846
      recurrence). Codex closes both with the same `task_complete` record, and
      the completion note dropped its `error`, so a first turn that never ran
-     read as "Task completed" with nothing under it. `detail` is the provider's
-     own sentence after the feed's secret redaction; `reason` picks the line
-     that tells the operator what to do about it. */
-  | { kind: "turn-error"; ts: unknown; reason: TurnErrorReason; detail: string }
+     read as "Task completed" with nothing under it.
+     Nothing here is the provider's own text. `reason` chooses which
+     Viewer-authored explanation the row shows, `code` is null unless the
+     record's error code is one the Viewer recognizes by name, and `withheld`
+     records that the failure carried a message the row did not print. */
+  | { kind: "turn-error"; ts: unknown; reason: TurnErrorReason; code: string | null; withheld: boolean }
   | ToolEvent
   | CmdGroupItem
   | ReviewCardItem
@@ -476,19 +478,48 @@ function base64DecodedLength(base64: string): number {
   return Math.floor((base64.length * 3) / 4) - padding;
 }
 
-const TURN_ERROR_DETAIL_MAX = 600;
-
 /**
- * Bound a diagnostic value for the screen — after the transcript redactor has
- * been over it, never before. A provider writes whatever it likes into an
- * error: the JSON body it rejected, the `Authorization` header it refused. Cut
- * first and a credential sitting before the cut survives whole, while one
- * straddling it is merely halved; redact first and the cut can only ever fall
- * through `[redacted]`.
+ * Error codes this row knows by name. Two things hang off recognition, and
+ * only recognized codes get either: which explanation the row shows, and
+ * whether the code itself is printed — the printed string is the constant
+ * below, never the bytes out of the record, so no payload glued behind a code
+ * can ride onto the screen inside it.
  */
-function boundedDiagnostic(value: string): string {
-  const safe = redactTranscriptText(value).trim();
-  return safe.length > TURN_ERROR_DETAIL_MAX ? safe.slice(0, TURN_ERROR_DETAIL_MAX - 1) + "…" : safe;
+const AUTH_TURN_ERROR_CODES = new Set([
+  "unauthorized",
+  "unauthenticated",
+  "auth_error",
+  "authentication_error",
+  "authentication_failed",
+  "invalid_credentials",
+  "token_expired",
+  "refresh_token_expired",
+  "login_required",
+]);
+/** Recognized and explicitly NOT a sign-in problem. An auth SERVICE being down
+    is the clearest of them: the operator's credentials are fine, and telling
+    them to sign in again would send them after the wrong thing. */
+const OTHER_TURN_ERROR_CODES = new Set([
+  "auth_service_unavailable",
+  "service_unavailable",
+  "usage_limit",
+  "usage_limit_exceeded",
+  "rate_limited",
+  "stream_error",
+  "server_error",
+  "internal_error",
+  "network_error",
+  "timeout",
+  "context_length_exceeded",
+  "cancelled",
+]);
+/** Prose that names an expired sign-in, read ONLY when the record carries no
+    code at all. A code that exists is the provider's own classification and
+    outranks anything its prose happens to mention. */
+const AUTH_MESSAGE_RE = /\b(?:unauthorized|refresh token has expired|sign ?in again|log ?out and sign in)\b/i;
+
+function turnErrorCodeKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
 
 /**
@@ -497,23 +528,34 @@ function boundedDiagnostic(value: string): string {
  * all, so anything read here is a real failure — including the observed
  * `unauthorized` first turn, which returned no assistant message whatsoever.
  *
- * The message is the provider's own prose, which is what makes it useful.
- * Every value that can reach the screen — the message AND the error code the
- * row falls back to — passes through {@link boundedDiagnostic} first: the
- * transcript redactor catches the JSON and `Bearer` credential shapes plain
- * `redactSecrets` does not. The classification below reads the RAW record,
- * because what a turn died of is not a thing being displayed.
+ * **Nothing the provider wrote is returned for display.** A provider's error
+ * message is arbitrary prose that can quote the request it rejected — a JSON
+ * body, a header, a token in single quotes, escaped, or nested three levels
+ * down — and no set of patterns over arbitrary text can be trusted to have
+ * found every credential in it. So the row is keyed on values this parser
+ * RECOGNIZES and rendered from strings the Viewer itself authored. What the
+ * record said is still in the transcript record rows, under the same bounded,
+ * key-aware redaction every other raw record gets.
+ *
+ * `withheld` says a message existed and was not printed, so the row can be
+ * honest about the choice rather than silently dropping it.
  */
-function codexTurnFailure(payload: Record<string, unknown>): { reason: TurnErrorReason; detail: string } | null {
+function codexTurnFailure(payload: Record<string, unknown>): Omit<Extract<Item, { kind: "turn-error" }>, "kind" | "ts"> | null {
   const error = rec(payload.error);
   const info = (textPart(payload.codex_error_info) || textPart(error.codex_error_info)).trim();
-  const message = textPart(error.message) || textPart(payload.error) || (info ? textPart(payload.message) : "");
+  const message = (textPart(error.message) || textPart(payload.error) || (info ? textPart(payload.message) : "")).trim();
   if (!info && !message) return null;
-  /* The code leads the value; a provider may glue a payload behind it, and
-     `unauthorized <payload>` is still an expired sign-in. */
-  const auth = /^(?:unauthorized|unauthenticated|auth(?:_error)?)\b/i.test(info)
-    || /\b(?:unauthorized|refresh token|access token|sign ?in again|log ?out and sign)\b/i.test(message);
-  return { reason: auth ? "auth" : "other", detail: boundedDiagnostic(message) || boundedDiagnostic(info) };
+  const key = turnErrorCodeKey(info);
+  /* A code the Viewer knows decides on its own. An unrecognized code may still
+     LEAD with a known one ("unauthorized <payload>"), which classifies the
+     failure without being printed. With no code at all, the prose is all there
+     is to go on. */
+  const leading = turnErrorCodeKey(info.split(/[\s,;(]/, 1)[0] ?? "");
+  const auth = AUTH_TURN_ERROR_CODES.has(key)
+    || (!OTHER_TURN_ERROR_CODES.has(key) && AUTH_TURN_ERROR_CODES.has(leading))
+    || (!info && AUTH_MESSAGE_RE.test(message));
+  const recognized = AUTH_TURN_ERROR_CODES.has(key) || OTHER_TURN_ERROR_CODES.has(key);
+  return { reason: auth ? "auth" : "other", code: recognized ? key : null, withheld: Boolean(message || info) };
 }
 
 function codexImageFromDataUrl(value: string): Extract<Item, { kind: "image" }> | null {
@@ -1990,8 +2032,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const addNote = (text: string) => {
     push({ kind: "note", text });
   };
-  const addTurnError = (ts: unknown, failure: { reason: TurnErrorReason; detail: string }) => {
-    push({ kind: "turn-error", ts, reason: failure.reason, detail: failure.detail });
+  const addTurnError = (ts: unknown, failure: Omit<Extract<Item, { kind: "turn-error" }>, "kind" | "ts">) => {
+    push({ kind: "turn-error", ts, ...failure });
   };
   const addThink = (text: string, sourceId?: string) => {
     const normalized = text.trim();

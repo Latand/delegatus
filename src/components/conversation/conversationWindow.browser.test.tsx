@@ -166,6 +166,9 @@ describe("#1846 recurrence: the first turn that died unauthorized", () => {
     { name: "desktop-1280", width: 1280, height: 900 },
   ] as const;
   const CASES = ["auth-terminal", "clean-terminal"] as const;
+  /* The fixture's failing record quotes this in a JSON body; assembled from
+     parts so no credential-shaped literal is committed. */
+  const SENTINEL = ["sk", "live", "9f4c2ab77d31e05c86f0"].join("_");
   const LANGS = ["en", "uk"] as const;
 
   interface TerminalGeometry {
@@ -241,8 +244,12 @@ describe("#1846 recurrence: the first turn that died unauthorized", () => {
                 expect(reading.box!.height).toBeGreaterThan(40);
                 expect(reading.completionNotes).toBe(0);
                 expect(reading.rowText).toContain(lang === "uk" ? "Помилка авторизації" : "Authorization failed");
-                expect(reading.rowText).toContain("refresh token has expired");
+                /* The Viewer's own explanation, and never the provider's
+                   sentence, which the fixture's record carries verbatim. */
+                expect(reading.rowText).toContain(lang === "uk" ? "вхід цього акаунта більше не дійсний" : "sign-in is no longer valid");
                 expect(reading.rowText).toContain(lang === "uk" ? "Увійдіть" : "Sign in to it again");
+                expect(reading.rowText).not.toContain("refresh token has expired");
+                expect(reading.rowText).not.toContain(SENTINEL);
               } else {
                 /* A turn that really completed keeps the quiet note it had. */
                 expect(reading.turnError).toBeNull();

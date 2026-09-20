@@ -1,26 +1,26 @@
 {
   "auth-terminal-phone-390-en": {
     "turnError": "auth",
-    "rowText": "Authorization failed05:49Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.This account's sign-in has expired. Sign in to it again, or move the conversation to another account, then send the message again.",
+    "rowText": "Authorization failed05:49The provider ended this turn before the agent answered: this account's sign-in is no longer valid.This account's sign-in has expired. Sign in to it again, or move the conversation to another account, then send the message again.unauthorizedthe provider's own message is not shown here, because it can quote credentials",
     "completionNotes": 0,
     "danger": true,
     "leaks": 0,
     "box": {
       "width": 358,
-      "height": 158
+      "height": 204
     },
     "overflowX": 0,
     "viewportWidth": 390
   },
   "auth-terminal-phone-390-uk": {
     "turnError": "auth",
-    "rowText": "Помилка авторизації05:49Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.Сесія входу цього акаунта закінчилася. Увійдіть у нього ще раз або переведіть розмову на інший акаунт і надішліть повідомлення знову.",
+    "rowText": "Помилка авторизації05:49Провайдер завершив цей хід ще до відповіді агента: вхід цього акаунта більше не дійсний.Сесія входу цього акаунта закінчилася. Увійдіть у нього ще раз або переведіть розмову на інший акаунт і надішліть повідомлення знову.unauthorizedвласне повідомлення провайдера тут не показано, бо воно може містити облікові дані",
     "completionNotes": 0,
     "danger": true,
     "leaks": 0,
     "box": {
       "width": 358,
-      "height": 174
+      "height": 220
     },
     "overflowX": 0,
     "viewportWidth": 390
@@ -47,26 +47,26 @@
   },
   "auth-terminal-desktop-1280-en": {
     "turnError": "auth",
-    "rowText": "Authorization failed05:49:12Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.This account's sign-in has expired. Sign in to it again, or move the conversation to another account, then send the message again.",
+    "rowText": "Authorization failed05:49:12The provider ended this turn before the agent answered: this account's sign-in is no longer valid.This account's sign-in has expired. Sign in to it again, or move the conversation to another account, then send the message again.unauthorizedthe provider's own message is not shown here, because it can quote credentials",
     "completionNotes": 0,
     "danger": true,
     "leaks": 0,
     "box": {
       "width": 1212,
-      "height": 102
+      "height": 129
     },
     "overflowX": 0,
     "viewportWidth": 1280
   },
   "auth-terminal-desktop-1280-uk": {
     "turnError": "auth",
-    "rowText": "Помилка авторизації05:49:12Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.Сесія входу цього акаунта закінчилася. Увійдіть у нього ще раз або переведіть розмову на інший акаунт і надішліть повідомлення знову.",
+    "rowText": "Помилка авторизації05:49:12Провайдер завершив цей хід ще до відповіді агента: вхід цього акаунта більше не дійсний.Сесія входу цього акаунта закінчилася. Увійдіть у нього ще раз або переведіть розмову на інший акаунт і надішліть повідомлення знову.unauthorizedвласне повідомлення провайдера тут не показано, бо воно може містити облікові дані",
     "completionNotes": 0,
     "danger": true,
     "leaks": 0,
     "box": {
       "width": 1212,
-      "height": 102
+      "height": 129
     },
     "overflowX": 0,
     "viewportWidth": 1280
