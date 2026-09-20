@@ -793,6 +793,66 @@ export interface ViewerDeploymentRequest {
   idempotencyKey: string;
 }
 
+export interface ViewerDeploymentListOptions {
+  limit?: number;
+  cursor?: string;
+  compact?: boolean;
+}
+
+export interface ViewerDeploymentSummary {
+  deploymentId: string;
+  phase: ViewerDeploymentPhase;
+  sha: string;
+  terminal: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+
+export interface ViewerDeploymentList {
+  deployments: Array<ViewerDeploymentStatus | ViewerDeploymentSummary>;
+  nextCursor: string | null;
+  hasMore: boolean;
+  /** Older hosts expose only their retained snapshot window. */
+  legacySnapshot?: true;
+}
+
+export function viewerDeploymentListLimit(limit?: number): number {
+  return typeof limit === "number" && Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 25;
+}
+
+/** Stable keyset cursor; creation time is immutable across deployment updates. */
+export function viewerDeploymentListCursor(startedAt: number, id: string, legacySnapshot = false): string {
+  return Buffer.from(JSON.stringify([1, startedAt, id, ...(legacySnapshot ? ["snapshot"] : [])])).toString("base64url");
+}
+
+export function parseViewerDeploymentListCursor(cursor?: string): [number, string, boolean] | null {
+  if (cursor === undefined) return null;
+  try {
+    if (typeof cursor !== "string" || cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw new Error();
+    const value: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString());
+    if (!Array.isArray(value) || (value.length !== 3 && !(value.length === 4 && value[3] === "snapshot")) || value[0] !== 1 || !Number.isSafeInteger(value[1])
+      || typeof value[2] !== "string" || !value[2] || value[2].length > 512) throw new Error();
+    return [value[1], value[2], value[3] === "snapshot"];
+  } catch { throw new Error("deployment list cursor is invalid"); }
+}
+
+export function viewerDeploymentStartedAt(row: ViewerDeploymentStatus): number {
+  const created = Date.parse(row.createdAt);
+  const updated = Date.parse(row.updatedAt);
+  return Number.isFinite(created) ? created : Number.isFinite(updated) ? updated : -8640000000000000;
+}
+
+export function compactViewerDeploymentError(error: string | null): string | null {
+  return error == null ? null : error.length > 300 ? error.slice(0, 300) + "…" : error;
+}
+
+export function viewerDeploymentSummary(row: ViewerDeploymentStatus): ViewerDeploymentSummary {
+  return { deploymentId: row.deploymentId, phase: row.phase, sha: row.revision, terminal: row.terminal,
+    startedAt: row.createdAt ?? null, finishedAt: row.terminal ? row.updatedAt ?? null : null,
+    error: compactViewerDeploymentError(row.error) };
+}
+
 export type ViewerDeploymentReceipt =
   | { state: "accepted"; deploymentId: string; revision: string; replayed: boolean }
   | { state: "busy"; deploymentId: string; revision: string };
@@ -805,7 +865,7 @@ export interface RuntimeReplay {
 
 export interface RuntimeSocketRequest {
   id: string;
-  method: "runtime-host-health" | "snapshot" | "events" | "wait" | "append" | "operation" | "command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "snapshot" | "events" | "wait" | "append" | "operation" | "command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 
