@@ -1,0 +1,4066 @@
+{
+  "distinctRenderings": {
+    "phone-390": 2,
+    "desktop-1280": 2
+  },
+  "renderings": {
+    "phone-390": [
+      "{\"bubble\":{\"width\":292,\"height\":62,\"opacity\":\"1\",\"fontSize\":\"15px\",\"padding\":\"9px/12px/9px/12px\",\"radius\":\"12px\",\"right\":24},\"aside\":\"Sent — waiting for confirmation. Show delivery details\",\"inBubble\":\"Check what is blocking the release and tell me which lane owns it.\",\"controls\":[\"Sent — waiting for confirmation. Show delivery details\"]}",
+      "{\"bubble\":{\"width\":292,\"height\":62,\"opacity\":\"1\",\"fontSize\":\"15px\",\"padding\":\"9px/12px/9px/12px\",\"radius\":\"12px\",\"right\":24},\"aside\":\"\",\"inBubble\":\"Check what is blocking the release and tell me which lane owns it.\",\"controls\":[\"Copy message (Markdown)\"]}"
+    ],
+    "desktop-1280": [
+      "{\"bubble\":{\"width\":495,\"height\":44,\"opacity\":\"1\",\"fontSize\":\"16px\",\"padding\":\"10px/16px/10px/16px\",\"radius\":\"12px\",\"right\":134},\"aside\":\"Sent — waiting for confirmation. Show delivery details\",\"inBubble\":\"Check what is blocking the release and tell me which lane owns it.\",\"controls\":[\"Sent — waiting for confirmation. Show delivery details\"]}",
+      "{\"bubble\":{\"width\":495,\"height\":44,\"opacity\":\"1\",\"fontSize\":\"16px\",\"padding\":\"10px/16px/10px/16px\",\"radius\":\"12px\",\"right\":134},\"aside\":\"\",\"inBubble\":\"Check what is blocking the release and tell me which lane owns it.\",\"controls\":[\"Copy message (Markdown)\"]}"
+    ]
+  },
+  "readings": {
+    "success-submitted-phone-390-dark-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_461ed5cd-1711-4c61-b9a1-c61676b86ccb",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-accepted-phone-390-dark-en": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_461ed5cd-1711-4c61-b9a1-c61676b86ccb",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-confirmed-phone-390-dark-en": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_461ed5cd-1711-4c61-b9a1-c61676b86ccb",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-transcript-phone-390-dark-en": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_461ed5cd-1711-4c61-b9a1-c61676b86ccb",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "queued-behind-turn-submitted-phone-390-dark-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_436dd78c-9270-4084-9d05-d85d1d74dbe5",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "queued-behind-turn-queued-behind-turn-phone-390-dark-en": {
+      "state": "queued-behind-turn",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_436dd78c-9270-4084-9d05-d85d1d74dbe5",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "held-for-host-submitted-phone-390-dark-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_790c8d40-b04d-4307-a979-3f03d8913d25",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "held-for-host-held-for-host-phone-390-dark-en": {
+      "state": "held-for-host",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_790c8d40-b04d-4307-a979-3f03d8913d25",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-acknowledgement-lost-acknowledgement-phone-390-dark-en": {
+      "state": "lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_971d5c9c-6242-4c80-874a-812245420213",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-acknowledgement-lost-acknowledgement-open-phone-390-dark-en": {
+      "state": "lost-acknowledgement-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Hide delivery details The last attempt's outcome is unknownCheck status",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Hide delivery details",
+        "Check status"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_971d5c9c-6242-4c80-874a-812245420213",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "safe-failure-failed-phone-390-dark-en": {
+      "state": "failed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "The agent could not be started again — its account is busySend again",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)",
+        "The agent could not be started again — its account is busy",
+        "Send again"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_6deabdd3-c45d-4759-94cf-857c255deca3",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "safe-failure-failed-open-phone-390-dark-en": {
+      "state": "failed-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "The agent could not be started again — its account is busySend againstructured host recovery failed after 12 contended attempts: account is busyCancel this message",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)",
+        "The agent could not be started again — its account is busy",
+        "Send again",
+        "Cancel this message"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_6deabdd3-c45d-4759-94cf-857c255deca3",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-prepared-phone-390-dark-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-submitted-with-attachment-phone-390-dark-en": {
+      "state": "submitted-with-attachment",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_01ca6d8c-c7c4-4d75-bcf8-a998bdcc594f",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-attachment-confirmed-phone-390-dark-en": {
+      "state": "attachment-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_01ca6d8c-c7c4-4d75-bcf8-a998bdcc594f",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-attachment-transcript-phone-390-dark-en": {
+      "state": "attachment-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 86,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_01ca6d8c-c7c4-4d75-bcf8-a998bdcc594f",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-submitted-phone-390-dark-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_e7a7f027-b2b5-4376-b56f-ae8be992224e",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-accepted-phone-390-dark-uk": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_e7a7f027-b2b5-4376-b56f-ae8be992224e",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-confirmed-phone-390-dark-uk": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_e7a7f027-b2b5-4376-b56f-ae8be992224e",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-transcript-phone-390-dark-uk": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_e7a7f027-b2b5-4376-b56f-ae8be992224e",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "queued-behind-turn-submitted-phone-390-dark-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_3d02fe0f-40df-4e3d-bc41-6a8fc75acfa1",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "queued-behind-turn-queued-behind-turn-phone-390-dark-uk": {
+      "state": "queued-behind-turn",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_3d02fe0f-40df-4e3d-bc41-6a8fc75acfa1",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "held-for-host-submitted-phone-390-dark-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_0ec86a06-4d53-4060-b4ec-d3b7d2dfc301",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "held-for-host-held-for-host-phone-390-dark-uk": {
+      "state": "held-for-host",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_0ec86a06-4d53-4060-b4ec-d3b7d2dfc301",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-acknowledgement-lost-acknowledgement-phone-390-dark-uk": {
+      "state": "lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_d8879e36-3425-4caf-a066-3a25d0bb190d",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-acknowledgement-lost-acknowledgement-open-phone-390-dark-uk": {
+      "state": "lost-acknowledgement-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Сховати деталі доставки Результат останньої спроби невідомийПеревірити стан",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Сховати деталі доставки",
+        "Перевірити стан"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_d8879e36-3425-4caf-a066-3a25d0bb190d",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "safe-failure-failed-phone-390-dark-uk": {
+      "state": "failed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Не вдалося знову запустити агента — його акаунт зайнятийНадіслати знову",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)",
+        "Не вдалося знову запустити агента — його акаунт зайнятий",
+        "Надіслати знову"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_90a41be9-c7a2-4c43-8df7-aded77e4c2a8",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "safe-failure-failed-open-phone-390-dark-uk": {
+      "state": "failed-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Не вдалося знову запустити агента — його акаунт зайнятийНадіслати зновуstructured host recovery failed after 12 contended attempts: account is busyСкасувати це повідомлення",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)",
+        "Не вдалося знову запустити агента — його акаунт зайнятий",
+        "Надіслати знову",
+        "Скасувати це повідомлення"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_90a41be9-c7a2-4c43-8df7-aded77e4c2a8",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-prepared-phone-390-dark-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-submitted-with-attachment-phone-390-dark-uk": {
+      "state": "submitted-with-attachment",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_230fca71-6457-4e8a-bcc5-d1859520b395",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-attachment-confirmed-phone-390-dark-uk": {
+      "state": "attachment-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_230fca71-6457-4e8a-bcc5-d1859520b395",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-attachment-transcript-phone-390-dark-uk": {
+      "state": "attachment-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 86,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_230fca71-6457-4e8a-bcc5-d1859520b395",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-submitted-phone-390-light-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2f2b48c5-be10-42cd-96c8-a4f473315967",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-accepted-phone-390-light-en": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2f2b48c5-be10-42cd-96c8-a4f473315967",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-confirmed-phone-390-light-en": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_2f2b48c5-be10-42cd-96c8-a4f473315967",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-transcript-phone-390-light-en": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_2f2b48c5-be10-42cd-96c8-a4f473315967",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "queued-behind-turn-submitted-phone-390-light-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_ae3605a1-faf9-4e70-9d52-7dd50fa60597",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "queued-behind-turn-queued-behind-turn-phone-390-light-en": {
+      "state": "queued-behind-turn",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_ae3605a1-faf9-4e70-9d52-7dd50fa60597",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "held-for-host-submitted-phone-390-light-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_08f2afa8-d55f-4c76-88e5-ba1d13232a90",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "held-for-host-held-for-host-phone-390-light-en": {
+      "state": "held-for-host",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_08f2afa8-d55f-4c76-88e5-ba1d13232a90",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-acknowledgement-lost-acknowledgement-phone-390-light-en": {
+      "state": "lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_eb97e93f-71dc-42c1-92d7-ae58dc94b19e",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-acknowledgement-lost-acknowledgement-open-phone-390-light-en": {
+      "state": "lost-acknowledgement-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Hide delivery details The last attempt's outcome is unknownCheck status",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Hide delivery details",
+        "Check status"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_eb97e93f-71dc-42c1-92d7-ae58dc94b19e",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "safe-failure-failed-phone-390-light-en": {
+      "state": "failed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "The agent could not be started again — its account is busySend again",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)",
+        "The agent could not be started again — its account is busy",
+        "Send again"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_5bb050a4-3ca9-4d3e-b167-99356cf17376",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "safe-failure-failed-open-phone-390-light-en": {
+      "state": "failed-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "The agent could not be started again — its account is busySend againstructured host recovery failed after 12 contended attempts: account is busyCancel this message",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)",
+        "The agent could not be started again — its account is busy",
+        "Send again",
+        "Cancel this message"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_5bb050a4-3ca9-4d3e-b167-99356cf17376",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-prepared-phone-390-light-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-submitted-with-attachment-phone-390-light-en": {
+      "state": "submitted-with-attachment",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_fe583f2e-b381-4805-b11f-c022e9af074d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-attachment-confirmed-phone-390-light-en": {
+      "state": "attachment-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_fe583f2e-b381-4805-b11f-c022e9af074d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-attachment-transcript-phone-390-light-en": {
+      "state": "attachment-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 86,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_fe583f2e-b381-4805-b11f-c022e9af074d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-submitted-phone-390-light-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_fd70f183-80a0-4009-abc2-199b9e0e770d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-accepted-phone-390-light-uk": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_fd70f183-80a0-4009-abc2-199b9e0e770d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-confirmed-phone-390-light-uk": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_fd70f183-80a0-4009-abc2-199b9e0e770d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-transcript-phone-390-light-uk": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_fd70f183-80a0-4009-abc2-199b9e0e770d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "queued-behind-turn-submitted-phone-390-light-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_6030145a-ba5c-4a3f-b89a-f53210a6cfbb",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "queued-behind-turn-queued-behind-turn-phone-390-light-uk": {
+      "state": "queued-behind-turn",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_6030145a-ba5c-4a3f-b89a-f53210a6cfbb",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "held-for-host-submitted-phone-390-light-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_a713977d-4c96-475b-826b-ad7b8a7bacfc",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "held-for-host-held-for-host-phone-390-light-uk": {
+      "state": "held-for-host",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_a713977d-4c96-475b-826b-ad7b8a7bacfc",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-acknowledgement-lost-acknowledgement-phone-390-light-uk": {
+      "state": "lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_186cf977-9ba6-4e56-8653-0efb9ed32dc0",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-acknowledgement-lost-acknowledgement-open-phone-390-light-uk": {
+      "state": "lost-acknowledgement-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Сховати деталі доставки Результат останньої спроби невідомийПеревірити стан",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Сховати деталі доставки",
+        "Перевірити стан"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_186cf977-9ba6-4e56-8653-0efb9ed32dc0",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "safe-failure-failed-phone-390-light-uk": {
+      "state": "failed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Не вдалося знову запустити агента — його акаунт зайнятийНадіслати знову",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)",
+        "Не вдалося знову запустити агента — його акаунт зайнятий",
+        "Надіслати знову"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_bba9e91d-7722-49f5-9280-7a3c3c79221e",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "safe-failure-failed-open-phone-390-light-uk": {
+      "state": "failed-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Не вдалося знову запустити агента — його акаунт зайнятийНадіслати зновуstructured host recovery failed after 12 contended attempts: account is busyСкасувати це повідомлення",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)",
+        "Не вдалося знову запустити агента — його акаунт зайнятий",
+        "Надіслати знову",
+        "Скасувати це повідомлення"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_bba9e91d-7722-49f5-9280-7a3c3c79221e",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-prepared-phone-390-light-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-submitted-with-attachment-phone-390-light-uk": {
+      "state": "submitted-with-attachment",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_6bc306db-7bbf-4a28-96db-85e08853a4bc",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-attachment-confirmed-phone-390-light-uk": {
+      "state": "attachment-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_6bc306db-7bbf-4a28-96db-85e08853a4bc",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "attachment-and-context-attachment-transcript-phone-390-light-uk": {
+      "state": "attachment-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 86,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_6bc306db-7bbf-4a28-96db-85e08853a4bc",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-submitted-desktop-1280-dark-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_d5c65b30-297e-4052-9332-15347f975e35",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-accepted-desktop-1280-dark-en": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_d5c65b30-297e-4052-9332-15347f975e35",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-confirmed-desktop-1280-dark-en": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_d5c65b30-297e-4052-9332-15347f975e35",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-transcript-desktop-1280-dark-en": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_d5c65b30-297e-4052-9332-15347f975e35",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "queued-behind-turn-submitted-desktop-1280-dark-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_9d781026-5b96-4435-a3a9-d1de2f916d6d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "queued-behind-turn-queued-behind-turn-desktop-1280-dark-en": {
+      "state": "queued-behind-turn",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_9d781026-5b96-4435-a3a9-d1de2f916d6d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "held-for-host-submitted-desktop-1280-dark-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_3bd5548a-50ec-493b-a66b-0572c34c643a",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "held-for-host-held-for-host-desktop-1280-dark-en": {
+      "state": "held-for-host",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_3bd5548a-50ec-493b-a66b-0572c34c643a",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-acknowledgement-lost-acknowledgement-desktop-1280-dark-en": {
+      "state": "lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_cedd341e-4d07-4488-9cf5-6a429c542a2d",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-acknowledgement-lost-acknowledgement-open-desktop-1280-dark-en": {
+      "state": "lost-acknowledgement-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Hide delivery details The last attempt's outcome is unknownCheck status",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Hide delivery details",
+        "Check status"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_cedd341e-4d07-4488-9cf5-6a429c542a2d",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "safe-failure-failed-desktop-1280-dark-en": {
+      "state": "failed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "The agent could not be started again — its account is busySend again",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)",
+        "The agent could not be started again — its account is busy",
+        "Send again"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_67d4347d-e3c2-4d82-a879-a55d6ccf0d2d",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "safe-failure-failed-open-desktop-1280-dark-en": {
+      "state": "failed-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "The agent could not be started again — its account is busySend againstructured host recovery failed after 12 contended attempts: account is busyCancel this message",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)",
+        "The agent could not be started again — its account is busy",
+        "Send again",
+        "Cancel this message"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_67d4347d-e3c2-4d82-a879-a55d6ccf0d2d",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-prepared-desktop-1280-dark-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-submitted-with-attachment-desktop-1280-dark-en": {
+      "state": "submitted-with-attachment",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_12ae4ec1-4443-4f53-8639-1c82f40af60f",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-attachment-confirmed-desktop-1280-dark-en": {
+      "state": "attachment-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_12ae4ec1-4443-4f53-8639-1c82f40af60f",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-attachment-transcript-desktop-1280-dark-en": {
+      "state": "attachment-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 47,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_12ae4ec1-4443-4f53-8639-1c82f40af60f",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-submitted-desktop-1280-dark-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_474d44fb-cae6-495e-b533-3fa676be7f07",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-accepted-desktop-1280-dark-uk": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_474d44fb-cae6-495e-b533-3fa676be7f07",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-confirmed-desktop-1280-dark-uk": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_474d44fb-cae6-495e-b533-3fa676be7f07",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-transcript-desktop-1280-dark-uk": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_474d44fb-cae6-495e-b533-3fa676be7f07",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "queued-behind-turn-submitted-desktop-1280-dark-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_ba6f2f73-6824-40cb-b89c-e6efd87ee53c",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "queued-behind-turn-queued-behind-turn-desktop-1280-dark-uk": {
+      "state": "queued-behind-turn",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_ba6f2f73-6824-40cb-b89c-e6efd87ee53c",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "held-for-host-submitted-desktop-1280-dark-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2037df73-0ae0-4d50-af7e-e9b3e4985a14",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "held-for-host-held-for-host-desktop-1280-dark-uk": {
+      "state": "held-for-host",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2037df73-0ae0-4d50-af7e-e9b3e4985a14",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-acknowledgement-lost-acknowledgement-desktop-1280-dark-uk": {
+      "state": "lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_9594365f-2988-4bce-bae2-0583e932fa85",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-acknowledgement-lost-acknowledgement-open-desktop-1280-dark-uk": {
+      "state": "lost-acknowledgement-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Сховати деталі доставки Результат останньої спроби невідомийПеревірити стан",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Сховати деталі доставки",
+        "Перевірити стан"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_9594365f-2988-4bce-bae2-0583e932fa85",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "safe-failure-failed-desktop-1280-dark-uk": {
+      "state": "failed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Не вдалося знову запустити агента — його акаунт зайнятийНадіслати знову",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)",
+        "Не вдалося знову запустити агента — його акаунт зайнятий",
+        "Надіслати знову"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_fb4aa860-94a2-4b67-9c43-8603a0006fab",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "safe-failure-failed-open-desktop-1280-dark-uk": {
+      "state": "failed-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Не вдалося знову запустити агента — його акаунт зайнятийНадіслати зновуstructured host recovery failed after 12 contended attempts: account is busyСкасувати це повідомлення",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)",
+        "Не вдалося знову запустити агента — його акаунт зайнятий",
+        "Надіслати знову",
+        "Скасувати це повідомлення"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_fb4aa860-94a2-4b67-9c43-8603a0006fab",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-prepared-desktop-1280-dark-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-submitted-with-attachment-desktop-1280-dark-uk": {
+      "state": "submitted-with-attachment",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_b97aa734-61a3-4f94-a186-75191bb58259",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-attachment-confirmed-desktop-1280-dark-uk": {
+      "state": "attachment-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_b97aa734-61a3-4f94-a186-75191bb58259",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-attachment-transcript-desktop-1280-dark-uk": {
+      "state": "attachment-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 47,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_b97aa734-61a3-4f94-a186-75191bb58259",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-submitted-desktop-1280-light-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_065084bb-3001-4840-babd-871c4b5bddcf",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-accepted-desktop-1280-light-en": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_065084bb-3001-4840-babd-871c4b5bddcf",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-confirmed-desktop-1280-light-en": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_065084bb-3001-4840-babd-871c4b5bddcf",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-transcript-desktop-1280-light-en": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_065084bb-3001-4840-babd-871c4b5bddcf",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "queued-behind-turn-submitted-desktop-1280-light-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_47fbcdea-4655-4c43-b77d-7e38eb4ae14d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "queued-behind-turn-queued-behind-turn-desktop-1280-light-en": {
+      "state": "queued-behind-turn",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_47fbcdea-4655-4c43-b77d-7e38eb4ae14d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "held-for-host-submitted-desktop-1280-light-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_205d752a-6eae-4ea2-bcd3-147093caf9dc",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "held-for-host-held-for-host-desktop-1280-light-en": {
+      "state": "held-for-host",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_205d752a-6eae-4ea2-bcd3-147093caf9dc",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-acknowledgement-lost-acknowledgement-desktop-1280-light-en": {
+      "state": "lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_bcb7eba0-45ef-4abb-8c80-438a4b01d81b",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-acknowledgement-lost-acknowledgement-open-desktop-1280-light-en": {
+      "state": "lost-acknowledgement-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Hide delivery details The last attempt's outcome is unknownCheck status",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Hide delivery details",
+        "Check status"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_bcb7eba0-45ef-4abb-8c80-438a4b01d81b",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "safe-failure-failed-desktop-1280-light-en": {
+      "state": "failed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "The agent could not be started again — its account is busySend again",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)",
+        "The agent could not be started again — its account is busy",
+        "Send again"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_cf4b0ea5-d283-4140-806f-651c080ff9e7",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "safe-failure-failed-open-desktop-1280-light-en": {
+      "state": "failed-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "The agent could not be started again — its account is busySend againstructured host recovery failed after 12 contended attempts: account is busyCancel this message",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)",
+        "The agent could not be started again — its account is busy",
+        "Send again",
+        "Cancel this message"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_cf4b0ea5-d283-4140-806f-651c080ff9e7",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-prepared-desktop-1280-light-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-submitted-with-attachment-desktop-1280-light-en": {
+      "state": "submitted-with-attachment",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_fcc5d057-8924-452c-a0cc-844d498702a5",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-attachment-confirmed-desktop-1280-light-en": {
+      "state": "attachment-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_fcc5d057-8924-452c-a0cc-844d498702a5",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-attachment-transcript-desktop-1280-light-en": {
+      "state": "attachment-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 47,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_fcc5d057-8924-452c-a0cc-844d498702a5",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-submitted-desktop-1280-light-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_a7dfd799-4a04-4adf-bfcb-80660a4282b0",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-accepted-desktop-1280-light-uk": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_a7dfd799-4a04-4adf-bfcb-80660a4282b0",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-confirmed-desktop-1280-light-uk": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_a7dfd799-4a04-4adf-bfcb-80660a4282b0",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-transcript-desktop-1280-light-uk": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_a7dfd799-4a04-4adf-bfcb-80660a4282b0",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "queued-behind-turn-submitted-desktop-1280-light-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_f166810a-d742-4b24-a223-a3761a04da12",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "queued-behind-turn-queued-behind-turn-desktop-1280-light-uk": {
+      "state": "queued-behind-turn",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_f166810a-d742-4b24-a223-a3761a04da12",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "held-for-host-submitted-desktop-1280-light-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_5dfac4e9-7b79-4d60-b908-0eef9369de00",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "held-for-host-held-for-host-desktop-1280-light-uk": {
+      "state": "held-for-host",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_5dfac4e9-7b79-4d60-b908-0eef9369de00",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-acknowledgement-lost-acknowledgement-desktop-1280-light-uk": {
+      "state": "lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_5e48bc73-efe8-4b9d-b60a-c3c148855d0c",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-acknowledgement-lost-acknowledgement-open-desktop-1280-light-uk": {
+      "state": "lost-acknowledgement-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Сховати деталі доставки Результат останньої спроби невідомийПеревірити стан",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Сховати деталі доставки",
+        "Перевірити стан"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_5e48bc73-efe8-4b9d-b60a-c3c148855d0c",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "safe-failure-failed-desktop-1280-light-uk": {
+      "state": "failed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Не вдалося знову запустити агента — його акаунт зайнятийНадіслати знову",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)",
+        "Не вдалося знову запустити агента — його акаунт зайнятий",
+        "Надіслати знову"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_03d2adeb-96ab-42b0-a2b1-1193d06b3605",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "safe-failure-failed-open-desktop-1280-light-uk": {
+      "state": "failed-open",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Не вдалося знову запустити агента — його акаунт зайнятийНадіслати зновуstructured host recovery failed after 12 contended attempts: account is busyСкасувати це повідомлення",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)",
+        "Не вдалося знову запустити агента — його акаунт зайнятий",
+        "Надіслати знову",
+        "Скасувати це повідомлення"
+      ],
+      "phase": "failed",
+      "outboxState": "failed",
+      "queue": [
+        {
+          "id": "op_03d2adeb-96ab-42b0-a2b1-1193d06b3605",
+          "state": "failed",
+          "error": "structured host recovery failed after 12 contended attempts: account is busy"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-prepared-desktop-1280-light-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-submitted-with-attachment-desktop-1280-light-uk": {
+      "state": "submitted-with-attachment",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_0dc68bdd-d1e0-46c3-b30c-6fc3f18a6290",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-attachment-confirmed-desktop-1280-light-uk": {
+      "state": "attachment-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_0dc68bdd-d1e0-46c3-b30c-6fc3f18a6290",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "attachment-and-context-attachment-transcript-desktop-1280-light-uk": {
+      "state": "attachment-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 47,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_0dc68bdd-d1e0-46c3-b30c-6fc3f18a6290",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    }
+  }
+}

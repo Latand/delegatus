@@ -12,7 +12,7 @@
  * the driver is `conversationWindow.browser.test.tsx`.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setLocale, useLocale, type Locale } from "@/lib/i18n";
@@ -21,10 +21,17 @@ import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import { useComposer } from "@/hooks/useComposer";
 
 import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/components/ComposerBar";
-import { capabilitiesFor } from "@/components/agentCapabilities";
+import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 
 import { FeedItem } from "@/components/feed/FeedItem";
 import { buildFeed, type Item } from "@/components/feed/parse";
+import { LogFeed } from "@/components/LogFeed";
+import { TmuxComposer } from "@/components/TmuxComposer";
+import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
+import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
+import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
+import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
+import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
@@ -36,6 +43,8 @@ import {
   type OutboxEntry,
   type OutboxOwner,
 } from "./outbox";
+
+const params = new URLSearchParams(window.location.search);
 
 const ADMITTED_AT = Date.parse("2026-09-19T03:02:09.021Z");
 const DELIVERED_AT = ADMITTED_AT + 19_000;
@@ -59,6 +68,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "lifecycle"
   | "queued"
   | "receipt-delivered"
   | "retired-on-transcript"
@@ -345,6 +355,321 @@ function DeadQueueFixture({ id }: { id: ConversationWindowCase }) {
   );
 }
 
+
+
+/* ── One message, one row: the whole LIFE of an ordinary send ────────────────
+   Not a gallery of reconstructed states — a conversation the driver actually
+   uses. The production `LogFeed` and `TmuxComposer` are mounted together over
+   the production outbox store, and behind them a configurable fake host
+   answers `/api/runtime/send` and publishes receipts. The driver types into
+   the real field, submits through the path it is exercising, and advances the
+   host; every frame it photographs is a frame that submission really reached.
+
+   An earlier version of this fixture handed each state to a fresh browser
+   context with the store pre-arranged — which is exactly why it could not see
+   that the transcript's own record REPLACED the row instead of being adopted
+   into it. A lifecycle that never transitions cannot observe a transition.
+
+   The scenarios are the five an ordinary message meets: it simply arrives; it
+   is parked behind a turn that is running; it waits for a host that is coming
+   back; its acknowledgement is lost; and it fails safely. */
+
+const LIFE_CARD = "conversation_message_lifecycle";
+const LIFE_PATH = "/codex-message-lifecycle.jsonl";
+const LIFE_TEXT = "Check what is blocking the release and tell me which lane owns it.";
+/* What the runtime writes when a contended resume gives up: English prose,
+   from the server, which the row must not print at a Ukrainian operator. */
+const LIFE_FAILURE = "structured host recovery failed after 12 contended attempts: account is busy";
+
+export type LifecycleScenario =
+  | "success"
+  | "queued-behind-turn"
+  | "held-for-host"
+  | "lost-acknowledgement"
+  | "safe-failure";
+
+/** What the fake host does with the next admission, and what it has published. */
+interface FakeHost {
+  scenario: LifecycleScenario;
+  host: string;
+  turn: string;
+  receipts: RuntimeReceipt[];
+  lines: string[];
+  /** Resolves the durable-preparation gate, when the driver has closed it. */
+  release: (() => void) | null;
+}
+
+const fakeHost: FakeHost = {
+  scenario: "success",
+  host: "hosted",
+  turn: "idle",
+  receipts: [],
+  lines: [],
+  release: null,
+};
+
+const hostListeners = new Set<() => void>();
+let hostRevision = 0;
+function announceHost(): void {
+  hostRevision += 1;
+  for (const listener of hostListeners) listener();
+}
+function useFakeHost(): number {
+  return useSyncExternalStore(
+    (listener) => { hostListeners.add(listener); return () => { hostListeners.delete(listener); }; },
+    () => hostRevision,
+    () => hostRevision,
+  );
+}
+
+const LIFE_SESSION = () => ({
+  session: {
+    conversationId: LIFE_CARD,
+    sessionKey: { engine: "codex", sessionId: "codex-session-lifecycle" },
+    hostKind: "codex-app-server",
+    host: fakeHost.host,
+    turn: fakeHost.turn,
+    provenance: "structured",
+    revision: 1 + hostRevision,
+    attentionIds: [],
+    recentReceipts: fakeHost.receipts,
+    accountId: null,
+    parentConversationId: null,
+    flowId: null,
+    workflowId: null,
+    cwd: "viewer",
+    artifactPath: LIFE_PATH,
+    capabilities: {
+      steer: false,
+      structuredAttention: false,
+      imageInput: { supported: true },
+      runtimeSettings: { perTurnEffort: true, perTurnModel: false },
+    },
+    activeTurnId: null,
+  },
+  uiState: {},
+  attentions: [],
+  receipts: fakeHost.receipts,
+  legacy: false,
+  structuredControlsEnabled: true,
+} as unknown as RuntimeSessionView);
+
+const LIFE_FILE = {
+  path: LIFE_PATH,
+  root: "codex-sessions",
+  name: "message-lifecycle.jsonl",
+  project: "viewer",
+  engine: "codex",
+  kind: "session",
+  fmt: "codex",
+  parent: null,
+  proc: "running",
+  pid: 4242,
+  conversationId: LIFE_CARD,
+  generation: 1,
+  activity: "live",
+  mtime: 1,
+  size: 1,
+} as unknown as FileEntry;
+
+/** The agent's last turn, so the row is photographed where it really sits. */
+const LIFE_OPENING = JSON.stringify({
+  type: "event_msg",
+  timestamp: "2026-09-19T09:14:00.000Z",
+  payload: { type: "agent_message", message: "The release branch is green again. Anything else you want me to look at?" },
+});
+
+/* Monotonic: the production projection refuses a receipt that does not
+   advance the journal's own revision, so a fake host that reuses one publishes
+   evidence the row is right to ignore. */
+let lifecycleRevision = 0;
+
+function lifecycleReceipt(key: string, status: string, extra: Record<string, unknown> = {}): RuntimeReceipt {
+  lifecycleRevision += 1;
+  return {
+    operationId: `operation-${key}`,
+    idempotencyKey: key,
+    conversationId: LIFE_CARD,
+    kind: "send",
+    status,
+    text: LIFE_TEXT,
+    at: new Date().toISOString(),
+    admittedAt: new Date(Date.now() - 45_000).toISOString(),
+    revision: lifecycleRevision,
+    ...extra,
+  } as unknown as RuntimeReceipt;
+}
+
+/**
+ * The transport, wired once. `/api/runtime/send` answers the way the scenario
+ * says the server behaved; everything the composer needs beside it answers
+ * plausibly and nothing else is reachable.
+ */
+function installFakeTransport(): void {
+  const realFetch = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url === "/api/tmux/targets") return Response.json({ targets: {} });
+    if (url.startsWith("/api/runtime/send?")) {
+      /* The original-key admission query. Nothing was journaled under the key
+         in the lost-acknowledgement scenario, and saying so would settle it —
+         the frame is about a delivery nobody can settle yet, so the lookup
+         answers what a lookup that could not read the record answers. */
+      return Response.json({ outcome: "unknown" });
+    }
+    if (url === "/api/runtime/send") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { idempotencyKey: string };
+      if (fakeHost.release) await new Promise<void>((resolve) => { fakeHost.release = resolve; });
+      if (fakeHost.scenario === "lost-acknowledgement") throw new TypeError("Network disconnected");
+      if (fakeHost.scenario === "safe-failure") {
+        /* A refusal ABOVE the delivery attempt: nothing journaled, no
+           operation minted, nothing on any wire. A 4xx says that; the 503 the
+           route reserves for a genuinely unknown outcome does not, which is
+           what keeps this frame a proven failure rather than an unknown one. */
+        return Response.json({ error: LIFE_FAILURE }, { status: 400 });
+      }
+      const status = fakeHost.scenario === "success" ? "pending" : "queued";
+      const receipt = lifecycleReceipt(body.idempotencyKey, status);
+      fakeHost.receipts = [receipt];
+      queueMicrotask(announceHost);
+      return Response.json({ operationId: receipt.operationId, receipt }, { status: 202 });
+    }
+    if (url.startsWith("/api/")) return new Response("{}", { status: 404 });
+    return realFetch(input as RequestInfo, init);
+  }) as typeof fetch;
+}
+
+/**
+ * What the driver can do to the host, from the page.
+ *
+ * Deliberately small: choose a scenario, hold or release the durable
+ * preparation, publish the receipt the scenario's next step would produce, and
+ * let the transcript carry the message. Everything else the driver does it
+ * does through the interface, like an operator.
+ */
+interface LifecycleControls {
+  scenario(next: LifecycleScenario): void;
+  axes(host: string, turn: string): void;
+  /** Hold the durable preparation open until `release()`. */
+  hold(): void;
+  release(): void;
+  /** Publish the receipt that moves this send on. */
+  settle(status: "delivered" | "queued" | "uncertain"): void;
+  /** The transcript's own record of the message arrives. */
+  echo(): void;
+  /** Point the view at a card, so the next submission captures a reference to
+      it exactly as the operator's own selection would (#844). */
+  select(label: string): void;
+  reset(): void;
+  /** The durable queue behind the rows, so a frame that reads oddly can be
+      traced to the state the store was really in. */
+  queue(): { id: string; state: string; error?: string; deliveryUncertain?: true }[];
+}
+
+function lifecycleControls(): LifecycleControls {
+  return {
+    scenario: (next) => { fakeHost.scenario = next; announceHost(); },
+    axes: (host, turn) => { fakeHost.host = host; fakeHost.turn = turn; announceHost(); },
+    hold: () => { fakeHost.release = () => undefined; },
+    release: () => { const release = fakeHost.release; fakeHost.release = null; release?.(); announceHost(); },
+    settle: (status) => {
+      const key = readOutbox(LIFE_CARD)[0]?.id ?? "unknown-key";
+      fakeHost.receipts = [lifecycleReceipt(key, status === "uncertain" ? "uncertain" : status,
+        status === "uncertain" ? { resend: "verify-first", reason: "recipient evidence unavailable" } : {})];
+      announceHost();
+    },
+    select: (label) => {
+      viewBus.reportContext({ ...OVERVIEW_CONTEXT, project: "viewer" });
+      viewBus.reportCards([{ path: "/codex-selected-card.jsonl", conversationId: "conversation_selected_card", project: "viewer", label }]);
+      viewBus.reportSlice({
+        ...OVERVIEW_SLICE,
+        focusedPath: "/codex-selected-card.jsonl",
+        selectedPaths: ["/codex-selected-card.jsonl"],
+      });
+      announceHost();
+    },
+    echo: () => {
+      fakeHost.lines = [LIFE_OPENING, JSON.stringify({
+        type: "event_msg",
+        timestamp: new Date().toISOString(),
+        payload: { type: "user_message", message: readOutbox(LIFE_CARD)[0]?.text ?? LIFE_TEXT },
+      })];
+      announceHost();
+    },
+    queue: () => readOutbox(LIFE_CARD).map((entry) => ({
+      id: entry.id, state: entry.state,
+      ...(entry.error ? { error: entry.error } : {}),
+      ...(entry.deliveryUncertain ? { deliveryUncertain: true as const } : {}),
+    })),
+    /* Only the fake host's own state. The queue store is reset at MOUNT,
+       before anything subscribes to it: `resetOutboxForTests` drops every
+       listener, so calling it on a live page silently detaches the feed from
+       the store and freezes every row at whatever it last painted. */
+    reset: () => {
+      fakeHost.receipts = [];
+      fakeHost.lines = [LIFE_OPENING];
+      fakeHost.host = "hosted";
+      fakeHost.turn = "idle";
+      fakeHost.release = null;
+      sessionStorage.clear();
+      announceHost();
+    },
+  };
+}
+
+function LifecycleFixture() {
+  /* Re-renders whenever the fake host publishes anything. */
+  useFakeHost();
+  return (
+    <div data-evidence-case="lifecycle" className="flex min-h-dvh flex-col bg-canvas text-primary">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <LogFeed file={LIFE_FILE} showSvc={false} lineFilter="" onStatus={() => undefined}
+          paused={false} follow setFollow={() => undefined} />
+      </div>
+      <TmuxComposer file={LIFE_FILE} />
+    </div>
+  );
+}
+
+function mountLifecycle(root: HTMLElement): void {
+  setRuntimeUiEnabledForTests(false);
+  setLogFeedDependenciesForTests({
+    useLogTail: () => ({
+      lines: fakeHost.lines, linesStart: 0, size: fakeHost.lines.length, loading: false, error: null,
+      tickTime: null, paused: false, setPaused() {}, clear() {}, hasMore: false, loadingOlder: false,
+      loadOlder: async () => 0, prependGen: 0,
+    }),
+  });
+  setTmuxComposerRuntimeDependenciesForTests({
+    useAgentCapabilities: (candidate) => {
+      const view = LIFE_SESSION();
+      const options = { runtimeEnabled: true };
+      return {
+        caps: capabilitiesFor(candidate, view, options),
+        runtime: view,
+        structuredSession: view,
+        runtimeEnabled: true,
+        attachMode: attachModeFor(candidate, view, options),
+      };
+    },
+    useRuntimeReceiptsForArtifact: () => {
+      useFakeHost();
+      return fakeHost.receipts;
+    },
+    refreshRuntime: async () => { announceHost(); return true; },
+  });
+  installFakeTransport();
+  /* Each scenario gets a fresh window, and a window restored mid-flight from
+     the previous one would refuse the next submission before it started. The
+     composer's durable records live in sessionStorage, so the page starts by
+     forgetting them — the language seeded into localStorage stays. */
+  try { sessionStorage.clear(); } catch { /* opaque origin */ }
+  resetOutboxForTests();
+  fakeHost.lines = [LIFE_OPENING];
+  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
+  createRoot(root).render(<LifecycleFixture />);
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
@@ -370,7 +695,11 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   );
 }
 
-const params = new URLSearchParams(window.location.search);
 setLocale((params.get("lang") as Locale | null) ?? "en");
 const root = document.getElementById("root");
-if (root) createRoot(root).render(<Fixture id={(params.get("case") as ConversationWindowCase | null) ?? "receipt-delivered"} />);
+const requested = (params.get("case") as ConversationWindowCase | null) ?? "receipt-delivered";
+/* The lifecycle case mounts the production window itself — the feed, the
+   composer and a fake host behind them — so it takes over the root rather than
+   rendering one arranged frame. */
+if (root && requested === "lifecycle") mountLifecycle(root);
+else if (root) createRoot(root).render(<Fixture id={requested} />);

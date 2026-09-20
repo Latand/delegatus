@@ -22,6 +22,7 @@
 import { useSyncExternalStore } from "react";
 
 import { receiptIsAdmitted, receiptIsTerminal, type ReceiptStatus, type RuntimeReceipt } from "@/components/runtime/runtimeModel";
+import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
 
 export type OutboxState = "queued" | "delivering" | "delivered" | "failed";
 
@@ -69,6 +70,23 @@ export interface OutboxEntry {
   operationId?: string;
   /** Server-owned held admission; await its receipt without local replay. */
   acceptedHeld?: true;
+  /**
+   * The submission's durable payload is still being written (send-latency
+   * slice 3). The row exists from the instant the operator pressed Send — in
+   * its final form, in its final position — while `retain`/`seal`/`beginAttempt`
+   * run for an attachment-bearing or recovery-fenced send. The serial
+   * dispatcher SKIPS a preparing entry, so nothing reaches the wire before its
+   * envelope is durable and the one-wire-claim fence is untouched. Cleared when
+   * the preparation commits; the whole row is withdrawn if it cannot.
+   */
+  preparing?: true;
+  /**
+   * What this submission pointed at (#844), captured at submit and carried on
+   * the durable entry so the row shows the SAME badge before and after the
+   * transcript's own record arrives. Bounded preview fields only — never
+   * transcript content.
+   */
+  selectedContext?: SelectedContextPreview;
   /** Moment the entry left `queued`/`delivering` (ms), for the hard-cap TTL. */
   settledAt?: number;
   /** Receipt-driven delivery has its own clock authority. Unknown receipt
@@ -452,6 +470,12 @@ function persistedQueue(cardId: string): readonly OutboxEntry[] {
       const counted: OutboxEntry = { ...entry, images };
       if (files) counted.files = files;
       else delete counted.files;
+      /* Preparation belongs to the mount that started it: the sealing promise
+         died with the page. The flag is dropped so the row cannot be stranded
+         undispatchable forever, and the rules below decide what a submission
+         whose envelope never became durable is worth — an attachment-bearing
+         one is held for re-attachment, a text one simply queues again. */
+      delete counted.preparing;
       /* The initial launch prompt is owned by the spawn, not the composer: it
          survives a refresh exactly as it was (never re-dispatched, never
          re-queued) until its transcript echo or live adoption retires it. */
@@ -1214,25 +1238,32 @@ export function cancelOutbox(cardId: string, id: string): void {
 }
 
 /**
- * Clear a parked bubble nothing can ever address (#1593).
+ * Hand a PROVEN-unsent submission's words back to the composer and drop its row.
  *
- * An entry parked `deliveryUncertain` normally carries an operation: the
- * receipt stream settles it, and the recovery row offers the journal's own
- * retry and discard against that id. An entry parked with NO operation and no
- * receipt has neither — the send was refused before an id was minted, or the
- * response died before one arrived — so nothing will ever settle it, no control
- * is offered on it, and `visibleOutbox` shows it past every retirement rule for
- * as long as the tab's storage lives.
+ * The one rule that governs this (round-3 P1, superseding #1593's escape
+ * hatch): a delivery whose outcome nobody established is never dropped from
+ * here. Removing such a row looks like tidying and is not — the row IS the
+ * record of key K, and once it is gone the composer mints K2 for the same
+ * words, so a message the server may already hold is admitted a second time. An
+ * independent probe reproduced exactly that: two admitted operations, one text,
+ * zero lookups of the original key. So `deliveryUncertain` is refused outright,
+ * whether or not an operation id was ever minted; those rows keep their whole
+ * payload under K and settle by ASKING (see the row's Check status).
  *
- * This is the one way out: the row goes, and the caller puts its text back in
- * the composer. Refused for any entry an operation CAN address, because there
- * the message may really be in the journal and dropping the bubble would tell
- * the operator it is gone.
+ * What is left is what the word "parked" always should have meant: a settled
+ * failure the server proved it did not execute. Its attachment bytes are gone
+ * (`needsReattach`), or nothing was ever admitted, or the receipt itself says
+ * the replay is `safe`. There the message is provably not in the journal, so
+ * its text can go back to the field and the row can go.
  */
 export function clearParkedOutbox(cardId: string, id: string): OutboxEntry | null {
   const queue = readOutbox(cardId);
   const entry = queue.find((item) => item.id === id);
-  if (!entry || !entry.deliveryUncertain || entry.operationId || entry.deliveryReceipt) return null;
+  if (!entry || entry.deliveryUncertain || entry.state !== "failed") return null;
+  const provenUnsent = Boolean(entry.needsReattach)
+    || (!entry.operationId && !entry.deliveryReceipt)
+    || entry.deliveryReceipt?.resend === "safe";
+  if (!provenUnsent) return null;
   write(cardId, queue.filter((item) => item.id !== id));
   return entry;
 }
@@ -1341,7 +1372,19 @@ function echoKey(text: string): string {
   return text.trim();
 }
 
-/** Collision-free durable identity for one row inside one transcript generation. */
+/**
+ * Collision-free durable identity for one row inside one transcript generation.
+ *
+ * Exported because the feed needs to read the binding back: an entry retired by
+ * an echo records THAT anchor in {@link OutboxEntry.retiredEchoId}, and the row
+ * the transcript paints has to recognise itself in it to keep the submitted
+ * row's key — which is what stops the message's node being replaced when its
+ * own record arrives (send-latency slice 3).
+ */
+export function transcriptEchoObservationId(observation: TranscriptEchoObservation): string {
+  return echoObservationId(observation);
+}
+
 function echoObservationId(observation: TranscriptEchoObservation): string {
   const anchor = observation.id.trim();
   if (!anchor) return "";
@@ -1378,18 +1421,25 @@ function sameCounts(left: TranscriptEchoCounts | undefined, right: TranscriptEch
   return true;
 }
 
-function reconcileEchoRetirements(
-  cardId: string,
-  ledger: readonly PersistedEchoObservation[],
-): void {
+interface EchoOwner {
+  type: "tombstone" | "queue";
+  id: string;
+  at: number;
+  key: string;
+  echoBaseline?: number;
+  echoBaselineIds?: string[];
+  retiredEchoId?: string;
+  launchOwned?: true;
+}
+
+/** Everything in this conversation that can own a transcript echo, oldest
+    first: the live queue plus the terminal occurrence tombstones of rows that
+    already aged out of it. One walk, so the retirement writer and the feed's
+    own row binding can never disagree about which echo belongs to whom. */
+function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly OutboxEntry[]; tombstones: readonly PersistedOccurrenceTombstone[] } {
   const queue = readOutbox(cardId);
   const tombstones = readOccurrenceTombstones(cardId);
-  if (!queue.length && !tombstones.length) return;
-  const claimed = new Set([
-    ...tombstones.flatMap((entry) => entry.retiredEchoId ? [entry.retiredEchoId] : []),
-    ...queue.flatMap((entry) => entry.retiredEchoId ? [entry.retiredEchoId] : []),
-  ]);
-  const owners = [
+  const owners: EchoOwner[] = [
     ...tombstones.map((entry) => ({
       type: "tombstone" as const,
       id: entry.id,
@@ -1413,19 +1463,85 @@ function reconcileEchoRetirements(
       launchOwned: entry.launchOwned,
     })),
   ].sort((left, right) => left.at - right.at);
+  return { owners, queue, tombstones };
+}
+
+/**
+ * Which submitted message each transcript echo belongs to (send-latency slice
+ * 3): the observation's durable id mapped to the outbox entry id — the
+ * message's own idempotency key.
+ *
+ * The feed keys the operator's row on that key, so the row the composer
+ * created at submit and the row the transcript's own record paints are ONE
+ * keyed row and React never replaces the node. It has to be computable in the
+ * same render the echo first appears in, which is why it takes the feed's live
+ * observations rather than the persisted ledger: `publishTranscriptEchoes`
+ * writes `retiredEchoId` from an effect, one frame too late to key a render.
+ *
+ * Same claim rule as retirement — baseline watermark, one echo per owner, in
+ * submission order — so identical text never merges two submissions and an
+ * echo that predates a submission never binds it.
+ */
+export function transcriptEchoBindings(
+  cardId: string,
+  observations: readonly TranscriptEchoObservation[],
+): ReadonlyMap<string, string> {
+  const { owners } = echoOwners(cardId);
+  const bindings = new Map<string, string>();
+  if (!owners.length) return bindings;
+  const ledger: PersistedEchoObservation[] = [];
+  for (const observation of observations) {
+    const id = echoObservationId(observation);
+    const key = echoKey(observation.text);
+    if (id && key) ledger.push({ id, key });
+  }
+  const claimed = new Set(owners.flatMap((owner) => owner.retiredEchoId ? [owner.retiredEchoId] : []));
+  for (const owner of owners) {
+    /* Tombstones bind too. An entry that aged out of the bounded queue leaves
+       one behind carrying its id and its claimed echo, so the row the operator
+       submitted keeps its key — and its node — long after the queue itself has
+       forgotten the submission. */
+    if (owner.retiredEchoId) {
+      bindings.set(owner.retiredEchoId, owner.id);
+      continue;
+    }
+    const echo = claimEcho(owner, ledger, claimed);
+    if (!echo) continue;
+    claimed.add(echo.id);
+    bindings.set(echo.id, owner.id);
+  }
+  return bindings;
+}
+
+/** The oldest unclaimed echo of this owner's text past its own watermark. */
+function claimEcho(
+  owner: EchoOwner,
+  ledger: readonly PersistedEchoObservation[],
+  claimed: ReadonlySet<string>,
+): PersistedEchoObservation | undefined {
+  const baseline = new Set(owner.echoBaselineIds ?? []);
+  let remainingBaseline = baseline.size ? 0 : (owner.echoBaseline ?? 0);
+  return ledger.find((echo) => {
+    if (echo.key !== owner.key || baseline.has(echo.id)) return false;
+    if (remainingBaseline > 0) {
+      remainingBaseline -= 1;
+      return false;
+    }
+    return !claimed.has(echo.id);
+  });
+}
+
+function reconcileEchoRetirements(
+  cardId: string,
+  ledger: readonly PersistedEchoObservation[],
+): void {
+  const { owners, queue, tombstones } = echoOwners(cardId);
+  if (!queue.length && !tombstones.length) return;
+  const claimed = new Set(owners.flatMap((owner) => owner.retiredEchoId ? [owner.retiredEchoId] : []));
   const retirements = new Map<string, { echoId: string; retiredAt: number }>();
   for (const entry of owners) {
     if (entry.retiredEchoId) continue;
-    const baseline = new Set(entry.echoBaselineIds ?? []);
-    let remainingBaseline = baseline.size ? 0 : (entry.echoBaseline ?? 0);
-    const owner = ledger.find((echo) => {
-      if (echo.key !== entry.key || baseline.has(echo.id)) return false;
-      if (remainingBaseline > 0) {
-        remainingBaseline -= 1;
-        return false;
-      }
-      return !claimed.has(echo.id);
-    });
+    const owner = claimEcho(entry, ledger, claimed);
     if (!owner) continue;
     claimed.add(owner.id);
     retirements.set(`${entry.type}:${entry.id}`, {
@@ -1690,7 +1806,7 @@ function holdsLocalWireFence(entry: OutboxEntry): boolean {
     composer, so it neither dispatches nor blocks the drain (round-1 P1#2/#4). */
 export function nextDispatch(queue: readonly OutboxEntry[]): OutboxEntry | null {
   if (queue.some(holdsLocalWireFence)) return null;
-  return queue.find((entry) => entry.state === "queued" && !entry.originalOperationOnly) ?? null;
+  return queue.find((entry) => entry.state === "queued" && !entry.originalOperationOnly && !entry.preparing) ?? null;
 }
 
 /** Atomically claim one queued entry before any asynchronous wire work starts. */
@@ -1698,7 +1814,7 @@ export function claimOutboxDispatch(cardId: string, id: string): OutboxEntry | n
   const queue = readOutbox(cardId);
   if (queue.some(holdsLocalWireFence)) return null;
   const entry = queue.find((candidate) => candidate.id === id);
-  if (!entry || entry.state !== "queued" || entry.originalOperationOnly) return null;
+  if (!entry || entry.state !== "queued" || entry.originalOperationOnly || entry.preparing) return null;
   /* The wire fence belongs to one attempt. A replay starts unfenced so that a
      refresh between this claim and the request still replays it. */
   const claimed: OutboxEntry = { ...entry, state: "delivering" };

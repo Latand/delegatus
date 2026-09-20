@@ -72,6 +72,9 @@ import {
   type OutboxEntry,
   type OutboxState,
 } from "./conversation/outbox";
+import { failureReasonKey } from "./conversation/messageRow";
+import { publishMessageRowRecovery } from "./conversation/rowRecovery";
+import { useRenderedMessageRows } from "./conversation/renderedRows";
 import {
   ComposerAdmissionTimeoutError,
   composerAdmissionTiming,
@@ -530,9 +533,19 @@ export function RuntimeComposerReceipts({
      so the terse cause keeps its width beside them at 390px. */
   const noticeActionClass = "relative inline-flex h-11 w-8 shrink-0 items-center justify-center rounded-control text-muted before:absolute before:inset-y-0 before:-inset-x-1.5 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:h-6 sm:w-6 sm:before:hidden";
 
+  /* Send-latency slice 3: routine delivery bookkeeping is no longer a second
+     status surface. While every attempt is simply moving — admitted, queued
+     behind a turn, being handed over — the message's OWN row carries the one
+     progress affordance and its disclosure carries this evidence, so nothing
+     is painted beside the composer. The stack comes back for exactly what the
+     operator has to decide about: a settled failure, or a delivery whose fate
+     nobody can establish — the recovery controls for an unknown outcome act on
+     the journal's own operation and have no equivalent on the message row. */
+  const needsDecision = Boolean(notice) || problemReceipts.length > 0 || unknownReceipts.length > 0;
+
   return (
     <>
-      {visibleAttempts.length || textlessRows.length ? (
+      {(visibleAttempts.length || textlessRows.length) && needsDecision ? (
         <>
           {/* `open` is controlled: the details element can unmount while all
               message receipts are resolved and remount for the next attempt,
@@ -1911,6 +1924,27 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     if (!assistantTurnMessageKey) return;
     markOutboxResponded(cardId, assistantTurnMessageKey, nowMs());
   }, [cardId, assistantTurnMessageKey]);
+  /* Send-latency slice 3: the message's OWN row carries its delivery state and
+     its disclosure carries the evidence, so the recovery that belongs to that
+     evidence is published from here for the feed's rows to call. The handlers
+     themselves are defined far below, past this component's capability
+     early-returns, so the registration is one stable object reading the latest
+     closures out of a ref — the same shape `OutboxDispatcher` uses. */
+  /* Which of this conversation's deliveries already have a row on screen. Read
+     from what a feed is actually painting, never inferred from the queue: a
+     composer mounted with no feed behind it is the only status surface there
+     is, and must keep speaking for every one of them. */
+  const rowOwnedKeys = useRenderedMessageRows(cardId);
+  const rowRecovery = useRef<{
+    check?: (key: string) => void;
+    retryOperation?: (key: string) => void;
+    discard?: (key: string) => void;
+  }>({});
+  useEffect(() => publishMessageRowRecovery(cardId, {
+    check: (key) => rowRecovery.current.check?.(key),
+    retryOperation: (key) => rowRecovery.current.retryOperation?.(key),
+    discard: (key) => rowRecovery.current.discard?.(key),
+  }), [cardId]);
   const displayedRuntimeReceiptsRef = useRef(displayedRuntimeReceipts);
   useLayoutEffect(() => {
     displayedRuntimeReceiptsRef.current = displayedRuntimeReceipts;
@@ -1959,10 +1993,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      states none. */
   // Local discard hides the retained copy; its bytes and receipt observer stay
   // alive until the original request has an authoritative outcome.
-  const visiblePayloadRows = payloadRows.filter(row => row.operationId
-    || !dismissedReceipts.has(unconfirmedReceiptOperationId(row.ref.key)));
+  /* A saved copy whose message has a row on screen is explained THERE, with
+     the transport evidence and the original-operation controls behind the
+     row's own affordance (send-latency slice 3). This panel keeps exactly what
+     the row cannot speak for: a copy whose queue entry is gone, a submission
+     made in another tab, a storage error. */
+  const visiblePayloadRows = payloadRows.filter(row => !rowOwnedKeys.has(row.ref.key)
+    && (row.operationId || !dismissedReceipts.has(unconfirmedReceiptOperationId(row.ref.key))));
   const payloadDiagnostics = visiblePayloadRows.length > 0
-    || pendingDeliveries.current.some(entry => entry.payloadComplete === false);
+    || pendingDeliveries.current.some(entry => entry.payloadComplete === false && !rowOwnedKeys.has(entry.key));
   const hasPayloadRecovery = payloadDiagnostics || payloadStorageError !== null;
   const renderedAccessorySurfaces = (callPanelDocked ? 1 : 0) + (queuePanelRendered ? 1 : 0)
     + (sent.length || echoedReceipts.length ? 1 : 0) + (hasPayloadRecovery || displayedRuntimeReceipts.length ? 1 : 0);
@@ -2486,8 +2525,26 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        remount may have restored from an older unresolved generation — reusing
        such a key would stamp a NEW message as a replay of stale bytes. */
     const clientMessageId = mintIdempotencyKey();
-    const commitSubmission = () => {
-      if (payloadOwner.current !== cardId) return;
+    /* What this turn points at, captured the moment Send was pressed (#844).
+       It rides on the durable entry so the row shows the SAME badge the
+       composer showed before the send, and goes on showing it unchanged when
+       the transcript's own record of the message arrives. Display only — the
+       reference the wire carries is captured by `send` at dispatch. */
+    const submittedContext = viewerSelectedContext();
+    /**
+     * The row, at the instant the operator pressed Send.
+     *
+     * Slice 3's first rule: one message is one row, created synchronously, in
+     * its final conversational position and its final form. A submission that
+     * has durable preparation to do — attachment bytes to retain, an envelope
+     * to seal, a wire claim to take — reserves its row `preparing`, which the
+     * serial dispatcher skips, so nothing reaches the wire before its envelope
+     * is durable and the one-wire-claim fence is exactly as it was. Before
+     * this, such a message had no row at all until every one of those phases
+     * had finished, which is precisely the wait the operator called slow.
+     */
+    const reserveSubmission = (preparing: boolean): boolean => {
+      if (payloadOwner.current !== cardId) return false;
       outboxImages.current.set(clientMessageId, requestedImages);
       if (requestedFiles.length) outboxFiles.current.set(clientMessageId, requestedFiles);
       outboxKeys.current.add(clientMessageId);
@@ -2504,6 +2561,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
            replay after a reload asks for the same thing rather than falling back
            to the default interrupt. */
         ...(options?.policy ? { policy: options.policy } : {}),
+        ...(submittedContext.state === "selected" ? {
+          selectedContext: {
+            state: "selected" as const,
+            conversationId: submittedContext.conversationId,
+            ...(submittedContext.project ? { project: submittedContext.project } : {}),
+            ...(submittedContext.label ? { label: submittedContext.label } : {}),
+          },
+        } : {}),
+        ...(preparing ? { preparing: true as const } : {}),
         at: nowMs(),
         /* Submission watermark (finding 2): the echoes of this exact text that
            already exist, so a pre-existing identical message never retires this
@@ -2511,12 +2577,25 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         echoBaseline: transcriptEchoCount(cardId, requestedText),
       });
       if (!admitted) {
-        outboxImages.current.delete(clientMessageId);
-        outboxFiles.current.delete(clientMessageId);
-        outboxKeys.current.delete(clientMessageId);
+        withdrawSubmission();
         setStatus({ kind: "err", text: t("composer.outboxFull") });
-        return;
+        return false;
       }
+      return true;
+    };
+    /* The preparation could not be made durable, so the message never became
+       one: the row goes and the operator's words and attachments are still in
+       the composer, untouched, exactly as they were before Send. */
+    const withdrawSubmission = () => {
+      outboxImages.current.delete(clientMessageId);
+      outboxFiles.current.delete(clientMessageId);
+      outboxKeys.current.delete(clientMessageId);
+      cancelOutbox(cardId, clientMessageId);
+    };
+    /* The composer lets go of the submission only once it is durable: until
+       then the draft and its staged attachments are the only copy of some of
+       it, and a preparation that fails must leave the operator whole. */
+    const releaseComposer = () => {
       if (!preserveDraft) {
         if (composer.draftRevision.current === draftRevision) setText("");
         attachments.settleDelivered(requestedImages, requestedFiles);
@@ -2525,9 +2604,13 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       inputRef.current?.focus();
     };
     if (!requestedImages.length && !requestedFiles.length
-      && !pendingDeliveries.current.some(entry => entry.payloadComplete === false)) { commitSubmission(); return; }
+      && !pendingDeliveries.current.some(entry => entry.payloadComplete === false)) {
+      if (reserveSubmission(false)) releaseComposer();
+      return;
+    }
+    if (!reserveSubmission(true)) return;
     // Keep the complete authored generation until both durable phases commit.
-    const selectedContext = viewerSelectedContext();
+    const selectedContext = submittedContext;
     const submittedFile = { path: file.path, project: file.project, pid: file.pid };
     const submittedConversationId = deliveryRoute?.session.conversationId;
     const legacyResumeRuntime = spawnMode && !relayMode;
@@ -2564,8 +2647,14 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         if (!await composerSubmissionPayloads.beginAttempt(ref)) throw new Error("Original attempt is already owned");
         if (bridge?.ackToken) rememberBridgeAcknowledgement(clientMessageId, bridge.ackToken);
         await refreshPayloads();
-        commitSubmission();
+        if (payloadOwner.current !== cardId) return;
+        /* Durable: the row stops being held back and the dispatcher may take
+           it. Nothing about the row itself changes — it has been in its final
+           form, in its final position, since Send. */
+        updateOutbox(cardId, clientMessageId, { preparing: undefined });
+        releaseComposer();
       } catch {
+        withdrawSubmission();
         if (payloadOwner.current === cardId) {
           setStatus({ kind: "err", text: t("composer.payloadStorageUnavailable") });
           void refreshPayloads();
@@ -3196,7 +3285,16 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         // same bounded recovery as a request that throws or never answers.
         else if (possiblyAccepted && outboxId) reconcileUnconfirmedAdmission();
         else settleOutbox("failed", failure);
-        setStatus({ kind: "err", text: failure });
+        /* The message's own row says this now, in the operator's language,
+           with the runtime's English sentence one tap behind it (slice 3 §5).
+           Repeating the raw sentence under the composer is both the second
+           status surface this slice removes and the exact thing the operator
+           photographed: provider prose in an interface that is not in English.
+           Only a submission with no row of its own still announces here, and
+           it announces the human reason when one is known. */
+        const owned = Boolean(outboxId) && readOutbox(cardId).some((entry) => entry.id === outboxId);
+        const humanReason = failureReasonKey(failure);
+        setStatus(owned ? null : { kind: "err", text: humanReason ? t(humanReason) : failure });
         return;
       }
       if (json.structured && json.receipt) {
@@ -3448,7 +3546,14 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     if (busy || voiceSending || reconcilingSend) return;
     if (receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
       const entry = localRecoveryEntry(receipt);
-      if (!entry || !clearParkedOutbox(cardId, entry.id)) return;
+      if (!entry) return;
+      /* An admission nobody confirmed is never dropped (round-3 P1). The
+         message may be in the journal under this key, and the row is the only
+         record of it; the lookup under the original key is what settles it. */
+      if (!clearParkedOutbox(cardId, entry.id)) {
+        setStatus({ kind: "err", text: t("composer.deliveryUnconfirmed") });
+        return;
+      }
       dismissReceipts([receipt.operationId]);
       persistPendingDeliveries(pendingDeliveries.current.filter(candidate => candidate.key !== entry.id));
       setImmediateRuntimeReceipts(current => current.filter(candidate => candidate.operationId !== receipt.operationId));
@@ -3471,6 +3576,53 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       setBusy(false);
     }
   };
+
+  /**
+   * What the operator's own message row can ask this composer to do.
+   *
+   * `check` is the one control an unconfirmed delivery is ever offered, and it
+   * is a READ: for a local admission that never came back it runs the lookup
+   * under the ORIGINAL key — the only thing that can tell "the server has it"
+   * from "the server never had it" — and for everything else it re-reads the
+   * runtime and reconciles the same key. Nothing here sends a message.
+   */
+  rowRecovery.current = {
+    check: (key) => {
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
+      if (entry?.deliveryUncertain && !entry.launchOwned) {
+        void resolveUnknownAdmission(entry);
+        return;
+      }
+      startReceiptReconciliation(key);
+      void runtimeDependencies.refreshRuntime();
+    },
+    retryOperation: (key) => {
+      const row = payloadRows.find((candidate) => candidate.ref.key === key);
+      if (row) {
+        void retryAdmittedPayload(row, key);
+        return;
+      }
+      const receipt = displayedRuntimeReceipts.find((candidate) => candidate.idempotencyKey === key);
+      if (receipt) void retryRuntimeReceipt(receipt, receiptHasUnknownFate(receipt) ? "uncertain" : undefined);
+    },
+    discard: (key) => {
+      const receipt = displayedRuntimeReceipts.find((candidate) => candidate.idempotencyKey === key);
+      if (receipt) void discardRuntimeReceipt(receipt);
+    },
+  };
+
+  /**
+   * The receipts this composer still has to speak for (send-latency slice 3).
+   *
+   * A delivery whose message has a row in the feed is explained THERE — one
+   * quiet affordance, and every word of transport evidence behind it — so
+   * repeating it beside the composer would be the second status surface the
+   * whole slice removes, and the same failure would be explained twice with
+   * two sets of controls. What is left here is what genuinely has no row: a
+   * send from another tab or device, an operation recovered from the journal
+   * after this queue aged out, a non-message operation.
+   */
+  const unownedRuntimeReceipts = displayedRuntimeReceipts.filter((receipt) => !rowOwnedKeys.has(receipt.idempotencyKey));
 
   const editRuntimeReceipt = (receipt: RuntimeReceipt) => {
     if (busy || voiceSending || !receipt.text) return;
@@ -4143,7 +4295,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           </div>
         </details>;
       })}
-      {pendingDeliveries.current.filter(entry => entry.payloadComplete === false && !payloadRows.some(row => row.ref.key === entry.key)).map(entry => (
+      {pendingDeliveries.current.filter(entry => entry.payloadComplete === false
+        && !rowOwnedKeys.has(entry.key)
+        && !payloadRows.some(row => row.ref.key === entry.key)).map(entry => (
         <details key={entry.key} data-payload-incomplete className="rounded border border-border p-2">
           <summary>{entry.text || t("composer.payloadAttachments")} · {t("composer.payloadIncomplete")}</summary>
           <p>{t("composer.payloadMissing")}</p>
@@ -4339,10 +4493,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
          forces a fresh runtime snapshot, which resolves an unresolved host,
          surfaces a recovered one, and reconciles a timed-out admission. */
       onSendBlockedRecover={() => void runtimeDependencies.refreshRuntime()}
-      receipts={switchHeld || payloadRecovery || displayedRuntimeReceipts.length ? <>{switchHeld}{payloadRecovery}{
-        displayedRuntimeReceipts.length
+      receipts={switchHeld || payloadRecovery || unownedRuntimeReceipts.length ? <>{switchHeld}{payloadRecovery}{
+        unownedRuntimeReceipts.length
           ? <RuntimeComposerReceipts
-              receipts={displayedRuntimeReceipts}
+              receipts={unownedRuntimeReceipts}
               localRecoveryKeys={new Set(displayedRuntimeReceipts.filter(receipt => localRecoveryEntry(receipt)).map(receipt => receipt.idempotencyKey))}
               payloadRecoveryKeys={new Set([
                 ...payloadRows.flatMap(row => [row.ref.key, ...payloadReceiptEvidence({ conversationId: row.ref.conversationId,

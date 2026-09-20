@@ -210,6 +210,48 @@ const captured: RuntimeReceipt = {
   reason: "Dispatch began; recipient transcript unavailable; arrival unverified",
   text: "Check the release status",
 };
+/**
+ * Everything ONE message row says about its delivery (send-latency slice 3).
+ *
+ * The row itself reads one stable sentence while a delivery is unconfirmed;
+ * the transport's own words — «outcome is unknown» among them — are the
+ * evidence under the message's progress affordance, published for hover and
+ * rendered by its disclosure. Both are reachable without leaving the row, and
+ * both are read here, so an assertion about what the operator can learn from
+ * the message keeps its meaning.
+ */
+/**
+ * Open every message row's own evidence (send-latency slice 3).
+ *
+ * The delivery's transport wording and the controls that act on its admitted
+ * operation used to sit in a receipt stack beside the composer, where they
+ * explained the same failure a second time. They belong to the message, so
+ * they live behind the message's one quiet affordance now — which is exactly
+ * what a reader has to do to see them, and therefore what these assertions do
+ * before looking for them. The controls keep their names: a retry of an
+ * uncertain operation is still `data-receipt-uncertain-retry` wherever it is
+ * rendered.
+ */
+/** The bytes the payload store still holds for one submission. */
+async function retainedImages(conversationId: string, key: string): Promise<string[] | undefined> {
+  const { composerSubmissionPayloads } = await import("@/lib/composerSubmissionPayloads");
+  return (await composerSubmissionPayloads.restore({ conversationId, key }))?.submission.images.map((image) => image.base64);
+}
+
+async function openRowEvidence(root: ParentNode): Promise<void> {
+  for (const toggle of [...root.querySelectorAll("[data-outbox-progress], [data-outbox-reason]")] as HTMLButtonElement[]) {
+    if (toggle.getAttribute("aria-expanded") !== "true") await settle(() => toggle.click());
+  }
+}
+
+function rowDelivery(root: ParentNode, id?: string): string {
+  const selector = id ? `[data-outbox-entry="${id}"]` : "[data-outbox-entry]";
+  const row = root.querySelector(selector);
+  if (!row) return "";
+  const evidence = row.querySelector("[data-outbox-progress]")?.getAttribute("title") ?? "";
+  return `${row.textContent ?? ""} ${evidence}`;
+}
+
 const surface = () => <><LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} /><TmuxComposer file={file} /></>;
 
 test("captured verify-first receipt stays unknown in mounted composer and feed without local retry", async () => {
@@ -221,7 +263,7 @@ test("captured verify-first receipt stays unknown in mounted composer and feed w
   const { host, root } = await renderInto(surface());
   try {
     const bubble = host.querySelector("[data-outbox-entry]")!;
-    expect(bubble.textContent).toContain("outcome is unknown");
+    expect(rowDelivery(host)).toContain("outcome is unknown");
     expect(host.textContent).not.toMatch(/not delivered/i);
     expect(bubble.querySelector("[data-outbox-retry], [data-outbox-cancel]")).toBeNull();
     retryOutbox(file.conversationId!, captured.idempotencyKey);
@@ -261,9 +303,9 @@ test.each(["failed", "uncertain"] as const)("textless %s receipt polling and rem
   bus.start();
   await settle(() => {});
   let mounted = await renderInto(surface());
-  const check = () => {
-
+  const check = async () => {
     expect(mounted.host.textContent).not.toMatch(/not delivered/i);
+    await openRowEvidence(mounted.host);
     expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/outcome is unknown/i);
     const row = mounted.host.querySelector("[data-receipt-standalone-row]")!;
     expect(row.textContent).toMatch(/outcome is unknown/i);
@@ -273,19 +315,19 @@ test.each(["failed", "uncertain"] as const)("textless %s receipt polling and rem
     expect(row.querySelector("[data-receipt-edit], [data-outbox-retry], [data-outbox-cancel]")).toBeNull();
   };
   try {
-    check();
+    await check();
     // A new receipt snapshot from polling keeps the optional echo absent.
     receipt = { ...receipt, revision: 5 };
     snapshotSeq++;
     await act(async () => { expect(await bus.refresh()).toBe(true); });
     expect(polls).toBeGreaterThanOrEqual(2);
-    check();
+    await check();
     await act(async () => mounted.root.unmount());
     resetOutboxForTests();
     mounted = await renderInto(surface());
-    check();
-    const details = mounted.host.querySelector<HTMLDetailsElement>("details[data-runtime-receipt-stack]")!;
-    await settle(() => { details.open = true; details.dispatchEvent(new dom.Event("toggle") as unknown as Event); });
+    await check();
+    const details = mounted.host.querySelector<HTMLDetailsElement>("details[data-runtime-receipt-stack]");
+    if (details) await settle(() => { details.open = true; details.dispatchEvent(new dom.Event("toggle") as unknown as Event); });
     await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-receipt-uncertain-retry]")!.click());
     expect(calls).toEqual([{ url: `/api/runtime/operations/${captured.operationId}`, method: "POST", body: JSON.stringify({ action: "retry-uncertain" }) }]);
     receipt = { ...receipt, status: "failed", revision: 6, reason: "delivery-discarded", resend: "not-needed" };
@@ -358,7 +400,8 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
     updateOutbox(file.conversationId!, receipt.idempotencyKey, { state: "delivering", deliveryUncertain: true, deliveryReceipt: receipt });
   }
   let mounted = await renderInto(surface());
-  const check = (ids: string[]) => {
+  const check = async (ids: string[]) => {
+    await openRowEvidence(mounted.host);
     const controls = [...mounted.host.querySelectorAll("[data-operation]:has([data-receipt-uncertain-retry])")];
     expect(controls.map(node => node.getAttribute("data-operation")).sort()).toEqual([...ids].sort());
     for (const control of controls) {
@@ -369,10 +412,11 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
     for (const bubble of mounted.host.querySelectorAll('[data-outbox-wait="uncertain"]')) {
       expect(bubble.querySelectorAll("[data-outbox-retry], [data-outbox-cancel]")).toHaveLength(0);
     }
+    await openRowEvidence(mounted.host);
     expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/outcome is unknown/i);
   };
   try {
-    check([original.operationId, sibling.operationId]);
+    await check([original.operationId, sibling.operationId]);
     for (const receipt of [original, sibling]) {
       await settle(() => mounted.host.querySelector<HTMLButtonElement>(`[data-operation="${receipt.operationId}"] [data-receipt-uncertain-retry]`)!.click());
     }
@@ -382,7 +426,7 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
     await act(async () => { await bus.refresh(); await new Promise(resolve => setTimeout(resolve, 30)); });
     expect(bus.getState().store.sessions[file.conversationId!]?.recentReceipts[0]?.revision).toBe(6);
     await settle(() => {});
-    check([original.operationId]);
+    await check([original.operationId]);
     if (text && terminal === "delivered") {
       await settle(() => publishTranscriptEchoes(file.conversationId!, [{ id: "independent-native-echo", text }]));
       expect(visibleOutbox(readOutbox(file.conversationId!), new Map([[text, 1]]), Date.now()).some(entry => entry.id === original.idempotencyKey)).toBe(true);
@@ -390,7 +434,7 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
     await act(async () => mounted.root.unmount());
     resetOutboxForTests();
     mounted = await renderInto(surface());
-    check([original.operationId]);
+    await check([original.operationId]);
     await settle(() => mounted.host.querySelector<HTMLButtonElement>(`[data-operation="${original.operationId}"] [data-receipt-discard]`)!.click());
     expect(calls[2]).toEqual({ url: `/api/runtime/operations/${original.operationId}`, method: "DELETE", body: undefined });
     expect(mounted.host.querySelectorAll("[data-receipt-uncertain-retry], [data-receipt-discard]")).toHaveLength(0);
@@ -422,9 +466,10 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
   snapshotReceipts = [];
   mounted = await renderInto(surface());
   try {
-    expect(mounted.host.textContent).toContain("outcome is unknown");
+    expect(rowDelivery(mounted.host)).toContain("outcome is unknown");
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.operationId).toBe(captured.operationId);
     expect(mounted.host.textContent).not.toMatch(/not delivered/i);
+    await openRowEvidence(mounted.host);
     expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/outcome is unknown/i);
     await settle(() => { retryOutbox(file.conversationId!, captured.idempotencyKey); cancelOutbox(file.conversationId!, captured.idempotencyKey); });
     expect(calls).toHaveLength(0);
@@ -435,11 +480,10 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
     for (const status of ["queued", "delivering", "pending", "failed"] as const) {
       snapshotReceipts = [{ ...captured, status, resend: undefined, revision: ++actionReceipt.revision }];
       await settle(() => mounted.root.render(surface()));
-      expect(mounted.host.querySelector("[data-outbox-entry]")?.textContent).toContain("outcome is unknown");
+      expect(rowDelivery(mounted.host)).toContain("outcome is unknown");
       expect(mounted.host.querySelector("[data-outbox-retry]")).toBeNull();
     }
-    const details = mounted.host.querySelector<HTMLDetailsElement>("details[data-runtime-receipt-stack]")!;
-    await settle(() => { details.open = true; details.dispatchEvent(new dom.Event("toggle") as unknown as Event); });
+    await openRowEvidence(mounted.host);
     const retry = mounted.host.querySelector<HTMLButtonElement>("[data-receipt-uncertain-retry]")!;
     expect(retry).not.toBeNull();
     actionReceipt = { ...captured, revision: 20 };
@@ -477,7 +521,7 @@ test.each(["network", "503", "malformed", "null"])("%s after possible dispatch s
   await settle(() => composerControls(mounted.host).type("Keep the submitted message"));
   await settle(() => composerControls(mounted.host).submit());
   expect(sends).toHaveLength(1);
-  expect(mounted.host.querySelector("[data-outbox-entry]")?.textContent).toContain("outcome is unknown");
+  expect(rowDelivery(mounted.host)).toContain("outcome is unknown");
   await act(async () => mounted.root.unmount());
   resetOutboxForTests();
   mounted = await renderInto(surface());
@@ -606,13 +650,20 @@ test.skipIf(!process.env.LLV_UNCERTAINTY_BROWSER)("390/430 mounted uncertainty h
       await page.goto(`http://127.0.0.1:${server.port}`);
       await page.locator('[data-outbox-wait="uncertain"]').waitFor();
       expect(await page.locator('[data-outbox-retry], [data-outbox-cancel]').count()).toBe(0);
+      /* Slice 3: the message that HAS a row is explained on that row, behind
+         its own quiet affordance; the two sends this browser holds no row for
+         keep the composer's fallback stack. Three unknown operations, three
+         sets of controls, and no operation explained in two places. */
       await page.locator('details[data-runtime-receipt-stack] > summary').click();
+      expect(await page.locator('[data-receipt-uncertain-retry]').count()).toBe(2);
+      expect(await page.locator('[data-receipt-discard]').count()).toBe(2);
+      await page.locator('[data-outbox-progress]').click();
       expect(await page.locator('[data-receipt-uncertain-retry]').count()).toBe(3);
       expect(await page.locator('[data-receipt-discard]').count()).toBe(3);
       const retry = page.locator(`[data-operation="${captured.operationId}"] [data-receipt-uncertain-retry]`);
       await retry.waitFor();
       expect(await retry.innerText()).toBe("Retry");
-      expect(await page.locator('[data-runtime-receipt-status]').textContent()).toMatch(/outcome is unknown/i);
+      expect(await page.locator(`[data-operation="${captured.operationId}"] [data-runtime-receipt-status]`).first().textContent()).toMatch(/outcome is unknown/i);
       expect(await page.locator('body').textContent()).not.toMatch(/not delivered/i);
       const discard = page.locator(`[data-operation="${captured.operationId}"] [data-receipt-discard]`);
       expect(await discard.innerText()).toBe("Discard");
@@ -649,15 +700,17 @@ test("non-2xx original receipt retains identity and verify-first evidence throug
     expect(sends).toHaveLength(1);
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.operationId).toBe(captured.operationId);
     expect(mounted.host.textContent).not.toMatch(/not delivered/i);
+    await openRowEvidence(mounted.host);
     expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/outcome is unknown/i);
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.resend).toBe("verify-first");
-    expect(mounted.host.querySelector("[data-outbox-entry]")?.textContent).toContain("outcome is unknown");
+    expect(rowDelivery(mounted.host)).toContain("outcome is unknown");
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.reason).toBe(captured.reason);
     await act(async () => mounted.root.unmount());
     resetOutboxForTests();
     mounted = await renderInto(surface());
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.operationId).toBe(captured.operationId);
     expect(mounted.host.textContent).not.toMatch(/not delivered/i);
+    await openRowEvidence(mounted.host);
     expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/outcome is unknown/i);
     await settle(() => {
       retryOutbox(file.conversationId!, sends[0]!.idempotencyKey);
@@ -735,7 +788,7 @@ test.each(["reservation", "idempotency"])("ambiguous %s conflict retains unknown
     resetOutboxForTests();
     mounted = await renderInto(surface());
     await settle(() => { retryOutbox(file.conversationId!, sends[0]!.idempotencyKey); cancelOutbox(file.conversationId!, sends[0]!.idempotencyKey); });
-    expect(mounted.host.querySelector("[data-outbox-entry]")?.textContent).toContain("outcome is unknown");
+    expect(rowDelivery(mounted.host)).toContain("outcome is unknown");
     expect(mounted.host.querySelector("[data-outbox-retry], [data-outbox-cancel]")).toBeNull();
     expect(sends).toHaveLength(1);
   } finally { await act(async () => mounted.root.unmount()); }
@@ -786,8 +839,12 @@ test.each(["network", "503", "malformed"])("safe retry followed by %s becomes un
     mounted = await renderInto(surface());
     expect(readOutbox(file.conversationId!)[0]?.deliveryUncertain).toBe(true);
     expect(mounted.host.querySelector("[data-outbox-retry], [data-outbox-cancel]")).toBeNull();
-    await settle(() => mounted.host.querySelector<HTMLDetailsElement>("details[data-runtime-receipt-stack]")?.setAttribute("open", ""));
-    expect(mounted.host.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
+    await openRowEvidence(mounted.host);
+    /* Nothing was ever admitted under this key, so there is no operation to
+       replay and the row offers the one thing that can settle it: the lookup
+       under its ORIGINAL identity. It is a read — `sends` does not move. */
+    expect(mounted.host.querySelector("[data-outbox-check]")).not.toBeNull();
+    expect(mounted.host.querySelector("[data-outbox-retry], [data-outbox-clear]")).toBeNull();
     expect(sends).toHaveLength(2);
   } finally { await act(async () => mounted.root.unmount()); }
 });
@@ -811,7 +868,7 @@ test.each([200, 503].flatMap(httpStatus => ["conversation", "key", "operation"].
       expect(entry.deliveryReceipt).toBeUndefined();
       expect(entry.operationId).toBeUndefined();
       expect(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-retry], [data-outbox-cancel]")).toBeNull();
-      expect(mounted.host.querySelector("[data-outbox-entry]")?.textContent).toMatch(/outcome is unknown/i);
+      expect(rowDelivery(mounted.host)).toMatch(/outcome is unknown/i);
       if (!attempt) {
         await act(async () => mounted.root.unmount());
         resetOutboxForTests();
@@ -884,6 +941,7 @@ test.each(["delivered", "discarded"])("producer settlement %s survives real jour
   let mounted = await renderInto(surface());
   try {
     const selector = outcome === "discarded" ? "[data-receipt-discard]" : "[data-receipt-uncertain-retry]";
+    await openRowEvidence(mounted.host);
     await settle(() => mounted.host.querySelector<HTMLButtonElement>(selector)!.click());
     const assertSettled = () => {
       expect(readOutbox(file.conversationId!)[0]?.state).toBe(outcome === "delivered" ? "delivered" : "failed");
@@ -930,7 +988,10 @@ test("safe recovery accepts the producer's linked retry projection and settles o
   }) as typeof fetch;
   let mounted = await renderInto(surface());
   try {
-    await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-delivery-notice-retry]")!.click());
+    await openRowEvidence(mounted.host);
+    /* The producer owns this payload, so the row's recovery is the journal's
+       own next attempt of the admitted operation — never an ordinary send. */
+    await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-outbox-operation-retry]")!.click());
     expect(readOutbox(file.conversationId!)[0]?.state).toBe("delivered");
     await act(async () => mounted.root.unmount());
     resetOutboxForTests();
@@ -995,6 +1056,9 @@ test.each([
   }
   let mounted = await renderInto(surface());
   const assertSettled = () => {
+    /* Nothing is left to decide: no uncertain replay and nothing to end. A
+       proven-safe failure keeps ONE action, the journal's own replay, which is
+       what the branch below presses. */
     expect(Boolean(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard]"))).toBe(false);
     if (local) {
       expect(readOutbox(file.conversationId!)[0]?.state).toBe("failed");
@@ -1003,6 +1067,7 @@ test.each([
     } else expect(readOutbox(file.conversationId!)).toHaveLength(0);
   };
   try {
+    await openRowEvidence(mounted.host);
     await settle(() => mounted.host.querySelector<HTMLButtonElement>(outcome === "discarded"
       ? "[data-receipt-discard]" : "[data-receipt-uncertain-retry]")!.click());
     assertSettled();
@@ -1045,13 +1110,21 @@ test.each([
     } else if (outcome === "safe") {
       // Explicitly starting another attempt consumes the safe proof. Its lost
       // response cannot restore ordinary retry, including after remount.
-      await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-delivery-notice-retry]")!.click());
-      expect(mounted.host.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
+      /* With a message row the recovery is the row's own; a send this browser
+         has no row for (another tab, an aged-out queue) keeps the composer's
+         fallback notice, which is the only thing left speaking for it. */
+      const safeRetry = local ? "[data-outbox-operation-retry]" : "[data-delivery-notice-retry]";
+      const stillRecoverable = local ? "[data-outbox-operation-retry]" : "[data-receipt-uncertain-retry]";
+      await openRowEvidence(mounted.host);
+      await settle(() => mounted.host.querySelector<HTMLButtonElement>(safeRetry)!.click());
+      await openRowEvidence(mounted.host);
+      expect(mounted.host.querySelector(stillRecoverable)).not.toBeNull();
       expect(mounted.host.querySelector("[data-outbox-retry]")).toBeNull();
       await act(async () => mounted.root.unmount());
       resetOutboxForTests();
       mounted = await renderInto(surface());
-      expect(mounted.host.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
+      await openRowEvidence(mounted.host);
+      expect(mounted.host.querySelector(stillRecoverable)).not.toBeNull();
       expect(mounted.host.querySelector("[data-outbox-retry]")).toBeNull();
     }
     expect(calls).toEqual(outcome === "safe" && !newerJournal ? ["POST", "POST"] : [outcome === "discarded" ? "DELETE" : "POST"]);
@@ -1153,10 +1226,11 @@ test("issue 1538: delivered history compacts first; an unknown original survives
     expect(queue().map((entry) => entry.id)).toEqual(ids);
     expect(originalEntry()).toMatchObject({ text: captured.text, deliveryUncertain: true });
     expect(originalEntry()?.deliveryReceipt?.operationId).toBe(captured.operationId);
+    await openRowEvidence(mounted.host);
     const rows = mounted.host.querySelectorAll(`[data-operation="${captured.operationId}"]`);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
-    expect(mounted.host.querySelector(`[data-outbox-entry="${original}"]`)?.textContent).toContain("outcome is unknown");
+    expect(rowDelivery(mounted.host, original)).toContain("outcome is unknown");
     expect(mounted.host.querySelector(`[data-outbox-retry="${original}"], [data-outbox-cancel="${original}"]`)).toBeNull();
     expect(sends).toHaveLength(7);
 
@@ -1211,6 +1285,7 @@ test("issue 1538: exhausted unresolved capacity refuses the new submission befor
     resetOutboxForTests();
     mounted = await renderInto(surface());
     expect(queue().map((entry) => entry.id)).toEqual(before);
+    await openRowEvidence(mounted.host);
     expect(mounted.host.querySelectorAll(`[data-operation="${captured.operationId}"]`)).toHaveLength(1);
     expect(mounted.host.querySelectorAll("[data-outbox-entry]")).toHaveLength(32);
     await settle(() => composerControls(mounted.host).type("still refused"));
@@ -1220,6 +1295,9 @@ test("issue 1538: exhausted unresolved capacity refuses the new submission befor
 
     // Removing one queued row through its existing control frees a slot; the same draft is then admitted and waits behind the unknown original.
     const queued = queue().find((entry) => entry.state === "queued")!;
+    /* The control is one tap behind that message's own progress affordance
+       (send-latency slice 3) — the resting row is the message, not a toolbar. */
+    await openRowEvidence(mounted.host);
     await settle(() => mounted.host.querySelector<HTMLButtonElement>(`[data-outbox-cancel="${queued.id}"]`)!.click());
     expect(queue()).toHaveLength(31);
     await settle(() => composerControls(mounted.host).submit());
@@ -1299,10 +1377,15 @@ for (const initialState of ["in-flight", "failed"] as const) {
         await settle(() => composerControls(mounted.host).type("later draft"));
         await pasteImage(mounted.host, "later-image");
         /* A retained copy is never re-driven while its fate is unknown: the
-           operator re-checks the original operation instead. */
+           operator asks about the original operation instead. Since slice 3
+           that offer is on the message's own row, behind its one quiet
+           affordance, and the saved copy is no longer a panel of its own
+           repeating the same message beside the composer. */
         expect(mounted.host.querySelector("[data-receipt-uncertain-retry]")).toBeNull();
-        expect([...mounted.host.querySelectorAll("button")]
-          .some(button => button.textContent === translate("en", "composer.payloadRecheck"))).toBe(true);
+        expect(mounted.host.querySelector("[data-payload-key]")).toBeNull();
+        await openRowEvidence(mounted.host);
+        expect(mounted.host.querySelector("[data-outbox-check]")).not.toBeNull();
+        expect(await retainedImages(file.conversationId!, sends[0]!.idempotencyKey)).toHaveLength(1);
         /* The authoritative answer arrives on the receipt stream: never executed. */
         safe = { ...runtimeReceiptForSend({ operationId: captured.operationId,
           clientMessageId: sends[0]!.idempotencyKey, conversationId: file.conversationId!,
@@ -1319,7 +1402,8 @@ for (const initialState of ["in-flight", "failed"] as const) {
         await settle(() => retryOutbox(file.conversationId!, safeEntry.id));
         expect(readOutbox(file.conversationId!).find(entry => entry.id === safeEntry.id)).toEqual(safeEntry);
         expect(sends).toEqual([originalWire]);
-        await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-delivery-notice-retry]")!.click());
+        await openRowEvidence(mounted.host);
+    await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-delivery-notice-retry]")!.click());
         expect(actions).toEqual([undefined]);
         expect(readOutbox(file.conversationId!).find(entry => entry.id === safeEntry.id)?.state).toBe("delivered");
         expect(sends).toEqual([originalWire]);
@@ -1474,7 +1558,7 @@ for (const attachment of ["none", "image", "document"] as const) {
       expect(inflight!.needsReattach).toBeUndefined();
       expect(behind).toMatchObject({ id: behindId, text: "queued behind it", state: "queued" });
       const inflightRow = mounted.host.querySelector(`[data-outbox-entry="${original.idempotencyKey}"]`)!;
-      expect(inflightRow.textContent).toContain("outcome is unknown");
+      expect(rowDelivery(mounted.host, original.idempotencyKey)).toContain("outcome is unknown");
       expect(inflightRow.querySelector("[data-outbox-retry], [data-outbox-cancel]")).toBeNull();
       const behindRow = mounted.host.querySelector(`[data-outbox-entry="${behindId}"]`)!;
       expect(behindRow.querySelector("[data-outbox-cancel]")).not.toBeNull();

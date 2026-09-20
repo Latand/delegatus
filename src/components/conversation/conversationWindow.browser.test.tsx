@@ -278,8 +278,14 @@ describe("composer stays usable with a dead host", () => {
    * no restore button in front of it — and that the message then says what it
    * is doing. So the frames are: the composer itself on a reclaimed
    * conversation, with a real draft and a real staged image; and the one
-   * message's bubble in each state the send passes through, including a resume
+   * message's row in each state the send passes through, including a resume
    * that failed.
+   *
+   * Since send-latency slice 3 what the row SAYS at rest is one sentence for
+   * every unconfirmed state; the transport's own words are its evidence, read
+   * here from the affordance that holds them. The frames still cover every
+   * state, because the point of this block is that the send works with the
+   * host gone, not that each step announces itself.
    *
    * The composer case reads its capability props from the production matrix,
    * so a frame cannot show an open picker the shipped matrix would have
@@ -341,6 +347,8 @@ describe("composer stays usable with a dead host", () => {
     outboxWait: string | null;
     /** The words under the bubble the operator actually reads. */
     statusLabel: string | null;
+    /** The transport evidence the row's own affordance holds. */
+    transportLabel: string | null;
     /** A retry beside a failed message. */
     retryActions: number;
     /** A spinner claims the message is moving. */
@@ -406,7 +414,8 @@ describe("composer stays usable with a dead host", () => {
                   outboxState: entry?.getAttribute("data-outbox-state") ?? null,
                   outboxWait: entry?.getAttribute("data-outbox-wait") ?? null,
                   statusLabel: status?.textContent?.trim() ?? null,
-                  retryActions: document.querySelectorAll(`button[aria-label="${labels.retry}"]`).length,
+                  transportLabel: document.querySelector("[data-outbox-progress]")?.getAttribute("title") ?? null,
+                  retryActions: document.querySelectorAll(`button[data-outbox-retry]`).length,
                   spinner: Boolean(document.querySelector("[data-outbox-entry] .animate-spin")),
                   overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
                   viewportWidth: window.innerWidth,
@@ -461,12 +470,13 @@ describe("composer stays usable with a dead host", () => {
                 expect(reading.retryActions).toBe(0);
               } else if (id === "dead-host-queued") {
                 expect(reading.outboxState).toBe("queued");
-                expect(reading.statusLabel).toBe(translate(lang, "outbox.queued"));
+                expect(reading.statusLabel).toBe(translate(lang, "outbox.awaitingConfirmation"));
+                expect(reading.transportLabel).toBe(translate(lang, "outbox.queued"));
               } else if (id === "dead-host-resuming") {
                 /* The one state the vocabulary did not have: the send's own
                    recovery, under way, reading and spinning like progress. */
                 expect(reading.outboxWait).toBe("resuming-host");
-                expect(reading.statusLabel).toBe(translate(lang, "runtime.receipt.resumingHostFor", {
+                expect(reading.transportLabel).toBe(translate(lang, "runtime.receipt.resumingHostFor", {
                   waited: translate(lang, "runtime.receipt.waitedMin", { n: 1 }),
                 }));
                 expect(reading.spinner).toBe(true);
@@ -475,18 +485,24 @@ describe("composer stays usable with a dead host", () => {
                    step between "starting" and "delivered", which the committed
                    case list used to skip over. */
                 expect(reading.outboxState).toBe("delivering");
-                expect(reading.statusLabel).toBe(translate(lang, "outbox.delivering"));
+                expect(reading.transportLabel).toBe(translate(lang, "outbox.delivering"));
+                /* The operator reads the same sentence they read a moment ago:
+                   the hand-over is progress, not news. */
+                expect(reading.statusLabel).toBe(translate(lang, "outbox.awaitingConfirmation"));
                 expect(reading.retryActions).toBe(0);
               } else if (id === "dead-host-delivered") {
                 expect(reading.outboxState).toBe("delivered");
-                expect(reading.statusLabel).toBe(translate(lang, "outbox.delivered"));
+                /* Arrival clears the affordance; the row is the message. */
+                expect(reading.transportLabel).toBeNull();
                 expect(reading.spinner).toBe(false);
               } else {
-                /* A resume the server gave up on: the reason it gave up for,
-                   verbatim, and exactly one retry. */
+                /* A resume the server gave up on: the reason in the operator's
+                   own language — never the runtime's English sentence, which
+                   is what they photographed inside the Ukrainian interface —
+                   and exactly one action. */
                 expect(reading.outboxState).toBe("failed");
-                expect(reading.statusLabel).toContain("account is busy");
-                expect(reading.statusLabel).not.toBe(translate(lang, "outbox.failed"));
+                expect(reading.statusLabel).toBe(translate(lang, "outbox.failure.hostBusy"));
+                expect(reading.statusLabel).not.toContain("contended attempts");
                 expect(reading.retryActions).toBe(1);
               }
             } finally {
@@ -501,4 +517,432 @@ describe("composer stays usable with a dead host", () => {
       served.stop();
     }
   }, 240_000);
+});
+
+describe("send latency slice 3: one message, one row", () => {
+  /*
+   * Rendered evidence for the operator's complaint that a sent message passes
+   * through a pile of visually different states before it settles.
+   *
+   * ONE page, one mounted conversation window — the production `LogFeed` and
+   * `TmuxComposer` over the production outbox store — and a configurable fake
+   * host behind them. The driver types into the real field, submits through
+   * the path it is exercising, and then advances the host: a receipt lands,
+   * the axes move, the transcript carries the message. Every frame it
+   * photographs is a frame that ONE submission really reached, which is the
+   * only way a transition can be observed at all. Pre-arranged snapshots of
+   * each state, in a fresh context each, is what the previous round did, and
+   * it is why a replaced node looked identical to an adopted one.
+   *
+   * What is written down, per frame: the bubble's painted width, opacity, type
+   * size, padding and FULL position (both axes), the words beside the message,
+   * the controls on it, and whether the row is still the very same DOM node —
+   * marked on the first frame and looked for by that mark afterwards.
+   *
+   * The number the work is judged by is `distinctRenderings`: how many
+   * different descriptions one ordinary message passes through between Send
+   * and the transcript's own record of it. `evidence/message-row/
+   * before-default-branch.json` is this same driver, unchanged, run against
+   * the default branch over the ordinary send alone — which is how the before
+   * and the after are the same measurement rather than two descriptions of
+   * one. (Only the success scenario runs there: the affordance the other
+   * scenarios disclose does not exist on that side.)
+   *
+   * Every scenario runs at a phone (with touch emulated, as a phone has) and a
+   * desktop viewport, in both themes and both languages. Geometry goes to
+   * `evidence/message-row/one-row.json`; frames to `.artifacts/message-row/`
+   * and, so the operator can look at the pixels before merging, to
+   * `/var/tmp/llv-message-row-evidence/`. Neither raster directory is
+   * committed.
+   */
+
+  const OUT = path.resolve(".artifacts/message-row");
+  const EVIDENCE = path.resolve("evidence/message-row");
+  const LOOK = "/var/tmp/llv-message-row-evidence";
+  const VIEWPORTS = [
+    { name: "phone-390", width: 390, height: 844, touch: true },
+    { name: "desktop-1280", width: 1280, height: 900, touch: false },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  const THEMES = ["dark", "light"] as const;
+
+  const MESSAGE = "Check what is blocking the release and tell me which lane owns it.";
+  const FAILURE_RAW = "structured host recovery failed after 12 contended attempts: account is busy";
+
+  /** One submission's whole life, as steps the driver performs on the page. */
+  type Step =
+    | { state: string; act: "submit-button" | "submit-keyboard" }
+    | { state: string; act: "attach-and-select" }
+    | { state: string; act: "settle"; status: "delivered" | "queued" | "uncertain" }
+    | { state: string; act: "axes"; host: string; turn: string }
+    | { state: string; act: "echo" }
+    | { state: string; act: "disclose"; target: "progress" | "reason" };
+
+  const SCENARIOS: { id: string; steps: Step[] }[] = [
+    /* An ordinary send that simply works, all the way to the transcript's own
+       record being adopted into the row the operator already had. */
+    { id: "success", steps: [
+      { state: "submitted", act: "submit-button" },
+      { state: "accepted", act: "settle", status: "queued" },
+      { state: "confirmed", act: "settle", status: "delivered" },
+      { state: "transcript", act: "echo" },
+    ] },
+    /* Admitted and parked: the agent is inside a turn, and a structured send
+       only crosses at a turn boundary. */
+    { id: "queued-behind-turn", steps: [
+      { state: "submitted", act: "submit-keyboard" },
+      { state: "queued-behind-turn", act: "axes", host: "hosted", turn: "running" },
+    ] },
+    /* Admitted while nothing is hosting the conversation: the send raises the
+       host on its way to delivering. */
+    { id: "held-for-host", steps: [
+      { state: "submitted", act: "submit-button" },
+      { state: "held-for-host", act: "axes", host: "recovering", turn: "unknown" },
+    ] },
+    /* The acknowledgement never came back. The message may well be in the
+       journal, so the row may never say it was not sent. */
+    { id: "lost-acknowledgement", steps: [
+      { state: "lost-acknowledgement", act: "submit-button" },
+      { state: "lost-acknowledgement-open", act: "disclose", target: "progress" },
+    ] },
+    /* A failure the server proved: one reason in the operator's language, one
+       thing to do about it, and the runtime's English sentence one tap away. */
+    { id: "safe-failure", steps: [
+      { state: "failed", act: "submit-keyboard" },
+      { state: "failed-open", act: "disclose", target: "reason" },
+    ] },
+    /* The submission that carries more than words: a staged image and a
+       reference to the card the operator was looking at. Both belong to the
+       row from the first frame, and both must survive the transcript's own
+       record arriving — the badge is how the operator checks what they asked
+       ABOUT, and losing it on arrival is the same defect as losing the node. */
+    { id: "attachment-and-context", steps: [
+      { state: "prepared", act: "attach-and-select" },
+      { state: "submitted-with-attachment", act: "submit-button" },
+      { state: "attachment-confirmed", act: "settle", status: "delivered" },
+      { state: "attachment-transcript", act: "echo" },
+    ] },
+  ];
+
+  /** A 48x48 PNG, two-tone: a real image through the production intake. */
+  const TILE_PNG = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAX0lEQVR42u3XsQkAIAwEQCcRR3AVW6d3E90g"
+    + "FhYKXpHyIVc9n3obM7pcani38wkAAAAA4Ajw+oO7PAAAAADAGUATAwAAANgDmhgAAADAHtDEAAAAAPaAJgYAAAD4DrAAlLbY"
+    + "gOGW5kkAAAAASUVORK5CYII=";
+
+  interface RowReading {
+    state: string;
+    /** Copies of the operator's message on screen. One, always. */
+    bubbles: number;
+    /** Everything about the bubble a person could see change, both axes. */
+    bubble: {
+      width: number;
+      height: number;
+      opacity: string;
+      fontSize: string;
+      padding: string;
+      radius: string;
+      /** Distance from the window's right edge and from its own row's top. */
+      right: number;
+      top: number;
+    } | null;
+    /** Whether the row is still the node the first frame marked. */
+    sameNode: boolean;
+    /** Whether the bubble inside it is still that node's own body. */
+    sameBody: boolean;
+    /** Words on the row that are not the message itself. */
+    aside: string;
+    badge: string;
+    inBubble: string;
+    /** Controls on the message, by their accessible name. */
+    controls: string[];
+    /** The row's own phase, where the row publishes one. */
+    phase: string | null;
+    outboxState: string | null;
+    queue: unknown[];
+    overflowX: number;
+    viewportWidth: number;
+  }
+
+  /** Read in the page. The bubble is found by its own surface class, so the
+      same reading works against a build that predates this work. */
+  const READ = (state: string) => {
+    const row = document.querySelector("[data-message-row]")
+      ?? document.querySelector("[data-outbox-entry]")
+      ?? document.querySelector('[data-feed-kind="user"]');
+    const bubbles = [...document.querySelectorAll("div")].filter((node) =>
+      node.className.includes("bg-user"));
+    const bubble = bubbles[bubbles.length - 1];
+    const painted = bubble ? getComputedStyle(bubble) : null;
+    const rect = bubble?.getBoundingClientRect();
+    const rowRect = (row as HTMLElement | null)?.getBoundingClientRect();
+    const rowText = row?.textContent ?? "";
+    const bubbleText = bubble?.textContent ?? "";
+    return {
+      state,
+      bubbles: bubbles.length,
+      bubble: bubble && painted && rect ? {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        opacity: painted.opacity,
+        fontSize: painted.fontSize,
+        padding: `${painted.paddingTop}/${painted.paddingRight}/${painted.paddingBottom}/${painted.paddingLeft}`,
+        radius: painted.borderTopLeftRadius,
+        right: Math.round(window.innerWidth - rect.right),
+        top: rowRect ? Math.round(rect.top - rowRect.top) : 0,
+      } : null,
+      sameNode: Boolean(row && (row as HTMLElement).dataset.observedRow === "1"),
+      sameBody: Boolean(bubble && (bubble as HTMLElement).dataset.observedBody === "1"),
+      aside: (bubbleText ? rowText.replace(bubbleText, " ") : rowText).replace(/\s+/g, " ").trim(),
+      /* What the bubble carries besides the words: the reference to the card
+         this turn pointed at, and what the submission was carrying with it. */
+      badge: (row?.querySelector("[data-selected-context]")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+      inBubble: (bubble?.textContent ?? "").replace(/\s+/g, " ").trim(),
+      controls: [...(row?.querySelectorAll("button") ?? [])]
+        .map((button) => (button.getAttribute("aria-label") ?? button.textContent ?? "").trim())
+        .filter(Boolean),
+      phase: row?.getAttribute("data-message-row") ?? null,
+      /* The queue's own word for this entry, kept in the record so a frame
+         that reads oddly can be traced back to the state it was really in. */
+      outboxState: row?.getAttribute("data-outbox-state") ?? null,
+      queue: (window as unknown as { llvHost?: { queue(): unknown[] } }).llvHost?.queue() ?? [],
+      overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+      viewportWidth: window.innerWidth,
+    };
+  };
+
+  /** Mark the row and its body so later frames can prove they are the same. */
+  const MARK = () => {
+    const row = document.querySelector("[data-message-row]")
+      ?? document.querySelector("[data-outbox-entry]")
+      ?? document.querySelector('[data-feed-kind="user"]');
+    if (row) (row as HTMLElement).dataset.observedRow = "1";
+    const bubbles = [...document.querySelectorAll("div")].filter((node) => node.className.includes("bg-user"));
+    const bubble = bubbles[bubbles.length - 1];
+    if (bubble) (bubble as HTMLElement).dataset.observedBody = "1";
+  };
+
+  /** One message's rendering, as a person would describe it. Two frames with
+      the same description are the same rendering, however far apart in the
+      message's life they are. */
+  const describeRendering = (reading: RowReading): string => JSON.stringify({
+    bubble: reading.bubble ? { ...reading.bubble, top: undefined } : null,
+    aside: reading.aside,
+    inBubble: reading.inBubble,
+    controls: reading.controls,
+  });
+
+  browserTest("one message keeps one rendering, and one node, from submit to transcript", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.rmSync(LOOK, { recursive: true, force: true });
+    fs.mkdirSync(LOOK, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const geometry: Record<string, RowReading> = {};
+    /* Per viewport: every rendering the ordinary send passed through. */
+    const renderings: Record<string, Set<string>> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const viewport of VIEWPORTS) {
+        for (const theme of THEMES) {
+          for (const lang of LANGS) {
+            /* ONE page for the whole walk: the transitions are the evidence. */
+            const { context, page, pageErrors } = await openFixture(
+              browser,
+              `${served.base}?case=lifecycle&lang=${lang}`,
+              { width: viewport.width, height: viewport.height },
+              theme,
+              lang,
+              "no-preference",
+              viewport.touch,
+            );
+            try {
+              await page.waitForSelector('[data-evidence-case="lifecycle"]');
+              await page.waitForSelector("textarea");
+              for (const scenario of SCENARIOS) {
+                /* A fresh window per scenario, and then ONE window for the
+                   whole of it: a lifecycle is what this driver measures, and a
+                   composer left mid-reconciliation by the previous scenario
+                   would refuse the next submission outright. */
+                await page.reload();
+                await page.waitForSelector('[data-evidence-case="lifecycle"]');
+                await page.waitForSelector("textarea");
+                await page.evaluate((id) => {
+                  const host = (window as unknown as { llvHost: Record<string, (...args: unknown[]) => void> }).llvHost;
+                  host.reset();
+                  host.scenario(id);
+                }, scenario.id);
+                await page.waitForTimeout(60);
+                let marked = false;
+                for (const step of scenario.steps) {
+                  if (step.act === "attach-and-select") {
+                    await page.evaluate(() => (window as unknown as {
+                      llvHost: { select(label: string): void };
+                    }).llvHost.select("release-blockers"));
+                    await page.fill("textarea", MESSAGE);
+                    await page.setInputFiles('input[type="file"]', {
+                      name: "stack-trace.png", mimeType: "image/png", buffer: Buffer.from(TILE_PNG, "base64"),
+                    });
+                    await page.waitForSelector('[data-testid="attachment-tile"][data-status="ready"]');
+                  } else if (step.act === "submit-button" || step.act === "submit-keyboard") {
+                    if (scenario.id !== "attachment-and-context") await page.fill("textarea", MESSAGE);
+                    if (step.act === "submit-keyboard") {
+                      await page.focus("textarea");
+                      await page.keyboard.press("Enter");
+                    } else {
+                      await page.click('button[type="submit"]');
+                    }
+                  } else if (step.act === "settle") {
+                    await page.evaluate((status) => (window as unknown as {
+                      llvHost: { settle(value: string): void };
+                    }).llvHost.settle(status), step.status);
+                  } else if (step.act === "axes") {
+                    await page.evaluate(([host, turn]) => (window as unknown as {
+                      llvHost: { axes(host: string, turn: string): void };
+                    }).llvHost.axes(host!, turn!), [step.host, step.turn]);
+                  } else if (step.act === "echo") {
+                    await page.evaluate(() => (window as unknown as {
+                      llvHost: { echo(): void };
+                    }).llvHost.echo());
+                  } else if (step.act === "disclose") {
+                    await page.click(step.target === "progress" ? "[data-outbox-progress]" : "[data-outbox-reason]");
+                  }
+                  await page.waitForTimeout(260);
+                  const reading = await page.evaluate(READ, step.state) as RowReading;
+                  expect(pageErrors).toEqual([]);
+                  const key = `${scenario.id}-${step.state}-${viewport.name}-${theme}-${lang}`;
+                  geometry[key] = reading;
+                  const frame = `${scenario.id}-${step.state}-${viewport.name}-${theme}-${lang}.png`;
+                  await page.screenshot({ path: path.join(OUT, frame), fullPage: true });
+                  fs.copyFileSync(path.join(OUT, frame), path.join(LOOK, frame));
+                  /* The ordinary send is the walk the churn is counted over:
+                     the other scenarios are single states of the same row. */
+                  if (scenario.id === "success" && theme === "dark" && lang === "en") {
+                    (renderings[viewport.name] ??= new Set()).add(describeRendering(reading));
+                  }
+                  /* Mark the first frame that HAS a row, so every later frame
+                     answers whether that row survived the transition. */
+                  if (!marked && reading.bubbles > 0) {
+                    await page.evaluate(MARK);
+                    marked = true;
+                  }
+                }
+              }
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      /* Written before the assertions so a run that fails still leaves the
+         evidence it collected — which is how the before/after counts are
+         taken against a build that does not satisfy the claim yet. */
+      fs.writeFileSync(
+        path.join(EVIDENCE, "one-row.json"),
+        `${JSON.stringify({
+          distinctRenderings: Object.fromEntries(
+            Object.entries(renderings).map(([viewport, set]) => [viewport, set.size]),
+          ),
+          renderings: Object.fromEntries(
+            Object.entries(renderings).map(([viewport, set]) => [viewport, [...set]]),
+          ),
+          readings: geometry,
+        }, null, 2)}\n`,
+      );
+      await browser?.close();
+      served.stop();
+    }
+
+    for (const [key, reading] of Object.entries(geometry)) {
+      /* Exactly one copy of the message at every instant of every scenario —
+         never the local row beside the transcript's own record. The one frame
+         taken BEFORE a submission (the staged attachment and the selected
+         card, still in the composer) is the only one with none. */
+      const expected = reading.state === "prepared" ? 0 : 1;
+      expect({ key, bubbles: reading.bubbles }).toEqual({ key, bubbles: expected });
+      expect({ key, overflowX: reading.overflowX }).toEqual({ key, overflowX: 0 });
+    }
+
+    /* The claim, in one number: an ordinary send passes through ONE rendering
+       while it is unconfirmed and ONE once it has arrived — and the second is
+       already the transcript's own, so nothing changes when the transcript
+       catches up. */
+    for (const viewport of VIEWPORTS) {
+      expect({ viewport: viewport.name, distinct: renderings[viewport.name]?.size }).toEqual({
+        viewport: viewport.name, distinct: 2,
+      });
+    }
+
+    const at = (key: string) => geometry[key]!;
+    for (const viewport of VIEWPORTS) {
+      for (const theme of THEMES) {
+        for (const lang of LANGS) {
+          const suffix = `${viewport.name}-${theme}-${lang}`;
+          const submitted = at(`success-submitted-${suffix}`);
+          const accepted = at(`success-accepted-${suffix}`);
+          const confirmed = at(`success-confirmed-${suffix}`);
+          const transcript = at(`success-transcript-${suffix}`);
+          /* The phone's own defect: the optimistic row was capped at 75% and
+             dimmed, its canonical replacement at 86% and full strength. They
+             are one rendering now, so every frame of the walk agrees — down to
+             where the bubble sits inside its own row. */
+          expect({ suffix, bubble: accepted.bubble }).toEqual({ suffix, bubble: submitted.bubble });
+          expect({ suffix, bubble: confirmed.bubble }).toEqual({ suffix, bubble: submitted.bubble });
+          expect({ suffix, bubble: transcript.bubble }).toEqual({ suffix, bubble: submitted.bubble });
+          /* And it is the SAME node, through every receipt and through the
+             transcript's own record arriving — never a replacement that looks
+             the same. */
+          for (const step of [accepted, confirmed, transcript]) {
+            expect({ suffix, state: step.state, sameNode: step.sameNode, sameBody: step.sameBody })
+              .toEqual({ suffix, state: step.state, sameNode: true, sameBody: true });
+          }
+          /* The only difference the whole walk shows is the affordance. */
+          expect({ suffix, controls: confirmed.controls }).toEqual({ suffix, controls: transcript.controls });
+          expect(submitted.controls).not.toEqual(confirmed.controls);
+          expect({ suffix, phase: transcript.phase }).toEqual({ suffix, phase: "confirmed" });
+
+          /* A lost acknowledgement never reads as a message that was not sent,
+             and what it offers is a question, never a second send. */
+          const unknown = at(`lost-acknowledgement-lost-acknowledgement-${suffix}`);
+          expect({ suffix, phase: unknown.phase }).toEqual({ suffix, phase: "pending" });
+          expect(unknown.aside).toContain(translate(lang, "outbox.awaitingConfirmation"));
+          const unknownOpen = at(`lost-acknowledgement-lost-acknowledgement-open-${suffix}`);
+          expect(unknownOpen.aside).toContain(translate(lang, "orchPanel.errorUnknownTitle"));
+          expect(unknownOpen.controls).toContain(translate(lang, "outbox.action.checkStatus"));
+          expect(unknownOpen.controls).not.toContain(translate(lang, "outbox.action.takeBack"));
+          expect(unknownOpen.controls).not.toContain(translate(lang, "outbox.action.retry"));
+          /* Opening the evidence never moves the message itself. */
+          expect({ suffix, bubble: unknownOpen.bubble }).toEqual({ suffix, bubble: unknown.bubble });
+
+          /* A proven failure: a concise reason in the operator's language and
+             exactly ONE thing to do, with the runtime's English one tap away. */
+          const failed = at(`safe-failure-failed-${suffix}`);
+          expect({ suffix, phase: failed.phase }).toEqual({ suffix, phase: "failed" });
+          expect(failed.aside).toContain(translate(lang, "outbox.failure.hostBusy"));
+          expect(failed.aside).not.toContain("contended attempts");
+          const actions = failed.controls.filter((label) =>
+            label !== translate(lang, "feed.copyMd") && label !== translate(lang, "outbox.failure.hostBusy"));
+          expect({ suffix, actions }).toEqual({ suffix, actions: [translate(lang, "outbox.action.retry")] });
+          const failedOpen = at(`safe-failure-failed-open-${suffix}`);
+          expect(failedOpen.aside).toContain(FAILURE_RAW);
+          expect({ suffix, bubble: failedOpen.bubble }).toEqual({ suffix, bubble: failed.bubble });
+
+          /* A submission that carried an image and a reference to a card keeps
+             BOTH on its row, and the reference survives the transcript's own
+             record arriving. The attachment count is the local submission's
+             own fact and retires with it: the transcript carries the image as
+             its own row. */
+          const withAttachment = at(`attachment-and-context-submitted-with-attachment-${suffix}`);
+          expect(withAttachment.badge).toContain("release-blockers");
+          expect(withAttachment.inBubble).toContain(translate(lang, "composer.imagesCount", { count: 1 }));
+          const attachmentTranscript = at(`attachment-and-context-attachment-transcript-${suffix}`);
+          expect(attachmentTranscript.badge).toContain("release-blockers");
+          expect({ suffix, phase: attachmentTranscript.phase }).toEqual({ suffix, phase: "confirmed" });
+          expect({ suffix, sameNode: attachmentTranscript.sameNode, sameBody: attachmentTranscript.sameBody })
+            .toEqual({ suffix, sameNode: true, sameBody: true });
+        }
+      }
+    }
+  }, 1_800_000);
 });
