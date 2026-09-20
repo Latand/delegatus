@@ -8794,6 +8794,165 @@ const PUBLISH_STAGES = [
   { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
 ] as const;
 
+async function interruptedPublication() {
+  const h = harness();
+  const box = publishHarness(h, { remoteReadFails: true });
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const terminal = loadPipelines()[0]!;
+  const reviewStage = terminal.stages.pop()!;
+  const reviewRun = terminal.runs.pop()!;
+  terminal.stages[0]!.next = null;
+  savePipelines([terminal]);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  const pipeline = loadPipelines()[0]!;
+  pipeline.stages[0]!.next = "review";
+  pipeline.stages.push(reviewStage);
+  pipeline.runs.push(reviewRun);
+  pipeline.delivery!.operation!.state = "pending";
+  delete pipeline.delivery!.operation!.result;
+  savePipelines([pipeline]);
+  box.setRemoteReadFails(false);
+  const { publishPipelineBranch } = await import("./git");
+  await publishPipelineBranch(pipeline, () => { throw new Error("publisher interrupted after reservation"); }, { acceptedSha: box.passedSha });
+  return { h, box, pipeline: loadPipelines()[0]! };
+}
+
+test("a same-owner publication waits through another tick, then advances once settled (#1939)", async () => {
+  const { h, box, pipeline } = await interruptedPublication();
+  const operation = pipeline.delivery!.operation!;
+  expect(operation.state).toBe("running");
+  const descriptor = fs.openSync(operation.executor!.lock, "a");
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    await tickPipelines([], h.ports);
+    const waiting = loadPipelines()[0]!;
+    expect(waiting.state).toBe("running");
+    expect(waiting.stateDetail).toContain("in progress since");
+    expect(waiting.delivery!.operation!.id).toBe(operation.id);
+    expect(waiting.cursor).toMatchObject({ stageId: "build", state: "committing" });
+    expect(waiting.runs[0]!.attempts[0]!.state).toBe("passed");
+  } finally { fs.closeSync(descriptor); }
+  box.setRemote(box.passedSha);
+  await tickPipelines([], h.ports);
+  const advanced = loadPipelines()[0]!;
+  expect(advanced.cursor?.stageId).toBe("review");
+  expect(advanced.publishedCommit).toBe(box.passedSha);
+  expect(advanced.runs[0]!.attempts).toHaveLength(1);
+  expect(box.order.filter((item) => item === "commit")).toHaveLength(1);
+  expect(box.order.some((item) => item.startsWith("push:"))).toBe(false);
+});
+
+test("a restarted engine reconciles an interrupted reservation from the remote without repeating stage work (#1939)", async () => {
+  const { h, box, pipeline } = await interruptedPublication();
+  pipeline.delivery!.operation!.state = "pending";
+  savePipelines([pipeline]);
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { publishPipelineBranch } = await import("./src/lib/pipelines/git.ts");
+    const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+    const pipeline = loadPipelines()[0];
+    await publishPipelineBranch(pipeline, () => process.exit(0), { acceptedSha: pipeline.lastPassedCommit });
+    process.exit(1);
+  `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(0);
+  const crashed = loadPipelines()[0]!.delivery!.operation!;
+  expect(crashed).toMatchObject({ state: "running", executor: { pid: child.pid } });
+  expect(crashed.executor!.finished).toBeUndefined();
+  box.setRemote(box.passedSha);
+  const reservation = crashed.id;
+  const exec = h.ports.exec;
+  h.ports.exec = (command, args, cwd) => {
+    if (args.includes("ls-remote")) {
+      const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
+      try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: 0 }); }
+      finally { db.close(); }
+    }
+    return exec(command, args, cwd);
+  };
+  await tickPipelines([], { ...h.ports });
+  const recovered = loadPipelines()[0]!;
+  expect(recovered.state).toBe("running");
+  expect(recovered.cursor?.stageId).toBe("review");
+  expect(recovered.delivery!.operation).toMatchObject({ id: reservation, state: "settled" });
+  expect(recovered.publishedCommit).toBe(box.passedSha);
+  expect(recovered.runs[0]!.attempts).toHaveLength(1);
+  expect(box.order).toEqual(["commit"]);
+});
+
+test("a quiescent reservation that never pushed retries publication without repeating the passed stage (#1939)", async () => {
+  const { h, box } = await interruptedPublication();
+  await tickPipelines([], h.ports);
+  const recovered = loadPipelines()[0]!;
+  expect(recovered.cursor?.stageId).toBe("review");
+  expect(recovered.publishedCommit).toBe(box.passedSha);
+  expect(recovered.runs[0]!.attempts).toHaveLength(1);
+  expect(box.order.filter((item) => item === "commit")).toHaveLength(1);
+  expect(box.order.filter((item) => item.startsWith("push:"))).toEqual([`push:${box.passedSha}`]);
+});
+
+test("a stale running publication parks with its reservation, age and recovery action (#1939)", async () => {
+  const { h, box, pipeline } = await interruptedPublication();
+  const operation = pipeline.delivery!.operation!;
+  const descriptor = fs.openSync(operation.executor!.lock, "a");
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    const stale = new Date(Date.now() - 120_000);
+    fs.futimesSync(descriptor, stale, stale);
+    await tickPipelines([], h.ports);
+    const parked = loadPipelines()[0]!;
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.stateDetail).toContain(`publication ${operation.id} has no progress for 120s`);
+    expect(parked.stateDetail).toContain(`takeover with expectedOwner ${pipeline.id} and expectedEpoch 1`);
+    expect(parked.delivery!.operation!.id).toBe(operation.id);
+    expect(parked.runs[0]!.attempts[0]!.state).toBe("passed");
+  } finally { fs.closeSync(descriptor); }
+  box.setRemote(box.passedSha);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("review");
+});
+
+for (const settled of [false, true]) {
+  test(`a lane already parked on its own publisher recovers with a ${settled ? "settled" : "running"} reservation (#1939)`, async () => {
+    const { h, box, pipeline } = await interruptedPublication();
+    box.setRemote(box.passedSha);
+    pipeline.state = "needs_decision";
+    pipeline.stateDetail = `publishing the passed stage: publisher ${pipeline.id} at epoch 1 is in flight or uncertain`;
+    // The old park helper overwrote even the passed attempt's state.
+    pipeline.runs[0]!.attempts[0]!.state = "needs_decision";
+    pipeline.runs[0]!.attempts[0]!.error = pipeline.stateDetail;
+    if (settled) {
+      pipeline.delivery!.operation!.state = "settled";
+      pipeline.delivery!.operation!.result = { ok: true, sha: box.passedSha, remote: "published" };
+    }
+    savePipelines([pipeline]);
+    await tickPipelines([], h.ports);
+    const recovered = loadPipelines()[0]!;
+    expect(recovered.state).toBe("running");
+    expect(recovered.cursor?.stageId).toBe("review");
+    expect(recovered.runs[0]!.attempts).toHaveLength(1);
+    expect(recovered.runs[0]!.attempts[0]!.state).toBe("passed");
+    expect(box.order).toEqual(["commit"]);
+  });
+}
+
+test("a builder that already pushed the accepted commit settles without another push (#1939)", async () => {
+  const h = harness();
+  const box = publishHarness(h);
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  box.setDirty(false);
+  box.setLocalHead(box.passedSha);
+  box.setRemote(box.passedSha);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  const advanced = loadPipelines()[0]!;
+  expect(advanced.state).toBe("running");
+  expect(advanced.cursor?.stageId).toBe("review");
+  expect(advanced.publishedCommit).toBe(box.passedSha);
+  expect(box.order).toEqual([]);
+});
+
 test("a passed run stage publishes its committed head before the review stage creates its flow (#729)", async () => {
   const h = harness();
   const box = publishHarness(h);

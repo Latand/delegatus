@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -584,6 +585,32 @@ test("publication releases the SQLite lease during Git and refuses an in-flight 
     expect((await takeover)?.error).toContain("in flight");
     expect(box.originHead()).toBe(head);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("a same-owner adapter retry waits on its running reservation without executing Git (#1939)", async () => {
+  const subject = pipeline();
+  const head = "7".repeat(40);
+  await publishPipelineBranch(subject, () => { throw new Error("lost publication reply"); }, { acceptedSha: head });
+  const running = findPipelineRecord(subject.id)!;
+  const descriptor = fs.openSync(running.delivery!.operation!.executor!.lock, "a");
+  let execCalls = 0;
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    expect(await publishPipelineBranch(running, () => { execCalls++; throw new Error("duplicate Git call"); }, { acceptedSha: head }))
+      .toMatchObject({ ok: true, remote: "unreachable", detail: expect.stringContaining("in progress since") });
+    expect(findPipelineRecord(subject.id)!.delivery!.operation!.id).toBe(running.delivery!.operation!.id);
+    const staleEpoch = { ...running, delivery: { ...running.delivery!, epoch: 0 } };
+    expect(await publishPipelineBranch(staleEpoch, () => { execCalls++; throw new Error("foreign Git call"); }, { acceptedSha: head }))
+      .toMatchObject({ ok: false, error: "publication owner or epoch changed" });
+    expect(execCalls).toBe(0);
+  } finally { fs.closeSync(descriptor); }
+  const result = await publishPipelineBranch(running, () => { throw new Error("must not reserve or execute again"); }, { acceptedSha: head });
+  expect(result).toMatchObject({ ok: true, remote: "unreachable", detail: expect.stringContaining("in progress since") });
+  expect(findPipelineRecord(subject.id)!.delivery!.operation!.id).toBe(running.delivery!.operation!.id);
+  const stale = new Date(Date.now() - 120_000);
+  fs.utimesSync(running.delivery!.operation!.executor!.lock, stale, stale);
+  expect(await publishPipelineBranch(running, () => { throw new Error("must not execute stale publication"); }, { acceptedSha: head }))
+    .toMatchObject({ ok: false, error: expect.stringContaining(`publication ${running.delivery!.operation!.id} has no progress for 120s`) });
 });
 
 test("a lost push reply is reconciled before explicit takeover and stale owner publication is refused", async () => {
