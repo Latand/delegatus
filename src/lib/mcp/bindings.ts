@@ -194,7 +194,7 @@ import {
   type VoiceUtteranceLookup,
   type VoiceWorkLookupIdentity,
 } from "./selectedContextTarget";
-import { mcpCallerIdentity, mcpToolPolicy, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
+import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
 const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage"]);
 const PIPELINE_GRAPH_EDIT_ACTIONS = new Set<PipelineAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
@@ -572,10 +572,15 @@ function viewerControlForCall(
   context?: McpToolCallContext,
 ): ViewerControlDependencies {
   if (!context) return control;
+  const timed = async (run: () => Promise<Record<string, unknown>>) => {
+    const startedAt = performance.now();
+    try { return await run(); }
+    finally { context.recordTiming?.("http", performance.now() - startedAt); }
+  };
   return {
-    ...(control.get ? { get: (pathname: string) => control.get!(pathname, context) } : {}),
-    post: (pathname, body, headers) => control.post(pathname, body, headers, context),
-    ...(control.dispatch ? { dispatch: (pathname, body, headers) => control.dispatch!(pathname, body, headers, context) } : {}),
+    ...(control.get ? { get: (pathname: string) => timed(() => control.get!(pathname, context)) } : {}),
+    post: (pathname, body, headers) => timed(() => control.post(pathname, body, headers, context)),
+    ...(control.dispatch ? { dispatch: (pathname, body, headers) => timed(() => control.dispatch!(pathname, body, headers, context)) } : {}),
   };
 }
 
@@ -4562,11 +4567,20 @@ export function viewerMcpToolPolicy(
     seats: authorizedManagerSeats(managerAuthoritySources())
       .map((seat) => ({ conversationId: seat.conversationId, path: seat.path })),
   });
-  return mcpToolPolicy(
+  const policy = mcpToolPolicy(
     () => hostHealthProbe
       ? { kind: "health-probe" }
       : mcpCallerIdentity(domainDependencies.attentionAuthority(), callerManagerTarget()),
   );
+  return {
+    permit: (tool, args) => {
+      // An admitted agent's read surface is independent of role/seat identity.
+      // Resolve authority only where the policy uses it. Bindings still verify
+      // their own operation authority and recoverable receipts before dispatch.
+      if (!hostHealthProbe && !mcpToolNeedsCallerIdentity(tool, args)) return { allowed: true };
+      return policy.permit(tool, args);
+    },
+  };
 }
 
 /* ── ORIGINAL-KEY RECOVERY (#1490) ──────────────────────────────────────── */
