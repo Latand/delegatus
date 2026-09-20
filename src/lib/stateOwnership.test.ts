@@ -89,7 +89,7 @@ interface ProbeResult {
   stderr: string;
 }
 
-function runProbe(mode: "resolve" | "load-stores", environment: Record<string, string | undefined>): ProbeResult {
+function runProbe(mode: "resolve" | "load-stores" | "open-registry", environment: Record<string, string | undefined>): ProbeResult {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries({ ...process.env, ...environment })) {
     if (value !== undefined) env[key] = value;
@@ -117,6 +117,7 @@ function operatorEnvironment(temporary: string): Record<string, string | undefin
     XDG_CONFIG_HOME: path.join(OPERATOR_HOME, ".config"),
     TMPDIR: temporary,
     LLV_STATE_DIR: undefined,
+    LLV_AGENT_REGISTRY_SQLITE: undefined,
     [STATE_OWNER_ENV]: undefined,
     NEXT_PHASE: undefined,
     NEXT_RUNTIME: undefined,
@@ -151,6 +152,33 @@ describe("the operator's state directory", () => {
        first-boot import had nothing of the operator's to import. */
     expect(resolved.stateDirectory.startsWith(`${temporary}${path.sep}`)).toBeTrue();
     expect(snapshot(OPERATOR_HOME)).toEqual(before);
+    expect(fs.existsSync(path.dirname(resolved.stateDirectory))).toBeFalse();
+  });
+
+  test("an MCP registry reader leaves operator-owned legacy cleanup for the release fence", () => {
+    const temporary = temporaryRoot();
+    const registryDirectory = path.join(STATE_DIRECTORY);
+    const mirror = path.join(registryDirectory, "agent-registry.json");
+    const staleTemporary = path.join(registryDirectory, "agent-registry.json.4242.00000000-0000-0000-0000-000000000000.tmp");
+    const sqlite = path.join(registryDirectory, "agent-registry.sqlite");
+    fs.writeFileSync(mirror, JSON.stringify({ version: 2, entries: {}, receipts: {}, conversations: {} }));
+    fs.writeFileSync(staleTemporary, "stale");
+    fs.writeFileSync(sqlite, "");
+    fs.writeFileSync(path.join(registryDirectory, "agent-registry.backend.json"), JSON.stringify({
+      schemaVersion: 1,
+      mode: "sqlite",
+      sqliteFile: path.basename(sqlite),
+      publishedAt: "2026-09-20T00:00:00.000Z",
+    }));
+
+    const probe = runProbe("open-registry", {
+      ...operatorEnvironment(temporary),
+      [STATE_OWNER_ENV]: "mcp",
+    });
+
+    expect(probe.status).toBe(0);
+    expect(fs.existsSync(mirror)).toBeTrue();
+    expect(fs.existsSync(staleTemporary)).toBeTrue();
   });
 
   test("a script without the opt-in cannot resolve it, while the launcher and the deploy adapter can", () => {

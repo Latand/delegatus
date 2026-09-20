@@ -165,6 +165,18 @@ export function guardedContext(env: NodeJS.ProcessEnv = process.env): GuardedCon
 }
 
 let throwawayRoot: string | null = null;
+let throwawayRootCleanupInstalled = false;
+
+function removeThrowawayStateRoot(): void {
+  if (!throwawayRoot) return;
+  try {
+    /* This path came from mkdtemp in this process; never sweep the temp root. */
+    fs.rmSync(throwawayRoot, { recursive: true, force: true });
+  } catch {
+    /* Exit cleanup is best effort. The root remains private and 0700 if the
+       process is terminated before this handler can run. */
+  }
+}
 
 /**
  * One throw-away root per process, created on first use. It is stable for the
@@ -181,6 +193,10 @@ export function throwawayStateRoot(): string {
     const temporary = os.tmpdir();
     fs.mkdirSync(temporary, { recursive: true });
     throwawayRoot = fs.mkdtempSync(path.join(temporary, "llv-unowned-state-"));
+    if (!throwawayRootCleanupInstalled) {
+      throwawayRootCleanupInstalled = true;
+      process.once("exit", removeThrowawayStateRoot);
+    }
   }
   return throwawayRoot;
 }

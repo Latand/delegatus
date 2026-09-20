@@ -9,6 +9,7 @@ import path from "node:path";
  *
  *   bun src/lib/state/fixtures/stateOwnershipProbe.ts resolve
  *   bun src/lib/state/fixtures/stateOwnershipProbe.ts load-stores
+ *   bun src/lib/state/fixtures/stateOwnershipProbe.ts open-registry
  *
  * `resolve` prints the state directory it reached. `load-stores` additionally
  * walks the path the incident took: the instrumentation entry point, then a
@@ -29,6 +30,12 @@ async function main(): Promise<void> {
       tasks: state.tasks.length,
     }));
     return;
+  }
+
+  if (mode === "open-registry") {
+    const { agentRegistry } = await import("@/lib/agent/registry");
+    const registry = agentRegistry();
+    registry.close();
   }
 
   console.log(JSON.stringify({ stateDirectory: path.dirname(statePath("probe")) }));
