@@ -9,6 +9,7 @@ import type { FileEntry } from "@/lib/types";
 import type { LogChunk } from "@/lib/types";
 
 import { subscribeLog } from "./logBus";
+import { forgetTailSnapshot, persistTailSnapshot, restoreTailSnapshot, type TailSnapshot } from "./logTailStore";
 
 /** Longest single jsonl line we are willing to chase across history chunks. */
 const OLDER_CHUNK_HOPS = 4;
@@ -17,20 +18,12 @@ const TAIL_CACHE_LINES = 6000;
 
 const utf8len = (text: string) => new TextEncoder().encode(text).length;
 
-interface TailSnapshot {
-  win: { lines: string[]; start: number };
-  size: number;
-  offset: number;
-  historyStart: number;
-  partial: string;
-  first: boolean;
-  hasMore: boolean;
-  tickTime: Date | null;
-}
-
 /* Browser-wide tail snapshots keep revisited projects useful on their first
    paint. Entries retain the transport offset and partial-line decoder state,
-   so the live subscription continues forward without duplicating cached rows. */
+   so the live subscription continues forward without duplicating cached rows.
+   A NEW document starts with this map empty — a reload, a phone tab the
+   browser evicted, the Viewer reopened after a respawn — and then the bounded
+   persistent store behind it answers instead (#1821). */
 const tailCache = new Map<string, TailSnapshot>();
 
 export function resetLogTailCacheForTests(): void {
@@ -53,8 +46,11 @@ function boundedSnapshot(snapshot: TailSnapshot, cap: number): TailSnapshot {
   };
 }
 
-function readTailCache(path: string, cap: number): TailSnapshot | null {
-  const cached = tailCache.get(path);
+/** The tail this document can paint for `path` right now: what this tab still
+    holds, or — on the first mount of a new document — what the previous one
+    persisted, validated against the size the catalog reports (#1821). */
+function readTailCache(path: string, cap: number, fileSize: number | null = null): TailSnapshot | null {
+  const cached = tailCache.get(path) ?? restoreTailSnapshot(path, fileSize);
   if (!cached) return null;
   tailCache.delete(path);
   const bounded = boundedSnapshot(cached, cap);
@@ -64,7 +60,11 @@ function readTailCache(path: string, cap: number): TailSnapshot | null {
 
 function writeTailCache(path: string, snapshot: TailSnapshot): void {
   tailCache.delete(path);
-  tailCache.set(path, boundedSnapshot(snapshot, TAIL_CACHE_LINES));
+  const bounded = boundedSnapshot(snapshot, TAIL_CACHE_LINES);
+  tailCache.set(path, bounded);
+  /* Throttled inside the store: the tail moves on every poll tick, and the
+     moments that must not be lost — the page hidden or going away — flush. */
+  persistTailSnapshot(path, bounded);
   while (tailCache.size > TAIL_CACHE_PATHS) {
     const oldest = tailCache.keys().next().value as string | undefined;
     if (!oldest) break;
@@ -108,7 +108,7 @@ interface TailView {
 }
 
 function viewFor(file: FileEntry | null, cap: number): TailView {
-  const cached = file ? readTailCache(file.path, cap) : null;
+  const cached = file ? readTailCache(file.path, cap, file.size ?? null) : null;
   return {
     path: file?.path ?? null,
     win: cached?.win ?? { lines: [], start: 0 },
@@ -198,7 +198,10 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
   };
 
   const clear = useCallback(() => {
-    if (path) tailCache.delete(path);
+    if (path) {
+      tailCache.delete(path);
+      forgetTailSnapshot(path);
+    }
     updateWin(path, { lines: [], start: 0 });
     resetWindow(path);
   }, [path]);
@@ -209,7 +212,7 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
        transport state — offset, history start, decoder partial — is re-seated
        here from the same snapshot, so the live subscription continues forward
        from where the cached window ends instead of re-reading it. */
-    const cached = path ? readTailCache(path, capRef.current) : null;
+    const cached = path ? readTailCache(path, capRef.current, file?.size ?? null) : null;
     winRef.current = cached?.win ?? { lines: [], start: 0 };
     offsetRef.current = cached?.offset ?? 0;
     startRef.current = cached?.historyStart ?? 0;
