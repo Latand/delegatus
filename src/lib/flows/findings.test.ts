@@ -5,7 +5,9 @@ import path from "node:path";
 
 import type { FileEntry } from "@/lib/types";
 
-import { fallbackReviewFromTranscript, lastAssistantMessage, parseFindings } from "./findings";
+import { fallbackReviewFromTranscript } from "@/lib/reviewHistory/findings";
+import { lastAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
+import { parseFindings } from "@/lib/review/findings";
 import type { Round } from "./types";
 
 const FIXTURE = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
