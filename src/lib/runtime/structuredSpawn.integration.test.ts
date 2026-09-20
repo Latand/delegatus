@@ -5671,7 +5671,7 @@ test("issue 1071: a stage retry supersedes its queued predecessor even though it
 });
 
 
-test.each([false, true])("a recreated controller recovers durable identity without its continuation closure (uncertain acknowledgement: %s)", async (uncertainAcknowledgement) => {
+test.each(["healthy", "uncertain acknowledgement", "payload timeout"] as const)("a recreated controller recovers durable identity without its continuation closure (%s)", async (fault) => {
   const id = crypto.randomUUID();
   const cwd = path.join(sandbox, `durable-staged-${id}`);
   fs.mkdirSync(cwd, { recursive: true });
@@ -5685,6 +5685,7 @@ test.each([false, true])("a recreated controller recovers durable identity witho
   const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", accountId: "work" });
   if (begun.kind !== "created") throw new Error("fixture reservation failed");
   let starts = 0;
+  const stages = spyOn(registry, "stageStructuredSpawn");
   const response = await spawnStructuredConversation({
     engine: "codex", receipt: begun.receipt, registry, client, prompt: "recover this original first message",
     spec: { engine: "codex", command: "codex", cwd, windowName: "recovery" },
@@ -5712,20 +5713,35 @@ test.each([false, true])("a recreated controller recovers durable identity witho
   await bindStructuredDeliveryQueue([ { key, host } ], { registry: reopened, client });
   const { recoverStagedStructuredLaunch } = await import("./structuredSpawn");
   const originalCommand = client.command.bind(client);
-  if (uncertainAcknowledgement) {
+  if (fault === "uncertain acknowledgement") {
     client.command = async (command) => {
       const accepted = await originalCommand(command);
       if (command.kind === "send") throw new RuntimeHostUnavailableError("runtime host request timed out");
       return accepted;
     };
   }
-  await recoverStagedStructuredLaunch(begun.receipt.launchId, reopened, client);
+  if (fault === "payload timeout") {
+    const readPayload = client.effectBatch.bind(client);
+    let reads = 0;
+    client.effectBatch = async (...args) => {
+      if (reads++ === 0) throw new RuntimeHostUnavailableError("runtime host request timed out");
+      return readPayload(...args);
+    };
+    await recoverStagedStructuredLaunch(begun.receipt.launchId, reopened, client);
+    expect(host.sent).toEqual([]);
+    expect(stagedLaunchRecovery(reopened.snapshot().receipts[begun.receipt.launchId])?.phase).toBe("unpublished");
+    client.effectBatch = readPayload;
+  }
+  const firstRecovery = stagedLaunchRecovery(reopened.snapshot().receipts[begun.receipt.launchId])!;
+  await recoverStagedStructuredLaunch(begun.receipt.launchId, reopened, client, { now: () => firstRecovery.nextTryAt });
   await kickStructuredDeliveryQueue();
   await waitFor(() => host.sent.length === 1);
   const recovery = stagedLaunchRecovery(reopened.snapshot().receipts[begun.receipt.launchId])!;
   await recoverStagedStructuredLaunch(begun.receipt.launchId, reopened, client, { now: () => recovery.nextTryAt });
   expect(reopened.snapshot().receipts[begun.receipt.launchId]).toMatchObject({ state: "completed", key });
   expect(starts).toBe(1);
+  expect(stages).toHaveBeenCalledTimes(1);
+  expect(Object.keys(reopened.snapshot().receipts)).toEqual([begun.receipt.launchId]);
   expect(host.sent.map((entry) => entry.id)).toEqual([`spawn_message_${begun.receipt.launchId}`]);
   expect(host.sent[0]?.text).toBe("recover this original first message");
   await bindStructuredDeliveryQueue([]);

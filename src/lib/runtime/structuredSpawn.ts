@@ -1777,14 +1777,16 @@ export async function recoverStagedStructuredLaunch(
       if (continuation) await continuation.publish();
       else await publishStructuredDeliveryHost({ key: receipt.key, host: host as SpawnedStructuredHost }, async () => Boolean(current()));
       if (!current() || (continuation && !await continuation.owns())) return read();
-      // Commit uncertainty BEFORE dispatch. A crash here may conservatively
-      // park an unsent launch; it can never authorize a second first message.
-      recovery = { ...recovery, phase: "uncertain" };
-      writeStagedRecovery(registry, launchId, recovery);
       if (continuation) {
+        // Persist uncertainty immediately before dispatch. A crash at this
+        // boundary must never authorize a second first message.
+        recovery = { ...recovery, phase: "uncertain" };
+        writeStagedRecovery(registry, launchId, recovery);
         const outcome = await continuation.deliver();
-        if (outcome !== "held" && current()) {
-          recovery = { ...recovery, phase: "delivered", reason: "first message delivered; transcript publication pending" };
+        if (current()) {
+          recovery = outcome === "held"
+            ? { ...recovery, phase: "unpublished", reason: "first message held before dispatch" }
+            : { ...recovery, phase: "delivered", reason: "first message delivered; transcript publication pending" };
           writeStagedRecovery(registry, launchId, recovery);
         }
       } else {
@@ -1794,6 +1796,10 @@ export async function recoverStagedStructuredLaunch(
         if (typeof effect.prompt !== "string" || images === null) return stop("original launch payload is invalid");
         if (!current()) return read();
         const origin = spawnMessageOrigin(receipt, registry);
+        // Payload lookup and validation cannot publish a message. Keep their
+        // failures retryable; uncertainty starts only at the dispatch boundary.
+        recovery = { ...recovery, phase: "uncertain" };
+        writeStagedRecovery(registry, launchId, recovery);
         const result = await enqueueStructuredMessage({ path: receipt.artifactPath, conversationId: receipt.conversationId,
           clientMessageId: `spawn_${launchId}`, operationId: `spawn_message_${launchId}`, text: effect.prompt, imageRefs: images,
           ...(origin ? { origin } : {}),
@@ -1804,7 +1810,7 @@ export async function recoverStagedStructuredLaunch(
           if (result?.status === 503) throw Object.assign(new Error(reason), { status: 503 });
           throw new Error(reason);
         }
-        if (result.outcome === "held") {
+        if (result.outcome === "held" && current()) {
           writeStagedRecovery(registry, launchId, { ...recovery, phase: "unpublished", reason: "first message held before dispatch" });
         }
       }

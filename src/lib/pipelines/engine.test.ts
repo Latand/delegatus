@@ -10859,7 +10859,7 @@ test("a COMMENT review flow routes only on findings the review itself reported (
 });
 
 
-async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" | "uncertain" | "turn-started" | "absent" | "permanent" = "timeout") {
+async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" | "uncertain" | "turn-started" | "absent" | "permanent" | "held" = "timeout") {
   const h = harness();
   let clock = Date.now();
   h.ports.now = () => new Date(clock).toISOString();
@@ -10877,7 +10877,8 @@ async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" 
   const sessionId = crypto.randomUUID();
   let starts = 0;
   let messages = 0;
-  let failures = ["timeout", "reset", "busy", "503"].includes(mode) ? 2 : 0;
+  let failures = ["timeout", "reset", "busy", "503", "held"].includes(mode) ? 2 : 0;
+  let holds = mode === "held" ? 1 : 0;
   let statusFailures = 0;
   const lookups: string[] = [];
   const operations = new Map<string, import("@/lib/runtime/contracts").RuntimeOperationResult>();
@@ -10936,6 +10937,7 @@ async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" 
       },
       publishHost: async () => { await client.producerCursor("codex-app-server", "test:"); return async () => {}; },
       deliverFirst: async () => {
+        if (holds-- > 0) return "held";
         messages++;
         if (mode !== "absent") record(`spawn_message_${launchId}`, begun.receipt.conversationId, mode === "turn-started" ? "turn-started" : "delivered");
         if (mode === "absent") throw new RuntimeHostUnavailableError("runtime host request timed out");
@@ -11103,4 +11105,106 @@ test("generic startup recovery cannot dispatch a pipeline launch without attempt
   expect(f.lookups).toEqual([]);
   expect(f.messages()).toBe(0);
   expect(f.starts()).toBe(1);
+});
+
+
+test("a held first-message continuation retries the original staged launch on healthy wakes", async () => {
+  const f = await stagedRecoveryHarness("held");
+  await tickPipelines([], f.h.ports);
+  await f.wake(); // Second publication timeout.
+  await f.wake(); // Publication succeeds; delivery is held before dispatch.
+  expect(f.messages()).toBe(0);
+  const { stagedLaunchRecovery } = await import("@/lib/runtime/structuredSpawn");
+  expect(stagedLaunchRecovery(f.registry.readOnlySnapshot().receipts[f.launchId()])?.phase).toBe("unpublished");
+  for (let i = 0; i < 3; i++) await f.wake();
+  expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("completed");
+  expect(f.attempt()).toMatchObject({ n: 1, launchId: f.launchId(), state: "running", spawnCalls: 1 });
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.starts()).toBe(1);
+  expect(f.messages()).toBe(1);
+});
+
+test.each([false, true])("restart after receipt completion clears only the recovery wait (unrelated park: %s)", async (unrelatedPark) => {
+  const f = await stagedRecoveryHarness();
+  await tickPipelines([], f.h.ports);
+  f.h.ports.recoverStagedLaunch = async () => {};
+  f.advance(10_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempt().controllerWait).toBeDefined();
+  // Finish the durable receipt without applying the observation under the
+  // pipeline lease: the old controller stops at precisely that boundary.
+  for (let i = 0; i < 3; i++) {
+    f.advance(61_000);
+    await f.recover(f.launchId(), () => true);
+  }
+  expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("completed");
+  expect(f.attempt().state).toBe("spawning");
+  expect(loadPipelines()[0]!.stateDetail).toContain("waiting for the runtime host");
+  if (unrelatedPark) {
+    const pipelines = loadPipelines();
+    pipelines[0]!.state = "needs_decision";
+    pipelines[0]!.stateDetail = "manual review required for changed requirements";
+    savePipelines(pipelines);
+  }
+  const modulePath = "./engine?completed-receipt-controller-restart";
+  const restarted = await import(modulePath) as typeof engineModule;
+  f.h.ports.spawnAgent = async () => { throw new Error("completed receipt must never spawn again"); };
+  await restarted.tickPipelines([], { ...f.h.ports });
+  expect(f.attempt()).toMatchObject({ n: 1, launchId: f.launchId(), state: unrelatedPark ? "spawning" : "running", spawnCalls: 1 });
+  if (unrelatedPark) {
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "manual review required for changed requirements" });
+    expect(f.attempt().controllerWait).toBeDefined();
+  } else {
+    expect(f.attempt().controllerWait).toBeUndefined();
+    expect(loadPipelines()[0]!.stateDetail).toBeNull();
+  }
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.starts()).toBe(1);
+  expect(f.messages()).toBe(1);
+});
+
+
+test.each(["before probe", "during probe"] as const)("staged recovery preserves an unrelated park %s", async (boundary) => {
+  const f = await stagedRecoveryHarness();
+  await tickPipelines([], f.h.ports);
+  const parkForReview = () => {
+    const pipelines = loadPipelines();
+    pipelines[0]!.state = "needs_decision";
+    pipelines[0]!.stateDetail = "manual review required for changed requirements";
+    pipelines[0]!.runs[0]!.attempts[0]!.error = "manual review required for changed requirements";
+    savePipelines(pipelines);
+  };
+  if (boundary === "before probe") parkForReview();
+  else {
+    const pipelines = loadPipelines();
+    pipelines[0]!.state = "needs_decision";
+    pipelines[0]!.stateDetail = HOST_UNAVAILABLE;
+    pipelines[0]!.runs[0]!.attempts[0]!.error = HOST_UNAVAILABLE;
+    savePipelines(pipelines);
+    const read = f.client.operationStatus.bind(f.client);
+    f.client.operationStatus = async (id) => { parkForReview(); return read(id); };
+  }
+  await f.wake();
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "manual review required for changed requirements" });
+  expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("path-pending");
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.messages()).toBe(0);
+  if (boundary === "before probe") expect(f.lookups).toEqual([]);
+});
+
+
+test.each(["timeout", "uncertain"] as const)("a staged launch parked for runtime unavailability recovers its original attempt (%s)", async (mode) => {
+  const f = await stagedRecoveryHarness(mode);
+  await tickPipelines([], f.h.ports);
+  const pipelines = loadPipelines();
+  pipelines[0]!.state = "needs_decision";
+  pipelines[0]!.stateDetail = HOST_UNAVAILABLE;
+  pipelines[0]!.runs[0]!.attempts[0]!.state = "needs_decision";
+  pipelines[0]!.runs[0]!.attempts[0]!.error = HOST_UNAVAILABLE;
+  savePipelines(pipelines);
+  for (let i = 0; i < 3; i++) await f.wake();
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
+  expect(f.attempt()).toMatchObject({ n: 1, launchId: f.launchId(), state: "running", spawnCalls: 1 });
+  expect(f.stages).toHaveBeenCalledTimes(1);
+  expect(f.messages()).toBe(1);
 });
