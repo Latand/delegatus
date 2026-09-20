@@ -1,6 +1,6 @@
 "use client";
 
-import { ListPlus, MessageSquarePlus } from "lucide-react";
+import { ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
@@ -21,7 +21,8 @@ import { isPlacedTask } from "@/components/scheme/taskGeometry";
 import { updateTask } from "@/components/tasks/taskApi";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
-import { useOrchestratorSeat, type OrchestratorSeatRead } from "@/components/orchestrator/useOrchestratorSeat";
+import { useKanbanSeat } from "./kanbanSeatStore";
+import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
 import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
@@ -76,6 +77,15 @@ export function kanbanLayoutMode(width: number): KanbanLayoutMode {
   if (width >= 1200) return "narrow";
   if (width >= 768) return "scroll";
   return "tabs";
+}
+
+/** The columns' mode beside a seat docked at the side (#1841). The seat is the
+    operator's choice, so it never costs them the columns: where the board
+    alone would still show them, what the seat leaves scrolls rather than
+    folding into tabs. */
+export function kanbanLayoutModeBeside(width: number, seatWidth: number): KanbanLayoutMode {
+  const mode = kanbanLayoutMode(width - seatWidth);
+  return mode === "tabs" && seatWidth > 0 && kanbanLayoutMode(width) !== "tabs" ? "scroll" : mode;
 }
 
 /**
@@ -136,7 +146,7 @@ export interface KanbanBoardProps {
   aside?: ReactNode;
   /** The orchestrator seat above the columns (#1695 K3), given the id of the
       board region its skip link lands on. */
-  seat?: (boardId: string, seatRead: OrchestratorSeatRead | null) => ReactNode;
+  seat?: (boardId: string) => ReactNode;
   /** A conversation or task the Viewer was asked to open while this board
       shows: its card is revealed, and a conversation opens as a reader. */
   focus?: string | null;
@@ -164,11 +174,13 @@ export interface KanbanBoardProps {
   closedPaths?: readonly string[];
   /** Restore a closed conversation to the board. */
   onRestoreConversation?: (file: FileEntry) => void;
-  /** The project's checkout, for the orchestrator seat read. */
+  /** The project's checkout, carried into the seat the board draws. */
   projectCwd?: string;
-  /** The project's seat as a caller already knows it; read from the seat
-      route when absent. */
-  seatRefs?: SeatRefs | null;
+  /** The project's seat as its owner read it: every conversation the seat
+      record names, or null while that is unknown. Required, because the board
+      does not read the seat itself — the page that owns the Tasks panel does
+      (#1841), and a second reader here would poll the same route twice. */
+  seatRefs: SeatRefs | null;
   mutationPorts?: TaskMutationPorts;
   assignmentPorts?: AssignmentPorts;
   /** Where open readers are remembered; this browser's storage by default. */
@@ -389,25 +401,42 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
   }, [allTasks, edits]);
   const { bands, projection } = useBands({ ...props, allTasks: effectiveTasks });
-  /* The seat as its route reports it, active and pending. While it is unknown
-     the board guesses nothing: the × stays, and the server decides. This is
-     the page's one read of the seat: the orchestrator panel above the columns
-     is handed the same read and polls nothing of its own. */
-  const seatRead = useOrchestratorSeat(props.seatRefs === undefined ? project : null, props.projectCwd);
-  const seatKey = props.seatRefs !== undefined
-    ? (props.seatRefs ? JSON.stringify(props.seatRefs) : "")
-    : (seatRead.status ? JSON.stringify([seatRead.status.seat, seatRead.status.pending].map((seat) => [seat?.conversationId ?? null, seat?.path ?? null])) : "");
-  const seatRefs = useMemo<SeatRefs | null>(() => {
-    if (props.seatRefs !== undefined) return props.seatRefs;
-    const status = seatRead.status;
-    if (!status) return null;
-    const seats = [status.seat, status.pending];
-    return {
-      conversationIds: seats.flatMap((seat) => (seat?.conversationId ? [seat.conversationId] : [])),
-      paths: seats.flatMap((seat) => (seat?.path ? [seat.path] : [])),
+  /* Every conversation the project's seat record names leaves the bands
+     (#1841), as the page that read it reports them. Null is «not known yet»:
+     the board hides nothing on a guess, and a failed read arrives here as the
+     current seat alone, so work never disappears behind a record nobody could
+     read. Re-keyed by what the seat names, so a fresh answer with the same
+     content does not rebuild the model. */
+  const seatKey = props.seatRefs ? JSON.stringify(props.seatRefs) : "";
+  const seatRefs = useMemo<SeatRefs | null>(
+    () => (seatKey ? (JSON.parse(seatKey) as SeatRefs) : null),
+    [seatKey],
+  );
+  /* The orchestrator seat sits above the columns or, docked at the side,
+     between the rail and them (#1841): one choice per browser. */
+  const seatFrame = useKanbanSeat(project);
+  const wideColumns = useKanbanWide();
+  const workInAssignedRef = useRef(wideColumns.workInAssigned);
+  workInAssignedRef.current = wideColumns.workInAssigned;
+  /* A wide shelf gives the space back when the operator goes back to work in
+     Assigned: a pointer down or a focus landing on a card there. Reading,
+     scrolling or opening a card inside the wide column never narrows it. */
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onWork = (event: Event) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('.column[data-status="assigned"] .card')) workInAssignedRef.current();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by what the seat names
-  }, [seatKey]);
+    root.addEventListener("pointerdown", onWork, true);
+    root.addEventListener("focusin", onWork);
+    return () => {
+      root.removeEventListener("pointerdown", onWork, true);
+      root.removeEventListener("focusin", onWork);
+    };
+  }, []);
+  const seatView = props.seat ? props.seat(boardId) : null;
+  const seatSide = Boolean(seatView) && seatFrame.placement === "side";
   /* The model's own clock moves in 15 s steps: it only phrases ages and
      waits, and a per-second clock would rebuild every card each tick. */
   const modelNow = Math.floor(props.now / 15) * 15;
@@ -603,11 +632,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useLayoutEffect(() => {
     const element = rootRef.current;
     if (!element) return;
-    /* The bar spans the board and its aside; the columns' mode follows what the aside leaves them. */
+    /* The bar spans the board, its aside and a seat docked at the side; the
+       columns' mode follows what those leave them (#1841). */
     const aside = asideRef.current;
+    const seat = seatSide ? element.querySelector<HTMLElement>(".kb-body > .seat") : null;
     const apply = () => {
       const barWidth = element.getBoundingClientRect().width;
-      setMode(kanbanLayoutMode(barWidth - (aside?.getBoundingClientRect().width ?? 0)));
+      setMode(kanbanLayoutModeBeside(barWidth - (aside?.getBoundingClientRect().width ?? 0), seat?.getBoundingClientRect().width ?? 0));
       setBarWide(barWidth >= BAR_WIDE_MIN);
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
     };
@@ -616,8 +647,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const observer = new ResizeObserver(apply);
     observer.observe(element);
     if (aside) observer.observe(aside);
+    if (seat) observer.observe(seat);
     return () => observer.disconnect();
-  }, [hasAside]);
+  }, [hasAside, seatSide]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
   const flash = useCallback((cardId: string) => {
@@ -1460,6 +1492,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
      board answers reaches behind it. */
   const sheetOpen = useRef(false);
   sheetOpen.current = sheet !== null;
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = menu.open !== null;
+  const seatToggleRef = useRef<(() => void) | null>(null);
+  seatToggleRef.current = seatView ? seatFrame.toggle : null;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -1478,6 +1514,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
         event.preventDefault();
         event.stopPropagation();
         if (!sheetOpen.current) rootRef.current?.querySelector<HTMLInputElement>("[data-kanban-search]")?.focus();
+      } else if (event.key === "o" || event.key === "O") {
+        /* `O` collapses and expands the orchestrator seat (#1841), in either
+           placement, unless a sheet, a menu or a popover holds the keys. */
+        if (!seatToggleRef.current || sheetOpen.current || menuOpenRef.current) return;
+        if (!inBoard && target !== document.body) return;
+        if (target?.closest("[role='dialog'], [role='menu']")) return;
+        event.preventDefault();
+        seatToggleRef.current();
       } else if (event.key === "u" || event.key === "U") {
         if (sheetOpen.current) return;
         if (!inBoard && target !== document.body) return;
@@ -2028,8 +2072,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (card.drafts.length && card.status !== "assigned" && !collapsed.has(card.id)) readingStatuses.add(card.status);
   }
   if (composingTask) readingStatuses.add("inbox");
-  const readingStyle = (mode === "wide" || mode === "narrow") && readingStatuses.size
-    ? ({ "--c-assigned": "minmax(440px, 1fr)", ...Object.fromEntries([...readingStatuses].map((status) => [`--c-${status}`, "minmax(420px, 460px)"])) } as CSSProperties)
+  /* One column holds the wide share (#1841): Assigned, or the shelf the
+     operator widened. Tabs already show one column at full width, and the
+     cross-project Overview keeps its fixed shares and reads no pin. */
+  const widthControls = mode !== "tabs" && !props.overview;
+  const wideShelf = widthControls ? wideColumns.wide : null;
+  const gridMode = mode === "wide" || mode === "narrow";
+  const shelfShare = mode === "narrow" ? "220px" : "minmax(232px, var(--shelf-w))";
+  const workShare = mode === "narrow" ? "minmax(440px, 1fr)" : "minmax(var(--work-min), 1fr)";
+  const readingStyle = gridMode && (readingStatuses.size || wideShelf)
+    ? ({
+      ...(readingStatuses.size ? { "--c-assigned": "minmax(440px, 1fr)", ...Object.fromEntries([...readingStatuses].map((status) => [`--c-${status}`, "minmax(420px, 460px)"])) } : {}),
+      ...(wideShelf ? { "--c-assigned": shelfShare, [`--c-${wideShelf}`]: workShare } : {}),
+    } as CSSProperties)
     : undefined;
 
   /* ── K9a: + Task, + Agent and the drafts cards hold ─────────────────── */
@@ -2088,6 +2143,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       incomingEdits={incomingEdits}
       onHideIdle={() => hideIdle(status)}
       reading={readingStatuses.has(status)}
+      widths={widthControls ? { state: wideColumns, wide: wideShelf } : null}
       readerKeysByCard={readerKeysByCard}
       panelsByCard={panelsByCard}
       actingByCard={actingByCard}
@@ -2254,9 +2310,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
         </header>
       )}
 
-      <div className="kb-body">
+      <div className={`kb-body${seatSide ? " seat-side" : ""}`}>
+      {seatSide && seatView}
       <div className="kb-page">
-      {props.seat ? props.seat(boardId, props.seatRefs === undefined ? seatRead : null) : null}
+      {seatSide ? null : seatView}
       <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")}>
       {!loaded ? (
         <div className="board-loading" role="status">{t("kanban.loading")}</div>
@@ -2397,8 +2454,11 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
+  /** Which column holds the wide share and the controls that move it (#1841);
+      null where every column is already full width. */
+  widths: { state: KanbanWideState; wide: TaskStatus | null } | null;
   /** `+ Task`'s inline card, drawn first in Inbox. */
   newTask: ReactNode;
   editing: ReadonlyMap<string, { field: EditField; draft: string }>;
@@ -2451,9 +2511,14 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   const idle = shown.slice(split);
   const unlinked = status === "inbox" ? model.unlinkedShown : [];
   const empty = shown.length === 0 && unlinked.length === 0 && !newTask;
+  /* This column holds the wide share, or gave it to a widened shelf. */
+  const isWide = widths ? (widths.wide ? widths.wide === status : status === "assigned") : false;
+  const gaveShare = widths !== null && widths.wide !== null && status === "assigned";
+  const label = statusLabel(t, status);
   return (
     <section
-      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}`}
+      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}${widths?.wide && isWide ? " wide" : ""}${gaveShare ? " shelf" : ""}`}
+      data-wide={widths ? (isWide ? "1" : "0") : undefined}
       data-status={status}
       id={`kb-col-${status}`}
       aria-labelledby={`kb-h-${status}`}
@@ -2465,6 +2530,32 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
         {column.working ? <span className="live num">{t("kanban.columnWorking", { count: column.working })}</span> : null}
         {column.needsYou ? <span className="needs num">{t("kanban.columnNeeds", { count: column.needsYou })}</span> : null}
         <span className="spacer" />
+        {widths && widths.wide === status ? (
+          <button
+            type="button"
+            className="icon-btn col-pin"
+            aria-pressed={widths.state.pinned === status}
+            aria-label={t(widths.state.pinned === status ? "kanban.columnUnpin" : "kanban.columnPin")}
+            title={t(widths.state.pinned === status ? "kanban.columnUnpin" : "kanban.columnPin")}
+            data-col-pin={status}
+            onClick={widths.state.togglePin}
+          >
+            <Pin aria-hidden />
+          </button>
+        ) : null}
+        {widths && !(status === "assigned" && widths.wide === null) ? (
+          <button
+            type="button"
+            className="icon-btn col-width"
+            aria-label={isWide ? t("kanban.columnNarrow") : t("kanban.columnWiden", { column: label })}
+            title={isWide ? t("kanban.columnNarrow") : t("kanban.columnWiden", { column: label })}
+            data-col-width={status}
+            data-col-width-action={isWide ? "narrow" : "widen"}
+            onClick={() => (isWide ? widths.state.narrow() : widths.state.widen(status))}
+          >
+            {isWide ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
+          </button>
+        ) : null}
         <button
           type="button"
           className="icon-btn"

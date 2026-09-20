@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,9 +11,11 @@ import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAutho
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import {
   beginOrchestratorSeatIntent,
+  completeOrchestratorSeatIntent,
   failOrchestratorSeatIntent,
   orchestratorSeatFor,
 } from "@/lib/orchestrator/seats";
+import * as taskStore from "@/lib/tasks/store";
 
 import { POST as rotatePost } from "../rotate/route";
 import { GET as seatGet, POST as seatPost } from "./route";
@@ -139,4 +141,106 @@ test("the seat read reports the Viewer MCP definition resolved for the project c
   }));
   const registered = await seatGet(new NextRequest(`http://127.0.0.1/api/orchestrator/seat?project=proj-a&cwd=${encodeURIComponent(project)}`));
   expect(await registered.json()).toMatchObject({ viewerMcpRegistered: true });
+});
+
+/* #1841 — the Overview spans every project and names none, so it reads the
+   seat conversations alone; the per-project read carries the same set, so a
+   dashboard whose Tasks panel is in its «all» scope needs no second request. */
+test("the seat read answers the cross-project seat conversations, with a project and without one (#1841)", async () => {
+  const seat = (project: string, n: number, path: string, now: string) => {
+    const clientRequestId = `req_${project}_0000${n}`;
+    beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId, mode: "spawn", now });
+    completeOrchestratorSeatIntent({ project, clientRequestId, conversationId: `conversation_${project}_${n}`, path, engine: "claude", now });
+  };
+  seat("proj-a", 1, "/seats/a1.jsonl", "2026-09-18T14:02:00.000Z");
+  seat("proj-a", 2, "/seats/a2.jsonl", "2026-09-19T03:10:00.000Z");
+  seat("proj-b", 1, "/seats/b1.jsonl", "2026-09-19T04:00:00.000Z");
+
+  const expected = {
+    conversationIds: expect.arrayContaining(["conversation_proj-a_2", "conversation_proj-b_1"]),
+    paths: expect.arrayContaining(["/seats/a2.jsonl", "/seats/b1.jsonl"]),
+    previous: { conversationIds: ["conversation_proj-a_1"], paths: ["/seats/a1.jsonl"] },
+  };
+
+  const scoped = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-a"));
+  expect(scoped.status).toBe(200);
+  const scopedBody = await scoped.json() as { all: unknown; seat: { conversationId: string } | null };
+  expect(scopedBody.all).toMatchObject(expected);
+  /* The project's own answer is unchanged by carrying it. */
+  expect(scopedBody.seat?.conversationId).toBe("conversation_proj-a_2");
+
+  const everywhere = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?scope=all"));
+  expect(everywhere.status).toBe(200);
+  expect(await everywhere.json()).toEqual({ all: expected });
+});
+
+/*
+ * #1841 — the status read is a POLL, and every surface in the tab shares it:
+ * what it costs per tick is part of the answer. The record is ONE document, so
+ * the whole answer comes out of one parse of it, and the task store — the
+ * larger read — is touched once, only when there is a seat to find notes for.
+ */
+test("the status read parses the seat record once, and reads the task store once (#1841)", async () => {
+  const seatsRead = (paths: readonly string[]) => paths.filter((each) => each.endsWith("orchestrator-seats.json")).length;
+  const reads = async (run: () => unknown): Promise<string[]> => {
+    const paths: string[] = [];
+    const real = fs.readFileSync;
+    (fs as unknown as { readFileSync: unknown }).readFileSync = ((target: never, ...rest: never[]) => {
+      paths.push(String(target));
+      return (real as unknown as (...args: never[]) => never)(target, ...rest);
+    }) as never;
+    try {
+      await run();
+    } finally {
+      (fs as unknown as { readFileSync: unknown }).readFileSync = real;
+    }
+    return paths;
+  };
+
+  /* A seated project with a retired predecessor: every branch of the answer —
+     the seat, the previous seats, their notes tasks, the cross-project set. */
+  const seat = (n: number, conversationPath: string, now: string) => {
+    const clientRequestId = `req_reads_0000${n}`;
+    beginOrchestratorSeatIntent({ project: "proj-a", mandate: "own the board", clientRequestId, mode: "spawn", now });
+    completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId, conversationId: `conversation_reads_${n}`, path: conversationPath, engine: "claude", now });
+  };
+  seat(1, "/seats/r1.jsonl", "2026-09-18T14:02:00.000Z");
+  seat(2, "/seats/r2.jsonl", "2026-09-19T03:10:00.000Z");
+
+  /* The task store is counted by CALLS: the store caches its collection, so how
+     much FILE work one read of it costs depends on what ran before, while how
+     many times the route asks for it does not. */
+  const store = spyOn(taskStore, "loadTasks");
+  try {
+    let status = 0;
+    const answer = await reads(async () => { status = (await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-a"))).status; });
+    expect(status).toBe(200);
+    /* One parse of the record for the seat, the previous seats and the
+       cross-project set; one read of the store for their notes. */
+    expect(seatsRead(answer)).toBe(1);
+    expect(store.mock.calls.length).toBe(1);
+
+    /* The cross-project scope reads the record once too, and asks the task
+       store for nothing: it answers with conversations, not notes. */
+    store.mockClear();
+    const everywhere = await reads(() => seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?scope=all")));
+    expect(seatsRead(everywhere)).toBe(1);
+    expect(store.mock.calls.length).toBe(0);
+
+    /* And a project with no seat and nothing retired reads the record once and
+       the store not at all. */
+    store.mockClear();
+    const vacant = await reads(() => seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-vacant")));
+    expect(seatsRead(vacant)).toBe(1);
+    expect(store.mock.calls.length).toBe(0);
+  } finally {
+    store.mockRestore();
+  }
+});
+
+/* A project is still required of the read that answers about one. */
+test("the seat read still refuses a request that names neither a project nor the cross-project scope", async () => {
+  const answer = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat"));
+  expect(answer.status).toBe(400);
+  expect(await answer.json()).toMatchObject({ error: "project is required" });
 });

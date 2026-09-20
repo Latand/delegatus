@@ -16,6 +16,7 @@ import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 const PROJECT = "atlas";
+const queueRecovery = new URLSearchParams(location.search).has("queue-recovery");
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
 /* A real close spends seconds stopping the lane's hosts before it answers. */
@@ -122,6 +123,10 @@ const files: FileEntry[] = [
     model: "fable-5-1", effort: "high",
     ...reviewerLineage,
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
+    ...(queueRecovery ? {
+      activity: "idle", lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 20) * 1_000 },
+      authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(20), terminalKind: "completed" },
+    } : {}),
   }),
   ...Array.from({ length: 30 }, (_, i) => conversation(
     `/repo/done-${i}.jsonl`,
@@ -223,9 +228,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       schemaVersion: 1, snapshotSeq: 1, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
       sessions: [{
         conversationId: "conversation_running", sessionKey: { engine: "claude", sessionId: "running-session" }, hostKind: "claude-broker", host: "hosted",
-        turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: ACCOUNT,
+        turn: queueRecovery ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: ACCOUNT,
         parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: RUNNING_PATH,
-        capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
+        capabilities: { steer: false, structuredAttention: true }, activeTurnId: queueRecovery ? null : "turn-1", pendingReconfigure: null,
       }],
       attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
     });
@@ -247,7 +252,22 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const limit = Number(url.searchParams.get("limit") ?? 20);
     return json({ items: catalog.slice(offset, offset + limit), total: 4_595, nextCursor: offset + limit < catalog.length ? String(offset + limit) : null });
   }
-  if (url.pathname === "/api/orchestrator/seat") return json({ seat: null, pending: null, exists: true });
+  if (url.pathname === "/api/orchestrator/seat") {
+    // A lost optional read must never strand the composer's local wire fence.
+    if (queueRecovery) return new Promise<Response>(() => {});
+    return json({ seat: null, pending: null, exists: true });
+  }
+  if (queueRecovery && url.pathname === "/api/runtime/send") {
+    const body = JSON.parse(String(init?.body));
+    const sends = JSON.parse(sessionStorage.getItem("evidence-queue-sends") ?? "[]");
+    sends.push(body);
+    sessionStorage.setItem("evidence-queue-sends", JSON.stringify(sends));
+    return json({ receipt: {
+      operationId: `operation-queue-recovery-${sends.length}`, idempotencyKey: body.idempotencyKey,
+      conversationId: body.conversationId, kind: "send", status: "delivered",
+      text: body.text, at: new Date().toISOString(), revision: 1,
+    } });
+  }
   /* The feed's poll transport (the fixture has no log stream). */
   if (url.pathname === "/api/logs" && method === "POST") {
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };

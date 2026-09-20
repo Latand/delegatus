@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 
+import { retiredSeatPaths } from "@/components/orchestrator/seatState";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -452,4 +453,34 @@ test("the now-fragment is the agent's own current step, and only a working row s
   const model = buildMobileBoard({ files: [plan, entry({ path: "/p/done.jsonl", plan: { steps: [], done: 5, total: 5, current: "Old step", updatedAt: null } })], pipelines: [], project: PROJECT, now: NOW });
   expect(model.working[0]!.now).toBe("Rebuild the status projection");
   expect(model.recent[0]!.now).toBeNull();
+});
+
+/*
+ * A seat the project retired is listed by the seat sheet and drawn as no row
+ * (#1841). The phone keeps it out by path, so it depends on the paths the seat
+ * answer and the scan between them can name — and a revocation's stored path
+ * goes stale on its own: the identity wave rekeys the seats and not the
+ * revocations, and a conversation that moves accounts keeps its id while its
+ * transcript path changes.
+ */
+test("a retired seat whose stored path is stale is still no row on the phone board (#1841)", () => {
+  const product = entry({ path: "/p/product.jsonl", conversationId: "conversation_worker" });
+  /* The scan knows the retired seat under its NEW path; the revocation still
+     names the old one. */
+  const retired = entry({ path: "/p/seat-moved.jsonl", conversationId: "conversation_retired", title: "Manager seat, release week" });
+  const previous = [{ conversationId: "conversation_retired", path: "/p/seat-was-here.jsonl" }];
+
+  const paths = retiredSeatPaths(previous, [product, retired]);
+  expect([...paths].sort()).toEqual(["/p/seat-moved.jsonl", "/p/seat-was-here.jsonl"]);
+
+  const model = buildMobileBoard({ files: [product, retired], pipelines: [], project: PROJECT, hidden: new Set(paths), now: NOW });
+  const rows = [model.needsYou.flatMap((item) => (item.kind === "pipeline" ? [] : [item.path])), model.working.map((row) => row.path), model.recent.map((row) => row.path), model.recentRest.map((row) => row.path)].flat();
+  expect(rows).toEqual(["/p/product.jsonl"]);
+
+  /* Nothing is hidden on a read that answered nothing. */
+  expect(retiredSeatPaths([], [product, retired])).toEqual([]);
+  /* A retired seat the scan cannot name at all still hides its stored path. */
+  expect(retiredSeatPaths([{ conversationId: "conversation_gone", path: "/p/gone.jsonl" }], [product])).toEqual(["/p/gone.jsonl"]);
+  /* And one whose revocation carries no path is named by its conversation. */
+  expect(retiredSeatPaths([{ conversationId: "conversation_retired", path: null }], [product, retired])).toEqual(["/p/seat-moved.jsonl"]);
 });

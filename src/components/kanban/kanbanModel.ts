@@ -2,7 +2,7 @@ import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import { groupHideState, seatAssignment, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
+import { groupHideState, isSeatConversation, seatAssignment, seatOnlyTask, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
 import { TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
@@ -23,7 +23,8 @@ import { pastAttempts, stageViews, type PastAttempt, type StageView } from "./pi
  * conversation sits on the same card on either board.
  *
  * Completeness is the contract. Every stored task of the project is either a
- * card in exactly one column or an off-board task counted in the header; no
+ * card in exactly one column, an off-board task counted in the header, or a
+ * seat task (#1841) the seat panel lists instead of the board; no
  * constant slices the list, and every count is taken before search narrows it.
  * A member the scheme window elided is still counted from its durable
  * assignment or attempt row, so a card never under-reports its conversations.
@@ -143,6 +144,9 @@ export interface KanbanModel {
   unlinkedShown: KanbanCard[];
   /** Tasks the board draws no card for: empty tasks taken off the board. */
   offBoard: BoardTask[];
+  /** Tasks that exist only for the orchestrator seat (#1841): the seat panel
+      lists them, and no column, counter or tray does. */
+  seatTasks: BoardTask[];
   /** Task groups the operator or an agent hid, newest hide first. Each is a
       whole card, counted here and never in a column. */
   hiddenGroups: KanbanCard[];
@@ -175,7 +179,8 @@ export interface KanbanModelInput {
       The Overview passes `cardHasLiveWork` (#1820). */
   cardFilter?: (card: KanbanCard) => boolean;
   /** The project's orchestrator seat as the board last read it; null or absent
-      while it is unknown. */
+      while it is unknown. With its `previous` seats, every conversation the
+      seat record names leaves the bands (#1841). */
   seat?: SeatRefs | null;
   query?: string;
   /** Epoch seconds. */
@@ -371,12 +376,15 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const workflowByTask = new Map(projection.tasks.map((workflow) => [workflow.task.id, workflow] as const));
   const bandTitle = new Map(bands.map((band) => [band.id, band.title] as const));
 
-  const cards: KanbanCard[] = bands.map((band) => {
+  /* Seat conversations draw no tile (#1841): the seat panel is their home. */
+  const seatFile = (file: FileEntry) => isSeatConversation(input.seat, file);
+  const seatTasks: BoardTask[] = [];
+  const cards: KanbanCard[] = bands.flatMap((band): KanbanCard[] => {
     const task = band.task;
     const members = band.members
-      .filter((member) => member.kind === "node" && member.file)
+      .filter((member) => member.kind === "node" && member.file && !seatFile(member.file))
       .map((member) => memberOf(member.key, member.file!, stageByPath, now));
-    const mirrors = band.mirrors.map((mirror) => ({
+    const mirrors = band.mirrors.filter((mirror) => !seatFile(mirror.file)).map((mirror) => ({
       key: mirror.key,
       file: mirror.file,
       primaryCardId: mirror.primaryBandId,
@@ -403,6 +411,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     for (const mirror of mirrors) identities.add(conversationIdentity(mirror.file));
     const countReference = (reference: { kind: string; conversationId: string | null; path: string | null; file: FileEntry | null }) => {
       if (reference.kind === "planned") return;
+      if (isSeatConversation(input.seat, reference.file ?? reference)) return;
       const identity = referenceIdentity(reference);
       if (!identity || identities.has(identity)) return;
       identities.add(identity);
@@ -442,7 +451,18 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       : Math.max(parseMs(band.createdAt), ...members.map((member) => member.file.mtime * 1000));
     const otherSurfaces = band.members.filter((member) => member.kind === "deck" || member.kind === "stack").length;
     const drafts = band.members.flatMap((member) => (member.kind === "draft" ? [member.key.slice("draft::".length)] : []));
-    return {
+    /* A task that holds nothing but seat conversations draws nothing at all:
+       no card, no count, no share of working. */
+    if (task && !members.length && !mirrors.length && !summaries.length && !otherSurfaces && !drafts.length && seatOnlyTask(task, input.seat, pipelines)) {
+      seatTasks.push(task);
+      return [];
+    }
+    /* A band no task owns that carried only seat conversations (a seat
+       drawn as its own lineage root) is gone with them. */
+    const heldSeat = band.members.some((member) => member.kind === "node" && member.file && seatFile(member.file))
+      || band.mirrors.some((mirror) => seatFile(mirror.file));
+    if (!task && heldSeat && !members.length && !mirrors.length && !summaries.length && !otherSurfaces && !drafts.length && !band.flow) return [];
+    return [{
       id: band.id,
       /* One project's board answers `project` for every card alike; the
          cross-project Overview needs each card's own. A recorded task names
@@ -484,7 +504,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       past: pastAttempts(summaries.map((summary) => summary.pipeline), flowsById),
       hide,
       holdsSeat,
-    };
+    }];
   });
 
   /* Search and the Overview's predicate narrow the same way and in the same
@@ -509,16 +529,26 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   })) as Record<TaskStatus, KanbanColumn>;
 
   const carded = new Set([...recorded, ...hiddenGroups].map((card) => card.task!.id));
-  const offBoard = tasks.filter((task) => !carded.has(task.id));
+  const seatOnly = new Set(seatTasks.map((task) => task.id));
+  /* A seat task with no band this render (the scheme window did not carry
+     it) is still the seat's, never an off-board task. */
+  for (const task of tasks) {
+    if (!carded.has(task.id) && !seatOnly.has(task.id) && seatOnlyTask(task, input.seat, pipelines)) {
+      seatOnly.add(task.id);
+      seatTasks.push(task);
+    }
+  }
+  const offBoard = tasks.filter((task) => !carded.has(task.id) && !seatOnly.has(task.id));
   return {
     columns,
     unlinked,
     unlinkedShown: unlinked.filter((card) => keeps(card)),
     offBoard,
+    seatTasks,
     hiddenGroups,
     resurfaced,
     totals: {
-      tasks: tasks.length,
+      tasks: tasks.length - seatOnly.size,
       onBoard: recorded.length,
       /* Agents of a hidden group keep working, and the header says so; a
          decision the operator hid is not counted as waiting on them. */
