@@ -3,7 +3,7 @@ import fs from "node:fs";
 import type { DeliveredMessageOccurrence } from "@/lib/runtime/messageOrigin";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 
-import { relayClientMessageId } from "./engine";
+import { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
 import { relayPrompt } from "./prompts";
 import { loadFlows } from "./store";
 import type { Flow } from "./types";
