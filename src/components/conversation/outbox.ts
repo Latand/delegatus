@@ -1450,9 +1450,17 @@ function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly Outb
       retiredEchoId: entry.retiredEchoId,
       launchOwned: entry.launchOwned,
     })),
-    // Text-only echoes cannot identify an unresolved original operation.
-    // Its receipt or causally bound assistant turn must settle it first.
-    ...queue.filter((entry) => !entry.deliveryUncertain).map((entry) => ({
+    /* Every live submission owns echoes, INCLUDING one whose acknowledgement
+       was lost. Excluding those was how a message with an unknown outcome got
+       a second visible copy of itself: the transcript's own record of it could
+       not be bound to the row the operator already had, so the feed mounted
+       the canonical row beside the spinning one (round-4 P1).
+
+       Nothing about identity is relaxed to do it. An echo is claimed by the
+       submission watermark, one echo per owner, in submission order, so two
+       submissions of the same text still own two different records and
+       identical text alone never merges them. */
+    ...queue.map((entry) => ({
       type: "queue" as const,
       id: entry.id,
       at: entry.at,
@@ -1733,10 +1741,6 @@ export function visibleOutbox(
        which for a role launch is the scaffold-plus-draft carried on `echoText`,
        not the raw draft it displays (issue #615). */
     const key = echoKey(entry.echoText ?? entry.text);
-    if (entry.deliveryUncertain && entry.responseStartedAt === undefined && entry.adoptedAt === undefined) {
-      visible.push(entry);
-      continue;
-    }
     if (entry.retiredEchoId) {
       const floor = Math.max(entry.echoBaseline ?? 0, consumed.get(key) ?? 0);
       consumed.set(key, floor + 1);
@@ -1749,6 +1753,16 @@ export function visibleOutbox(
     const floor = Math.max(entry.echoBaseline ?? 0, consumed.get(key) ?? 0);
     if (total > floor) {
       consumed.set(key, floor + 1);
+      continue;
+    }
+    /* An outcome nobody could establish keeps its row until something can
+       establish it. The transcript's own record is that something, and it is
+       read ABOVE this line: the engine journaled the message, which is what
+       the lost acknowledgement failed to tell us. Without such a record the
+       row stays — unknown is neither delivered nor lost — whatever the local
+       state the failed request left behind says. */
+    if (entry.deliveryUncertain && entry.responseStartedAt === undefined && entry.adoptedAt === undefined) {
+      visible.push(entry);
       continue;
     }
     if (entry.adoptedAt !== undefined) continue;

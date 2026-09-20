@@ -104,7 +104,12 @@ export function ConversationMessageRow({
   session = null,
   actions,
 }: {
-  /** The local record of the submission, while one is still unresolved. */
+  /**
+   * The local record of the submission. Present while the delivery is still
+   * unresolved, and STILL present beside a canonical record, because it is the
+   * only thing that knows what the submission carried — the attachment caption
+   * is read from it in both states so the row's geometry never changes.
+   */
   entry: OutboxEntry | null;
   canonical?: CanonicalMessage | null;
   t: TFunction;
@@ -259,20 +264,10 @@ export function ConversationMessageRow({
             {t("outbox.action.checkStatus")}
           </button>
         ) : null}
-        {/* The journal's own retry of the ADMITTED operation: it starts the
-            next attempt from the recorded request, so every original byte
-            travels under the original identity. Never a second message. */}
-        {actions?.onRetryOperation && row.operationRetry ? (
-          <button
-            type="button"
-            data-outbox-operation-retry={entry.id}
-            data-receipt-uncertain-retry
-            onClick={() => actions.onRetryOperation!(entry)}
-            className={`${ROW_ACTION} hover:text-accent`}
-          >
-            {t("runtime.receipt.retry")}
-          </button>
-        ) : null}
+        {/* No replay lives here. The journal's own next attempt of an admitted
+            operation is offered where it is authorized — as the ONE primary
+            action of a failure the server proved safe, above — and an outcome
+            nobody has established authorizes none at all (round-4 P2). */}
         {/* Ending the operation is the operator's decision that this message
             must not arrive. Only ever offered for one the server admitted. */}
         {actions?.onDiscard && row.discardable ? (
@@ -303,11 +298,16 @@ export function ConversationMessageRow({
     <UserMessageRow
       text={text}
       selectedContext={selectedContext}
-      bubbleFooter={attachments && !canonical ? (
-        /* What the submission actually carried. A file-only bubble used to
-           render blank here, because the count came from the images alone
-           (#1224). The transcript's own record carries its attachments as
-           their own rows, so the count retires with the local entry. */
+      bubbleFooter={attachments ? (
+        /* What the submission actually carried, in ONE presentation from the
+           moment it was staged to long after its record arrived. A file-only
+           bubble used to render blank here, because the count came from the
+           images alone (#1224); it then used to VANISH the instant the
+           transcript adopted the row, shrinking an attachment-bearing message
+           by 19 px on the phone at the one moment the slice promises nothing
+           moves (round-4 P2). It is a caption about the submission, not a
+           second copy of the attachment: the transcript still carries the
+           image itself as its own row below. */
         <span className="mt-1 block text-caption font-semibold text-muted">
           {t(entry!.files ? "composer.attachmentsCount" : "composer.imagesCount", { count: attachments })}
         </span>
@@ -320,7 +320,12 @@ export function ConversationMessageRow({
         </>
       ) : null}
       rowAttributes={{
-        ...(entry ? { "data-outbox-entry": entry.id, "data-outbox-state": entry.state } : {}),
+        /* The delivery attributes belong to a row that is still speaking for a
+           local submission. An adopted row keeps its entry — for the
+           attachment caption above — but it is the transcript's record now,
+           and publishing a queue state on it would say a settled message is
+           still in flight. */
+        ...(entry && row ? { "data-outbox-entry": entry.id, "data-outbox-state": entry.state } : {}),
         "data-message-row": row?.phase ?? "confirmed",
         ...(row?.wait ? { "data-outbox-wait": row.wait } : {}),
       }}

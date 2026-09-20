@@ -386,7 +386,10 @@ export type LifecycleScenario =
   | "queued-behind-turn"
   | "held-for-host"
   | "lost-acknowledgement"
-  | "safe-failure";
+  | "safe-failure"
+  /* The send that carries more than words. The transport behaves like an
+     ordinary admitted send; what the scenario exercises is the row. */
+  | "attachment-and-context";
 
 /** What the fake host does with the next admission, and what it has published. */
 interface FakeHost {
@@ -478,6 +481,17 @@ const LIFE_OPENING = JSON.stringify({
   timestamp: "2026-09-19T09:14:00.000Z",
   payload: { type: "agent_message", message: "The release branch is green again. Anything else you want me to look at?" },
 });
+
+/* Where the agent's own copy of a pasted image lands. The transcript carries
+   that path inside the message it journals, and the feed renders it as the
+   conversation's own attachment card — which is what makes the caption on the
+   bubble a caption rather than a second copy of the picture. Repo-neutral by
+   construction: nothing here names anyone's home. */
+const LIFE_INBOX_IMAGE = "/var/tmp/llv-evidence-home/.claude/viewer-inbox/stack-trace.png";
+
+/* The bytes behind that path are a browser resource load, not a `fetch`, so
+   the fake transport below cannot serve them: the driver routes `/api/inbox`
+   in the page itself. */
 
 /* Monotonic: the production projection refuses a receipt that does not
    advance the journal's own revision, so a fake host that reuses one publishes
@@ -589,10 +603,18 @@ function lifecycleControls(): LifecycleControls {
       announceHost();
     },
     echo: () => {
+      const entry = readOutbox(LIFE_CARD)[0];
+      /* The engine journals the message WITH the attachment it received, as
+         the path its own copy was written to. The parser lifts that path out
+         into the conversation's own attachment card and leaves the message
+         text exactly as it was — which is why the row still recognises the
+         record as its own, and why the caption on the bubble and the card
+         below it are two different things rather than one thing twice. */
+      const carried = (entry?.images ?? 0) > 0 ? `\n${LIFE_INBOX_IMAGE}` : "";
       fakeHost.lines = [LIFE_OPENING, JSON.stringify({
         type: "event_msg",
         timestamp: new Date().toISOString(),
-        payload: { type: "user_message", message: readOutbox(LIFE_CARD)[0]?.text ?? LIFE_TEXT },
+        payload: { type: "user_message", message: `${entry?.text ?? LIFE_TEXT}${carried}` },
       })];
       announceHost();
     },

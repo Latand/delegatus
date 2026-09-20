@@ -369,9 +369,17 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
   const sibling = { ...original, operationId: "independent-operation", idempotencyKey: "independent-key", at: "2026-09-05T08:01:00.000Z" };
   let receipts: RuntimeReceipt[] = [original, sibling, { ...original, revision: 3, status: "delivering" }];
   const calls: { url: string; method?: string; body?: string }[] = [];
+  const lookups: string[] = [];
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url === "/api/tmux/targets") return Response.json({ targets: {} });
+    /* The row's one recovery is a READ under its own original key. Here the
+       record still cannot say what happened, so the row must stay exactly as
+       it is — and ask again later. */
+    if (url.startsWith("/api/runtime/send?")) {
+      lookups.push(url);
+      return Response.json({ outcome: "unknown" });
+    }
     if (init?.method === "POST" || init?.method === "DELETE") {
       calls.push({ url, method: init.method, body: init.body as string });
       const current = receipts.find(receipt => url.endsWith(receipt.operationId))!;
@@ -402,12 +410,16 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
   let mounted = await renderInto(surface());
   const check = async (ids: string[]) => {
     await openRowEvidence(mounted.host);
-    const controls = [...mounted.host.querySelectorAll("[data-operation]:has([data-receipt-uncertain-retry])")];
+    /* One evidence block per unresolved operation, named by that operation,
+       and the lookup under the row's own key is the whole of what it offers:
+       a delivery nobody has established authorizes no second attempt and no
+       decision about its fate (round-4 P2). */
+    const controls = [...mounted.host.querySelectorAll("[data-operation]:has([data-outbox-check])")];
     expect(controls.map(node => node.getAttribute("data-operation")).sort()).toEqual([...ids].sort());
     for (const control of controls) {
       expect(control.textContent).toMatch(/outcome is unknown/i);
-      expect(control.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
-      expect(control.querySelector("[data-receipt-discard]")?.textContent).toBe("Discard");
+      expect(control.querySelector("[data-outbox-check]")?.textContent).toBe(translate("en", "outbox.action.checkStatus"));
+      expect(control.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-operation-retry], [data-outbox-discard]")).toBeNull();
     }
     for (const bubble of mounted.host.querySelectorAll('[data-outbox-wait="uncertain"]')) {
       expect(bubble.querySelectorAll("[data-outbox-retry], [data-outbox-cancel]")).toHaveLength(0);
@@ -418,41 +430,66 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
   try {
     await check([original.operationId, sibling.operationId]);
     for (const receipt of [original, sibling]) {
-      await settle(() => mounted.host.querySelector<HTMLButtonElement>(`[data-operation="${receipt.operationId}"] [data-receipt-uncertain-retry]`)!.click());
+      await settle(() => mounted.host.querySelector<HTMLButtonElement>(`[data-operation="${receipt.operationId}"] [data-outbox-check]`)!.click());
     }
-    expect(calls).toEqual([original, sibling].map(receipt => ({ url: `/api/runtime/operations/${receipt.operationId}`, method: "POST", body: JSON.stringify({ action: "retry-uncertain" }) })));
+    /* Each row asked about ITS own submission, under the key it is filed
+       under, and nothing was posted anywhere. */
+    expect(lookups).toEqual([original, sibling].map(receipt =>
+      `/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${receipt.idempotencyKey}`));
+    expect(calls).toEqual([]);
     receipts = [{ ...sibling, revision: 6, status: terminal === "delivered" ? "delivered" : "failed", resend: "not-needed", reason: terminal === "discarded" ? "delivery-discarded" : undefined }, original, { ...original, revision: 2, status: "pending" }];
     seq++;
     await act(async () => { await bus.refresh(); await new Promise(resolve => setTimeout(resolve, 30)); });
     expect(bus.getState().store.sessions[file.conversationId!]?.recentReceipts[0]?.revision).toBe(6);
     await settle(() => {});
     await check([original.operationId]);
-    if (text && terminal === "delivered") {
-      await settle(() => publishTranscriptEchoes(file.conversationId!, [{ id: "independent-native-echo", text }]));
-      expect(visibleOutbox(readOutbox(file.conversationId!), new Map([[text, 1]]), Date.now()).some(entry => entry.id === original.idempotencyKey)).toBe(true);
-    }
     await act(async () => mounted.root.unmount());
     resetOutboxForTests();
     mounted = await renderInto(surface());
     await check([original.operationId]);
-    await settle(() => mounted.host.querySelector<HTMLButtonElement>(`[data-operation="${original.operationId}"] [data-receipt-discard]`)!.click());
-    expect(calls[2]).toEqual({ url: `/api/runtime/operations/${original.operationId}`, method: "DELETE", body: undefined });
-    expect(mounted.host.querySelectorAll("[data-receipt-uncertain-retry], [data-receipt-discard]")).toHaveLength(0);
+    /* The producer settles the last unknown by itself; the row never had to
+       ask for a second attempt to get there. */
+    receipts = [{ ...original, revision: 9, status: "delivered", resend: "not-needed" }, ...receipts.slice(1)];
     seq++;
     await act(async () => { await bus.refresh(); await new Promise(resolve => setTimeout(resolve, 30)); });
-    expect(mounted.host.querySelectorAll("[data-receipt-uncertain-retry], [data-receipt-discard]")).toHaveLength(0);
-    expect(calls).toHaveLength(3);
+    await settle(() => {});
+    await openRowEvidence(mounted.host);
+    expect(mounted.host.querySelectorAll("[data-operation]:has([data-outbox-check]), [data-receipt-uncertain-retry], [data-receipt-discard]")).toHaveLength(0);
+    /* Nothing in this whole life of two unknown deliveries posted anything:
+       every recovery was a read under an original key. */
+    expect(calls).toEqual([]);
+    expect(lookups).toHaveLength(2);
+    if (text) {
+      /* And the transcript's own record of the message belongs to the
+         submission that owns it — by watermark, in submission order — even
+         when that submission's acknowledgement was lost (round-4 P1). Exactly
+         one of the two identical texts is answered for: identical text alone
+         never merges two submissions, and the one that is answered for keeps
+         its payload and its own local record of an unknown fate. */
+      await settle(() => publishTranscriptEchoes(file.conversationId!, [{ id: "independent-native-echo", text }]));
+      const visible = visibleOutbox(readOutbox(file.conversationId!), new Map([[text, 1]]), Date.now()).map(entry => entry.id);
+      expect(visible).not.toContain(original.idempotencyKey);
+      expect(readOutbox(file.conversationId!).find(entry => entry.id === original.idempotencyKey)).toMatchObject({ text });
+      expect(readOutbox(file.conversationId!).find(entry => entry.id === sibling.idempotencyKey)?.retiredEchoId).toBeUndefined();
+    }
   } finally { await act(async () => mounted.root.unmount()); bus.stop(); }
 });
 
 test("uncertainty survives reload, conversation switches, and late errors; actions use the original operation", async () => {
   const calls: { url: string; method?: string; body?: string }[] = [];
   let actionReceipt = { ...captured, revision: 5 };
+  /* What the record says when the row asks about its original key. It cannot
+     settle anything until the operator presses the lookup below. */
+  let lookupAnswer: unknown = { outcome: "unknown" };
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url.includes("/api/runtime/operations/")) {
       calls.push({ url, method: init?.method, body: init?.body as string });
       return new Response(JSON.stringify({ receipt: actionReceipt }), { status: 200 });
+    }
+    if (url.startsWith("/api/runtime/send?")) {
+      calls.push({ url, method: init?.method, body: init?.body as string });
+      return Response.json(lookupAnswer);
     }
     if (init?.method === "POST" && (url === "/api/runtime/send" || url === "/api/tmux")) calls.push({ url, method: init.method, body: init.body as string });
     return new Response("{}", { status: 404 });
@@ -484,26 +521,29 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
       expect(mounted.host.querySelector("[data-outbox-retry]")).toBeNull();
     }
     await openRowEvidence(mounted.host);
-    const retry = mounted.host.querySelector<HTMLButtonElement>("[data-receipt-uncertain-retry]")!;
-    expect(retry).not.toBeNull();
-    actionReceipt = { ...captured, revision: 20 };
-    await settle(() => retry.click());
-    expect(calls).toEqual([{ url: `/api/runtime/operations/${captured.operationId}`, method: "POST", body: JSON.stringify({ action: "retry-uncertain" }) }]);
-    actionReceipt = runtimeReceiptForSend({ operationId: captured.operationId,
-      clientMessageId: captured.idempotencyKey, conversationId: captured.conversationId,
-      kind: "send", state: "failed", reason: "delivery-discarded", resend: "not-needed",
-      acceptedAt: captured.admittedAt, settledAt: captured.at } as SendReceipt);
-    await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-receipt-discard]")!.click());
+    /* The whole offer on an unknown row: ask about the ORIGINAL key. Nothing
+       may start another attempt of a delivery that may already be in the
+       engine, and nothing may decide the fate of one nobody has established
+       (round-4 P2). */
+    const lookup = mounted.host.querySelector<HTMLButtonElement>("[data-outbox-check]")!;
+    expect(lookup).not.toBeNull();
+    expect(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-operation-retry], [data-outbox-discard]")).toBeNull();
+    lookupAnswer = { outcome: "admitted", operationId: captured.operationId, receipt: runtimeReceiptForSend({
+      operationId: captured.operationId, clientMessageId: captured.idempotencyKey,
+      conversationId: captured.conversationId, kind: "send", state: "failed", reason: "delivery-discarded",
+      resend: "not-needed", acceptedAt: captured.admittedAt, settledAt: captured.at } as SendReceipt) };
+    await settle(() => lookup.click());
+    expect(calls).toEqual([{ url: `/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${captured.idempotencyKey}`, method: undefined, body: undefined }]);
     expect(Boolean(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard]"))).toBe(false);
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.reason).toBe("delivery-discarded");
     await act(async () => mounted.root.unmount());
     resetOutboxForTests();
     mounted = await renderInto(surface());
     expect(Boolean(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard]"))).toBe(false);
-    expect(calls[1]).toEqual({ url: `/api/runtime/operations/${captured.operationId}`, method: "DELETE", body: undefined });
     expect(mounted.host.querySelector("[data-outbox-retry]")).toBeNull();
     await settle(() => retryOutbox(file.conversationId!, captured.idempotencyKey));
-    expect(calls).toHaveLength(2);
+    /* One read, no writes: the row never posted or deleted anything. */
+    expect(calls).toHaveLength(1);
   } finally { await act(async () => mounted.root.unmount()); }
 });
 
@@ -926,10 +966,14 @@ test.each(["delivered", "discarded"])("producer settlement %s survives real jour
   expect(settlement.revision).toBe(1);
   const calls: string[] = [];
   globalThis.fetch = (async (input, init) => {
-    if (String(input) === `/api/runtime/operations/${captured.operationId}`) {
-      calls.push(init?.method ?? "GET");
-      return Response.json({ operationId: captured.operationId, receipt: settlement });
+    /* The row's ONE recovery: the lookup under the original key. It is the
+       only thing an unknown outcome may ask for, and the settlement the
+       producer journaled is what answers it. */
+    if (String(input).startsWith("/api/runtime/send?")) {
+      calls.push("lookup");
+      return Response.json({ outcome: "admitted", operationId: captured.operationId, receipt: settlement });
     }
+    if (String(input) === `/api/runtime/operations/${captured.operationId}`) calls.push(`unexpected:${init?.method ?? "GET"}`);
     if (init?.method === "POST" && ["/api/runtime/send", "/api/tmux"].includes(String(input))) calls.push(`unexpected:${String(input)}`);
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
@@ -940,9 +984,11 @@ test.each(["delivered", "discarded"])("producer settlement %s survives real jour
   snapshotReceipts = Object.values(bus.getState().store.operations);
   let mounted = await renderInto(surface());
   try {
-    const selector = outcome === "discarded" ? "[data-receipt-discard]" : "[data-receipt-uncertain-retry]";
     await openRowEvidence(mounted.host);
-    await settle(() => mounted.host.querySelector<HTMLButtonElement>(selector)!.click());
+    /* Nothing on an unknown row starts another attempt or ends the delivery
+       (round-4 P2): asking under the original key is the whole offer. */
+    expect(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-operation-retry], [data-outbox-discard]")).toBeNull();
+    await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-outbox-check]")!.click());
     const assertSettled = () => {
       expect(readOutbox(file.conversationId!)[0]?.state).toBe(outcome === "delivered" ? "delivered" : "failed");
       expect(readOutbox(file.conversationId!)[0]?.deliveryUncertain).toBeUndefined();
@@ -963,7 +1009,7 @@ test.each(["delivered", "discarded"])("producer settlement %s survives real jour
     resetOutboxForTests();
     mounted = await renderInto(surface());
     assertSettled();
-    expect(calls).toEqual([outcome === "discarded" ? "DELETE" : "POST"]);
+    expect(calls).toEqual(["lookup"]);
   } finally { bus.stop(); await act(async () => mounted.root.unmount()); }
 });
 
@@ -1034,8 +1080,16 @@ test.each([
   expect(settlement.revision).toBe(1);
   expect(original.revision).toBe(4);
   const calls: string[] = [];
+  const lookups: string[] = [];
   const newSends: string[] = [];
   globalThis.fetch = (async (input, init) => {
+    /* A submission this browser has a ROW for settles through the row's one
+       recovery — the lookup under its original key. It is a read: it answers
+       with what the producer journaled and never starts an attempt. */
+    if (String(input).startsWith("/api/runtime/send?")) {
+      lookups.push(String(input));
+      return Response.json({ outcome: "admitted", operationId: original.operationId, receipt: settlement });
+    }
     if (String(input) === `/api/runtime/operations/${original.operationId}`) {
       calls.push(init?.method ?? "GET");
       if (calls.length > 1) throw new Error("Response lost after retry dispatch");
@@ -1068,8 +1122,17 @@ test.each([
   };
   try {
     await openRowEvidence(mounted.host);
-    await settle(() => mounted.host.querySelector<HTMLButtonElement>(outcome === "discarded"
-      ? "[data-receipt-discard]" : "[data-receipt-uncertain-retry]")!.click());
+    if (local) {
+      /* An unknown outcome on a row offers the lookup and nothing else: no
+         second attempt, and no way to end a delivery nobody has established
+         (round-4 P2). */
+      expect(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-operation-retry], [data-outbox-discard]")).toBeNull();
+      await settle(() => mounted.host.querySelector<HTMLButtonElement>("[data-outbox-check]")!.click());
+      expect(lookups).toEqual([`/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${original.idempotencyKey}`]);
+    } else {
+      await settle(() => mounted.host.querySelector<HTMLButtonElement>(outcome === "discarded"
+        ? "[data-receipt-discard]" : "[data-receipt-uncertain-retry]")!.click());
+    }
     assertSettled();
     // An older journal event is rejected by real ingestion, not a mocked hook.
     (listeners.get("runtime") ?? source.onmessage)!({ data: JSON.stringify({ schemaVersion: 1, seq: 2, eventId: "older-recovery-event",
@@ -1127,7 +1190,12 @@ test.each([
       expect(mounted.host.querySelector(stillRecoverable)).not.toBeNull();
       expect(mounted.host.querySelector("[data-outbox-retry]")).toBeNull();
     }
-    expect(calls).toEqual(outcome === "safe" && !newerJournal ? ["POST", "POST"] : [outcome === "discarded" ? "DELETE" : "POST"]);
+    /* A row settles through the lookup, which posts nothing; only the safe
+       replay the row then offers reaches the operation endpoint. A send with
+       no row keeps the composer's notice, and its first action is that POST. */
+    expect(calls).toEqual(local
+      ? (outcome === "safe" && !newerJournal ? ["POST"] : [])
+      : (outcome === "safe" && !newerJournal ? ["POST", "POST"] : [outcome === "discarded" ? "DELETE" : "POST"]));
   } finally { bus.stop(); await act(async () => mounted.root.unmount()); }
 });
 
@@ -1142,12 +1210,18 @@ const deliveredResponse = (body: SendBody, index: number) => ({ status: 200, jso
 const uncertainResponse = (body: SendBody) => ({ status: 503, json: { receipt: { ...captured, idempotencyKey: body.idempotencyKey }, operationId: captured.operationId, error: "recipient evidence unavailable" } });
 const heldResponse = (_body: SendBody, index: number) => ({ status: 202, json: { held: true, operationId: `operation-held-${index}` } });
 
-function capacityWire(sends: SendBody[], respond: (body: SendBody, index: number) => { status: number; json: unknown }, calls: { url: string; method?: string }[] = [], discardReceipt?: () => RuntimeReceipt): void {
+function capacityWire(sends: SendBody[], respond: (body: SendBody, index: number) => { status: number; json: unknown }, calls: { url: string; method?: string }[] = [], discardReceipt?: () => RuntimeReceipt, lookupAnswer?: () => unknown): void {
   globalThis.fetch = (async (input: string | URL | Request, init?: { method?: string; body?: string }) => {
     const url = String(input);
     if (url.includes("/api/runtime/operations/")) {
       calls.push({ url, method: init?.method });
       return Response.json({ operationId: captured.operationId, receipt: discardReceipt!() }, { status: 200 });
+    }
+    /* The read half of the send key: the lookup a message row performs under
+       its ORIGINAL key, which is the one recovery an unknown outcome has. */
+    if (url.startsWith("/api/runtime/send?")) {
+      calls.push({ url, method: init?.method });
+      return Response.json(lookupAnswer!());
     }
     if (url !== "/api/runtime/send") return new Response("{}", { status: 404 });
     const body = JSON.parse(init?.body ?? "{}") as SendBody;
@@ -1172,9 +1246,11 @@ const pasteImage = async (host: HTMLElement, tag: string) => {
 test("issue 1538: delivered history compacts first; an unknown original survives the boundary, remount and recovery, then admission closes", async () => {
   const sends: SendBody[] = [];
   const calls: { url: string; method?: string }[] = [];
+  const journaled = () => runtimeReceiptForSend({ operationId: captured.operationId, clientMessageId: sends[5]!.idempotencyKey,
+    conversationId: captured.conversationId, kind: "send", state: "delivered", reason: null, resend: "not-needed",
+    acceptedAt: captured.admittedAt, settledAt: captured.at, duplicateRisk: false, evidence: "delivery-record" } as SendReceipt);
   capacityWire(sends, (body, index) => index < 5 ? deliveredResponse(body, index) : index === 5 ? uncertainResponse(body) : heldResponse(body, index), calls,
-    () => runtimeReceiptForSend({ operationId: captured.operationId, clientMessageId: sends[5]!.idempotencyKey, conversationId: captured.conversationId,
-      kind: "send", state: "failed", reason: "delivery-discarded", resend: "not-needed", acceptedAt: captured.admittedAt, settledAt: captured.at } as SendReceipt));
+    undefined, () => ({ outcome: "admitted", operationId: captured.operationId, receipt: journaled() }));
   let mounted = await renderInto(surface());
   const submit = async (text: string) => {
     await settle(() => composerControls(mounted.host).type(text));
@@ -1229,20 +1305,25 @@ test("issue 1538: delivered history compacts first; an unknown original survives
     await openRowEvidence(mounted.host);
     const rows = mounted.host.querySelectorAll(`[data-operation="${captured.operationId}"]`);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
+    /* The lookup under the original key, and nothing that could send again or
+       end a delivery whose fate nobody has established (round-4 P2). */
+    expect(rows[0]!.querySelector("[data-outbox-check]")).not.toBeNull();
+    expect(rows[0]!.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-operation-retry], [data-outbox-discard]")).toBeNull();
     expect(rowDelivery(mounted.host, original)).toContain("outcome is unknown");
     expect(mounted.host.querySelector(`[data-outbox-retry="${original}"], [data-outbox-cancel="${original}"]`)).toBeNull();
     expect(sends).toHaveLength(7);
 
-    // Original-operation discard at capacity binds to the original, settles it, and reopens admission.
-    await settle(() => rows[0]!.querySelector<HTMLButtonElement>("[data-receipt-discard]")!.click());
-    expect(calls).toEqual([{ url: `/api/runtime/operations/${captured.operationId}`, method: "DELETE" }]);
-    expect(originalEntry()).toMatchObject({ state: "failed", deliveryUncertain: undefined });
-    expect(originalEntry()?.deliveryReceipt?.reason).toBe("delivery-discarded");
-    await submit("admitted after discard");
+    /* The row's lookup at capacity binds to the original key, settles it from
+       what the producer actually journaled, and reopens admission — without
+       posting anything anywhere. */
+    await settle(() => rows[0]!.querySelector<HTMLButtonElement>("[data-outbox-check]")!.click());
+    expect(calls).toEqual([{ url: `/api/runtime/send?conversationId=${file.conversationId}&clientMessageId=${original}`, method: undefined }]);
+    expect(originalEntry()).toMatchObject({ state: "delivered", deliveryUncertain: undefined });
+    expect(originalEntry()?.deliveryReceipt?.operationId).toBe(captured.operationId);
+    await submit("admitted after the unknown settled");
     expect(mounted.host.querySelector("textarea")?.value).toBe("");
     expect(queue()).toHaveLength(32);
-    expect(queue().at(-1)?.text).toBe("admitted after discard");
+    expect(queue().at(-1)?.text).toBe("admitted after the unknown settled");
     expect(originalEntry()).toBeUndefined();
   } finally { await act(async () => mounted.root.unmount()); }
 });

@@ -92,15 +92,20 @@ export interface MessageRowModel {
    */
   recovery: "check" | null;
   /**
-   * The disclosure may offer the JOURNAL's own next attempt of the admitted
-   * operation. True only while that attempt would mean anything: an operation
-   * exists, its outcome is unresolved or proven failed, and it was not already
-   * delivered or ended by the operator.
+   * The disclosure may offer to END the admitted operation.
+   *
+   * Only ever true for a PROVEN failure that owns an operation. A delivery
+   * whose outcome is unknown authorizes nothing from here (round-4 P2): its
+   * fate is not established, so ending it is not the operator's decision to
+   * make yet and replaying it would be a second engine write for a message
+   * that may already be in the journal. An operation that already arrived, or
+   * that the operator already discarded, is not something left to decide
+   * about either.
+   *
+   * The journal's own next attempt is not a second control beside this one:
+   * where a replay is authorized — a failure the server proved SAFE — it is
+   * the row's ONE primary action, and the disclosure never repeats it.
    */
-  operationRetry: boolean;
-  /** The disclosure may offer to END the admitted operation. Same window: an
-      operation that already arrived, or that the operator already discarded,
-      is not something left to decide about. */
   discardable: boolean;
   /** The message can still be dropped from here without lying about it. */
   cancellable: boolean;
@@ -297,21 +302,31 @@ export function messageRowModel(
     : null;
   const pendingUncertain = phase === "pending" && uncertain;
   /* The window in which the admitted operation is still something to decide
-     about: it exists, it has not arrived, the operator has not already ended
-     it, and nothing simpler already answers for it. A failure the operator can
-     replay from here is answered by its own primary action, so repeating the
-     journal's controls under the disclosure would be the second place to do
-     the same thing — which is the whole defect this slice removes. Both
-     disclosure controls open and close together on this. */
-  const operationActionable = Boolean(messageRowOperationId(entry))
+     about, and it opens only for a PROVEN failure.
+
+     While the outcome is unknown the row offers exactly one thing — the lookup
+     under its original key (see {@link MessageRowModel.recovery}). Nothing
+     else may appear there: the journal's own next attempt re-arms a second
+     engine write for a message that may well have arrived, and ending an
+     operation decides the fate of a delivery nobody has established yet. A
+     replay becomes an offer only once authoritative evidence has settled what
+     happened — a proven failure, where the row's ONE primary action is that
+     replay and the server's `safe` resend is what proved the original did not
+     execute.
+
+     A failure the operator can replay from here is answered by its own primary
+     action, so repeating the journal's controls under the disclosure would be
+     the second place to do the same thing — which is the whole defect this
+     slice removes. `phase === "failed"` is also what makes the entry's own
+     state `failed`, so nothing delivered can reach here. */
+  const operationActionable = phase === "failed"
+    && Boolean(messageRowOperationId(entry))
     && entry.deliveryReceipt?.reason !== "delivery-discarded"
     /* A failure the server proved SAFE is already terminal and already known
        not to have executed: there is nothing left to end, and the row's own
        action is the whole of what can be done about it. */
     && entry.deliveryReceipt?.resend !== "safe"
-    && entry.state !== "delivered"
-    && (pendingUncertain
-      || (phase === "failed" && (failure!.action === "retry-operation" || failure!.action === "check")));
+    && (failure!.action === "retry-operation" || failure!.action === "check");
   return {
     phase,
     status: phase === "failed"
@@ -323,13 +338,6 @@ export function messageRowModel(
     wait: transport.wait,
     failure,
     uncertain: pendingUncertain,
-    /* Never a second copy of the primary action: a failure whose ONE action
-       is already the journal's replay does not offer it again under its own
-       disclosure. The disclosure adds what the row does not show — the raw
-       sentence, and ending the operation. */
-    operationRetry: operationActionable
-      && failure?.action !== "retry-operation"
-      && entry.deliveryReceipt?.status !== "rejected",
     discardable: operationActionable,
     /* Always the query, never the exit: see {@link MessageRowModel.recovery}.
        The key the row is filed under IS the idempotency key, so the query has

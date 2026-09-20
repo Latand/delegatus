@@ -3451,7 +3451,19 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         if (answer.receipt && row) await composerSubmissionPayloads.observe(row.ref, answer.receipt).catch(() => false);
         /* The operation id lands on the entry even when no receipt could be
            settled: it is what proves admission to every later read of this
-           key, and what stops the recovery row from offering a resend. */
+           key, and what stops the recovery row from offering a resend.
+
+           What the lookup FOUND then decides the row, not the bare fact that
+           it answered, so the receipt it came back with is remembered as a
+           validated observation of this operation — the same standing an
+           operation response has, and for the same reason: it IS the record,
+           read now, under the key the row is filed under. Ordinary receipt
+           reconciliation then projects it. Without that standing a stale
+           journal revision outranks the answer and the row goes on spinning
+           over a delivery the producer has already settled — and the row's
+           ONE recovery is this lookup now (round-4 P2), so nothing else would
+           ever settle it. */
+        if (answer.receipt && entry.deliveryReceipt) rememberRuntimeReceipt(answer.receipt, entry.deliveryReceipt);
         updateOutbox(cardId, entry.id, {
           state: "delivering",
           deliveryUncertain: undefined,

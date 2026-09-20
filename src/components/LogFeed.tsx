@@ -925,6 +925,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      that the operator's rows are members of the same list as the transcript's,
      which is what keeps one message on one node. */
   const conversationRows = useMemo<ConversationRow[]>(() => {
+    /* Which submissions the transcript is already answering for in THIS
+       render. The tail below skips them, so one message can never have two
+       rows however the queue is reading at that instant: a canonical row and
+       a tail row would even share the same React key (`msg:<key>`), which is
+       how the lost-acknowledgement case put two bubbles of one message on
+       screen (round-4 P1). The rule is the invariant, not a retirement
+       timing. */
+    const adopted = new Set<string>();
     const rows: ConversationRow[] = visibleItems.map(({ anchorKey, key, item, responseDurationMs }, visibleIndex) => {
       const answer = answerFor(visibleStartIndex + visibleIndex);
       const speakText = answer?.firstIndex === visibleStartIndex + visibleIndex ? answer.text : undefined;
@@ -942,11 +950,18 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            at the moment the record arrives would be the same defect as losing
            the node. */
         const bound = outbox.find((candidate) => candidate.id === rowKey.slice("msg:".length));
+        adopted.add(rowKey.slice("msg:".length));
         return {
           kind: "message",
           key: rowKey,
           anchorKey,
-          entry: null,
+          /* The submission itself travels with its canonical record. The
+             canonical text and reference win wherever both can speak, and the
+             entry answers for what only the submission knows — what it was
+             CARRYING. Dropping it here shrank an attachment-bearing row at the
+             moment its record arrived (round-4 P2), which is the reflow this
+             slice exists to remove. */
+          entry: bound ?? null,
           canonical: {
             text: item.text,
             selectedContext: item.selectedContext
@@ -966,7 +981,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     })) {
       if (section === "launch") rows.push({ kind: "launch", key: "launch" });
       else if (section === "delta") rows.push({ kind: "delta", key: "delta" });
-      else for (const entry of pendingOutbox) rows.push({ kind: "message", key: `msg:${entry.id}`, entry, canonical: null });
+      else for (const entry of pendingOutbox) {
+        if (adopted.has(entry.id)) continue;
+        rows.push({ kind: "message", key: `msg:${entry.id}`, entry, canonical: null });
+      }
     }
     return rows;
     /* `messageRowKey`/`answerFor` are read, not depended on: both are pure
@@ -975,8 +993,15 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   }, [visibleItems, visibleStartIndex, echoBindings, outbox, pendingOutbox, launch, memoryKey,
     visibleLiveTurnItems.length, answerFor, provenanceLookup]);
   /* What this feed is painting, so the composer's receipt stack knows which
-     deliveries already have a row explaining them and stops repeating them. */
-  const renderedRowKeys = pendingOutbox.map((entry) => entry.id).join("\u0000");
+     deliveries already have a row explaining them and stops repeating them.
+     Read off the ROWS rather than off the queue, and including the rows the
+     transcript has adopted: those still carry the submission, and a delivery
+     the operator can see explained on its own message must not also be
+     explained a second time under the composer — which is what would happen
+     to a lost acknowledgement the moment its record arrived. */
+  const renderedRowKeys = conversationRows
+    .flatMap((row) => row.kind === "message" && row.entry ? [row.entry.id] : [])
+    .join("\u0000");
   useEffect(() => {
     if (!memoryKey) return;
     publishRenderedMessageRows(memoryKey, renderedRowKeys ? renderedRowKeys.split("\u0000") : []);

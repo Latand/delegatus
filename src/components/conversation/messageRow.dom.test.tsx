@@ -204,3 +204,131 @@ test("the transcript's own record is adopted into the row, never swapped for it"
   host.remove();
   resetOutboxForTests();
 });
+
+test("an unknown outcome's disclosure offers the lookup and nothing else, across a reload", async () => {
+  /* Round-4 P2: an uncertain receipt that carried an operation id opened the
+     journal's own Retry and a Discard under the affordance, and pressing Retry
+     re-armed another attempt of a message that may already be in the engine.
+     Both identities are exercised — an entry that knows its operation and one
+     that never learned it — because the offer must be the same either way. */
+  /* Its own conversation: `resetOutboxForTests` drops the in-memory queues but
+     sessionStorage keeps what earlier cases persisted, and this case counts the
+     queue itself. */
+  const card = `${CARD}_unknown`;
+  const uncertainReceipt = {
+    operationId: "operation-unknown", idempotencyKey: "key-unknown", conversationId: card,
+    kind: "send", status: "uncertain", resend: "verify-first", reason: "recipient evidence unavailable",
+  } as Entry["deliveryReceipt"];
+  const armed: string[] = [];
+  for (const withOperation of [true, false]) {
+    resetOutboxForTests();
+    /* The composer writes the local row `failed` with the unknown flag when its
+       request dies, and the queue persists exactly that. */
+    enqueueOutbox(card, { id: "key-unknown", text: TEXT, images: 0, at: SUBMITTED_AT });
+    updateOutbox(card, "key-unknown", {
+      state: "failed",
+      deliveryUncertain: true,
+      ...(withOperation ? { operationId: "operation-unknown", deliveryReceipt: uncertainReceipt } : {}),
+    });
+    /* Each pass builds its own host and its own root off the PERSISTED entry,
+       so the second one is a genuine remount with nothing but storage behind
+       it — which is what a reload is, and what the round-3 defect survived. */
+    for (const mount of ["first", "reload"]) {
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      const persisted = readOutbox(card).find((candidate) => candidate.id === "key-unknown")!;
+      await act(async () => root.render(
+        <OutboxBubblesView
+          entries={[persisted]}
+          t={translator("en")}
+          nowMs={SUBMITTED_AT + 120_000}
+          onCancel={() => armed.push("cancel")}
+          onRetry={() => armed.push("retry")}
+          onClear={() => armed.push("clear")}
+          onCheck={() => armed.push("check")}
+          onRetryOperation={() => armed.push("retry-operation")}
+          onDiscard={() => armed.push("discard")}
+          session={{ host: "hosted", turn: "idle" }}
+        />,
+      ));
+      const row = reading(host);
+      expect({ withOperation, mount, phase: row.phase }).toEqual({ withOperation, mount, phase: "pending" });
+      /* Open the evidence: the disclosure is where the controls live. */
+      const affordance = host.querySelector("[data-outbox-progress]") as HTMLElement;
+      expect(affordance).not.toBeNull();
+      await act(async () => { affordance.click(); });
+      const offered = [...host.querySelectorAll("[data-outbox-detail] button")]
+        .map((button) => button.textContent?.trim());
+      expect({ withOperation, mount, offered })
+        .toEqual({ withOperation, mount, offered: [translate("en", "outbox.action.checkStatus")] });
+      /* No control anywhere on the row may start another attempt or end a
+         delivery whose fate nobody has established. */
+      for (const selector of ["[data-outbox-operation-retry]", "[data-outbox-discard]",
+        "[data-outbox-retry]", "[data-outbox-clear]", "[data-outbox-cancel]"]) {
+        expect({ withOperation, mount, selector, found: host.querySelectorAll(selector).length })
+          .toEqual({ withOperation, mount, selector, found: 0 });
+      }
+      /* And the one control there is asks, never sends. */
+      await act(async () => { (host.querySelector("[data-outbox-check]") as HTMLElement).click(); });
+      expect(armed).toEqual(Array.from({ length: armed.length }, () => "check"));
+      await act(async () => root.unmount());
+      host.remove();
+    }
+    /* Nothing the row offered changed the submission: the queue still holds
+       ONE entry, under the original key, with the same unresolved outcome and
+       no fresh dispatch stamp — no second attempt was armed by looking. */
+    const queue = readOutbox(card);
+    expect(queue.map((candidate) => ({
+      id: candidate.id,
+      state: candidate.state,
+      uncertain: candidate.deliveryUncertain ?? false,
+      dispatchedAt: candidate.dispatchedAt ?? null,
+    }))).toEqual([{ id: "key-unknown", state: "failed", uncertain: true, dispatchedAt: null }]);
+  }
+  expect(armed).toEqual(["check", "check", "check", "check"]);
+  resetOutboxForTests();
+});
+
+test("an attachment-bearing message keeps its caption when the transcript adopts it", async () => {
+  /* Round-4 P2: adoption passed `entry: null`, so the «1 image» caption left
+     the bubble at the exact moment the record arrived and the row shrank. The
+     caption is the submission's own fact, and the submission is still the same
+     one, so it travels with the canonical record. */
+  resetOutboxForTests();
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  enqueueOutbox(CARD, { id: "key-attached", text: TEXT, images: 1, at: SUBMITTED_AT });
+  updateOutbox(CARD, "key-attached", { state: "delivering" });
+  const staged = () => readOutbox(CARD).find((candidate) => candidate.id === "key-attached")!;
+  const row = (canonical: { text: string } | null) => (
+    <ConversationMessageRow
+      key="msg:key-attached"
+      entry={staged()}
+      canonical={canonical}
+      t={translator("en")}
+      nowMs={SUBMITTED_AT + 6_000}
+    />
+  );
+  await act(async () => root.render(row(null)));
+  const before = reading(host);
+  const caption = translate("en", "composer.imagesCount", { count: 1 });
+  expect(before.bubbleText).toContain(caption);
+
+  await act(async () => root.render(row({ text: TEXT })));
+  const after = reading(host);
+  expect(after.phase).toBe("confirmed");
+  /* The same node, the same bubble, and the caption still on it: nothing about
+     the row's geometry changed when its record arrived. */
+  expect(after.node).toBe(before.node);
+  expect(after.bubbleClass).toBe(before.bubbleClass);
+  expect(after.bubbleText).toContain(caption);
+  expect(after.bubbleText).toBe(before.bubbleText);
+  expect(after.bubbles).toBe(1);
+  /* An adopted row is the transcript's record: it publishes no queue state. */
+  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+  await act(async () => root.unmount());
+  host.remove();
+  resetOutboxForTests();
+});

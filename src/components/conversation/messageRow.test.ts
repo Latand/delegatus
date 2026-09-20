@@ -124,3 +124,73 @@ test("the transport's own words survive as the row's evidence", () => {
   });
   expect(switched.transport).toBe(translate("en", "outbox.heldForSwitch", { label: "Account B" }));
 });
+
+test("an unknown outcome authorizes nothing, whatever identity it carries", () => {
+  /* The defect this pins (round-4 P2): an uncertain receipt that happened to
+     carry an operation id opened the journal's own retry under the row's
+     disclosure, and clicking it re-armed another attempt of a message that may
+     already be in the engine. The lookup is the whole offer. */
+  const receipt = (extra: Record<string, unknown> = {}) => ({
+    operationId: "operation-unknown",
+    idempotencyKey: "key",
+    conversationId: "conversation_x",
+    kind: "send",
+    status: "uncertain",
+    resend: "verify-first",
+    reason: "recipient evidence unavailable",
+    ...extra,
+  }) as OutboxEntry["deliveryReceipt"];
+  const unknowns: Partial<OutboxEntry>[] = [
+    /* With an operation id on the entry itself. */
+    { state: "delivering", deliveryUncertain: true, operationId: "operation-unknown" },
+    /* With one only on the receipt the stream projected onto it. */
+    { state: "delivering", deliveryUncertain: true, deliveryReceipt: receipt() },
+    /* With both, and the local row written `failed` by a request that died. */
+    { state: "failed", deliveryUncertain: true, operationId: "operation-unknown", deliveryReceipt: receipt() },
+    /* And with neither — the admission whose response never named one. */
+    { state: "delivering", deliveryUncertain: true },
+  ];
+  for (const overrides of unknowns) {
+    for (const locale of ["en", "uk"] as const) {
+      const row = messageRowModel(t(locale), entry(overrides), { nowMs: AT + 90_000 });
+      expect(row.phase).toBe("pending");
+      expect(row.recovery).toBe("check");
+      expect(row.discardable).toBe(false);
+      expect(row.cancellable).toBe(false);
+      expect(row.failure).toBeNull();
+    }
+  }
+});
+
+test("only a proven failure may replay the admitted operation", () => {
+  /* The other side of the same rule: once the outcome IS established, the row
+     offers the journal's own next attempt as its ONE primary action — and the
+     server's `safe` resend is what proved the original never executed. */
+  const safe = messageRowModel(t("en"), entry({
+    state: "failed",
+    originalOperationOnly: true,
+    operationId: "operation-proven",
+    error: "structured host recovery failed after 12 contended attempts: account is busy",
+    deliveryReceipt: {
+      operationId: "operation-proven", idempotencyKey: "key", conversationId: "conversation_x",
+      kind: "send", status: "failed", resend: "safe",
+    } as OutboxEntry["deliveryReceipt"],
+  }), { nowMs: AT + 90_000 });
+  expect(safe.phase).toBe("failed");
+  expect(safe.failure?.action).toBe("retry-operation");
+  /* Never twice: the disclosure does not repeat the row's own action, and a
+     terminal safe failure has nothing left to end. */
+  expect(safe.discardable).toBe(false);
+  /* An unresolved admitted operation behind a proven failure keeps the end-it
+     control, which is a decision about a delivery whose failure IS known. */
+  const unresolved = messageRowModel(t("en"), entry({
+    state: "failed",
+    operationId: "operation-open",
+    error: "account is busy",
+    deliveryReceipt: {
+      operationId: "operation-open", idempotencyKey: "key", conversationId: "conversation_x",
+      kind: "send", status: "failed",
+    } as OutboxEntry["deliveryReceipt"],
+  }), { nowMs: AT + 90_000 });
+  expect(unresolved.discardable).toBe(true);
+});
