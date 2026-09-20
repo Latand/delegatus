@@ -1904,3 +1904,42 @@ test("a JSON-mode registry answers the seat tick's conversation read and decline
   expect(registry.seatTickConversation(["conversation", "0000000000000000"].join("_"))).toBeNull();
   expect(registry.pageSeatChildren(seat.id, null, 20)).toBeNull();
 });
+
+/**
+ * THE NOTE THAT SAYS A HISTORY IS INCOMPLETE IS A PERSISTED ROW.
+ *
+ * `deliveryAdmissionForKey` answers `not-executed` — the one answer that
+ * authorizes a resend — only for a conversation that never dropped a keyed
+ * delivery record. That fact is written down when the drop happens, and it is
+ * worth exactly as much as its persistence: a note the SQLite store does not
+ * carry would come back as `not-executed` on the next Viewer restart, and the
+ * operator's delivered message would be sent a second time by the browser.
+ */
+test("SQLite carries the dropped-evidence note across a restart, so a compacted key stays unknown", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-evidence-note-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const sqlite = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const conversation = sqlite.ensureConversation("codex", "/sessions/sqlite-evidence-note.jsonl", "default");
+  const original = sqlite.holdDelivery(conversation.id, "the message that was delivered", "sqlite-compacted-key");
+  sqlite.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
+  expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "admitted" });
+
+  /* One operation whose fate was never proven, then enough later traffic to
+     push the delivered key past the owner retention bound. */
+  const unverified = sqlite.holdDelivery(conversation.id, "the message whose fate is unknown", "sqlite-unverified-key");
+  sqlite.recordDeliveryOutcome(unverified.id, "failed", "no receipt arrived", "unverified");
+  for (let index = 0; index < 205; index += 1) {
+    const later = sqlite.holdDelivery(conversation.id, `later SQLite message ${index}`, `sqlite-later-${index}`);
+    sqlite.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+  }
+  /* Re-arming the unverified operation clears its terminal state, which puts
+     the retained group back under the bound — so nothing but the note itself
+     can still say this history has a hole in it. */
+  expect(sqlite.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
+  expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
+
+  const restarted = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
+  /* The retained end of the same history still answers from its own row. */
+  expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-later-204")).toMatchObject({ outcome: "admitted" });
+});

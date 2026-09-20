@@ -126,8 +126,9 @@ test("the lookup refuses a malformed key or conversation before reading anything
 
 const artifactPath = "/sessions/33333333-3333-\x34333-8333-333333333333.jsonl";
 
-function conversationRegistry(): { registry: AgentRegistry; conversationId: string } {
-  const registry = new AgentRegistry(path.join(sandbox, `registry-${registryNumber += 1}.json`));
+function conversationRegistry(): { registry: AgentRegistry; conversationId: string; filename: string } {
+  const filename = path.join(sandbox, `registry-${registryNumber += 1}.json`);
+  const registry = new AgentRegistry(filename);
   registry.reconcileConversations([{
     engine: "codex",
     path: artifactPath,
@@ -136,7 +137,7 @@ function conversationRegistry(): { registry: AgentRegistry; conversationId: stri
     turn: { state: "idle", source: "empty", terminalAt: null },
     observedAt: "2026-07-13T00:00:00.000Z",
   }]);
-  return { registry, conversationId: registry.conversationForPath(artifactPath)!.id };
+  return { registry, conversationId: registry.conversationForPath(artifactPath)!.id, filename };
 }
 
 /** The lookup as the route wires it: this registry, and the process's own
@@ -302,7 +303,7 @@ test("a lookup racing an unfinished send under the same key answers `unknown`, a
  * Driven against the real registry and the real retry entry point.
  */
 test("a compacted key stays `unknown` when another operation is re-armed afterwards", async () => {
-  const { registry, conversationId: liveConversationId } = conversationRegistry();
+  const { registry, conversationId: liveConversationId, filename: registryFilename } = conversationRegistry();
   const original = registry.holdDelivery(liveConversationId as never, "the message that was delivered", "rearm-compacted-key", "text", [], null, {});
   registry.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
   /* One operation whose fate was never proven — the kind a later retry re-arms. */
@@ -349,4 +350,11 @@ test("a compacted key stays `unknown` when another operation is re-armed afterwa
      answer: this rule narrows nothing but the histories it cannot see. */
   const fresh = conversationRegistry();
   expect(fresh.registry.deliveryAdmissionForKey(fresh.conversationId, "never-used-key")).toMatchObject({ outcome: "not-executed" });
+
+  /* The answer outlives the process that learned it. A Viewer restart reads
+     the same registry from disk, and a note that did not survive the reload
+     would hand the browser its Retry one deploy later. */
+  const reopened = new AgentRegistry(registryFilename);
+  expect(reopened.deliveryAdmissionForKey(liveConversationId, "rearm-compacted-key")).toMatchObject({ outcome: "unknown" });
+  expect(reopened.deliveryAdmissionForKey(liveConversationId, "rearm-later-204")).toMatchObject({ outcome: "admitted" });
 });
