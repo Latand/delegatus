@@ -1,4 +1,4 @@
-import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
+import type { EffectivePipelineRole, Pipeline, PipelineDecisionAnswer, PipelineStage } from "./types";
 import { pipelineStageSandbox } from "./stageSandbox";
 
 const RELAY_PLACEHOLDER = "{{prev.output}}";
@@ -13,6 +13,17 @@ export function pipelineDeliveryGuidance(pipeline: Pipeline): string[] {
 
 function replaceAll(source: string, token: string, value: string): string {
   return source.split(token).join(value);
+}
+
+/** Persist this input with the new attempt so launch replay is byte-stable. */
+export function renderDecisionInput(previousInput: string | null, decision: PipelineDecisionAnswer): string {
+  return [
+    previousInput ?? "",
+    `Decision continuation for stage ${decision.stageId}, settled attempt ${decision.attempt}:`,
+    "Question / prior result:", decision.question,
+    "Answer:", decision.answer,
+    "Continue the stage using this answer and report its final result.",
+  ].filter(Boolean).join("\n\n");
 }
 
 export function renderStagePrompt(

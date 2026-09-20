@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -453,6 +453,27 @@ describe("MCP tool service", () => {
     restartedStore.close();
   });
 
+  test("slow calls emit one numeric phase line and fast replays stay quiet", async () => {
+    const output = spyOn(console, "error").mockImplementation(() => {});
+    const privateSentinel = "PRIVATE_SLOW_CALL_SENTINEL";
+    const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as unknown as McpToolBindings;
+    bindings.list_tasks = async () => {
+      await Bun.sleep(2_100);
+      return { result: privateSentinel };
+    };
+    const service = createMcpToolService(bindings, new MemoryMcpReceiptStore(), { permit: () => ({ allowed: true }) });
+    try {
+      const args = { clientRequestId: privateSentinel, conversationId: privateSentinel, query: privateSentinel };
+      expect((await service.callTool("list_tasks", args)).ok).toBe(true);
+      expect((await service.callTool("list_tasks", args)).replayed).toBe(true);
+      expect(output).toHaveBeenCalledTimes(1);
+      const line = String(output.mock.calls[0]![0]);
+      expect(line).toMatch(/^\[mcp slow\] tool=list_tasks(?: [a-zA-Z]+Ms=\d+)+$/);
+      for (const phase of ["caller", "claim", "binding", "completion", "serialization", "serviceTotal"]) expect(line).toContain(`${phase}Ms=`);
+      expect(line).not.toContain(privateSentinel);
+    } finally { output.mockRestore(); }
+  });
+
   test("tool timing aggregates expose numeric phases and retain no call data", async () => {
     const timings = new McpToolTimingAggregate();
     const privateSentinel = "PRIVATE_TIMING_SENTINEL";
@@ -693,6 +714,33 @@ describe("MCP tool service", () => {
     expect(bindingCalls).toEqual(["archive", "unarchive"]);
   });
 
+  test("only resolve-decision recovers an interrupted pipeline action receipt", async () => {
+    const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})])) as unknown as McpToolBindings;
+    const bindingCalls: string[] = [];
+    bindings.pipeline_action = async (args) => {
+      bindingCalls.push(String(args.action));
+      return { pipelineId: "pipeline_fixture" };
+    };
+    for (const action of PIPELINE_ACTIONS) {
+      const completed: McpToolResult[] = [];
+      const pendingStore: McpReceiptStore = {
+        claim: () => ({ kind: "pending", unfinishedAgeMs: 4_000 }),
+        complete: (_key, _digest, result) => { completed.push(result); },
+      };
+      const result = await createMcpToolService(bindings, pendingStore).callTool("pipeline_action", {
+        clientRequestId: `interrupted-${action}`, pipelineId: "pipeline_fixture", action,
+      });
+      if (action === "resolve-decision") {
+        expect(result).toMatchObject({ ok: true, pipelineId: "pipeline_fixture" });
+        expect(completed).toEqual([result]);
+      } else {
+        expect(result).toMatchObject({ ok: false, code: "call_interrupted", replayed: true });
+        expect(completed).toEqual([]);
+      }
+    }
+    expect(bindingCalls).toEqual(["resolve-decision"]);
+  });
+
   test("agent_activity keeps a durable receipt: it appends to the same journal lifecycle_events does", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-receipts-"));
     scratch.push(directory);
@@ -879,7 +927,9 @@ describe("MCP tool service", () => {
     const processResult = await childResult(claimant);
 
     expect(settled).toBeTrue();
-    expect(processResult).toEqual({ exit: 0, error: "" });
+    expect(processResult.exit).toBe(0);
+    expect(processResult.error).toMatch(/^\[mcp slow\] tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
+    expect(Number(processResult.error.match(/claimMs=(\d+)/)?.[1])).toBeGreaterThanOrEqual(4_900);
     expect(JSON.parse(fs.readFileSync(resultPath, "utf8"))).toMatchObject({
       outcome: "failed",
       error: "MCP receipt store is busy",
@@ -1242,7 +1292,11 @@ describe("MCP tool service", () => {
         elapsedMs: number;
       });
 
-    expect(claimants).toEqual([{ exit: 0, error: "" }, { exit: 0, error: "" }]);
+    for (const claimant of claimants) {
+      expect(claimant.exit).toBe(0);
+      expect(claimant.error).toMatch(/^\[mcp slow\] tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
+      expect(Number(claimant.error.match(/claimMs=(\d+)/)?.[1])).toBeGreaterThanOrEqual(4_900);
+    }
     for (const result of results) {
       expect(result).toMatchObject({ outcome: "failed", error: "MCP receipt store is busy" });
       expect(result.ticks).toBeGreaterThan(10);
