@@ -358,3 +358,108 @@ test("a compacted key stays `unknown` when another operation is re-armed afterwa
   expect(reopened.deliveryAdmissionForKey(liveConversationId, "rearm-compacted-key")).toMatchObject({ outcome: "unknown" });
   expect(reopened.deliveryAdmissionForKey(liveConversationId, "rearm-later-204")).toMatchObject({ outcome: "admitted" });
 });
+
+/**
+ * AN UPGRADE DOES NOT MAKE AN OLD HISTORY COMPLETE.
+ *
+ * The note above is written when a keyed record is dropped, by the build that
+ * drops it. A registry written before that build existed carries none — its
+ * retention ran, silently, and took whatever it took. Nothing left in the file
+ * can reconstruct that: the first version of this rule read a retained
+ * terminal-owner count at the bound as "compaction happened here", and the
+ * count moves. One retry on an unrelated message — before the upgrade or
+ * after it — puts the group back under the bound, and the delivered key the
+ * file can no longer show is answered `not-executed`, which is the answer that
+ * hands the browser its Retry.
+ *
+ * So completeness is a property a conversation is BORN with. A conversation
+ * created by a build that writes the note proves its own history; a
+ * conversation carried across the upgrade proves nothing, whatever is left in
+ * the file and whatever happens to it afterwards.
+ *
+ * `preUpgradeRegistry` takes a history this build wrote and removes exactly
+ * what this build added to the file — the conversation's birth stamp and the
+ * dropped-evidence notes — which is byte for byte the shape the previous
+ * build's own writer produced.
+ */
+function preUpgradeRegistry(filename: string): void {
+  const payload = JSON.parse(fs.readFileSync(filename, "utf8")) as {
+    conversations: Record<string, Record<string, unknown>>;
+    deliveryEvidenceCompactions?: unknown;
+  };
+  delete payload.deliveryEvidenceCompactions;
+  for (const conversation of Object.values(payload.conversations)) delete conversation.deliveryEvidenceTracked;
+  const stripped = JSON.stringify(payload, null, 2);
+  /* The file must carry nothing this build introduced, or the case is testing
+     its own fix rather than the upgrade. */
+  expect(stripped).not.toContain("deliveryEvidence");
+  fs.writeFileSync(filename, stripped);
+}
+
+/** The compacted history, as the previous build would have left it on disk. */
+function compactedPreUpgradeRegistry(retryBeforeUpgrade: boolean): { filename: string; conversationId: string; unverifiedOperationId: string } {
+  const { registry, conversationId: liveConversationId, filename } = conversationRegistry();
+  const original = registry.holdDelivery(liveConversationId as never, "the message that was delivered", "upgrade-compacted-key", "text", [], null, {});
+  registry.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
+  const unverified = registry.holdDelivery(liveConversationId as never, "the message whose fate is unknown", "upgrade-unverified-key", "text", [], null, {});
+  registry.recordDeliveryOutcome(unverified.id, "failed", "no receipt arrived", "unverified");
+  for (let index = 0; index < 205; index += 1) {
+    const later = registry.holdDelivery(liveConversationId as never, `later message ${index}`, `upgrade-later-${index}`, "text", [], null, {});
+    registry.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+  }
+  if (retryBeforeUpgrade) expect(registry.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
+  preUpgradeRegistry(filename);
+  return { filename, conversationId: liveConversationId, unverifiedOperationId: unverified.command.operationId };
+}
+
+test("a compacted key from a history written before the note stays `unknown`, retried before the upgrade", async () => {
+  const { filename, conversationId: liveConversationId } = compactedPreUpgradeRegistry(true);
+  const upgraded = new AgentRegistry(filename);
+  expect(upgraded.deliveryAdmissionForKey(liveConversationId, "upgrade-compacted-key")).toMatchObject({ outcome: "unknown" });
+
+  const response = await handleRuntimeAdmissionQuery(
+    lookupRequest(`conversationId=${liveConversationId}&clientMessageId=upgrade-compacted-key`),
+    liveDependencies(upgraded),
+  );
+  const body = await response.json() as Record<string, unknown>;
+  expect(body.outcome).toBe("unknown");
+  expect(body.reason).toBeTruthy();
+
+  /* And it stays that way once this build has written the file itself. */
+  const reopened = new AgentRegistry(filename);
+  expect(reopened.deliveryAdmissionForKey(liveConversationId, "upgrade-compacted-key")).toMatchObject({ outcome: "unknown" });
+});
+
+test("a compacted key from a history written before the note stays `unknown`, retried after the upgrade", async () => {
+  const { filename, conversationId: liveConversationId, unverifiedOperationId } = compactedPreUpgradeRegistry(false);
+  const upgraded = new AgentRegistry(filename);
+  expect(upgraded.deliveryAdmissionForKey(liveConversationId, "upgrade-compacted-key")).toMatchObject({ outcome: "unknown" });
+  /* The production retry route's own call, on the retained unverified
+     operation: it drops the terminal count below the bound. */
+  expect(upgraded.retryUncertainDeliveryForOperation(unverifiedOperationId)).toBeTruthy();
+  expect(upgraded.deliveryAdmissionForKey(liveConversationId, "upgrade-compacted-key")).toMatchObject({ outcome: "unknown" });
+
+  const response = await handleRuntimeAdmissionQuery(
+    lookupRequest(`conversationId=${liveConversationId}&clientMessageId=upgrade-compacted-key`),
+    liveDependencies(upgraded),
+  );
+  expect((await response.json() as Record<string, unknown>).outcome).toBe("unknown");
+
+  const reopened = new AgentRegistry(filename);
+  expect(reopened.deliveryAdmissionForKey(liveConversationId, "upgrade-compacted-key")).toMatchObject({ outcome: "unknown" });
+});
+
+/**
+ * The rule narrows the histories it cannot see and nothing else: a
+ * conversation this build created — in the very registry that carried an old
+ * one across the upgrade — still proves non-execution, which is what keeps the
+ * operator's Retry available where it is safe.
+ */
+test("a conversation born after the upgrade still proves `not-executed` in the same registry", () => {
+  const { filename } = compactedPreUpgradeRegistry(true);
+  const upgraded = new AgentRegistry(filename);
+  const born = upgraded.ensureConversation("codex", "/sessions/born-after-the-upgrade.jsonl", "default");
+  expect(upgraded.deliveryAdmissionForKey(born.id, "never-used-key")).toMatchObject({ outcome: "not-executed" });
+  const reopened = new AgentRegistry(filename);
+  expect(reopened.deliveryAdmissionForKey(born.id, "never-used-key")).toMatchObject({ outcome: "not-executed" });
+});

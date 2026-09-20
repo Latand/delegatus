@@ -576,6 +576,26 @@ export interface RegistryConversation {
       conversations; admission then falls back to membership/lineage evidence. */
   delegationDepth: number | null;
   turn: TurnState & { observedAt: string | null };
+  /**
+   * THIS CONVERSATION'S DELIVERY EVIDENCE HAS BEEN COMPLETE SINCE IT BEGAN.
+   *
+   * Stamped once, at birth, by a build that writes a
+   * {@link DeliveryEvidenceCompaction} note for every keyed delivery record
+   * its retention drops. It is the only thing that lets absence under a key
+   * mean non-execution, because it is the only thing that says the notes were
+   * there to be written.
+   *
+   * False on every conversation carried across an upgrade FROM a build that
+   * had no note to write. Those histories were trimmed silently and nothing
+   * left in the file can say by how much: a retained-row count at the
+   * retention bound looks like proof that compaction ran, but the count moves
+   * both ways — any later operation that clears its terminal state puts the
+   * group back under the bound — and a fate read off a number that can go back
+   * down is a delivered message read as one that never went. So a pre-note
+   * conversation answers `unknown` for every key it cannot show, for good, and
+   * a conversation this build created answers for itself.
+   */
+  deliveryEvidenceTracked: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -1933,6 +1953,10 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
     turn: value.turn && typeof value.turn === "object"
       ? { state: value.turn.state, source: value.turn.source, terminalAt: value.turn.terminalAt ?? null, observedAt: value.turn.observedAt ?? null }
       : { state: "unknown", source: "empty", terminalAt: null, observedAt: null },
+    /* A record written before the stamp existed cannot claim it, and the
+       absence is the answer rather than a gap to fill in: nothing about the
+       file it came from says its notes were ever written. */
+    deliveryEvidenceTracked: (value as Partial<RegistryConversation>).deliveryEvidenceTracked === true,
   };
 }
 
@@ -2973,6 +2997,9 @@ function adoptProvisionalOwner(
   }
   target.agentRole ??= owner.agentRole;
   target.delegationDepth ??= owner.delegationDepth;
+  /* The adopted identity's keys are answered under the target from here on, so
+     the target inherits the weaker of the two histories. */
+  if (!owner.deliveryEvidenceTracked) target.deliveryEvidenceTracked = false;
   for (const receipt of Object.values(file.receipts)) {
     if (receipt.conversationId === owner.id) receipt.conversationId = target.id;
     if (receipt.parentConversationId === owner.id) receipt.parentConversationId = target.id;
@@ -5438,6 +5465,7 @@ export class AgentRegistry {
       agentRole: null,
       delegationDepth: null,
       turn: { state: "unknown" as const, source: "empty" as const, terminalAt: null, observedAt: null },
+      deliveryEvidenceTracked: true,
       createdAt,
       updatedAt: createdAt,
     };
@@ -6362,6 +6390,7 @@ export class AgentRegistry {
         agentRole: null,
         delegationDepth: null,
         turn: { state: "unknown", source: "empty", terminalAt: null, observedAt: null },
+        deliveryEvidenceTracked: true,
         createdAt,
         updatedAt: createdAt,
       };
@@ -6561,6 +6590,7 @@ export class AgentRegistry {
             agentRole: null,
             delegationDepth: null,
             turn: { ...observation.turn, observedAt: observation.observedAt },
+            deliveryEvidenceTracked: true,
             createdAt,
             updatedAt: createdAt,
           };
@@ -8052,10 +8082,18 @@ export class AgentRegistry {
    * here" — until any later operation clears its own terminal state and pushes
    * the group back under it. Re-arming an unverified operation does exactly
    * that, one retry on an unrelated message, and a delivered key would go back
-   * to reading `not-executed`. The count is still consulted below, for the one
-   * thing it can still prove: a registry compacted by a build that predates
-   * the note has no note to carry, and a group sitting at its bound is reason
-   * enough to stay uncertain.
+   * to reading `not-executed`. No count is consulted here, at any bound, for
+   * anything.
+   *
+   * The other half is the history that predates the note. A registry the
+   * previous build left behind carries no notes because that build had none to
+   * write, and its retention still ran — so the same moving count would read
+   * it as complete, whether the retry that moved it happened before the
+   * upgrade or after. What answers instead is
+   * {@link RegistryConversation.deliveryEvidenceTracked}: a stamp put on a
+   * conversation when it is CREATED, by the build that creates it, which no
+   * later mutation touches. A conversation without it proves nothing and says
+   * so, for good.
    *
    * Read-only by construction: it mints nothing and settles nothing, so asking
    * repeatedly is free and changes no fate.
@@ -8090,15 +8128,19 @@ export class AgentRegistry {
     }
     const evidenceDropped = Object.values(snapshot.deliveryEvidenceCompactions).some((record) =>
       resolveConversationAlias(snapshot, record.conversationId) === canonicalId);
-    /* Belt for the upgrade: a file compacted before the note was written down
-       carries none, and its group is still sitting at the bound. */
-    const retainedTerminalOwners = Object.values(snapshot.deliveryOperationOwners).filter((item) =>
-      item.terminalState !== null
-      && resolveConversationAlias(snapshot, item.conversationId) === canonicalId).length;
-    if (evidenceDropped || retainedTerminalOwners >= DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT) {
+    if (evidenceDropped) {
       return {
         outcome: "unknown",
         reason: "this conversation's delivery evidence has been compacted, so nothing under this key is not proof that nothing was sent",
+      };
+    }
+    /* A history carried across the upgrade, including one whose conversation
+       record is gone: its notes were never written, so its silence is not an
+       answer. */
+    if (!snapshot.conversations[canonicalId]?.deliveryEvidenceTracked) {
+      return {
+        outcome: "unknown",
+        reason: "this conversation predates the record of what delivery evidence was dropped, so nothing under this key is not proof that nothing was sent",
       };
     }
     return { outcome: "not-executed" };

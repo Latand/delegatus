@@ -684,8 +684,9 @@ async function untilAdmissionAnswer(host: HTMLElement): Promise<string> {
  * that says so comes with a Retry, and pressing it sends the message twice.
  * The uncertainty survives a reload, and so does every byte.
  */
-test("a compacted key the registry re-armed around stays uncertain in the composer, across a reload", async () => {
-  const registry = new AgentRegistry(path.join(registrySandbox, `composer-registry-${registryFileNumber += 1}.json`));
+async function compactedKeyStaysUncertainInTheComposer(options: { preUpgrade: boolean }): Promise<void> {
+  const filename = path.join(registrySandbox, `composer-registry-${registryFileNumber += 1}.json`);
+  let registry = new AgentRegistry(filename);
   const registryPath = "/sessions/44444444-4444-\x34444-8444-444444444444.jsonl";
   registry.reconcileConversations([{
     engine: "codex",
@@ -759,6 +760,22 @@ test("a compacted key the registry re-armed around stays uncertain in the compos
     }
     /* And the retry that used to make the conversation look complete again. */
     expect(registry.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
+    /* The upgrade case reads the same history as the PREVIOUS build wrote it:
+       this build's own additions — the conversation's birth stamp and the
+       dropped-evidence notes — are removed from the file before it is opened
+       again, which is byte for byte what that build's writer produced. */
+    if (options.preUpgrade) {
+      const payload = JSON.parse(fs.readFileSync(filename, "utf8")) as {
+        conversations: Record<string, Record<string, unknown>>;
+        deliveryEvidenceCompactions?: unknown;
+      };
+      delete payload.deliveryEvidenceCompactions;
+      for (const row of Object.values(payload.conversations)) delete row.deliveryEvidenceTracked;
+      const stripped = JSON.stringify(payload, null, 2);
+      expect(stripped).not.toContain("deliveryEvidence");
+      fs.writeFileSync(filename, stripped);
+      registry = new AgentRegistry(filename);
+    }
 
     const recover = first.host.querySelector("[data-receipt-uncertain-retry]") as HTMLButtonElement;
     await act(async () => {
@@ -814,4 +831,23 @@ test("a compacted key the registry re-armed around stays uncertain in the compos
   } finally {
     await act(async () => second.root.unmount());
   }
+}
+
+test("a compacted key the registry re-armed around stays uncertain in the composer, across a reload", async () => {
+  await compactedKeyStaysUncertainInTheComposer({ preUpgrade: false });
 });
+
+/**
+ * AND THE SAME CONTRACT OVER A HISTORY THE PREVIOUS BUILD WROTE.
+ *
+ * A registry carried across the upgrade has no dropped-evidence notes in it —
+ * that build had none to write — and nothing left in the file can reconstruct
+ * what its retention took. Read as complete, the compacted key answers
+ * `not-executed`, and this is the screen that answer produces: the sentence
+ * that says the message was never sent, over a message that WAS delivered,
+ * with a Retry under it.
+ */
+test("a compacted key from a history written before the note stays uncertain in the composer", async () => {
+  await compactedKeyStaysUncertainInTheComposer({ preUpgrade: true });
+});
+
