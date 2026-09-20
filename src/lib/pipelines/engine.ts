@@ -1757,7 +1757,10 @@ export function adoptAttempt(
   const existing = run.attempts.find((attempt) =>
     attempt.conversationId === conversationRef.conversationId
     || (conversationRef.launchId !== null && attempt.launchId === conversationRef.launchId));
-  if (existing) return existing;
+  if (existing) {
+    retainCloseHosts(pipeline);
+    return existing;
+  }
   const source = run.attempts.find((attempt) => attempt.conversationId === conversationRef.sourceConversationId) ?? null;
   if (!source) return null;
   const effectiveRole = structuredClone(source.effectiveRole ?? stage.effectiveRole);
@@ -1788,6 +1791,7 @@ export function adoptAttempt(
     error: null,
   };
   run.attempts.push(attempt);
+  retainCloseHosts(pipeline);
   return attempt;
 }
 
@@ -5941,6 +5945,40 @@ const CLOSE_TEARDOWN_BUDGET_MS = 10_000;
 const closeExecutors = globalThis as unknown as { __llvCloseExecutors?: Set<string> };
 const activeCloses = closeExecutors.__llvCloseExecutors ??= new Set<string>();
 
+/** A transcript or pane may rebind while the recorded launch is stopping. */
+function closeHostIdentity(target: PipelineStageHostRef): string {
+  return target.launchId || target.conversationId
+    ? JSON.stringify([target.launchId ?? null, target.conversationId])
+    : JSON.stringify([target.agentPath, target.paneId]);
+}
+
+/** Merge newly materialized hosts into custody in the same mutation as their
+ * adoption, and again at drain checkpoints before a snapshot can settle it. */
+function retainCloseHosts(pipeline: Pipeline, report = pipeline.closeReport): boolean {
+  const plan = pipeline.closeTeardown;
+  if (!plan || !report) return false;
+  const recorded = new Set([...report.pending, ...report.stopped, ...report.alreadyStopped,
+    ...report.unconfirmed, ...report.stillRunning, ...report.acknowledged].map(closeHostIdentity));
+  let added = false;
+  for (const target of [...(pipeline.closeReport?.pending ?? []), ...launchedStageHosts(pipeline).map((item) => item.target)]) {
+    const key = closeHostIdentity(target);
+    if (recorded.has(key)) continue;
+    recorded.add(key);
+    report.pending.push(structuredClone(target));
+    added = true;
+  }
+  if (added) {
+    report.status = "pending";
+    if (plan.phase === "settled") {
+      plan.phase = "pending";
+      delete plan.owner;
+    }
+    pipeline.hiddenAt = null;
+    pipeline.stateDetail = "closed; teardown pending";
+  }
+  return added;
+}
+
 /** Claim and checkpoint under short leases; every host/flow/git operation runs
  * on the claimed snapshot outside them. An unknown owner never grants takeover. */
 async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
@@ -5983,10 +6021,8 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
         if (!live?.closeReport || JSON.stringify(live.closeTeardown) !== JSON.stringify(obligation)) return null;
         if (live.runs.some((run) => run.attempts.some((attempt) => attempt.activation))) return null;
         const plan = live.closeTeardown!;
-        if (plan.waitingForActivation) {
-          live.closeReport.pending = launchedStageHosts(live).map(({ target }) => target);
-          plan.waitingForActivation = false;
-        }
+        retainCloseHosts(live);
+        plan.waitingForActivation = false;
         delete live.activationCloseRequested;
         plan.owner = owner;
         plan.phase = "running";
@@ -6015,6 +6051,11 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
             current.error = candidate.attempt.error;
             current.completedAt = candidate.attempt.completedAt;
           }
+        }
+        retainCloseHosts(live, report);
+        if (report.pending.length) {
+          report.status = "pending";
+          if (plan.phase === "settled") plan.phase = "pending";
         }
         live.closeReport = structuredClone(report);
         live.closeTeardown = structuredClone(plan);
@@ -6951,6 +6992,7 @@ export async function patchPipeline(
         return { error: "acknowledgeHosts must be a boolean", status: 400 };
       }
       if (pipeline.closeTeardown) {
+        if (retainCloseHosts(pipeline)) persist();
         const report = pipeline.closeReport!;
         if (report.status === "settled" && req.acknowledgeHosts === true && !report.stillRunning.length) {
           report.acknowledged.push(...report.unconfirmed);

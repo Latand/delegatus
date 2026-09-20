@@ -11966,3 +11966,74 @@ test("close checkpoints a frozen host after its conversation path rebinds during
   expect(loadPipelines()[0]!.closeReport).toMatchObject({ status: "settled", pending: [], stopped: [{ agentPath: "/codex/stage-1.jsonl" }] });
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ agentPath: "/codex/rebound-stage.jsonl", paneId: "%new" });
 });
+
+for (const enabled of [false, true]) {
+  test.each(["host-stop", "flow-close", "settled"] as const)(`late adoption retains close custody at %s (activation: ${enabled})`, async (seam) => {
+    const h = harness();
+    const pipeline = await create(h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const records = loadPipelines();
+    const source = records[0]!.runs[0]!.attempts[0]!;
+    if (seam === "flow-close") source.flowId = "late-close-flow";
+    savePipelines(records);
+    const childRef = { launchId: "late-child-launch", conversationId: "conversation_late_child",
+      sessionId: "late-child-session", agentPath: "/codex/late-child.jsonl", paneId: "%late-child", startedAt: h.ports.now() };
+    const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    process.env.LLV_PIPELINE_ACTIVATION_DRAIN = enabled ? "1" : "0";
+    const stops: string[] = [];
+    const adopt = async () => {
+      expectPipelineLeaseAbsent();
+      // A separate process commits adoption and exits before the controller
+      // resumes: recovery must read the obligation from the durable store.
+      const child = Bun.spawn([process.execPath, "-e", `
+        const { adoptPipelineAttemptFromSource } = await import("./src/lib/pipelines/engine.ts");
+        const result = await adoptPipelineAttemptFromSource(${JSON.stringify(source.conversationId)}, ${JSON.stringify(childRef)});
+        process.exit(result ? 0 : 2);
+      `], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
+      expect(await child.exited).toBe(0);
+      const adopted = loadPipelines()[0]!;
+      expect(adopted.state).toBe("closed");
+      expect(adopted.closeReport?.status).toBe("pending");
+      expect(adopted.closeReport?.pending.some((target) => target.conversationId === childRef.conversationId)).toBe(true);
+      expect(adopted.hiddenAt).toBeNull();
+      expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).status).toBe(409);
+      const { archiveSettledPipelines } = await import("./store");
+      expect(await archiveSettledPipelines(Date.parse(h.ports.now()) + 30 * 86_400_000)).toBe(0);
+    };
+    h.ports.stopStageAgent = async (target) => {
+      stops.push(target.conversationId!);
+      if (target.conversationId === source.conversationId && seam === "host-stop") await adopt();
+      if (target.conversationId === childRef.conversationId) expect(target).toMatchObject({
+        launchId: childRef.launchId, conversationId: childRef.conversationId, agentPath: childRef.agentPath, paneId: childRef.paneId,
+      });
+      return { outcome: "stopped" };
+    };
+    h.ports.getFlow = () => ({ id: "late-close-flow", state: "reviewing" } as Flow);
+    h.ports.closeFlow = async () => { await adopt(); return {}; };
+    try {
+      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      if (seam === "settled") await adopt();
+      // Check the old executor did not overwrite the adoption transaction.
+      // The next controller pass must recover without any caller replay.
+      expect(loadPipelines()[0]!.closeReport).toMatchObject({ status: "pending",
+        pending: [{ conversationId: childRef.conversationId, launchId: childRef.launchId }] });
+      expect(loadPipelines()[0]!.hiddenAt).toBeNull();
+      expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).status).toBe(409);
+      await tickPipelines([], h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      // Replaying adoption and close must not enqueue a confirmed host again.
+      await engineModule.adoptPipelineAttemptFromSource(source.conversationId!, childRef);
+      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      expect(stops).toEqual([source.conversationId!, childRef.conversationId]);
+      expect(loadPipelines()[0]!.closeReport).toMatchObject({ status: "settled", pending: [],
+        stopped: [{ conversationId: source.conversationId }, { conversationId: childRef.conversationId }] });
+      expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).error).toBeUndefined();
+    } finally {
+      if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+      else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+    }
+  });
+}
