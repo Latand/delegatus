@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "role-eval.v1",
+  "datasetVersion": "pilot.v1",
+  "seed": "20260920",
+  "sourceBaseCommit": "a5d37a2d0ff7a943bb39e7ac6666e7450c4f9147",
+  "fixtures": [
+    {"id":"quota-window","baseCommit":"1111111111111111111111111111111111111111","treeHash":"16b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820","supportHash":"46b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820","candidateFiles":["case/quotaSummary.ts","case/quotaSummary.test.ts"],"forbiddenFiles":["support/routeWindowsByHorizon.ts"],"hiddenCommitment":"26b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820","holdoutCommitment":"36b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820"},
+    {"id":"error-row","baseCommit":"2222222222222222222222222222222222222222","treeHash":"17b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820","supportHash":"47b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820","candidateFiles":["case/ErrorRow.tsx","case/error-row.css","case/ErrorRow.test.tsx"],"forbiddenFiles":["support/MobileSwipeRow.tsx"],"hiddenCommitment":"27b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820","holdoutCommitment":"37b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820"},
+    {"id":"diagnostic-summary","baseCommit":"3333333333333333333333333333333333333333","treeHash":"18b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820","supportHash":"48b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820","candidateFiles":["case/diagnosticSummary.ts","case/diagnosticSummary.test.ts"],"forbiddenFiles":["support/redactMonitorText.ts"],"hiddenCommitment":"28b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820","holdoutCommitment":"38b0f9f70c26a7c851761a537afaa6d5a8ab1f8113c784aab09b5109ff475820"}
+  ],
+  "cells": [
+    {"id":"quota-window-A","caseId":"quota-window","arm":"A","order":1,"requestedModel":"gpt-5.6-luna","requestedEffort":"high","receivesBrief":false,"taskHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","briefHash":null},
+    {"id":"quota-window-B","caseId":"quota-window","arm":"B","order":2,"requestedModel":"gpt-5.6-luna","requestedEffort":"high","receivesBrief":true,"taskHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","briefHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    {"id":"quota-window-C","caseId":"quota-window","arm":"C","order":3,"requestedModel":"gpt-6-astra","requestedEffort":"high","receivesBrief":false,"taskHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","briefHash":null},
+    {"id":"error-row-B","caseId":"error-row","arm":"B","order":1,"requestedModel":"sonnet-5","requestedEffort":"high","receivesBrief":true,"taskHash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","briefHash":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+    {"id":"error-row-C","caseId":"error-row","arm":"C","order":2,"requestedModel":"gpt-6-astra","requestedEffort":"high","receivesBrief":false,"taskHash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","briefHash":null},
+    {"id":"error-row-A","caseId":"error-row","arm":"A","order":3,"requestedModel":"sonnet-5","requestedEffort":"high","receivesBrief":false,"taskHash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","briefHash":null},
+    {"id":"diagnostic-summary-C","caseId":"diagnostic-summary","arm":"C","order":1,"requestedModel":"gpt-6-astra","requestedEffort":"high","receivesBrief":false,"taskHash":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","briefHash":null},
+    {"id":"diagnostic-summary-A","caseId":"diagnostic-summary","arm":"A","order":2,"requestedModel":"gpt-5.6-terra","requestedEffort":"medium","receivesBrief":false,"taskHash":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","briefHash":null},
+    {"id":"diagnostic-summary-B","caseId":"diagnostic-summary","arm":"B","order":3,"requestedModel":"gpt-5.6-terra","requestedEffort":"medium","receivesBrief":true,"taskHash":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","briefHash":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
+  ]
+}
