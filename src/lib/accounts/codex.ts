@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
+import { procBackend } from "@/lib/proc";
 import os from "node:os";
 import path from "node:path";
 
@@ -6,7 +8,7 @@ import { stateDir, statePath } from "@/lib/configDir";
 
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { isShellCommand } from "@/lib/status";
-import { withAccountMutationLock } from "./accountMutation";
+import { accountProbeIdentity, withAccountMutationLockAsync, withAccountMutationLock } from "./accountMutation";
 import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, scrubAccountHomeToRetainedHistory, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite } from "@/lib/agent/registry";
 
@@ -37,12 +39,15 @@ export interface CodexAccount {
   createdAt: number;
 }
 
+type LoginReservation = { token: string; pid: number; identity: string | null; namespace: string | null; bootId: string | null };
+
 interface StoredAccount {
   id: string;
   label: string;
   kind: "managed";
   createdAt: number;
   loginPane?: LoginPane | null;
+  loginReservation?: LoginReservation | null;
 }
 
 /** A removed account. `archived` leftovers live in the shared archive
@@ -138,6 +143,11 @@ function isStoredAccount(value: unknown): value is StoredAccount {
     typeof account.label === "string" &&
     account.kind === "managed" &&
     typeof account.createdAt === "number" &&
+    (account.loginReservation == null || (typeof account.loginReservation.token === "string"
+      && Number.isSafeInteger(account.loginReservation.pid) && account.loginReservation.pid > 0
+      && (account.loginReservation.identity === null || typeof account.loginReservation.identity === "string")
+      && (account.loginReservation.namespace === null || typeof account.loginReservation.namespace === "string")
+      && (account.loginReservation.bootId === null || typeof account.loginReservation.bootId === "string"))) &&
     (account.loginPane === undefined || account.loginPane === null || (
       typeof account.loginPane === "object" &&
       typeof account.loginPane.paneId === "string" &&
@@ -204,6 +214,7 @@ function normalizeRegistry(value: unknown, sourceKey: string): LoadedRegistry {
       label: account.label,
       kind: "managed",
       createdAt: account.createdAt,
+      loginReservation: account.loginReservation ?? null,
       loginPane: account.loginPane ? { ...account.loginPane, startedAt: account.loginPane.startedAt ?? 0 } : null,
     });
   }
@@ -371,9 +382,79 @@ export function listCodexAccounts(): CodexAccount[] {
   return [defaultAccount(), ...readRegistry().registry.accounts.map(asAccount)];
 }
 
+export class CodexLoginBusyError extends Error {
+  constructor() { super("Codex sign-in is already changing; retry shortly"); }
+}
+
+function loginNamespace(): string | null {
+  try { return fs.readlinkSync("/proc/self/ns/pid"); } catch { return null; }
+}
+
+function loginBootId(): string | null {
+  try { return fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null; } catch { return null; }
+}
+
+/** Called before acquiring the lease: portable process identity can invoke ps. */
+function liveLoginReservation(reservation: LoginReservation | null | undefined): boolean {
+  if (!reservation) return false;
+  const bootId = loginBootId();
+  if (reservation.bootId && bootId && reservation.bootId !== bootId) return false;
+  // An owner in another namespace cannot be proved dead from here.
+  if (reservation.namespace !== loginNamespace()) return true;
+  if (!procBackend.pidAlive(reservation.pid)) return false;
+  const identity = procBackend.processIdentity(reservation.pid);
+  return identity === null || reservation.identity === null || identity === reservation.identity;
+}
+
+export function codexAccountLoginBusy(id: string): boolean {
+  return Boolean(readRegistry().registry.accounts.find((account) => account.id === id)?.loginReservation);
+}
+
+/** Keep removal and competing login requests fenced in the existing account
+ * row while the runtime owns child/RPC work outside the collection lease. */
+export async function withManagedCodexLogin<T>(account: CodexAccount, operation: () => Promise<T>): Promise<T> {
+  const reservation: LoginReservation = { token: crypto.randomUUID(), pid: process.pid,
+    identity: procBackend.processIdentity(process.pid), namespace: loginNamespace(), bootId: loginBootId() };
+  const previous = readRegistry().registry.accounts.find((candidate) => candidate.id === account.id)?.loginReservation ?? null;
+  if (liveLoginReservation(previous)) throw new CodexLoginBusyError();
+  const identity = accountProbeIdentity(account);
+  await withAccountMutationLockAsync(() => {
+    const registry = mutableRegistry();
+    const current = registry.accounts.find((candidate) => candidate.id === account.id);
+    if (!current || current.createdAt !== account.createdAt || identity !== accountProbeIdentity(account)) throw new UnknownAccountError(account.id);
+    if (JSON.stringify(current.loginReservation ?? null) !== JSON.stringify(previous)) throw new CodexLoginBusyError();
+    if (registry.removals.some((item) => item.id === account.id) || accountRemovalInFlight("codex", account.id)) throw new CodexLoginBusyError();
+    writeRegistry({ ...registry, accounts: registry.accounts.map((item) => item.id === account.id ? { ...item, loginReservation: reservation } : item) });
+  }, { holder: "Codex login reservation" });
+  try { return await operation(); }
+  finally {
+    // Keep cleanup responsibility while transient lock/storage failures clear.
+    // Every retry revalidates this exact token; sleeps never own the lease.
+    for (let attempt = 0; ; attempt++) {
+      let released: boolean;
+      try {
+        released = await withAccountMutationLockAsync(() => {
+          const registry = mutableRegistry();
+          const current = registry.accounts.find((candidate) => candidate.id === account.id);
+          if (!current || current.loginReservation?.token !== reservation.token) return false;
+          writeRegistry({ ...registry, accounts: registry.accounts.map((item) => item.id === account.id ? { ...item, loginReservation: null } : item) });
+          return true;
+        }, { holder: "Codex login completion" });
+      } catch (error) {
+        if (error instanceof CorruptCodexAccountsError) throw error;
+        if (attempt === 0) console.warn("[codex accounts] login completion could not persist; retrying");
+        await new Promise<void>((resolve) => setTimeout(resolve, Math.min(100 * 2 ** Math.min(attempt, 8), 5_000)));
+        continue;
+      }
+      if (!released) throw new Error("Codex login reservation changed");
+      break;
+    }
+  }
+}
+
 export function activeCodexAccountId(): string {
-  const active = readRegistry().registry.active;
-  return listCodexAccounts().some((account) => account.id === active) ? active : DEFAULT_ID;
+  const { active, accounts, removals } = readRegistry().registry;
+  return !removals.some((item) => item.id === active) && accounts.some((account) => account.id === active) ? active : DEFAULT_ID;
 }
 
 export function accountForSpawn(requested?: string | null): Pick<CodexAccount, "id" | "kind" | "home" | "sessionsDir"> {
@@ -388,9 +469,10 @@ export function isManagedCodexHome(home: string): boolean {
 }
 
 export function setActiveCodexAccount(id: string): void {
-  withRegistryLock(() => {
+  withAccountMutationLock(() => {
     const registry = mutableRegistry();
-    if (!listCodexAccounts().some((account) => account.id === id)) throw new UnknownAccountError(id);
+    if (id !== DEFAULT_ID && !registry.accounts.some((account) => account.id === id)) throw new UnknownAccountError(id);
+    if (registry.removals.some((item) => item.id === id) || accountRemovalInFlight("codex", id)) throw new UnknownAccountError(id);
     writeRegistry({ ...registry, active: id });
   });
 }
@@ -549,6 +631,7 @@ function recoverRemovalsAtStartup(): void {
  */
 export function removeManagedCodexAccount(id: string): AccountArchiveRemovalReport {
   return withRegistryLock(() => {
+    if (codexAccountLoginBusy(id)) throw new CodexLoginBusyError();
     recoverRemovalsLocked();
     const registry = mutableRegistry();
     const existing = registry.accounts.find((account) => account.id === id);
