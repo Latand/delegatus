@@ -10,9 +10,10 @@ const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-account-project-bindi
 const ORIGINAL_STATE = process.env.LLV_STATE_DIR;
 const STATE = path.join(SANDBOX, "state");
 process.env.LLV_STATE_DIR = STATE;
-const RECORD = path.join(STATE, "account-project-bindings.json");
 
 const { accountProjectBindings, bindAccountToProject, unbindAccountFromProject } = await import("./projectBindings");
+const { BINDINGS_SOURCE, resetAccountCollectionsForTests } = await import("./accountsStore");
+const { persistedAccountSource, seedAccountSource } = await import("./accountsStoreFixture");
 
 const ATLAS = "project-atlas";
 const MODULE = path.join(import.meta.dir, "projectBindings.ts");
@@ -21,6 +22,7 @@ const CONTENDERS = 16;
 beforeEach(() => {
   fs.rmSync(STATE, { recursive: true, force: true });
   fs.mkdirSync(STATE, { recursive: true });
+  resetAccountCollectionsForTests();
 });
 
 afterAll(() => {
@@ -121,8 +123,10 @@ test("concurrent adds and removes leave the record agreeing with every answer", 
 
 test("a record damaged mid-flight refuses every process instead of opening the project", async () => {
   expect(bindAccountToProject("claude", "acct-reserved", ATLAS).ok).toBe(true);
-  const content = '{"schemaVersion":1,"bindings":[{"engine":"claude"';
-  fs.writeFileSync(RECORD, content, "utf8");
+  /* Since #1870 the record is rows every process shares, so damage arrives as
+     a row no reader can turn into a binding. */
+  const damaged = { schemaVersion: 1, bindings: [{ engine: "claude" }] };
+  seedAccountSource(BINDINGS_SOURCE, damaged);
 
   const answers = await results([
     contender("acct-intruder", "add"),
@@ -134,6 +138,6 @@ test("a record damaged mid-flight refuses every process instead of opening the p
   }
   /* No process wrote over the damaged record, so the repair is still possible
      and no project silently became unbound. */
-  expect(fs.readFileSync(RECORD, "utf8")).toBe(content);
+  expect(persistedAccountSource(BINDINGS_SOURCE)).toEqual(damaged);
   expect(unbindAccountFromProject("claude", "acct-reserved", ATLAS)).toMatchObject({ ok: false, code: "RECORD_UNREADABLE" });
 }, 20_000);
