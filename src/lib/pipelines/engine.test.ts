@@ -12469,3 +12469,74 @@ for (const enabled of [false, true]) {
     }
   });
 }
+
+
+test.each(["path-pending", "starting", "closed", "closed-pending"] as const)("never-started %s launch becomes terminal and permits a fenced retry (#1972)", async (shape) => {
+  const closed = shape.startsWith("closed");
+  const f = await stagedRecoveryHarness();
+  await tickPipelines([], f.h.ports);
+  const original = { ...f.attempt() };
+  const receipt = f.registry.readOnlySnapshot().receipts[original.launchId!]!;
+  const stopped = "structured launch recovery: " + JSON.stringify({
+    phase: "unpublished", startedAt: Date.parse(receipt.createdAt), checks: 2,
+    nextTryAt: 0, stopped: shape !== "closed-pending",
+    reason: "runtime host recovery exhausted after 2 checks; original launch and first-message operation inspected; last result: runtime host request timed out",
+  });
+  f.registry.preserveSpawnArtifactOwnership(receipt.launchId, stopped);
+  const records = loadPipelines();
+  records[0]!.state = closed ? "closed" : "needs_decision";
+  if (closed) {
+    records[0]!.cursor = null; records[0]!.closedAt = f.h.ports.now();
+    records[0]!.runs[0]!.attempts[0]!.completedAt = records[0]!.closedAt;
+  }
+  records[0]!.stateDetail = "stage spawn recovery stopped: runtime host recovery exhausted; original launch retained";
+  records[0]!.runs[0]!.attempts[0]!.state = "needs_decision";
+  records[0]!.runs[0]!.attempts[0]!.error = records[0]!.stateDetail;
+  savePipelines(records);
+  setAgentRegistryForTests(f.registry);
+  try {
+    const real = defaultPipelinePorts();
+    f.h.ports.spawnReceipt = (id) => {
+      const read = real.spawnReceipt(id);
+      // Older controllers retained the same unpublished receipt as starting.
+      return shape === "starting" && read?.state === "path-pending" ? { ...read, state: "starting", error: null } : read;
+    };
+    f.h.ports.failStageLaunch = real.failStageLaunch;
+    f.h.ports.claimSpawnRetry = real.claimSpawnRetry;
+    await tickPipelines([], f.h.ports);
+    expect(f.registry.readOnlySnapshot().receipts[receipt.launchId]!.state).toBe("failed");
+    expect(f.attempt().state).toBe("failed");
+    const { projectLaunchConversations } = await import("@/lib/agent/spawnProjection");
+    const card = projectLaunchConversations([], f.registry.readOnlySnapshot()).cards[0]!;
+    expect(card.spawn?.state).toBe("failed");
+    expect(card.activity).not.toBe("live");
+    const { buildSchemeLayout } = await import("@/components/scheme/layout");
+    const { buildTaskBands } = await import("@/components/scheme/taskBands");
+    const { projectTaskWorkflows } = await import("@/components/tasks/taskWorkflowModel");
+    const { buildKanbanModel } = await import("@/components/kanban/kanbanModel");
+    const task: BoardTask = {
+      id: "task-never-started", project: card.project, text: "Completed by the successor", status: "done", placement: "unplaced",
+      assignments: [{ path: card.path, conversationId: card.conversationId!, panePid: null, state: "delivered", error: null, at: receipt.createdAt }],
+      createdAt: receipt.createdAt, updatedAt: receipt.createdAt,
+    };
+    const pipelines = loadPipelines();
+    const projection = projectTaskWorkflows([task], pipelines, [], [card]);
+    const layout = buildSchemeLayout([], [card], [card]);
+    const bands = buildTaskBands(layout, { tasks: [task], projection, untitled: "Task" });
+    const board = buildKanbanModel({ bands, tasks: [task], pipelines, projection, files: [card], now: Date.now() / 1000 });
+    expect(board.columns.done.cards.find((item) => item.task?.id === task.id)?.working).toBe(0);
+    expect(board.columns.done.working).toBe(0);
+    expect(board.totals.working).toBe(0);
+    if (closed) return;
+    const retried = await patchPipeline(records[0]!.id, { action: "retry-stage" }, f.h.ports);
+    expect(retried.error).toBeUndefined();
+    await tickPipelines([], f.h.ports);
+    const next = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
+    expect(next.n).toBe(2);
+    expect(next.launchId).not.toBe(original.launchId);
+    expect(f.registry.readOnlySnapshot().receipts[receipt.launchId]!.retryClaim).not.toBeNull();
+    const oldEntry = f.registry.readOnlySnapshot().entries["codex:" + receipt.key!.sessionId]!;
+    expect(f.registry.settleSpawn(receipt.launchId, oldEntry).kind).toBe("conflict");
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.launchId).toBe(next.launchId);
+  } finally { setAgentRegistryForTests(null); }
+});

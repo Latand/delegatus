@@ -643,3 +643,59 @@ test("a routed needs_decision leaves no chip claiming the operator is needed, wh
   expect(pastAttempts([current()], new Map()).map((row) => [row.stageId, row.n, row.state]))
     .toEqual([["build", 1, "passed"]]);
 });
+
+
+const uncertainDelivery = "delivery was started by an earlier executor; whether it reached the recipient is unverified; the stage transcript exists, so the prompt may already have reached the agent and is not sent again";
+
+test.each(["report", "fenced"] as const)("a delivered parked attempt accepts its %s verdict and takes the fail edge (#1979)", async (channel) => {
+  const h = harness();
+  const pathname = path.join(process.env.LLV_STATE_DIR!, `delivered-${channel}.jsonl`);
+  const at = 2_000_000;
+  fs.writeFileSync(pathname, JSON.stringify({ timestamp: new Date(at).toISOString(), type: "event_msg", payload: { type: "user_message", message: "Review this change" } }) + "\n");
+  const spawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, reserved) => {
+    await spawn(input, reserved);
+    // The prompt reached the agent before this executor lost its acknowledgement.
+    throw new Error(uncertainDelivery);
+  };
+  h.ports.transcriptPresent = (file) => fs.existsSync(file);
+  h.ports.pathForConversation = (id) => id === "conversation_stage_1" ? pathname : null;
+  h.ports.sourcePathAllowed = (file) => file === pathname || file.startsWith("/codex/");
+  h.ports.durableTurnEvidence = (engine, file) => import("./durableEvidence").then((module) => module.durableStageTurnEvidence(engine, file));
+  h.ports.spawnReceipt = (launchId) => ({ launchId, conversationId: "conversation_stage_1", state: "failed", sessionId: null, transcript: null, stagedTranscript: pathname, paneId: null, staged: true, error: uncertainDelivery });
+  await started(h.ports, [stage("review", null, { access: "read-only", onFail: { to: "repair", maxRounds: 2 } }), stage("repair", null)]);
+  expect(current().state).toBe("needs_decision");
+  h.ports.spawnAgent = spawn;
+  if (channel === "report") {
+    const accepted = await h.report(1, { verdict: "fail", findings: [{ severity: "P1", text: "Delivery admission rejected the received prompt." }] });
+    expect(accepted.error).toBeUndefined();
+  }
+  const verdict = '```json\n{"status":"fail","findings":["P1 — Delivery admission rejected the received prompt."],"confidence":0.95}\n```';
+  fs.appendFileSync(pathname, [
+    { timestamp: new Date(at + 1).toISOString(), type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: verdict }] } },
+    { timestamp: new Date(at + 2).toISOString(), type: "event_msg", payload: { type: "task_complete" } },
+  ].map((record) => JSON.stringify(record)).join("\n") + "\n");
+  await tickPipelines([], h.ports);
+  expect(attemptsOf("review")).toHaveLength(1);
+  expect(attemptsOf("review")[0]).toMatchObject({ state: "failed", verdict: { status: "fail" } });
+  expect(current().cursor?.stageId).toBe("repair");
+  await tickPipelines([], h.ports);
+  expect(h.spawnedStages).toEqual(["review", "repair"]);
+});
+
+
+test.each(["metadata", "unknown", "older-turn", "other-decision", "closed", "superseded"] as const)("unverified delivery does not reopen a %s attempt (#1979)", async (shape) => {
+  const h = harness();
+  await started(h.ports, [stage("review", null)]);
+  const parked = current();
+  parked.state = shape === "closed" ? "closed" : "needs_decision";
+  parked.stateDetail = uncertainDelivery;
+  const attempt = parked.runs[0]!.attempts[0]!;
+  Object.assign(attempt, { state: "needs_decision", error: shape === "other-decision" ? "Operator must select a requirement" : uncertainDelivery, paneId: null });
+  if (shape === "closed") parked.cursor = null;
+  if (shape === "superseded") parked.runs[0]!.attempts.push({ ...attempt, n: 2, conversationId: "conversation_replacement" });
+  savePipelines([parked]);
+  h.ports.durableTurnEvidence = async () => ({ turn: shape === "unknown" ? "unknown" : "busy", message: null, launchOnly: shape === "metadata", lastRecordAt: shape === "older-turn" ? 1 : 2_000_000 });
+  expect((await h.report(1, { verdict: "pass" })).code).toBe("STAGE_REPORT_SETTLED");
+  expect(attemptsOf("review")[0]!.report).toBeUndefined();
+});

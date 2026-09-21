@@ -183,6 +183,7 @@ interface Props {
 }
 
 export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome }: Props) {
+  const neverStarted = file.path.startsWith("spawn:") && file.spawn?.state === "failed";
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const paneRef = useRef<HTMLElement | null>(null);
@@ -328,7 +329,7 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
                   {cleanTitle(file.title, 90)}
                 </span>
               )}
-              <ProcessStatusControls file={file} compact />
+              {neverStarted ? null : <ProcessStatusControls file={file} compact />}
               {showFavorite ? <FavoriteCrown id={cardId} cardRef={paneRef} /> : null}
               {onToggleExpand ? (
                 <button
@@ -345,7 +346,8 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
               {onClose ? (
                 <button
                   className={"inline-flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
-                  aria-label={t("branch.removeColumn", { title: cleanTitle(file.title, 60) })}
+                  data-launch-dismiss={neverStarted || undefined}
+                  aria-label={neverStarted ? t("runtime.receipt.dismiss") : t("branch.removeColumn", { title: cleanTitle(file.title, 60) })}
                   onClick={onClose}
                 >
                   <X className="h-3 w-3" aria-hidden />
@@ -486,9 +488,9 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
             no control applies. Dormant far-zoom board nodes suppress it entirely
             (the dormant-node contract): the strip returns on activation, and
             active review panes keep it regardless of `noComposer`. */}
-        {dormant || isMobile ? null : <AgentControlStrip file={file} />}
-        {composerMount && !superseded ? <div ref={composerMount} className="contents" /> : null}
-        {noComposer || superseded ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} />}
+        {dormant || isMobile || neverStarted ? null : <AgentControlStrip file={file} />}
+        {composerMount && !superseded && !neverStarted ? <div ref={composerMount} className="contents" /> : null}
+        {noComposer || superseded || neverStarted ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} />}
       </section>
     </div>
   );

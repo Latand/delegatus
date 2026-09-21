@@ -647,6 +647,27 @@ const tasks: BoardTask[] = [
   ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
+// Stopped launch receipts on a completed task, including a still-retryable parked lane.
+if (SCENARIO === "stopped-launches") {
+  const launches = ["closed", "needs_decision"].map((state) => {
+    const launchId = `launch-${state}`;
+    const file = conversation(`stopped-${state}`, `Stopped ${state} launch`, {
+      path: `spawn:${launchId}`, size: 0, mtime: now, activityReason: "structured_spawn_failed",
+      spawn: { launchId, clientAttemptId: null, accountId: null, state: "failed",
+        initialMessage: "failed", retrySafe: true, error: "stage launch never started: runtime host recovery exhausted after 2 checks" },
+      durableLineage: { kind: "spawn", role: "builder", parentConversationId: null, reviewsConversationId: null,
+        memberships: [{ kind: "pipeline", containerId: `p-${state}`, role: "builder", slot: "build",
+          stageId: "build", stageOrder: 0, round: null, parentConversationId: null }] },
+    });
+    return { file, pipeline: pipeline(`p-${state}`, `Stopped ${state} launch`, "t-stopped", state,
+      [stage("build", "builder", null)],
+      [{ stageId: "build", attempts: [attempt(1, "failed", file, { agentPath: null, launchId, completedAt: iso(0) })] }],
+      { stageId: "build", state: "needs_decision", input: null, activatedBy: null }) };
+  });
+  files.splice(0, files.length, ...launches.map((entry) => entry.file));
+  pipelines.splice(0, pipelines.length, ...launches.map((entry) => entry.pipeline));
+  tasks.splice(0, tasks.length, task("t-stopped", "done", "Recover stopped launches", "", 0, files));
+}
 if (OVERVIEW_SCOPE) {
   tasks.push(
     task("t-ledger", "assigned", "Reconcile the ledger export against the bank file", "Two of the quarter's statements disagree by one day.", 3 * MIN, [ledgerBuild!], { project: LEDGER }),

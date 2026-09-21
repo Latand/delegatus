@@ -366,10 +366,12 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     return latest;
   };
   const stageByPath = new Map<string, { pipeline: Pipeline; stage: PipelineStage }>();
+  const pathByConversation = new Map((input.files ?? []).filter((file) => file.conversationId).map((file) => [file.conversationId!, file.path]));
   for (const pipeline of pipelines) {
     for (const stage of pipeline.stages) {
       for (const attempt of stageAttempts(pipeline, stage.id)) {
-        if (attempt.agentPath) stageByPath.set(attempt.agentPath, { pipeline, stage });
+        const attemptPath = attempt.agentPath ?? (attempt.conversationId ? pathByConversation.get(attempt.conversationId) : undefined);
+        if (attemptPath) stageByPath.set(attemptPath, { pipeline, stage });
       }
     }
   }
