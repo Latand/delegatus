@@ -59,7 +59,11 @@
  * sandbox lets it reach), its source view and its new-tab page; a long
  * markdown guide with a wide table, at its top and at an anchor; a source
  * file at a `:line`; and a path that does not exist — at 1280 × 800 and
- * 390 × 844, measuring sideways overflow and clipped controls.
+ * 390 × 844, measuring sideways overflow and clipped controls. It also runs
+ * the report's ES module (with a relative import and a scoped fetch) in the
+ * frame and the new tab, lands a dotted element id, follows a relative
+ * markdown link after a Source/Rendered round trip, and follows a link to the
+ * Viewer's own non-loopback host (`viewer.example`, mapped to loopback).
  *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
@@ -3148,6 +3152,9 @@ const PREVIEW_REPORT = path.join(PREVIEW_ROOT, "index.html");
 const PREVIEW_GUIDE = path.join(REPO_DIR, "docs", "release-guide.md");
 const PREVIEW_SOURCE = path.join(REPO_DIR, "src", "delivery", "retry.ts");
 const PREVIEW_MISSING = path.join(REPO_DIR, "reports", "round-3", "index.html");
+const PREVIEW_LINKS = path.join(REPO_DIR, "docs", "links.md");
+/** A non-loopback name the Viewer is served on, as over a tailnet. */
+const PREVIEW_HOST = "viewer.example";
 
 const previewSvg = (title: string, nodes: string[]) => {
   const boxes = nodes.map((label, i) => `<g transform="translate(${20 + i * 150},40)"><rect width="130" height="56" rx="10" fill="#e8f1fb" stroke="#1f5f99"/><text x="65" y="33" font-family="sans-serif" font-size="13" text-anchor="middle" fill="#123">${label}</text></g>`).join("");
@@ -3170,8 +3177,10 @@ ${section("summary", "Summary", 6)}
 ${section("replay", "Replay notes", 8)}
 <section id="decision-graph"><h2>Decision graph</h2><p>Each node is a decision the round made; the arrows are what it unblocked.</p><img src="assets/decision-graph.svg" alt="Decision graph"><ol><li>Keep the second-pass tone classifier.</li><li>Drop the variants over the latency budget.</li><li>Replay round 3 against the same batch.</li></ol></section>
 ${section("next", "Next round", 5)}
+<section id="appendix.1"><h2>Appendix 1 (a dotted id)</h2><p>Reached by an anchor holding a dot.</p><p id="module-status">module: waiting</p></section>
+${section("closing", "Closing notes", 6)}
 <section id="sandbox"><h2>Sandbox probe</h2><p>This page runs in the viewer's report frame. The script below tries to reach the viewer:</p><pre id="probe">running…</pre></section>
-<script src="assets/probe.js"></script></body></html>
+<script src="assets/probe.js"></script><script type="module" src="assets/module.js"></script></body></html>
 `, "utf8");
   fs.writeFileSync(path.join(PREVIEW_ROOT, "style.css"), `body{font:15px/1.6 Georgia,serif;color:#1d2733;max-width:860px;margin:0 auto;padding:24px 20px 80px;background:#fff}h1{color:rgb(15,76,129);font:700 28px/1.2 system-ui,sans-serif}h2{color:rgb(15,76,129);font:700 20px/1.3 system-ui,sans-serif;border-bottom:1px solid #d5dde6;padding-bottom:4px;margin-top:36px}.lede{color:#4a5a6b}nav a{color:#1f5f99}.wide{overflow-x:auto}table{border-collapse:collapse;font:13px system-ui,sans-serif}td,th{border:1px solid #d5dde6;padding:4px 8px;white-space:nowrap}th{background:#eef3f8}img{max-width:100%}pre{background:#f4f6f8;padding:10px;border-radius:6px;white-space:pre-wrap}`, "utf8");
   fs.writeFileSync(path.join(PREVIEW_ROOT, "assets", "decision-graph.svg"), previewSvg("Round 2 → round 3", ["tone pass 2", "latency cut", "replay r3", "ship"]), "utf8");
@@ -3187,6 +3196,15 @@ ${section("next", "Next round", 5)}
   document.getElementById("probe").textContent = JSON.stringify(out, null, 2);
 })();
 `, "utf8");
+
+  /* A module script is a CORS request from the frame's opaque origin, and so is its import and fetch. */
+  fs.writeFileSync(path.join(PREVIEW_ROOT, "assets", "module.js"), `import { label } from "./helper.mjs";
+const data = await (await fetch(new URL("./data.json", import.meta.url))).json();
+document.body.dataset.module = label + ":" + data.rows;
+document.getElementById("module-status").textContent = "module: " + document.body.dataset.module;
+`, "utf8");
+  fs.writeFileSync(path.join(PREVIEW_ROOT, "assets", "helper.mjs"), `export const label = "module-ran";\n`, "utf8");
+  fs.writeFileSync(path.join(PREVIEW_ROOT, "assets", "data.json"), `{"rows": 12}\n`, "utf8");
 
   fs.mkdirSync(path.join(path.dirname(PREVIEW_GUIDE), "img"), { recursive: true });
   fs.writeFileSync(path.join(path.dirname(PREVIEW_GUIDE), "img", "pipeline.svg"), previewSvg("Release train", ["freeze", "verify", "promote", "announce"]), "utf8");
@@ -3235,6 +3253,7 @@ ${section("next", "Next round", 5)}
     ...Array.from({ length: 4 }, (_, s) => [`## Appendix ${String.fromCharCode(65 + s)}`, "", ...Array.from({ length: 4 }, (_, p) => [`Appendix paragraph ${p + 1}: the long tail of the guide, so the anchor has somewhere to scroll to.`, ""]).flat()].join("\n")),
   ].join("\n");
   fs.writeFileSync(PREVIEW_GUIDE, guide, "utf8");
+  fs.writeFileSync(PREVIEW_LINKS, `# Links\n\nThe [round 2 report](http://${PREVIEW_HOST}:PORT/#f=${encodeURIComponent(PREVIEW_REPORT + "#decision-graph")}) on this Viewer's own host.\n`, "utf8");
   fs.writeFileSync(path.join(path.dirname(PREVIEW_GUIDE), "verify.md"), "# Verification\n\n## Bun runtime\n\nRun both halves under the pinned runtime.\n", "utf8");
 
   fs.mkdirSync(path.dirname(PREVIEW_SOURCE), { recursive: true });
@@ -3299,6 +3318,8 @@ async function filePreviewMain(): Promise<void> {
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
   const port = await freePort();
+  SERVER_EXTRA_ENV.LLV_TS_HOST = PREVIEW_HOST;
+  fs.writeFileSync(PREVIEW_LINKS, fs.readFileSync(PREVIEW_LINKS, "utf8").replace(":PORT/", `:${port}/`), "utf8");
   const baseUrl = `http://127.0.0.1:${port}`;
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
@@ -3310,7 +3331,7 @@ async function filePreviewMain(): Promise<void> {
     server = startServer(port);
     await waitForServer(baseUrl, server);
     await waitForBoard(baseUrl, false);
-    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage", `--host-resolver-rules=MAP ${PREVIEW_HOST} 127.0.0.1`], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
     const viewports = [
       { tag: "desktop", options: { viewport: { width: 1280, height: 800 } } },
       { tag: "phone", options: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true } },
@@ -3339,13 +3360,14 @@ async function filePreviewMain(): Promise<void> {
       /* 1. The owner's link: an HTML report with its anchor glued on as %23. */
       await visit(fHash(`${PREVIEW_REPORT}#decision-graph`), "iframe[data-preview-frame]");
       const frame = page.frames().find((candidate) => candidate.url().includes("/api/artifact/frame/")) ?? null;
-      if (frame) await frame.waitForFunction(() => Boolean(document.body?.dataset.probe), undefined, { timeout: 15_000 }).catch(() => {});
+      if (frame) await frame.waitForFunction(() => Boolean(document.body?.dataset.probe && document.body.dataset.module), undefined, { timeout: 15_000 }).catch(() => {});
       const html = await page.evaluate(readPreview);
       const inFrame = frame ? await frame.evaluate(() => {
         const target = document.getElementById("decision-graph");
         const img = document.querySelector<HTMLImageElement>("#decision-graph img");
         return {
           probe: JSON.parse(document.body.dataset.probe ?? "null") as Record<string, string> | null,
+          module: document.body.dataset.module ?? null,
           scrollY: Math.round(window.scrollY),
           anchorTop: target ? Math.round(target.getBoundingClientRect().top) : null,
           stylesheetApplied: getComputedStyle(document.querySelector("h1")!).color,
@@ -3363,6 +3385,7 @@ async function filePreviewMain(): Promise<void> {
       const probe = inFrame?.probe ?? null;
       must(probe?.scriptRan === true as unknown as string, `${tag} html: the report's relative script did not run`);
       must(probe?.origin === "null", `${tag} html: the frame's origin is «${probe?.origin}», not opaque`);
+      must(inFrame?.module === "module-ran:12", `${tag} html: the report's module script, its import or its fetch did not run («${inFrame?.module}»)`);
       for (const key of ["parentDocument", "cookie", "localStorage", "viewerApi", "artifactApi"]) must(probe?.[key] === "blocked", `${tag} html: the frame reached ${key}: «${probe?.[key]}»`);
       await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-html-anchor.png`) });
       report[`${tag}-html`] = { ...html, inFrame };
@@ -3371,10 +3394,12 @@ async function filePreviewMain(): Promise<void> {
       if (html.openExternal) {
         const tab = await context.newPage();
         const response = await tab.goto(new URL(html.openExternal, baseUrl).toString());
-        await tab.waitForFunction(() => Boolean(document.body?.dataset.probe), undefined, { timeout: 15_000 }).catch(() => {});
+        await tab.waitForFunction(() => Boolean(document.body?.dataset.probe && document.body.dataset.module), undefined, { timeout: 15_000 }).catch(() => {});
         const tabProbe = await tab.evaluate(() => JSON.parse(document.body.dataset.probe ?? "null") as Record<string, string> | null);
+        const tabModule = await tab.evaluate(() => document.body.dataset.module ?? null);
         must(response?.status() === 200 && tabProbe?.origin === "null" && tabProbe?.cookie === "blocked", `${tag} html: the new tab is not sandboxed ${JSON.stringify(tabProbe)}`);
-        report[`${tag}-html-new-tab`] = { status: response?.status(), probe: tabProbe };
+        must(tabModule === "module-ran:12", `${tag} html: the module script did not run in the new tab («${tabModule}»)`);
+        report[`${tag}-html-new-tab`] = { status: response?.status(), probe: tabProbe, module: tabModule };
         await tab.close();
       }
 
@@ -3387,6 +3412,16 @@ async function filePreviewMain(): Promise<void> {
       must(htmlSource.frame === null, `${tag} html-source: the frame is still shown`);
       must(firstLine.includes("<!doctype html>"), `${tag} html-source: the source view shows «${firstLine.slice(0, 60)}»`);
       await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-html-source.png`) });
+
+      /* An element id holding a dot, encoded into the payload. */
+      await visit(fHash(`${PREVIEW_REPORT}#appendix.1`), "iframe[data-preview-frame]");
+      const dotted = await page.evaluate(readPreview);
+      const dottedFrame = page.frames().find((candidate) => candidate.url().includes("/api/artifact/frame/")) ?? null;
+      const dottedTop = dottedFrame ? await dottedFrame.evaluate(() => { const el = document.getElementById("appendix.1"); return el ? Math.round(el.getBoundingClientRect().top) : null; }) : null;
+      common("html-dotted-anchor", dotted);
+      must(dotted.state === "ready" && dottedTop !== null && Math.abs(dottedTop) <= 4, `${tag} html-dotted-anchor: state ${dotted.state}, anchor top ${dottedTop}`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-html-dotted-anchor.png`) });
+      report[`${tag}-html-dotted-anchor`] = { ...dotted, anchorTop: dottedTop };
 
       /* 2. A long markdown guide: top, then its wide-table anchor. */
       await visit(fHash(PREVIEW_GUIDE), "[data-md-document]");
@@ -3407,6 +3442,34 @@ async function filePreviewMain(): Promise<void> {
       must((mdAnchor.markdown?.tallestTableRow ?? 0) <= 80, `${tag} markdown: a table row is ${mdAnchor.markdown?.tallestTableRow}px tall`);
       await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-markdown-anchor.png`) });
       report[`${tag}-markdown-anchor`] = mdAnchor;
+
+      /* A relative link followed after a Source/Rendered round trip lands on the next document and its anchor. */
+      await visit(fHash(PREVIEW_GUIDE), "[data-md-document]");
+      await page.click('[data-preview-mode="source"]');
+      await page.waitForSelector('[data-preview-line="1"]', { timeout: 15_000 }).catch(() => {});
+      await page.click('[data-preview-mode="rendered"]');
+      await page.waitForSelector("[data-md-document]", { timeout: 15_000 }).catch(() => {});
+      await page.click('[data-md-document] a:has-text("the verification notes")');
+      await page.waitForSelector('[data-md-anchor="bun-runtime"]', { timeout: 15_000 }).catch(() => {});
+      await page.waitForTimeout(600);
+      const followed = await page.evaluate(readPreview);
+      const followedHeading = await page.evaluate(() => document.querySelector("[data-md-document] h1")?.textContent ?? null);
+      common("markdown-relative-link", followed);
+      must(followed.state === "ready" && followedHeading === "Verification", `${tag} markdown-relative-link: state ${followed.state}, heading «${followedHeading}», alert «${followed.failureText}»`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-markdown-relative-link.png`) });
+      report[`${tag}-markdown-relative-link`] = { ...followed, heading: followedHeading };
+
+      /* A link to the Viewer's own non-loopback host opens the same anchored report as a loopback one. */
+      await page.goto(`http://${PREVIEW_HOST}:${port}/${fHash(PREVIEW_LINKS)}`);
+      await page.waitForSelector("[data-md-document]", { timeout: 30_000 }).catch(() => {});
+      await page.click('[data-md-document] a:has-text("round 2 report")').catch(() => {});
+      await page.waitForSelector("iframe[data-preview-frame]", { timeout: 15_000 }).catch(() => {});
+      await page.waitForTimeout(1_200);
+      const hosted = await page.evaluate(readPreview);
+      common("html-own-host", hosted);
+      must(hosted.state === "ready" && Boolean(hosted.frame?.src?.endsWith("/index.html#decision-graph")), `${tag} html-own-host: state ${hosted.state}, frame «${hosted.frame?.src}», alert «${hosted.failureText}»`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-html-own-host.png`) });
+      report[`${tag}-html-own-host`] = hosted;
 
       /* 3. Code with a :line. */
       await visit(fHash(`${PREVIEW_SOURCE}:180`), "[data-preview-target]");
