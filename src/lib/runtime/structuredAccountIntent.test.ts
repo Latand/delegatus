@@ -260,7 +260,7 @@ test("a withdrawn pick never moves anything, and the message behind it runs wher
   journal.close();
 });
 
-test("a failed move holds the message with its reason, sends nothing, and releases it exactly once", async () => {
+test("a failed move settles messages with its reason and requires an explicit resend", async () => {
   const journal = journalWithSwitch("failed-move", "idle");
   const { queue, moves, writes, holds } = queueOver(journal, hostState(false), { fail: "claude account requires authentication" });
   send(journal, "held-message");
@@ -269,7 +269,7 @@ test("a failed move holds the message with its reason, sends nothing, and releas
 
   expect(moves).toEqual(["pick-b→account-b"]);
   expect(writes()).toEqual([]);
-  expect(journal.operationResult("held-message")?.receipt).toMatchObject({ status: "queued" });
+  expect(journal.operationResult("held-message")?.receipt).toMatchObject({ status: "failed", reason: "account switch failed: claude account requires authentication" });
   expect(holds.get(CONVERSATION)).toEqual({ accountId: "account-b", reason: "claude account requires authentication" });
 
   /* A second message is held beside it, not sent past it. */
@@ -277,17 +277,18 @@ test("a failed move holds the message with its reason, sends nothing, and releas
   await queue.drain();
   expect(writes()).toEqual([]);
 
-  /* «Send on the current account»: the hold is released, and each message
-     goes exactly once. */
+  /* Clearing the hold cannot replay a failed message. A fresh send is explicit. */
   holds.delete(CONVERSATION);
   await queue.drain();
+  expect(writes()).toEqual([]);
+  send(journal, "explicit-resend");
   await queue.drain();
-  expect(writes()).toEqual(["held-message", "second-message"]);
+  expect(writes()).toEqual(["explicit-resend"]);
   expect(moves).toEqual(["pick-b→account-b"]);
   journal.close();
 });
 
-test("after a failed move, picking another account moves there and delivers the held message once", async () => {
+test("after a failed move, another pick and explicit resend delivers once", async () => {
   const journal = journalWithSwitch("failed-then-other", "idle");
   const failing = queueOver(journal, hostState(false), { fail: "the migration was refused" });
   send(journal, "held-message");
@@ -297,14 +298,15 @@ test("after a failed move, picking another account moves there and delivers the 
   const retry = queueOver(journal, hostState(false));
   retry.holds.set(CONVERSATION, failing.holds.get(CONVERSATION)!);
   pick(journal, "pick-c", "account-c");
+  send(journal, "explicit-resend");
   await retry.queue.drain();
   await retry.queue.drain();
   expect(retry.moves).toEqual(["pick-c→account-c"]);
-  expect(retry.writes()).toEqual(["held-message"]);
+  expect(retry.writes()).toEqual(["explicit-resend"]);
   journal.close();
 });
 
-test("a settings change after a failed move leaves the held message held, never sent on the old account", async () => {
+test("a settings change after a failed move preserves the failed receipt and account hold", async () => {
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(sandbox, "held-settings-state");
   const store = new AgentRegistry(path.join(sandbox, "held-settings-registry.json"), () => false);
@@ -327,13 +329,13 @@ test("a settings change after a failed move leaves the held message held, never 
     await later.queue.drain();
     expect(later.moves).toEqual(["model-only→profile"]);
     expect(later.writes()).toEqual([]);
-    expect(journal.operationResult("held-message")?.receipt).toMatchObject({ status: "queued" });
+    expect(journal.operationResult("held-message")?.receipt).toMatchObject({ status: "failed", reason: "account switch failed: claude account requires authentication" });
     expect(store.switchHold(id)).toMatchObject({ accountId: "account-b" });
 
     /* «Send on the current account» is still the explicit release. */
     store.releaseSwitchHold(id);
     await later.queue.drain();
-    expect(later.writes()).toEqual(["held-message"]);
+    expect(later.writes()).toEqual([]);
     journal.close();
   } finally {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;

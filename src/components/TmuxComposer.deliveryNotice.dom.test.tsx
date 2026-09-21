@@ -62,6 +62,16 @@ function receipt(overrides: Partial<RuntimeReceipt> & { operationId: string }): 
 const threeRetries = (): RuntimeReceipt[] => [2, 1, 0].map((second) =>
   receipt({ operationId: `op-retry-${second}`, at: `2026-08-31T10:00:0${second}.000Z` }));
 
+test("a message failed behind an account switch shows its reason and resend control", () => {
+  const reason = "account switch failed: target account requires authentication";
+  const mounted = mount({ receipts: [receipt({ operationId: "switch-held-send", reason, resend: "safe" })], onDismiss: () => {} });
+  expect(mounted.summary().querySelector("[data-delivery-notice-retry]")).not.toBeNull();
+  click(mounted.summary());
+  expect(mounted.host.textContent).toContain(reason);
+  expect(mounted.host.querySelector(".animate-spin")).toBeNull();
+  mounted.cleanup();
+});
+
 interface Mounted {
   host: HTMLElement;
   root: Root;

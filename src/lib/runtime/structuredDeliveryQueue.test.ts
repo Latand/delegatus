@@ -1,4 +1,6 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
+
+afterEach(() => setSystemTime());
 
 import type { DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import {
@@ -1859,6 +1861,7 @@ test("an absent-host kill retries after terminal projection fails", async () => 
     ["kill-retry", "queued", "dead projection unavailable"],
   ]);
 
+  setSystemTime(Date.now() + 1_001);
   await queue.drain();
 
   expect(pending).toBeFalse();
@@ -2120,6 +2123,7 @@ test("an active-host kill retries after terminal projection fails", async () => 
     ["kill-active-retry", "queued", "dead projection unavailable"],
   ]);
 
+  setSystemTime(Date.now() + 1_001);
   await queue.drain();
 
   expect(pending).toBeFalse();

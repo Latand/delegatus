@@ -1,4 +1,5 @@
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
 
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
@@ -15,7 +16,7 @@ import { runtimeSettingsCapability, type RuntimeEventInput, type RuntimeOperatio
 import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
-import { applyStructuredReconfigure } from "./structuredReconfigure";
+import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import { conversationTurnLiveness, readTranscriptEvidence, type TurnLivenessDependencies } from "./liveness";
 import {
@@ -609,6 +610,7 @@ export async function bindStructuredDeliveryQueue(
     registry?: AgentRegistry;
     client?: RuntimeHostClient | null;
     recover?: StructuredConversationRecovery;
+    reconfigure?: Omit<StructuredReconfigureDependencies, "registry" | "ownsOperation">;
     deferStartupWork?: boolean;
     /** Process and transcript readers behind the severed-turn evidence, so a
         test can drive this seam against a real process and a real transcript
@@ -635,6 +637,7 @@ export async function bindStructuredDeliveryQueue(
   let scheduleAutomaticRetry = () => {};
   let requestDrain = () => {};
   const nativeReconciliations = new Map<string, Promise<void>>();
+  const nativeRetries = new Map<string, RetryBackoff>();
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
     resolveHost: hostResolver(registry, hosts),
@@ -652,6 +655,7 @@ export async function bindStructuredDeliveryQueue(
   });
   const queue = new StructuredDeliveryQueue(
     {
+      terminalTurn: (conversationId) => registry.conversation(conversationId as ViewerConversationId)?.turn.state === "terminal",
       deferTarget: (conversationId) => startupPending && hostResolver(registry, hosts)(conversationId) === null,
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
@@ -666,16 +670,25 @@ export async function bindStructuredDeliveryQueue(
       nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;
+        const readyHosts = [...hosts].filter(([key, host]) => {
+          if (!host.nativeQueue) return false;
+          const retry = nativeRetries.get(key);
+          if (retry && !retry.ready()) { scheduleAutomaticRetry(); return false; }
+          return true;
+        });
+        // A cooldown wake must not rebuild the registry snapshot either.
+        if (readyHosts.length === 0) return;
         const entries = registry.readOnlySnapshot().entries;
-        for (const [key, host] of hosts) {
-          if (!host.nativeQueue) continue;
+        for (const [key] of readyHosts) {
           const entry = entries[key];
           const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
           if (!conversationId || nativeReconciliations.has(conversationId)) continue;
+          const retry = nativeRetries.get(key) ?? new RetryBackoff();
+          nativeRetries.set(key, retry);
           // Canonical reads cannot hold up interrupt/answer or other sends.
           const read = nativeQueueExecutor.reconcile(conversationId)
-            .then(pending => { if (pending) scheduleAutomaticRetry(); })
-            .catch(() => { scheduleAutomaticRetry(); })
+            .then(pending => { retry.reset(); if (pending) scheduleAutomaticRetry(); })
+            .catch(() => { retry.fail(); scheduleAutomaticRetry(); })
             .finally(() => { nativeReconciliations.delete(conversationId); });
           nativeReconciliations.set(conversationId, read);
         }
@@ -805,6 +818,7 @@ export async function bindStructuredDeliveryQueue(
       return recovered?.spawned === true;
     },
     (effect, ownership) => applyStructuredReconfigure(effect, {
+      ...dependencies.reconfigure,
       registry,
       ownsOperation: ownership.isCurrent,
     }),

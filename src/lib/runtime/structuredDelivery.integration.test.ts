@@ -139,8 +139,8 @@ function burstyObservableHost(): {
   };
 }
 
-async function waitForCondition(assertion: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+async function waitForCondition(assertion: () => boolean, timeoutMs = 1_000): Promise<void> {
+  for (let attempt = 0; attempt < timeoutMs / 5; attempt += 1) {
     if (assertion()) return;
     await Bun.sleep(5);
   }
@@ -1059,7 +1059,7 @@ test("a failed route kick retries queued controls and messages without a host-st
 
     await kickStructuredDeliveryQueue();
     expect(effectBatchCalls - baselineEffectBatchCalls).toBe(1);
-    await waitForCondition(() => journal.operationResult("operation-route-send")?.receipt.status === "delivered");
+    await waitForCondition(() => journal.operationResult("operation-route-send")?.receipt.status === "delivered", 2_500);
 
     expect(journal.operationResult("operation-route-answer")?.receipt.status).toBe("answered");
     expect(journal.operationResult("operation-route-interrupt")?.receipt.status).toBe("interrupted");
@@ -1322,7 +1322,7 @@ test("a failed kill projection retries through the coalesced drain and terminali
 
     await kickStructuredDeliveryQueue();
     expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
-    await waitForCondition(() => journal.operationResult(operationId)?.receipt.status === "delivered");
+    await waitForCondition(() => journal.operationResult(operationId)?.receipt.status === "delivered", 2_500);
 
     expect(deadProjectionAttempts).toBe(2);
     expect(journal.snapshot().sessions.find((session) => session.conversationId === conversationId)).toMatchObject({

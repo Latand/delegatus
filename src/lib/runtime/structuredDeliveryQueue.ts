@@ -1,4 +1,5 @@
 import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
+import { RetryBackoff } from "./retryBackoff";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
 import { parseRuntimeCommand, parseRuntimeSendSettings } from "./commands";
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
@@ -34,6 +35,9 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** A terminal provider turn engages an account pick immediately (#1983).
+      Live host health still fences a newer turn before applying it. */
+  terminalTurn?(conversationId: string): boolean;
   nativeQueueExecute?(command: NativeQueueCommand & { operationId: string }, refusalReason?: string): Promise<void>;
   nativeQueueReconcile?(): Promise<void>;
   /** Startup owns recovery for hosts it has not registered yet. Leave their
@@ -618,6 +622,8 @@ export class StructuredDeliveryQueue {
   private activeDrain: Promise<void> | null = null;
   private rerun = false;
   private readonly targetErrors = new Map<string, string>();
+  private readonly passRetry = new RetryBackoff();
+  private readonly reconfigureRetries = new Map<string, RetryBackoff>();
   private lastPassError: string | null = null;
   /** This executor's identity, minted per instance and never persisted beyond
       the `delivering` rows it writes. A successor instance — in this process or
@@ -681,6 +687,7 @@ export class StructuredDeliveryQueue {
   ) {}
 
   drain(): Promise<void> {
+    if (!this.passRetry.ready()) { this.retrySoon(); return Promise.resolve(); }
     if (this.activeDrain) {
       this.rerun = true;
       return this.activeDrain;
@@ -709,7 +716,9 @@ export class StructuredDeliveryQueue {
       this.rerun = false;
       try {
         await this.drainPass();
+        this.passRetry.reset();
       } catch (error) {
+        this.passRetry.fail();
         this.lastPassError = failureReason(error);
         throw error;
       }
@@ -744,6 +753,10 @@ export class StructuredDeliveryQueue {
       for (const operationId of this.contendedRecoveries.keys()) {
         if (!listed.has(operationId)) this.contendedRecoveries.delete(operationId);
       }
+    }
+    const listed = new Set(rawEffects.map((effect) => effect.payload.operationId));
+    for (const operationId of this.reconfigureRetries.keys()) {
+      if (!listed.has(operationId)) this.reconfigureRetries.delete(operationId);
     }
     if (rawEffects.length === 0) return;
     const grouped = new Map<string, DeliveryEffect[]>();
@@ -842,11 +855,26 @@ export class StructuredDeliveryQueue {
   }
 
   private async drainTarget(effects: DeliveryEffect[]): Promise<boolean> {
+    const latestSwitch = effects.filter(isReconfigureEffect).reduce<StructuredReconfigureEffect | null>(
+      (latest, effect) => !latest || effect.eventSeq > latest.eventSeq ? effect : latest, null);
+    if (!effects.some(isControlEffect) && latestSwitch
+      && !this.port.reconfigureCancelled?.(latestSwitch)
+      && this.reconfigureRetries.get(latestSwitch.operationId)?.ready() === false) {
+      this.retrySoon();
+      return true;
+    }
     const openEffects: DeliveryEffect[] = [];
     const durableStatuses = new Map<string, StructuredOperationStatus | null>();
     for (const effect of effects) {
       const durable = await this.readStatus(effect.operationId);
-      if (!durable.readable) return this.fenceUnavailable();
+      if (!durable.readable) {
+        if (isReconfigureEffect(effect)) {
+          const retry = this.reconfigureRetries.get(effect.operationId) ?? new RetryBackoff();
+          retry.fail();
+          this.reconfigureRetries.set(effect.operationId, retry);
+        }
+        return this.fenceUnavailable();
+      }
       if (durable.value && TERMINAL_DELIVERY_STATUSES.has(durable.value.status)) {
         this.firstDispatches.delete(effect.operationId);
         this.contendedRecoveries.delete(effect.operationId);
@@ -876,8 +904,10 @@ export class StructuredDeliveryQueue {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "superseded" });
       }
     }
-    /* #1846: an account pick moves the conversation when it is next engaged, never on its own. */
-    const engaged = effects.some(isEngagement);
+    /* A pick after a terminal provider turn applies now (#1983). Other idle
+       picks retain the next-engagement behavior from #1846. */
+    const engaged = effects.some(isEngagement)
+      || Boolean(currentReconfigure && this.port.terminalTurn?.(currentReconfigure.conversationId));
     const conversationId = effects[0]?.conversationId;
     const readHold = () => conversationId ? this.port.switchHold?.(conversationId) ?? null : null;
     let hold = readHold();
@@ -931,10 +961,22 @@ export class StructuredDeliveryQueue {
         }
         continue;
       }
-      /* A failed account switch holds every message after it until the operator sends on the current account or
-         picks another one (#1846). The registry keeps the hold and its reason, and the message stays queued where
-         it is: nothing reaches any engine, so nothing can be sent twice. */
-      if (hold && isEngagement(effect)) continue;
+      /* Failed switches settle unactuated messages with the hold's explanation.
+         The operator can clear the hold and explicitly resend (#1983). */
+      if (hold && isEngagement(effect)) {
+        const reason = `account switch failed: ${hold.reason}`;
+        if (effect.kind === "native-queue") {
+          if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
+          await this.port.nativeQueueExecute(effect, reason);
+        } else if (durableStatuses.get(effect.operationId)?.status === "delivering") {
+          // A switch failure cannot establish the fate of an earlier actuation.
+          this.retrySoon();
+          return true;
+        } else {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        }
+        continue;
+      }
       if (effect.kind === "native-queue") {
         if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
         const boundary = this.successfulKillBoundaries.get(effect.conversationId);
@@ -1680,13 +1722,16 @@ export class StructuredDeliveryQueue {
       await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "cancelled" });
       return false;
     }
+    const retry = this.reconfigureRetries.get(effect.operationId) ?? new RetryBackoff();
+    this.reconfigureRetries.set(effect.operationId, retry);
+    if (!retry.ready()) { this.retrySoon(); return true; }
     const host = this.resolveHost(effect.conversationId);
     if (host) {
       /* A switch is applied at a turn boundary, and an unreadable state is not
          one: it cannot show the host busy, and treating it as idle would apply
          the switch across a turn that may be running. */
       const state = await this.readHealth(host);
-      if (!state.readable) { this.retrySoon(); return true; }
+      if (!state.readable) { retry.fail(); this.retrySoon(); return true; }
       const health = state.value;
       if (health.status === "active" || health.status === "attention" || health.activeTurnRef) return true;
     }
@@ -1696,19 +1741,21 @@ export class StructuredDeliveryQueue {
         isCurrent: () => this.isCurrentReconfigure(effect),
       });
       if (outcome === "pending") {
+        retry.fail();
         await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "turn-boundary" });
         this.retrySoon();
         return true;
       }
       await this.transitionUnlessSettled(effect.operationId, "applied");
+      this.reconfigureRetries.delete(effect.operationId);
     } catch (error) {
       await this.transitionUnlessSettled(effect.operationId, "failed", { reason: failureReason(error) });
-      /* A move that failed at engagement keeps the message that engaged it (#1846). A superseded or cancelled
-         switch ended by the operator's own later choice, which is not a failure to hold anything for. */
+      /* Keep the failed account hold; the unactuated messages below settle
+         with its reason. Supersedence and cancellation create no failure hold. */
       if (effect.accountId && !this.port.reconfigureCancelled?.(effect)
         && error instanceof Error && error.name !== "StructuredReconfigureSupersededError" && error.name !== "StructuredReconfigureCancelledError") {
         this.port.holdForFailedSwitch?.(effect, failureReason(error));
-        return true;
+        return false;
       }
     }
     return false;

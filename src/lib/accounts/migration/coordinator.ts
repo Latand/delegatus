@@ -1003,13 +1003,19 @@ export async function reconcileMigrations(
   });
   const pendingDeliveries = new Set<ViewerConversationId>();
   await forEachCooperatively(Object.values(before.heldDeliveries), (item) => {
-    if (item.state !== "delivered" && (item.state !== "delivery-uncertain" || delivery.reconcileUncertain)) {
-      pendingDeliveries.add(item.conversationId);
+    if (item.state !== "delivered" && item.state !== "failed"
+      && (item.state !== "delivery-uncertain" || delivery.reconcileUncertain)) {
+      pendingDeliveries.add(registry.canonicalConversationId(item.conversationId));
     }
   });
   await forEachCooperatively(Object.values(before.conversations), async (snapshotConversation) => {
-    const needsFreshSnapshot = snapshotConversation.migration !== null || pendingDeliveries.has(snapshotConversation.id);
-    let conversation = needsFreshSnapshot ? registry.conversation(snapshotConversation.id) ?? snapshotConversation : snapshotConversation;
+    // A keyed delivery read may assemble grant provenance across the registry.
+    // Inventory already tells us which conversations need that read (#1983).
+    const hasDelivery = pendingDeliveries.has(snapshotConversation.id);
+    const activeMigration = snapshotConversation.migration !== null
+      && !terminalMigrationPhase(snapshotConversation.migration.phase);
+    if (!hasDelivery && !activeMigration) return;
+    let conversation = registry.conversation(snapshotConversation.id) ?? snapshotConversation;
     if (conversation.migration
       && conversation.migration.phase !== "committed"
       && conversation.migration.phase !== "rolled-back"
@@ -1061,6 +1067,7 @@ export async function reconcileMigrations(
       }
       return;
     }
+    if (conversation.migration.phase === "failed-recoverable") return;
     const migration = conversation.migration;
     const source = conversation.generations.find((generation) => generation.id === migration.sourceGenerationId)
       ?? conversation.generations.at(-1);
