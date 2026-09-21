@@ -159,7 +159,7 @@ export function buildCaptureEnvironment(root: string, source = process.env): Nod
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
     LOGNAME: "demo",
-    USER: "demo",
+    "USER": "demo",
     SHELL: "/bin/sh",
   };
 }

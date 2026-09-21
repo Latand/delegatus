@@ -128,11 +128,11 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
         { say: "I'll add a key ring with an activation time so verification accepts the previous key during the overlap." },
         {
           tool: "Grep",
-          input: { pattern: "WEBHOOK_SECRET", path: "src" },
-          result: "src/webhooks/sign.ts:4:const secret = env.WEBHOOK_SECRET;\nsrc/webhooks/verify.ts:7:  const expected = hmac(env.WEBHOOK_SECRET, payload);",
+          input: { pattern: "hmac\\(", path: "src/webhooks" },
+          result: "src/webhooks/sign.ts:9:  return hmac(currentKey(), payload);\nsrc/webhooks/verify.ts:7:  const expected = hmac(currentKey(), payload);",
         },
       ],
-      midTurn: { tool: "Edit", input: { file_path: `src/webhooks/verify.ts`, old_string: "  const expected = hmac(env.WEBHOOK_SECRET, payload);", new_string: "  const accepted = keyRing.verifying(now).map((key) => hmac(key, payload));" } },
+      midTurn: { tool: "Edit", input: { file_path: `src/webhooks/verify.ts`, old_string: "  const expected = hmac(currentKey(), payload);", new_string: "  const accepted = keyRing.verifying(now).map((key) => hmac(key, payload));" } },
     },
     {
       key: "charges-pagination",
