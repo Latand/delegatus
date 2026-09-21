@@ -1509,3 +1509,196 @@ test("a registry row cannot be persisted without a completed grant re-decision",
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("keyed reads of a granted row reuse one assembled decision per stored revision, never for a rewritten row", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-decision-record-"));
+  const registryPath = path.join(directory, "agent-registry.json");
+  const sqlitePath = path.join(directory, "agent-registry.sqlite");
+  const grant = ["viewer", "test-connector"];
+  const rowReads = new Map<string, number>();
+  const storage = {
+    sqliteMode: "sqlite" as const,
+    mcpGrantPolicy: WITH_CONNECTOR,
+    onSqliteRowPayloadRead: (collection: string, count: number) => rowReads.set(collection, (rowReads.get(collection) ?? 0) + count),
+  };
+  try {
+    const seeded = new AgentRegistry(registryPath, undefined, undefined, storage);
+    const rootId = settledParent(seeded, ["viewer"], "record-root");
+    const workerId = settledDelegatedChild(seeded, rootId, "record-worker");
+    structuredRow(seeded, "record-root");
+    structuredRow(seeded, "record-worker");
+    // Retained history: every row the whole-file decision has to assemble.
+    for (let index = 0; index < 300; index += 1) seeded.ensureConversation("codex", `/sessions/record-history-${index}.jsonl`, null);
+    tamperSqliteGrant(sqlitePath, [
+      { collection: "conversations", key: rootId },
+      { collection: "entries", key: entryRowKey("record-root") },
+      { collection: "conversations", key: workerId },
+      { collection: "entries", key: entryRowKey("record-worker") },
+    ], grant);
+    const conversations = Object.keys(seeded.readOnlySnapshot().conversations).length;
+
+    const store = new AgentRegistry(registryPath, undefined, undefined, storage);
+    rowReads.clear();
+    for (let read = 0; read < 25; read += 1) {
+      expect(store.conversation(rootId as never)!.generations.at(-1)!.launchProfile.mcpServers).toEqual(grant);
+      expect(store.conversation(workerId as never)!.generations.at(-1)!.launchProfile.mcpServers).toEqual(["viewer"]);
+    }
+    /* Fifty keyed reads of rows claiming a grant used to assemble and decide
+       the whole file fifty times over. */
+    console.log(JSON.stringify({ conversations, keyedReads: 50, conversationRowReads: rowReads.get("conversations") }));
+    expect(rowReads.get("conversations")!).toBeLessThan(2 * conversations);
+
+    /* Rewritten on disk without a revision: a decision made about the row as it
+       was never carries over to what it now says. */
+    const db = new Database(sqlitePath, { strict: true });
+    try {
+      const row = db.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM registry_rows WHERE collection = 'conversations' AND row_key = ?",
+      ).get(rootId)!;
+      const parsed = JSON.parse(row.value_json) as { generations: { launchProfile: Record<string, unknown> }[] };
+      parsed.generations.at(-1)!.launchProfile.parentConversationId = workerId;
+      db.query<unknown, [string, string]>("UPDATE registry_rows SET value_json = ? WHERE collection = 'conversations' AND row_key = ?")
+        .run(JSON.stringify(parsed), rootId);
+    } finally {
+      db.close();
+    }
+    expect(store.conversation(rootId as never)!.generations.at(-1)!.launchProfile.mcpServers).toEqual(["viewer"]);
+
+    /* A mutation handed a recorded decision persists what it rewrote, exactly
+       as it persists the rows the whole decision rewrites. */
+    const owner = { pid: process.pid, startIdentity: null };
+    expect(store.claimStructuredHost({ engine: "codex", sessionId: sessionIdFor("record-worker") }, owner, { allowUnhosted: true })
+      ?.launchProfile?.mcpServers).toEqual(["viewer"]);
+    const stored = new Database(sqlitePath, { readonly: true });
+    try {
+      const entry = stored.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM registry_rows WHERE collection = 'entries' AND row_key = ?",
+      ).get(entryRowKey("record-worker"))!;
+      expect((JSON.parse(entry.value_json) as { launchProfile: { mcpServers: string[] } }).launchProfile.mcpServers).toEqual(["viewer"]);
+    } finally {
+      stored.close();
+    }
+    // The root's own entry now answers to a delegated generation.
+    expect(store.claimStructuredHost({ engine: "codex", sessionId: sessionIdFor("record-root") }, owner, { allowUnhosted: true })
+      ?.launchProfile?.mcpServers).toEqual(["viewer"]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a recorded grant decision never outlives a change to any row it was assembled from, revision or not", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-decision-inputs-"));
+  const registryPath = path.join(directory, "agent-registry.json");
+  const sqlitePath = path.join(directory, "agent-registry.sqlite");
+  const grant = ["viewer", "test-connector"];
+  const rowReads = new Map<string, number>();
+  const storeOptions = {
+    normalize: (value: unknown) => normalizeRegistry(value, WITH_CONNECTOR),
+    mcpGrantPolicy: WITH_CONNECTOR,
+    initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }, WITH_CONNECTOR),
+  };
+  const openStore = () => new SqliteAgentRegistryStore(sqlitePath, {
+    ...storeOptions,
+    onRowPayloadRead: (collection, count) => rowReads.set(collection, (rowReads.get(collection) ?? 0) + count),
+  });
+  const rootGrantIn = (store: SqliteAgentRegistryStore, rootId: string) =>
+    store.read((file) => [...file.conversations[rootId]!.generations.at(-1)!.launchProfile.mcpServers]);
+  const fromFreshStore = (rootId: string) => {
+    const fresh = new SqliteAgentRegistryStore(sqlitePath, storeOptions);
+    try {
+      return rootGrantIn(fresh, rootId);
+    } finally {
+      fresh.close();
+    }
+  };
+  /** Rewrites the lineage edge at `key` through a second connection, the way
+      another process commits: the target conversation row stays byte-identical
+      and the revision stays where it was. */
+  const rewriteEdge = (sourceKey: string, key: string, edit: (edge: Record<string, unknown>) => void, commit = true) => {
+    const db = new Database(sqlitePath, { strict: true });
+    try {
+      const edge = JSON.parse(db.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM registry_rows WHERE collection = 'lineageEdges' AND row_key = ?",
+      ).get(sourceKey)!.value_json) as Record<string, unknown>;
+      edit(edge);
+      db.exec("BEGIN");
+      db.query<unknown, [string, string]>(
+        "INSERT OR REPLACE INTO registry_rows(collection, row_key, value_json, row_order) VALUES ('lineageEdges', ?, ?, 999)",
+      ).run(key, JSON.stringify(edge));
+      db.exec(commit ? "COMMIT" : "ROLLBACK");
+    } finally {
+      db.close();
+    }
+  };
+  try {
+    const seeded = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "sqlite", mcpGrantPolicy: WITH_CONNECTOR });
+    const rootId = settledParent(seeded, ["viewer"], "inputs-root");
+    const workerId = settledDelegatedChild(seeded, rootId, "inputs-worker");
+    for (let index = 0; index < 300; index += 1) seeded.ensureConversation("codex", `/sessions/inputs-history-${index}.jsonl`, null);
+    tamperSqliteGrant(sqlitePath, [{ collection: "conversations", key: rootId }], grant);
+    const conversations = Object.keys(seeded.readOnlySnapshot().conversations).length;
+
+    const store = openStore();
+    const repeatedReads = (expected: string[]) => {
+      rowReads.clear();
+      for (let read = 0; read < 25; read += 1) expect(rootGrantIn(store, rootId)).toEqual(expected);
+      return rowReads.get("conversations") ?? 0;
+    };
+    const snapshotGrant = () =>
+      [...store.readOnlySnapshot().file.conversations[rootId]!.generations.at(-1)!.launchProfile.mcpServers];
+    // Warm: the whole decision runs once, then keyed reads reuse it.
+    expect(repeatedReads(grant)).toBeLessThan(2 * conversations);
+    expect(repeatedReads(grant)).toBeLessThan(conversations);
+    // Unchanged, the complete snapshot that decision loaded is reused as it is.
+    expect(store.readOnlySnapshot()).toBe(store.readOnlySnapshot());
+
+    /* A transaction another connection rolled back changed nothing, and the
+       record is still applied without deciding the whole file again. */
+    rewriteEdge(workerId, rootId, (edge) => {
+      edge.childConversationId = rootId;
+      edge.parentConversationId = workerId;
+    }, false);
+    expect(repeatedReads(grant)).toBeLessThan(conversations);
+    expect(fromFreshStore(rootId)).toEqual(grant);
+
+    /* A local commit to a collection the decision never reads carries the
+       record forward, and a local operation that failed wrote nothing. */
+    store.mutate((file) => {
+      file.conversationAliases["conversation_inputs-alias"] = rootId as never;
+    }, false);
+    expect(() => store.mutate((file) => {
+      file.lineageEdges[rootId] = { ...file.lineageEdges[workerId]!, childConversationId: rootId, parentConversationId: workerId } as never;
+      throw new Error("operation failed after editing an edge");
+    }, false)).toThrow("operation failed after editing an edge");
+    expect(repeatedReads(grant)).toBeLessThan(conversations);
+
+    /* Only a SEPARATE input changes: the root now sits under a delegated worker
+       by its lineage edge, committed by another connection with no revision.
+       The root's own conversation row is byte-identical, so a record keyed by
+       revision and target row alone went on answering with the connector. */
+    const revision = store.revision();
+    rewriteEdge(workerId, rootId, (edge) => {
+      edge.childConversationId = rootId;
+      edge.parentConversationId = workerId;
+    });
+    expect(store.revision()).toBe(revision);
+    expect(fromFreshStore(rootId)).toEqual(["viewer"]);
+    /* Whole-file reads first: the first keyed read left the complete snapshot
+       it decided over cached, and it was cached for the old rows. */
+    expect(snapshotGrant()).toEqual(["viewer"]);
+    expect(rootGrantIn(store, rootId)).toEqual(["viewer"]);
+    // One re-decision over the new state, then bounded keyed reads again.
+    expect(repeatedReads(["viewer"])).toBeLessThan(conversations);
+
+    /* A local commit that rewrites an input is re-decided as well: restoring
+       the edge returns the grant, as a fresh store also sees it. */
+    store.mutate((file) => {
+      delete file.lineageEdges[rootId];
+    }, false);
+    expect(fromFreshStore(rootId)).toEqual(grant);
+    expect(repeatedReads(grant)).toBeLessThan(2 * conversations);
+    store.close();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

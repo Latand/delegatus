@@ -41,7 +41,7 @@ afterAll(() => {
   fs.rmSync(isolated, { recursive: true, force: true });
 });
 
-function fixture(failedCount: number, fullHistory = false, historyCount = 8078) {
+function fixture(failedCount: number, fullHistory = false, historyCount = 8078, grantedRoots = 0) {
   const directory = fs.mkdtempSync(path.join(isolated, "fixture-"));
   const filename = path.join(directory, "registry.json");
   const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
@@ -81,13 +81,19 @@ function fixture(failedCount: number, fullHistory = false, historyCount = 8078) 
       const id = `conversation_history_${i}` as const;
       const sessionId = `history_${i}`;
       const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+      // Operator roots holding a grantable connector, spread through the history as they are in production.
+      const mcpServers = i % 85 === 0 && i / 85 < grantedRoots ? ["viewer", "telegram"] : ["viewer"];
       if (i < 5188) data.entries[`codex:${sessionId}`] = {
         ...entry, key: { engine: "codex", sessionId }, artifactPath,
+        launchProfile: { ...entry.launchProfile!, mcpServers },
       };
       data.conversations[id] = {
         ...conversation, id,
+        ...(mcpServers.length > 1 ? { agentRole: null, delegationDepth: 0 } : {}),
         turn: { state: "terminal", source: "assistant", terminalAt: receipt.createdAt, observedAt: receipt.createdAt },
-        generations: conversation.generations.map((generation) => ({ ...generation, id: sessionId, path: artifactPath })),
+        generations: conversation.generations.map((generation) => ({
+          ...generation, id: sessionId, path: artifactPath, launchProfile: { ...generation.launchProfile, mcpServers },
+        })),
       };
     }
     const held = Object.values(data.heldDeliveries)[0]!;
@@ -128,6 +134,14 @@ function fixture(failedCount: number, fullHistory = false, historyCount = 8078) 
 for (const responseMs of [5_000, 11_000]) test(`slow startup keyed read completes after ${responseMs} ms and reconnects reuse ready`, async () => {
   const f = fixture(0);
   const conversation = f.registry.ensureConversation("codex", path.join(f.directory, "slow.jsonl"), null);
+  // A released structured row: startup reads runtime evidence only for rows a structured host can own.
+  f.registry.upsert({
+    key: { engine: "codex", sessionId: conversation.generations.at(-1)!.id }, artifactPath: path.join(f.directory, "slow.jsonl"),
+    cwd: f.directory, accountId: null, launchProfile: emptyLaunchProfile({ cwd: f.directory }), status: "dead", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 0, protocolVersion: null,
+      writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
   const { savePipelines } = await import("@/lib/pipelines/store");
   savePipelines([]);
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
@@ -199,7 +213,8 @@ for (const responseMs of [5_000, 11_000]) test(`slow startup keyed read complete
     expect(adoptions - firstPassAdoptions).toBe(0);
     expect(requests.length - firstPassReads).toBe(0);
     expect(passes).toBe(1);
-    expect(requests).toEqual([{ method: "session-read", params: { conversationId: conversation.id } }]);
+    // The startup signal read, then the historical fallback's comparison read.
+    expect(requests).toEqual(Array.from({ length: 2 }, () => ({ method: "session-read", params: { conversationId: conversation.id } })));
     expect(heldDuringRequest).toBe(false);
     expect(holds.length).toBeGreaterThan(0);
     expect(Math.max(...holds)).toBeLessThan(100);
@@ -595,6 +610,69 @@ test("the full retained history completes within the promoted serving budget", a
   }
 }, 130_000);
 
+
+test("granted operator rows keep HTTP answering through a full retained-history startup", async () => {
+  const f = fixture(672, true, 8078, 60);
+  const granted = Object.values(f.registry.readOnlySnapshot().conversations)
+    .filter((conversation) => conversation.generations.at(-1)!.launchProfile.mcpServers.includes("telegram"));
+  expect(granted).toHaveLength(60);
+  const counts: Record<string, number> = {};
+  const host = new RuntimeHost(f.journal);
+  const socketPath = path.join(isolated, "sockets", "granted.sock");
+  const server = serveRuntimeHost(socketPath, { handle: async (request, options) => {
+    counts[request.method] = (counts[request.method] ?? 0) + 1;
+    return host.handle(request, options);
+  } });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const client = new UnixRuntimeHostClient(socketPath);
+  // The Viewer's own HTTP answers from this event loop; probe it the whole way through.
+  const http = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
+  const latencies: number[] = [];
+  let probing = true;
+  const probe = (async () => {
+    while (probing) {
+      const sent = performance.now();
+      await (await fetch(`http://127.0.0.1:${http.port}/`)).text();
+      latencies.push(performance.now() - sent);
+      await Bun.sleep(50);
+    }
+  })();
+  const delay = monitorEventLoopDelay({ resolution: 10 });
+  delay.enable();
+  const started = performance.now();
+  try {
+    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup({
+      registry: f.registry, client, refreshTranscriptState: async () => {},
+      adopt: async () => [], adoptClaude: async () => [], orchestratorSeats: () => [],
+    }), () => {}, { waitUntilReady: true });
+    const elapsedMs = performance.now() - started;
+    probing = false;
+    await probe;
+    delay.disable();
+    const httpMaxMs = Math.max(...latencies);
+    console.log(JSON.stringify({ granted: granted.length, counts, elapsedMs, httpProbes: latencies.length, httpMaxMs,
+      eventLoopMaxMs: delay.max / 1e6 }));
+    expect(structuredStartupStatus()?.state).toBe("ready");
+    /* Each row a structured host can own is read for its signals and again for its fallback, and each failed
+       launch twice by spawn recovery. The other 2890 historical conversations are not read at all. */
+    expect(counts["session-read"]).toBeLessThanOrEqual(2 * 5188 + 2 * 672);
+    expect(httpMaxMs).toBeLessThan(1_000);
+    expect(delay.max / 1e6).toBeLessThan(1_000);
+    // Before the decision was reused, this history took over sixty seconds to reach ready here.
+    expect(elapsedMs).toBeLessThan(30_000);
+    // The decision is reused, never skipped: each granted root keeps exactly its grant.
+    for (const conversation of granted) {
+      expect(f.registry.conversation(conversation.id)!.generations.at(-1)!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+    }
+  } finally {
+    probing = false;
+    await probe;
+    http.stop(true);
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    f.journal.close();
+  }
+}, 180_000);
 
 test("ready startup survives a second module realm without any adoption calls", async () => {
   const f = fixture(0);

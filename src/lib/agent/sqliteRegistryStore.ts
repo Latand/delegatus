@@ -79,6 +79,82 @@ type StoredRow = { collection: string; row_key: string; value_json: string; row_
 type MetaRow = { key: string; value: string };
 type CachedRow = { valueJson: string; parsed: unknown };
 
+/** Per grant-bearing row, the stored JSON it was decided from and the MCP lists
+    the assembled decision left on it: one for an entry or a receipt, one per
+    generation for a conversation. */
+type RecordedGrant = { storedJson: string | undefined; lists: readonly (readonly string[] | undefined)[] };
+/** `stamp` names the stored database the decision ran over (see
+    `SqliteAgentRegistryStore.storeStamp`), so the record is only ever applied
+    to exactly that database: the decision also reads the lineage edges and
+    every other row attesting to the one being read, and a commit rewriting any
+    of them without a revision would otherwise leave the old answer standing. */
+type GrantDecisions = { revision: number; stamp: string; rows: ReadonlyMap<string, RecordedGrant> };
+type GrantProfileRow = { launchProfile?: { mcpServers?: string[] } | null; generations?: { launchProfile?: { mcpServers?: string[] } }[] };
+
+const grantDecisionKey = (collection: string, key: string) => `${collection}\u0000${key}`;
+
+function grantLists(collection: string, row: GrantProfileRow): (string[] | undefined)[] {
+  return collection === "conversations"
+    ? (row.generations ?? []).map((generation) => generation.launchProfile?.mcpServers)
+    : [row.launchProfile?.mcpServers];
+}
+
+/** Read off a file the assembled decision has just run over. `storedJson`
+    names the stored row each decision was made from. */
+function recordGrantDecisions(
+  file: RegistryFile,
+  revision: number,
+  stamp: string,
+  storedJson: (collection: RowCollection, key: string) => string | undefined,
+): GrantDecisions {
+  const rows = new Map<string, RecordedGrant>();
+  for (const collection of ["entries", "receipts", "conversations"] as const) {
+    for (const [key, row] of Object.entries(file[collection] as Record<string, GrantProfileRow>)) {
+      rows.set(grantDecisionKey(collection, key), {
+        storedJson: storedJson(collection, key),
+        lists: grantLists(collection, row).map((list) => list && [...list]),
+      });
+    }
+  }
+  return { revision, stamp, rows };
+}
+
+/** Gives one row what the assembled decision gave it, but only when the row is
+    stored exactly as it was when that decision ran: a row rewritten without a
+    revision can never inherit a decision made about its predecessor. False
+    when the record cannot say, so the caller decides in full. */
+function applyRecordedGrantDecision(
+  decisions: GrantDecisions,
+  collection: string,
+  key: string,
+  storedJson: string | null | undefined,
+  row: unknown,
+  rewritten: () => void,
+): boolean {
+  // The decision reads lineage edges and never rewrites one.
+  if (collection === "lineageEdges") return true;
+  const recorded = decisions.rows.get(grantDecisionKey(collection, key));
+  if (!recorded || recorded.storedJson === undefined || recorded.storedJson !== storedJson) return false;
+  const target = row as GrantProfileRow;
+  const profiles = collection === "conversations"
+    ? (target.generations ?? []).map((generation) => generation.launchProfile)
+    : [target.launchProfile];
+  if (recorded.lists.length !== profiles.length) return false;
+  for (const [index, profile] of profiles.entries()) {
+    if ((profile?.mcpServers === undefined) !== (recorded.lists[index] === undefined)) return false;
+  }
+  let changed = false;
+  for (const [index, profile] of profiles.entries()) {
+    const list = recorded.lists[index];
+    if (!profile?.mcpServers || !list) continue;
+    if (profile.mcpServers.length !== list.length || profile.mcpServers.some((name, at) => name !== list[at])) changed = true;
+    profile.mcpServers = [...list];
+  }
+  // A mutation persists what the decision rewrote, as it does after the full one.
+  if (changed) rewritten();
+  return true;
+}
+
 interface RegistryChanges {
   rows: Map<RowCollection, Set<string>>;
   meta: Set<(typeof META_FIELDS)[number]>;
@@ -151,6 +227,8 @@ export interface SqliteRegistryStoreOptions {
 declare const DECIDED: unique symbol;
 export type DecidedRegistryFile = RegistryFile & { readonly [DECIDED]: true };
 
+type StampedSnapshot = SqliteRegistrySnapshot & { stamp: string };
+
 interface LazyRegistrySnapshot extends SqliteRegistrySnapshot {
   file: DecidedRegistryFile;
   changes(): RegistryChanges;
@@ -194,7 +272,14 @@ export class SqliteAgentRegistryStore {
   private onRevisionQuery: (() => void) | undefined;
   private readonly rowCache = new Map<RowCollection, Map<string, CachedRow>>();
   private revisionCache: { signature: string; revision: number } | null = null;
-  private readOnlyCache: SqliteRegistrySnapshot | null = null;
+  /** Stamped like the grant record: a complete snapshot is only ever handed
+      out again over exactly the database it was loaded from. */
+  private readOnlyCache: StampedSnapshot | null = null;
+  /** What the assembled grant decision (#739) returned for every grant-bearing
+      row at one stored revision. A keyed read of a row claiming more than the
+      baseline otherwise assembles, clones and decides the whole file, per read:
+      sixty such rows cost startup half a minute of blocked event loop. */
+  private grantDecisions: GrantDecisions | null = null;
 
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   /** Runtime half of {@link DecidedRegistryFile}: the files this store has
@@ -358,16 +443,18 @@ export class SqliteAgentRegistryStore {
   }
 
   snapshot(): SqliteRegistrySnapshot {
-    return this.loadSnapshot(false);
+    const { file, revision } = this.loadSnapshot(false);
+    return { file, revision };
   }
 
-  private loadSnapshot(useRowCache: boolean): SqliteRegistrySnapshot {
+  private loadSnapshot(useRowCache: boolean): StampedSnapshot {
     this.onSnapshotLoad?.();
     this.db.exec("BEGIN");
     try {
       const snapshot = this.loadInTransaction(useRowCache);
+      const stamp = this.storeStamp();
       this.db.exec("COMMIT");
-      return snapshot;
+      return { ...snapshot, stamp };
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
@@ -393,7 +480,10 @@ export class SqliteAgentRegistryStore {
 
   readOnlySnapshot(): SqliteRegistrySnapshot {
     const revision = this.revision();
-    if (this.readOnlyCache?.revision === revision) return this.readOnlyCache;
+    /* The revision alone cannot say the rows are the ones cached: a commit that
+       rewrites a row without advancing it would leave the decision over the old
+       rows standing in every whole-file read. */
+    if (this.readOnlyCache?.revision === revision && this.readOnlyCache.stamp === this.storeStamp()) return this.readOnlyCache;
     this.readOnlyCache = this.loadSnapshot(true);
     return this.readOnlyCache;
   }
@@ -402,7 +492,7 @@ export class SqliteAgentRegistryStore {
   read<T>(reader: (file: RegistryFile) => T): T {
     this.db.exec("BEGIN");
     try {
-      const result = reader(this.loadLazyInTransaction().file);
+      const result = reader(this.loadLazyInTransaction(true, true, true).file);
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -738,6 +828,7 @@ export class SqliteAgentRegistryStore {
       const waitStartedAt = performance.now();
       this.beginMutationWrite();
       let revision: number;
+      let stamps = { before: "", after: "" };
       const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
       try {
         this.onWriterWait?.(performance.now() - waitStartedAt);
@@ -746,7 +837,12 @@ export class SqliteAgentRegistryStore {
           continue;
         }
         revision = changed ? current.revision + 1 : current.revision;
-        if (changed) this.persistChanges(current.file, changes, revision);
+        if (changed) {
+          // Inside the write lock, so no other connection commits in between.
+          const before = this.storeStamp();
+          this.persistChanges(current.file, changes, revision);
+          stamps = { before, after: this.storeStamp() };
+        }
         this.db.exec("COMMIT");
       } catch (error) {
         try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
@@ -756,7 +852,7 @@ export class SqliteAgentRegistryStore {
         this.secureFiles();
         // A narrow delivery commit must not clone populated snapshot maps.
         if (options.updateSnapshotCache === false) this.readOnlyCache = null;
-        this.updateCachesAfterCommit(current.file, changes, revision);
+        this.updateCachesAfterCommit(current.file, changes, revision, stamps);
         this.rememberRevision(revision);
       }
       if (includeSnapshot) {
@@ -809,6 +905,7 @@ export class SqliteAgentRegistryStore {
       this.secureFiles();
       this.rowCache.clear();
       this.readOnlyCache = null;
+      this.grantDecisions = null;
       this.rememberRevision(revision);
       return { file, revision, replaced: true };
     } catch (error) {
@@ -849,7 +946,7 @@ export class SqliteAgentRegistryStore {
     return snapshot;
   }
 
-  private loadLazyInTransaction(trackMutations = true, useRowCache = trackMutations): LazyRegistrySnapshot {
+  private loadLazyInTransaction(trackMutations = true, useRowCache = trackMutations, readOnly = false): LazyRegistrySnapshot {
     /* Branded here because the row ACCESSORS below carry the guarantee: every
        row this file can hand out goes through `admitRow`, which runs the
        assembled decision before returning anything claiming more than the
@@ -870,29 +967,70 @@ export class SqliteAgentRegistryStore {
        than a way around it, and a keyed mutation still reads exactly the one row
        it asked for. The first row that claims anything MORE runs the decision
        over the whole file before it is handed out. */
+    const revision = Number(this.meta("revision") ?? 0);
+    const loadedCollections = new Map<RowCollection, RegistryFile[RowCollection]>();
+    const baselineCollections = new Map<RowCollection, Map<string, string | null>>();
+    const dirtyRows = new Map<RowCollection, Set<string>>();
+    const reorderedCollections = new Set<RowCollection>();
+    /* Nothing this transaction wrote yet: the file is exactly the stored
+       revision, so the decision over it is the one recorded for that revision. */
+    const unchanged = () => reorderedCollections.size === 0
+      && [...dirtyRows.values()].every((rows) => rows.size === 0);
+    /* Read at most once: nothing this transaction does writes the database, so
+       the stored state it sees cannot move under it. */
+    let transactionStamp: string | undefined;
+    const stamp = () => transactionStamp ??= this.storeStamp();
+    const recordHolds = () => this.grantDecisions?.revision === revision && this.grantDecisions.stamp === stamp();
     let grantsDecided = false;
     let decidingGrants = false;
     const decideGrants = () => {
       if (grantsDecided || decidingGrants) return;
       decidingGrants = true;
       try {
+        const recordable = unchanged();
         reboundAssembledMcpGrants(file, this.mcpGrantPolicy);
         grantsDecided = true;
+        if (recordable) {
+          this.grantDecisions = recordGrantDecisions(file, revision, stamp(), (collection, key) =>
+            this.rowCache.get(collection)?.get(key)?.valueJson);
+        }
       } finally {
         decidingGrants = false;
       }
     };
+    /* Whether this transaction reads its decisions from the record. Settled
+       once, at the first row that needs a decision, exactly where the whole
+       decision would otherwise have run: from then on a row still at the stored
+       revision gets what that decision gave it, and a row this transaction
+       rewrote is not re-decided, as before. */
+    let recordedDecisions: GrantDecisions | null | undefined;
     /* Every row leaves a loader through here. A row at the baseline is admitted
        untouched; anything claiming more is only returned once the decision has
        run over the whole file, including the rows attesting to this one. */
-    const admitRow = <T>(collection: RowCollection, row: T): T => {
-      if (GRANT_COLLECTIONS.has(collection) && rowClaimsBeyondBaselineGrant(row)) decideGrants();
+    const admitRow = <T>(collection: RowCollection, key: string, storedJson: string | null | undefined, row: T): T => {
+      if (!GRANT_COLLECTIONS.has(collection) || grantsDecided || decidingGrants
+        || !rowClaimsBeyondBaselineGrant(row)) return row;
+      if (recordedDecisions === undefined) {
+        if (readOnly && unchanged() && !recordHolds()) {
+          /* The same decision over the same revision, read in this transaction
+             by the eager loader: it neither clones every row nor wraps it for
+             mutation tracking, and it leaves the complete snapshot the next
+             whole-file read at this revision would load again. Only a read
+             takes it: it decides the shared parsed rows in place, and a
+             mutation persists the rows its decision rewrites. */
+          const snapshot = this.loadInTransaction(true);
+          if (this.readOnlyCache?.revision !== revision || this.readOnlyCache.stamp !== stamp()) {
+            this.readOnlyCache = { file: snapshot.file, revision, stamp: stamp() };
+          }
+        }
+        recordedDecisions = unchanged() && recordHolds() ? this.grantDecisions : null;
+      }
+      if (recordedDecisions && (dirtyRows.get(collection)?.has(key)
+        || applyRecordedGrantDecision(recordedDecisions, collection, key, storedJson, row,
+          () => dirtyRows.get(collection)?.add(key)))) return row;
+      decideGrants();
       return row;
     };
-    const loadedCollections = new Map<RowCollection, RegistryFile[RowCollection]>();
-    const baselineCollections = new Map<RowCollection, Map<string, string | null>>();
-    const dirtyRows = new Map<RowCollection, Set<string>>();
-    const reorderedCollections = new Set<RowCollection>();
     keyedReaders.set(file, (collection, field, value) => {
       const values = typeof value === "string" ? [value] : value;
       if (values.length === 0) return [];
@@ -1033,7 +1171,7 @@ export class SqliteAgentRegistryStore {
             }
             /* The decision rewrites `rows[key]` in place where it denies, so the
                caller never holds the undecided object. */
-            return admitRow(collection, rows[key]);
+            return admitRow(collection, key, baseline.get(key), rows[key]);
           };
           const loadAllRows = () => {
             if (allRowsLoaded) return;
@@ -1174,7 +1312,7 @@ export class SqliteAgentRegistryStore {
     }
     return {
       file,
-      revision: Number(this.meta("revision") ?? 0),
+      revision,
       changes: () => {
         const changes: RegistryChanges = { rows: new Map(), meta: new Set(), order: new Set() };
         for (const [collection, value] of loadedCollections) {
@@ -1229,8 +1367,18 @@ export class SqliteAgentRegistryStore {
     file: RegistryFile,
     changes: RegistryChanges,
     revision: number,
+    stamps: { before: string; after: string },
   ): void {
-    const cachedSnapshot = this.readOnlyCache?.revision === revision - 1
+    /* Only the grant collections are inputs to the decision; a commit that
+       touched none of them leaves every recorded decision what it was, provided
+       the database it was recorded over is exactly the one this commit wrote
+       to: nothing else committed and nothing else was written since. */
+    this.grantDecisions = this.grantDecisions?.revision === revision - 1
+      && this.grantDecisions.stamp === stamps.before
+      && ![...changes.rows.keys(), ...changes.order].some((collection) => GRANT_COLLECTIONS.has(collection))
+      ? { ...this.grantDecisions, revision, stamp: stamps.after }
+      : null;
+    const cachedSnapshot = this.readOnlyCache?.revision === revision - 1 && this.readOnlyCache.stamp === stamps.before
       ? this.readOnlyCache
       : null;
     const nextFile = cachedSnapshot ? { ...cachedSnapshot.file } : null;
@@ -1273,7 +1421,7 @@ export class SqliteAgentRegistryStore {
       for (const field of changes.meta) {
         (nextFile as unknown as Record<string, unknown>)[field] = structuredClone(file[field]);
       }
-      this.readOnlyCache = { file: nextFile, revision };
+      this.readOnlyCache = { file: nextFile, revision, stamp: stamps.after };
     } else {
       this.readOnlyCache = null;
     }
@@ -1350,6 +1498,19 @@ export class SqliteAgentRegistryStore {
       this.db.query("UPDATE registry_rows SET row_order = ? WHERE collection = ? AND row_key = ? AND row_order != ?")
         .run(order, collection, key, order);
     }
+  }
+
+  /** Names the stored database as this connection sees it, in two O(1)
+      counters: `data_version` moves on every commit by any other connection,
+      in this process or another, whatever it wrote and whether or not it
+      advanced the revision; `total_changes()` moves on every row this
+      connection writes, including writes a rollback discarded. Read inside a
+      transaction, it is fixed for the transaction's snapshot. */
+  private storeStamp(): string {
+    const stamp = this.db.query<{ dataVersion: number; changes: number }, []>(
+      "SELECT (SELECT data_version FROM pragma_data_version) AS dataVersion, total_changes() AS changes",
+    ).get()!;
+    return `${stamp.dataVersion}:${stamp.changes}`;
   }
 
   private meta(key: string): string | null {
