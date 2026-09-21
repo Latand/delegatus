@@ -32,7 +32,7 @@ async function releaseStructuredHost(key: SessionKey): Promise<boolean> {
   return await releaseStructuredDeliveryHost(key);
 }
 
-interface StructuredReconfigureDependencies {
+export interface StructuredReconfigureDependencies {
   registry?: AgentRegistry;
   validateAccount?: (engine: "claude" | "codex", accountId: string) => Promise<void>;
   resolveAccount?: typeof accountManager.resolveSpawn;

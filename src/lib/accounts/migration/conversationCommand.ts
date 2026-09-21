@@ -115,7 +115,7 @@ export async function applyConversationMigration(
       action: "reconfigure",
       operationId: command.requestOperationId,
       actor: command.actor,
-      reconfiguration: { model: profile.model, effort: profile.effort, fast: profile.fast, accountId: command.accountId },
+      reconfiguration: { model: profile.model, effort: profile.effort, fast: conversation.engine === "codex" ? profile.fast ?? false : profile.fast, accountId: command.accountId },
     }, { registry });
     return result
       ? { status: result.status, body: result.body as Record<string, unknown> }

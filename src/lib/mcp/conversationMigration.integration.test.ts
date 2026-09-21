@@ -34,11 +34,11 @@ afterAll(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-function migrationFixture(name: string, options: { missingHost?: boolean; delay?: Promise<void>; loseRuntimeAnswer?: boolean } = {}) {
+function migrationFixture(name: string, options: { missingHost?: boolean; delay?: Promise<void>; loseRuntimeAnswer?: boolean; defaultSpeed?: boolean } = {}) {
   const root = fs.mkdtempSync(path.join(sandbox, `${name}-`));
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, accountId: "account-a", transport: "structured",
-    launchProfile: { title: "Account migration fixture", model: "gpt-5.6-luna", effort: "low", fast: false, project: "repo-fixture", role: "worker" } });
+    launchProfile: { title: "Account migration fixture", model: "gpt-5.6-luna", effort: "low", fast: options.defaultSpeed ? null : false, project: "repo-fixture", role: "worker" } });
   if (begun.kind !== "created") throw new Error("fixture was not created");
   const id = begun.receipt.conversationId;
   const nativeId = crypto.randomUUID();
@@ -135,6 +135,18 @@ test.each([false, true])("MCP explicit pick preserves busy=%s until engagement, 
     expect(host.ledger.writes).toHaveLength(1);
     expect(await f.service.callTool("conversation_migration", args)).toEqual({ ...picked, replayed: true });
     expect(f.commands).toHaveLength(1);
+  } finally { f.close(); }
+});
+
+test("MCP select-account defaults an unspecified Codex speed to false", async () => {
+  const f = migrationFixture("default-speed", { defaultSpeed: true });
+  try {
+    expect(f.registry.conversation(f.id)?.generations.at(-1)?.launchProfile.fast).toBeNull();
+    expect(await f.service.callTool("conversation_migration", {
+      clientRequestId: "default-speed", conversationId: f.id, action: "select-account", accountId: "account-b",
+    })).toMatchObject({ ok: true, receipt: { status: "queued" } });
+    expect(f.commands).toHaveLength(1);
+    expect(f.commands[0]).toMatchObject({ kind: "reconfigure", fast: false, accountId: "account-b" });
   } finally { f.close(); }
 });
 
