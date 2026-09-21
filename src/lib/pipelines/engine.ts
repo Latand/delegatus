@@ -58,7 +58,7 @@ import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed } from "./failEdgeBudget";
-import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -200,6 +200,8 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
 
 export interface PipelinePorts {
   exec: ExecPort;
+  /** Asynchronous Git used only by the provisioning pre-pass. */
+  provisionExec?: ProvisionExecPort;
   preflightRepo(repoDir: string): PipelineRepoPreflight;
   roleLookup?: PipelineRoleLookup | null;
   spawnAgent(input: {
@@ -3902,7 +3904,7 @@ export const PIPELINE_BASE_UNRESOLVED_DETAIL = "resolving the pipeline base and 
 interface PipelineProvisionOutcome {
   id: string;
   /** The identity the work was performed against. */
-  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string };
+  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; createdAt: string; lastPassedCommit: string; owner: string };
   /** The commit the fetch resolved, recorded even when the worktree then
       failed: a retry of a parked provisioning provisions the SAME commit the
       lane was parked on rather than whatever the base has moved to since. */
@@ -3913,6 +3915,9 @@ interface PipelineProvisionOutcome {
 
 function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
   return {
+    createdAt: pipeline.createdAt,
+    lastPassedCommit: pipeline.lastPassedCommit,
+    owner: JSON.stringify(pipeline.delivery ? [pipeline.delivery.ownerId, pipeline.delivery.epoch, pipeline.delivery.active, pipeline.delivery.target] : null),
     repoDir: pipeline.repoDir,
     worktreeDir: pipeline.worktreeDir,
     branch: pipeline.branch,
@@ -3921,18 +3926,18 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
   };
 }
 
-function provisionPipelineOutsideLease(pipeline: Pipeline, ports: PipelinePorts): PipelineProvisionOutcome {
+async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal): Promise<PipelineProvisionOutcome> {
   const fence = provisionFence(pipeline);
   let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef };
   if (!base.baseBranch || !base.baseRef || !pipeline.lastPassedCommit) {
     /* The lane's OWN base branch, never a hardcoded default: the create path
        records what the caller asked for and resolves nothing, so this is the
        only place that reads it (#1799). */
-    const resolved = resolvePipelineBase(pipeline.repoDir, { baseBranch: pipeline.baseBranch }, ports.exec);
+    const resolved = await resolvePipelineBaseAsync(pipeline.repoDir, { baseBranch: pipeline.baseBranch }, exec, signal);
     if (!resolved.ok) return { id: pipeline.id, fence, base: null, error: resolved.error };
     base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef };
   }
-  const provisioned = provisionPipelineWorktree({ ...pipeline, ...base }, ports.exec);
+  const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal);
   return { id: pipeline.id, fence, base, error: provisioned.ok ? null : provisioned.error };
 }
 
@@ -3944,7 +3949,7 @@ function provisionPipelineOutsideLease(pipeline: Pipeline, ports: PipelinePorts)
  * nothing to provision — every pass but the one after a create — costs one
  * cached read and no subprocess at all.
  */
-function provisionPendingPipelines(ports: PipelinePorts): Map<string, PipelineProvisionOutcome> {
+async function provisionPendingPipelines(ports: PipelinePorts): Promise<Map<string, PipelineProvisionOutcome>> {
   const outcomes = new Map<string, PipelineProvisionOutcome>();
   let pending: Pipeline[];
   try {
@@ -3957,7 +3962,65 @@ function provisionPendingPipelines(ports: PipelinePorts): Map<string, PipelinePr
     if (!(error instanceof PipelineStoreError)) throw error;
     return outcomes;
   }
-  for (const pipeline of pending) outcomes.set(pipeline.id, provisionPipelineOutsideLease(pipeline, ports));
+  if (!pending.length) return outcomes;
+  // Existing injected synchronous ports remain usable by state-machine tests.
+  // Production's realExec always selects the native asynchronous implementation.
+  const exec = ports.provisionExec ?? (ports.exec === realExec ? realProvisionExec
+    : async (command, args, cwd) => ports.exec(command, args, cwd));
+  const jobs = pending.map((pipeline) => ({ pipeline, fence: JSON.stringify(provisionFence(pipeline)), abort: new AbortController() }));
+  const revalidate = () => {
+    try {
+      const current = new Map(loadPipelinesForProjection().map((pipeline) => [pipeline.id, pipeline]));
+      for (const job of jobs) {
+        const record = current.get(job.pipeline.id);
+        if (!record || record.state !== "provisioning" || record.hiddenAt || record.closedAt
+          || JSON.stringify(provisionFence(record)) !== job.fence) job.abort.abort();
+      }
+    } catch {
+      // An unreadable registry cannot authorize more provisioning work.
+      for (const job of jobs) job.abort.abort();
+    }
+  };
+  // Close/delete may originate in another process. Projection reads are cached
+  // by collection revision; polling needs no lease and no close-path hook.
+  const watch = setInterval(revalidate, 50);
+  const repositoryTails = new Map<string, Promise<void>>();
+  try {
+    await Promise.all(jobs.map(async (job) => {
+      const guardedExec: ProvisionExecPort = async (command, args, cwd, signal) => {
+        revalidate();
+        if (signal?.aborted) return { code: null, stdout: "", stderr: "pipeline provisioning cancelled" };
+        try { return await exec(command, args, cwd, signal); }
+        catch (error) { return { code: null, stdout: "", stderr: String(error) }; }
+      };
+      let releaseRepository: (() => void) | undefined;
+      try {
+        // Linked worktrees share refs and Git locks even when repoDir differs.
+        // Resolve through Git asynchronously, then serialize each common dir.
+        const common = await guardedExec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], job.pipeline.repoDir, job.abort.signal);
+        if (common.code !== 0 || !common.stdout.trim()) {
+          if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, {
+            id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null,
+            error: `resolving the pipeline Git directory: ${common.stderr || "no common directory"}`,
+          });
+          return;
+        }
+        const repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
+        const previous = repositoryTails.get(repository);
+        repositoryTails.set(repository, new Promise<void>((resolve) => { releaseRepository = resolve; }));
+        await previous;
+        const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal);
+        revalidate();
+        if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
+      } catch (error) {
+        revalidate();
+        if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, {
+          id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null,
+          error: `pipeline provisioning failed: ${String(error)}`,
+        });
+      } finally { releaseRepository?.(); }
+    }));
+  } finally { clearInterval(watch); }
   return outcomes;
 }
 
@@ -3965,7 +4028,7 @@ function provisionPendingPipelines(ports: PipelinePorts): Map<string, PipelinePr
     record is re-read here, so everything the decision rested on is checked
     against the record as it stands now. */
 function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOutcome | undefined): boolean {
-  if (!outcome || pipeline.state !== "provisioning") return false;
+  if (!outcome || pipeline.state !== "provisioning" || pipeline.hiddenAt || pipeline.closedAt) return false;
   const fence = provisionFence(pipeline);
   if ((Object.keys(fence) as Array<keyof typeof fence>).some((key) => fence[key] !== outcome.fence[key])) return false;
   if (outcome.base) {
@@ -4824,7 +4887,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     for (const pipeline of legacy) await admitExistingPipelineDelivery(pipeline, ports);
     if (legacy.length === 16) followUp = true;
     /* Before the lease, never under it (#1799). */
-    const provisioned = provisionPendingPipelines(ports);
+    const provisioned = await provisionPendingPipelines(ports);
     // Reconcile only this owner's reservation, with the existing kernel fence.
     // Remote reads must finish before entering the pipeline mutation lease.
     for (const pipeline of loadPipelinesForProjection()) {
