@@ -4,6 +4,7 @@ import type { NextRequest } from "next/server";
 import { tokensMatch } from "@/lib/authToken";
 
 const AUTH_COOKIE = "llv_auth";
+const FRAME_PREFIX = "/api/artifact/frame/";
 const COOKIE_MAX_AGE_SECONDS = 2_592_000;
 
 function tokenMatches(candidate: string | undefined, token: string): boolean {
@@ -48,6 +49,14 @@ function forbidden(request: NextRequest): NextResponse {
 export function proxy(request: NextRequest): NextResponse {
   const token = process.env.LLV_TOKEN;
   if (!token) {
+    return NextResponse.next();
+  }
+
+  // The report frame is loaded from a sandboxed, origin-less document, so its
+  // subresource requests are cross-site and never carry the SameSite cookie.
+  // The route authorizes each request by the signed directory scope in its
+  // path, which only an authenticated meta read can mint (frameScope.ts).
+  if (request.nextUrl.pathname.startsWith(FRAME_PREFIX)) {
     return NextResponse.next();
   }
 

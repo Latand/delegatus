@@ -1,9 +1,9 @@
+import { artifactContentUrl } from "@/components/preview/artifactResource";
+import { openArtifactPreview } from "@/components/preview/previewBus";
+import { resolveLink } from "@/lib/artifact/linkTarget";
+
 import { Check, Loader2, X } from "../../icons";
 import type { ToolStatus } from "../parse";
-
-/* Paths that live under a viewer transcript root can deep-link to that file;
-   source-tree paths in a finding stay plain code chips. Mirrors ROOTS. */
-const TRANSCRIPT_PATH_RE = /(?:\/\.codex\/sessions\/|\/\.claude\/projects\/|\/\.claude\/plugins\/data\/codex-openai-codex\/state\/|^\/tmp\/claude-\d+\/)/;
 
 /** Run/ok/err status shown as an icon so the cmd rows read at a glance. */
 export function StatusIcon({ status, className }: { status: ToolStatus; className?: string }) {
@@ -16,9 +16,30 @@ export function StatusIcon({ status, className }: { status: ToolStatus; classNam
 export function FileRef({ file, line }: { file: string; line?: number }) {
   const label = line ? `${file}:${line}` : file;
   const cls = "inline-block min-w-0 max-w-full truncate rounded-md bg-sunken px-1.5 py-0.5 align-bottom font-mono text-[11.5px]";
-  if (TRANSCRIPT_PATH_RE.test(file)) {
+  /* The feed's one link resolver decides: a transcript deep-links to its
+     conversation, any other absolute path opens the file preview at the line.
+     Repo-relative paths in a finding have no base here and stay code chips. */
+  const target = resolveLink(label);
+  if (target?.kind === "viewer") {
     return (
-      <a href={`#f=${encodeURIComponent(file)}`} className={`${cls} text-accent underline decoration-dotted`} title={label}>
+      <a href={target.hash} className={`${cls} text-accent underline decoration-dotted`} title={label}>
+        {label}
+      </a>
+    );
+  }
+  if (target?.kind === "file") {
+    return (
+      <a
+        href={artifactContentUrl(target.path)}
+        className={`${cls} text-accent underline decoration-dotted`}
+        title={label}
+        data-file-link
+        onClick={(event) => {
+          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          openArtifactPreview(label);
+        }}
+      >
         {label}
       </a>
     );

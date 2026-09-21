@@ -1,11 +1,11 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { createContext, Fragment, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { artifactContentUrl } from "@/components/preview/artifactResource";
 import { openArtifactPreview } from "@/components/preview/previewBus";
-import { classifyArtifact } from "@/lib/artifact/classify";
+import { resolveLink, resolveRelative } from "@/lib/artifact/linkTarget";
 
 import { CopyButton, copyText } from "./CopyButton";
 import { useHighlighted } from "./highlight";
@@ -98,51 +98,84 @@ export function CodeBlock({ code, lang, copyLabel }: { code: string; lang?: stri
   );
 }
 
-function linkHref(raw: string): string {
-  const href = raw.replace(/\\([()])/g, "$1");
-  const local = href.replace(/^file:\/\//, "");
-  if (/^(?:\/|~\/)/.test(local)) {
-    return `#f=${encodeURIComponent(local.replace(/:\d+$/, ""))}`;
-  }
-  return href;
-}
-
 const ANCHOR_CLASS = "break-all text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent";
 
-/** The local spelling of a link, or null when it is not a local path. */
-function localPath(href: string): string | null {
-  const local = href.replace(/^file:\/\//, "");
-  return /^(?:\/|~\/)/.test(local) ? local : null;
+/**
+ * Set by a surface that renders a whole document (the file preview): links
+ * and images written relative to the document resolve against its directory,
+ * and `#heading` links scroll within it instead of touching the location.
+ * The feed renders without it, so a chat message keeps its own semantics.
+ */
+export interface MdDocumentScope {
+  baseDir: string;
+  scrollToAnchor: (anchor: string) => void;
+}
+
+export const MdDocumentContext = createContext<MdDocumentScope | null>(null);
+
+function viewerHosts(): string[] {
+  return typeof window === "undefined" ? [] : [window.location.host];
+}
+
+/** A link to a local file: its href names the resource route so copy and
+    middle-click keep working, and a plain click opens the in-app preview —
+    same-document, no navigation, no history entry. The raw spelling travels
+    to the preview, which reads line and anchor through the same resolver. */
+function FileAnchor({ spelled, path, title, label }: { spelled: string; path: string; title: string; label: ReactNode }) {
+  return (
+    <a
+      href={artifactContentUrl(path)}
+      title={title}
+      data-file-link
+      className={ANCHOR_CLASS}
+      onClick={(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        openArtifactPreview(spelled);
+      }}
+    >
+      {label}
+    </a>
+  );
 }
 
 function Anchor({ href: raw, label }: { href: string; label: string }) {
+  const scope = useContext(MdDocumentContext);
   const href = raw.replace(/\\([()])/g, "$1");
-  const local = localPath(href);
-  /* A linked local artifact (issue #875) opens the in-app preview surface —
-     same-document, no navigation, no history entry. The href still names the
-     resource route so copy/middle-click keep working; everything else keeps
-     the legacy behavior (`#f=` conversation deep link, ordinary web anchor). */
-  const artifact = local !== null && classifyArtifact(local) !== null;
-  if (artifact) {
+  if (scope && href.startsWith("#") && !/^#[acfp]=/.test(href)) {
     return (
       <a
-        href={artifactContentUrl(local!)}
-        title={href}
+        href={href}
         className={ANCHOR_CLASS}
         onClick={(event) => {
           event.preventDefault();
-          openArtifactPreview(local!);
+          scope.scrollToAnchor(decodeURIComponent(href.slice(1)));
         }}
       >
         {label}
       </a>
     );
   }
-  const resolved = local !== null ? linkHref(raw) : href;
-  const external = /^https?:\/\//.test(resolved);
+  const relative = scope ? resolveRelative(scope.baseDir, href) : null;
+  /* One resolver for every link shape agents write (see linkTarget.ts): a
+     viewer URL or bare hash, `#f=` naming a transcript or any other file, an
+     encoded or literal anchor, `:line` suffixes, file:// and plain paths. */
+  const target = resolveLink(relative ?? href, { viewerHosts: viewerHosts() });
+  if (target?.kind === "file") {
+    return <FileAnchor spelled={relative ?? href} path={target.path} title={href} label={label} />;
+  }
+  if (target?.kind === "viewer") {
+    /* The conversation router owns these; it intercepts the in-app hash. */
+    return (
+      <a href={target.hash} title={href} className={ANCHOR_CLASS}>
+        {label}
+      </a>
+    );
+  }
+  const external = /^https?:\/\//.test(href);
   return (
     <a
-      href={resolved}
+      href={href}
       target={external ? "_blank" : undefined}
       rel={external ? "noreferrer" : undefined}
       title={href}
@@ -154,12 +187,14 @@ function Anchor({ href: raw, label }: { href: string; label: string }) {
 }
 
 /* Where an image's bytes come from: http(s)/data URIs load straight; a local
-   path (or file:// URL, as agents emit) streams through /api/image. */
-function imageSrc(raw: string): string {
+   path (or file:// URL, as agents emit) streams through /api/image, and a
+   path relative to a previewed document resolves against its directory. */
+function imageSrc(raw: string, scope: MdDocumentScope | null): string {
   const url = raw.replace(/\\([()])/g, "$1");
   if (/^(?:https?:)?\/\//.test(url) || url.startsWith("data:")) return url;
-  const local = url.replace(/^file:\/\//, "");
-  return `/api/image?path=${encodeURIComponent(local)}`;
+  const relative = scope ? resolveRelative(scope.baseDir, url) : null;
+  const local = relative ?? url.replace(/^file:\/\//, "");
+  return `/api/image?path=${encodeURIComponent(local.split("#")[0]!)}`;
 }
 
 /* Inline embedded image: a capped thumbnail that opens the full-size lightbox
@@ -167,7 +202,7 @@ function imageSrc(raw: string): string {
 function MdImage({ alt, src }: { alt: string; src: string }) {
   const [full, setFull] = useState(false);
   const [failed, setFailed] = useState(false);
-  const resolved = imageSrc(src);
+  const resolved = imageSrc(src, useContext(MdDocumentContext));
   if (failed) return <Anchor href={src} label={alt || src} />;
   return (
     <>
@@ -188,7 +223,7 @@ function MdImage({ alt, src }: { alt: string; src: string }) {
 
 /* A run of image-only lines flows as a wrapping thumbnail row (a contact sheet
    of screenshots reads far better side by side than stacked). */
-function MdImageRow({ images }: { images: { alt: string; src: string }[] }) {
+export function MdImageRow({ images }: { images: { alt: string; src: string }[] }) {
   return (
     <div className="my-1.5 flex flex-wrap items-start gap-2">
       {images.map((image, i) => (
@@ -236,7 +271,7 @@ export function md(text: string): ReactNode {
 const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
 const TABLE_SEP_CELL_RE = /^:?-{1,}:?$/;
 
-function MdTable({ rows }: { rows: string[] }) {
+export function MdTable({ rows }: { rows: string[] }) {
   const parsed = rows.map((row) =>
     row
       .trim()

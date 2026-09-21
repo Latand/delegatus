@@ -1,11 +1,12 @@
 "use client";
 
 import { Download, ExternalLink, FileWarning, X } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { classifyArtifact, type ArtifactKind } from "@/lib/artifact/classify";
 import { parseArtifactFragment } from "@/lib/artifact/fragment";
+import { parseFileSpelling, resolveLink, type FileLinkTarget } from "@/lib/artifact/linkTarget";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { useModalLayer } from "../modalLayer";
@@ -19,6 +20,7 @@ import {
   type ArtifactFailure,
   type ArtifactMeta,
 } from "./artifactResource";
+import { frameSource, HtmlPane, MarkdownPane } from "./DocumentPanes";
 import { ImagePane } from "./ImagePane";
 import { onArtifactPreview } from "./previewBus";
 import { TextPane } from "./TextPane";
@@ -57,7 +59,24 @@ interface OpenRequest {
   fromFragment?: boolean;
 }
 
-function kindLabel(t: TFunction, kind: ArtifactKind | null): string {
+/** The file a request names, read by the one link resolver: whatever shape
+    the link had, the preview gets a clean path plus its line and anchor. */
+export function previewTarget(spelled: string): FileLinkTarget {
+  const resolved = resolveLink(spelled);
+  return resolved?.kind === "file" ? resolved : parseFileSpelling(spelled);
+}
+
+type DocumentKind = "markdown" | "html" | null;
+
+function documentKind(path: string): DocumentKind {
+  if (/\.(?:md|markdown)$/i.test(path)) return "markdown";
+  if (/\.html?$/i.test(path)) return "html";
+  return null;
+}
+
+function kindLabel(t: TFunction, kind: ArtifactKind | null, doc: DocumentKind): string {
+  if (doc === "markdown") return t("preview.kindMarkdown");
+  if (doc === "html") return t("preview.kindHtml");
   if (kind === "pdf") return t("preview.kindPdf");
   if (kind === "image") return t("preview.kindImage");
   if (kind === "text") return t("preview.kindText");
@@ -165,7 +184,7 @@ function PreviewSheet({
     setMeta(null);
     setFailure(null);
     const controller = new AbortController();
-    void fetch(artifactMetaUrl(open.path), { signal: controller.signal })
+    void fetch(artifactMetaUrl(previewTarget(open.path).path), { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) {
           setFailure(failureFromStatus(response.status));
@@ -210,7 +229,9 @@ function PreviewSheet({
     [],
   );
 
-  const name = meta?.name ?? artifactBasename(open.path);
+  const target = useMemo(() => previewTarget(open.path), [open.path]);
+  const doc = documentKind(target.path);
+  const name = meta?.name ?? artifactBasename(target.path);
   const kind = meta?.kind ?? classifyArtifact(open.path)?.kind ?? null;
   const state = failure ?? (meta ? "ready" : "loading");
   const reload = useCallback(
@@ -223,6 +244,10 @@ function PreviewSheet({
     <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center" role="alert">
       <FileWarning className="h-8 w-8 text-warning" aria-hidden />
       <div className="max-w-[340px] text-[13px] font-semibold text-primary">{failureCopy(t, failure)}</div>
+      {/* The path the link named, so a wrong or stale link is visible for what it is. */}
+      <code data-preview-failure-path className="max-w-full break-all rounded-md bg-sunken px-2 py-1 font-mono text-[11.5px] text-muted">
+        {target.path}
+      </code>
       {meta ? <div className="text-[12px] text-muted">{formatBytes(meta.size)}</div> : null}
       {failure === "changed" || failure === "error" || failure === "aborted" ? (
         <button
@@ -238,10 +263,14 @@ function PreviewSheet({
     <div className="flex flex-1 items-center justify-center p-6 text-[13px] text-muted" role="status">
       {t("preview.loading")}
     </div>
+  ) : meta.kind === "text" && doc === "markdown" ? (
+    <MarkdownPane key={`${open.nonce}`} path={target.path} meta={meta} anchor={target.anchor} line={target.line} mobile={mobile} onFailure={onPaneFailure} />
+  ) : meta.kind === "text" && doc === "html" && meta.frame ? (
+    <HtmlPane key={`${open.nonce}`} path={target.path} meta={{ ...meta, frame: meta.frame }} anchor={target.anchor} line={target.line} mobile={mobile} onFailure={onPaneFailure} />
   ) : meta.kind === "text" ? (
-    <TextPane key={`${open.nonce}`} path={open.path} meta={meta} mobile={mobile} onFailure={onPaneFailure} />
+    <TextPane key={`${open.nonce}`} path={target.path} meta={meta} line={target.line} mobile={mobile} onFailure={onPaneFailure} />
   ) : meta.kind === "image" ? (
-    <ImagePane key={`${open.nonce}`} path={open.path} meta={meta} mobile={mobile} onFailure={onPaneFailure} />
+    <ImagePane key={`${open.nonce}`} path={target.path} meta={meta} mobile={mobile} onFailure={onPaneFailure} />
   ) : (
     <Suspense
       fallback={
@@ -250,7 +279,7 @@ function PreviewSheet({
         </div>
       }
     >
-      <PdfPane key={`${open.nonce}`} path={open.path} etag={meta.etag} mobile={mobile} onFailure={onPaneFailure} />
+      <PdfPane key={`${open.nonce}`} path={target.path} etag={meta.etag} mobile={mobile} onFailure={onPaneFailure} />
     </Suspense>
   );
 
@@ -293,13 +322,13 @@ function PreviewSheet({
             {name}
           </div>
           <div className="flex items-center gap-1.5 text-[11px] text-muted">
-            <span>{kindLabel(t, kind)}</span>
+            <span>{kindLabel(t, kind, doc)}</span>
             {meta ? <span aria-hidden>·</span> : null}
             {meta ? <span>{formatBytes(meta.size)}</span> : null}
           </div>
         </div>
         <a
-          href={artifactContentUrl(open.path, { download: true })}
+          href={artifactContentUrl(target.path, { download: true })}
           download={name}
           aria-label={t("preview.download")}
           title={t("preview.download")}
@@ -308,7 +337,9 @@ function PreviewSheet({
           <Download className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} aria-hidden />
         </a>
         <a
-          href={artifactContentUrl(open.path)}
+          /* An HTML report opens as a page (in its sandbox), not as source text. */
+          href={meta?.frame ? frameSource(meta.frame, target.anchor) : artifactContentUrl(target.path)}
+          data-preview-open-external
           target="_blank"
           rel="noreferrer"
           aria-label={t("preview.openExternal")}
