@@ -369,6 +369,35 @@ test("a thinking block's signature is kept, so a real transcript still has a tai
   expect(persistableLine(JSON.stringify({ type: "assistant", [keyNamed("access", "token")]: { signature: SENTINEL } }))).toBe(false);
 });
 
+test("a NUMBER under a credential key, and attachment bytes written as numbers, never reach the store", () => {
+  /* A value's key says what it is before its type does: a password that
+     happens to be digits is still a password, a secret below an
+     authorization header is still a secret, and an attachment's bytes
+     written out as an array of numbers are still the attachment. */
+  const NUMERIC = 739182465021;
+  const BYTE_RUN = [217, 183, 251, 199, 142, 233, 177, 205];
+  const password = JSON.stringify({ type: "user", [["pass", "word"].join("")]: NUMERIC });
+  const underAuthorization = JSON.stringify({ type: "user", request: { headers: { [["author", "ization"].join("")]: { secret: NUMERIC } } } });
+  const attachmentBytes = JSON.stringify({ type: "user", message: { attachment: { name: "scan.bin", bytes: BYTE_RUN } } });
+  for (const line of [password, underAuthorization, attachmentBytes]) expect(persistableLine(line)).toBe(false);
+
+  /* What a record legitimately counts stays: both engines' usage counters,
+     whose keys happen to spell "token", and a size written under `bytes`.
+     Every one of these shapes is in real transcripts' tails. */
+  const claudeUsage = JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 512, output_tokens: 64, cache_read_input_tokens: 20_480, cache_creation: { ephemeral_5m_input_tokens: 0 } } } });
+  const codexUsage = JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 9, cached_input_tokens: 4, output_tokens: 2, reasoning_output_tokens: 1, total_tokens: 11 }, last_token_usage: { input_tokens: 9, output_tokens: 2, total_tokens: 11 }, model_context_window: 272_000 } } });
+  const counters = JSON.stringify({ type: "response_item", payload: { time_to_first_token_ms: 812, output: [{ text: JSON.stringify({ original_token_count: 4096, goal: { tokensUsed: 12 }, remainingTokens: { total: 3 }, scanned: { bytes: 20_480 } }) }] }, metadata: { fallback_token_limit_override: 128_000 } });
+  for (const line of [claudeUsage, codexUsage, counters]) expect(persistableLine(line)).toBe(true);
+
+  /* Storage-wide: write, flush, restore, then scan every byte the store holds. */
+  const window_ = [password, underAuthorization, attachmentBytes, claudeUsage, codexUsage, counters, record(9, "and then ordinary prose")];
+  write("/sessions/numeric.jsonl", snapshot(window_));
+  expect(restoreTailSnapshot("/sessions/numeric.jsonl", bytesOf(window_))?.win.lines).toEqual([claudeUsage, codexUsage, counters, record(9, "and then ordinary prose")]);
+  const stored = storedText();
+  expect(stored).not.toContain(String(NUMERIC));
+  expect(stored).not.toContain(BYTE_RUN.join(","));
+});
+
 test("a structure this cannot finish reading is refused rather than assumed safe", () => {
   /* Wider and deeper than the inspection budget: "not inspected" is not
      "safe", so the line stays out. */

@@ -178,6 +178,13 @@ const ATTACHMENT_VALUE_KEY_RE = /^(?:b64|b64_json|base64|base64_?data|blob|bytes
     is bytes however short it is. `file_change`, `image_generation_call` and
     the rest stay readable because the match is anchored. */
 const ATTACHMENT_TYPE_RE = /^(?:image|audio|video|document|file|base64|input_image|input_audio|image_url|image_file)$/i;
+/** A key that names a credential outright, so the value under it is one
+    whatever its type. Every word of `SENSITIVE_RECORD_KEY` except the token
+    forms, which also spell the usage counters both engines write —
+    `input_tokens`, `original_token_count`, `time_to_first_token_ms`,
+    `tokensUsed`, `total_token_usage` — and which name a credential only when
+    the key ENDS in the word: `token`, `access_token`, `authToken`. */
+const CREDENTIAL_KEY_RE = /(?:api.?key|authorization|bearer|secret|password|passwd|pwd|cookie)|token$/i;
 /** A `data` field this short is a field; longer is a payload. */
 const SHORT_DATA_CHARS = 64;
 const MAX_INSPECTED_NODES = 600;
@@ -194,17 +201,32 @@ interface Inspection {
 }
 
 /**
- * Whether one decoded value may be written. `tainted` means an ancestor key
- * named a credential or an attachment: everything below it is refused unless
- * it carries no payload at all (a number, a flag, an absent value), because a
- * value's key is the only thing that says what it is.
+ * Whether one decoded value may be written. The key is classified BEFORE the
+ * value's type is looked at, because a value's key is the only thing that
+ * says what it is:
+ *
+ * - under a key that names a credential nothing survives but a value that
+ *   carries nothing — an absent value, a flag, an empty string or container.
+ *   A password made of digits is still a password, and a secret one level
+ *   below an authorization header is still a secret, so such a value is
+ *   neither accepted as a number nor traversed.
+ * - under a key that names an attachment's bytes, a string, an array or an
+ *   object is the attachment — bytes written as an array of numbers are still
+ *   its bytes — and a lone number is its size.
+ * - `tainted` means an ancestor key reads as sensitive in the broader sense
+ *   (a `token` counter included): no string below it is written, and the
+ *   counts it holds are.
  */
 function safeValue(value: unknown, key: string, depth: number, budget: Inspection, tainted: boolean): boolean {
   if ((budget.nodes -= 1) < 0 || depth > MAX_INSPECTED_DEPTH) return false;
-  if (value === null || typeof value === "number" || typeof value === "boolean" || value === undefined) return true;
-  const marked = tainted || SENSITIVE_RECORD_KEY.test(key) || ATTACHMENT_VALUE_KEY_RE.test(key);
+  if (value === null || value === undefined || typeof value === "boolean" || value === "") return true;
+  const empty = Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0;
+  if (CREDENTIAL_KEY_RE.test(key)) return empty;
+  const attachment = ATTACHMENT_VALUE_KEY_RE.test(key);
+  if (typeof value === "number") return true;
+  if (attachment) return empty;
+  const marked = tainted || SENSITIVE_RECORD_KEY.test(key);
   if (typeof value === "string") {
-    if (value === "") return true;
     if (marked) return false;
     if (key.toLowerCase() === "data" && value.length > SHORT_DATA_CHARS) return false;
     if (!safeText(value)) return false;
