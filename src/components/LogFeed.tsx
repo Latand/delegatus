@@ -593,9 +593,20 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      "system" row or a legacy paste into the operator's bubble or the internal
      relay card at render time. Codex structured rows carry their authorship in
      the transcript marker instead. */
+  /* The submissions this window is still waiting on. They are handed to the
+     provenance hook so the join from a record's own delivery identity to the
+     row it belongs to is asked for at SUBMIT time — the registry has it from
+     admission — and is therefore already in hand when the record arrives. */
+  const awaitingSubmissions = useMemo(
+    () => outbox.filter((entry) => !entry.retiredEchoId
+      && entry.responseStartedAt === undefined
+      && entry.adoptedAt === undefined).map((entry) => entry.id),
+    [outbox],
+  );
   const provenanceLookup = useDeliveredMessageProvenance(
     file?.engine === "claude" || file?.engine === "codex" ? tailPath : null,
     feed.items,
+    awaitingSubmissions,
   );
   const hiddenLocal = Math.max(0, feed.items.length - visibleCount);
   const visibleItems = hiddenLocal ? feed.items.slice(-visibleCount) : feed.items;

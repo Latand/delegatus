@@ -134,6 +134,30 @@ const codexAgentLine = (timestamp: string, message: string) => JSON.stringify({
   type: "event_msg", timestamp, payload: { type: "agent_message", message },
 });
 
+/* The production shape of a structured send's own record: the Codex host
+   stamps the delivery's identity onto the canonical structured-user record,
+   and `/api/log/provenance` resolves that token to the client message id the
+   delivery was admitted under. Two halves of one join; a record that carries
+   only one of them is bound by neither. */
+const DEDUP_TOKEN = "9f".repeat(32);
+const TWIN_FIRST_DEDUP = "a1".repeat(32);
+const TWIN_SECOND_DEDUP = "b2".repeat(32);
+const codexStructuredUserLine = (timestamp: string, message: string, dedup = DEDUP_TOKEN) => JSON.stringify({
+  type: "event_msg", timestamp,
+  payload: { type: "user_message", message: `<!-- llv:structured-user dedup=${dedup} -->\n${message}` },
+});
+
+/** The provenance endpoint, answering the one join this window needs. */
+const serveProvenance = (submissions: Record<string, string>) => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("/api/log/provenance")) {
+      return Response.json({ messages: {}, occurrences: [], submissions });
+    }
+    if (String(input) === "/api/tmux/targets") return Response.json({ targets: {} });
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+};
+
 const realFetch = globalThis.fetch;
 const composerStorage = installComposerStorageForTests();
 afterAll(() => composerStorage.uninstall());
@@ -484,6 +508,11 @@ test("a lost acknowledgement keeps its one row, and the transcript's record land
   document.body.append(host);
   const root: Root = createRoot(host);
   const submittedAt = Date.now();
+  /* The server DID admit this send; only the answer to the browser was lost.
+     So the registry can name the submission behind the record's identity,
+     and it can do so from the moment of admission — which is why the window
+     asks for the join while it waits, not once the record has landed. */
+  serveProvenance({ [DEDUP_TOKEN]: "key-lost-ack" });
   enqueueOutbox(CARD, { id: "key-lost-ack", text: TEXT, images: 0, at: submittedAt });
   /* Exactly what the composer writes when its request dies on the wire: the
      local row is `failed`, and the unknown flag says nobody established what
@@ -513,7 +542,7 @@ test("a lost acknowledgement keeps its one row, and the transcript's record land
 
   /* The transcript carries the message. That is the engine's own record of
      it — the thing the lost acknowledgement failed to tell us. */
-  await settle(() => { lines = [codexUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT)]; });
+  await settle(() => { lines = [codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT)]; });
   await settle(() => root.render(surface()));
 
   const adopted = reading(host);
@@ -539,15 +568,17 @@ test("a lost acknowledgement keeps its one row, and the transcript's record land
 });
 
 test("two identical submissions, one of them unacknowledged, keep two rows and two records", async () => {
-  /* The other half of round-4 P1: identical text must never merge two
-     submissions, and an unknown outcome must not change that. Each echo is
-     claimed by one owner, in submission order, so the first record answers
-     for the first send and the second for the second — and both keep the node
-     they were painted on. */
+  /* The other half of round-4 P1, under round-2's rule. Identical text must
+     never merge two submissions, and an unknown outcome must not change that
+     — but text is not what tells them apart any more. Each record carries the
+     identity of the delivery that wrote it, so the first record answers for
+     the first send and the second for the second even when they arrive out of
+     order, and both rows keep the node they were painted on. */
   const host = document.createElement("div");
   document.body.append(host);
   const root: Root = createRoot(host);
   const submittedAt = Date.now();
+  serveProvenance({ [TWIN_FIRST_DEDUP]: "key-twin-first", [TWIN_SECOND_DEDUP]: "key-twin-second" });
   enqueueOutbox(CARD, { id: "key-twin-first", text: TEXT, images: 0, at: submittedAt });
   updateOutbox(CARD, "key-twin-first", { state: "failed", deliveryUncertain: true, error: "lost response" });
   enqueueOutbox(CARD, { id: "key-twin-second", text: TEXT, images: 0, at: submittedAt + 1_000 });
@@ -558,41 +589,91 @@ test("two identical submissions, one of them unacknowledged, keep two rows and t
   expect(before).toHaveLength(2);
   expect(before.map((entry) => entry.phase)).toEqual(["pending", "pending"]);
 
-  /* One record arrives. It belongs to the FIRST submission — the one whose
-     acknowledgement was lost — and to nothing else. */
-  await settle(() => { lines = [codexUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT)]; });
+  /* The SECOND submission's record arrives first — the out-of-order case. It
+     names its own send, so the unacknowledged first one neither settles on it
+     nor consumes it. */
+  await settle(() => {
+    lines = [codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT, TWIN_SECOND_DEDUP)];
+  });
   await settle(() => root.render(surface()));
   const half = messageRows(host);
   expect(half).toHaveLength(2);
-  expect(half.map((entry) => entry.phase)).toEqual(["confirmed", "pending"]);
-  expect(half.map((entry) => entry.row)).toEqual(before.map((entry) => entry.row));
-  expect(half.map((entry) => entry.bubble)).toEqual(before.map((entry) => entry.bubble));
-  expect(half.map((entry) => entry.bubbleClass)).toEqual(before.map((entry) => entry.bubbleClass));
-  expect(half.map((entry) => entry.position)).toEqual(before.map((entry) => entry.position));
+  /* Both rows are the nodes they were painted on. The one that arrived moved
+     into the transcript's own order — that is where its record is — and the
+     one still waiting stays in the tail below it. */
+  const halfFirst = half.find((entry) => entry.row === before[0]!.row);
+  const halfSecond = half.find((entry) => entry.row === before[1]!.row);
+  expect(halfFirst).toBeDefined();
+  expect(halfSecond).toBeDefined();
+  expect(halfFirst!.phase).toBe("pending");
+  expect(halfSecond!.phase).toBe("confirmed");
+  expect(halfFirst!.bubble).toBe(before[0]!.bubble);
+  expect(halfSecond!.bubble).toBe(before[1]!.bubble);
+  expect(halfFirst!.bubbleClass).toBe(before[0]!.bubbleClass);
+  expect(halfSecond!.bubbleClass).toBe(before[1]!.bubbleClass);
 
-  /* And the second record answers for the second submission. */
+  /* And then the first submission's own record. */
   await settle(() => {
     lines = [
-      codexUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT),
-      /* The agent answered the first one in between, which is what a repeated
-         identical send actually looks like in a transcript. */
+      codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT, TWIN_SECOND_DEDUP),
+      /* The agent answered in between, which is what a repeated identical
+         send actually looks like in a transcript. */
       codexAgentLine(new Date(submittedAt + 3_500).toISOString(), "Looking now."),
-      codexUserLine(new Date(submittedAt + 4_000).toISOString(), TEXT),
+      codexStructuredUserLine(new Date(submittedAt + 4_000).toISOString(), TEXT, TWIN_FIRST_DEDUP),
     ];
   });
   await settle(() => root.render(surface()));
   const both = messageRows(host);
   expect(both).toHaveLength(2);
   expect(both.map((entry) => entry.phase)).toEqual(["confirmed", "confirmed"]);
-  expect(both.map((entry) => entry.row)).toEqual(before.map((entry) => entry.row));
-  expect(both.map((entry) => entry.bubble)).toEqual(before.map((entry) => entry.bubble));
-  /* The agent's answer now sits between the two messages, so the second one is
-     further down the conversation than it was — the first is exactly where it
-     always was, and the order of the two is unchanged. */
-  expect(both[0]!.position).toBe(before[0]!.position);
-  expect(both[1]!.position).toBeGreaterThan(both[0]!.position);
+  const bothFirst = both.find((entry) => entry.row === before[0]!.row);
+  const bothSecond = both.find((entry) => entry.row === before[1]!.row);
+  expect(bothFirst).toBeDefined();
+  expect(bothSecond).toBeDefined();
+  expect(bothFirst!.bubble).toBe(before[0]!.bubble);
+  expect(bothSecond!.bubble).toBe(before[1]!.bubble);
+  /* Each record kept its own submission: the one whose acknowledgement was
+     lost sits at ITS record, after the agent's answer, and the other at its
+     own — never merged, never swapped. */
+  expect(bothSecond!.position).toBeLessThan(bothFirst!.position);
   /* Two messages, two bubbles — never one merged into the other. */
   expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(2);
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("an unrelated arrival of the same words never settles an unacknowledged row", async () => {
+  /* Round-2 P1, in the mounted window. A record that names no submission of
+     this browser's — somebody else's send of the same words — used to flip
+     the row to confirmed and take its lookup away, while the entry was still
+     marked uncertain. It is somebody else's message: it gets its own row, and
+     the operator's own row keeps waiting with the one control it has. */
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const submittedAt = Date.now();
+  serveProvenance({});
+  enqueueOutbox(CARD, { id: "key-lost-ack", text: TEXT, images: 0, at: submittedAt });
+  updateOutbox(CARD, "key-lost-ack", { state: "failed", deliveryUncertain: true, error: "lost response" });
+  await settle(() => root.render(surface()));
+  const unknown = reading(host);
+  expect(unknown.phase).toBe("pending");
+
+  await settle(() => { lines = [codexUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT)]; });
+  await settle(() => root.render(surface()));
+
+  const after = reading(host);
+  /* Still pending, still the same node, and still the one row the operator's
+     own queue owns. */
+  expect(after.rows).toBe(1);
+  expect(after.phase).toBe("pending");
+  expect(after.row).toBe(unknown.row);
+  expect(after.row!.querySelector("[data-user-bubble]")).toBe(unknown.bubble);
+  expect(after.progress).toBe(1);
+  /* The arrival is a second message, so the conversation shows two — what it
+     must never do is make one of them answer for the other. */
+  expect(after.bubbles).toBe(2);
+  expect(readOutbox(CARD)[0]).toMatchObject({ deliveryUncertain: true });
   await act(async () => root.unmount());
   host.remove();
 });

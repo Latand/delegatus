@@ -203,9 +203,21 @@ interface WantedEvidence {
   /** Every row that can consume an occurrence (see occurrenceCandidate),
       including rows already attributed by the parser or the ledger. */
   candidates: Item[];
+  /**
+   * The submissions this window is still waiting on, by id (#1950 round 2).
+   *
+   * They are a fetch trigger in their own right, and the reason is timing,
+   * not evidence: the registry writes a delivery's owner row when it ADMITS
+   * the message, long before the engine journals anything. Asking then means
+   * the join from the record's own identity to this row is already in hand
+   * when the record finally appears — so the record is bound in the render it
+   * first appears in, rather than painting a second copy of the message for
+   * as long as a round trip takes.
+   */
+  pending: readonly string[];
 }
 
-function wantedEvidence(items: readonly FeedEntry[]): WantedEvidence {
+function wantedEvidence(items: readonly FeedEntry[], pending: readonly string[]): WantedEvidence {
   const drivers: WantedDriver[] = [];
   const candidates: Item[] = [];
   const seenDedup = new Set<string>();
@@ -225,15 +237,21 @@ function wantedEvidence(items: readonly FeedEntry[]): WantedEvidence {
       drivers.push({ item, engineMessageId: null, tsMs: candidate?.tsMs ?? Number.NaN, token, dedup: submissionDedup });
     }
   }
-  return { drivers, candidates };
+  return { drivers, candidates, pending };
 }
 
 /** Whether some driver row still lacks evidence. `recentRowsOnly` is the
     revalidation rule: a ledger id revalidates regardless of age, a row
     without one only while it is fresh enough to be racing its receipt. */
 function unresolvedDrivers(wanted: WantedEvidence, data: PathProvenance | null, recentRowsOnly: boolean, nowMs: number): boolean {
-  if (wanted.drivers.length === 0) return false;
+  if (wanted.drivers.length === 0 && wanted.pending.length === 0) return false;
   if (!data) return true;
+  /* A submission the server has not named yet. Answering it early is the
+     whole point; once every live submission is named there is nothing left
+     to ask for on their account. */
+  const named = new Set(Object.values(data.submissions));
+  if (wanted.pending.some((id) => !named.has(id))) return true;
+  if (wanted.drivers.length === 0) return false;
   const assigned = assignDeliveredOccurrences(wanted.candidates, data.occurrences);
   return wanted.drivers.some((driver) => {
     /* A delivery identity revalidates on its own terms: the registry writes
@@ -298,6 +316,7 @@ export function provenanceLookupFor(
 }
 
 const NO_OCCURRENCES: readonly DeliveredMessageOccurrence[] = [];
+const NO_PENDING: readonly string[] = [];
 
 /**
  * Fetches `/api/log/provenance` whenever the window shows a row the cache
@@ -305,13 +324,22 @@ const NO_OCCURRENCES: readonly DeliveredMessageOccurrence[] = [];
  * row could still be racing its own receipt. Failures stay quiet — a row
  * without evidence renders exactly as it does today.
  */
-export function useDeliveredMessageProvenance(path: string | null, items: readonly FeedEntry[]): ProvenanceLookup {
+export function useDeliveredMessageProvenance(
+  path: string | null,
+  items: readonly FeedEntry[],
+  pending: readonly string[] = NO_PENDING,
+): ProvenanceLookup {
+  const pendingKey = pending.join("\n");
   const wanted = useMemo<WantedEvidence>(
-    () => (path ? wantedEvidence(items) : { drivers: [], candidates: [] }),
-    [path, items],
+    () => (path ? wantedEvidence(items, pending) : { drivers: [], candidates: [], pending: NO_PENDING }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `pending` is keyed by its content, so a same-content array keeps the evidence
+    [path, items, pendingKey],
   );
   const wantedKey = useMemo(
-    () => wanted.drivers.map((driver) => driver.dedup ?? driver.engineMessageId ?? driver.token).join("\n"),
+    () => [
+      ...wanted.drivers.map((driver) => driver.dedup ?? driver.engineMessageId ?? driver.token),
+      ...wanted.pending,
+    ].join("\n"),
     [wanted],
   );
   /* The fetch effect keys on the bounded `wantedKey` alone — `wanted` changes

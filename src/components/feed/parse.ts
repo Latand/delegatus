@@ -1372,6 +1372,10 @@ interface PendingCodexUser {
   text: string;
   entrySeqs: number[];
   structured: boolean;
+  /** The delivery identity on the record that opened this row (#1366), when
+      it carried one. Two records that name DIFFERENT deliveries are two
+      messages however alike their words and their clocks are. */
+  dedup?: string;
   /** A later record of the same text at the same instant already replaced
       this row like for like (#1398): the message is real whatever its text
       looks like, and any further echo folds into the same row. */
@@ -2534,7 +2538,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     else if (cleaned) emit({ kind: "user", ts, text: cleaned, ...(content.selectedContext ? { selectedContext: content.selectedContext } : {}) });
     for (const image of images) emit({ kind: "inbox-image", name: image.name, path: image.path });
     for (const attachment of content.attachments) emit(attachment);
-    return { src: curSrc, ts, text: content.text, entrySeqs, structured: content.structured };
+    return { src: curSrc, ts, text: content.text, entrySeqs, structured: content.structured,
+      ...(content.deliveryDedup ? { dedup: content.deliveryDedup } : {}) };
   };
   const updateCodexPendingSource = (pending: PendingCodexUser, src: number) => {
     for (const seq of pending.entrySeqs) {
@@ -2627,7 +2632,15 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     pending.echoed = true;
   };
   const addCodexUserRecord = (ts: unknown, content: CodexUserContent) => {
-    const pending = pendingCodexUsers.find((candidate) => sameCodexTextAtTime(candidate.ts, candidate.text, ts, content.text));
+    /* Same words at the same instant used to be the whole test for "this is
+       the same message arriving again". It is not, once two sends of one text
+       can land a second apart: the delivery identity says which is which, and
+       where both records carry one and they disagree these are two messages
+       and each keeps its own row. Where either record carries none, nothing
+       has been said and the old test stands. */
+    const pending = pendingCodexUsers.find((candidate) =>
+      !(candidate.dedup && content.deliveryDedup && candidate.dedup !== content.deliveryDedup)
+      && sameCodexTextAtTime(candidate.ts, candidate.text, ts, content.text));
     if (pending) return reconcileCodexUserEcho(pending, ts, content);
     const emitted = emitCodexUserContent(ts, content);
     if (!emitted.entrySeqs.length && !emitted.text) addSvc("message user");
