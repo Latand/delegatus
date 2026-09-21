@@ -54,6 +54,9 @@ const OFFLINE_AFTER_MS = 60_000;
 const RESYNCED_NOTE_MS = 6_000;
 /** Publish accumulated store changes at most once per display frame. */
 const SUBSCRIBER_NOTIFY_MS = 16;
+/** A tab hidden this long stops its transport until it is visible again
+    (#1994). Short flips — a glance at another app — keep the stream. */
+export const HIDDEN_SUSPEND_MS = 30_000;
 
 export interface RuntimeBusState {
   store: RuntimeStore;
@@ -85,8 +88,15 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
  *  authority would leave every conversation `unresolved` forever. */
 class RuntimePlaneAbsentError extends Error {}
 
+/** Page visibility, injectable so tests can hide and show the tab. */
+export interface VisibilityLike {
+  hidden(): boolean;
+  subscribe(listener: () => void): () => void;
+}
+
 export interface RuntimeBusDeps {
   fetch: FetchLike;
+  visibility?: VisibilityLike;
   createEventSource: (url: string) => EventSourceLike;
   now: () => number;
   setTimeout: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -140,6 +150,13 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
   let fallbackEpoch = 0;
   let fallbackPollSerial = 0;
   let fallbackAppliedSerial = 0;
+
+  /* Hidden-tab suspension (#1994). Snapshot reads in flight are aborted when
+     the transport suspends, so a hidden tab stops downloading at once. */
+  let suspended = false;
+  let suspendTimer: ReturnType<typeof setTimeout> | null = null;
+  let unsubscribeVisibility: (() => void) | null = null;
+  const snapshotReads = new Set<AbortController>();
 
   function emit(): void {
     if (emitQueued || listeners.size === 0) return;
@@ -206,7 +223,17 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
   /** Snapshot fetch that tells a plane-absent deployment (no runtime host in
       this deployment at all) apart from a declared host that is failing. */
   async function fetchSnapshot(): Promise<RuntimeSnapshot> {
-    const res = await deps.fetch(SNAPSHOT_URL, { headers: { accept: "application/json" } });
+    const controller = new AbortController();
+    snapshotReads.add(controller);
+    try {
+      return await readSnapshot(controller.signal);
+    } finally {
+      snapshotReads.delete(controller);
+    }
+  }
+
+  async function readSnapshot(signal: AbortSignal): Promise<RuntimeSnapshot> {
+    const res = await deps.fetch(SNAPSHOT_URL, { headers: { accept: "application/json" }, signal });
     if (res.ok) return (await res.json()) as RuntimeSnapshot;
     if (res.status === 503) {
       let code: unknown = null;
@@ -227,6 +254,10 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
     clearFallback();
     reconnectTimer = clearTimer(reconnectTimer);
     resyncedTimer = clearTimer(resyncedTimer);
+    suspendTimer = clearTimer(suspendTimer);
+    suspended = false;
+    unsubscribeVisibility?.();
+    unsubscribeVisibility = null;
     hasSnapshot = false;
     reconnectAttempts = 0;
     firstFailureAt = null;
@@ -363,8 +394,53 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
     }
   }
 
+  /**
+   * The tab has stayed hidden: stop every transport and timer. Nothing is
+   * installed or discarded — the store keeps the cursor it reached, and the
+   * connection says `reconnecting` because it is no longer current.
+   */
+  function suspend(): void {
+    suspendTimer = null;
+    if (suspended || !state.enabled) return;
+    suspended = true;
+    closeSource();
+    clearFallback();
+    reconnectTimer = clearTimer(reconnectTimer);
+    for (const read of snapshotReads) read.abort();
+    snapshotReads.clear();
+    setState({ connection: "reconnecting" });
+  }
+
+  /**
+   * Visible again: resume the stream from the cursor the store reached. The
+   * journal replays every event since, or answers `reset` when the cursor fell
+   * out of retention, which rejoins through a full snapshot. The connection
+   * stays `reconnecting` until the stream is open, so nothing looks current
+   * before it is.
+   */
+  function wake(): void {
+    if (!suspended) return;
+    suspended = false;
+    firstFailureAt = null;
+    reconnectAttempts = 0;
+    if (hasSnapshot) openStream(state.store.cursor);
+    else void join(false);
+  }
+
+  function onVisibilityChange(): void {
+    const visibility = deps.visibility;
+    if (!visibility || !state.enabled) return;
+    if (visibility.hidden()) {
+      if (!suspended && suspendTimer === null) suspendTimer = deps.setTimeout(suspend, HIDDEN_SUSPEND_MS);
+      return;
+    }
+    suspendTimer = clearTimer(suspendTimer);
+    wake();
+  }
+
   /** Any transport failure funnels here: escalate reconnecting → degraded → offline. */
   function onTransportLost(): void {
+    if (suspended) return;
     closeSource();
     const now = deps.now();
     if (firstFailureAt === null) firstFailureAt = now;
@@ -491,6 +567,10 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
       // 503 while flipping authority back on in between.
       if (planeAbsent || state.enabled) return;
       setState({ enabled: true, connection: "reconnecting" });
+      unsubscribeVisibility = deps.visibility?.subscribe(onVisibilityChange) ?? null;
+      /* A tab that starts hidden still joins once; it suspends after the
+         same grace period as one that was hidden later. */
+      if (deps.visibility?.hidden()) suspendTimer = deps.setTimeout(suspend, HIDDEN_SUSPEND_MS);
       void join(false);
     },
     stop() {
@@ -562,6 +642,13 @@ let singleton: RuntimeBus | null = null;
 function browserDeps(): RuntimeBusDeps {
   return {
     fetch: (input, init) => fetch(input, init),
+    visibility: typeof document === "undefined" ? undefined : {
+      hidden: () => document.visibilityState === "hidden",
+      subscribe: (listener) => {
+        document.addEventListener("visibilitychange", listener);
+        return () => document.removeEventListener("visibilitychange", listener);
+      },
+    },
     createEventSource: (url) => new EventSource(url) as unknown as EventSourceLike,
     now: () => Date.now(),
     setTimeout: (fn, ms) => setTimeout(fn, ms),

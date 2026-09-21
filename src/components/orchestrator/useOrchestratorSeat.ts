@@ -79,6 +79,25 @@ interface SeatPoll {
 }
 const polls = new Map<string, SeatPoll>();
 
+/* A hidden tab skips its seat ticks (#1994) and reads once on return, so a
+   phone with the Viewer in the background stops re-reading seats nobody sees. */
+function documentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+let seatVisibilityListening = false;
+function listenForSeatVisibility(): void {
+  if (seatVisibilityListening || typeof document === "undefined") return;
+  seatVisibilityListening = true;
+  document.addEventListener("visibilitychange", () => {
+    if (documentHidden()) return;
+    for (const [key, poll] of polls) {
+      const [project, cwd] = key.split("\0");
+      if (poll.listeners.size) loadSeat(project, cwd || undefined, key);
+    }
+  });
+}
+
 /** Give every mount of `key` the answer, and keep it for the next one. */
 function publishSeat(key: string, next: ScopedRead): void {
   answers.set(key, next);
@@ -129,7 +148,10 @@ function subscribeSeat(project: string, cwd: string | undefined, listener: (read
   started.listeners.add(listener);
   if (started.timer === null) {
     started.controller = new AbortController();
-    started.timer = setInterval(() => loadSeat(project, cwd, key), SEAT_POLL_MS);
+    listenForSeatVisibility();
+    started.timer = setInterval(() => {
+      if (!documentHidden()) loadSeat(project, cwd, key);
+    }, SEAT_POLL_MS);
   }
   /* Every arriving surface revalidates, as it always has — it paints the cached
      answer and asks for a fresh one. Surfaces arriving TOGETHER (the dock and
@@ -235,9 +257,16 @@ export function useSeatConversations(enabled: boolean): SeatRefs | null {
         });
     };
     load();
-    const timer = setInterval(load, SEAT_POLL_MS);
+    const timer = setInterval(() => {
+      if (!documentHidden()) load();
+    }, SEAT_POLL_MS);
+    const onVisibility = () => {
+      if (!documentHidden()) load();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
       controller.abort();
     };
   }, [enabled]);

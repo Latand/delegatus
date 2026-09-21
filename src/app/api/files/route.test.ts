@@ -3497,3 +3497,100 @@ test("a project-scoped burst keeps its own representation without rebuilding the
   expect(unscopedAgain.headers.get("x-llv-files-projection-cache")).toBe("hit");
   expect(unscopedAgain.headers.get("etag")).toBe(unscoped.headers.get("etag"));
 });
+
+/* #1994: a changed revision of a board with megabytes of retained history
+   must not send that history again. */
+function retainedHistory(count: number, changed = -1): FileEntry[] {
+  return Array.from({ length: count }, (_, index) => ({
+    ...file(`/sessions/retained-${index}.jsonl`),
+    title: `retained conversation ${index} `.repeat(20),
+    mtime: index === changed ? 9_999 : index,
+  }));
+}
+
+test("#1994: a changed board revision reaches a delta-capable client as the changed rows only", async () => {
+  scannedFiles = retainedHistory(2_000);
+  const responses: Array<{ status: number; bytes: number; delta: boolean }> = [];
+  const cache = createFilesClientCache(async (input, init) => {
+    const response = await GET(new Request(`http://127.0.0.1${input}`, init));
+    const body = await response.clone().text();
+    responses.push({ status: response.status, bytes: body.length, delta: response.headers.has("x-llv-files-delta-base") });
+    return response;
+  });
+  const unsubscribe = cache.subscribe(() => {});
+  try {
+    await cache.revalidate();
+    const cold = responses.at(-1)!;
+    expect(cold).toMatchObject({ status: 200, delta: false });
+    expect(cold.bytes).toBeGreaterThan(1_000_000);
+
+    const before = cache.read().files;
+    scannedFiles = retainedHistory(2_000, 1_234);
+    await cache.revalidate(undefined, 2);
+    for (let attempt = 0; attempt < 200 && cache.read().files === before; attempt += 1) await Bun.sleep(10);
+    const warm = responses.findLast((response) => response.status === 200)!;
+    expect(warm).toMatchObject({ status: 200, delta: true });
+    expect(warm.bytes).toBeLessThan(cold.bytes * 0.01);
+
+    const after = cache.read().files;
+    expect(after.find((entry) => entry.path === "/sessions/retained-1234.jsonl")?.mtime).toBe(9_999);
+    // Unchanged rows keep their identity; only the changed row is new.
+    expect(after.filter((entry) => !before.includes(entry)).map((entry) => entry.path)).toEqual(["/sessions/retained-1234.jsonl"]);
+
+    // The delta-built representation is exactly what a cold client receives.
+    const fresh = createFilesClientCache((input, init) => GET(new Request(`http://127.0.0.1${input}`, init)));
+    const freshUnsubscribe = fresh.subscribe(() => {});
+    await fresh.revalidate();
+    expect(JSON.stringify(after)).toBe(JSON.stringify(fresh.read().files));
+    freshUnsubscribe();
+    fresh.dispose();
+
+    // Unchanged: bodyless.
+    await cache.revalidate();
+    expect(responses.at(-1)).toMatchObject({ status: 304, bytes: 0 });
+  } finally {
+    unsubscribe();
+    cache.dispose();
+  }
+});
+
+test("#1994: a client without delta support, or behind the retained chain, gets the full body", async () => {
+  scannedFiles = retainedHistory(200);
+  const first = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  const etag = first.headers.get("etag")!;
+  const full = await first.text();
+  scannedFiles = retainedHistory(200, 7);
+  await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-revision": "2" } }));
+  let delta = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "if-none-match": etag, "x-llv-files-delta": "1" },
+  }));
+  for (let attempt = 0; attempt < 200 && delta.status === 304; attempt += 1) {
+    await Bun.sleep(10);
+    delta = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+      headers: { "if-none-match": etag, "x-llv-files-delta": "1" },
+    }));
+  }
+  expect(delta.headers.get("x-llv-files-delta-base")).toBe(etag);
+  expect(delta.headers.get("cache-control")).toBe("no-store");
+
+  const legacy = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "if-none-match": etag } }));
+  expect(legacy.status).toBe(200);
+  expect(legacy.headers.has("x-llv-files-delta-base")).toBe(false);
+  expect((await legacy.text()).length).toBeGreaterThan(full.length * 0.9);
+
+  const unknownBase = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "if-none-match": "\"0000000000000000000000000000000000000000\"", "x-llv-files-delta": "1" },
+  }));
+  expect(unknownBase.status).toBe(200);
+  expect(unknownBase.headers.has("x-llv-files-delta-base")).toBe(false);
+});
+
+test("#1994: board bodies are gzip-encoded for a caller that accepts gzip", async () => {
+  scannedFiles = retainedHistory(500);
+  const plain = await (await GET(new Request("http://127.0.0.1/api/files?view=summary"))).text();
+  const response = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "accept-encoding": "gzip, deflate, br" } }));
+  expect(response.headers.get("content-encoding")).toBe("gzip");
+  const compressed = new Uint8Array(await response.arrayBuffer());
+  expect(compressed.length).toBeLessThan(plain.length / 5);
+  expect(Buffer.from(Bun.gunzipSync(compressed)).toString("utf8")).toBe(plain);
+});

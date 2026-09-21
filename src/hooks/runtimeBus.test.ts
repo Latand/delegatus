@@ -5,7 +5,7 @@ import { capabilitiesFor } from "@/components/agentCapabilities";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
 
-import { createRuntimeBus, type EventSourceLike, type FetchLike, type RuntimeBus, type RuntimeBusDeps } from "./runtimeBus";
+import { createRuntimeBus, HIDDEN_SUSPEND_MS, type EventSourceLike, type FetchLike, type RuntimeBus, type RuntimeBusDeps } from "./runtimeBus";
 
 /** A running top-level Claude conversation — the card whose control strip the
     plane's authority decides. Mirrors the fixture in agentCapabilities.test.ts. */
@@ -181,6 +181,10 @@ interface Harness {
   /** Answer every snapshot fetch with a non-ok status and body, as the routes do. */
   serveError: (status: number, body: unknown) => void;
   fetchCalls: () => number;
+  /** Hide or show the tab, firing visibilitychange like the browser does. */
+  setHidden: (hidden: boolean) => void;
+  /** Abort signals of snapshot reads, in fetch order. */
+  signals: Array<AbortSignal | undefined>;
 }
 
 function harness(): Harness {
@@ -191,9 +195,20 @@ function harness(): Harness {
   let calls = 0;
   let deferredFetch: Promise<Response> | null = null;
   let errorResponse: { status: number; body: unknown } | null = null;
+  let hidden = false;
+  const visibilityListeners = new Set<() => void>();
+  const signals: Array<AbortSignal | undefined> = [];
   const deps: RuntimeBusDeps = {
-    fetch: (() => {
+    visibility: {
+      hidden: () => hidden,
+      subscribe: (listener) => {
+        visibilityListeners.add(listener);
+        return () => visibilityListeners.delete(listener);
+      },
+    },
+    fetch: ((_input: string, init?: RequestInit) => {
       calls += 1;
+      signals.push(init?.signal ?? undefined);
       if (errorResponse) {
         const { status, body } = errorResponse;
         return Promise.resolve({ ok: false, status, json: () => Promise.resolve(body) } as unknown as Response);
@@ -235,6 +250,11 @@ function harness(): Harness {
     failFetch: (fail) => (shouldFail = fail),
     serveError: (status, body) => (errorResponse = { status, body }),
     fetchCalls: () => calls,
+    setHidden: (next) => {
+      hidden = next;
+      for (const listener of visibilityListeners) listener();
+    },
+    signals,
   };
 }
 
@@ -944,5 +964,125 @@ describe("runtimeBus on a deployment with no runtime plane", () => {
 
     expect(h.bus.getState().enabled).toBeTrue();
     expect(capabilitiesFor(running, null, { runtimeEnabled: h.bus.getState().enabled }).surface).toBe("unresolved");
+  });
+});
+
+/* #1994: a hidden phone tab kept its stream, and every transport hiccup cost a
+   multi-megabyte snapshot, while nobody was looking. */
+describe("runtimeBus hidden-tab suspension", () => {
+  let h: Harness;
+  beforeEach(() => (h = harness()));
+
+  /* The server heartbeats every 15 s; an open stream sees them while time passes. */
+  function pass(ms: number): void {
+    for (let left = ms; left > 0; left -= 10_000) {
+      const step = Math.min(10_000, left);
+      h.clock.advance(step);
+      const source = h.sources.at(-1);
+      if (source && !source.closed) source.named("heartbeat", {});
+    }
+  }
+
+  async function live(): Promise<FakeEventSource> {
+    h.bus.start();
+    await flush();
+    const source = h.sources.at(-1)!;
+    source.open();
+    source.named("heartbeat", {});
+    expect(h.bus.getState().connection).toBe("live");
+    return source;
+  }
+
+  test("a hidden tab closes its stream after the grace period and fetches nothing while hidden", async () => {
+    const source = await live();
+    const fetches = h.fetchCalls();
+    h.setHidden(true);
+    pass(HIDDEN_SUSPEND_MS - 1);
+    expect(source.closed).toBe(false);
+    pass(1);
+    expect(source.closed).toBe(true);
+    expect(h.bus.getState().connection).toBe("reconnecting");
+
+    h.clock.advance(60 * 60_000);
+    await flush();
+    expect(h.fetchCalls()).toBe(fetches);
+    expect(h.sources.length).toBe(1);
+  });
+
+  test("returning resumes the stream from the store cursor without a snapshot, and is not live until it opens", async () => {
+    const source = await live();
+    source.message(sessionEvent(101, 2, "running", "turn-1"));
+    const fetches = h.fetchCalls();
+    h.setHidden(true);
+    pass(HIDDEN_SUSPEND_MS);
+    h.setHidden(false);
+    await flush();
+
+    expect(h.fetchCalls()).toBe(fetches);
+    const resumed = h.sources.at(-1)!;
+    expect(resumed).not.toBe(source);
+    expect(resumed.url).toBe("/api/runtime/stream?after=101");
+    expect(h.bus.getState().connection).toBe("reconnecting");
+    resumed.open();
+    expect(h.bus.getState().connection).toBe("live");
+    expect(h.bus.getState().store.sessions.conv_a?.turn).toBe("running");
+  });
+
+  test("a cursor that fell out of retention rejoins through one authoritative snapshot", async () => {
+    await live();
+    h.setHidden(true);
+    pass(HIDDEN_SUSPEND_MS);
+    h.setHidden(false);
+    const fetches = h.fetchCalls();
+    h.setSnapshot(snapshot(500));
+    h.sources.at(-1)!.named("reset", { floorSeq: 400 });
+    await flush();
+    expect(h.fetchCalls()).toBe(fetches + 1);
+    expect(h.sources.at(-1)!.url).toBe("/api/runtime/stream?after=500");
+    expect(h.bus.getState().resyncedAt).not.toBeNull();
+  });
+
+  test("fast visibility flapping inside the grace period keeps the one stream", async () => {
+    const source = await live();
+    for (let flip = 0; flip < 20; flip += 1) {
+      h.setHidden(true);
+      pass(HIDDEN_SUSPEND_MS / 4);
+      h.setHidden(false);
+    }
+    await flush();
+    expect(source.closed).toBe(false);
+    expect(h.sources.length).toBe(1);
+    expect(h.bus.getState().connection).toBe("live");
+  });
+
+  test("a snapshot read in flight when the tab suspends is cancelled", async () => {
+    const source = await live();
+    h.deferNextFetch();
+    source.error();
+    h.clock.advance(500);
+    await flush();
+    const read = h.signals.at(-1)!;
+    expect(read.aborted).toBe(false);
+    h.setHidden(true);
+    h.clock.advance(HIDDEN_SUSPEND_MS);
+    expect(read.aborted).toBe(true);
+  });
+
+  test("an offline transport stops retrying while hidden and reconnects on return", async () => {
+    const source = await live();
+    h.failFetch(true);
+    source.error();
+    h.setHidden(true);
+    h.clock.advance(HIDDEN_SUSPEND_MS);
+    await flush();
+    const fetches = h.fetchCalls();
+    h.clock.advance(10 * 60_000);
+    await flush();
+    expect(h.fetchCalls()).toBe(fetches);
+    h.failFetch(false);
+    h.setHidden(false);
+    await flush();
+    h.sources.at(-1)!.open();
+    expect(h.bus.getState().connection).toBe("live");
   });
 });
