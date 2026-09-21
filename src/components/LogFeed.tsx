@@ -984,7 +984,18 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         /* The record's anchor stays on the record's own row: two rows sharing
            one anchor would give the viewport two answers to where it was. */
         return [
-          { kind: "message", key: boundSubmission, anchorKey: null, entry: boundEntry, canonical: null } as ConversationRow,
+          /* The record IS arrival, so the row reads as arrived from the
+             instant it lands — the same fact a bubble's own canonical text
+             carries for a send that had words. It has none, so the canonical
+             half is empty and the row keeps saying what the submission
+             carried, which is the only thing that can say it. */
+          {
+            kind: "message",
+            key: boundSubmission,
+            anchorKey: null,
+            entry: boundEntry,
+            canonical: { text: "text" in item ? item.text : "" },
+          } as ConversationRow,
           { kind: "item", key: rowKey, anchorKey, item, speakText,
             ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow,
         ];
