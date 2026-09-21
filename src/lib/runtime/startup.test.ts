@@ -984,6 +984,11 @@ test.each(["terminal", "demoted-superseded", "new-generation", "superseded-durin
       return baseClient.snapshot();
     },
     effectBatch: async (...args: Parameters<RuntimeHostClient["effectBatch"]>) => {
+      // Signals read no session for a demoted row, but always page the effects.
+      if (failStartupSignalsAfterDiscard) {
+        failStartupSignalsAfterDiscard = false;
+        throw new RuntimeHostUnavailableError("runtime socket failed after retained host discard");
+      }
       const batch = await baseClient.effectBatch(...args);
       if (supersedeDuringEffectBatch) {
         supersedeDuringEffectBatch = false;

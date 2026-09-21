@@ -1509,3 +1509,79 @@ test("a registry row cannot be persisted without a completed grant re-decision",
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("keyed reads of a granted row reuse one assembled decision per stored revision, never for a rewritten row", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-decision-record-"));
+  const registryPath = path.join(directory, "agent-registry.json");
+  const sqlitePath = path.join(directory, "agent-registry.sqlite");
+  const grant = ["viewer", "test-connector"];
+  const rowReads = new Map<string, number>();
+  const storage = {
+    sqliteMode: "sqlite" as const,
+    mcpGrantPolicy: WITH_CONNECTOR,
+    onSqliteRowPayloadRead: (collection: string, count: number) => rowReads.set(collection, (rowReads.get(collection) ?? 0) + count),
+  };
+  try {
+    const seeded = new AgentRegistry(registryPath, undefined, undefined, storage);
+    const rootId = settledParent(seeded, ["viewer"], "record-root");
+    const workerId = settledDelegatedChild(seeded, rootId, "record-worker");
+    structuredRow(seeded, "record-root");
+    structuredRow(seeded, "record-worker");
+    // Retained history: every row the whole-file decision has to assemble.
+    for (let index = 0; index < 300; index += 1) seeded.ensureConversation("codex", `/sessions/record-history-${index}.jsonl`, null);
+    tamperSqliteGrant(sqlitePath, [
+      { collection: "conversations", key: rootId },
+      { collection: "entries", key: entryRowKey("record-root") },
+      { collection: "conversations", key: workerId },
+      { collection: "entries", key: entryRowKey("record-worker") },
+    ], grant);
+    const conversations = Object.keys(seeded.readOnlySnapshot().conversations).length;
+
+    const store = new AgentRegistry(registryPath, undefined, undefined, storage);
+    rowReads.clear();
+    for (let read = 0; read < 25; read += 1) {
+      expect(store.conversation(rootId as never)!.generations.at(-1)!.launchProfile.mcpServers).toEqual(grant);
+      expect(store.conversation(workerId as never)!.generations.at(-1)!.launchProfile.mcpServers).toEqual(["viewer"]);
+    }
+    /* Fifty keyed reads of rows claiming a grant used to assemble and decide
+       the whole file fifty times over. */
+    console.log(JSON.stringify({ conversations, keyedReads: 50, conversationRowReads: rowReads.get("conversations") }));
+    expect(rowReads.get("conversations")!).toBeLessThan(2 * conversations);
+
+    /* Rewritten on disk without a revision: a decision made about the row as it
+       was never carries over to what it now says. */
+    const db = new Database(sqlitePath, { strict: true });
+    try {
+      const row = db.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM registry_rows WHERE collection = 'conversations' AND row_key = ?",
+      ).get(rootId)!;
+      const parsed = JSON.parse(row.value_json) as { generations: { launchProfile: Record<string, unknown> }[] };
+      parsed.generations.at(-1)!.launchProfile.parentConversationId = workerId;
+      db.query<unknown, [string, string]>("UPDATE registry_rows SET value_json = ? WHERE collection = 'conversations' AND row_key = ?")
+        .run(JSON.stringify(parsed), rootId);
+    } finally {
+      db.close();
+    }
+    expect(store.conversation(rootId as never)!.generations.at(-1)!.launchProfile.mcpServers).toEqual(["viewer"]);
+
+    /* A mutation handed a recorded decision persists what it rewrote, exactly
+       as it persists the rows the whole decision rewrites. */
+    const owner = { pid: process.pid, startIdentity: null };
+    expect(store.claimStructuredHost({ engine: "codex", sessionId: sessionIdFor("record-worker") }, owner, { allowUnhosted: true })
+      ?.launchProfile?.mcpServers).toEqual(["viewer"]);
+    const stored = new Database(sqlitePath, { readonly: true });
+    try {
+      const entry = stored.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM registry_rows WHERE collection = 'entries' AND row_key = ?",
+      ).get(entryRowKey("record-worker"))!;
+      expect((JSON.parse(entry.value_json) as { launchProfile: { mcpServers: string[] } }).launchProfile.mcpServers).toEqual(["viewer"]);
+    } finally {
+      stored.close();
+    }
+    // The root's own entry now answers to a delegated generation.
+    expect(store.claimStructuredHost({ engine: "codex", sessionId: sessionIdFor("record-root") }, owner, { allowUnhosted: true })
+      ?.launchProfile?.mcpServers).toEqual(["viewer"]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

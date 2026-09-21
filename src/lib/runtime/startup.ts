@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
+import { agentRegistry, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -845,10 +845,33 @@ function admittedRuntimeMessages(
   return admittedMessages;
 }
 
+/** The conversations whose runtime evidence a startup decision can read. The
+    signals gate only a row whose current entry has a structured host, and
+    admitted messages settle only the obligations this pass holds; every
+    registry spelling of such a conversation is read, because receipts are
+    matched by canonical id. The rest of the retained history is a read per
+    conversation that no decision consumes. */
+function startupRuntimeConversationIds(
+  registry: AgentRegistry,
+  owedConversationIds: ReadonlySet<string>,
+  snapshot: RegistryFile = registry.readOnlySnapshot(),
+): string[] {
+  return Object.values(snapshot.conversations).flatMap((conversation) => {
+    // Resolved against the snapshot in hand: one keyed transaction per retained conversation is the cost avoided here.
+    const canonicalId = resolveConversationAlias(snapshot, conversation.id);
+    if (owedConversationIds.has(canonicalId)) return [conversation.id];
+    const canonical = snapshot.conversations[canonicalId] ?? conversation;
+    const generation = canonical.generations.at(-1);
+    return generation && snapshot.entries[sessionKeyId({ engine: canonical.engine, sessionId: generation.id })]?.structuredHost
+      ? [conversation.id]
+      : [];
+  });
+}
+
 async function readStartupRuntime(
   registry: AgentRegistry,
   client: RuntimeHostClient,
-  conversationIds = Object.keys(registry.readOnlySnapshot().conversations),
+  conversationIds: readonly string[],
 ): Promise<Pick<Awaited<ReturnType<RuntimeHostClient["snapshot"]>>, "sessions" | "recentOperations">> {
   // Compatibility with older embedders; the production client has session-read.
   if (!client.readSession) return client.snapshot(undefined, { timeoutMs: STARTUP_READ_TIMEOUT_MS });
@@ -863,6 +886,7 @@ async function readStartupRuntime(
 async function structuredStartupSignals(
   registry: AgentRegistry,
   client: RuntimeHostClient | null,
+  owedConversationIds: ReadonlySet<string> = new Set(),
 ): Promise<StructuredStartupSignals> {
   if (!client) {
     return {
@@ -872,7 +896,7 @@ async function structuredStartupSignals(
       admittedMessages: new Map(),
     };
   }
-  const runtime = await readStartupRuntime(registry, client);
+  const runtime = await readStartupRuntime(registry, client, startupRuntimeConversationIds(registry, owedConversationIds));
   /* #1846: an account pick waits for the conversation's next engagement, so on its own it is no work that
      needs a host at startup. Its message, once there is one, is. */
   const waitingSwitches = new Set<string>();
@@ -1294,7 +1318,11 @@ async function adoptStructuredHostsPass(
       || interruptionHostKeys.has(sessionKeyId(entry.key))
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key)));
-    const signals = await structuredStartupSignals(registry, client);
+    const signals = await structuredStartupSignals(
+      registry,
+      client,
+      new Set(unresolvedInterruptions.map((obligation) => canonicalConversationId(registry, obligation.conversationId))),
+    );
     pipelineEvidence = await admitState(async (available) =>
       available ? readEvidence() : pipelineStartupEvidence(registry, false), "reading startup signals");
     /* Only a continuation not yet admitted forces its row's adoption. One the

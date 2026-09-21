@@ -79,6 +79,76 @@ type StoredRow = { collection: string; row_key: string; value_json: string; row_
 type MetaRow = { key: string; value: string };
 type CachedRow = { valueJson: string; parsed: unknown };
 
+/** Per grant-bearing row, the stored JSON it was decided from and the MCP lists
+    the assembled decision left on it: one for an entry or a receipt, one per
+    generation for a conversation. */
+type RecordedGrant = { storedJson: string | undefined; lists: readonly (readonly string[] | undefined)[] };
+type GrantDecisions = { revision: number; rows: ReadonlyMap<string, RecordedGrant> };
+type GrantProfileRow = { launchProfile?: { mcpServers?: string[] } | null; generations?: { launchProfile?: { mcpServers?: string[] } }[] };
+
+const grantDecisionKey = (collection: string, key: string) => `${collection}\u0000${key}`;
+
+function grantLists(collection: string, row: GrantProfileRow): (string[] | undefined)[] {
+  return collection === "conversations"
+    ? (row.generations ?? []).map((generation) => generation.launchProfile?.mcpServers)
+    : [row.launchProfile?.mcpServers];
+}
+
+/** Read off a file the assembled decision has just run over. `storedJson`
+    names the stored row each decision was made from. */
+function recordGrantDecisions(
+  file: RegistryFile,
+  revision: number,
+  storedJson: (collection: RowCollection, key: string) => string | undefined,
+): GrantDecisions {
+  const rows = new Map<string, RecordedGrant>();
+  for (const collection of ["entries", "receipts", "conversations"] as const) {
+    for (const [key, row] of Object.entries(file[collection] as Record<string, GrantProfileRow>)) {
+      rows.set(grantDecisionKey(collection, key), {
+        storedJson: storedJson(collection, key),
+        lists: grantLists(collection, row).map((list) => list && [...list]),
+      });
+    }
+  }
+  return { revision, rows };
+}
+
+/** Gives one row what the assembled decision gave it, but only when the row is
+    stored exactly as it was when that decision ran: a row rewritten without a
+    revision can never inherit a decision made about its predecessor. False
+    when the record cannot say, so the caller decides in full. */
+function applyRecordedGrantDecision(
+  decisions: GrantDecisions,
+  collection: string,
+  key: string,
+  storedJson: string | null | undefined,
+  row: unknown,
+  rewritten: () => void,
+): boolean {
+  // The decision reads lineage edges and never rewrites one.
+  if (collection === "lineageEdges") return true;
+  const recorded = decisions.rows.get(grantDecisionKey(collection, key));
+  if (!recorded || recorded.storedJson === undefined || recorded.storedJson !== storedJson) return false;
+  const target = row as GrantProfileRow;
+  const profiles = collection === "conversations"
+    ? (target.generations ?? []).map((generation) => generation.launchProfile)
+    : [target.launchProfile];
+  if (recorded.lists.length !== profiles.length) return false;
+  for (const [index, profile] of profiles.entries()) {
+    if ((profile?.mcpServers === undefined) !== (recorded.lists[index] === undefined)) return false;
+  }
+  let changed = false;
+  for (const [index, profile] of profiles.entries()) {
+    const list = recorded.lists[index];
+    if (!profile?.mcpServers || !list) continue;
+    if (profile.mcpServers.length !== list.length || profile.mcpServers.some((name, at) => name !== list[at])) changed = true;
+    profile.mcpServers = [...list];
+  }
+  // A mutation persists what the decision rewrote, as it does after the full one.
+  if (changed) rewritten();
+  return true;
+}
+
 interface RegistryChanges {
   rows: Map<RowCollection, Set<string>>;
   meta: Set<(typeof META_FIELDS)[number]>;
@@ -195,6 +265,11 @@ export class SqliteAgentRegistryStore {
   private readonly rowCache = new Map<RowCollection, Map<string, CachedRow>>();
   private revisionCache: { signature: string; revision: number } | null = null;
   private readOnlyCache: SqliteRegistrySnapshot | null = null;
+  /** What the assembled grant decision (#739) returned for every grant-bearing
+      row at one stored revision. A keyed read of a row claiming more than the
+      baseline otherwise assembles, clones and decides the whole file, per read:
+      sixty such rows cost startup half a minute of blocked event loop. */
+  private grantDecisions: GrantDecisions | null = null;
 
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   /** Runtime half of {@link DecidedRegistryFile}: the files this store has
@@ -402,7 +477,7 @@ export class SqliteAgentRegistryStore {
   read<T>(reader: (file: RegistryFile) => T): T {
     this.db.exec("BEGIN");
     try {
-      const result = reader(this.loadLazyInTransaction().file);
+      const result = reader(this.loadLazyInTransaction(true, true, true).file);
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -809,6 +884,7 @@ export class SqliteAgentRegistryStore {
       this.secureFiles();
       this.rowCache.clear();
       this.readOnlyCache = null;
+      this.grantDecisions = null;
       this.rememberRevision(revision);
       return { file, revision, replaced: true };
     } catch (error) {
@@ -849,7 +925,7 @@ export class SqliteAgentRegistryStore {
     return snapshot;
   }
 
-  private loadLazyInTransaction(trackMutations = true, useRowCache = trackMutations): LazyRegistrySnapshot {
+  private loadLazyInTransaction(trackMutations = true, useRowCache = trackMutations, readOnly = false): LazyRegistrySnapshot {
     /* Branded here because the row ACCESSORS below carry the guarantee: every
        row this file can hand out goes through `admitRow`, which runs the
        assembled decision before returning anything claiming more than the
@@ -870,29 +946,63 @@ export class SqliteAgentRegistryStore {
        than a way around it, and a keyed mutation still reads exactly the one row
        it asked for. The first row that claims anything MORE runs the decision
        over the whole file before it is handed out. */
+    const revision = Number(this.meta("revision") ?? 0);
+    const loadedCollections = new Map<RowCollection, RegistryFile[RowCollection]>();
+    const baselineCollections = new Map<RowCollection, Map<string, string | null>>();
+    const dirtyRows = new Map<RowCollection, Set<string>>();
+    const reorderedCollections = new Set<RowCollection>();
+    /* Nothing this transaction wrote yet: the file is exactly the stored
+       revision, so the decision over it is the one recorded for that revision. */
+    const unchanged = () => reorderedCollections.size === 0
+      && [...dirtyRows.values()].every((rows) => rows.size === 0);
     let grantsDecided = false;
     let decidingGrants = false;
     const decideGrants = () => {
       if (grantsDecided || decidingGrants) return;
       decidingGrants = true;
       try {
+        const recordable = unchanged();
         reboundAssembledMcpGrants(file, this.mcpGrantPolicy);
         grantsDecided = true;
+        if (recordable) {
+          this.grantDecisions = recordGrantDecisions(file, revision, (collection, key) =>
+            this.rowCache.get(collection)?.get(key)?.valueJson);
+        }
       } finally {
         decidingGrants = false;
       }
     };
+    /* Whether this transaction reads its decisions from the record. Settled
+       once, at the first row that needs a decision, exactly where the whole
+       decision would otherwise have run: from then on a row still at the stored
+       revision gets what that decision gave it, and a row this transaction
+       rewrote is not re-decided, as before. */
+    let recordedDecisions: GrantDecisions | null | undefined;
     /* Every row leaves a loader through here. A row at the baseline is admitted
        untouched; anything claiming more is only returned once the decision has
        run over the whole file, including the rows attesting to this one. */
-    const admitRow = <T>(collection: RowCollection, row: T): T => {
-      if (GRANT_COLLECTIONS.has(collection) && rowClaimsBeyondBaselineGrant(row)) decideGrants();
+    const admitRow = <T>(collection: RowCollection, key: string, storedJson: string | null | undefined, row: T): T => {
+      if (!GRANT_COLLECTIONS.has(collection) || grantsDecided || decidingGrants
+        || !rowClaimsBeyondBaselineGrant(row)) return row;
+      if (recordedDecisions === undefined) {
+        if (readOnly && unchanged() && this.grantDecisions?.revision !== revision) {
+          /* The same decision over the same revision, read in this transaction
+             by the eager loader: it neither clones every row nor wraps it for
+             mutation tracking, and it leaves the complete snapshot the next
+             whole-file read at this revision would load again. Only a read
+             takes it: it decides the shared parsed rows in place, and a
+             mutation persists the rows its decision rewrites. */
+          const snapshot = this.loadInTransaction(true);
+          if (this.readOnlyCache?.revision !== revision) this.readOnlyCache = snapshot;
+        }
+        recordedDecisions = this.grantDecisions?.revision === revision && unchanged() ? this.grantDecisions : null;
+      }
+      if (recordedDecisions && (dirtyRows.get(collection)?.has(key)
+        || applyRecordedGrantDecision(recordedDecisions, collection, key, storedJson, row,
+          () => dirtyRows.get(collection)?.add(key)))) return row;
+      decideGrants();
       return row;
     };
-    const loadedCollections = new Map<RowCollection, RegistryFile[RowCollection]>();
-    const baselineCollections = new Map<RowCollection, Map<string, string | null>>();
-    const dirtyRows = new Map<RowCollection, Set<string>>();
-    const reorderedCollections = new Set<RowCollection>();
     keyedReaders.set(file, (collection, field, value) => {
       const values = typeof value === "string" ? [value] : value;
       if (values.length === 0) return [];
@@ -1033,7 +1143,7 @@ export class SqliteAgentRegistryStore {
             }
             /* The decision rewrites `rows[key]` in place where it denies, so the
                caller never holds the undecided object. */
-            return admitRow(collection, rows[key]);
+            return admitRow(collection, key, baseline.get(key), rows[key]);
           };
           const loadAllRows = () => {
             if (allRowsLoaded) return;
@@ -1174,7 +1284,7 @@ export class SqliteAgentRegistryStore {
     }
     return {
       file,
-      revision: Number(this.meta("revision") ?? 0),
+      revision,
       changes: () => {
         const changes: RegistryChanges = { rows: new Map(), meta: new Set(), order: new Set() };
         for (const [collection, value] of loadedCollections) {
@@ -1230,6 +1340,12 @@ export class SqliteAgentRegistryStore {
     changes: RegistryChanges,
     revision: number,
   ): void {
+    /* Only the grant collections are inputs to the decision; a commit that
+       touched none of them leaves every recorded decision what it was. */
+    this.grantDecisions = this.grantDecisions?.revision === revision - 1
+      && ![...changes.rows.keys(), ...changes.order].some((collection) => GRANT_COLLECTIONS.has(collection))
+      ? { ...this.grantDecisions, revision }
+      : null;
     const cachedSnapshot = this.readOnlyCache?.revision === revision - 1
       ? this.readOnlyCache
       : null;

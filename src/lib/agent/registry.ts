@@ -2754,7 +2754,7 @@ function recordObservedLineage(
   };
 }
 
-function resolveConversationAlias(file: Pick<RegistryFile, "conversationAliases">, id: ViewerConversationId): ViewerConversationId {
+export function resolveConversationAlias(file: Pick<RegistryFile, "conversationAliases">, id: ViewerConversationId): ViewerConversationId {
   const seen = new Set<ViewerConversationId>();
   let current = id;
   while (!seen.has(current)) {
