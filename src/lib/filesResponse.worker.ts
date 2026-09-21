@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { buildFilesResponse } from "@/app/api/files/response";
 import { statePath } from "@/lib/configDir";
+import { diffFilesBodies } from "@/lib/filesDelta";
 import type { FilesResponseWorkerRequest } from "@/lib/scanner/filesResponseWorker";
 
 /** One request frame. A whole snapshot can ride inline, so the bound is large. */
@@ -30,6 +31,7 @@ function workerRequest(value: unknown): FilesResponseWorkerRequest | null {
     || typeof value.url !== "string"
     || !Array.isArray(value.headers)
     || (value.snapshotFile !== undefined && typeof value.snapshotFile !== "string")
+    || (value.deltaScope !== undefined && (typeof value.deltaScope !== "string" || !/^[0-9a-f]{40}$/.test(value.deltaScope)))
     || (value.snapshot === undefined && value.snapshotFile === undefined)
     || (value.snapshot !== undefined && (
       !record(value.snapshot)
@@ -61,13 +63,53 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
   const resultDirectory = statePath("files-response-results");
   fs.mkdirSync(resultDirectory, { recursive: true, mode: 0o700 });
   const bodyFile = path.join(resultDirectory, `${process.pid}-${crypto.randomUUID()}.json`);
-  fs.writeFileSync(bodyFile, await response.text(), { encoding: "utf8", mode: 0o600 });
+  const body = await response.text();
+  const etag = response.headers.get("etag") ?? "";
+  fs.writeFileSync(bodyFile, body, { encoding: "utf8", mode: 0o600 });
   return {
     bodyFile,
     contentType: response.headers.get("content-type") ?? "application/json",
-    etag: response.headers.get("etag") ?? "",
+    etag,
     timing: response.headers.get("server-timing") ?? "",
+    ...(request.deltaScope ? deltaFromBase(resultDirectory, request.deltaScope, body, etag) : {}),
   };
+}
+
+/** Base representations kept for deltas: one per board scope in use. */
+const DELTA_BASES_KEPT = 4;
+
+/**
+ * The delta from the representation this scope last built to `body` (#1994).
+ * The base lives on disk beside the result files rather than in this process,
+ * so a worker retired for idleness or size still answers the next revision
+ * with a delta instead of making every client download the board again.
+ */
+function deltaFromBase(resultDirectory: string, scope: string, body: string, etag: string): Record<string, string> {
+  if (!/^"[0-9a-f]{40}"$/.test(etag)) return {};
+  const basePath = path.join(resultDirectory, `delta-base-${scope}.json`);
+  let result: Record<string, string> = {};
+  try {
+    const stored = fs.readFileSync(basePath, "utf8");
+    const newline = stored.indexOf("\n");
+    const baseEtag = stored.slice(0, newline);
+    if (newline > 0 && baseEtag === etag) return {};
+    if (newline > 0 && /^"[0-9a-f]{40}"$/.test(baseEtag)) {
+      const deltaFile = path.join(resultDirectory, `${process.pid}-${crypto.randomUUID()}.delta.json`);
+      fs.writeFileSync(deltaFile, diffFilesBodies(stored.slice(newline + 1), body, baseEtag, etag), { encoding: "utf8", mode: 0o600 });
+      result = { deltaFile, deltaBase: baseEtag };
+    }
+  } catch {
+    // No base yet, or an unreadable one: this build becomes the base.
+  }
+  const temporary = `${basePath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${etag}\n${body}`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporary, basePath);
+  const bases = fs.readdirSync(resultDirectory)
+    .filter((name) => /^delta-base-[0-9a-f]{40}\.json$/.test(name))
+    .map((name) => ({ name, mtimeMs: fs.statSync(path.join(resultDirectory, name)).mtimeMs }))
+    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+  for (const stale of bases.slice(DELTA_BASES_KEPT)) fs.rmSync(path.join(resultDirectory, stale.name), { force: true });
+  return result;
 }
 
 function reply(payload: Record<string, unknown>): void {
