@@ -792,6 +792,36 @@ test.each(["pipelines.json", "pipelines-archive.json"])("ordinary legacy %s read
 });
 
 
+test("pending close custody retains publication ownership and stays out of the archive", async () => isolatedDelivery(async () => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("close-custody-owner"), deliveryTarget);
+  await withPipelineMutation((pipelines, persist) => {
+    const record = pipelines.find((item) => item.id === owner.id)!;
+    record.state = "closed";
+    record.cursor = null;
+    record.closedAt = "2026-07-02T00:00:00.000Z";
+    record.closeTeardown = { id: "close-obligation", phase: "pending", waitingForActivation: false, acknowledgeHosts: false, flow: null };
+    record.closeReport = { status: "pending", pending: [], stopped: [], alreadyStopped: [], unconfirmed: [], acknowledged: [],
+      reviewers: [], stillRunning: [], notes: [], worktree: null };
+    persist([record]);
+  });
+  expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })?.id).toBe(owner.id);
+  expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(0);
+  const borrowed = loadPipelines()[0]!;
+  borrowed.closeTeardown!.waitingForActivation = true;
+  borrowed.closeReport!.notes.push({ stageId: "build", attempt: 1, conversationId: null, agentPath: null, paneId: null, detail: "borrowed copy" });
+  expect(loadPipelines()[0]!.closeTeardown!.waitingForActivation).toBeFalse();
+  expect(loadPipelines()[0]!.closeReport!.notes).toEqual([]);
+  await withPipelineMutation((pipelines, persist) => {
+    const record = pipelines.find((item) => item.id === owner.id)!;
+    record.closeTeardown!.phase = "settled";
+    record.closeReport!.status = "settled";
+    persist([record]);
+  });
+  expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
+  expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
+  expect(findPipelineRecord(owner.id)?.closeReport?.status).toBe("settled");
+}));
+
 test("startup admission warns with its phase when one hold exceeds 100 ms", async () => isolatedDelivery(async () => {
   const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {
