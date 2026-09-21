@@ -1,6 +1,7 @@
 import { agentRegistry, RegistryReadError, type SnapshotTitleConversationProjection } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
+import { projectResolutionStateKey } from "@/lib/scanner/projectState";
 import type { FileEntry } from "@/lib/types";
 
 import { resolveProjectAttribution } from "./projectResolution";
@@ -55,6 +56,20 @@ function projectRegistrySnapshot(
   const projectByPath = new Map<string, string>();
   const projectCwdByPath = new Map<string, string>();
   const archivedPaths = new Set<string>();
+  /* One resolution state per projection, and one cwd resolution per distinct
+     cwd. Each `projectInfoFromCwd` call without a state re-reads the state
+     database's collection revisions, which for every conversation of a
+     retained registry held the event loop for seconds per revision (#1987).
+     The projection is a snapshot of one moment, so its project attribution and
+     its lazily read metadata resolve against the same state. */
+  const resolutionState = includeProjects ? projectResolutionStateKey() : undefined;
+  const projectInfoByCwd = new Map<string, ReturnType<typeof projectInfoFromCwd>>();
+  const cwdInfo = (cwd: string): ReturnType<typeof projectInfoFromCwd> => {
+    if (projectInfoByCwd.has(cwd)) return projectInfoByCwd.get(cwd) ?? null;
+    const info = projectInfoFromCwd(cwd, resolutionState);
+    projectInfoByCwd.set(cwd, info);
+    return info;
+  };
   for (const conversation of Object.values(snapshot.conversations)) {
     const owned = [...conversation.generations.map((generation) => generation.path), ...conversation.continuityPaths];
     ownedPathsByConversation.set(conversation.id, owned);
@@ -62,9 +77,11 @@ function projectRegistrySnapshot(
     const latest = conversation.generations.at(-1);
     if (!latest) continue;
     if (includeProjects) {
+      const cwd = latest.launchProfile.cwd?.trim();
       const { project } = resolveProjectAttribution({
         projectOwnership: conversation.projectOwnership,
         cwd: latest.launchProfile.cwd,
+        cwdInfo: cwd ? cwdInfo(cwd) : null,
         launchProfileProject: latest.launchProfile.project,
       });
       if (project) {
@@ -89,7 +106,6 @@ function projectRegistrySnapshot(
      A historical registry can own thousands of one-off worktree cwd values,
      while one board response asks for only a few hundred current paths. */
   const projectMetadataCache = new Map<string, { displayName: string; projectRoot?: string; unresolved?: true } | null>();
-  const projectInfoByCwd = new Map<string, ReturnType<typeof projectInfoFromCwd>>();
   const projectMetadataByPath = {
     get(pathname: string) {
       const cached = projectMetadataCache.get(pathname);
@@ -100,15 +116,11 @@ function projectRegistrySnapshot(
         projectMetadataCache.set(pathname, null);
         return undefined;
       }
-      let cwdInfo = projectInfoByCwd.get(cwd);
-      if (!projectInfoByCwd.has(cwd)) {
-        cwdInfo = projectInfoFromCwd(cwd);
-        projectInfoByCwd.set(cwd, cwdInfo);
-      }
-      const metadata = cwdInfo?.project === project ? {
-        displayName: cwdInfo.displayName,
-        ...(cwdInfo.repo ? { projectRoot: cwdInfo.repo } : {}),
-        ...(cwdInfo.unresolved ? { unresolved: true as const } : {}),
+      const info = cwdInfo(cwd.trim());
+      const metadata = info?.project === project ? {
+        displayName: info.displayName,
+        ...(info.repo ? { projectRoot: info.repo } : {}),
+        ...(info.unresolved ? { unresolved: true as const } : {}),
       } : null;
       projectMetadataCache.set(pathname, metadata);
       return metadata ?? undefined;

@@ -251,8 +251,11 @@ export function admitOperatorDirectory(
   kind: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  if (!isOperatorOwnedDirectory(directory, env)) return directory;
+  /* A declared owner is admitted wherever the directory is, so it is asked
+     first: the classification below is path work that every `statePath()`
+     call repeated (#1987). Both answers are read afresh on every call. */
   if (stateOwner(env)) return directory;
+  if (!isOperatorOwnedDirectory(directory, env)) return directory;
   const context = guardedContext(env);
   if (!context) throw new UnownedStateAccessError(directory, env);
   const substitute = path.join(throwawayStateRoot(), kind);
@@ -283,5 +286,6 @@ export function mayRunStateStartupMutation(
   directory: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return !isOperatorOwnedDirectory(directory, env) || ownsStateStartupMutation(env);
+  /* The same answer as before, the cheap half first. */
+  return ownsStateStartupMutation(env) || !isOperatorOwnedDirectory(directory, env);
 }
