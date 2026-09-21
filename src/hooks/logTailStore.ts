@@ -650,10 +650,18 @@ function anchorOf(lines: string[]): string {
  * anchor can never push the read past the server's live window and be jumped
  * forward. A window with no rows has nothing to anchor, and resumes as a first
  * read of the file.
+ *
+ * A snapshot that is ALREADY armed — a reopen that was taken away before its
+ * first answer — is checked against the catalog again, because the file can
+ * have changed since, and is returned as it is: rewinding it a second time
+ * would ask the next chunk for bytes that are not the anchor it carries.
  */
 export function resumableSnapshot(snapshot: TailSnapshot, fileSize: number | null, knownSize = snapshot.size): TailSnapshot | null {
   /* Zero counts: a truncated file is the clearest case of "not this one". */
   if (typeof fileSize === "number" && fileSize < knownSize) return null;
+  if (snapshot.resumeAnchor) {
+    return typeof fileSize === "number" && fileSize - snapshot.offset > MAX_BEHIND_BYTES ? null : snapshot;
+  }
   if (snapshot.win.lines.length === 0) {
     return { ...snapshot, offset: 0, historyStart: 0, partial: "", first: true, hasMore: false, resumeAnchor: undefined };
   }

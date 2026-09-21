@@ -51,16 +51,16 @@ function boundedSnapshot(snapshot: TailSnapshot, cap: number): TailSnapshot {
     persisted. Either one is validated the same way (#1821): refused when the
     catalog reports a shorter file, and otherwise resumed one anchor before
     its end, so the first forward chunk proves the rows are still this file's.
+    A snapshot a reopen already armed is held to the same catalog checks on
+    every later read, and keeps the anchor it has.
     A tab's memory is not proof — the transcript can be replaced while the
     pane is away — it only saves the paint the wait. */
 function readTailCache(path: string, cap: number, fileSize: number | null = null): TailSnapshot | null {
   const held = tailCache.get(path);
   tailCache.delete(path);
-  const cached = !held
-    ? restoreTailSnapshot(path, fileSize)
-    : held.resumeAnchor
-      ? held
-      : resumableSnapshot(held, fileSize, held.catalogSize ?? held.size);
+  const cached = held
+    ? resumableSnapshot(held, fileSize, held.catalogSize ?? held.size)
+    : restoreTailSnapshot(path, fileSize);
   if (!cached) {
     if (held) forgetTailSnapshot(path);
     return null;

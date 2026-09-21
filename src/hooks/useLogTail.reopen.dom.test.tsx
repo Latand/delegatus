@@ -415,3 +415,80 @@ test("a transcript truncated in the same document is not painted from memory, an
   expect(text()).not.toContain("old-");
   expect(cues).toEqual([]);
 });
+
+/** Reopen `file` and take the pane away again before any answer arrives: the
+    tab now holds a snapshot already armed with its anchor. Returns the offset
+    that reopen asked for. */
+async function reopenThenLeaveUnanswered(file: FileEntry): Promise<number> {
+  mount(file);
+  expect(commits[0]).toEqual({ lines: 4, loading: false });
+  const asked = (await waitForSubscriber(file.path)).getOffset();
+  flushSync(() => roots.pop()!.unmount());
+  subscribers.clear();
+  commits.length = 0;
+  cues.length = 0;
+  return asked;
+}
+
+test("a reopen interrupted before its first answer is validated again on the next one, against what the catalog now says", async () => {
+  const lines = [...call("old-a"), ...call("old-b")];
+  const file = entry("/sessions/alpha/interrupted-truncated.jsonl", bytes(transcript(lines)));
+  await readThenUnmount(file, lines);
+  await reopenThenLeaveUnanswered(file);
+
+  /* Truncated while the pane was away the second time, and the catalog knows. */
+  mount(entry(file.path, 0));
+  expect(commits[0]).toEqual({ lines: 0, loading: true });
+  expect(text()).toBe("");
+  const first = await waitForSubscriber(file.path);
+  expect(first.getOffset()).toBe(0);
+  const shortLines = call("new-a");
+  serve(first, transcript(shortLines));
+  expect(text()).toBe(shortLines.join("|"));
+  expect(cues).toEqual([]);
+
+  /* A file that ran further ahead than one live read can catch up is loaded
+     fresh too, rather than painted with a hole after it. */
+  flushSync(() => roots.pop()!.unmount());
+  subscribers.clear();
+  commits.length = 0;
+  const far = entry("/sessions/alpha/interrupted-far.jsonl", bytes(transcript(lines)));
+  await readThenUnmount(far, lines);
+  await reopenThenLeaveUnanswered(far);
+  mount(entry(far.path, bytes(transcript(lines)) + 2 * 1024 * 1024));
+  expect(commits[0]).toEqual({ lines: 0, loading: true });
+});
+
+test("a reopen interrupted before its first answer still paints at once next time, resumes where it did, and a replacement clears", async () => {
+  const lines = [...call("old-a"), ...call("old-b")];
+  const file = entry("/sessions/alpha/interrupted-valid.jsonl", bytes(transcript(lines)));
+  const body = await readThenUnmount(file, lines);
+  const asked = await reopenThenLeaveUnanswered(file);
+
+  /* Nothing disproves the snapshot: the paint is immediate, and the anchor is
+     not rewound a second time. */
+  mount(file);
+  expect(commits[0]).toEqual({ lines: 4, loading: false });
+  const resumed = await waitForSubscriber(file.path);
+  expect(resumed.getOffset()).toBe(asked);
+  serve(resumed, body);
+  expect(text()).toBe(lines.join("|"));
+  expect(cues).toEqual([]);
+
+  /* The same interruption over a transcript replaced at the same length. */
+  flushSync(() => roots.pop()!.unmount());
+  subscribers.clear();
+  commits.length = 0;
+  const other = entry("/sessions/alpha/interrupted-replaced.jsonl", bytes(transcript(lines)));
+  await readThenUnmount(other, lines);
+  await reopenThenLeaveUnanswered(other);
+  const replacementLines = [...call("new-a"), ...call("new-b")];
+  const replacement = transcript(replacementLines);
+  expect(bytes(replacement)).toBe(bytes(body));
+  mount(other);
+  expect(commits[0]).toEqual({ lines: 4, loading: false });
+  serve(await waitForSubscriber(other.path), replacement);
+  expect(text()).toBe(replacementLines.join("|"));
+  expect(text()).not.toContain("old-");
+  expect(cues).toEqual([]);
+});
