@@ -102,7 +102,10 @@ eight stages in a dedicated worktree and branch. Each stage has a role
 effort and whether it may change the repository. A stage ends by reporting
 a verdict: pass moves to the next stage, fail follows the stage's fail edge
 (usually back to the builder) within a round budget, and "needs decision"
-stops and asks you. The pipeline card on the board shows where it is; open
+stops and asks you. A "needs decision" that carries findings on a stage with
+a fail edge is routed like a fail, so the findings reach the stage that can
+fix them; only a decision without findings, or on a stage without a fail
+edge, parks the pipeline for you. The pipeline card on the board shows where it is; open
 it to see the stage graph and each stage's conversation side by side.
 
 ![A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation](docs/media/readme/pipeline.svg)
@@ -155,8 +158,10 @@ through the Viewer, so treat it as a secret.
 - **Dictation.** The composer's microphone button transcribes speech into the
   message. By default this runs locally with faster-whisper, and no audio
   leaves the machine; run `scripts/setup-whisper.sh` once to install it. Cloud
-  backends (ChatGPT through your Codex login, ElevenLabs) are a per-machine
-  opt-in with `LLV_TRANSCRIBE_BACKEND`. See
+  backends (ChatGPT through your Codex login, ElevenLabs, Soniox) are a
+  per-machine opt-in: right-click the microphone button to pick one, and the
+  choice is saved in the config directory. `LLV_TRANSCRIBE_BACKEND` overrides
+  that choice and locks the menu. See
   [docs/transcription.md](docs/transcription.md).
 - **Read aloud.** An answer's speaker button reads it with OpenAI, ElevenLabs
   or Soniox speech, billed to your own API key. Right-click the button to pick
@@ -237,7 +242,7 @@ switch to Ukrainian with `LLV_LANG=uk` or a `uk_*` locale.
 | Variable | Effect |
 | --- | --- |
 | `LLV_LANG` | `en` or `uk`: the CLI message language. |
-| `LLV_TRANSCRIBE_BACKEND` | `local` (default), `chatgpt` or `elevenlabs`: the dictation backend. |
+| `LLV_TRANSCRIBE_BACKEND` | `local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu. |
 | `LLV_WHISPER_MODEL`, `LLV_WHISPER_DEVICE` | faster-whisper model size (default `small`) and device (`cpu` or `cuda`). |
 | `LLV_TTS_BACKEND` | `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider. |
 | `LLV_HOST_RETIREMENT_IDLE_HOURS` | Hours a hosted agent's transcript must be quiet before the Viewer may stop its host (default `6`, `0` turns this off). Hosts in the middle of a turn, with a pending question or holding an orchestrator seat are never stopped. |
