@@ -33,9 +33,12 @@
  *
  * What each row attributes, and how:
  *
- * - the milestone is a PAINTED frame. The poll notices the rows in the DOM;
- *   the two animation frames after it are what make the answer a frame that
- *   was rendered. A run whose renderer produced no frame says so.
+ * - the milestone is a PAINTED frame showing the target's rows: rows a reader
+ *   can see (laid out, not hidden anywhere up their chain, on screen) in the
+ *   pane that is active for the target. The poll notices them; the two
+ *   animation frames after it, in each of which they must still be there,
+ *   make the answer a frame that was rendered. A milestone no frame confirms
+ *   is rejected, and the run fails rather than record a timer reading.
  * - transcript bytes arrive on a server-sent event stream that never ends, so
  *   its resource entry's `responseEnd` never lands while the page is alive —
  *   which is why an earlier version of this script recorded every case,
@@ -63,6 +66,7 @@ import {
   assertViewport,
   Cdp,
   DEFAULT_CHROME,
+  devToolsPort,
   launchChrome,
   navigate,
   outputLines,
@@ -81,6 +85,7 @@ import {
 const repoRoot = path.resolve(import.meta.dir, "..");
 const args = parseArgs();
 const PORT = Number(args.get("port") ?? 3131);
+/** `--cdp-port 0` lets Chrome pick a free port and reads it back. */
 const CDP_PORT = Number(args.get("cdp-port") ?? 9343);
 const KEEP = args.has("keep");
 const OUT = args.get("out");
@@ -184,8 +189,9 @@ interface Sample {
   paintedMs: number;
   /** ms to those rows being in the DOM; `paintedMs` minus this is the frame. */
   detectedMs: number;
-  /** False when the renderer produced no animation frame within a second of
-      the rows appearing: the row says so rather than reporting a timer. */
+  /** Always true: a milestone no animation frame confirmed is rejected by
+      the probe, so no sample exists for it. Kept in the evidence so a reader
+      can see that for every sample. */
   rafConfirmed: boolean;
   /** The document's own responseEnd — how much is the HTML alone. */
   documentMs: number | null;
@@ -269,7 +275,6 @@ function recordSamples(surface: string, step: string, samples: Sample[], notes =
     parseRender === null ? "" : `bytes→rows ${parseRender}ms (main thread ${median(samples.map((sample) => sample.blockingMs))}ms)`,
     `frame +${median(samples.map((sample) => round(sample.paintedMs - sample.detectedMs)))}ms`,
     `tails in store at document start ${samples.map((sample) => sample.storedTails).join("/")}`,
-    samples.every((sample) => sample.rafConfirmed) ? "" : "FRAME NOT CONFIRMED",
     `rows ${median(samples.map((sample) => sample.rows))}`,
   ].filter(Boolean).join("; ");
   table.record(surface, step, { ms: median(painted), frames: "" as unknown as number, seen: {} } as Milestone,
@@ -301,31 +306,12 @@ function sampleExpression(options: {
     const p = window.__profile;
     const origin = ${options.origin};
     const target = ${js(options.target)};
-    /* When transcript bytes for THIS conversation first reached the page.
-       Normally that is a chunk on the event stream; when the stream cannot
-       connect — Chrome holds six sockets per origin and the Viewer's stream
-       never ends — the bus polls POST /api/logs instead, and that request is
-       the delivery. Both are reported, with which transport it was. */
-    const bytesFor = () => {
-      const net = p.net(origin, Number.MAX_SAFE_INTEGER);
-      let best = null;
-      const consider = (candidate) => {
-        if (candidate.at < origin) return;
-        if (best === null || candidate.at < best.at) best = candidate;
-      };
-      for (const stream of net.allStreams) {
-        const seen = stream.paths[target];
-        if (seen) consider({ at: seen.at, bytes: seen.bytes, via: 'stream' });
-      }
-      /* The EARLIEST delivery, whichever transport it came on: a stream that
-         reconnects later must not hide a poll that already carried the rows. */
-      for (const entry of net.requests) {
-        if (entry.end === null) continue;
-        if (!entry.url.includes('/api/logs') || entry.url.includes('/api/logs/stream')) continue;
-        consider({ at: entry.end, bytes: entry.bytes || 0, via: 'poll' });
-      }
-      return best;
-    };
+    /* When transcript bytes for THIS conversation first reached the page:
+       a chunk on the event stream, or — when the stream cannot connect, since
+       Chrome holds six sockets per origin and the Viewer's stream never ends —
+       a completed POST /api/logs body that asked for this transcript and got
+       bytes for it. See deliveryFor in profileBrowser.ts. */
+    const bytesFor = () => p.deliveryFor(target, origin);
     const milestone = await p.paintedAt(() => (${options.check}), ${options.timeoutMs});
     const painted = milestone.painted;
     const rows = ${options.rows};
@@ -353,7 +339,7 @@ function sampleExpression(options: {
       rafConfirmed: !!milestone.rafConfirmed,
       documentMs: nav && nav.responseEnd >= origin && nav.responseEnd <= painted ? rel(nav.responseEnd) : null,
       fcpMs: origin === 0 && net.paint['first-contentful-paint'] !== undefined ? net.paint['first-contentful-paint'] : null,
-      filesMs: files ? rel(files.end) : null,
+      filesMs: files ? rel(files.bodyEnd ?? files.end) : null,
       filesKb: files && files.bytes ? kb(files.bytes) : null,
       streamOpenMs: stream ? rel(stream.open) : null,
       firstBytesMs: atPaint ? rel(atPaint.at) : null,
@@ -382,13 +368,14 @@ interface Target {
   label: string;
 }
 
-/** The check that the target's feed is painted, per surface. */
+/** The check that the target's feed is painted, per surface: rows of the
+    target a reader can see, in the pane that is active for it. */
 function paintedCheck(surface: Surface, target: Seeded): string {
-  return surface === "phone"
-    ? `p.focusedPath() === ${js(target.diskPath)} && p.focusedRows() > 0`
-    : `p.rows(${js(target.diskPath)}) > 0`;
+  return `p.targetPainted(${js(target.diskPath)}, ${js(surface)})`;
 }
 
+/** The target's rows in the DOM, seen or not: what "the pane is gone" and
+    "a row was appended" are asked of. */
 function rowsExpression(surface: Surface, target: Seeded): string {
   return surface === "phone" ? "p.focusedRows()" : `p.rows(${js(target.diskPath)})`;
 }
@@ -400,7 +387,7 @@ function sampleFor(surface: Surface, target: Seeded, origin: string, timeoutMs: 
     check: paintedCheck(surface, target),
     origin,
     timeoutMs,
-    rows: rowsExpression(surface, target),
+    rows: `p.visibleRows(${js(target.diskPath)}, ${js(surface)})`,
     target: target.diskPath,
   });
 }
@@ -606,6 +593,17 @@ async function serverTimings(origin: string, small: Seeded, large: Seeded): Prom
 
 /* ── main ───────────────────────────────────────────────────────────────── */
 
+/** The commit the measured build came from, and whether the checkout had
+    changes on top of it: a number is attributable to a revision or to none. */
+function revision(): { commit: string; dirty: boolean; buildId: string } {
+  const git = (...argv: string[]) => Bun.spawnSync(["git", ...argv], { cwd: repoRoot }).stdout.toString().trim();
+  return {
+    commit: git("rev-parse", "HEAD"),
+    dirty: git("status", "--porcelain", "--untracked-files=no").length > 0,
+    buildId: fs.readFileSync(path.join(repoRoot, ".next", "BUILD_ID"), "utf8").trim(),
+  };
+}
+
 async function main(): Promise<void> {
   const { small, large, other, elsewhere, total } = seedHome();
   const env = seededEnvironment(root, { nodeEnv: "production" });
@@ -644,7 +642,7 @@ async function main(): Promise<void> {
     for (const note of server_notes) console.log(`  server | ${note}`);
 
     chrome = launchChrome({ cdpPort: CDP_PORT, userDataDir: path.join(root, "chrome"), home: root, chrome: CHROME });
-    cdp = await Cdp.connect(await pageWebSocketUrl(CDP_PORT));
+    cdp = await Cdp.connect(await pageWebSocketUrl(CDP_PORT || await devToolsPort(path.join(root, "chrome"))));
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
     /* Before the first document: the stream and paint instrumentation, and a
@@ -686,6 +684,7 @@ async function main(): Promise<void> {
     if (OUT) fs.writeFileSync(OUT, markdown);
     if (JSON_OUT) {
       fs.writeFileSync(JSON_OUT, `${JSON.stringify({
+        revision: revision(),
         viewports: Object.fromEntries(SURFACES.map((surface) => [surface, VIEWPORTS[surface]])),
         corpus: { seededTranscripts: total, projects: BACKGROUND_PROJECTS + 1, smallRecords: small.records, largeRecords: large.records, largeKb: Math.round(large.bytes / 1024) },
         samplesPerCase: REPEAT,

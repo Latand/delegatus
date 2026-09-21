@@ -248,6 +248,19 @@ export class Cdp {
   }
 }
 
+/** The port Chrome chose for `--remote-debugging-port=0`, read from the file
+    it writes into its profile, so a run never has to guess a free port. */
+export async function devToolsPort(userDataDir: string, timeoutMs = 20_000): Promise<number> {
+  const file = path.join(userDataDir, "DevToolsActivePort");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const port = Number(fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n")[0] : NaN);
+    if (Number.isInteger(port) && port > 0) return port;
+    await Bun.sleep(100);
+  }
+  throw new Error("headless chrome reported no DevTools port");
+}
+
 export async function pageWebSocketUrl(cdpPort: number): Promise<string> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
@@ -281,6 +294,54 @@ export const PROBE = String.raw`
     chip: (path, title) => Array.from(document.querySelectorAll('button[title]')).find((b) => b.title === title) || null,
     chipActive: (title) => { const b = probe.chip(null, title); return !!(b && b.className.includes('border-accent/60')); },
     firstRow: (path) => { const el = pane(path); return el ? el.querySelector('[data-feed-key]') : null; },
+    /* A node a reader can SEE: not hidden by CSS anywhere up its chain, not
+       inert, laid out with a size, and inside the viewport. A row in the DOM
+       under display:none is in the DOM and nowhere else. */
+    visible: (el) => {
+      if (!el || !el.isConnected) return false;
+      if (el.closest('[inert], [aria-hidden="true"]')) return false;
+      if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, contentVisibilityAuto: true })) return false;
+      const box = el.getBoundingClientRect();
+      if (!(box.width > 0 && box.height > 0)) return false;
+      return box.bottom > 0 && box.right > 0 && box.top < window.innerHeight && box.left < window.innerWidth;
+    },
+    /* The target's rows a reader can see, in the pane that is ACTIVE for it:
+       on the phone the focused pane, and only while it shows this path; on the
+       desktop the board pane that carries the path. */
+    visibleRows: (path, surface) => {
+      const el = surface === 'phone' ? (probe.focusedPath() === path ? probe.focusedPane() : null) : pane(path);
+      if (!el || !probe.visible(el)) return 0;
+      let count = 0;
+      for (const row of el.querySelectorAll('[data-feed-kind]')) if (probe.visible(row)) count += 1;
+      return count;
+    },
+    /* The milestone every reopen row times: the target's rows are on screen. */
+    targetPainted: (path, surface) => probe.visibleRows(path, surface) > 0,
+    /* When transcript bytes for THIS conversation first reached the page at or
+       after origin, and on which transport. A stream chunk is tied to the
+       target by the subscriber id it carries; a POST /api/logs poll by the
+       ids its own request body named, and only once its body COMPLETED and
+       the answer actually held bytes for the target. The earliest delivery
+       wins, whichever transport it came on. */
+    deliveryFor: (path, origin) => {
+      const net = window.__net;
+      if (!net) return null;
+      let best = null;
+      const consider = (candidate) => {
+        if (candidate.at < origin) return;
+        if (best === null || candidate.at < best.at) best = candidate;
+      };
+      for (const stream of net.streams) {
+        const seen = stream.paths[path];
+        if (seen) consider({ at: seen.at, bytes: seen.bytes, via: 'stream' });
+      }
+      for (const entry of net.requests) {
+        if (entry.bodyEnd === null || !entry.delivered) continue;
+        const delivered = entry.delivered[path];
+        if (delivered) consider({ at: entry.bodyEnd, bytes: delivered, via: 'poll' });
+      }
+      return best;
+    },
     /* Where the rendered window starts in the tail stream, straight off the
        scroller. A window restored from the persisted tail starts deep in the
        file; a first read of the same file starts at 0. It is the one signal
@@ -314,20 +375,41 @@ export const PROBE = String.raw`
     /* The milestone a reader can SEE. The poll is what notices the DOM; the
        two animation frames after it are what make the answer a frame that was
        rendered rather than a timer reading — the first callback runs before
-       the paint of the frame the change is in, the second after it. A renderer
-       that is not producing frames at all (a throttled background tab) is
-       reported as such instead of being silently timed by the fallback. */
-    paintedAt: (check, timeoutMs) => probe.until(check, timeoutMs).then((milestone) => new Promise((resolve) => {
-      const detected = performance.now();
-      let settled = false;
-      const done = (rafConfirmed) => {
-        if (settled) return;
-        settled = true;
-        resolve({ ...milestone, detected: Math.round(detected * 10) / 10, painted: Math.round(performance.now() * 10) / 10, rafConfirmed });
-      };
-      const fallback = setTimeout(() => done(false), 1000);
-      requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(fallback); done(true); }));
-    })),
+       the paint of the frame the change is in, the second after it — and the
+       check must STILL hold in each of them: a row that flickered in and out
+       between frames was never shown, and the wait starts over. A renderer
+       that produces no frame within a second is a milestone that was never
+       confirmed, and it is rejected: a timer reading is not a paint. */
+    paintedAt: (check, timeoutMs) => new Promise((resolve, reject) => {
+      const start = performance.now();
+      const attempt = () => probe.until(check, Math.max(1, timeoutMs - (performance.now() - start))).then((milestone) => {
+        const detected = performance.now();
+        let settled = false;
+        const fallback = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          reject(new Error('milestone not confirmed: no animation frame within 1000 ms of ' + check.toString().slice(0, 160)));
+        }, 1000);
+        const lost = () => {
+          settled = true;
+          clearTimeout(fallback);
+          if (performance.now() - start > timeoutMs) reject(new Error('milestone not reached: never held through two frames: ' + check.toString().slice(0, 160)));
+          else attempt();
+        };
+        requestAnimationFrame(() => {
+          if (settled) return;
+          if (!check()) { lost(); return; }
+          requestAnimationFrame(() => {
+            if (settled) return;
+            if (!check()) { lost(); return; }
+            settled = true;
+            clearTimeout(fallback);
+            resolve({ ...milestone, detected: Math.round(detected * 10) / 10, painted: Math.round(performance.now() * 10) / 10, rafConfirmed: true });
+          });
+        });
+      }, reject);
+      attempt();
+    }),
     /* What the network probe recorded for this document, trimmed to one step.
        Both bounds are performance.now() stamps; a whole document starts at 0. */
     net: (since, until) => {
@@ -337,7 +419,7 @@ export const PROBE = String.raw`
       const requests = net.requests.filter((entry) => within(entry.end));
       const streams = net.streams.filter((entry) => entry.open >= since && entry.open <= until);
       return {
-        requests: requests.map((entry) => ({ url: entry.url, start: entry.start, end: entry.end, bytes: entry.bytes })),
+        requests: requests.map((entry) => ({ url: entry.url, start: entry.start, end: entry.end, bodyEnd: entry.bodyEnd, bytes: entry.bytes, paths: entry.ids ? Object.values(entry.ids) : null })),
         streams: streams.map((entry) => ({ url: entry.url, open: entry.open, connected: entry.connected, firstChunkAt: entry.firstChunkAt, bytes: entry.bytes, chunks: entry.chunks, paths: entry.paths })),
         /* Every stream, so a step that rides a connection opened earlier can
            still find the chunk that carried its transcript. */
@@ -437,14 +519,49 @@ export const NETWORK_PROBE = String.raw`
     new PerformanceObserver((list) => { for (const entry of list.getEntries()) net.longtasks.push({ start: round(entry.startTime), duration: round(entry.duration) }); }).observe({ type: 'longtask', buffered: true });
   } catch (error) { net.longtaskObserver = String(error); }
   const realFetch = window.fetch;
+  /* A fetch resolves when the HEADERS arrive, which for a poll can be long
+     before its body has: end is that moment, bodyEnd the one the
+     body completed. A POST /api/logs names the transcripts it polls for in
+     its own body, by id; delivered is filled from the answer the Viewer
+     itself parsed — the app's own json() call is wrapped, so the probe
+     never parses a payload of its own — with the bytes each transcript got. */
   window.fetch = function (input, init) {
     const url = String(typeof input === 'string' ? input : (input && input.url) || input);
-    const entry = { url: url.slice(0, 200), start: round(performance.now()), end: null, bytes: null };
+    const entry = { url: url.slice(0, 200), start: round(performance.now()), end: null, bodyEnd: null, bytes: null, ids: null, delivered: null };
     if (net.requests.length < 2000) net.requests.push(entry);
+    if (url.includes('/api/logs') && init && typeof init.body === 'string') {
+      try {
+        const ids = {};
+        for (const req of JSON.parse(init.body).reqs || []) ids[String(req.id)] = req.path;
+        entry.ids = ids;
+      } catch (error) { entry.idsError = String(error); }
+    }
     const settle = (response) => {
       entry.end = round(performance.now());
       const length = response && response.headers ? response.headers.get('content-length') : null;
       entry.bytes = length === null || length === undefined ? null : Number(length);
+      const bodyDone = response && typeof response.clone === 'function'
+        ? response.clone().arrayBuffer().then((body) => {
+          entry.bodyEnd = round(performance.now());
+          entry.bytes = body.byteLength;
+        }, () => { entry.bodyFailed = true; })
+        : Promise.resolve();
+      if (entry.ids && response && typeof response.json === 'function') {
+        const json = response.json.bind(response);
+        /* Settled with the body's own completion, whichever of the two
+           branches of the tee the event loop finishes first. */
+        response.json = () => Promise.all([json(), bodyDone]).then(([value]) => {
+          const delivered = {};
+          const chunks = (value && value.chunks) || {};
+          for (const id of Object.keys(chunks)) {
+            const path = entry.ids[id];
+            const data = chunks[id] && chunks[id].data;
+            if (path && typeof data === 'string' && data.length > 0) delivered[path] = data.length;
+          }
+          entry.delivered = delivered;
+          return value;
+        });
+      }
       return response;
     };
     return realFetch.call(this, input, init).then(settle, (error) => { entry.end = round(performance.now()); throw error; });
@@ -506,7 +623,7 @@ export const NETWORK_PROBE = String.raw`
 
 /** What one measured step saw on the wire and on the main thread. */
 export interface NetworkTrace {
-  requests: Array<{ url: string; start: number; end: number; bytes: number | null }>;
+  requests: Array<{ url: string; start: number; end: number; bodyEnd: number | null; bytes: number | null; paths: string[] | null }>;
   streams: Array<{ url: string; open: number; connected: number | null; firstChunkAt: number | null; bytes: number; chunks: number; paths: Record<string, { at: number; bytes: number; chunks: number }> }>;
   allStreams: Array<{ open: number; paths: Record<string, { at: number; bytes: number; chunks: number }> }>;
   paint: Record<string, number>;
