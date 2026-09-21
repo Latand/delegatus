@@ -49,6 +49,9 @@ function looksTextual(head: Buffer): boolean {
   return !head.includes(0);
 }
 
+/** How much of the head the extension agreement looks at. */
+export const SNIFF_BYTES = 512;
+
 /**
  * Does the file's head agree with the MIME the extension claims? Binary
  * formats must present their signature; text must be NUL-free (a renamed

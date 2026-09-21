@@ -572,3 +572,21 @@ test("the durable not-found notice has an explicit dismiss", async () => {
   await act(async () => { dismiss!.click(); });
   expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
 }, 20_000);
+
+test("#f= naming a report file (anchor glued on as %23) opens the file preview, never a conversation not-found", async () => {
+  const report = "/workspace/checkout/reports/round-2/index.html";
+  dom.location.hash = `#f=${encodeURIComponent(report + "#decision-graph")}`;
+  stubFetch(() => [otherRow]);
+
+  const host = await mountViewer();
+
+  /* The preview takes the link: its sheet opens and asks the artifact route
+     about the file (this stub answers 404, so it names the missing path). */
+  expect(await waitFor(() => document.querySelector("[data-artifact-preview]") !== null)).toBe(true);
+  expect(await waitFor(() => document.querySelector("[data-preview-failure-path]")?.textContent === report)).toBe(true);
+  /* …and the conversation router never claims it: past the not-found deadline
+     there is no stale-focus notice. */
+  await act(async () => { await Bun.sleep(9_000); });
+  expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+  expect(host.textContent).not.toContain(en["viewer.staleFocusEntry"]);
+}, 20_000);

@@ -49,20 +49,27 @@ function MarkedLine({ line, query }: { line: string; query: string }) {
   return <>{parts}</>;
 }
 
+/** How far a `:line` link may pull the file in to reach its line. */
+const LINE_SEEK_BYTES = 8 * TEXT_CHUNK;
+
 /**
  * Bounded text preview: byte-ranged loads pinned to the meta validator, line
  * numbers, wrap toggle, search within the loaded portion, and hljs rendering
- * where the language is known and the loaded portion is small enough.
+ * where the language is known and the loaded portion is small enough. A link
+ * that named a line (`file.ts:42`) marks that line and scrolls it into view.
  */
 export function TextPane({
   path,
   meta,
   mobile,
+  line: targetLine = null,
   onFailure,
 }: {
   path: string;
   meta: ArtifactMeta;
   mobile: boolean;
+  /** 1-based line the link named. */
+  line?: number | null;
   onFailure: (failure: ArtifactFailure) => void;
 }) {
   const { t } = useLocale();
@@ -159,7 +166,25 @@ export function TextPane({
       ?.scrollIntoView({ block: "center" });
   }, [query, cursor, matches]);
 
-  const gutterWidth = `${Math.max(String(lines.length).length, 3)}ch`;
+  /* The linked line may sit past the first chunk: keep reading, within a
+     bound, until it is loaded — then bring it into view once. */
+  const targetIndex = targetLine ? targetLine - 1 : null;
+  const reachedTarget = targetIndex !== null && targetIndex < lines.length - (complete ? 0 : 1);
+  useEffect(() => {
+    if (targetIndex === null || reachedTarget || complete || loading || loadedBytes === 0) return;
+    if (loadedBytes >= LINE_SEEK_BYTES) return;
+    void loadMore();
+  }, [targetIndex, reachedTarget, complete, loading, loadedBytes, loadMore]);
+  const scrolledToTarget = useRef(false);
+  useEffect(() => {
+    if (!reachedTarget || scrolledToTarget.current) return;
+    scrolledToTarget.current = true;
+    scrollRef.current?.querySelector(`[data-preview-line="${targetIndex}"]`)?.scrollIntoView({ block: "center" });
+  }, [reachedTarget, targetIndex, highlightedLines]);
+
+  /* The digits plus the gutter's own padding (px-1.5 on each side): sized to
+     the digits alone, a three-digit number spilled into the line beside it. */
+  const gutterWidth = `calc(${Math.max(String(lines.length).length, 3)}ch + 0.75rem)`;
 
   /* Same touch-target contract as the host header: 44 px controls on mobile. */
   const control = mobile ? "h-11 w-11" : "h-7 w-7";
@@ -222,11 +247,18 @@ export function TextPane({
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-canvas font-mono text-[11.5px] leading-[1.5]">
         <div className={wrap ? "" : "w-max min-w-full"}>
           {lines.map((line, index) => (
-            <div key={index} data-preview-line={index} className="flex">
+            <div
+              key={index}
+              data-preview-line={index}
+              data-preview-target={index === targetIndex ? "" : undefined}
+              className={index === targetIndex ? "flex bg-warning/20" : "flex"}
+            >
               <span
                 data-line-number
                 aria-hidden
-                className="sticky left-0 shrink-0 select-none border-r border-border bg-sunken px-1.5 text-right text-muted"
+                className={`sticky left-0 shrink-0 select-none border-r border-border px-1.5 text-right ${
+                  index === targetIndex ? "bg-warning/30 font-semibold text-primary" : "bg-sunken text-muted"
+                }`}
                 style={{ width: gutterWidth, minWidth: gutterWidth }}
               >
                 {index + 1}

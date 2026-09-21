@@ -53,6 +53,21 @@
  * its account id visible, the blocks stay inside the panel, and the phone's
  * targets are 44 px.
  *
+ * With BOARD_CAPTURE_CASE=file-preview it opens the file links agents write
+ * in the preview on a seeded home: the `#f=<report>%23<anchor>` link to a long
+ * HTML report with relative CSS, an image and a script (which probes what the
+ * sandbox lets it reach), its source view and its new-tab page; a long
+ * markdown guide with a wide table, at its top and at an anchor; a source
+ * file at a `:line`; and a path that does not exist — at 1280 × 800 and
+ * 390 × 844, measuring sideways overflow and clipped controls. It also runs
+ * the report's ES module (with a relative import and a scoped fetch) in the
+ * frame and the new tab, lands a dotted element id, follows a relative
+ * markdown link after a Source/Rendered round trip, and follows a link to the
+ * Viewer's own non-loopback host (`viewer.example`, mapped to loopback).
+ * Relative links with a percent-encoded fragment (Unicode and ASCII) land on
+ * their markdown heading or HTML element id, and a sibling `retry.ts:180` /
+ * `retry.ts:180:5` link opens the file at that line.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -3131,8 +3146,446 @@ async function seatsMain(which: SeatCase): Promise<void> {
   }
 }
 
+/* ------------------------------------------------------------------------- */
+/* Agent file links open in the preview: markdown, HTML report, :line        */
+/* ------------------------------------------------------------------------- */
+
+const PREVIEW_ROOT = path.join(REPO_DIR, "reports", "round-2");
+const PREVIEW_REPORT = path.join(PREVIEW_ROOT, "index.html");
+const PREVIEW_GUIDE = path.join(REPO_DIR, "docs", "release-guide.md");
+const PREVIEW_SOURCE = path.join(REPO_DIR, "src", "delivery", "retry.ts");
+const PREVIEW_MISSING = path.join(REPO_DIR, "reports", "round-3", "index.html");
+const PREVIEW_LINKS = path.join(REPO_DIR, "docs", "links.md");
+/** Notes beside retry.ts whose relative links carry encoded fragments and `file:line` suffixes. */
+const PREVIEW_NOTES = path.join(path.dirname(PREVIEW_SOURCE), "NOTES.md");
+const PREVIEW_DEEP = path.join(REPO_DIR, "docs", "deep-guide.md");
+/** A non-loopback name the Viewer is served on, as over a tailnet. */
+const PREVIEW_HOST = "viewer.example";
+
+const previewSvg = (title: string, nodes: string[]) => {
+  const boxes = nodes.map((label, i) => `<g transform="translate(${20 + i * 150},40)"><rect width="130" height="56" rx="10" fill="#e8f1fb" stroke="#1f5f99"/><text x="65" y="33" font-family="sans-serif" font-size="13" text-anchor="middle" fill="#123">${label}</text></g>`).join("");
+  const arrows = nodes.slice(1).map((_, i) => `<path d="M${150 + i * 150} 68 h20" stroke="#1f5f99" stroke-width="2" marker-end="url(#a)"/>`).join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${nodes.length * 150 + 20}" height="130" viewBox="0 0 ${nodes.length * 150 + 20} 130"><defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8z" fill="#1f5f99"/></marker></defs><text x="20" y="24" font-family="sans-serif" font-size="14" font-weight="bold" fill="#123">${title}</text>${boxes}${arrows}</svg>`;
+};
+
+/** An invented report and guide the size agents really write: long sections, a table wider than a
+    phone, a code block, relative CSS, images and a script, and anchors deep in the page. */
+function seedFilePreview(): void {
+  fs.mkdirSync(path.join(PREVIEW_ROOT, "assets"), { recursive: true });
+  const section = (id: string, title: string, paragraphs: number) =>
+    `<section id="${id}"><h2>${title}</h2>${Array.from({ length: paragraphs }, (_, i) => `<p>${title} — observation ${i + 1}. The banter redesign round kept the reply latency under the budget while the tone classifier moved to the second pass; every figure below comes from the replayed conversations of the round.</p>`).join("")}</section>`;
+  const tableRows = Array.from({ length: 12 }, (_, i) => `<tr>${["variant-" + (i + 1), "0." + (61 + i), "0." + (44 + i), String(120 + i * 7) + " ms", String(8 + i) + "%", i % 2 ? "kept" : "dropped", "round " + ((i % 3) + 1), "classifier v" + (2 + (i % 2)), "notes on the replayed batch " + (i + 1)].map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("");
+  fs.writeFileSync(PREVIEW_REPORT, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Banter redesign — round 2</title><link rel="stylesheet" href="style.css"></head><body>
+<header><h1>Banter redesign — round 2</h1><p class="lede">What changed since round 1, what the replay shows, and the decision graph for round 3.</p>
+<nav><a href="#summary">Summary</a> · <a href="#metrics">Metrics</a> · <a href="#decision-graph">Decision graph</a> · <a href="#sandbox">Sandbox probe</a></nav></header>
+${section("summary", "Summary", 6)}
+<section id="metrics"><h2>Metrics</h2><div class="wide"><table><thead><tr><th>Variant</th><th>Precision</th><th>Recall</th><th>p95 latency</th><th>Drop rate</th><th>Outcome</th><th>Round</th><th>Classifier</th><th>Notes</th></tr></thead><tbody>${tableRows}</tbody></table></div></section>
+${section("replay", "Replay notes", 8)}
+<section id="decision-graph"><h2>Decision graph</h2><p>Each node is a decision the round made; the arrows are what it unblocked.</p><img src="assets/decision-graph.svg" alt="Decision graph"><ol><li>Keep the second-pass tone classifier.</li><li>Drop the variants over the latency budget.</li><li>Replay round 3 against the same batch.</li></ol></section>
+${section("next", "Next round", 5)}
+<section id="appendix.1"><h2>Appendix 1 (a dotted id)</h2><p>Reached by an anchor holding a dot.</p><p id="module-status">module: waiting</p></section>
+${section("closing", "Closing notes", 6)}
+${section("підсумок", "Підсумок", 4)}
+<section id="sandbox"><h2>Sandbox probe</h2><p>This page runs in the viewer's report frame. The script below tries to reach the viewer:</p><pre id="probe">running…</pre></section>
+<script src="assets/probe.js"></script><script type="module" src="assets/module.js"></script></body></html>
+`, "utf8");
+  fs.writeFileSync(path.join(PREVIEW_ROOT, "style.css"), `body{font:15px/1.6 Georgia,serif;color:#1d2733;max-width:860px;margin:0 auto;padding:24px 20px 80px;background:#fff}h1{color:rgb(15,76,129);font:700 28px/1.2 system-ui,sans-serif}h2{color:rgb(15,76,129);font:700 20px/1.3 system-ui,sans-serif;border-bottom:1px solid #d5dde6;padding-bottom:4px;margin-top:36px}.lede{color:#4a5a6b}nav a{color:#1f5f99}.wide{overflow-x:auto}table{border-collapse:collapse;font:13px system-ui,sans-serif}td,th{border:1px solid #d5dde6;padding:4px 8px;white-space:nowrap}th{background:#eef3f8}img{max-width:100%}pre{background:#f4f6f8;padding:10px;border-radius:6px;white-space:pre-wrap}`, "utf8");
+  fs.writeFileSync(path.join(PREVIEW_ROOT, "assets", "decision-graph.svg"), previewSvg("Round 2 → round 3", ["tone pass 2", "latency cut", "replay r3", "ship"]), "utf8");
+  /* What a hostile report would try. Each probe records what the sandbox let it do. */
+  fs.writeFileSync(path.join(PREVIEW_ROOT, "assets", "probe.js"), `(async () => {
+  const out = { origin: self.origin, scriptRan: true };
+  try { out.parentDocument = typeof parent.document.title === "string" ? "readable" : "unknown"; } catch { out.parentDocument = "blocked"; }
+  try { out.cookie = document.cookie === "" ? "empty" : "readable"; } catch { out.cookie = "blocked"; }
+  try { out.localStorage = localStorage.length >= 0 ? "readable" : "unknown"; } catch { out.localStorage = "blocked"; }
+  try { const response = await fetch("/api/files"); out.viewerApi = "read " + response.status; } catch { out.viewerApi = "blocked"; }
+  try { const response = await fetch("/api/artifact?path=" + encodeURIComponent("~/.claude.json") + "&mode=meta"); out.artifactApi = "read " + response.status; } catch { out.artifactApi = "blocked"; }
+  document.body.dataset.probe = JSON.stringify(out);
+  document.getElementById("probe").textContent = JSON.stringify(out, null, 2);
+})();
+`, "utf8");
+
+  /* A module script is a CORS request from the frame's opaque origin, and so is its import and fetch. */
+  fs.writeFileSync(path.join(PREVIEW_ROOT, "assets", "module.js"), `import { label } from "./helper.mjs";
+const data = await (await fetch(new URL("./data.json", import.meta.url))).json();
+document.body.dataset.module = label + ":" + data.rows;
+document.getElementById("module-status").textContent = "module: " + document.body.dataset.module;
+`, "utf8");
+  fs.writeFileSync(path.join(PREVIEW_ROOT, "assets", "helper.mjs"), `export const label = "module-ran";\n`, "utf8");
+  fs.writeFileSync(path.join(PREVIEW_ROOT, "assets", "data.json"), `{"rows": 12}\n`, "utf8");
+
+  fs.mkdirSync(path.join(path.dirname(PREVIEW_GUIDE), "img"), { recursive: true });
+  fs.writeFileSync(path.join(path.dirname(PREVIEW_GUIDE), "img", "pipeline.svg"), previewSvg("Release train", ["freeze", "verify", "promote", "announce"]), "utf8");
+  const wideHead = ["Stage", "Owner", "Gate", "Input", "Output", "Duration", "Retries", "Rollback", "Evidence", "Notes"];
+  const wideRows = Array.from({ length: 9 }, (_, i) => [`stage-${i + 1}`, i % 2 ? "builder" : "reviewer", `gate ${i + 1}`, "candidate image", "signed manifest", `${4 + i} min`, String(i % 3), i % 2 ? "automatic" : "manual", `evidence/stage-${i + 1}.json`, "long free-text notes that make this column wider than a phone"]);
+  const guide = [
+    "# Release guide",
+    "",
+    "How a candidate becomes the running viewer. Read [the verification notes](verify.md#bun-runtime) first, and see the [retry code](../src/delivery/retry.ts:180) for the delivery side.",
+    "",
+    "![Release train](img/pipeline.svg)",
+    "",
+    ...Array.from({ length: 5 }, (_, s) => [
+      `## Step ${s + 1}: ${["Freeze the branch", "Build the candidate", "Verify under the pinned runtime", "Promote", "Announce"][s]}`,
+      "",
+      ...Array.from({ length: 3 }, (_, p) => [`Paragraph ${p + 1} of step ${s + 1}. The candidate carries its own manifest, and every check below names the process it exercised, so a green result can be traced to the run that produced it.`, ""]).flat(),
+      "- The gate reads the manifest, never the branch name.",
+      "- A failed check stops the train:",
+      "  - the candidate stays staged,",
+      "  - the running viewer is untouched.",
+      "1. Record the commit.",
+      "2. Record the image digest.",
+      "",
+    ].join("\n")),
+    "## Wide table",
+    "",
+    `| ${wideHead.join(" | ")} |`,
+    `|${" --- |".repeat(wideHead.length)}`,
+    ...wideRows.map((row) => `| ${row.join(" | ")} |`),
+    "",
+    "## Verification script",
+    "",
+    "```ts",
+    "export async function verifyCandidate(image: string): Promise<Verdict> {",
+    "  const manifest = await readManifest(image);",
+    "  for (const check of manifest.checks) {",
+    "    const result = await runCheck(check, { runtime: manifest.runtime, timeoutMs: 120_000 });",
+    "    if (!result.ok) return { ok: false, failed: check.name, output: result.output.slice(-4_000) };",
+    "  }",
+    "  return { ok: true };",
+    "}",
+    "```",
+    "",
+    "> A check that stays green against a subject that should fail is not a check.",
+    "",
+    ...Array.from({ length: 4 }, (_, s) => [`## Appendix ${String.fromCharCode(65 + s)}`, "", ...Array.from({ length: 4 }, (_, p) => [`Appendix paragraph ${p + 1}: the long tail of the guide, so the anchor has somewhere to scroll to.`, ""]).flat()].join("\n")),
+  ].join("\n");
+  fs.writeFileSync(PREVIEW_GUIDE, guide, "utf8");
+  fs.writeFileSync(PREVIEW_LINKS, `# Links\n\nThe [round 2 report](http://${PREVIEW_HOST}:PORT/#f=${encodeURIComponent(PREVIEW_REPORT + "#decision-graph")}) on this Viewer's own host.\n`, "utf8");
+  fs.writeFileSync(path.join(path.dirname(PREVIEW_GUIDE), "verify.md"), "# Verification\n\n## Bun runtime\n\nRun both halves under the pinned runtime.\n", "utf8");
+
+  const filler = (title: string, count: number) => Array.from({ length: count }, (_, p) => [`${title}, paragraph ${p + 1}: enough text that the next heading sits far below the top of the preview.`, ""]).flat();
+  fs.writeFileSync(PREVIEW_DEEP, ["# Deep guide", "", ...filler("Вступ", 30), "## Розділ", "", ...filler("Розділ", 6), "## Fallback plan", "", ...filler("Fallback", 30)].join("\n"), "utf8");
+  const encoded = (value: string) => encodeURIComponent(value);
+  fs.mkdirSync(path.dirname(PREVIEW_NOTES), { recursive: true });
+  fs.writeFileSync(PREVIEW_NOTES, [
+    "# Delivery notes",
+    "",
+    "- [Line suffix](retry.ts:180)",
+    "- [Line and column](retry.ts:180:5)",
+    `- [Encoded Unicode heading](../../docs/deep-guide.md#${encoded("розділ")})`,
+    "- [Encoded ASCII heading](../../docs/deep-guide.md#Fallback%20plan)",
+    `- [Encoded Unicode id](../../reports/round-2/index.html#${encoded("підсумок")})`,
+    "- [Encoded ASCII id](../../reports/round-2/index.html#decision%2Dgraph)",
+    "",
+  ].join("\n"), "utf8");
+
+  fs.mkdirSync(path.dirname(PREVIEW_SOURCE), { recursive: true });
+  fs.writeFileSync(PREVIEW_SOURCE, Array.from({ length: 320 }, (_, i) => i === 179
+    ? "  if (attempt > policy.maxAttempts) return { settled: false, reason: \"retry budget spent\" }; // the linked line"
+    : `  const step${i + 1} = await deliver(message, { attempt: ${i % 5}, backoffMs: ${(i % 7) * 250} });`).join("\n") + "\n", "utf8");
+}
+
+/** Everything the preview case asserts, read in the page. */
+function readPreview() {
+  const rect = (el: Element | null) => { if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const sheet = document.querySelector<HTMLElement>("[data-artifact-preview]");
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const controls = sheet ? [...sheet.querySelectorAll<HTMLElement>("button, a[href], input")].filter((el) => !el.closest("[data-md-document]") && el.getClientRects().length > 0).slice(0, 12) : [];
+  const clipped = controls.map((el) => ({ label: el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 24) || el.tagName, r: rect(el)! }))
+    .filter(({ r }) => r.x < -0.5 || r.y < -0.5 || r.x + r.w > vw + 0.5 || r.y + r.h > vh + 0.5 || r.w < 1 || r.h < 1);
+  const md = document.querySelector<HTMLElement>("[data-md-scroll]");
+  const tableBox = document.querySelector<HTMLElement>("[data-md-document] table")?.parentElement ?? null;
+  const target = document.querySelector<HTMLElement>("[data-preview-target]");
+  const textScroller = target?.closest<HTMLElement>(".overflow-auto") ?? null;
+  const scrollTop = md ? md.getBoundingClientRect().top : 0;
+  const wide = document.querySelector<HTMLElement>('[data-md-anchor="wide-table"]');
+  return {
+    viewport: { w: vw, h: vh },
+    state: sheet?.getAttribute("data-artifact-state") ?? null,
+    kind: sheet?.getAttribute("data-artifact-kind") ?? null,
+    sheet: rect(sheet),
+    staleNotice: document.querySelector("[data-stale-focus-notice]")?.textContent?.trim() ?? null,
+    pageOverflowX: document.documentElement.scrollWidth - vw,
+    sheetOverflowX: sheet ? sheet.scrollWidth - sheet.clientWidth : null,
+    controls: controls.map((el) => ({ label: el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 24) || el.tagName, r: rect(el) })),
+    clippedControls: clipped,
+    frame: (() => { const f = document.querySelector("iframe[data-preview-frame]"); return f ? { sandbox: f.getAttribute("sandbox"), src: f.getAttribute("src"), r: rect(f) } : null; })(),
+    openExternal: document.querySelector("[data-preview-open-external]")?.getAttribute("href") ?? null,
+    markdown: md ? {
+      overflowX: md.scrollWidth - md.clientWidth,
+      scrollTop: md.scrollTop,
+      headings: document.querySelectorAll("[data-md-document] [data-md-anchor]").length,
+      tableScrollsInside: tableBox ? tableBox.scrollWidth > tableBox.clientWidth : null,
+      tallestTableRow: Math.round(Math.max(0, ...[...document.querySelectorAll("[data-md-document] tr")].map((row) => row.getBoundingClientRect().height))),
+      images: [...document.querySelectorAll<HTMLImageElement>("[data-md-document] img")].map((img) => ({ loaded: img.complete && img.naturalWidth > 0, src: img.getAttribute("src") })),
+      wideTableHeadingTop: wide ? Math.round(wide.getBoundingClientRect().top - scrollTop) : null,
+      codeBlocks: document.querySelectorAll("[data-md-document] pre").length,
+      listItems: document.querySelectorAll("[data-md-document] [data-md-list] li").length,
+    } : null,
+    failurePath: document.querySelector("[data-preview-failure-path]")?.textContent ?? null,
+    failureText: document.querySelector("[data-artifact-preview] [role=alert]")?.textContent?.trim() ?? null,
+    line: target ? {
+      index: target.getAttribute("data-preview-line"),
+      visible: (() => { const t = target.getBoundingClientRect(); const s = textScroller!.getBoundingClientRect(); return t.top >= s.top && t.bottom <= s.bottom; })(),
+      text: target.textContent?.slice(0, 200) ?? "",
+    } : null,
+  };
+}
+
+type PreviewReading = ReturnType<typeof readPreview>;
+
+async function filePreviewMain(): Promise<void> {
+  seedHome();
+  seedFilePreview();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  SERVER_EXTRA_ENV.LLV_TS_HOST = PREVIEW_HOST;
+  fs.writeFileSync(PREVIEW_LINKS, fs.readFileSync(PREVIEW_LINKS, "utf8").replace(":PORT/", `:${port}/`), "utf8");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  /* Paths in the record are $HOME-relative: the synthetic home lives under the temp root. */
+  const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(HOME).join("$HOME").split(encodeURIComponent(HOME)).join(encodeURIComponent("$HOME")));
+  const report: Record<string, unknown> = { commit: captureCommit() };
+  const fHash = (spelled: string) => `#f=${encodeURIComponent(spelled)}`;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage", `--host-resolver-rules=MAP ${PREVIEW_HOST} 127.0.0.1`], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const viewports = [
+      { tag: "desktop", options: { viewport: { width: 1280, height: 800 } } },
+      { tag: "phone", options: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true } },
+    ] as const;
+    for (const { tag, options } of viewports) {
+      const phone = tag === "phone";
+      const context = await browser.newContext(options);
+      await context.addInitScript(seedInit);
+      /* A viewer cookie the report must not be able to read. */
+      await context.addCookies([{ name: "llv_probe", value: "viewer-only", url: baseUrl }]);
+      const page = await context.newPage();
+      const visit = async (hash: string, waitFor: string) => {
+        await page.goto(`${baseUrl}/${hash}`);
+        await page.waitForSelector(waitFor, { timeout: 30_000 }).catch(() => {});
+        await page.waitForTimeout(1_200);
+      };
+      const common = (name: string, reading: PreviewReading) => {
+        must(reading.sheet !== null, `${tag} ${name}: the preview did not open (state ${reading.state}, notice «${reading.staleNotice}»)`);
+        must(reading.staleNotice === null, `${tag} ${name}: a not-found notice showed: «${reading.staleNotice}»`);
+        must(reading.pageOverflowX <= 0, `${tag} ${name}: the page overflows sideways by ${reading.pageOverflowX}px`);
+        must((reading.sheetOverflowX ?? 0) <= 0, `${tag} ${name}: the sheet overflows sideways by ${reading.sheetOverflowX}px`);
+        must(reading.clippedControls.length === 0, `${tag} ${name}: clipped controls ${JSON.stringify(reading.clippedControls)}`);
+        if (phone) for (const control of reading.controls) must(!control.r || control.r.h >= 44, `${tag} ${name}: «${control.label}» is ${control.r?.h}px tall`);
+      };
+
+      /* 1. The owner's link: an HTML report with its anchor glued on as %23. */
+      await visit(fHash(`${PREVIEW_REPORT}#decision-graph`), "iframe[data-preview-frame]");
+      const frame = page.frames().find((candidate) => candidate.url().includes("/api/artifact/frame/")) ?? null;
+      if (frame) await frame.waitForFunction(() => Boolean(document.body?.dataset.probe && document.body.dataset.module), undefined, { timeout: 15_000 }).catch(() => {});
+      const html = await page.evaluate(readPreview);
+      const inFrame = frame ? await frame.evaluate(() => {
+        const target = document.getElementById("decision-graph");
+        const img = document.querySelector<HTMLImageElement>("#decision-graph img");
+        return {
+          probe: JSON.parse(document.body.dataset.probe ?? "null") as Record<string, string> | null,
+          module: document.body.dataset.module ?? null,
+          scrollY: Math.round(window.scrollY),
+          anchorTop: target ? Math.round(target.getBoundingClientRect().top) : null,
+          stylesheetApplied: getComputedStyle(document.querySelector("h1")!).color,
+          relativeImageLoaded: Boolean(img && img.complete && img.naturalWidth > 0),
+          overflowX: document.documentElement.scrollWidth - window.innerWidth,
+        };
+      }) : null;
+      common("html", html);
+      must(html.frame !== null, `${tag} html: no report frame`);
+      must(Boolean(html.frame && /allow-scripts/.test(html.frame.sandbox ?? "") && !/allow-same-origin/.test(html.frame.sandbox ?? "")), `${tag} html: frame sandbox «${html.frame?.sandbox}»`);
+      must(Boolean(html.frame?.src?.endsWith("#decision-graph")), `${tag} html: frame src «${html.frame?.src}»`);
+      must(inFrame !== null && inFrame.scrollY > 0 && inFrame.anchorTop !== null && Math.abs(inFrame.anchorTop) <= 4, `${tag} html: the anchor did not scroll the frame ${JSON.stringify(inFrame && { scrollY: inFrame.scrollY, anchorTop: inFrame.anchorTop })}`);
+      must(inFrame?.stylesheetApplied === "rgb(15, 76, 129)", `${tag} html: relative CSS did not apply (${inFrame?.stylesheetApplied})`);
+      must(Boolean(inFrame?.relativeImageLoaded), `${tag} html: the relative image did not load`);
+      const probe = inFrame?.probe ?? null;
+      must(probe?.scriptRan === true as unknown as string, `${tag} html: the report's relative script did not run`);
+      must(probe?.origin === "null", `${tag} html: the frame's origin is «${probe?.origin}», not opaque`);
+      must(inFrame?.module === "module-ran:12", `${tag} html: the report's module script, its import or its fetch did not run («${inFrame?.module}»)`);
+      for (const key of ["parentDocument", "cookie", "localStorage", "viewerApi", "artifactApi"]) must(probe?.[key] === "blocked", `${tag} html: the frame reached ${key}: «${probe?.[key]}»`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-html-anchor.png`) });
+      report[`${tag}-html`] = { ...html, inFrame };
+
+      /* Open in a new tab: the same sandbox holds at the top level. */
+      if (html.openExternal) {
+        const tab = await context.newPage();
+        const response = await tab.goto(new URL(html.openExternal, baseUrl).toString());
+        await tab.waitForFunction(() => Boolean(document.body?.dataset.probe && document.body.dataset.module), undefined, { timeout: 15_000 }).catch(() => {});
+        const tabProbe = await tab.evaluate(() => JSON.parse(document.body.dataset.probe ?? "null") as Record<string, string> | null);
+        const tabModule = await tab.evaluate(() => document.body.dataset.module ?? null);
+        must(response?.status() === 200 && tabProbe?.origin === "null" && tabProbe?.cookie === "blocked", `${tag} html: the new tab is not sandboxed ${JSON.stringify(tabProbe)}`);
+        must(tabModule === "module-ran:12", `${tag} html: the module script did not run in the new tab («${tabModule}»)`);
+        report[`${tag}-html-new-tab`] = { status: response?.status(), probe: tabProbe, module: tabModule };
+        await tab.close();
+      }
+
+      /* The source toggle. */
+      await page.click('[data-preview-mode="source"]').catch(() => {});
+      await page.waitForSelector('[data-preview-line="1"]', { timeout: 15_000 }).catch(() => {});
+      const htmlSource = await page.evaluate(readPreview);
+      const firstLine = await page.evaluate(() => document.querySelector('[data-preview-line="0"]')?.textContent ?? "");
+      common("html-source", htmlSource);
+      must(htmlSource.frame === null, `${tag} html-source: the frame is still shown`);
+      must(firstLine.includes("<!doctype html>"), `${tag} html-source: the source view shows «${firstLine.slice(0, 60)}»`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-html-source.png`) });
+
+      /* An element id holding a dot, encoded into the payload. */
+      await visit(fHash(`${PREVIEW_REPORT}#appendix.1`), "iframe[data-preview-frame]");
+      const dotted = await page.evaluate(readPreview);
+      const dottedFrame = page.frames().find((candidate) => candidate.url().includes("/api/artifact/frame/")) ?? null;
+      const dottedTop = dottedFrame ? await dottedFrame.evaluate(() => { const el = document.getElementById("appendix.1"); return el ? Math.round(el.getBoundingClientRect().top) : null; }) : null;
+      common("html-dotted-anchor", dotted);
+      must(dotted.state === "ready" && dottedTop !== null && Math.abs(dottedTop) <= 4, `${tag} html-dotted-anchor: state ${dotted.state}, anchor top ${dottedTop}`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-html-dotted-anchor.png`) });
+      report[`${tag}-html-dotted-anchor`] = { ...dotted, anchorTop: dottedTop };
+
+      /* 2. A long markdown guide: top, then its wide-table anchor. */
+      await visit(fHash(PREVIEW_GUIDE), "[data-md-document]");
+      const mdTop = await page.evaluate(readPreview);
+      common("markdown", mdTop);
+      must(Boolean(mdTop.markdown && mdTop.markdown.headings >= 10 && mdTop.markdown.codeBlocks === 1 && mdTop.markdown.listItems >= 20), `${tag} markdown: document blocks ${JSON.stringify(mdTop.markdown)}`);
+      must(Boolean(mdTop.markdown && mdTop.markdown.overflowX <= 0), `${tag} markdown: the document overflows sideways by ${mdTop.markdown?.overflowX}px`);
+      must(Boolean(mdTop.markdown?.images.length && mdTop.markdown.images.every((image) => image.loaded)), `${tag} markdown: relative images ${JSON.stringify(mdTop.markdown?.images)}`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-markdown-top.png`) });
+      report[`${tag}-markdown-top`] = mdTop;
+
+      await visit(fHash(`${PREVIEW_GUIDE}#wide-table`), "[data-md-document]");
+      const mdAnchor = await page.evaluate(readPreview);
+      common("markdown-anchor", mdAnchor);
+      must(Boolean(mdAnchor.markdown && mdAnchor.markdown.scrollTop > 0 && mdAnchor.markdown.wideTableHeadingTop !== null && Math.abs(mdAnchor.markdown.wideTableHeadingTop) <= 40), `${tag} markdown: the anchor did not bring its heading up ${JSON.stringify(mdAnchor.markdown && { scrollTop: mdAnchor.markdown.scrollTop, top: mdAnchor.markdown.wideTableHeadingTop })}`);
+      must(Boolean(mdAnchor.markdown?.tableScrollsInside), `${tag} markdown: the wide table does not scroll inside its own box`);
+      /* Squeezed to the viewport, every cell broke to one word per line and a row grew to 450 px. */
+      must((mdAnchor.markdown?.tallestTableRow ?? 0) <= 80, `${tag} markdown: a table row is ${mdAnchor.markdown?.tallestTableRow}px tall`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-markdown-anchor.png`) });
+      report[`${tag}-markdown-anchor`] = mdAnchor;
+
+      /* A relative link followed after a Source/Rendered round trip lands on the next document and its anchor. */
+      await visit(fHash(PREVIEW_GUIDE), "[data-md-document]");
+      await page.click('[data-preview-mode="source"]');
+      await page.waitForSelector('[data-preview-line="1"]', { timeout: 15_000 }).catch(() => {});
+      await page.click('[data-preview-mode="rendered"]');
+      await page.waitForSelector("[data-md-document]", { timeout: 15_000 }).catch(() => {});
+      await page.click('[data-md-document] a:has-text("the verification notes")');
+      await page.waitForSelector('[data-md-anchor="bun-runtime"]', { timeout: 15_000 }).catch(() => {});
+      await page.waitForTimeout(600);
+      const followed = await page.evaluate(readPreview);
+      const followedHeading = await page.evaluate(() => document.querySelector("[data-md-document] h1")?.textContent ?? null);
+      common("markdown-relative-link", followed);
+      must(followed.state === "ready" && followedHeading === "Verification", `${tag} markdown-relative-link: state ${followed.state}, heading «${followedHeading}», alert «${followed.failureText}»`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-markdown-relative-link.png`) });
+      report[`${tag}-markdown-relative-link`] = { ...followed, heading: followedHeading };
+
+      /* Relative links with a percent-encoded fragment land on their heading or element id. */
+      for (const [label, anchor, name] of [
+        ["Encoded Unicode heading", "розділ", "markdown-encoded-unicode-fragment"],
+        ["Encoded ASCII heading", "fallback-plan", "markdown-encoded-ascii-fragment"],
+      ] as const) {
+        /* A fresh document each time: re-entering the same hash is no navigation. */
+        await page.goto("about:blank");
+        await visit(fHash(PREVIEW_NOTES), "[data-md-document]");
+        await page.click(`[data-md-document] a:has-text("${label}")`);
+        await page.waitForSelector(`[data-md-anchor="${anchor}"]`, { timeout: 15_000 }).catch(() => {});
+        await page.waitForTimeout(600);
+        const landed = await page.evaluate(readPreview);
+        const headingTop = await page.evaluate((wanted) => {
+          const heading = document.querySelector(`[data-md-anchor="${wanted}"]`);
+          const scroller = document.querySelector("[data-md-scroll]");
+          return heading && scroller ? Math.round(heading.getBoundingClientRect().top - scroller.getBoundingClientRect().top) : null;
+        }, anchor);
+        common(name, landed);
+        must(landed.state === "ready" && Boolean(landed.markdown && landed.markdown.scrollTop > 0) && headingTop !== null && Math.abs(headingTop) <= 40, `${tag} ${name}: state ${landed.state}, scrollTop ${landed.markdown?.scrollTop}, heading top ${headingTop}`);
+        await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-${name}.png`) });
+        report[`${tag}-${name}`] = { ...landed, headingTop };
+      }
+      for (const [label, id, name] of [
+        ["Encoded Unicode id", "підсумок", "html-encoded-unicode-fragment"],
+        ["Encoded ASCII id", "decision-graph", "html-encoded-ascii-fragment"],
+      ] as const) {
+        /* A fresh document each time: re-entering the same hash is no navigation. */
+        await page.goto("about:blank");
+        await visit(fHash(PREVIEW_NOTES), "[data-md-document]");
+        await page.click(`[data-md-document] a:has-text("${label}")`);
+        await page.waitForSelector("iframe[data-preview-frame]", { timeout: 15_000 }).catch(() => {});
+        await page.waitForTimeout(1_200);
+        const landed = await page.evaluate(readPreview);
+        const landedFrame = page.frames().find((candidate) => candidate.url().includes("/api/artifact/frame/")) ?? null;
+        const idTop = landedFrame ? await landedFrame.evaluate((wanted) => { const el = document.getElementById(wanted); return el ? { top: Math.round(el.getBoundingClientRect().top), scrollY: Math.round(window.scrollY) } : null; }, id) : null;
+        common(name, landed);
+        must(landed.state === "ready" && Boolean(landed.frame?.src?.endsWith(`#${encodeURIComponent(id)}`)) && idTop !== null && idTop.scrollY > 0 && Math.abs(idTop.top) <= 4, `${tag} ${name}: state ${landed.state}, frame «${landed.frame?.src}», element ${JSON.stringify(idTop)}`);
+        await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-${name}.png`) });
+        report[`${tag}-${name}`] = { ...landed, element: idTop };
+      }
+
+      /* A sibling file named with a :line or :line:col suffix opens at that line. */
+      for (const [label, name] of [["Line suffix", "code-sibling-line"], ["Line and column", "code-sibling-line-column"]] as const) {
+        /* A fresh document each time: re-entering the same hash is no navigation. */
+        await page.goto("about:blank");
+        await visit(fHash(PREVIEW_NOTES), "[data-md-document]");
+        await page.click(`[data-md-document] a:has-text("${label}")`);
+        await page.waitForSelector("[data-preview-target]", { timeout: 15_000 }).catch(() => {});
+        await page.waitForTimeout(600);
+        const sibling = await page.evaluate(readPreview);
+        common(name, sibling);
+        must(Boolean(sibling.line && sibling.line.index === "179" && sibling.line.visible && sibling.line.text.includes("the linked line")), `${tag} ${name}: state ${sibling.state}, line ${JSON.stringify(sibling.line)}`);
+        await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-${name}.png`) });
+        report[`${tag}-${name}`] = sibling;
+      }
+
+      /* A link to the Viewer's own non-loopback host opens the same anchored report as a loopback one. */
+      await page.goto(`http://${PREVIEW_HOST}:${port}/${fHash(PREVIEW_LINKS)}`);
+      await page.waitForSelector("[data-md-document]", { timeout: 30_000 }).catch(() => {});
+      await page.click('[data-md-document] a:has-text("round 2 report")').catch(() => {});
+      await page.waitForSelector("iframe[data-preview-frame]", { timeout: 15_000 }).catch(() => {});
+      await page.waitForTimeout(1_200);
+      const hosted = await page.evaluate(readPreview);
+      common("html-own-host", hosted);
+      must(hosted.state === "ready" && Boolean(hosted.frame?.src?.endsWith("/index.html#decision-graph")), `${tag} html-own-host: state ${hosted.state}, frame «${hosted.frame?.src}», alert «${hosted.failureText}»`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-html-own-host.png`) });
+      report[`${tag}-html-own-host`] = hosted;
+
+      /* 3. Code with a :line. */
+      await visit(fHash(`${PREVIEW_SOURCE}:180`), "[data-preview-target]");
+      const code = await page.evaluate(readPreview);
+      common("code-line", code);
+      must(Boolean(code.line && code.line.index === "179" && code.line.visible && code.line.text.includes("the linked line")), `${tag} code: line ${JSON.stringify(code.line)}`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-code-line.png`) });
+      report[`${tag}-code-line`] = code;
+
+      /* 4. A path that does not exist. */
+      await visit(fHash(`${PREVIEW_MISSING}#summary`), "[data-preview-failure-path]");
+      const missing = await page.evaluate(readPreview);
+      common("missing", missing);
+      must(missing.state === "missing" && missing.failurePath === PREVIEW_MISSING, `${tag} missing: state ${missing.state}, path «${missing.failurePath}»`);
+      await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-missing.png`) });
+      report[`${tag}-missing`] = missing;
+
+      await context.close();
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "file-preview.json"), JSON.stringify(scrub(report), null, 2) + "\n", "utf8");
+  console.log(`file preview measurements: ${path.join(OUT_DIR, "file-preview.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`file preview acceptance FAILED (${failures.length}):\n  ${scrub(failures).join("\n  ")}`);
+  } else {
+    console.log("file preview acceptance passed at 1280 × 800 and 390 × 844.");
+  }
+}
+
 /* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
+else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
 else if ((SEAT_CASES as readonly string[]).includes(process.env.BOARD_CAPTURE_CASE ?? "")) await seatsMain(process.env.BOARD_CAPTURE_CASE as SeatCase);
 else await main();

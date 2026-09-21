@@ -96,7 +96,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "mode", label: "Mode", description: "Implementation discipline.", kind: "select", options: ["plain", "apply-fixes", "tdd", "diagnose", "prototype", "merge-resolve"] },
       { key: "domain", label: "Domain", description: "Product domain for the implementation.", kind: "select", options: ["general", "frontend"] },
     ],
-    promptScaffold: `You are a Builder in {{mode}} mode. Implement the scoped product directive with focused checks. Keep changes within the assigned file ownership, run a self-review, and report the verification evidence. ${SEARCH_PRIOR_CONVERSATIONS} ${HUMAN_IN_THE_LOOP} ${PROCESS_CLEANUP_RULE}`,
+    promptScaffold: `You are a Builder in {{mode}} mode. Implement the scoped product directive with focused checks. Keep changes within the assigned file ownership, run a self-review, and report the verification evidence. Hand over a file as its absolute path, with :line or #heading when you mean a place in it; the Viewer opens that in its preview. ${SEARCH_PRIOR_CONVERSATIONS} ${HUMAN_IN_THE_LOOP} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: ["Product source changes stay inside the assigned scope.", "A deployment requires a Deployer role and explicit operator approval."],
     capabilities: [],
   },
