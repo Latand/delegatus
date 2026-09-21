@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { documentHidden } from "@/lib/client/hiddenTraffic";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 
 import { parseSeatStatus, seatConversationsOf, type OrchestratorSeatStatus } from "./seatState";
@@ -80,10 +81,9 @@ interface SeatPoll {
 const polls = new Map<string, SeatPoll>();
 
 /* A hidden tab skips its seat ticks (#1994) and reads once on return, so a
-   phone with the Viewer in the background stops re-reading seats nobody sees. */
-function documentHidden(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden";
-}
+   Viewer in the background stops re-reading seats nobody sees. Neither the
+   agent chimes nor the title count read the seat, so this holds on a desktop
+   as well as on a phone. */
 
 let seatVisibilityListening = false;
 function listenForSeatVisibility(): void {

@@ -26,6 +26,7 @@ import {
   type RuntimeSnapshot,
   type RuntimeStore,
 } from "@/components/runtime/runtimeModel";
+import { hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { rolledBack, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 
 export const SNAPSHOT_URL = "/api/runtime/snapshot?view=summary";
@@ -54,7 +55,7 @@ const OFFLINE_AFTER_MS = 60_000;
 const RESYNCED_NOTE_MS = 6_000;
 /** Publish accumulated store changes at most once per display frame. */
 const SUBSCRIBER_NOTIFY_MS = 16;
-/** A tab hidden this long stops its transport until it is visible again
+/** A phone tab hidden this long stops its transport until it is visible again
     (#1994). Short flips — a glance at another app — keep the stream. */
 export const HIDDEN_SUSPEND_MS = 30_000;
 
@@ -90,6 +91,9 @@ class RuntimePlaneAbsentError extends Error {}
 
 /** Page visibility, injectable so tests can hide and show the tab. */
 export interface VisibilityLike {
+  /** Hidden on a device whose hidden tab stops its transport — a phone. A
+      hidden desktop tab keeps the stream: its revisions drive the board feed
+      behind the agent chimes and the title count (#1994). */
   hidden(): boolean;
   subscribe(listener: () => void): () => void;
 }
@@ -643,7 +647,7 @@ function browserDeps(): RuntimeBusDeps {
   return {
     fetch: (input, init) => fetch(input, init),
     visibility: typeof document === "undefined" ? undefined : {
-      hidden: () => document.visibilityState === "hidden",
+      hidden: hiddenTrafficSuspended,
       subscribe: (listener) => {
         document.addEventListener("visibilitychange", listener);
         return () => document.removeEventListener("visibilitychange", listener);

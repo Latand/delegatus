@@ -9,6 +9,7 @@ import { SESSION_TITLES_CHANGED_EVENT } from "@/components/session/sessionTitleA
 import { TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
 import { WORKFLOWS_CHANGED_EVENT } from "@/components/workflows/workflowModel";
 import { applyFilesDelta, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER, type FilesDelta } from "@/lib/filesDelta";
+import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -29,6 +30,11 @@ const FILES_GENERATION_RETRY_MAX_MS = 1_000;
 /** Failed initial hydration: first retry, then doubling to the ceiling (#696). */
 const FILES_HYDRATE_RETRY_MS = 1_000;
 const FILES_HYDRATE_RETRY_MAX_MS = 30_000;
+/* A hidden desktop tab keeps its feed for the chimes and the title count, at
+   a slower cadence (#1994): revisions coalesce into one delta read at most
+   this often, and the fallback poll runs at most this often. */
+export const HIDDEN_REVISION_COALESCE_MS = 10_000;
+export const HIDDEN_POLL_MS = 30_000;
 
 export interface FilesData {
   files: FileEntry[];
@@ -137,10 +143,6 @@ export interface FilesClientCache {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
-}
-
-function documentHidden(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
 /** A completion retry that reached the network while the tab was hidden. Not
@@ -504,7 +506,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     if (completionRetry) {
       if (!ownsCompletionRetry(url, completionRetry)) return snapshot;
       /* Queued before the tab hid: park instead of fetching. */
-      if (documentHidden()) throw new ParkedRetry("completion retry parked while hidden");
+      if (hiddenTrafficSuspended()) throw new ParkedRetry("completion retry parked while hidden");
       completionRetry.phase = "active";
       completionRetry.controller = new AbortController();
     }
@@ -674,7 +676,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     if (!owner) completionRetries.set(url, retry);
     /* A hidden tab owes this read but does not make it: the chain waits,
        target and pin intact, for resumeCompletionRetries. */
-    if (documentHidden()) {
+    if (hiddenTrafficSuspended()) {
       retry.phase = "parked";
       return;
     }
@@ -688,7 +690,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
         cancelCompletionRetry(url);
         return;
       }
-      if (documentHidden()) {
+      if (hiddenTrafficSuspended()) {
         retry.phase = "parked";
         return;
       }
@@ -956,7 +958,7 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
     let owedWhileHidden = false;
     const performLoad = async (revision?: number): Promise<boolean> => {
       if (!alive) return true;
-      if (documentHidden()) {
+      if (hiddenTrafficSuspended()) {
         owedWhileHidden = true;
         return false;
       }
@@ -965,7 +967,7 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
         return true;
       } catch {
         /* keep previous list; a read the hiding tab cancelled is owed */
-        if (documentHidden()) owedWhileHidden = true;
+        if (hiddenTrafficSuspended()) owedWhileHidden = true;
         return false;
       }
     };
@@ -987,7 +989,7 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       }
       /* Hidden: the visibility handler restarts hydration when the tab
          returns instead of retrying into a tab nobody is looking at. */
-      if (documentHidden()) {
+      if (hiddenTrafficSuspended()) {
         owedWhileHidden = true;
         hydrateOnVisible = true;
         return;
@@ -1015,11 +1017,18 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
      */
     let timer: ReturnType<typeof setInterval> | null = null;
     let mode: "poll" | "live" | null = null;
+    let lastPollAt = 0;
+    const pollTick = () => {
+      const now = Date.now();
+      if (documentHidden() && now - lastPollAt < HIDDEN_POLL_MS) return;
+      lastPollAt = now;
+      void load();
+    };
     const setCadence = (next: "poll" | "live") => {
       if (next === mode) return;
       mode = next;
       if (timer) clearInterval(timer);
-      timer = next === "poll" ? setInterval(load, POLL_MS) : null;
+      timer = next === "poll" ? setInterval(pollTick, POLL_MS) : null;
     };
 
     /* Flow, workflow and task mutations refresh out of band: strips and
@@ -1065,7 +1074,7 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       if (!alive) return;
       if (hydrated && pendingRevision === requestedRevision) pendingRevision = null;
       /* A hidden tab keeps the revision it owes and hydrates it on return. */
-      if (pendingRevision !== null && !documentHidden()) {
+      if (pendingRevision !== null && !hiddenTrafficSuspended()) {
         scheduleRevisionHydration(hydrated ? 0 : FILES_REVISION_RETRY_MS);
       }
     };
@@ -1076,7 +1085,11 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       unsubBus = bus.subscribe(applyConnection);
       unsubFiles = bus.subscribeFilesRevision((revision) => {
         pendingRevision = pendingRevision === null ? revision : Math.max(pendingRevision, revision);
-        scheduleRevisionHydration(FILES_DEBOUNCE_MS);
+        /* Hidden desktop: a throttle, not a debounce — a busy board must not
+           postpone the read forever, and the first revision's read carries
+           every later one. */
+        if (!documentHidden()) scheduleRevisionHydration(FILES_DEBOUNCE_MS);
+        else if (!revisionTimer && !revisionHydrating) scheduleRevisionHydration(HIDDEN_REVISION_COALESCE_MS);
       });
     } else {
       setCadence("poll");
@@ -1084,6 +1097,8 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
 
     const onVisibility = () => {
       if (documentHidden()) {
+        /* A desktop keeps its (slower) feed while hidden. */
+        if (!hiddenTrafficSuspended()) return;
         inflight.abort();
         inflight = new AbortController();
         cache.pauseCompletionRetries();

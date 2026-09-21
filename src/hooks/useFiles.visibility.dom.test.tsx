@@ -21,7 +21,7 @@ mock.module("./runtimeBus", () => ({
   }),
 }));
 
-const { createFilesClientCache, resetFilesClientCacheForTests, useFiles } = await import("./useFiles");
+const { createFilesClientCache, HIDDEN_REVISION_COALESCE_MS, resetFilesClientCacheForTests, useFiles } = await import("./useFiles");
 const dom = new Window();
 Object.assign(globalThis, {
   window: dom,
@@ -34,6 +34,13 @@ Object.assign(globalThis, {
 
 let visibility: "visible" | "hidden" = "visible";
 Object.defineProperty(dom.document, "visibilityState", { configurable: true, get: () => visibility });
+/* The device class decides what a hidden tab may fetch. Every case below is a
+   phone unless it says it is a desktop. */
+let phone = true;
+Object.defineProperty(dom, "matchMedia", {
+  configurable: true,
+  value: (query: string) => ({ matches: query === "(pointer: coarse)" ? phone : query === "(any-pointer: fine)" ? !phone : false }),
+});
 
 function setVisibility(next: "visible" | "hidden"): void {
   visibility = next;
@@ -52,6 +59,7 @@ function body(tag: string): string {
 beforeEach(() => {
   resetFilesClientCacheForTests();
   visibility = "visible";
+  phone = true;
   connection = "live";
   requests = [];
   serve = async () => new Response(body("current"), { headers: { ETag: "\"current\"" } });
@@ -269,4 +277,59 @@ test("a pinned scope keeps custody of its incomplete scan across hide and return
   const resumed = requests[hiddenAt]!;
   expect(resumed.url).toContain(`path=${encodeURIComponent(pinnedPath)}`);
   expect(resumed.headers["x-llv-files-generation"]).toBe("1");
+});
+
+/* Desktop: the operator decided a hidden desktop tab keeps the delta feed, so
+   the agent chimes and the "(N)" title count still move in a background tab. */
+
+test("a hidden desktop tab coalesces revisions into one delta read within the coalescing window", async () => {
+  phone = false;
+  const host = await mount();
+  setVisibility("hidden");
+  serve = async () => new Response(body("after"), { headers: { ETag: "\"after\"" } });
+  // A busy board: a revision every two seconds must not postpone the read.
+  for (let tick = 0; tick < 5; tick += 1) {
+    revisionListener?.(20 + tick);
+    await Bun.sleep(2_000);
+  }
+  await Bun.sleep(HIDDEN_REVISION_COALESCE_MS - 10_000 + 600);
+  const hiddenReads = requests.slice(1);
+  expect(hiddenReads).toHaveLength(1);
+  expect(hiddenReads[0]!.headers["if-none-match"]).toBe("\"current\"");
+  expect(Number(hiddenReads[0]!.headers["x-llv-files-revision"])).toBeGreaterThanOrEqual(24);
+  expect(host.textContent).toBe("/sessions/after.jsonl|0");
+}, 20_000);
+
+test("hiding a desktop tab neither cancels its read in flight nor parks its completion retries", async () => {
+  phone = false;
+  let started!: () => void;
+  const inFlight = new Promise<void>((resolve) => { started = resolve; });
+  let release!: () => void;
+  serve = async (index) => {
+    if (index === 0) return incomplete("stale")();
+    started();
+    await new Promise<void>((resolve) => { release = resolve; });
+    return complete("done")();
+  };
+  const host = await mount();
+  await inFlight;
+  setVisibility("hidden");
+  await Bun.sleep(20);
+  expect(requests.at(-1)!.signal?.aborted ?? false).toBe(false);
+  release();
+  await Bun.sleep(50);
+  expect(host.textContent).toBe("/sessions/done.jsonl|0");
+});
+
+test("a desktop tab returning with a coalesced revision reads it at once", async () => {
+  phone = false;
+  await mount();
+  setVisibility("hidden");
+  revisionListener?.(31);
+  await Bun.sleep(200);
+  expect(requests).toHaveLength(1);
+  setVisibility("visible");
+  await Bun.sleep(50);
+  expect(requests).toHaveLength(2);
+  expect(requests[1]!.headers["x-llv-files-revision"]).toBe("31");
 });
