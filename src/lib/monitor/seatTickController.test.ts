@@ -534,23 +534,32 @@ test("a check whose cards already say what they should takes no task write (#198
   /* Each task write rebuilds and fingerprints every task under the lease; a
      sweep over thirty-odd seats paid that for every card it merely confirmed. */
   const project = `card-current-${crypto.randomUUID().slice(0, 8)}`;
-  const tasksFile = path.join(SANDBOX, "state", "tasks.json");
+  /* A board of its own: the suite's shared board fills up with earlier tests'
+     cards, and a full board refuses the first card this test needs. */
+  const own = fs.mkdtempSync(path.join(SANDBOX, "card-current-state-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = own;
   const store = await import("@/lib/tasks/store");
-  const readCards = (): { text: string; status: string }[] => store.loadTasks(tasksFile)
+  const readCards = (): { text: string; status: string }[] => store.loadTasks(path.join(own, "tasks.json"))
     .filter((task) => task.project === project).map((task) => ({ text: task.text, status: task.status }));
-  const off = harness({ pipelines: OPEN_LANE, settings: { ...offSettings(), project } });
-  await runSeatTickCheck(project, { ...off.deps, ensureCard: undefined });
-  const raised = readCards();
-  expect(raised).toHaveLength(1);
-
-  const writes = spyOn(store, "mutateTasksFile");
   try {
+    const off = harness({ pipelines: OPEN_LANE, settings: { ...offSettings(), project } });
     await runSeatTickCheck(project, { ...off.deps, ensureCard: undefined });
-    expect(writes).not.toHaveBeenCalled();
+    const raised = readCards();
+    expect(raised).toHaveLength(1);
+
+    const writes = spyOn(store, "mutateTasksFile");
+    try {
+      await runSeatTickCheck(project, { ...off.deps, ensureCard: undefined });
+      expect(writes).not.toHaveBeenCalled();
+    } finally {
+      writes.mockRestore();
+    }
+    expect(readCards()).toEqual(raised);
   } finally {
-    writes.mockRestore();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
   }
-  expect(readCards()).toEqual(raised);
 });
 
 /* The card writer resolves the board file per call, not once at import.
