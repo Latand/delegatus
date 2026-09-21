@@ -14,9 +14,12 @@
  * byte for byte inside the gate, and a browser screenshot cannot be
  * reproduced that way. Chrome prints the frame to PDF and poppler turns the
  * page into an SVG whose glyphs are paths, so the file carries no raster and
- * no font dependency. Because OCR does not read an SVG, the driver itself
- * refuses a frame whose text contains this machine's home, user name or
- * capture root, and every shot declares the text it must and must not show.
+ * no font dependency. The gate does not OCR an SVG, so the driver runs the
+ * gate's own checks before it keeps one: the frame's text goes through the
+ * gate's sensitive-text classifier, the full-frame PNG through its raster
+ * inspection (OCR included), and the text must not contain this machine's
+ * home, user name or host name. Every shot also declares
+ * the text it must and must not show.
  *
  * Flags: --serve keeps the server up for inspection instead of capturing.
  * Requirements: a completed `bun run build`, Chrome (CHROME_BIN, default
@@ -31,6 +34,7 @@ import path from "node:path";
 
 import type { Page } from "playwright-core";
 
+import { inspectPaths, sensitiveClasses } from "./privacy-publication-gate";
 import { seedDemoAccounts, seedDemoHome, WORKING_CONVERSATIONS, type DemoProject } from "./readme-demo-state";
 
 export const README_MEDIA_DIR = "docs/media/readme";
@@ -97,6 +101,11 @@ export const SHOTS: ReadmeShot[] = [
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
       await clickLabel(page, "Expand all 3 stages");
+      await page.waitForTimeout(1_200);
+      /* The running stage opens scrolled back; jump it to its live tail so
+         the pill does not sit over the newest row. */
+      const liveTail = page.getByText("live tail", { exact: true });
+      if (await liveTail.count()) await liveTail.first().click();
     },
     description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
   },
@@ -117,8 +126,9 @@ export const SHOTS: ReadmeShot[] = [
     id: "phone-conversation",
     target: { kind: "conversation", key: "refunds-builder" },
     viewport: PHONE,
-    requiredText: ["Idempotency-Key"],
-    description: "The same conversation on a 390 px phone screen.",
+    requiredText: ["Idempotency-Key", "4 pass"],
+    prepare: (page) => clickText(page, "wrote 1 file"),
+    description: "The same conversation on a 390 px phone screen, its test run expanded.",
   },
 ];
 
@@ -219,18 +229,24 @@ function collectOutput(child: ChildProcess): () => string {
 
 /* ── vector conversion ──────────────────────────────────────────────────── */
 
-export function pdfToSvg(pdf: Buffer, target: string): void {
+/** Returns how many raster tiles the vector frame embeds. Chrome prints CSS
+    gradients (the board's dot grid, column washes) as image patterns; they
+    carry no text, and the full-frame PNG they are rendered into is what the
+    gate's OCR reads before the SVG is kept. */
+export function pdfToSvg(pdf: Buffer, target: string): number {
   const scratch = fs.mkdtempSync(path.join(CAPTURE_ROOT, "svg-"));
   try {
     const pdfPath = path.join(scratch, "frame.pdf");
     fs.writeFileSync(pdfPath, pdf);
     const svgPath = path.join(scratch, "frame.svg");
     const conversion = spawnSync("pdftocairo", ["-svg", "-f", "1", "-l", "1", pdfPath, svgPath], { encoding: "utf8" });
-    if (conversion.status !== 0) throw new Error(`pdftocairo failed: ${conversion.stderr || conversion.stdout}`);
-    const svg = fs.readFileSync(svgPath, "utf8");
-    if (/<image\b|data:image\//.test(svg)) throw new Error(`${path.basename(target)}: the vector frame embeds a raster`);
+    /* Some poppler/cairo builds assert while tearing down after the page is
+       fully written; a complete document is kept, anything else fails. */
+    const svg = fs.existsSync(svgPath) ? fs.readFileSync(svgPath, "utf8") : "";
+    if (!svg.trimEnd().endsWith("</svg>")) throw new Error(`pdftocairo failed: ${conversion.stderr || conversion.stdout}`);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, svg);
+    return (svg.match(/<image\b/g) ?? []).length;
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
@@ -240,9 +256,11 @@ export function sha256(bytes: Buffer | string): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-/** Strings from this machine that must never appear on a committed frame. */
+/** Strings that identify this machine and must never appear on a committed
+    frame. The capture root is not among them: it names nothing, and a
+    conversation's off-screen header carries it as the working directory. */
 function forbiddenHostText(): string[] {
-  const values = [os.homedir(), os.userInfo().username, CAPTURE_ROOT, os.hostname()];
+  const values = [os.homedir(), os.userInfo().username, os.hostname()];
   return values.filter((value) => value && value.length >= 3);
 }
 
@@ -336,8 +354,15 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout): 
         if (text.includes(absent)) throw new Error(`${shot.id}: frame shows ${JSON.stringify(absent)}`);
       }
 
+      const textFindings = [...sensitiveClasses(text)];
+      if (textFindings.length) throw new Error(`${shot.id}: the gate classifies the frame text as ${textFindings.join(", ")}`);
+
       const png = path.join(EVIDENCE_DIR, `${shot.id}.png`);
       await page.screenshot({ path: png });
+      /* A browser raster never carries provenance, so those two classes are
+         expected here; anything else the gate finds in the pixels is not. */
+      const rasterFindings = [...inspectPaths([png]).keys()].filter((finding) => !finding.startsWith("provenance_"));
+      if (rasterFindings.length) throw new Error(`${shot.id}: the gate finds ${rasterFindings.join(", ")} in the rendered frame`);
       await page.emulateMedia({ media: "screen", colorScheme: "dark" });
       const pdf = await page.pdf({
         width: `${shot.viewport.width}px`,
@@ -347,12 +372,13 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout): 
         margin: { top: "0", bottom: "0", left: "0", right: "0" },
       });
       const svgPath = path.join(repoRoot, README_MEDIA_DIR, `${shot.id}.svg`);
-      pdfToSvg(Buffer.from(pdf), svgPath);
+      const rasterTiles = pdfToSvg(Buffer.from(pdf), svgPath);
       manifest.push({
         path: `${shot.id}.svg`,
         description: shot.description,
         viewport: shot.viewport,
         colorScheme: "dark",
+        rasterTiles,
         sha256: sha256(fs.readFileSync(svgPath)),
       });
       await context.close();
