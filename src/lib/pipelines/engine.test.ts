@@ -12287,6 +12287,7 @@ for (const enabled of [false, true]) {
     flow.rounds = [round(1) as never];
     flow.state = "reviewing";
     let newerAttempt: import("./types").PipelineStageAttempt | undefined;
+    let attemptBeforeNewStop: typeof newerAttempt;
     const sync = async () => {
       const { withPipelineMutation } = await import("./store");
       await withPipelineMutation((pipelines, persist) => {
@@ -12307,8 +12308,7 @@ for (const enabled of [false, true]) {
     h.ports.stopStageAgent = async (target) => {
       stops.push(target.conversationId!);
       if (target.conversationId === "conversation_reviewer_2") {
-        expect(target.launchId).toBe("review-launch-2");
-        expect(loadPipelines()[0]!.runs[1]!.attempts[0]).toEqual(newerAttempt!);
+        attemptBeforeNewStop = structuredClone(loadPipelines()[0]!.runs[1]!.attempts[0]!);
       }
       if (target.conversationId === "conversation_reviewer_1" && (seam === "during-stop" || (seam === "survivor" && stops.length === 2))) {
         await sync();
@@ -12367,8 +12367,9 @@ for (const enabled of [false, true]) {
         : ["conversation_stage_1", "conversation_reviewer_1", "conversation_reviewer_2",
           ...(survivor ? ["conversation_reviewer_1", "conversation_reviewer_1"] : [])]);
       expect(closes).toBe(1);
+      expect(attemptBeforeNewStop).toEqual(newerAttempt!);
       const closed = loadPipelines()[0]!;
-      expect(closed.closeReport).toMatchObject({ status: "settled", pending: [] });
+      expect(closed.closeReport).toMatchObject({ status: "settled", pending: [], unconfirmed: [], stillRunning: [] });
       expect(closed.runs[1]!.attempts[0]).toMatchObject({ launchId: "review-launch-2", conversationId: "conversation_reviewer_2" });
     } finally {
       if (survivor && survivor.exitCode === null) { survivor.kill(); await survivor.exited; }
