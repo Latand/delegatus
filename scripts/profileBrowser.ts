@@ -295,15 +295,35 @@ export const PROBE = String.raw`
     chipActive: (title) => { const b = probe.chip(null, title); return !!(b && b.className.includes('border-accent/60')); },
     firstRow: (path) => { const el = pane(path); return el ? el.querySelector('[data-feed-key]') : null; },
     /* A node a reader can SEE: not hidden by CSS anywhere up its chain, not
-       inert, laid out with a size, and inside the viewport. A row in the DOM
-       under display:none is in the DOM and nowhere else. */
+       inert, laid out with a size, and with some of that box left once the
+       viewport AND every clipping ancestor have cut it. A row in the DOM under
+       display:none is in the DOM and nowhere else, and a row its transcript
+       scroller has scrolled out of view is inside the viewport and unseen. */
     visible: (el) => {
       if (!el || !el.isConnected) return false;
       if (el.closest('[inert], [aria-hidden="true"]')) return false;
       if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, contentVisibilityAuto: true })) return false;
       const box = el.getBoundingClientRect();
       if (!(box.width > 0 && box.height > 0)) return false;
-      return box.bottom > 0 && box.right > 0 && box.top < window.innerHeight && box.left < window.innerWidth;
+      let left = Math.max(box.left, 0);
+      let top = Math.max(box.top, 0);
+      let right = Math.min(box.right, window.innerWidth);
+      let bottom = Math.min(box.bottom, window.innerHeight);
+      for (let node = el.parentElement; node && right > left && bottom > top; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        const clips = style.overflowX !== 'visible' || style.overflowY !== 'visible' || /paint|strict|content/.test(style.contain);
+        if (!clips) continue;
+        /* An ancestor clips to its padding box: inside the border, and not
+           over its own scrollbars. */
+        const outer = node.getBoundingClientRect();
+        const clipLeft = outer.left + node.clientLeft;
+        const clipTop = outer.top + node.clientTop;
+        left = Math.max(left, clipLeft);
+        top = Math.max(top, clipTop);
+        right = Math.min(right, clipLeft + node.clientWidth);
+        bottom = Math.min(bottom, clipTop + node.clientHeight);
+      }
+      return right > left && bottom > top;
     },
     /* The target's rows a reader can see, in the pane that is ACTIVE for it:
        on the phone the focused pane, and only while it shows this path; on the

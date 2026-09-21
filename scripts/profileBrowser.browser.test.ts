@@ -7,8 +7,9 @@
  *
  * A timing table is only as good as the milestone and the attribution under
  * it, and both used to go green on the wrong subject: a target row under
- * display:none counted as painted, a renderer with no animation frames still
- * produced a milestone, a poll that asked for another transcript was credited
+ * display:none counted as painted, and so did a row its own scrolling pane
+ * clipped out of sight; a renderer with no animation frames still produced a
+ * milestone, a poll that asked for another transcript was credited
  * to the target, and a poll was stamped delivered when its headers arrived.
  * The page here is a bare stand-in for the Viewer — the probe reads only the
  * attributes the Viewer renders — and the server answers a poll the way
@@ -19,7 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 
-import { armDocuments, Cdp, devToolsPort, launchChrome, navigate, pageWebSocketUrl, stop } from "./profileBrowser";
+import { armDocuments, assertViewport, Cdp, devToolsPort, launchChrome, navigate, pageWebSocketUrl, setViewport, stop, type Surface } from "./profileBrowser";
 
 const CHROME = process.env.CHROME_BIN ?? "";
 const browserTest = process.env.LLV_PROFILE_BROWSER_TEST === "1" && CHROME && fs.existsSync(CHROME) ? test : test.skip;
@@ -27,7 +28,7 @@ const browserTest = process.env.LLV_PROFILE_BROWSER_TEST === "1" && CHROME && fs
 const TARGET = "/sessions/probe/target.jsonl";
 const OTHER = "/sessions/probe/other.jsonl";
 
-const PAGE = `<!doctype html><html><body style="margin:0">
+const PAGE = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0">
 <div id="target" data-link-path="${TARGET}" style="display:none"><div data-feed-kind="prose" style="height:40px">target row</div></div>
 <div id="other" data-link-path="${OTHER}"><div data-feed-kind="prose" style="height:40px">other row</div></div>
 </body></html>`;
@@ -154,3 +155,48 @@ browserTest("a poll is delivered when its body completed, not when its headers a
   expect(seen.delivery!.at).toBeGreaterThanOrEqual(seen.headersAt + 300);
   expect(seen.delivery!.at).toBeLessThanOrEqual(seen.parsedAt + 1);
 }, 30_000);
+
+/** A pane that CLIPS, the way every transcript scroller does, holding one row
+    laid out entirely below what the pane shows. On the phone surface the pane
+    is the focused one, so only the clipping keeps the row out of sight. */
+const CLIPPED_PANE = (surface: Surface) => `(() => {
+  document.getElementById('target').remove();
+  document.getElementById('other').remove();
+  const pane = document.createElement('div');
+  pane.setAttribute('data-link-path', ${js(TARGET)});
+  pane.style.cssText = 'height:40px;overflow:hidden';
+  pane.innerHTML = '<div data-feed-kind="prose" style="height:40px;margin-top:100px">target row</div>';
+  if (${js(surface)} === 'phone') {
+    const focused = document.createElement('div');
+    focused.setAttribute('data-testid', 'mobile-focused-pane');
+    focused.appendChild(pane);
+    document.body.appendChild(focused);
+  } else document.body.appendChild(pane);
+  const row = pane.firstElementChild.getBoundingClientRect();
+  const box = pane.getBoundingClientRect();
+  return { pane: [box.top, box.bottom], row: [row.top, row.bottom] };
+})()`;
+
+for (const surface of ["desktop", "phone"] as const) {
+  browserTest(`a row its scrolling pane clips entirely out of sight is never painted, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await assertViewport(page, surface);
+    const layout = await page.evaluate<{ pane: number[]; row: number[] }>(CLIPPED_PANE(surface));
+    /* The row is inside the viewport and wholly below the 40px the pane shows. */
+    expect(layout.pane).toEqual([0, 40]);
+    expect(layout.row).toEqual([100, 140]);
+    expect(await page.evaluate<number>(`window.__profile.rows(${js(TARGET)})`)).toBe(1);
+    expect(await page.evaluate<number>(`window.__profile.visibleRows(${js(TARGET)}, ${js(surface)})`)).toBe(0);
+    const clipped = await page.evaluate<string>(outcome(`p.paintedAt(() => p.targetPainted(${js(TARGET)}, ${js(surface)}), 700)`));
+    expect(clipped).toStartWith("rejected:milestone not reached");
+
+    /* Scrolled into what the pane shows, the same row is a confirmed milestone. */
+    const scrolled = await page.evaluate<string>(outcome(`(() => {
+      setTimeout(() => { document.querySelector('[data-link-path=${js(TARGET)}]').scrollTop = 100; }, 100);
+      return p.paintedAt(() => p.targetPainted(${js(TARGET)}, ${js(surface)}), 5000);
+    })()`));
+    expect(scrolled).toStartWith("resolved:");
+    expect((JSON.parse(scrolled.slice("resolved:".length)) as { rafConfirmed: boolean }).rafConfirmed).toBe(true);
+  }, 30_000);
+}
