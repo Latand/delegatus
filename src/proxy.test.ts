@@ -98,3 +98,13 @@ test("remote access accepts the existing llv_auth cookie", () => {
 
   expect(proxy(request).headers.get("x-middleware-next")).toBe("1");
 });
+
+test("only the report frame passes without the cookie; the route checks its signed scope", () => {
+  process.env.LLV_TOKEN = "viewer-token";
+  const bare = (pathname: string) =>
+    new NextRequest(`http://viewer.example${pathname}`, { headers: { host: "viewer.example", "sec-fetch-site": "cross-site" } });
+  expect(proxy(bare("/api/artifact/frame/scope/index.html")).headers.get("x-middleware-next")).toBe("1");
+  for (const pathname of ["/api/artifact?path=%2Fx.md", "/api/artifact/framed", "/api/artifact/frame", "/api/files"]) {
+    expect(proxy(bare(pathname)).status).toBe(403);
+  }
+});

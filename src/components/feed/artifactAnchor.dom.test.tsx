@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { installActEnv } from "@/test-helpers/actEnv";
+import { previewTarget } from "@/components/preview/ArtifactPreviewHost";
 import { onArtifactPreview } from "@/components/preview/previewBus";
 
 import { md } from "./markdown";
@@ -107,4 +108,37 @@ test("a local link with a :line suffix previews the file itself", async () => {
     anchor().dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event);
   });
   expect(opened).toEqual(["~/fixtures/src/main.ts:42"]);
+});
+
+test("the owner's viewer URL in prose opens the report in the preview, not a new tab", async () => {
+  const report = "/workspace/checkout/reports/round-2/index.html";
+  await renderMd(`Added the decision graph: http://127.0.0.1:8898/#f=${encodeURIComponent(report + "#decision-graph")}`);
+  const a = anchor();
+  expect(a.getAttribute("target")).toBeNull();
+  expect(new URL(a.getAttribute("href")!, "http://127.0.0.1:8898").searchParams.get("path")).toBe(report);
+  await act(async () => {
+    a.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event);
+  });
+  /* The raw spelling travels; the preview reads it with the same resolver. */
+  expect(opened).toHaveLength(1);
+  expect(previewTarget(opened[0]!)).toEqual({ kind: "file", path: report, line: null, column: null, anchor: "decision-graph" });
+});
+
+test("a viewer URL naming a conversation becomes the in-app hash the router intercepts", async () => {
+  await renderMd("Continue in [the lane](http://127.0.0.1:8898/#c=conversation-1).");
+  const a = anchor();
+  expect(a.getAttribute("href")).toBe("#c=conversation-1");
+  expect(a.getAttribute("target")).toBeNull();
+});
+
+test("file:// and plain-path links to any local file open the preview, never a dead #f=", async () => {
+  await renderMd("See [a](file:///workspace/a%20b/notes.md#setup) and [b](/workspace/out/build).");
+  const anchors = [...dom.document.querySelectorAll("a")] as unknown as HTMLAnchorElement[];
+  for (const a of anchors) {
+    expect(a.getAttribute("href")!.startsWith("#f=")).toBe(false);
+    await act(async () => {
+      a.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event);
+    });
+  }
+  expect(opened).toEqual(["file:///workspace/a%20b/notes.md#setup", "/workspace/out/build"]);
 });
