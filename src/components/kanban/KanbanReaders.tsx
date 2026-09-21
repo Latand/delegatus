@@ -8,7 +8,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { BranchPane } from "@/components/BranchPane";
 import { mobileRowState, nowFragment } from "@/components/mobile/mobileBoardModel";
-import { stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
 import { CtxChip } from "@/components/PlanChip";
@@ -21,6 +21,7 @@ import { ConversationAccountChip } from "./AccountPicker";
 import { engineWord } from "./identityMarks";
 import { BranchGlyph, CloseGlyph, CollapseGlyph, ExpandGlyph, MaximizeGlyph, MinimizeGlyph, MoreGlyph } from "./kanbanGlyphs";
 import { KanbanPopover } from "./kanbanMenus";
+import { pipelineActionOptions } from "./stagesModel";
 
 /**
  * Conversations open inside kanban cards (#1695 K3).
@@ -193,6 +194,7 @@ interface ReaderProps extends ReaderView {
   onMenu: (key: string, anchor: HTMLElement, stop: ReaderStop) => void;
   /** A failed launch in the conversation's feed offers its retry (K9a). */
   onSpawnRetry?: (file: FileEntry) => void;
+  onCloseConversation?: (file: FileEntry) => void;
 }
 
 /** The host control the reader's actions menu offers, as the capability
@@ -205,7 +207,7 @@ export interface ReaderStop {
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
-const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, inSheet = false, owner, now, onFold, onClose, onFull, onMenu, onSpawnRetry }: ReaderProps) {
+const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, inSheet = false, owner, now, onFold, onClose, onFull, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
@@ -225,6 +227,28 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
      tabular suffix of the stage's name, never a third bold word. */
   const labelParts = owner?.stage && place ? stageCardLabelParts(t, owner.stage.stage, place) : null;
   const titleHint = owner?.stage && place ? `${stageLabelTitle(t, owner.stage.stage, place, engine ? engineWord(engine) : null)} · ${owner.cardTitle}` : title;
+  // A failed receipt alone cannot authorize retry of a closed or superseded stage.
+  const pipelineOwner = owner?.stage;
+  const retryOption = pipelineOwner
+    ? pipelineActionOptions(pipelineOwner.pipeline).find((option) => option.action === "retry-stage")
+    : null;
+  const pipelineLaunch = file.durableLineage?.memberships.some((item) => item.kind === "pipeline");
+  const retryEligible = pipelineOwner
+    ? retryOption?.refusal === null && retryOption.stageId === pipelineOwner.stage.id
+      && latestAttempt(pipelineOwner.pipeline, pipelineOwner.stage.id)?.launchId === file.spawn?.launchId
+    : !pipelineLaunch;
+  const retryLaunch = retryEligible ? onSpawnRetry : undefined;
+  const neverStarted = file.spawn?.state === "failed" && file.path.startsWith("spawn:");
+  const dismissLaunch = neverStarted && onCloseConversation ? (
+    <button
+      type="button"
+      className="btn sm"
+      data-launch-dismiss=""
+      onClick={() => { onClose(readerKey); onCloseConversation(file); }}
+    >
+      {t("runtime.receipt.dismiss")}
+    </button>
+  ) : null;
   const needs = row.dot === "warning";
   const identity = (
     <>
@@ -277,13 +301,14 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
         file={file}
         tasks={[]}
         isRoot={false}
-        onSpawnRetry={onSpawnRetry}
+        onSpawnRetry={retryLaunch}
         chrome={{
           header: (
             <div className="conv-head">
               <div className="ch-meta pane-id">
                 {identity}
                 <span className="spacer" />
+                {dismissLaunch}
                 {menuButton}
               </div>
             </div>
@@ -341,6 +366,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
               {full ? <MinimizeGlyph /> : <MaximizeGlyph />}
             </button>
           )}
+          {dismissLaunch}
           {menuButton}
           <button
             type="button"
@@ -381,7 +407,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       file={file}
       tasks={[]}
       isRoot={false}
-      onSpawnRetry={onSpawnRetry}
+      onSpawnRetry={retryLaunch}
       chrome={{
         header,
         className: `reader conv${needs ? " needs" : ""}${folded ? " folded" : ""}${full ? " full" : ""}`,

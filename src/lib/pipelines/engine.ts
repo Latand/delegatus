@@ -193,6 +193,7 @@ export interface PipelinePorts {
   }, onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>): Promise<PipelineStageSpawn>;
   spawnReceipt(launchId: string): PipelineSpawnReceipt | null;
   recoverStagedLaunch?(launchId: string, eligible: () => boolean): Promise<void>;
+  failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict";
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
@@ -1070,6 +1071,20 @@ export function defaultPipelinePorts(
       if (!client) return;
       try { await recoverStagedStructuredLaunch(launchId, registry, client, { eligible }); }
       finally { registrySnapshot = null; materializationFence = null; }
+    },
+    failStageLaunch: (launchId, conversationId, reason) => {
+      // Refresh at the write boundary: a receipt that published meanwhile wins.
+      const receipt = registry.readOnlySnapshot().receipts[launchId];
+      if (!receipt || receipt.conversationId !== conversationId
+        || receipt.pane || (receipt.artifactPath && fs.existsSync(receipt.artifactPath))) return false;
+      if (receipt.state === "failed") return true;
+      if (!["starting", "path-pending"].includes(receipt.state)) return false;
+      const recovery = stagedLaunchRecovery(receipt);
+      // An uncertain/delivered operation can outlive the controller's budget.
+      if (recovery && recovery.phase !== "unpublished") return false;
+      registry.failSpawn(launchId, reason);
+      invalidateRegistryProjection();
+      return registry.readOnlySnapshot().receipts[launchId]?.state === "failed";
     },
     claimSpawnRetry: (launchId, claimId) => {
       const result = registry.claimFailedSpawnForRetry(launchId, claimId).kind;
@@ -3318,7 +3333,7 @@ async function tickRunStage(
   /* A terminal spawn receipt is durable launch evidence. Runtime liveness can
      lag behind receipt settlement or fail to answer, so it has no authority to
      hide the recorded drain cause behind a later transcript park (#1326). */
-  if (terminalSpawnFailure) {
+  if (terminalSpawnFailure && !(isUnverifiedDeliverySpawnFailure(terminalSpawnFailure) && attempt.agentPath)) {
     park(pipeline, terminalSpawnFailure, attempt);
     return;
   }
@@ -4276,6 +4291,28 @@ function clearStagedLaunchWait(pipeline: Pipeline, attempt: PipelineStageAttempt
   pipeline.stateDetail = null;
 }
 
+/** Terminalize only the retained launch that never acquired a transcript.
+ * The registry's failed receipt fences late publication and owns retry claims. */
+function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted = false): boolean {
+  if (!attempt.launchId || !attempt.conversationId || attempt.agentPath || attempt.sessionId
+    || attempt.paneId || attempt.verdict || (attempt.completedAt && pipeline.state !== "closed") || attempt.activation
+    || pipelineSurvivorRefusal(pipeline)) return false;
+  const receipt = ports.spawnReceipt(attempt.launchId);
+  if (!receipt || receipt.conversationId !== attempt.conversationId || receipt.transcript || receipt.sessionId
+    || (attempt.state === "failed" && receipt.state === "failed")) return false;
+  const recovery = stagedLaunchRecovery(receipt);
+  const stoppedByController = attempt.error?.startsWith("stage spawn recovery stopped:") === true;
+  if (pipeline.state !== "closed" && !exhausted && !recovery?.stopped && !stoppedByController) return false;
+  const reason = `stage launch never started: ${pipeline.state === "closed" ? "pipeline closed" : recovery?.reason ?? attempt.error ?? "spawn recovery exhausted"}`;
+  if (!ports.failStageLaunch?.(attempt.launchId, attempt.conversationId, reason)) return false;
+  attempt.state = "failed";
+  attempt.error = reason;
+  attempt.completedAt ??= ports.now();
+  delete attempt.controllerWait;
+  if (pipeline.state !== "closed") park(pipeline, `${reason}; use retry-stage to start a fresh attempt`, attempt);
+  return true;
+}
+
 function waitForStagedLaunch(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   recovery: StagedLaunchRecovery, ports: PipelinePorts,
@@ -4283,7 +4320,9 @@ function waitForStagedLaunch(
   if (recovery.stopped || unixMs(ports.now()) - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
     const reason = recovery.stopped ? recovery.reason
       : `runtime host recovery exhausted after ${recovery.checks} checks; original launch and first-message operation retained; last result: ${recovery.reason}`;
-    park(pipeline, `stage spawn recovery stopped: ${reason}; original launch retained`, attempt);
+    if (!settleNeverStartedLaunch(pipeline, attempt, ports, true)) {
+      park(pipeline, `stage spawn recovery stopped: ${reason}; original launch retained`, attempt);
+    }
     return;
   }
   attempt.state = "spawning";
@@ -4349,6 +4388,48 @@ function stagedRecoveryMatches(pipeline: Pipeline, expected: StagedRecoveryObser
     && pipeline.cursor?.stageId === expected.stageId && attempt?.error === expected.attemptError
     && attempt?.n === expected.attempt && attempt.state === expected.attemptState && attempt.launchId === expected.launchId
     && attempt.conversationId === expected.conversationId && !attempt.completedAt && !attempt.verdict;
+}
+
+function deliveryUnverifiedAttempt(pipeline: Pipeline, attempt: PipelineStageAttempt): boolean {
+  return pipeline.state === "needs_decision" && attempt.state === "needs_decision"
+    && !attempt.historical && !attempt.completedAt && !attempt.verdict && !attempt.activation
+    && !pipelineSurvivorRefusal(pipeline)
+    && currentStage(pipeline)?.kind === "run"
+    && currentAttempt(pipeline, pipeline.cursor!.stageId) === attempt
+    && isUnverifiedDeliverySpawnFailure(attempt.error ?? "");
+}
+
+async function deliveredAttemptPath(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<string | null> {
+  if (!deliveryUnverifiedAttempt(pipeline, attempt) || !attempt.conversationId) return null;
+  const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
+  if (receipt && receipt.conversationId !== attempt.conversationId) return null;
+  const pathname = attempt.agentPath ?? ports.pathForConversation(attempt.conversationId)
+    ?? receipt?.transcript ?? receipt?.stagedTranscript;
+  if (!pathname || !ports.sourcePathAllowed(pathname)) return null;
+  const evidence = await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname);
+  // Metadata alone proves no prompt delivery. Require a native turn from this attempt.
+  if (!evidence || evidence.launchOnly || evidence.turn === "unknown"
+    || (evidence.lastRecordAt ?? evidence.message?.ts ?? 0) < unixMs(attempt.startedAt)) return null;
+  return pathname;
+}
+
+function reopenDeliveredAttempt(pipeline: Pipeline, attempt: PipelineStageAttempt, pathname: string): void {
+  attempt.agentPath = pathname;
+  attempt.state = "running";
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = null;
+  setCursorState(pipeline, pipeline.cursor!.stageId, "running");
+}
+
+async function reconcileParkedDelivery(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
+  const stage = currentStage(pipeline);
+  const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
+  if (!attempt) return false;
+  const pathname = await deliveredAttemptPath(pipeline, attempt, ports);
+  if (!pathname) return false;
+  reopenDeliveredAttempt(pipeline, attempt, pathname);
+  return true;
 }
 
 function reconcileParkedStructuredSpawn(pipeline: Pipeline, ports: PipelinePorts): boolean {
@@ -4883,8 +4964,24 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     await drainStageActivations(ports);
     const recoveredLaunches = await recoverWaitingStageLaunches(ports);
+    // Closed rows are excluded by the controller index. Repair only rows with
+    // an unfinished, pathless launch; after settlement they leave this set.
+    const closedLaunches = new Set(loadPipelinesForProjection().filter((pipeline) => pipeline.state === "closed"
+      && pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.launchId && !attempt.agentPath
+        && !attempt.sessionId && attempt.state !== "failed" && !attempt.verdict))).map((pipeline) => pipeline.id));
+    let closedLaunchesChanged = false;
+    if (closedLaunches.size) await withPipelineMutation((pipelines, persist) => {
+      for (const pipeline of pipelines) {
+        if (!closedLaunches.has(pipeline.id) || pipeline.state !== "closed") continue;
+        let changed = false;
+        for (const run of pipeline.runs) for (const attempt of run.attempts) {
+          changed = settleNeverStartedLaunch(pipeline, attempt, ports) || changed;
+        }
+        if (changed) { persist([pipeline]); closedLaunchesChanged = true; }
+      }
+    });
     const result = await withPipelineControllerMutation(async (pipelines, persist) => {
-      let changed = reconcilePipelineFallbackTasks(pipelines, persist);
+      let changed = reconcilePipelineFallbackTasks(pipelines, persist) || closedLaunchesChanged;
       await forEachCooperatively(pipelines, async (pipeline) => {
         if (publishesRemoteBranch(pipeline) && !pipeline.delivery) return;
         const persistPipeline = () => persist([pipeline]);
@@ -4930,7 +5027,11 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           changed = true;
         }
         if (pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.activation))) return;
-        let pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, ports);
+        let pipelineChanged = false;
+        for (const run of pipeline.runs) for (const attempt of run.attempts) {
+          pipelineChanged = settleNeverStartedLaunch(pipeline, attempt, ports) || pipelineChanged;
+        }
+        pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, ports) || pipelineChanged;
         pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, ports) || pipelineChanged;
         pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, ports) || pipelineChanged;
         pipelineChanged = rebindPipelineAttemptPaths(pipeline, ports) || pipelineChanged;
@@ -4940,6 +5041,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         if (!pipelineSurvivorRefusal(pipeline)) {
           pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, ports, persistPipeline) || pipelineChanged;
           pipelineChanged = reconcileParkedVerdictMiss(pipeline, ports) || pipelineChanged;
+          pipelineChanged = await reconcileParkedDelivery(pipeline, ports) || pipelineChanged;
           pipelineChanged = reconcileParkedStructuredSpawn(pipeline, ports) || pipelineChanged;
           pipelineChanged = reconcileBoundReviewFlow(pipeline, ports, persistPipeline) || pipelineChanged;
         }
@@ -6839,6 +6941,7 @@ export async function patchPipeline(
         }
         return { conflict: null, claimRequired: false };
       };
+      if (attempt && settleNeverStartedLaunch(pipeline, attempt, ports)) persist();
       const initialReceipt = validateRetryReceipt();
       if (initialReceipt.conflict) return initialReceipt.conflict;
       const orphan = await orphanAgentPane(attempt, ports);
@@ -7218,11 +7321,12 @@ function stageKindOf({ pipeline, stageId }: StageCompletionTarget): PipelineStag
 /** Which attempt a completion call is about, decided from the conversation the
     server attributed the call to. Nothing the caller says takes part beyond
     `stageId`, which only narrows the attempts it already holds. */
-function resolveStageCompletionTarget(
+async function resolveStageCompletionTarget(
   pipelines: readonly Pipeline[],
   conversationId: string,
   requestedStageId: string | null,
-): { target: StageCompletionTarget } | { refusal: StageCompletionResult } {
+  ports: PipelinePorts,
+): Promise<{ target: StageCompletionTarget; recoveryPath?: string } | { refusal: StageCompletionResult }> {
   const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
     .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
     .map((attempt) => ({ pipeline, stageId: run.stageId, attempt }))));
@@ -7263,7 +7367,12 @@ function resolveStageCompletionTarget(
       slots: slots(named),
     } };
   }
-  const live = runStages.filter(({ attempt }) => REPORTABLE_ATTEMPT_STATES.has(attempt.state));
+  const recoverable = new Map<StageCompletionTarget, string>();
+  for (const target of runStages) {
+    const pathname = await deliveredAttemptPath(target.pipeline, target.attempt, ports);
+    if (pathname) recoverable.set(target, pathname);
+  }
+  const live = runStages.filter((target) => REPORTABLE_ATTEMPT_STATES.has(target.attempt.state) || recoverable.has(target));
   if (live.length === 0) {
     const settled = runStages.at(-1)!;
     return { refusal: {
@@ -7281,7 +7390,7 @@ function resolveStageCompletionTarget(
       slots: slots(live),
     } };
   }
-  return { target: live[0]! };
+  return { target: live[0]!, recoveryPath: recoverable.get(live[0]!) };
 }
 
 /**
@@ -7350,12 +7459,14 @@ export async function reportStageCompletion(
     };
   }
   const requestedStageId = typeof request.stageId === "string" && request.stageId.trim() ? request.stageId.trim() : null;
-  const previewed = resolveStageCompletionTarget(loadPipelines(), conversationId, requestedStageId);
+  const previewed = await resolveStageCompletionTarget(loadPipelines(), conversationId, requestedStageId, ports);
   if ("refusal" in previewed) return previewed.refusal;
   const normalized = normalizeStageCompletion(request);
   if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
   const preview = previewed.target;
-  const heldWork = await backgroundWorkRefusal(preview, ports);
+  const heldWork = await backgroundWorkRefusal(previewed.recoveryPath
+    ? { ...preview, attempt: { ...preview.attempt, agentPath: previewed.recoveryPath } }
+    : preview, ports);
   if (heldWork) return heldWork;
   const previewStage = preview.pipeline.stages.find((candidate) => candidate.id === preview.stageId);
   const provenance = collectStageProvenance(
@@ -7364,8 +7475,8 @@ export async function reportStageCompletion(
     ports.exec,
   );
 
-  return withPipelineMutation((pipelines, persist) => {
-    const resolved = resolveStageCompletionTarget(pipelines, conversationId, requestedStageId);
+  return withPipelineMutation(async (pipelines, persist) => {
+    const resolved = await resolveStageCompletionTarget(pipelines, conversationId, requestedStageId, ports);
     if ("refusal" in resolved) return resolved.refusal;
     const { pipeline, stageId, attempt } = resolved.target;
     if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n) {
@@ -7376,6 +7487,7 @@ export async function reportStageCompletion(
         slots: [{ pipelineId: pipeline.id, stageId, attempt: attempt.n, state: attempt.state }],
       };
     }
+    if (resolved.recoveryPath) reopenDeliveredAttempt(pipeline, attempt, resolved.recoveryPath);
     const prior = attempt.report ?? null;
     const entries = pipeline.stageReports ?? [];
     const seq = (entries.at(-1)?.seq ?? 0) + 1;

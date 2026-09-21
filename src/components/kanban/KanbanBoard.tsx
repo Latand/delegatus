@@ -2383,6 +2383,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onFull={toggleFull}
         onMenu={openReaderMenu}
         onSpawnRetry={props.onSpawnRetry ? spawnRetry : undefined}
+        onCloseConversation={props.onCloseConversation}
       />
 
       {openMenu && menu.open ? (
