@@ -210,7 +210,9 @@ The tools include:
 - **accounts:** `account_limits`, `account_project_binding`,
   `conversation_migration`;
 - **the operator and the machine:** `operator_snapshot`, `request_attention`
-  (asks you to look at something and waits for your answer), `agent_activity`,
+  (moves your active Viewer to a conversation, task or other target and
+  returns once the browser has arrived there; it does not wait for a reply,
+  and a Return control takes you back), `agent_activity`,
   `lifecycle_events`, `resources`, `deployment_status`, `deploy_exact_sha`.
 
 Every call takes a `clientRequestId`; repeating a call with the same id and
