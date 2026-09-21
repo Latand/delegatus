@@ -165,7 +165,7 @@ test("markdown renders as a document: headings, lists, table, code, quote, image
 
   /* A relative image resolves against the file's directory. */
   const image = doc.querySelector("img")!;
-  expect(image.getAttribute("src")).toBe(`/api/image?path=${encodeURIComponent("/workspace/docs/img/flow.png")}`);
+  expect(image.getAttribute("src")).toBe(`/api/artifact?path=${encodeURIComponent("/workspace/docs/img/flow.png")}`);
 });
 
 test("a relative link opens its target in the preview, resolved against the file's directory", async () => {

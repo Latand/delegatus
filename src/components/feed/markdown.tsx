@@ -187,14 +187,18 @@ function Anchor({ href: raw, label }: { href: string; label: string }) {
 }
 
 /* Where an image's bytes come from: http(s)/data URIs load straight; a local
-   path (or file:// URL, as agents emit) streams through /api/image, and a
-   path relative to a previewed document resolves against its directory. */
+   path (or file:// URL, as agents emit) streams through /api/image. Inside a
+   previewed document a path resolves against the document's directory and
+   loads through the preview's own file route, which serves SVG inertly. */
 function imageSrc(raw: string, scope: MdDocumentScope | null): string {
   const url = raw.replace(/\\([()])/g, "$1");
   if (/^(?:https?:)?\/\//.test(url) || url.startsWith("data:")) return url;
-  const relative = scope ? resolveRelative(scope.baseDir, url) : null;
-  const local = relative ?? url.replace(/^file:\/\//, "");
-  return `/api/image?path=${encodeURIComponent(local.split("#")[0]!)}`;
+  if (scope) {
+    const target = resolveLink(resolveRelative(scope.baseDir, url) ?? url);
+    if (target?.kind === "file") return artifactContentUrl(target.path);
+  }
+  const local = url.replace(/^file:\/\//, "");
+  return `/api/image?path=${encodeURIComponent(local)}`;
 }
 
 /* Inline embedded image: a capped thumbnail that opens the full-size lightbox

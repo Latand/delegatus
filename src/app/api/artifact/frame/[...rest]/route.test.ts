@@ -98,7 +98,7 @@ test("the frame cannot read the viewer: its requests to the viewer's API are ref
   const dir = reportDir();
   const url = new URL("http://127.0.0.1:8898/api/artifact");
   url.searchParams.set("path", path.join(dir, "../../secrets.md"));
-  for (const headers of [
+  for (const headers of <Record<string, string>[]>[
     /* fetch() from the sandboxed page */
     { host: "127.0.0.1:8898", origin: "null", "sec-fetch-site": "cross-site" },
     /* a no-cors subresource from the sandboxed page */
