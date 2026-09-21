@@ -96,7 +96,7 @@ export interface RuntimeHostClient {
       Answers the settled entry; there is no operation receipt to answer. */
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
   readSession?(identity: RuntimeSessionRead): Promise<RuntimeSession | null>;
-  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor: string[] }): Promise<RuntimeSnapshot>;
+  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   append(event: RuntimeEventInput): Promise<unknown>;
@@ -150,7 +150,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   readSession(identity: RuntimeSessionRead): Promise<RuntimeSession | null> {
     return this.call("session-read", { ...identity }) as Promise<RuntimeSession | null>;
   }
-  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor: string[] }): Promise<RuntimeSnapshot> { return this.call("snapshot", options, this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>; }
+  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot> {
+    // The deadline belongs to this caller, never to the wire protocol.
+    const params = options?.voiceBodiesFor ? { voiceBodiesFor: options.voiceBodiesFor } : undefined;
+    return this.call("snapshot", params, options?.timeoutMs ?? this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>;
+  }
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
   waitEvents(after: number, timeoutMs = 15_000, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("wait", { after, timeoutMs }, timeoutMs + 1_000, signal) as Promise<RuntimeReplay>; }
   append(event: RuntimeEventInput): Promise<unknown> { return this.call("append", { event }); }
