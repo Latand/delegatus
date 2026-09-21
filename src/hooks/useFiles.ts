@@ -90,7 +90,9 @@ type CompletionRetry = {
   targetGeneration: number;
   logicalGeneration: number;
   attempt: number;
-  phase: "scheduled" | "queued" | "active" | "canceled";
+  /** `parked`: the tab is hidden. The retry keeps its target generation,
+      pin and attempt, and is rescheduled when the tab is shown (#1994). */
+  phase: "scheduled" | "queued" | "active" | "parked" | "canceled";
   timer?: ReturnType<typeof setTimeout>;
   controller?: AbortController;
 };
@@ -124,12 +126,27 @@ export interface FilesClientCache {
       stale or reconnecting feed can only delay the confirmation, never orphan
       the launch. */
   applySpawnedConversation(file: FileEntry): void;
+  /** The tab hid: abort completion retries in flight and park every retry
+      chain until {@link resumeCompletionRetries}. Idempotent. */
+  pauseCompletionRetries(): void;
+  /** The tab is visible again: reschedule every parked retry chain. */
+  resumeCompletionRetries(): void;
   /** Cancel owned retries and detach subscribers. A disposed cache is inert. */
   dispose(): void;
 }
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function documentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+/** A completion retry that reached the network while the tab was hidden. Not
+    a server failure, so it never counts against the catalog. */
+class ParkedRetry extends Error {
+  override name = "AbortError";
 }
 
 function equalValue(left: unknown, right: unknown): boolean {
@@ -486,6 +503,8 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     const url = filesApiUrl(undefined, pinnedPath);
     if (completionRetry) {
       if (!ownsCompletionRetry(url, completionRetry)) return snapshot;
+      /* Queued before the tab hid: park instead of fetching. */
+      if (documentHidden()) throw new ParkedRetry("completion retry parked while hidden");
       completionRetry.phase = "active";
       completionRetry.controller = new AbortController();
     }
@@ -653,6 +672,12 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     retry.attempt = attempt;
     retry.phase = "scheduled";
     if (!owner) completionRetries.set(url, retry);
+    /* A hidden tab owes this read but does not make it: the chain waits,
+       target and pin intact, for resumeCompletionRetries. */
+    if (documentHidden()) {
+      retry.phase = "parked";
+      return;
+    }
     const delay = Math.min(
       FILES_GENERATION_RETRY_MAX_MS,
       FILES_GENERATION_RETRY_MS * 2 ** Math.min(attempt, 10),
@@ -661,6 +686,10 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
       retry.timer = undefined;
       if (!ownsCompletionRetry(url, retry)) {
         cancelCompletionRetry(url);
+        return;
+      }
+      if (documentHidden()) {
+        retry.phase = "parked";
         return;
       }
       retry.phase = "queued";
@@ -684,6 +713,35 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
         );
       });
     }, delay);
+  };
+
+  const pauseCompletionRetries = () => {
+    for (const retry of completionRetries.values()) {
+      if (retry.timer !== undefined) {
+        clearTimeout(retry.timer);
+        retry.timer = undefined;
+        retry.phase = "parked";
+      }
+      /* In flight: the abort settles through the chain's own catch, which
+         reschedules it and parks it there. */
+      retry.controller?.abort();
+    }
+  };
+
+  const resumeCompletionRetries = () => {
+    if (disposed) return;
+    for (const [url, retry] of [...completionRetries]) {
+      if (retry.phase !== "parked") continue;
+      scheduleCompletionRetry(
+        url,
+        retry.pinnedPath,
+        retry.revision,
+        retry.targetGeneration,
+        retry.logicalGeneration,
+        retry.attempt,
+        retry,
+      );
+    }
   };
 
   const revalidate = (pinnedPath?: string | null, revision?: number, signal?: AbortSignal): Promise<FilesData> =>
@@ -751,7 +809,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     listeners.clear();
   };
 
-  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, dispose };
+  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
@@ -860,10 +918,6 @@ export function filesRequestHeaders(
  */
 export function filesPollCadence(connection: "live" | "reconnecting" | "degraded" | "offline"): "poll" | "live" {
   return connection === "live" ? "live" : "poll";
-}
-
-function documentHidden(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
 /** Polls /api/files. Keeps the last good list on transient fetch errors.
@@ -1032,8 +1086,10 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       if (documentHidden()) {
         inflight.abort();
         inflight = new AbortController();
+        cache.pauseCompletionRetries();
         return;
       }
+      cache.resumeCompletionRetries();
       if (hydrateOnVisible) {
         hydrateOnVisible = false;
         owedWhileHidden = false;
