@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import net from "node:net";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { afterAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
@@ -122,6 +124,71 @@ function fixture(failedCount: number, fullHistory = false) {
   } satisfies Partial<RuntimeHostClient> as RuntimeHostClient;
   return { directory, registry, journal, client };
 }
+
+test("slow startup snapshot stays responsive and concurrent reconnects never repeat a ready pass", async () => {
+  const f = fixture(0);
+  const socketPath = path.join(isolated, "sockets", "slow-startup.sock");
+  const connections = new Set<net.Socket>();
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  let snapshotCalls = 0;
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on("error", () => {});
+    socket.on("close", () => connections.delete(socket));
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString();
+      if (!buffer.includes("\n")) return;
+      const request = JSON.parse(buffer.slice(0, buffer.indexOf("\n")));
+      buffer = "";
+      snapshotCalls += 1;
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (!socket.destroyed) socket.end(JSON.stringify({ id: request.id, ok: true, result: f.journal.snapshot() }) + "\n");
+      }, snapshotCalls <= 1 ? 11_000 : 0);
+      timers.add(timer);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  const transport = new UnixRuntimeHostClient(socketPath);
+  const client: RuntimeHostClient = { ...f.client, snapshot: transport.snapshot.bind(transport) };
+  let passes = 0;
+  let attempts = 0;
+  const retries: number[] = [];
+  const dependencies = {
+    registry: f.registry, client, orchestratorSeats: () => [],
+    refreshTranscriptState: async () => { passes += 1; },
+    adopt: async () => [], adoptClaude: async () => [],
+  };
+  const delay = monitorEventLoopDelay({ resolution: 10 });
+  delay.enable();
+  try {
+    await runStructuredHostStartup(async () => {
+      attempts += 1;
+      await Promise.all([
+        adoptStructuredHostsAtStartup(dependencies),
+        adoptStructuredHostsAtStartup(dependencies),
+      ]);
+    }, () => {}, { waitUntilReady: true, schedule: (callback, ms) => {
+      retries.push(ms);
+      return setTimeout(callback, ms);
+    } });
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(structuredStartupStatus()?.state).toBe("ready");
+    expect(attempts).toBe(1);
+    expect(passes).toBe(1);
+    expect(retries).toEqual([]);
+    expect(snapshotCalls).toBeGreaterThanOrEqual(1);
+    expect(delay.max / 1e6).toBeLessThan(500);
+  } finally {
+    delay.disable();
+    for (const timer of timers) clearTimeout(timer);
+    for (const socket of connections) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    f.journal.close();
+  }
+}, 30_000);
 
 test("historical failed launches do not retain startup admission across one full runtime snapshot per receipt", async () => {
   const f = fixture(672);
