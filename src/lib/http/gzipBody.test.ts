@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { gunzipSync } from "node:zlib";
 
 import { acceptsGzip, gzipBody } from "./gzipBody";
 
@@ -32,5 +33,5 @@ test("no header, identity only, an excluded wildcard or an unreadable weight mea
 
 test("the compressed body round-trips", async () => {
   const body = JSON.stringify({ rows: Array.from({ length: 1000 }, (_, i) => ({ i })) });
-  expect(Buffer.from(Bun.gunzipSync(await gzipBody(body))).toString("utf8")).toBe(body);
+  expect(gunzipSync(await gzipBody(body)).toString("utf8")).toBe(body);
 });

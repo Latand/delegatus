@@ -986,11 +986,11 @@ describe("runtimeBus hidden-tab suspension", () => {
   async function live(): Promise<FakeEventSource> {
     h.bus.start();
     await flush();
-    const source = h.sources.at(-1)!;
-    source.open();
-    source.named("heartbeat", {});
+    const stream = h.sources.at(-1)!;
+    stream.open();
+    stream.named("heartbeat", {});
     expect(h.bus.getState().connection).toBe("live");
-    return source;
+    return stream;
   }
 
   test("a hidden tab closes its stream after the grace period and fetches nothing while hidden", async () => {
