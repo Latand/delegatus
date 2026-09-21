@@ -1,0 +1,935 @@
+{
+  "what": "The BEFORE measurement: the same lifecycle driver in this branch, run unchanged against the default branch, over the ordinary send only.",
+  "distinctRenderings": {
+    "phone-390": 4,
+    "desktop-1280": 4
+  },
+  "renderings": {
+    "phone-390": [
+      "{\"bubble\":{\"width\":257,\"height\":92,\"opacity\":\"0.8\",\"fontSize\":\"16px\",\"padding\":\"10px/16px/10px/16px\",\"radius\":\"12px\",\"right\":24},\"aside\":\"Delivering\",\"controls\":[]}",
+      "{\"bubble\":{\"width\":257,\"height\":92,\"opacity\":\"0.8\",\"fontSize\":\"16px\",\"padding\":\"10px/16px/10px/16px\",\"radius\":\"12px\",\"right\":24},\"aside\":\"waiting to be handed to the agent \u00b7 1s\",\"controls\":[]}",
+      "{\"bubble\":{\"width\":257,\"height\":92,\"opacity\":\"0.8\",\"fontSize\":\"16px\",\"padding\":\"10px/16px/10px/16px\",\"radius\":\"12px\",\"right\":24},\"aside\":\"Delivered\",\"controls\":[]}",
+      "{\"bubble\":{\"width\":292,\"height\":62,\"opacity\":\"1\",\"fontSize\":\"15px\",\"padding\":\"9px/12px/9px/12px\",\"radius\":\"12px\",\"right\":24},\"aside\":\"\",\"controls\":[\"Copy message (Markdown)\"]}"
+    ],
+    "desktop-1280": [
+      "{\"bubble\":{\"width\":495,\"height\":44,\"opacity\":\"0.8\",\"fontSize\":\"16px\",\"padding\":\"10px/16px/10px/16px\",\"radius\":\"12px\",\"right\":134},\"aside\":\"Delivering\",\"controls\":[]}",
+      "{\"bubble\":{\"width\":495,\"height\":44,\"opacity\":\"0.8\",\"fontSize\":\"16px\",\"padding\":\"10px/16px/10px/16px\",\"radius\":\"12px\",\"right\":134},\"aside\":\"waiting to be handed to the agent \u00b7 1s\",\"controls\":[]}",
+      "{\"bubble\":{\"width\":495,\"height\":44,\"opacity\":\"0.8\",\"fontSize\":\"16px\",\"padding\":\"10px/16px/10px/16px\",\"radius\":\"12px\",\"right\":134},\"aside\":\"Delivered\",\"controls\":[]}",
+      "{\"bubble\":{\"width\":495,\"height\":44,\"opacity\":\"1\",\"fontSize\":\"16px\",\"padding\":\"10px/16px/10px/16px\",\"radius\":\"12px\",\"right\":134},\"aside\":\"\",\"controls\":[\"Copy message (Markdown)\"]}"
+    ]
+  },
+  "readings": {
+    "success-submitted-phone-390-dark-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Delivering",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2cc5b3ba-bab9-44e4-85b0-e7626b8baad6",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-accepted-phone-390-dark-en": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "waiting to be handed to the agent \u00b7 1s",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2cc5b3ba-bab9-44e4-85b0-e7626b8baad6",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-confirmed-phone-390-dark-en": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Delivered",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_2cc5b3ba-bab9-44e4-85b0-e7626b8baad6",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-transcript-phone-390-dark-en": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": null,
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_2cc5b3ba-bab9-44e4-85b0-e7626b8baad6",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-submitted-phone-390-dark-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u044f\u0454\u0442\u044c\u0441\u044f",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_67ac41a9-7490-47d8-8188-fbc800964821",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-accepted-phone-390-dark-uk": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "\u0447\u0435\u043a\u0430\u0454 \u043d\u0430 \u043f\u0435\u0440\u0435\u0434\u0430\u0447\u0443 \u0430\u0433\u0435\u043d\u0442\u043e\u0432\u0456 \u00b7 1 \u0441",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_67ac41a9-7490-47d8-8188-fbc800964821",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-confirmed-phone-390-dark-uk": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u043e",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_67ac41a9-7490-47d8-8188-fbc800964821",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-transcript-phone-390-dark-uk": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "controls": [
+        "\u0421\u043a\u043e\u043f\u0456\u044e\u0432\u0430\u0442\u0438 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f (Markdown)"
+      ],
+      "phase": null,
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_67ac41a9-7490-47d8-8188-fbc800964821",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-submitted-phone-390-light-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Delivering",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_4e30f39a-526b-4a59-97ab-1a435c3f41f4",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-accepted-phone-390-light-en": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "waiting to be handed to the agent \u00b7 1s",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_4e30f39a-526b-4a59-97ab-1a435c3f41f4",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-confirmed-phone-390-light-en": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Delivered",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_4e30f39a-526b-4a59-97ab-1a435c3f41f4",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-transcript-phone-390-light-en": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": null,
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_4e30f39a-526b-4a59-97ab-1a435c3f41f4",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-submitted-phone-390-light-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u044f\u0454\u0442\u044c\u0441\u044f",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_b1999623-08fa-4b49-ab49-0deb528eaa34",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-accepted-phone-390-light-uk": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "\u0447\u0435\u043a\u0430\u0454 \u043d\u0430 \u043f\u0435\u0440\u0435\u0434\u0430\u0447\u0443 \u0430\u0433\u0435\u043d\u0442\u043e\u0432\u0456 \u00b7 1 \u0441",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_b1999623-08fa-4b49-ab49-0deb528eaa34",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-confirmed-phone-390-light-uk": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 257,
+        "height": 92,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u043e",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_b1999623-08fa-4b49-ab49-0deb528eaa34",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-transcript-phone-390-light-uk": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "controls": [
+        "\u0421\u043a\u043e\u043f\u0456\u044e\u0432\u0430\u0442\u0438 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f (Markdown)"
+      ],
+      "phase": null,
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_b1999623-08fa-4b49-ab49-0deb528eaa34",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "success-submitted-desktop-1280-dark-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Delivering",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_81ecc2e5-b1dd-4f01-9980-34cbf0a3c9b5",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-accepted-desktop-1280-dark-en": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "waiting to be handed to the agent \u00b7 1s",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_81ecc2e5-b1dd-4f01-9980-34cbf0a3c9b5",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-confirmed-desktop-1280-dark-en": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Delivered",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_81ecc2e5-b1dd-4f01-9980-34cbf0a3c9b5",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-transcript-desktop-1280-dark-en": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": null,
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_81ecc2e5-b1dd-4f01-9980-34cbf0a3c9b5",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-submitted-desktop-1280-dark-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u044f\u0454\u0442\u044c\u0441\u044f",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_1c340d80-e685-4f3e-8f4e-f955f108f04d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-accepted-desktop-1280-dark-uk": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "\u0447\u0435\u043a\u0430\u0454 \u043d\u0430 \u043f\u0435\u0440\u0435\u0434\u0430\u0447\u0443 \u0430\u0433\u0435\u043d\u0442\u043e\u0432\u0456 \u00b7 1 \u0441",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_1c340d80-e685-4f3e-8f4e-f955f108f04d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-confirmed-desktop-1280-dark-uk": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u043e",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_1c340d80-e685-4f3e-8f4e-f955f108f04d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-transcript-desktop-1280-dark-uk": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "controls": [
+        "\u0421\u043a\u043e\u043f\u0456\u044e\u0432\u0430\u0442\u0438 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f (Markdown)"
+      ],
+      "phase": null,
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_1c340d80-e685-4f3e-8f4e-f955f108f04d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-submitted-desktop-1280-light-en": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Delivering",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_5d89fef8-5b1e-482d-a29a-a003f5277ad1",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-accepted-desktop-1280-light-en": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "waiting to be handed to the agent \u00b7 1s",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_5d89fef8-5b1e-482d-a29a-a003f5277ad1",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-confirmed-desktop-1280-light-en": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Delivered",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_5d89fef8-5b1e-482d-a29a-a003f5277ad1",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-transcript-desktop-1280-light-en": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "phase": null,
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_5d89fef8-5b1e-482d-a29a-a003f5277ad1",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-submitted-desktop-1280-light-uk": {
+      "state": "submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u044f\u0454\u0442\u044c\u0441\u044f",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_41c6bda2-4e52-45a9-b6b6-4764756c179a",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-accepted-desktop-1280-light-uk": {
+      "state": "accepted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "\u0447\u0435\u043a\u0430\u0454 \u043d\u0430 \u043f\u0435\u0440\u0435\u0434\u0430\u0447\u0443 \u0430\u0433\u0435\u043d\u0442\u043e\u0432\u0456 \u00b7 1 \u0441",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_41c6bda2-4e52-45a9-b6b6-4764756c179a",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-confirmed-desktop-1280-light-uk": {
+      "state": "confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "0.8",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u043e",
+      "controls": [],
+      "phase": null,
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_41c6bda2-4e52-45a9-b6b6-4764756c179a",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "success-transcript-desktop-1280-light-uk": {
+      "state": "transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 0
+      },
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "controls": [
+        "\u0421\u043a\u043e\u043f\u0456\u044e\u0432\u0430\u0442\u0438 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f (Markdown)"
+      ],
+      "phase": null,
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_41c6bda2-4e52-45a9-b6b6-4764756c179a",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    }
+  }
+}

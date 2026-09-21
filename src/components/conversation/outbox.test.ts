@@ -24,7 +24,9 @@ import {
   seedLaunchOutbox,
   settleLaunchOutboxDelivered,
   settleLaunchOutboxFailed,
+  transcriptEchoBindings,
   transcriptEchoCount,
+  transcriptEchoObservationId,
   updateOutbox,
   visibleOutbox,
   type OutboxEntry,
@@ -2127,4 +2129,176 @@ test("pending then queued observations preserve a server-reported unknown delive
   const queued = { ...pending, ...outboxReceiptPatch(pending, "queued", { ...receipt, status: "queued", revision: 3 }) };
   expect(queued.deliveryUncertain).toBe(true);
   expect(queued.awaitingTurn).toBeUndefined();
+});
+
+test("an unknown outcome owns the record that NAMES it, and only that one", () => {
+  /* Round-4 P1 and round-2 P1, together. A submission whose acknowledgement
+     never came back used to be excluded from echo ownership, so the
+     transcript's own record of it could not be recognised as belonging to the
+     row the operator already had — and the feed mounted the canonical row
+     beside the spinning one. It owns records now.
+
+     What it does NOT own is a record that merely repeats its words. An
+     outcome nobody could establish is not established by somebody else's
+     message saying the same thing, so the claim rests on the identity the
+     delivery path recorded: the client message id the record was written
+     under, which is this row's own id. */
+  const conversation = "conv-unknown-echo";
+  const text = "Check the release status";
+  enqueueOutbox(conversation, { id: "key-unknown", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-unknown", { state: "failed", deliveryUncertain: true, error: "lost response" });
+  enqueueOutbox(conversation, { id: "key-later", text, images: 0, at: 2_000 });
+  updateOutbox(conversation, "key-later", { state: "delivering" });
+
+  const unrelated: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text };
+  const own: TranscriptEchoObservation = { generation: "gen-1", id: "row:1:0", text, submissionId: "key-unknown" };
+  /* An arrival that names nobody is nobody's proof. It does not settle the
+     unknown submission, and it does not get consumed on its behalf either —
+     the submission that CAN be recognised by its words takes it. */
+  expect([...transcriptEchoBindings(conversation, [unrelated])])
+    .toEqual([[transcriptEchoObservationId(unrelated), "key-later"]]);
+  /* The record that names the unknown submission binds it, and binds it
+     alone: the later submission keeps its own. */
+  expect([...transcriptEchoBindings(conversation, [unrelated, own])]).toEqual([
+    [transcriptEchoObservationId(own), "key-unknown"],
+    [transcriptEchoObservationId(unrelated), "key-later"],
+  ]);
+
+  /* And the named record retires the row it answers for, exactly once: the
+     unknown entry leaves the tail for its canonical record while the later
+     submission keeps waiting. The payload and the unknown fate stay in the
+     queue. */
+  publishTranscriptEchoes(conversation, [own]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-later"]);
+  expect(readOutbox(conversation).find((entry) => entry.id === "key-unknown"))
+    .toMatchObject({ text, deliveryUncertain: true });
+  /* Replaying the same record changes nothing: one record, one adoption. */
+  publishTranscriptEchoes(conversation, [own, own]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-later"]);
+});
+
+test("an unrelated arrival never settles a submission whose outcome is unknown", () => {
+  /* Round-2 P1: another sender's identical words used to flip the row from
+     pending to confirmed and take its Check status away, while the entry was
+     still marked uncertain. */
+  const conversation = "conv-unknown-unrelated";
+  const text = "Deploy the release";
+  enqueueOutbox(conversation, { id: "key-unknown", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-unknown", { state: "delivering", deliveryUncertain: true });
+  const somebodyElse: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text };
+  publishTranscriptEchoes(conversation, [somebodyElse]);
+  expect([...transcriptEchoBindings(conversation, [somebodyElse])]).toEqual([]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-unknown"]);
+  expect(readOutbox(conversation)[0]).toMatchObject({ deliveryUncertain: true });
+});
+
+test("a record that arrives out of order stays with the submission it names", () => {
+  /* Two sends of the same words, the second one's record first. The unknown
+     first send must not consume it — it belongs to the second, and saying so
+     is the whole of what an identity is for. */
+  const conversation = "conv-out-of-order";
+  const text = "Run it again";
+  enqueueOutbox(conversation, { id: "key-first", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-first", { state: "delivering", deliveryUncertain: true });
+  enqueueOutbox(conversation, { id: "key-second", text, images: 0, at: 2_000 });
+  const secondRecord: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, submissionId: "key-second" };
+  expect([...transcriptEchoBindings(conversation, [secondRecord])])
+    .toEqual([[transcriptEchoObservationId(secondRecord), "key-second"]]);
+  publishTranscriptEchoes(conversation, [secondRecord]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-first"]);
+});
+
+test("a delivered document binds by identity though its record carries the inbox paths", () => {
+  /* The route folds the attachment's inbox path into the text the agent
+     receives, so the record NEVER carries the words the row shows. Text could
+     not bind it and the feed painted the canonical copy beside the original;
+     the identity binds it whatever the words are. */
+  const conversation = "conv-document";
+  const typed = "Read this and tell me what changed";
+  const delivered = `${typed}\n/tmp/viewer-inbox/files/a1b2c3d4e5f6/release-notes.pdf`;
+  enqueueOutbox(conversation, { id: "key-doc", text: typed, images: 0, files: 1, at: 1_000 });
+  updateOutbox(conversation, "key-doc", { state: "delivering" });
+  const record: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text: delivered, submissionId: "key-doc" };
+  expect([...transcriptEchoBindings(conversation, [record])])
+    .toEqual([[transcriptEchoObservationId(record), "key-doc"]]);
+  publishTranscriptEchoes(conversation, [record]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(typed), Date.now())).toEqual([]);
+});
+
+test("a send that is nothing but an attachment binds to its textless record", () => {
+  /* No words on either side. The record the engine journaled carries the
+     picture and the delivery identity, and that identity is the only thing
+     that can join it to the row the operator already has. */
+  const conversation = "conv-image-only";
+  enqueueOutbox(conversation, { id: "key-image", text: "", images: 1, at: 1_000 });
+  updateOutbox(conversation, "key-image", { state: "delivering" });
+  const record: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text: "", submissionId: "key-image" };
+  expect([...transcriptEchoBindings(conversation, [record])])
+    .toEqual([[transcriptEchoObservationId(record), "key-image"]]);
+  publishTranscriptEchoes(conversation, [record]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(""), Date.now())).toEqual([]);
+});
+
+test("an unknown outcome with no record of its own keeps its row", () => {
+  /* The other side of the same rule: without evidence, unknown is neither
+     delivered nor lost, so the row stays whatever the failed request left
+     behind on the local entry. */
+  const conversation = "conv-unknown-alone";
+  enqueueOutbox(conversation, { id: "key-unknown", text: "Nobody can say", images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-unknown", { state: "failed", deliveryUncertain: true, error: "lost response" });
+  expect(visibleOutbox(readOutbox(conversation), echoes("something else"), Date.now()).map((entry) => entry.id))
+    .toEqual(["key-unknown"]);
+});
+
+/* ── #1950 round 3: text never decides for a submission with an identity ── */
+
+test("two admitted equal-text sends: the second's record hides only the second", () => {
+  const conversation = "conv-admitted-reversed";
+  const text = "Run it again";
+  enqueueOutbox(conversation, { id: "key-first", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-first", { state: "delivering", operationId: "operation-first" });
+  enqueueOutbox(conversation, { id: "key-second", text, images: 0, at: 2_000 });
+  updateOutbox(conversation, "key-second", { state: "delivering", operationId: "operation-second" });
+  const secondRecord: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, submissionId: "key-second" };
+  const bindings = transcriptEchoBindings(conversation, [secondRecord]);
+  expect([...bindings]).toEqual([[transcriptEchoObservationId(secondRecord), "key-second"]]);
+  publishTranscriptEchoes(conversation, [secondRecord]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now(), undefined, undefined, new Set(bindings.values()))
+    .map((entry) => entry.id)).toEqual(["key-first"]);
+  expect(readOutbox(conversation).find((entry) => entry.id === "key-first")!.retiredEchoId).toBeUndefined();
+});
+
+test("an admitted submission is claimed by its own identity and never by equal text", () => {
+  const conversation = "conv-admitted-foreign";
+  const text = "Deploy the release";
+  enqueueOutbox(conversation, { id: "key-admitted", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-admitted", { state: "delivering", operationId: "operation-admitted" });
+  /* A record naming a delivery nobody here can resolve, and one naming none. */
+  const foreign: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, unresolvedSubmission: true };
+  const anonymous: TranscriptEchoObservation = { generation: "gen-1", id: "row:1:0", text };
+  expect([...transcriptEchoBindings(conversation, [foreign, anonymous])]).toEqual([]);
+  publishTranscriptEchoes(conversation, [foreign, anonymous]);
+  expect(readOutbox(conversation)[0]!.retiredEchoId).toBeUndefined();
+  expect(visibleOutbox(readOutbox(conversation), echoes([text, 2]), Date.now(), undefined, undefined, new Set())
+    .map((entry) => entry.id)).toEqual(["key-admitted"]);
+  /* Its own record does. */
+  const own: TranscriptEchoObservation = { generation: "gen-1", id: "row:2:0", text, submissionId: "key-admitted" };
+  const bindings = transcriptEchoBindings(conversation, [foreign, anonymous, own]);
+  expect([...bindings]).toEqual([[transcriptEchoObservationId(own), "key-admitted"]]);
+  publishTranscriptEchoes(conversation, [foreign, anonymous, own]);
+  expect(readOutbox(conversation)[0]!.retiredEchoId).toBe(transcriptEchoObservationId(own));
+});
+
+test("an unresolved identity is never claimed by text, even by a submission without one", () => {
+  const conversation = "conv-unadmitted-foreign";
+  const text = "Deploy the release";
+  enqueueOutbox(conversation, { id: "key-queued", text, images: 0, at: 1_000 });
+  const foreign: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, unresolvedSubmission: true };
+  expect([...transcriptEchoBindings(conversation, [foreign])]).toEqual([]);
+  publishTranscriptEchoes(conversation, [foreign]);
+  expect(readOutbox(conversation)[0]!.retiredEchoId).toBeUndefined();
 });

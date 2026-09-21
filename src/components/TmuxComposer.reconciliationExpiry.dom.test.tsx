@@ -1465,25 +1465,38 @@ test.each([
     expect(sends).toHaveLength(1);
     expect(polls).toBeGreaterThan(0);
     expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBe(true);
-    expect(host.querySelector("[data-outbox-status]")?.textContent).toBe(translate("en", "orchPanel.errorUnknownTitle"));
-    expect(host.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
-    expect(host.querySelector("[data-receipt-discard]")).not.toBeNull();
+    /* An admission nobody could confirm is not a message that was not sent:
+       the row stays "waiting for confirmation" and the unknown outcome is the
+       evidence under its own progress affordance (send-latency slice 3). */
+    expect(host.querySelector("[data-outbox-status]")?.textContent).toBe(translate("en", "outbox.awaitingConfirmation"));
+    expect(host.querySelector("[data-outbox-progress]")?.getAttribute("title"))
+      .toBe(translate("en", "orchPanel.errorUnknownTitle"));
+    /* The recovery lives one tap behind the message's own progress affordance
+       (send-latency slice 3), and for an admission with no operation id there
+       is exactly ONE thing on offer: asking under the original key. */
+    flushSync(() => host.querySelector<HTMLButtonElement>("[data-outbox-progress]")!.click());
+    expect(host.querySelector("[data-outbox-check]")).not.toBeNull();
     if (transport === "disconnected-admitted") expect(admitted.size).toBe(1);
     // A phone remount preserves the same local recovery authority and key.
     if (recovery === "discard") {
+      /* There is no way out of an unconfirmed delivery, and that is the point
+         (round-3 P1). Dropping the row used to look like tidying: the row IS
+         the record of key K, and once it is gone the composer mints K2 for the
+         same words and the server can hold both. So across a remount the row,
+         its key and its bytes are all still here, and nothing offers to end,
+         clear or cancel it. */
       flushSync(() => root.unmount());
       resetOutboxForTests();
       root = createRoot(host);
       flushSync(() => root.render(<ComposerWithOutbox file={fileFor(conversationId)} />));
-      await until(() => Boolean(host.querySelector("[data-receipt-discard]")));
-      expect(host.querySelector("[data-receipt-discard]")).not.toBeNull();
-      flushSync(() => host.querySelector<HTMLButtonElement>("[data-receipt-discard]")!.click());
-      await until(() => sessionStorage.getItem(`llvPendingSend:${conversationId}`) === null);
-      expect(readOutbox(conversationId)).toHaveLength(0);
-      expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).toBeNull();
-      expect(host.querySelector('[data-operation^="composer-unconfirmed:"]')).toBeNull();
+      await until(() => Boolean(host.querySelector("[data-outbox-progress]")));
+      flushSync(() => host.querySelector<HTMLButtonElement>("[data-outbox-progress]")!.click());
+      expect(host.querySelector("[data-receipt-discard], [data-outbox-discard], [data-outbox-clear], [data-outbox-cancel], [data-outbox-retry]")).toBeNull();
+      expect(host.querySelector("[data-outbox-check]")).not.toBeNull();
+      expect(readOutbox(conversationId).map(entry => entry.id)).toEqual([sends[0]!.idempotencyKey]);
+      expect(readOutbox(conversationId)[0]).toMatchObject({ text: prompt, deliveryUncertain: true });
+      expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).not.toBeNull();
       expect(sends).toHaveLength(1);
-      expect(host.querySelector("[data-payload-key]")).toBeNull();
       // Bytes remain recoverable until authoritative fate is known.
       if (attachment) expect(await retainedImages(conversationId, sends[0]!.idempotencyKey)).toHaveLength(1);
       return;
@@ -1514,7 +1527,7 @@ test.each([
        may already be delivering. The control asks instead, and the send count
        stays at the one attempt that was actually made. */
     const key = sends[0]!.idempotencyKey;
-    flushSync(() => host.querySelector<HTMLButtonElement>("[data-receipt-uncertain-retry]")!.click());
+    flushSync(() => host.querySelector<HTMLButtonElement>("[data-outbox-check]")!.click());
     /* The reconciliation window may already have parked this entry as a
        failure; what the LOOKUP settles is its uncertainty, so that is what the
        wait watches. */

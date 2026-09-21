@@ -537,7 +537,7 @@ export async function handleRuntimeDiscard(
     }
     const registry = (dependencies.registry ?? agentRegistry)();
     const presentationOperationId = operation.receipt.presentationOperationId ?? operation.operationId;
-    const deliveryRecord = sendReceiptFor(registry.readOnlySnapshot(), presentationOperationId);
+    const deliveryRecord = sendReceiptFor(registry.deliverySnapshotForOperation(presentationOperationId), presentationOperationId);
     const settleDelivered = () => {
       if (operation.receipt.conversationId.startsWith("conversation_")) {
         registry.recordDeliveryOutcomeForOperation(
@@ -607,7 +607,7 @@ export async function handleRuntimeDiscard(
       SEND_DISCARDED_REASON,
       disposition,
     );
-    const settled = sendReceiptFor(registry.readOnlySnapshot(), presentationOperationId);
+    const settled = sendReceiptFor(registry.deliverySnapshotForOperation(presentationOperationId), presentationOperationId);
     if (!settled || settled.state !== "failed" || settled.reason !== SEND_DISCARDED_REASON) {
       return NextResponse.json({
         error: "delivery discard could not be recorded durably",
@@ -704,7 +704,7 @@ export async function handleRuntimeRetry(
       }, { status: 409 });
     }
     const registry = (dependencies.registry ?? agentRegistry)();
-    const deliverySnapshot = registry.readOnlySnapshot();
+    const deliverySnapshot = registry.deliverySnapshotForOperation(previous.operationId);
     const deliveryRecord = sendReceiptFor(deliverySnapshot, previous.operationId);
     if (previous.operationId === operationId
       && previous.receipt.status !== "failed"
@@ -756,7 +756,7 @@ export async function handleRuntimeRetry(
         return NextResponse.json({ error: "runtime operation has no delivery reservation" }, { status: 409 });
       }
       if (reservation.state === "delivered" || reservation.state === "failed") {
-        const settled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
+        const settled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
         if (settled) {
           return NextResponse.json({ operationId, receipt: runtimeReceiptForSend(settled), send: settled });
         }

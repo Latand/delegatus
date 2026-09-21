@@ -300,6 +300,18 @@ export interface FeedEntry {
   item: Item;
   /** Receipt-to-completion total attached to the response that closed a turn. */
   responseDurationMs?: number;
+  /**
+   * WHICH delivery wrote this row, as the record itself says (#1950 round 2):
+   * the `dedup` token on the Codex structured-user marker, carried unchanged
+   * from the transcript. Every row a structured user record produced carries
+   * it — the bubble AND the attachment cards beside it — so the feed can bind
+   * a whole record to the submission it came from without comparing text, and
+   * an attachment-only send is bindable even though it has no text at all.
+   *
+   * It is an identity, not a resolution: the token names an operation, and
+   * only the registry can say which submission that operation belonged to.
+   */
+  submissionDedup?: string;
 }
 
 export interface FeedSnapshot {
@@ -587,6 +599,9 @@ interface CodexUserContent {
       an internal relay card; `operator` and records that predate the attribute
       keep the user bubble. */
   origin?: MessageOrigin | null;
+  /** The delivery's own identity on the marker (#1366), passed through to the
+      rows this record produces so they can be bound to their submission. */
+  deliveryDedup?: string;
 }
 
 /* Codex has added content-part variants over time. Keep the text path broad,
@@ -1341,6 +1356,9 @@ interface StoredEntry {
   src: number;
   item: Item;
   responseDurationMs?: number;
+  /** The delivery identity on the record that produced this row; see
+      {@link FeedEntry.submissionDedup}. */
+  submissionDedup?: string;
 }
 
 interface CallRec {
@@ -1354,6 +1372,10 @@ interface PendingCodexUser {
   text: string;
   entrySeqs: number[];
   structured: boolean;
+  /** The delivery identity on the record that opened this row (#1366), when
+      it carried one. Two records that name DIFFERENT deliveries are two
+      messages however alike their words and their clocks are. */
+  dedup?: string;
   /** A later record of the same text at the same instant already replaced
       this row like for like (#1398): the message is real whatever its text
       looks like, and any further echo folds into the same row. */
@@ -1493,8 +1515,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const entryIndex = (seq: number): number => (entries.length ? seq - entries[0].seq : -1);
 
-  const push = (item: Item): number => {
-    entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, reasoningBoundary, item });
+  const push = (item: Item, submissionDedup?: string): number => {
+    entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, reasoningBoundary, item,
+      ...(submissionDedup ? { submissionDedup } : {}) });
     snapshot = null;
     return pushSeq++;
   };
@@ -2503,7 +2526,11 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   });
   const emitCodexUserContent = (ts: unknown, content: CodexUserContent): PendingCodexUser => {
     const entrySeqs: number[] = [];
-    const emit = (item: Item) => entrySeqs.push(push(item));
+    /* Every row this ONE record produces carries the record's own delivery
+       identity — the bubble and the attachment cards alike. An image-only
+       send produces nothing but attachment rows, and they are the only thing
+       that can say which submission the picture arrived for. */
+    const emit = (item: Item) => entrySeqs.push(push(item, content.deliveryDedup));
     const { cleaned, images } = extractInboxImages(content.text);
     const voice = cleaned ? parseRealtimeDelegation(cleaned) : null;
     if (voice) emit({ kind: "voice", ts, ...voice });
@@ -2511,7 +2538,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     else if (cleaned) emit({ kind: "user", ts, text: cleaned, ...(content.selectedContext ? { selectedContext: content.selectedContext } : {}) });
     for (const image of images) emit({ kind: "inbox-image", name: image.name, path: image.path });
     for (const attachment of content.attachments) emit(attachment);
-    return { src: curSrc, ts, text: content.text, entrySeqs, structured: content.structured };
+    return { src: curSrc, ts, text: content.text, entrySeqs, structured: content.structured,
+      ...(content.deliveryDedup ? { dedup: content.deliveryDedup } : {}) };
   };
   const updateCodexPendingSource = (pending: PendingCodexUser, src: number) => {
     for (const seq of pending.entrySeqs) {
@@ -2559,6 +2587,17 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
      is its ECHO and replaces that row LIKE FOR LIKE: an internal relay stays
      the relay card (with the echo's timestamp), a user text stays the bubble —
      the echo must never re-author the message, and never opens a second row. */
+  /* One message can reach the rollout as several records, and only some of
+     them carry the marker: the identity the first sighting recorded stands
+     for the whole row group. */
+  const pendingDedup = (pending: PendingCodexUser): string | undefined => {
+    for (const seq of pending.entrySeqs) {
+      const idx = entryIndex(seq);
+      const dedup = idx >= 0 ? entries[idx]?.submissionDedup : undefined;
+      if (dedup) return dedup;
+    }
+    return undefined;
+  };
   const reconcileCodexUserEcho = (pending: PendingCodexUser, ts: unknown, decoded: CodexUserContent) => {
     const { cleaned, images } = extractInboxImages(decoded.text);
     if (cleaned) {
@@ -2573,9 +2612,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       });
       if (matchSeq !== undefined) {
         const idx = entryIndex(matchSeq);
-        entries[idx] = { ...entries[idx], item: echoItem };
+        entries[idx] = { ...entries[idx], item: echoItem,
+          ...(decoded.deliveryDedup ? { submissionDedup: decoded.deliveryDedup } : {}) };
       } else {
-        pending.entrySeqs.push(push(echoItem));
+        pending.entrySeqs.push(push(echoItem, decoded.deliveryDedup ?? pendingDedup(pending)));
       }
     }
     /* The provisional row already showed the message's inbox images; an echo
@@ -2585,13 +2625,22 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return idx >= 0 && entries[idx]?.item.kind === "inbox-image";
     });
     if (!illustrated) {
-      for (const image of images) pending.entrySeqs.push(push({ kind: "inbox-image", name: image.name, path: image.path }));
+      const dedup = decoded.deliveryDedup ?? pendingDedup(pending);
+      for (const image of images) pending.entrySeqs.push(push({ kind: "inbox-image", name: image.name, path: image.path }, dedup));
     }
     updateCodexPendingSource(pending, curSrc);
     pending.echoed = true;
   };
   const addCodexUserRecord = (ts: unknown, content: CodexUserContent) => {
-    const pending = pendingCodexUsers.find((candidate) => sameCodexTextAtTime(candidate.ts, candidate.text, ts, content.text));
+    /* Same words at the same instant used to be the whole test for "this is
+       the same message arriving again". It is not, once two sends of one text
+       can land a second apart: the delivery identity says which is which, and
+       where both records carry one and they disagree these are two messages
+       and each keeps its own row. Where either record carries none, nothing
+       has been said and the old test stands. */
+    const pending = pendingCodexUsers.find((candidate) =>
+      !(candidate.dedup && content.deliveryDedup && candidate.dedup !== content.deliveryDedup)
+      && sameCodexTextAtTime(candidate.ts, candidate.text, ts, content.text));
     if (pending) return reconcileCodexUserEcho(pending, ts, content);
     const emitted = emitCodexUserContent(ts, content);
     if (!emitted.entrySeqs.length && !emitted.text) addSvc("message user");
@@ -3223,6 +3272,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           key: String(head.seq),
           item: head.item,
           ...(head.responseDurationMs !== undefined ? { responseDurationMs: head.responseDurationMs } : {}),
+          ...(head.submissionDedup ? { submissionDedup: head.submissionDedup } : {}),
         });
         i += 1;
         continue;

@@ -94,6 +94,7 @@ function chain(name: string, options: { activeTurnRef?: string | null; inject?: 
   });
   const client = {
     snapshot: async () => journal.snapshot(),
+    readSession: async (identity) => journal.readSession(identity),
     append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => journal.append(event),
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => journal.executeOperation(command),
     operationStatus: async (operationId: string) => journal.operationResult(operationId),

@@ -666,11 +666,13 @@ export async function runStructuredHostStartup(
   options: StructuredHostStartupOptions = {},
 ): Promise<void> {
   const schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
-  const maxRetryMs = options.maxRetryMs ?? 1_000;
+  const maxRetryMs = options.maxRetryMs ?? 300_000;
   const jitterRatio = Math.min(Math.max(options.jitterRatio ?? 0.2, 0), 1);
   const random = options.random ?? Math.random;
-  let retryMs = options.initialRetryMs ?? 100;
+  let retryMs = options.initialRetryMs ?? 5_000;
   let retryPending = false;
+  let running = false;
+  let finished = false;
   let attempts = 0;
   let resolveReady: (() => void) | null = null;
   let rejectReady: ((error: unknown) => void) | null = null;
@@ -679,24 +681,32 @@ export async function runStructuredHostStartup(
     : null;
 
   const attempt = async (): Promise<void> => {
+    if (running || finished) return;
+    running = true;
     attempts += 1;
     try {
       options.signal?.throwIfAborted();
       await adopt();
       options.signal?.throwIfAborted();
       markStructuredHostStartupReady();
+      finished = true;
+      options.signal?.removeEventListener("abort", aborted);
       resolveReady?.();
       if (attempts > 1) log("[structured hosts] startup adoption recovered", { attempts });
     } catch (error) {
       markStructuredHostStartupFailed();
       if (options.signal?.aborted) {
+        finished = true;
         rejectReady?.(error);
         throw error;
       }
       const classification = classifyStructuredHostStartupError(error);
       if (classification.disposition === "terminal") {
-        log("[structured hosts] startup adoption failed", error, {
+        finished = true;
+        options.signal?.removeEventListener("abort", aborted);
+        log("[structured hosts] startup adoption failed", {
           category: classification.category,
+          attempt: attempts,
           action: classification.action,
         });
         rejectReady?.(error);
@@ -707,17 +717,23 @@ export async function runStructuredHostStartup(
       const delayMs = Math.min(maxRetryMs, Math.max(0, Math.round(retryMs * jitter)));
       retryMs = Math.min(retryMs * 2, maxRetryMs);
       retryPending = true;
-      if (attempts === 1) log("[structured hosts] startup adoption failed; retry scheduled", error);
+      log("[structured hosts] startup adoption failed; retry scheduled", {
+        category: classification.category, attempt: attempts, retryInMs: delayMs,
+      });
       schedule(() => {
+        if (!retryPending || running || finished) return;
         retryPending = false;
-        void attempt().catch((retryError) => {
-          log("[structured hosts] startup adoption retry aborted", retryError);
-        });
+        // The attempt logs its classified failure; avoid duplicating it or
+        // exposing an exception payload in a second log line.
+        void attempt().catch(() => {});
       }, delayMs).unref?.();
+    } finally {
+      running = false;
     }
   };
 
   const aborted = () => {
+    if (finished) return;
     markStructuredHostStartupFailed();
     // An executing attempt must settle before retirement can checkpoint.
     if (retryPending) rejectReady?.(options.signal?.reason);

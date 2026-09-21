@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -790,3 +790,19 @@ test.each(["pipelines.json", "pipelines-archive.json"])("ordinary legacy %s read
     expect(fs.readFileSync(path.join(sandbox, filename), "utf8")).toBe("null");
   });
 });
+
+
+test("startup admission warns with its phase when one hold exceeds 100 ms", async () => isolatedDelivery(async () => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await withPipelineStartupAdmission(async (available) => {
+      expect(available).toBe(true);
+      await Bun.sleep(125);
+    }, "fixture startup phase");
+    expect(warn).toHaveBeenCalledWith("[structured hosts] state lease exceeded budget", {
+      phase: "fixture startup phase", collection: "pipelines", budgetMs: 100, heldMs: expect.any(Number),
+    });
+    const fields = warn.mock.calls[0]![1] as { heldMs: number };
+    expect(fields.heldMs).toBeGreaterThanOrEqual(100);
+  } finally { warn.mockRestore(); }
+}));

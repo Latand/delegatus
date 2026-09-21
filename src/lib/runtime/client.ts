@@ -6,7 +6,7 @@ import { parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDepl
   type ViewerDeploymentList, type ViewerDeploymentListOptions } from "./contracts";
 
 
-import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
+import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSession, RuntimeSessionRead, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
 import { runtimeHostSocket } from "./flags";
 
 // The snapshot frame carries every hosted session, and a hosted session keeps
@@ -90,12 +90,15 @@ export function isRuntimeHostTransportFailure(error: unknown): boolean {
 }
 
 export interface RuntimeHostClient {
+  /** Stable listener identity; reconnecting to the same socket preserves it. */
+  startupGeneration?(): Promise<string | null>;
   nativeQueueRead?(conversationId: string): Promise<NativeQueueRecord[]>;
   nativeQueueTransition?(operationId: string, transition: NativeQueueTransition): Promise<RuntimeOperationResult>;
   /** Canonical proof for an entry whose add operation was compacted (#1664).
       Answers the settled entry; there is no operation receipt to answer. */
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
-  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor: string[] }): Promise<RuntimeSnapshot>;
+  readSession?(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null>;
+  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   append(event: RuntimeEventInput): Promise<unknown>;
@@ -146,7 +149,16 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   nativeQueueSettleCompacted(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement> {
     return this.call("native-queue-settle-compacted", { ...request }) as Promise<NativeQueueCompactedSettlement>;
   }
-  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor: string[] }): Promise<RuntimeSnapshot> { return this.call("snapshot", options, this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>; }
+  readSession(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null> {
+    // Startup can wait for a slow host without changing interactive deadlines
+    // or sending the caller's transport policy over the wire.
+    return this.call("session-read", { ...identity }, options?.timeoutMs ?? this.timeoutMs) as Promise<RuntimeSession | null>;
+  }
+  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot> {
+    // The deadline belongs to this caller, never to the wire protocol.
+    const params = options?.voiceBodiesFor ? { voiceBodiesFor: options.voiceBodiesFor } : undefined;
+    return this.call("snapshot", params, options?.timeoutMs ?? this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>;
+  }
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
   waitEvents(after: number, timeoutMs = 15_000, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("wait", { after, timeoutMs }, timeoutMs + 1_000, signal) as Promise<RuntimeReplay>; }
   append(event: RuntimeEventInput): Promise<unknown> { return this.call("append", { event }); }
@@ -198,6 +210,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs) as Promise<ViewerDeploymentReceipt>; }
   cancelViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-cancel", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-read", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
+  startupGeneration(): Promise<string | null> { return this.deploymentListGeneration(); }
   private async deploymentListGeneration(): Promise<string | null> {
     try {
       const stat = fs.statSync(this.socketPath, { bigint: true });
@@ -259,6 +272,9 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     return new Promise((resolve, reject) => {
       const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, ...(params ? { params } : {}) };
       const socket = net.createConnection(this.socketPath);
+      // Decode across chunk boundaries; a split multibyte character belongs
+      // to the same session response and must survive a large frame intact.
+      socket.setEncoding("utf8");
       const startedAt = performance.now();
       let frame = "";
       let settled = false;
@@ -302,4 +318,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
 export function runtimeHostClient(env: NodeJS.ProcessEnv = process.env): RuntimeHostClient | null {
   const socket = runtimeHostSocket(env);
   return socket ? new UnixRuntimeHostClient(socket) : null;
+}
+
+/** A missing keyed capability is unavailable evidence; admission must keep its
+    reservation recoverable instead of falling back to a population read. */
+export function readRuntimeSession(client: RuntimeHostClient, identity: RuntimeSessionRead): Promise<RuntimeSession | null> {
+  if (!client.readSession) throw new RuntimeHostUnavailableError("runtime session read is unavailable");
+  return client.readSession(identity);
 }
