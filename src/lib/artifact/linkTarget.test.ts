@@ -109,6 +109,28 @@ describe("relative links inside a document", () => {
     expect(resolveRelative("~/notes", "a.md")).toBe("~/notes/a.md");
   });
 
+  test("decode an encoded fragment exactly once and keep literal filename characters", () => {
+    const base = "/workspace/docs";
+    expect(resolveRelative(base, "t.md#%D1%80%D0%BE%D0%B7%D0%B4%D1%96%D0%BB")).toBe("/workspace/docs/t.md#розділ");
+    expect(resolveRelative(base, "t.md#Step%202")).toBe("/workspace/docs/t.md#Step 2");
+    expect(resolveRelative(base, "t.md#100%25")).toBe("/workspace/docs/t.md#100%");
+    expect(resolveRelative(base, "t.md#%2541")).toBe("/workspace/docs/t.md#%41");
+    expect(resolveRelative(base, "t.md#bad%zz")).toBe("/workspace/docs/t.md#bad%zz");
+    expect(resolveLink(resolveRelative(base, "../r/index.html#%D1%80")!)).toEqual({ kind: "file", path: "/workspace/r/index.html", line: null, column: null, anchor: "р" });
+    expect(resolveLink(resolveRelative(base, "t.md#Step%202")!)).toMatchObject({ path: "/workspace/docs/t.md", anchor: "Step 2" });
+  });
+
+  test("a sibling file with a :line or :line:col suffix is a file, never a URL scheme", () => {
+    const base = "/workspace/src";
+    expect(resolveRelative(base, "retry.ts:180")).toBe("/workspace/src/retry.ts:180");
+    expect(resolveLink(resolveRelative(base, "retry.ts:180")!)).toEqual({ kind: "file", path: "/workspace/src/retry.ts", line: 180, column: null, anchor: null });
+    expect(resolveLink(resolveRelative(base, "retry.ts:180:5")!)).toEqual({ kind: "file", path: "/workspace/src/retry.ts", line: 180, column: 5, anchor: null });
+    expect(resolveLink(resolveRelative(base, "retry.ts:12-20")!)).toMatchObject({ path: "/workspace/src/retry.ts", line: 12 });
+    for (const href of ["tel:5551234", "news:12", "mailto:a@example.com", "https://example.com:8080", "urn:isbn:0451450523"]) {
+      expect(resolveRelative(base, href)).toBeNull();
+    }
+  });
+
   test("leave absolute, scheme and anchor-only links alone", () => {
     for (const href of ["/abs.md", "~/x.md", "https://example.com", "mailto:a@example.com", "#top", "data:image/png;base64,AA"]) {
       expect(resolveRelative("/workspace", href)).toBeNull();

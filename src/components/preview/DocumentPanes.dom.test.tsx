@@ -104,6 +104,21 @@ const GUIDE = [
   "See [the table](#wide-table).",
 ].join("\n");
 
+/* Relative links a previewed document carries: percent-encoded fragments
+   (Unicode and ASCII) and sibling files with a :line / :line:col suffix. */
+const FRAGMENTS = [
+  "# Fragments",
+  "",
+  "- [Encoded Unicode heading](deep.md#%D1%80%D0%BE%D0%B7%D0%B4%D1%96%D0%BB)",
+  "- [Encoded ASCII heading](./deep.md#Step%202)",
+  "- [Encoded Unicode id](../reports/round-2/index.html#%D1%80%D0%BE%D0%B7%D0%B4%D1%96%D0%BB)",
+  "- [Encoded ASCII id](../reports/round-2/index.html#part%202)",
+  "- [Line suffix](retry.ts:180)",
+  "- [Line and column](retry.ts:180:5)",
+].join("\n");
+
+const RETRY_TS = Array.from({ length: 200 }, (_, i) => `const line${i + 1} = ${i + 1};`).join("\n");
+
 const MAIN_TS = "line one\nline two\nline three is the one\nline four\n";
 
 let root: Root | null = null;
@@ -120,6 +135,9 @@ beforeEach(() => {
       body: '<h2 id="decision-graph">Graph</h2>',
       frame: "/api/artifact/frame/SCOPE/index.html",
     },
+    "/workspace/docs/fragments.md": { body: FRAGMENTS },
+    "/workspace/docs/deep.md": { body: "# Deep\n\n## Вступ\n\n## Розділ\n\n## Step 2\n" },
+    "/workspace/docs/retry.ts": { body: RETRY_TS },
     "/workspace/docs/links.md": {
       body: `# Links\n\n[The report on this host](http://viewer.example/#f=${encodeURIComponent("/workspace/reports/round-2/index.html#decision-graph")}).`,
     },
@@ -321,5 +339,44 @@ test("a link to the Viewer's own non-loopback host opens the same anchored repor
     expect(sheet().querySelector("iframe[data-preview-frame]")!.getAttribute("src")).toBe("/api/artifact/frame/SCOPE/index.html#decision-graph");
   } finally {
     dom.happyDOM.setURL("http://127.0.0.1:8898/");
+  }
+});
+
+test("relative links decode their fragment once: a Unicode or ASCII heading scrolls, an HTML id reaches the frame", async () => {
+  for (const [label, heading] of [
+    ["Encoded Unicode heading", "розділ"],
+    ["Encoded ASCII heading", "step-2"],
+  ] as const) {
+    await open("/workspace/docs/fragments.md");
+    scrolled = [];
+    await act(async () => click(Array.from(sheet().querySelectorAll("a")).find((a) => a.textContent === label)!));
+    await settle();
+    expect(sheet().querySelector("h1")!.textContent).toBe("Deep");
+    expect(scrolled.at(-1)!.getAttribute("data-md-anchor")).toBe(heading);
+  }
+  for (const [label, frameHash] of [
+    ["Encoded Unicode id", "#%D1%80%D0%BE%D0%B7%D0%B4%D1%96%D0%BB"],
+    ["Encoded ASCII id", "#part%202"],
+  ] as const) {
+    await open("/workspace/docs/fragments.md");
+    await act(async () => click(Array.from(sheet().querySelectorAll("a")).find((a) => a.textContent === label)!));
+    await settle();
+    expect(sheet().querySelector("iframe[data-preview-frame]")!.getAttribute("src")).toBe(`/api/artifact/frame/SCOPE/index.html${frameHash}`);
+  }
+});
+
+test("a sibling file with a :line or :line:col suffix opens with that line highlighted", async () => {
+  for (const label of ["Line suffix", "Line and column"]) {
+    await open("/workspace/docs/fragments.md");
+    const link = Array.from(sheet().querySelectorAll("a")).find((a) => a.textContent === label)!;
+    expect(link.getAttribute("data-file-link")).not.toBeNull();
+    scrolled = [];
+    await act(async () => click(link));
+    await settle();
+    expect(fetchLog).toContain(`/api/artifact?path=${encodeURIComponent("/workspace/docs/retry.ts")}&mode=meta`);
+    const target = sheet().querySelector("[data-preview-target]")!;
+    expect(target.getAttribute("data-preview-line")).toBe("179");
+    expect(target.textContent).toContain("const line180 = 180;");
+    expect(scrolled).toContain(target);
   }
 });

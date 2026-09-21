@@ -180,14 +180,23 @@ export function resolveLink(raw: string, options: { viewerHosts?: readonly strin
 
 /**
  * Joins a relative link written inside a document to that document's
- * directory: `./img/a.png`, `../b.md#x`, `c.css`. Returns null for anything
- * that is not relative (schemes, absolute paths, bare anchors).
+ * directory: `./img/a.png`, `../b.md#x`, `c.css`, `retry.ts:180`. Returns null
+ * for anything that is not relative (schemes, absolute paths, bare anchors).
+ *
+ * A link's path and fragment are both percent-decoded once, as a browser
+ * reads an href, so `b.md#%D1%80` lands on the heading `р` and the HTML pane
+ * encodes it exactly once more for the frame.
  */
 export function resolveRelative(baseDir: string, href: string): string | null {
-  if (!href || href.startsWith("#") || href.startsWith("/") || href.startsWith("~") || /^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
+  if (!href || href.startsWith("#") || href.startsWith("/") || href.startsWith("~")) return null;
   const hashAt = href.indexOf("#");
   const pathPart = hashAt >= 0 ? href.slice(0, hashAt) : href;
-  const tail = hashAt >= 0 ? href.slice(hashAt) : "";
+  const tail = hashAt >= 0 ? decode(href.slice(hashAt)) : "";
+  /* `retry.ts:180` reads as a URL scheme to the generic pattern; a complete
+     file name followed by a line suffix is a sibling file, never a scheme. */
+  const named = pathPart.replace(LINE_SUFFIX_RE, "");
+  const fileLine = named !== pathPart && !named.includes(":") && endsInExtension(pathPart);
+  if (!fileLine && /^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
   const home = baseDir.startsWith("~");
   const segments = baseDir.replace(/^~/, "").split("/").filter(Boolean);
   for (const segment of decode(pathPart).split("/")) {
