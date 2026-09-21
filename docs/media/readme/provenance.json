@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "b77c17af973a0452d8313484638858e767caeb5994300d53581b633fd7c93955",
+  "generatorSha256": "0aabaef818c810e9a31c62f95eebed743ff4ad1af3e438fc7dd235a7d7536814",
   "seed": "scripts/readme-demo-state.ts",
-  "seedSha256": "8ad484ecbe0a2df76f47c7f8ce1fcf2c3e8db9d0a7fc1caef0ff8b9f3a5dff63",
+  "seedSha256": "8f2451583658be2f7e83fbb840d94e19a114379f635f828692ae17ccb3350c0a",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
   "assets": [
     {
@@ -16,7 +16,7 @@
       },
       "colorScheme": "dark",
       "rasterTiles": 14,
-      "sha256": "4c5416535b00992f7fa7efd03f3425cca13ebda33d8488072077114f86a0fc34"
+      "sha256": "4e50fb26ac8c6160074650d697067031066d755f807f489c6b9d1c8ecc446e97"
     },
     {
       "path": "conversation.svg",
@@ -27,7 +27,7 @@
       },
       "colorScheme": "dark",
       "rasterTiles": 22,
-      "sha256": "0ca664f89dd5096d6d0f8808b98dc5fc13ad574a045f330117fa748fd5d27fa3"
+      "sha256": "66ae6f184adf0d60aa92faa58384662426552f2718e27c0bac235d9596db7642"
     },
     {
       "path": "pipeline.svg",
@@ -38,7 +38,7 @@
       },
       "colorScheme": "dark",
       "rasterTiles": 25,
-      "sha256": "11cfccc806329585913a347b93404aea14b24b73ecee37a9f9e4ac8724c0e387"
+      "sha256": "e3e4d347a108fbb2deacd94aac8d66289ad7a7baafdd86bd95e8d8e99371fa95"
     },
     {
       "path": "accounts.svg",
@@ -49,7 +49,7 @@
       },
       "colorScheme": "dark",
       "rasterTiles": 16,
-      "sha256": "fb90ff739193c2eb8b801a9e6b4d7fb8fa2dbb35f92900153b972d4472ef32b4"
+      "sha256": "4ed12828e19b8fd5b474dd07674e984db389cb8b3fba935f94d3d100aa03bc5d"
     },
     {
       "path": "phone-conversation.svg",
@@ -60,7 +60,7 @@
       },
       "colorScheme": "dark",
       "rasterTiles": 4,
-      "sha256": "eda546f555d90b474ce4157b32cc20d38f9772e5318c51c76c4dc316810a5b4a"
+      "sha256": "cc7b68e25a019d917e917a15edc11b92fc1126e961427329107d91f6bbc3f686"
     }
   ]
 }
