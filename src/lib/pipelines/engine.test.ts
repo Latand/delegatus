@@ -39,6 +39,15 @@ registerPipelineTick(async () => {});
 
 afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
 
+/** Lifecycle assertions read the durable result after the controller drains. */
+async function closeAndDrain(id: string, req: Parameters<typeof patchPipeline>[1], ports: PipelinePorts) {
+  const accepted = await patchPipeline(id, req, ports);
+  if (accepted.error) return accepted;
+  await engineModule.drainStageActivations(ports);
+  const pipeline = loadPipelines().find((item) => item.id === id)!;
+  return { ...accepted, pipeline, close: pipeline.closeReport ?? accepted.close };
+}
+
 test("default pipeline projections reuse one registry parse across the historical backlog", () => {
   const registryPath = path.join(process.env.LLV_STATE_DIR!, "projection-cache-agent-registry.json");
   const registry = new AgentRegistry(registryPath);
@@ -2173,7 +2182,7 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   expect(shown.pipeline!.dismissedAt).toBeNull();
   expect(loadPipelines()[0]!).toMatchObject({ state: before.state, dismissedAt: null });
 
-  const closed = await patchPipeline(created.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(created.id, { action: "close" }, h.ports);
   expect(closed.pipeline!.state).toBe("closed");
   for (const action of ["dismiss", "undismiss"] as const) {
     expect((await patchPipeline(created.id, { action }, h.ports)).status).toBe(409);
@@ -3287,7 +3296,7 @@ test("an unregistered stage with only its launch record parks and the lane close
     outcome: "failed",
     error: "structured runtime host is unavailable",
   });
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.error).toBeUndefined();
   expect(closed.close?.stillRunning).toEqual([]);
@@ -3300,7 +3309,7 @@ test("an unregistered stage with only its launch record parks and the lane close
   expect(loadPipelines()[0]!.state).toBe("closed");
 });
 
-test("an unregistered launch-only stage with a resident host still refuses close (#1325)", async () => {
+test("an unregistered launch-only stage with a resident host still remains visible after close (#1325)", async () => {
   const h = harness();
   const pipeline = await runningStructuredStage(h);
   h.ports.conversationRegistered = () => false;
@@ -3315,11 +3324,11 @@ test("an unregistered launch-only stage with a resident host still refuses close
     error: "structured runtime host is unavailable",
   });
 
-  const refused = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const refused = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
-  expect(refused.status).toBe(409);
+  expect(refused.error).toBeUndefined();
   expect(refused.close?.stillRunning).toMatchObject([{ stageId: "plan", attempt: 1 }]);
-  expect(loadPipelines()[0]).toMatchObject({ state: "running", closedAt: null });
+  expect(loadPipelines()[0]).toMatchObject({ state: "closed", hiddenAt: null });
 });
 
 test("an unregistered stage with agent transcript progress keeps running (#1325)", async () => {
@@ -6252,17 +6261,17 @@ test("retry parks without synchronizing when reviewer termination cannot be veri
   expect(h.calls.some((call) => call.includes("reset --hard"))).toBeFalse();
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "reviewer process group did not terminate" });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
   /* The close carries its host-teardown report (#670) even when the flow refuses
      to close, so nothing it already stopped is swallowed by the rejection. */
-  expect(closed).toMatchObject({ error: "reviewer process group did not terminate", status: 409 });
+  expect(closed.error).toBeUndefined();
   /* A reviewer that would not die leaves through the same report a surviving
      stage host does, not only through the prose error (#670). */
   expect(closed.close).toMatchObject({
     stopped: [],
     stillRunning: [{ stageId: "review", attempt: 1, error: "reviewer process group did not terminate" }],
   });
-  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", closedAt: null, stateDetail: "reviewer process group did not terminate" });
+  expect(loadPipelines()[0]).toMatchObject({ state: "closed", hiddenAt: null, stateDetail: expect.stringContaining("reviewer process group did not terminate") });
 });
 
 test("failed stages park and retry resets to the last passed commit", async () => {
@@ -6669,7 +6678,7 @@ test("closing a mid-run or parked pipeline persists a record that loads back", a
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.cursor).not.toBeNull();
-  const closed = await patchPipeline(running.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(running.id, { action: "close" }, h.ports);
   expect(closed.pipeline?.state).toBe("closed");
   expect(closed.pipeline?.cursor).toBeNull();
   expect(loadPipelines()[0]!.state).toBe("closed");
@@ -6680,7 +6689,7 @@ test("closing a mid-run or parked pipeline persists a record that loads back", a
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-2.jsonl", "fail", "blocked")], h.ports);
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
-  await patchPipeline(parked.id, { action: "close" }, h.ports);
+  await closeAndDrain(parked.id, { action: "close" }, h.ports);
   expect(loadPipelines()[0]!).toMatchObject({ state: "closed", cursor: null });
 });
 
@@ -6691,7 +6700,7 @@ test("closing a running pipeline terminates its stage host and reports the stop 
   await tickPipelines([], h.ports);
   h.setStageHost("conversation_stage_1", { outcome: "stopped" });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(h.calls).toContain("stop-host:plan:1:conversation_stage_1");
   expect(closed.error).toBeUndefined();
@@ -6727,7 +6736,7 @@ test("closing probes every host the pipeline launched, settled rounds included (
   h.setStageHost("conversation_stage_settled", { outcome: "stopped" });
   h.setStageHost("conversation_stage_2", { outcome: "stopped" });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(h.calls).toContain("stop-host:build:1:conversation_stage_settled");
   expect(closed.close?.stopped.map((item) => `${item.stageId}:${item.attempt}`)).toEqual(["plan:1", "build:1", "build:2"]);
@@ -6746,7 +6755,7 @@ test("a parked stage whose host is still resident is stopped, not read as termin
   expect(parked.state).toBe("needs_decision");
   h.setStageHost("conversation_stage_1", { outcome: "stopped" });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(h.calls).toContain("stop-host:plan:1:conversation_stage_1");
   expect(closed.close?.stopped).toMatchObject([{ stageId: "plan", attempt: 1, conversationId: "conversation_stage_1" }]);
@@ -6762,7 +6771,7 @@ test("a parked stage with no resident host still reports nothing was running (#6
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision", "operator choice")], h.ports);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("needs_decision");
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.close).toMatchObject({
     stopped: [],
@@ -6780,7 +6789,7 @@ test("closing a pipeline whose host is already gone reports that nothing was run
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.close).toMatchObject({
     stopped: [],
@@ -6803,7 +6812,7 @@ test("an accepted but unconfirmed kill never counts as a clean stop (#670)", asy
     detail: "kill accepted as queued but termination was not confirmed",
   });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   /* A queued receipt is the normal first answer, so this still closes — but it
      records no stop and names the operation that may have left a survivor. */
@@ -6824,7 +6833,7 @@ test("an accepted but unconfirmed kill never counts as a clean stop (#670)", asy
 
   /* Closing again once the kill is confirmed settles the lane and hides it. */
   h.setStageHost("conversation_stage_1", { outcome: "stopped" });
-  const settled = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const settled = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
   expect(settled.close?.unconfirmed).toEqual([]);
   expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
   expect(loadPipelines()[0]!.hiddenAt).toBe(loadPipelines()[0]!.closedAt);
@@ -6842,24 +6851,24 @@ test("a teardown that runs out of budget reports the hosts it never probed (#670
   savePipelines(stored);
   h.setStageHost("conversation_stage_1", { outcome: "stopped" });
   h.setStageHost("conversation_stage_2", { outcome: "stopped" });
-  /* The clock jumps past the aggregate ceiling after the first host: the close
-     holds the pipelines transaction, so it must stop working, not run long. */
+  /* The clock jumps past the drain budget after the first host. Remaining
+     targets retain their pending custody for the next controller pass. */
   let reading = 0;
   h.setMonotonicClock(() => (reading += 60_000));
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.error).toBeUndefined();
   expect(closed.close?.stopped).toMatchObject([{ stageId: "plan", attempt: 1 }]);
-  /* Truthful, not silent: the unprobed host is named, and the lane stays
-     visible so a later close finishes the work. */
-  expect(closed.close?.unconfirmed).toMatchObject([
-    { stageId: "build", attempt: 1, operationId: null, detail: "close teardown budget expired before this host was probed" },
-  ]);
+  /* The unprobed host stays named and visible until the next drain pass. */
+  expect(closed.close?.pending).toMatchObject([{ stageId: "build", attempt: 1 }]);
   expect(h.calls).not.toContain("stop-host:build:1:conversation_stage_2");
   const record = loadPipelines()[0]!;
   expect(record.hiddenAt).toBeNull();
-  expect(record.unconfirmedHosts).toHaveLength(1);
+  expect(record.closeReport?.status).toBe("pending");
+  h.setMonotonicClock(() => 0);
+  await engineModule.drainStageActivations(h.ports);
+  expect(loadPipelines()[0]!.closeReport?.stopped).toHaveLength(2);
 });
 
 test("an unconfirmed host record retires once its host is demonstrably gone (#670)", async () => {
@@ -6873,7 +6882,7 @@ test("an unconfirmed host record retires once its host is demonstrably gone (#67
     operationId: "kill-op-1",
     detail: "kill accepted as queued but termination was not confirmed",
   });
-  await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
   expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(1);
 
   /* Still resident: the lane keeps its record and stays on the board. */
@@ -6915,7 +6924,7 @@ test("an adopted stage child is stopped and counted, never silently left running
   h.setStageHost("conversation_stage_1", { outcome: "stopped" });
   h.setStageHost("conversation_helper", { outcome: "stopped" });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(h.calls).toContain("stop-host:plan:2:conversation_helper");
   expect(closed.close?.stopped).toMatchObject([
@@ -6946,11 +6955,12 @@ test("an adopted child that cannot be stopped keeps the lane visible (#670)", as
   h.setStageHost("conversation_stage_1", { outcome: "stopped" });
   h.setStageHost("conversation_helper", { outcome: "failed", error: "structured host ownership is unavailable" });
 
-  const refused = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const refused = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
-  expect(refused.status).toBe(409);
-  expect(refused.error).toContain("adopted agent of stage plan attempt 2");
-  expect(loadPipelines()[0]!.state).not.toBe("closed");
+  expect(refused.error).toBeUndefined();
+  expect(refused.pipeline?.stateDetail).toContain("adopted agent of stage plan attempt 2");
+  expect(loadPipelines()[0]!.state).toBe("closed");
+  expect(loadPipelines()[0]!.hiddenAt).toBeNull();
 });
 
 test("an unidentifiable pane can be dismissed by the operator once judged (#670)", async () => {
@@ -6964,7 +6974,7 @@ test("an unidentifiable pane can be dismissed by the operator once judged (#670)
     detail: "pane %1 now runs codex in window other and cannot be identified as this stage's agent",
   });
 
-  const pinned = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const pinned = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
   expect(pinned.close?.unconfirmed).toHaveLength(1);
   expect(loadPipelines()[0]!.hiddenAt).toBeNull();
   /* The detail names what the pane actually shows, so the operator can find it. */
@@ -6972,7 +6982,7 @@ test("an unidentifiable pane can be dismissed by the operator once judged (#670)
 
   /* Their judgement is the way out: the lane stops claiming a host it could
      never identify, and leaves the board. */
-  const dismissed = await patchPipeline(pipeline.id, { action: "close", acknowledgeHosts: true }, h.ports);
+  const dismissed = await closeAndDrain(pipeline.id, { action: "close", acknowledgeHosts: true }, h.ports);
 
   expect(dismissed.error).toBeUndefined();
   expect(dismissed.close?.acknowledged).toMatchObject([{ stageId: "plan", attempt: 1, paneId: "%1" }]);
@@ -6991,11 +7001,12 @@ test("an acknowledgement never dismisses a host that is provably still running (
   h.setHostsResident(true);
   h.setStageHost("conversation_stage_1", { outcome: "failed", error: "structured host ownership is unavailable" });
 
-  const refused = await patchPipeline(pipeline.id, { action: "close", acknowledgeHosts: true }, h.ports);
+  const refused = await closeAndDrain(pipeline.id, { action: "close", acknowledgeHosts: true }, h.ports);
 
-  expect(refused.status).toBe(409);
+  expect(refused.error).toBeUndefined();
   expect(refused.close?.acknowledged).toEqual([]);
-  expect(loadPipelines()[0]!.state).not.toBe("closed");
+  expect(loadPipelines()[0]!.state).toBe("closed");
+  expect(loadPipelines()[0]!.hiddenAt).toBeNull();
 });
 
 test("closing mid-review counts the reviewer it stopped (#670)", async () => {
@@ -7018,7 +7029,7 @@ test("closing mid-review counts the reviewer it stopped (#670)", async () => {
     return { flow: h.flows.get(id), stoppedReviewer: { round: 1 } };
   };
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.error).toBeUndefined();
   expect(closed.close?.reviewers).toMatchObject([{ stageId: "review", flowId: "flow-1", round: 1 }]);
@@ -7041,7 +7052,7 @@ test("a worktree removed after a merge closes tidily, with no error text (#670)"
   await tickPipelines([], h.ports);
   h.setWorktreePresent(false);
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.close?.worktree).toBeNull();
   expect(loadPipelines()[0]).toMatchObject({ state: "closed", stateDetail: null });
@@ -7059,7 +7070,7 @@ test("a settled attempt with an idle CLI in its pane does not block the close (#
   expect(settled.verdict).toMatchObject({ status: "pass" });
   expect(settled.paneId).toBe("%1");
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.error).toBeUndefined();
   expect(closed.close?.stillRunning).toEqual([]);
@@ -7077,7 +7088,7 @@ test("a pane the teardown can identify as this stage's is stopped, not refused (
   h.setPaneAlive(true);
   h.setPaneStop({ outcome: "stopped" });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.error).toBeUndefined();
   expect(h.calls).toContain("stop-pane:plan:1:%1");
@@ -7099,7 +7110,7 @@ test("close terminalizes a running attempt after confirmed host and pane absence
     else h.setPaneStop({ outcome: "not-running" });
     savePipelines([stored]);
 
-    const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+    const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
     expect(closed.error).toBeUndefined();
     expect(closed.close?.alreadyStopped).toMatchObject([{ stageId: "plan", attempt: 1 }]);
@@ -7118,7 +7129,7 @@ test("a pane that cannot be identified is reported, never killed (#670)", async 
   h.setPaneAlive(true);
   h.setPaneStop({ outcome: "unknown", detail: "pane %1 runs an agent that cannot be identified as this stage's" });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   /* Unidentifiable is neither a stop nor a silent pass: nothing was signalled,
      and the lane stays visible with the pane named. */
@@ -7146,7 +7157,7 @@ test("an unreadable worktree is reported instead of closing as if nothing was le
   await tickPipelines([], h.ports);
   failStatus = true;
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.error).toBeUndefined();
   expect(closed.close?.worktree).toMatchObject({ uncommitted: [], error: "checking the pipeline worktree: fatal: not a git repository" });
@@ -7156,7 +7167,7 @@ test("an unreadable worktree is reported instead of closing as if nothing was le
   );
 });
 
-test("a stage host that cannot be stopped refuses the close instead of hiding it (#670)", async () => {
+test("a stage host that cannot be stopped stays visible after close (#670)", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
   await tickPipelines([], h.ports);
@@ -7164,16 +7175,17 @@ test("a stage host that cannot be stopped refuses the close instead of hiding it
   h.setHostsResident(true);
   h.setStageHost("conversation_stage_1", { outcome: "failed", error: "structured host ownership is unavailable" });
 
-  const refused = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const refused = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
-  expect(refused.status).toBe(409);
-  expect(refused.error).toBe(
-    "could not stop stage plan attempt 1 (conversation_stage_1): structured host ownership is unavailable",
+  expect(refused.error).toBeUndefined();
+  expect(refused.pipeline?.stateDetail).toBe(
+    "closed; could not stop stage plan attempt 1 (conversation_stage_1): structured host ownership is unavailable",
   );
   expect(refused.close?.stillRunning).toMatchObject([{ stageId: "plan", conversationId: "conversation_stage_1" }]);
   const stored = loadPipelines()[0]!;
-  expect(stored.state).not.toBe("closed");
-  expect(stored.closedAt).toBeNull();
+  expect(stored.state).toBe("closed");
+  expect(stored.hiddenAt).toBeNull();
+  expect(stored.closedAt).not.toBeNull();
   expect(stored.stateDetail).toContain("structured host ownership is unavailable");
 });
 
@@ -7193,11 +7205,11 @@ test("terminal transcript prose without a valid fenced verdict cannot dismiss a 
       message: { text, ts: 5_000_000 },
     });
 
-    const refused = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+    const refused = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
-    expect(refused.status).toBe(409);
+    expect(refused.error).toBeUndefined();
     expect(refused.close?.stillRunning).toMatchObject([{ stageId: "plan", attempt: 1 }]);
-    expect(loadPipelines()[0]).toMatchObject({ state: "running", closedAt: null });
+    expect(loadPipelines()[0]).toMatchObject({ state: "closed", hiddenAt: null });
   }
 });
 
@@ -7230,7 +7242,7 @@ test("close terminalizes host-unavailable attempts from durable evidence and rec
       });
     }
 
-    const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+    const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
     expect(closed.error).toBeUndefined();
     expect(closed.close?.alreadyStopped).toMatchObject([{ stageId: "plan", attempt: 1 }]);
@@ -7704,7 +7716,7 @@ test("close retires an attempt whose turn a provider limit cut off, naming the n
   h.setStageHost("conversation_stage_1", { outcome: "failed", error: "structured runtime host is unavailable" });
   readFixtures(h, { "/codex/stage-1.jsonl": limitInterruptedTranscript("close-limit-interrupted") });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.error).toBeUndefined();
   expect(closed.close?.stillRunning).toEqual([]);
@@ -7730,7 +7742,7 @@ test("a transcript that ends on a valid fenced verdict still closes on the verdi
   h.setStageHost("conversation_stage_1", { outcome: "failed", error: "structured runtime host is unavailable" });
   readFixtures(h, { "/codex/stage-1.jsonl": verdictTranscript("close-verdict") });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.error).toBeUndefined();
   const detail = closed.close?.notes[0]?.detail ?? "";
@@ -7750,13 +7762,14 @@ test("a transcript silent under a live host is not terminalized by the provider-
   h.setStageHost("conversation_stage_1", { outcome: "failed", error: "structured runtime host is unavailable" });
   readFixtures(h, { "/codex/stage-1.jsonl": silentTranscript("close-silent") });
 
-  const refused = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const refused = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   /* Silence is not evidence that the turn ended: the stall path keeps it. */
-  expect(refused.status).toBe(409);
+  expect(refused.error).toBeUndefined();
   expect(refused.close?.stillRunning).toMatchObject([{ stageId: "plan", attempt: 1 }]);
   const stored = loadPipelines()[0]!;
-  expect(stored.state).toBe("running");
+  expect(stored.state).toBe("closed");
+  expect(stored.hiddenAt).toBeNull();
   expect(stored.runs[0]!.attempts[0]!.state).toBe("running");
 });
 
@@ -7793,7 +7806,7 @@ test("a pipeline blocked only by a limit-interrupted attempt closes end to end (
     "/codex/stage-2.jsonl": verdictTranscript("close-blocker-verdict", "needs_decision"),
   });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.error).toBeUndefined();
   expect(closed.close?.stillRunning).toEqual([]);
@@ -7824,7 +7837,7 @@ test("closing preserves uncommitted stage work and names what it left behind (#6
   await tickPipelines([], h.ports);
   h.setStageHost("conversation_stage_1", { outcome: "stopped" });
 
-  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   expect(closed.close?.worktree).toEqual({
     dir: loadPipelines()[0]!.worktreeDir,
@@ -8179,7 +8192,7 @@ test("closing a draft settles it the same way discarding does (#1274)", async ()
     autoStart: false,
   }, ports);
 
-  const closed = await patchPipeline(created.pipeline!.id, { action: "close" }, ports);
+  const closed = await closeAndDrain(created.pipeline!.id, { action: "close" }, ports);
   expect(closed.pipeline?.id).toBe(created.pipeline!.id);
   const record = loadPipelines()[0]!;
   expect(record.state).toBe("closed");
@@ -8927,7 +8940,7 @@ test("closing an initial pending stage records the resting stage as a durable pe
   expect(before.cursor).toMatchObject({ stageId: "plan", state: "pending" });
   expect(before.runs.every((run) => run.attempts.length === 0)).toBe(true);
 
-  await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   const reloaded = loadPipelines()[0]!;
   expect(reloaded.state).toBe("closed");
@@ -8948,7 +8961,7 @@ test("closing a post-advance pending stage records the resting stage with its re
   expect(before.cursor).toMatchObject({ stageId: "build", state: "pending", input: "planned", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
   expect(before.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(0);
 
-  await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   const reloaded = loadPipelines()[0]!;
   expect(reloaded.state).toBe("closed");
@@ -8981,7 +8994,7 @@ test("closing a fail-edge target with an older terminal attempt records a fresh 
   expect(before.cursor).toMatchObject({ stageId: "build", state: "pending", activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } });
   expect(before.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(1); // build attempt 2 not yet materialized
 
-  await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   const reloaded = loadPipelines()[0]!;
   expect(reloaded.state).toBe("closed");
@@ -11717,8 +11730,9 @@ test.each(["pause", "close"] as const)("activation drain preserves %s after the 
   try {
     const changed = await patchPipeline(f.id, { action }, f.h.ports);
     if (action === "close") {
-      expect(changed.status).toBe(409);
-      expect(loadPipelines()[0]!.state).toBe("paused");
+      expect(changed.error).toBeUndefined();
+      expect(changed.close?.status).toBe("pending");
+      expect(loadPipelines()[0]!.state).toBe("closed");
     }
     f.release(); await f.ticking;
     const live = loadPipelines()[0]!;
@@ -11861,9 +11875,10 @@ test("activation drain close custody survives a failed teardown and retries afte
   try {
     await patchPipeline(f.id, { action: "close" }, f.h.ports);
     f.release(); await f.ticking;
-    expect(loadPipelines()[0]).toMatchObject({ activationCloseRequested: true, state: "paused" });
+    expect(loadPipelines()[0]).toMatchObject({ state: "closed", closeReport: { stillRunning: [{ error: "fixture host still running" }] } });
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.activation).toBeUndefined();
     f.h.ports.stopStageAgent = async () => ({ outcome: "stopped" });
+    await patchPipeline(f.id, { action: "close" }, f.h.ports);
     await engineModule.drainStageActivations(f.h.ports);
     expect(loadPipelines()[0]!.state).toBe("closed");
     expect(loadPipelines()[0]!.activationCloseRequested).toBeUndefined();
@@ -11963,3 +11978,494 @@ test("activation drain keeps a settled staged launch across a crash and pause", 
     expect(f.attempt()).toMatchObject({ n: 1, state: "running", launchId: f.launchId(), spawnCalls: 1 });
   } finally { broken.mockRestore(); delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
 });
+
+
+test.each([false, true])("close drain answers before a five second stop and releases the lease (activation: %s)", async (enabled) => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const retry = structuredClone(loadPipelines()[0]!);
+  retry.id = "pipeline-close-unrelated";
+  Object.assign(retry, pipelineIdentity(retry.id, retry.task, retry.repoDir));
+  retry.state = "needs_decision";
+  retry.delivery = undefined;
+  retry.runs.forEach((run) => { run.attempts = []; });
+  retry.cursor!.state = "pending";
+  savePipelines([...loadPipelines(), retry]);
+  const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = enabled ? "1" : "0";
+  let stops = 0;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  h.ports.stopStageAgent = async () => {
+    stops++;
+    entered();
+    await Bun.sleep(5_000);
+    return { outcome: "stopped" };
+  };
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  type LeaseProbe = { options: { collection: string }; filename: string; acquireLease(wait?: number): Promise<string>; releaseLease(token: string): Promise<void> };
+  const prototype = SqliteStateCollection.prototype as unknown as LeaseProbe;
+  const acquire = prototype.acquireLease;
+  const relinquish = prototype.releaseLease;
+  const starts = new Map<string, number>();
+  const holds: number[] = [];
+  const acquired = spyOn(prototype, "acquireLease").mockImplementation(async function(this: LeaseProbe, wait) {
+    const token = await acquire.call(this, wait);
+    if (this.options.collection === "pipelines") starts.set(token, performance.now());
+    return token;
+  });
+  const released = spyOn(prototype, "releaseLease").mockImplementation(async function(this: LeaseProbe, token) {
+    await relinquish.call(this, token);
+    const start = starts.get(token);
+    if (start !== undefined) { holds.push(performance.now() - start); starts.delete(token); }
+  });
+  let draining: Promise<void> | undefined;
+  try {
+    const begin = performance.now();
+    const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+    const elapsed = performance.now() - begin;
+    console.log(`close activation=${enabled}: answer=${elapsed.toFixed(1)}ms, max lease=${Math.max(...holds).toFixed(1)}ms`);
+    expect(elapsed).toBeLessThan(200);
+    expect(closed.pipeline?.state).toBe("closed");
+    expect(closed.close?.pending).toHaveLength(1);
+    expect(stops).toBe(0);
+    draining = engineModule.drainStageActivations(h.ports);
+    await started;
+    const again = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+    expect(again.close?.pending).toEqual(closed.close?.pending);
+    expect((await createPipelineFromRequest({ task: "Unrelated draft", repoDir: "/repo", autoStart: false, stages: [...RUN_STAGES] }, h.ports)).pipeline).toBeDefined();
+    expect((await patchPipeline(retry.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).status).toBe(409);
+    await engineModule.drainStageActivations(h.ports);
+    expect(stops).toBe(1);
+    await draining;
+    const final = loadPipelines().find((item) => item.id === pipeline.id)!;
+    expect(final.closeReport?.pending).toEqual([]);
+    expect(final.closeReport?.stopped).toHaveLength(1);
+    expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).error).toBeUndefined();
+    await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+    await engineModule.drainStageActivations(h.ports);
+    expect(stops).toBe(1);
+    console.log(`close activation=${enabled}: final max lease=${Math.max(...holds).toFixed(1)}ms across ${holds.length} holds`);
+    expect(Math.max(...holds)).toBeLessThan(200);
+  } finally {
+    await draining;
+    acquired.mockRestore(); released.mockRestore();
+    if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+  }
+}, 15_000);
+
+
+test.each([false, true])("close drain resumes after the closing process exits before teardown (activation: %s)", async (enabled) => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { patchPipeline } = await import("./src/lib/pipelines/engine.ts");
+    const answer = await patchPipeline(${JSON.stringify(pipeline.id)}, { action: "close" });
+    if (answer.pipeline?.state !== "closed" || answer.close?.status !== "pending") process.exit(2);
+    process.exit(0);
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_PIPELINE_ACTIVATION_DRAIN: enabled ? "1" : "0" }, stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(0);
+  expect(loadPipelines()[0]!.closeReport?.pending).toHaveLength(1);
+  let stops = 0;
+  h.ports.stopStageAgent = async (target) => {
+    expect(target.conversationId).toBe("conversation_stage_1");
+    stops++;
+    return { outcome: "stopped" };
+  };
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(stops).toBe(1);
+  expect(loadPipelines()[0]!.closeReport).toMatchObject({ status: "settled", pending: [], stopped: [{ conversationId: "conversation_stage_1" }] });
+});
+
+test("close drain recovers a dead executor and skips already checkpointed hosts", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines();
+  const first = stored[0]!.runs[0]!.attempts[0]!;
+  stored[0]!.runs[1]!.attempts.push({ ...structuredClone(first), conversationId: "conversation_second", agentPath: "/codex/second.jsonl", paneId: null });
+  savePipelines(stored);
+  await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { defaultPipelinePorts, drainStageActivations } = await import("./src/lib/pipelines/engine.ts");
+    let count = 0;
+    await drainStageActivations({ ...defaultPipelinePorts(), stopStageAgent: async () => {
+      if (++count === 2) process.exit(0);
+      return { outcome: "stopped" };
+    } });
+    process.exit(2);
+  `], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(0);
+  expect(loadPipelines()[0]!.closeTeardown).toMatchObject({ phase: "running", owner: { pid: child.pid } });
+  expect(loadPipelines()[0]!.closeReport?.stopped).toHaveLength(1);
+  const stops: string[] = [];
+  h.ports.stopStageAgent = async (target) => { stops.push(target.conversationId!); return { outcome: "stopped" }; };
+  await engineModule.drainStageActivations(h.ports);
+  await engineModule.drainStageActivations(h.ports);
+  expect(stops).toEqual(["conversation_second"]);
+  expect(loadPipelines()[0]!.closeReport?.stopped).toHaveLength(2);
+});
+
+
+test("close drain keeps a slow embedded flow and worktree inspection outside the lease", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const records = loadPipelines();
+  records[0]!.runs[0]!.attempts[0]!.flowId = "close-flow";
+  savePipelines(records);
+  h.ports.stopStageAgent = async () => ({ outcome: "stopped" });
+  h.ports.getFlow = () => ({ id: "close-flow", state: "reviewing" } as Flow);
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  h.ports.closeFlow = async () => { expectPipelineLeaseAbsent(); entered(); await gate; return { stoppedReviewer: { round: 1 } } as never; };
+  const exec = h.ports.exec;
+  h.ports.exec = (command, args, cwd) => { expectPipelineLeaseAbsent(); return exec(command, args, cwd); };
+  const accepted = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  expect(accepted.close?.status).toBe("pending");
+  const draining = engineModule.drainStageActivations(h.ports);
+  await started;
+  try {
+    expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).status).toBe(409);
+    expect(loadPipelines()[0]!.closeReport).toMatchObject({ pending: [], status: "pending", stopped: [{ stageId: "plan" }] });
+    expect(loadPipelines()[0]!.closeTeardown?.flow?.id).toBe("close-flow");
+  } finally { release(); await draining; }
+  expect(loadPipelines()[0]!.closeReport).toMatchObject({ status: "settled", reviewers: [{ flowId: "close-flow", round: 1 }] });
+});
+
+function expectPipelineLeaseAbsent() {
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
+  try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: 0 }); }
+  finally { db.close(); }
+}
+
+
+test.each([false, true])("retrying a failed flow close deduplicates hosts and preserves confirmed stops (unconfirmed: %s)", async (unconfirmed) => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const records = loadPipelines();
+  records[0]!.runs[0]!.attempts[0]!.flowId = "close-flow-retry";
+  savePipelines(records);
+  let stops = 0;
+  let closes = 0;
+  h.ports.stopStageAgent = async () => ++stops === 1 && unconfirmed
+    ? { outcome: "unconfirmed", operationId: "close-queued", detail: "termination pending" } : { outcome: "stopped" };
+  h.ports.getFlow = () => ({ id: "close-flow-retry", state: "reviewing" } as Flow);
+  h.ports.closeFlow = async () => ++closes === 1 ? { error: "reviewer is still running" } : {};
+  await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+  expect(loadPipelines()[0]!.closeReport?.stillRunning).toHaveLength(1);
+  const retried = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+  expect(retried.close).toMatchObject({ status: "settled", pending: [], stillRunning: [] });
+  expect(stops).toBe(unconfirmed ? 2 : 1);
+  expect(closes).toBe(2);
+});
+
+
+test("close checkpoints a frozen host after its conversation path rebinds during stop", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  let stops = 0;
+  h.ports.stopStageAgent = async (target) => {
+    stops++;
+    expect(target.agentPath).toBe("/codex/stage-1.jsonl");
+    const { withPipelineMutation } = await import("./store");
+    await withPipelineMutation((pipelines, persist) => {
+      const current = pipelines.find((item) => item.id === pipeline.id)!;
+      current.runs[0]!.attempts[0]!.agentPath = "/codex/rebound-stage.jsonl";
+      current.runs[0]!.attempts[0]!.paneId = "%new";
+      persist([current]);
+    });
+    return { outcome: "stopped" };
+  };
+  await engineModule.drainStageActivations(h.ports);
+  await engineModule.drainStageActivations(h.ports);
+  expect(stops).toBe(1);
+  expect(loadPipelines()[0]!.closeReport).toMatchObject({ status: "settled", pending: [], stopped: [{ agentPath: "/codex/stage-1.jsonl" }] });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ agentPath: "/codex/rebound-stage.jsonl", paneId: "%new" });
+});
+
+for (const enabled of [false, true]) {
+  test.each(["host-stop", "flow-close", "settled"] as const)(`late adoption retains close custody at %s (activation: ${enabled})`, async (seam) => {
+    const h = harness();
+    const pipeline = await create(h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const records = loadPipelines();
+    const source = records[0]!.runs[0]!.attempts[0]!;
+    if (seam === "flow-close") source.flowId = "late-close-flow";
+    savePipelines(records);
+    const childRef = { launchId: "late-child-launch", conversationId: "conversation_late_child",
+      sessionId: "late-child-session", agentPath: "/codex/late-child.jsonl", paneId: "%late-child", startedAt: h.ports.now() };
+    const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    process.env.LLV_PIPELINE_ACTIVATION_DRAIN = enabled ? "1" : "0";
+    const stops: string[] = [];
+    const adopt = async () => {
+      expectPipelineLeaseAbsent();
+      // A separate process commits adoption and exits before the controller
+      // resumes: recovery must read the obligation from the durable store.
+      const child = Bun.spawn([process.execPath, "-e", `
+        const { adoptPipelineAttemptFromSource } = await import("./src/lib/pipelines/engine.ts");
+        const result = await adoptPipelineAttemptFromSource(${JSON.stringify(source.conversationId)}, ${JSON.stringify(childRef)});
+        process.exit(result ? 0 : 2);
+      `], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
+      expect(await child.exited).toBe(0);
+      const adopted = loadPipelines()[0]!;
+      expect(adopted.state).toBe("closed");
+      expect(adopted.closeReport?.status).toBe("pending");
+      expect(adopted.closeReport?.pending.some((target) => target.conversationId === childRef.conversationId)).toBe(true);
+      expect(adopted.hiddenAt).toBeNull();
+      expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).status).toBe(409);
+      const { archiveSettledPipelines } = await import("./store");
+      expect(await archiveSettledPipelines(Date.parse(h.ports.now()) + 30 * 86_400_000)).toBe(0);
+    };
+    h.ports.stopStageAgent = async (target) => {
+      stops.push(target.conversationId!);
+      if (target.conversationId === source.conversationId && seam === "host-stop") await adopt();
+      if (target.conversationId === childRef.conversationId) expect(target).toMatchObject({
+        launchId: childRef.launchId, conversationId: childRef.conversationId, agentPath: childRef.agentPath, paneId: childRef.paneId,
+      });
+      return { outcome: "stopped" };
+    };
+    h.ports.getFlow = () => ({ id: "late-close-flow", state: "reviewing" } as Flow);
+    h.ports.closeFlow = async () => { await adopt(); return {}; };
+    try {
+      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      if (seam === "settled") await adopt();
+      // Check the old executor did not overwrite the adoption transaction.
+      // The next controller pass must recover without any caller replay.
+      expect(loadPipelines()[0]!.closeReport).toMatchObject({ status: "pending",
+        pending: [{ conversationId: childRef.conversationId, launchId: childRef.launchId }] });
+      expect(loadPipelines()[0]!.hiddenAt).toBeNull();
+      expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).status).toBe(409);
+      await tickPipelines([], h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      // Replaying adoption and close must not enqueue a confirmed host again.
+      await engineModule.adoptPipelineAttemptFromSource(source.conversationId!, childRef);
+      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      expect(stops).toEqual([source.conversationId!, childRef.conversationId]);
+      expect(loadPipelines()[0]!.closeReport).toMatchObject({ status: "settled", pending: [],
+        stopped: [{ conversationId: source.conversationId }, { conversationId: childRef.conversationId }] });
+      expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).error).toBeUndefined();
+    } finally {
+      if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+      else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+    }
+  });
+}
+
+/** Exercise the real startup reader and its scheduled re-probes against the
+    frozen evidence produced by close and scanner reconciliation. */
+async function frozenSurvivorStartup(pipelineId: string, terminateSurvivor: () => Promise<void>) {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { adoptStructuredHostsAtStartup, structuredStartupDeferral } = await import("@/lib/runtime/startup");
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "startup-frozen-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = {
+    readSession: async (identity) => journal.readSession(identity),
+    snapshot: async () => journal.snapshot(),
+    events: async (after: number) => journal.replay(after),
+    append: async (event) => journal.append(event),
+    command: async (command) => journal.executeOperation(command),
+    effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    operationStatus: async (id, options) => options?.currentRetryLeaf ? journal.currentRetryResult(id) : journal.operationResult(id),
+    retryOperation: async (id, nextKey, options) => journal.retryOperation(id, nextKey, options),
+    transitionOperation: async (id, status, details) => journal.transitionOperation(id, status, details),
+  } as import("@/lib/runtime/client").RuntimeHostClient;
+  const members = ["codex", "claude"].map((engine) => {
+    const key = { engine: engine as "codex" | "claude", sessionId: crypto.randomUUID() };
+    const artifactPath = path.join(directory, `${key.sessionId}.jsonl`);
+    fs.writeFileSync(artifactPath, "");
+    const conversation = registry.ensureConversation(key.engine, artifactPath, null);
+    registry.upsert({ key, artifactPath, cwd: directory, accountId: null,
+      launchProfile: emptyLaunchProfile({ cwd: directory }), status: "live", host: null,
+      structuredHost: { kind: engine === "codex" ? "codex-app-server" : "claude-broker",
+        endpoint: "fake:frozen-survivor", process: null, eventCursor: 0, protocolVersion: "test",
+        writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 0, claimOwner: null, pendingAction: null });
+    registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipelineId,
+      role: "builder", slot: `member-${engine}`, stageId: "build", stageOrder: 0, round: 1,
+      parentConversationId: null });
+    registry.holdDelivery(conversation.id, "queued work", `frozen-${engine}`);
+    return { key, conversation };
+  });
+  const selected: string[] = [];
+  const scheduled: Array<() => void> = [];
+  let retired = false;
+  const dependencies: import("@/lib/runtime/startup").StructuredStartupDependencies = {
+    registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+    assertActive: () => { if (retired) throw new Error("test startup retired"); },
+    adopt: async (received, _options, _env, filter = () => true) => {
+      for (const entry of Object.values(received.readOnlySnapshot().entries)) {
+        if (entry.key.engine === "codex" && filter(entry)) selected.push(`codex:${entry.key.sessionId}`);
+      }
+      return [];
+    },
+    adoptClaude: async (received, _options, _env, filter = () => true) => {
+      for (const entry of Object.values(received.readOnlySnapshot().entries)) {
+        if (entry.key.engine === "claude" && filter(entry)) selected.push(`claude:${entry.key.sessionId}`);
+      }
+      return [];
+    },
+    schedule: (callback) => { scheduled.push(callback); return { unref() {} }; },
+  };
+  const before = structuredClone(registry.readOnlySnapshot().entries);
+  const pipelineBefore = loadPipelines().find((pipeline) => pipeline.id === pipelineId)!;
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(selected).toEqual([]);
+    expect(new Set(structuredStartupDeferral()?.hostKeys)).toEqual(new Set(members.map(({ key }) => `${key.engine}:${key.sessionId}`)));
+    expect(registry.readOnlySnapshot().entries).toEqual(before);
+    for (let probe = 0; probe < 2; probe++) {
+      expect(scheduled).toHaveLength(1);
+      scheduled.shift()!();
+      expect(selected).toEqual([]);
+      expect(structuredStartupDeferral()?.nextProbeMs).toBe(2_000 * 2 ** probe);
+      expect(registry.readOnlySnapshot().entries).toEqual(before);
+    }
+    await terminateSurvivor();
+    scheduled.shift()!();
+    for (let probe = 0; probe < 400 && structuredStartupDeferral() !== null; probe++) await Bun.sleep(5);
+    expect(structuredStartupDeferral()).toBeNull();
+    expect(selected.sort()).toEqual(members.map(({ key }) => `${key.engine}:${key.sessionId}`).sort());
+    expect(scheduled).toEqual([]);
+    // Startup observes death without moving or erasing custody evidence.
+    expect(loadPipelines().find((pipeline) => pipeline.id === pipelineId)).toEqual(pipelineBefore);
+  } finally {
+    retired = true;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+for (const enabled of [false, true]) {
+  test.each(["before-stop", "during-stop", "crash-resume", "survivor", "survivor-after-checkpoint", "survivor-crash-resume", "survivor-startup-alive", "survivor-startup-unverified"] as const)(`reviewer identity advances during close at %s (activation: ${enabled})`, async (seam) => {
+    const h = harness();
+    const pipeline = await create(h.ports, [
+      { id: "build", kind: "run", prompt: "build", next: "review" },
+      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+    ] as never);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    const flow = h.flows.get("flow-1")!;
+    const round = (n: number) => ({ n, launchId: `review-launch-${n}`, reviewerConversationId: `conversation_reviewer_${n}`,
+      reviewerPath: `/codex/reviewer-${n}.jsonl`, startedAt: h.ports.now() });
+    flow.rounds = [round(1) as never];
+    flow.state = "reviewing";
+    let newerAttempt: import("./types").PipelineStageAttempt | undefined;
+    let attemptBeforeNewStop: typeof newerAttempt;
+    const sync = async () => {
+      const { withPipelineMutation } = await import("./store");
+      await withPipelineMutation((pipelines, persist) => {
+        expect(reconcileEmbeddedReviewFlows(pipelines, [flow], h.ports.now())).toBe(true);
+        if (flow.rounds.length === 2) newerAttempt = structuredClone(pipelines[0]!.runs[1]!.attempts[0]!);
+        persist();
+      });
+    };
+    await sync();
+    const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    process.env.LLV_PIPELINE_ACTIVATION_DRAIN = enabled ? "1" : "0";
+    const survivor = seam.startsWith("survivor") ? Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"],
+      { stdout: "ignore", stderr: "ignore" }) : null;
+    const { captureProcessIdentity } = await import("@/lib/processIdentity");
+    const survivorIdentity = survivor ? captureProcessIdentity(survivor.pid) : null;
+    if (survivorIdentity && seam === "survivor-startup-unverified") survivorIdentity.startIdentity = null;
+    const stops: string[] = [];
+    let closes = 0;
+    h.ports.stopStageAgent = async (target) => {
+      stops.push(target.conversationId!);
+      if (target.conversationId === "conversation_reviewer_2") {
+        attemptBeforeNewStop = structuredClone(loadPipelines()[0]!.runs[1]!.attempts[0]!);
+      }
+      if (target.conversationId === "conversation_reviewer_1" && (seam === "during-stop" || (seam === "survivor" && stops.length === 2))) {
+        await sync();
+      }
+      if (target.conversationId === "conversation_reviewer_1" && stops.length === 2 && survivorIdentity && seam !== "survivor-crash-resume") {
+        return { outcome: "unresolved", error: "descendant survived", survivors: [survivorIdentity] };
+      }
+      return { outcome: "not-running" };
+    };
+    h.ports.closeFlow = async () => { closes++; flow.state = "closed"; return {}; };
+    try {
+      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+      flow.rounds.push(round(2) as never);
+      const crash = seam === "crash-resume" || seam === "survivor-crash-resume";
+      if (seam === "before-stop" || crash) await sync();
+      if (crash) {
+        const child = Bun.spawn([process.execPath, "-e", `
+          const { defaultPipelinePorts, drainStageActivations } = await import("./src/lib/pipelines/engine.ts");
+          await drainStageActivations({ ...defaultPipelinePorts(), stopStageAgent: async (target) => {
+            if (target.conversationId === "conversation_reviewer_2") process.exit(0);
+            if (target.conversationId === "conversation_reviewer_1" && ${JSON.stringify(survivorIdentity)} !== null) {
+              return { outcome: "unresolved", error: "descendant survived", survivors: [${JSON.stringify(survivorIdentity)}] };
+            }
+            return { outcome: "stopped" };
+          } });
+          process.exit(2);
+        `], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
+        expect(await child.exited).toBe(0);
+        expect(loadPipelines()[0]!.closeReport?.stopped.map((host) => host.conversationId))
+          .toEqual(survivor ? ["conversation_stage_1"] : ["conversation_stage_1", "conversation_reviewer_1"]);
+      }
+      if (seam === "survivor-after-checkpoint" || seam.startsWith("survivor-startup-")) {
+        await engineModule.drainStageActivations(h.ports);
+        await sync();
+      }
+      for (let i = 0; i < 3; i++) await engineModule.drainStageActivations(h.ports);
+      if (survivor) {
+        const retained = loadPipelines()[0]!;
+        expect(retained.closeReport?.stillRunning.map((host) => host.conversationId)).toEqual(["conversation_reviewer_1"]);
+        expect(retained.closeTeardown?.hosts?.find((host) => host.target.conversationId === "conversation_reviewer_1")
+          ?.evidence.unresolvedTermination?.survivors).toEqual([survivorIdentity!]);
+        expect(retained.runs[1]!.attempts[0]!.unresolvedTermination).toBeUndefined();
+        expect(closes).toBe(0);
+        expect((await patchPipeline(pipeline.id, { action: "delete" }, h.ports)).status).toBe(409);
+        await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+        await engineModule.drainStageActivations(h.ports);
+        expect(loadPipelines()[0]!.closeReport?.stillRunning).toHaveLength(1);
+        const terminate = async () => { survivor.kill(); await survivor.exited; };
+        if (seam.startsWith("survivor-startup-")) await frozenSurvivorStartup(pipeline.id, terminate);
+        else await terminate();
+      }
+      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      expect(stops).toEqual(crash ? ["conversation_reviewer_2", ...(survivor ? ["conversation_reviewer_1", "conversation_reviewer_1"] : [])]
+        : ["conversation_stage_1", "conversation_reviewer_1", "conversation_reviewer_2",
+          ...(survivor ? ["conversation_reviewer_1", "conversation_reviewer_1"] : [])]);
+      expect(closes).toBe(1);
+      expect(attemptBeforeNewStop).toEqual(newerAttempt!);
+      const closed = loadPipelines()[0]!;
+      expect(closed.closeReport).toMatchObject({ status: "settled", pending: [], unconfirmed: [], stillRunning: [] });
+      expect(closed.runs[1]!.attempts[0]).toMatchObject({ launchId: "review-launch-2", conversationId: "conversation_reviewer_2" });
+    } finally {
+      if (survivor && survivor.exitCode === null) { survivor.kill(); await survivor.exited; }
+      if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+      else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+    }
+  });
+}

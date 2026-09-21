@@ -360,6 +360,45 @@ function isUnconfirmedHost(value: unknown): value is PipelineUnconfirmedHost {
     && typeof host.at === "string";
 }
 
+function isCloseCustody(pipeline: Partial<Pipeline>): boolean {
+  const plan = pipeline.closeTeardown;
+  const report = pipeline.closeReport;
+  if (plan === undefined && report === undefined) return true;
+  if (!plan || !report || typeof plan !== "object" || typeof report !== "object") return false;
+  const host = (item: unknown): boolean => {
+    if (!item || typeof item !== "object") return false;
+    const ref = item as Record<string, unknown>;
+    return typeof ref.stageId === "string" && Number.isInteger(ref.attempt) && Number(ref.attempt) > 0
+      && isNullableString(ref.conversationId) && isNullableString(ref.agentPath) && isNullableString(ref.paneId)
+      && (ref.launchId === undefined || isNullableString(ref.launchId));
+  };
+  const owner = plan.owner;
+  return typeof plan.id === "string" && !!plan.id && ["pending", "running", "settled"].includes(plan.phase)
+    && (plan.hosts === undefined || (Array.isArray(plan.hosts) && plan.hosts.every((item) => item && host(item.target)
+      && item.evidence && isEffectiveRole(item.evidence.effectiveRole) && typeof item.evidence.startedAt === "string"
+      && typeof item.evidence.state === "string" && isNullableString(item.evidence.error)
+      && isNullableString(item.evidence.completedAt) && isVerdict(item.evidence.verdict)
+      && isUnresolvedTermination(item.evidence.unresolvedTermination))))
+    && typeof plan.waitingForActivation === "boolean" && typeof plan.acknowledgeHosts === "boolean"
+    && (owner === undefined || (owner && typeof owner === "object" && Number.isInteger(owner.pid) && owner.pid > 0 && isNullableString(owner.startIdentity) && isNullableString(owner.bootEpoch)))
+    && (plan.flow === null || (typeof plan.flow === "object" && typeof plan.flow.id === "string"
+      && typeof plan.flow.stageId === "string" && Number.isInteger(plan.flow.attempt)))
+    && ["pending", "settled"].includes(report.status)
+    && (plan.phase === "settled") === (report.status === "settled")
+    && [report.pending, report.stopped, report.alreadyStopped, report.unconfirmed, report.acknowledged, report.stillRunning, report.notes]
+      .every((items) => Array.isArray(items) && items.every(host))
+    && report.unconfirmed.every((item) => isNullableString(item.operationId) && typeof item.detail === "string")
+    && report.stillRunning.every((item) => typeof item.error === "string")
+    && report.acknowledged.every((item) => typeof item.detail === "string")
+    && report.notes.every((item) => typeof item.detail === "string")
+    && Array.isArray(report.reviewers) && report.reviewers.every((item) => item && typeof item.stageId === "string"
+      && Number.isInteger(item.attempt) && typeof item.flowId === "string" && Number.isInteger(item.round))
+    && (report.worktree === null || (typeof report.worktree === "object" && typeof report.worktree.dir === "string"
+      && Array.isArray(report.worktree.uncommitted) && report.worktree.uncommitted.every((item) => typeof item === "string")
+      && typeof report.worktree.truncated === "boolean"))
+    && (report.status !== "settled" || report.pending.length === 0);
+}
+
 function isTerminalReap(value: unknown): value is PipelineTerminalReap {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const reap = value as Partial<PipelineTerminalReap>;
@@ -510,6 +549,7 @@ function isPipeline(value: unknown): value is Pipeline {
   const pipeline = value as Partial<Pipeline>;
   if (!(
     typeof pipeline.id === "string" &&
+    isCloseCustody(pipeline) &&
     (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
     (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
@@ -757,6 +797,8 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
       : []);
   return {
     ...pipeline,
+    closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
+    closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
     project: canonicalProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
@@ -831,6 +873,8 @@ function decodePipeline(value: unknown): Pipeline | null {
 }
 
 function pipelineControllerActive(pipeline: Pipeline): boolean {
+  if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled";
+  if (pipeline.activationCloseRequested) return true;
   if (pipeline.state === "closed") return Boolean(pipeline.unconfirmedHosts?.length);
   if (pipeline.state === "completed") {
     return Boolean(pipeline.unconfirmedHosts?.length) || !pipeline.terminalReap?.settledAt;
@@ -1042,6 +1086,7 @@ function terminalDeliveryFailure(pipeline: Pipeline): string | null {
 }
 
 function releaseTerminalDelivery(pipeline: Pipeline): void {
+  if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return;
   const delivery = pipeline.delivery;
   const failure = terminalDeliveryFailure(pipeline);
   const failed = failure !== null && failure !== delivery?.settledFailure;
@@ -1158,6 +1203,8 @@ export function loadArchivedPipelines(): Pipeline[] {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return false;
+  if (pipeline.activationCloseRequested) return false;
   if (pipeline.delivery?.active || pipeline.delivery?.operation?.state === "running") return false;
   /* Closed records archive on closedAt. A discarded draft now closes like
      anything else (#1274), but records discarded before that fix are hidden

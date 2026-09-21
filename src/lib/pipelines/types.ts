@@ -557,7 +557,70 @@ export type PipelineDelivery = {
   journal: Array<{ at: string; kind: "claim" | "comparison" | "release" | "takeover" | "denied" | "recovery"; ownerId: string; epoch: number; conversationId: string | null; reason: string }>;
 };
 
+export type PipelineStageHostRef = {
+  stageId: string;
+  attempt: number;
+  conversationId: string | null;
+  agentPath: string | null;
+  paneId: string | null;
+  /** Set for a conversation a stage agent spawned and the pipeline adopted, so
+      the report distinguishes it from the stage's own launch. */
+  adopted?: true;
+  /** The attempt's immutable launch identity. A stop that has to act on the
+      registry row alone (#1501) binds the row to this launch's receipt. */
+  launchId?: string | null;
+};
+
+/**
+ * What closing a pipeline did to its stage hosts, and what it left on disk
+ * (#670). `stopped` is empty and `alreadyStopped` may be populated when nothing
+ * was burning quota; a non-empty `stillRunning` keeps the closed lane visible.
+ */
+export type PipelineCloseReport = {
+  /** Recorded hosts still awaiting teardown. */
+  pending: PipelineStageHostRef[];
+  /** Pending while launch reconciliation, host, flow or worktree work is owed. */
+  status: "pending" | "settled";
+  /** Hosts this close terminated, with termination evidenced. */
+  stopped: PipelineStageHostRef[];
+  /** Launched stages — settled or parked included — whose host was already gone. */
+  alreadyStopped: PipelineStageHostRef[];
+  /** Kills the runtime accepted without confirming termination in time. The
+      operation id keeps the possible survivor addressable. */
+  unconfirmed: Array<PipelineStageHostRef & { operationId: string | null; detail: string }>;
+  /** Review rounds whose live reviewer this close terminated through the flow.
+      Headless reviewers are child processes with no registry entry, so they are
+      counted here rather than in `stopped`. */
+  reviewers: Array<{ stageId: string; attempt: number; flowId: string; round: number }>;
+  /** Unconfirmed hosts the operator explicitly dismissed on this close. */
+  acknowledged: Array<PipelineStageHostRef & { detail: string }>;
+  /** Hosts that survived teardown, so the close cannot claim to be clean. */
+  stillRunning: Array<PipelineStageHostRef & { error: string }>;
+  /** Stop failures demoted by durable terminal evidence. */
+  notes: Array<PipelineStageHostRef & { detail: string }>;
+  /** Uncommitted stage work preserved in the worktree; null when unprovisioned. */
+  worktree: { dir: string; uncommitted: string[]; truncated: boolean; error?: string } | null;
+};
+
+/** Evidence belongs to the recorded host even when a review round replaces it. */
+export type PipelineCloseHostEvidence = Pick<PipelineStageAttempt,
+  "effectiveRole" | "startedAt" | "state" | "error" | "completedAt" | "verdict" | "unresolvedTermination">;
+
+/** Durable close custody, understood regardless of the activation feature flag. */
+export type PipelineCloseTeardown = {
+  /** Optional for obligations written before host evidence was frozen. */
+  hosts?: Array<{ target: PipelineStageHostRef; evidence: PipelineCloseHostEvidence }>;
+  id: string;
+  phase: "pending" | "running" | "settled";
+  owner?: import("@/lib/processIdentity").ProcessIdentity;
+  waitingForActivation: boolean;
+  acknowledgeHosts: boolean;
+  flow: { id: string; stageId: string; attempt: number } | null;
+};
+
 export type Pipeline = {
+  closeTeardown?: PipelineCloseTeardown;
+  closeReport?: PipelineCloseReport;
   /** Retained until a close requested during spawn has completed teardown. */
   activationCloseRequested?: boolean;
   /** Viewer publication ownership. Agent tools remain unrestricted. */
