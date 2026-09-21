@@ -295,7 +295,7 @@ async function exportArtifact(kind: typeof artifactKinds[number], text: string, 
   return { response, bytes, occurrences };
 }
 
-test.each(artifactKinds)("HTTP export refuses malformed encoded strings in %s without changing source or provenance", async kind => {
+test.each([...artifactKinds])("HTTP export refuses malformed encoded strings in %s without changing source or provenance", async kind => {
   const marker = "invented ordinary malformed value";
   const complete = JSON.stringify({ message: JSON.stringify({ password: marker, retained: "history" }) });
   const malformed = [
@@ -311,7 +311,7 @@ test.each(artifactKinds)("HTTP export refuses malformed encoded strings in %s wi
   }
 });
 
-test.each(artifactKinds)("HTTP export redacts complete decoded headers in %s and preserves ordinary history", async kind => {
+test.each([...artifactKinds])("HTTP export redacts complete decoded headers in %s and preserves ordinary history", async kind => {
   const marker = "inventedordinaryheadervalue";
   const headers = [
     `Authorization: Bearer ${marker}`,
@@ -333,7 +333,7 @@ test.each(artifactKinds)("HTTP export redacts complete decoded headers in %s and
   }
 });
 
-test.each(artifactKinds)("HTTP export preserves lines and nested JSON after decoded URLs in %s", async kind => {
+test.each([...artifactKinds])("HTTP export preserves lines and nested JSON after decoded URLs in %s", async kind => {
   const text = "https://example.test/path?signature=private\nKEEP_NEXT_LINE\nEND";
   const expected = "https://example.test/path?redacted\nKEEP_NEXT_LINE\nEND";
   for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
@@ -351,7 +351,7 @@ test.each(artifactKinds)("HTTP export preserves lines and nested JSON after deco
   }
 });
 
-test.each(artifactKinds)("HTTP export preserves credential metadata in %s and retained extensions", async kind => {
+test.each([...artifactKinds])("HTTP export preserves credential metadata in %s and retained extensions", async kind => {
   const metadata = { tokenCount: 42, passwordChanged: false, secretary: "ordinary history", token_count: 7, PASSWORD_CHANGED: true, secretariat: "retained history" };
   const marker = "invented ordinary classified value";
   const credentials = Object.fromEntries(["token", "credentials", "PASSWORD", "AccessToken", "client_secret", "Api-Key", "PRIVATE KEY", "proxy_authorization", "setCookie", "pAsSwOrD", "aPiKeY", "clientSecret", "password_hash", "apiKeys"].map(key => [key, marker]));
