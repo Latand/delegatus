@@ -398,6 +398,35 @@ test("a NUMBER under a credential key, and attachment bytes written as numbers, 
   expect(stored).not.toContain(BYTE_RUN.join(","));
 });
 
+test("a numeric credential inside fenced, prefixed or trailing JSON output never reaches the store", () => {
+  /* A tool result is text, and the JSON a command printed sits in it behind a
+     code fence, after a line of prose, or before the command's own trailing
+     output — so it never starts with a brace and is never decoded. The key is
+     still quoted, the value is digits, and no text redactor matched it. */
+  const NUMERIC = 604417293858;
+  const PASSWORD = ["pass", "word"].join("");
+  const SECRET = ["sec", "ret"].join("");
+  const printed = JSON.stringify({ user: "svc", [PASSWORD]: NUMERIC }, null, 2);
+  const toolResult = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01", content }] } });
+  const fenced = toolResult("```json\n" + printed + "\n```");
+  const prefixed = toolResult("Here is the config it read:\n" + printed);
+  const trailing = toolResult(printed + "\n\nexit code 0");
+  const pythonRepr = toolResult(`{'user': 'svc', '${SECRET}': ${NUMERIC}}`);
+  const nestedObject = toolResult("result:\n" + JSON.stringify({ auth: { [keyNamed("client", SECRET)]: { value: NUMERIC } } }));
+  for (const line of [fenced, prefixed, trailing, pythonRepr, nestedObject]) expect(persistableLine(line)).toBe(false);
+
+  /* The same forms around counters and absent fields stay: usage printed in a
+     fence is not a credential, and neither is a credential key holding null or a flag. */
+  const fencedCounters = toolResult("```json\n" + JSON.stringify({ input_tokens: 512, total_tokens: 600, max_output_tokens: 4096 }, null, 2) + "\n```");
+  const emptyFields = toolResult("config:\n" + JSON.stringify({ [PASSWORD]: null, [SECRET]: {}, [keyNamed("api", "key")]: false }));
+  for (const line of [fencedCounters, emptyFields]) expect(persistableLine(line)).toBe(true);
+
+  const window_ = [fenced, prefixed, trailing, pythonRepr, nestedObject, fencedCounters, emptyFields, record(9, "and then ordinary prose")];
+  write("/sessions/printed.jsonl", snapshot(window_));
+  expect(restoreTailSnapshot("/sessions/printed.jsonl", bytesOf(window_))?.win.lines).toEqual([fencedCounters, emptyFields, record(9, "and then ordinary prose")]);
+  expect(storedText()).not.toContain(String(NUMERIC));
+});
+
 test("a structure this cannot finish reading is refused rather than assumed safe", () => {
   /* Wider and deeper than the inspection budget: "not inspected" is not
      "safe", so the line stays out. */

@@ -195,9 +195,23 @@ const SHORT_DATA_CHARS = 64;
 const MAX_INSPECTED_NODES = 600;
 const MAX_INSPECTED_DEPTH = 12;
 
+/**
+ * A QUOTED credential key followed by a value that carries something, found in
+ * text: the JSON or Python dict a command printed, which a tool result holds
+ * behind a code fence, after a line of prose or before trailing output, so it
+ * is never decoded as a document. The transcript redactor matches a quoted
+ * STRING value and an unquoted key; a number, an object or an array under a
+ * quoted key is neither. The quote may be escaped any number of levels down.
+ * The key words are `CREDENTIAL_KEY_RE`'s, so `token` must end the key and a
+ * usage counter printed in a fence is still readable; `null`, a flag and an
+ * empty string, object or array carry nothing and pass.
+ */
+const QUOTED_CREDENTIAL_VALUE_RE = /(?:(?:api.?key|authorization|bearer|secret|password|passwd|pwd|cookie)[\w.-]*|token)\\*["']\s*:\s*(?!(?:null|true|false)\b|\{\s*\}|\[\s*\])(?:\\*["'])?[^\s"'\\,}\]]/i;
+
 /** Whether a piece of TEXT may be written, judged as text alone. */
 function safeText(text: string): boolean {
   if (DATA_URI_RE.test(text)) return false;
+  if (QUOTED_CREDENTIAL_VALUE_RE.test(text)) return false;
   return redactTranscriptText(text) === text;
 }
 
