@@ -49,8 +49,10 @@ function boundedSnapshot(snapshot: TailSnapshot, cap: number): TailSnapshot {
 /** The tail this document can paint for `path` right now: what this tab still
     holds, or — on the first mount of a new document — what the previous one
     persisted. Either one is validated the same way (#1821): refused when the
-    catalog reports a shorter file, and otherwise resumed one anchor before
-    its end, so the first forward chunk proves the rows are still this file's.
+    catalog reports a shorter file, and otherwise resumed at the window's
+    first byte, so the forward chunks replay every cached row and prove each
+    one is still this file's — a matching suffix alone proves nothing about
+    the rows above it.
     A snapshot a reopen already armed is held to the same catalog checks on
     every later read, and keeps the anchor it has.
     A tab's memory is not proof — the transcript can be replaced while the
@@ -310,10 +312,10 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
             updateWin(target, { lines: [], start: 0 });
           }
         }
-        /* A window restored from the persistent store resumes one anchor
-           BEFORE it ends, and this chunk replays those bytes. They are this
-           file's own — the window is the tail it claims to be, and the rest of
-           the chunk appends to it — or the transcript at this path was
+        /* A resumed window — from the store or from this tab's memory — is
+           re-read from its first byte, and this chunk replays it. Those bytes
+           are this file's own — the window is the tail it claims to be, and
+           the rest of the chunk appends to it — or the transcript at this path was
            rewritten, compacted or replaced at the same length, and the cached
            rows are dropped for a fresh read rather than painted over (#1821).
            A chunk that carries only PART of the anchor (a batch that ran out

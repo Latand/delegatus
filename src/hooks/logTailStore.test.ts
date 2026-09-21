@@ -31,6 +31,7 @@ const {
   persistedTailPathsForTests,
   resetTailStoreForTests,
   restoreTailSnapshot,
+  resumableSnapshot,
   tailStoreMemoryForTests,
   TAIL_STORE_BOUNDS_FOR_TESTS: BOUNDS,
 } = store;
@@ -60,17 +61,16 @@ function snapshot(lines: string[], overrides: Partial<TailSnapshot> = {}): TailS
   };
 }
 
-/** What the store rewinds a restored read by: the tail's last records, up to
-    the anchor budget, which the next forward chunk has to replay. */
+/** What the store rewinds a restored read by: the WHOLE window, up to the
+    per-path bounds, which the next forward chunks have to replay. */
 function anchorBytesOf(lines: string[]): number {
   let bytes = 0;
   let kept = 0;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const cost = encoder.encode(lines[index]!).length + 1;
-    if (kept > 0 && bytes + cost > BOUNDS.ANCHOR_BYTES) break;
+    if (kept > 0 && (bytes + cost > BOUNDS.MAX_BYTES_PER_PATH || kept + 1 > BOUNDS.MAX_LINES_PER_PATH)) break;
     bytes += cost;
     kept += 1;
-    if (bytes >= BOUNDS.ANCHOR_BYTES) break;
   }
   return bytes;
 }
@@ -111,9 +111,9 @@ test("a persisted tail comes back with the transport position it ended at, so th
   const restored = restoreTailSnapshot("/sessions/a.jsonl", 900);
   expect(restored?.win.lines).toEqual(lines);
   expect(restored?.win.start).toBe(0);
-  /* The read resumes one anchor BEFORE the window ends, and the anchor is the
-     bytes that window ends with: the next chunk replays them or the window is
-     not this file's tail. */
+  /* The read resumes at the window's first byte, and the anchor is every byte
+     of the window: the next chunks replay them or the window is not this
+     file's tail. */
   expect(restored?.resumeAnchor).toBe(lines.join("\n") + "\n");
   expect(restored?.offset).toBe(860 - anchorBytesOf(lines));
   expect(restored?.historyStart).toBe(40);
@@ -207,7 +207,7 @@ test("a transcript that shrank, was emptied, or grew past the live tail window i
   /* A forward read that far behind is bounded to the live window and would
      skip whole records, leaving a hole between the restored rows and the new
      ones; so it loads fresh instead. The distance is measured from where the
-     read RESUMES, one anchor before the window ends, because that is the
+     read RESUMES, at the window's first byte, because that is the
      offset the server is asked for. */
   const resumeFrom = 5_000 - anchorBytesOf(lines);
   write("/sessions/grown.jsonl", snapshot(lines, { size: 5_000, offset: 5_000 }));
@@ -575,4 +575,21 @@ test("the throttle's own memory is bounded, before a flush as well as after", ()
     const index = Number(path.match(/stress(\d+)/)![1]);
     expect(restoreTailSnapshot(path, bytesOf(window_(index)))?.win.lines.length ?? 0).toBeGreaterThan(0);
   }
+});
+
+test("a resume replays the whole window, and a window longer than the stored bounds is cut forward to them first", () => {
+  /* A window this tab held in memory can be far longer than a stored one. */
+  const lines = Array.from({ length: BOUNDS.MAX_LINES_PER_PATH + 150 }, (_, index) => record(index, `message ${index}`));
+  const size = bytesOf(lines);
+  const resumed = resumableSnapshot(snapshot(lines, { size, offset: size, historyStart: 0 }), size);
+  const kept = lines.slice(-BOUNDS.MAX_LINES_PER_PATH);
+  expect(resumed?.win.lines).toEqual(kept);
+  expect(resumed?.win.start).toBe(150);
+  /* Every retained row is replayed, not only the last few kilobytes: a
+     transcript rewritten above an unchanged suffix is caught. */
+  expect(resumed?.resumeAnchor).toBe(kept.join("\n") + "\n");
+  expect(resumed?.offset).toBe(size - bytesOf(kept));
+  /* What was cut is ordinary history, reachable through loadOlder. */
+  expect(resumed?.historyStart).toBe(size - bytesOf(kept));
+  expect(resumed?.hasMore).toBe(true);
 });

@@ -31,8 +31,8 @@
  *   having the line rewritten, so what is restored is byte-identical to the
  *   file and the reader never sees a row mutate on revalidation.
  * - **Identity.** A restored window is not trusted because the file is the
- *   right LENGTH. It resumes one anchor earlier than it ends, and the first
- *   forward chunk replays those bytes: they are the file's own, or the window
+ *   right LENGTH. It resumes at its own first byte, and the first forward
+ *   chunks replay the whole window: they are the file's own, or the window
  *   belongs to a transcript this path no longer holds and is replaced. See
  *   {@link restoreTailSnapshot} and its consumer in `useLogTail`.
  */
@@ -68,10 +68,6 @@ const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
  * is simply loaded fresh.
  */
 const MAX_BEHIND_BYTES = 768 * 1024;
-/** How many bytes of the stored tail the first forward chunk must replay
-    before the window is believed. One record is already a strong witness; the
-    budget lets several small ones in without making the re-read matter. */
-const ANCHOR_BYTES = 4 * 1024;
 /** At most one write per path per window; a flush ignores it. A desktop board
     keeps many panes live at once and each one's tail moves on every poll tick,
     and `localStorage` is synchronous. */
@@ -718,25 +714,33 @@ export function flushTailSnapshots(): void {
 
 /* ── reads ──────────────────────────────────────────────────────────────── */
 
-/** The bytes a restored window ends with: one record at least, up to the
-    anchor budget. Re-derived on read rather than stored, so the store holds
-    each byte once. */
-function anchorOf(lines: string[]): string {
+/** How many of a window's last lines a resume replays: all of them, up to the
+    per-path bounds. Re-derived on read rather than stored, so the store holds
+    each byte once.
+
+    The WHOLE retained window, because a matching suffix proves nothing about
+    the rows before it: a transcript rewritten at the same length above an
+    unchanged last few kilobytes would keep painting rows it no longer holds
+    (#1821 review). A window held in memory can be longer than a stored one;
+    it is cut forward to the same bounds, so the replay never costs more than
+    one stored tail's bytes, and what was cut is ordinary history again. */
+function validatedSuffix(lines: string[]): { kept: number; bytes: number } {
   let bytes = 0;
   let kept = 0;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const cost = lineBytes(lines[index]!);
-    if (kept > 0 && bytes + cost > ANCHOR_BYTES) break;
+    if (kept > 0 && (bytes + cost > MAX_BYTES_PER_PATH || kept + 1 > MAX_LINES_PER_PATH)) break;
     bytes += cost;
     kept += 1;
-    if (bytes >= ANCHOR_BYTES) break;
   }
-  return lines.slice(lines.length - kept).join("\n") + "\n";
+  return { kept, bytes };
 }
 
 /**
- * `snapshot` made resumable: rewound to one `resumeAnchor` BEFORE its own end,
- * with its decoder partial dropped, or null when it cannot be this file's tail.
+ * `snapshot` made resumable: rewound to the first byte of its window, which
+ * becomes the `resumeAnchor`, with its decoder partial dropped — or null when
+ * it cannot be this file's tail. A window longer than the per-path bounds is
+ * cut forward to them first (see {@link validatedSuffix}).
  *
  * A file of the same length or longer is NOT thereby the same file — it can
  * have been compacted and regrown, or rewritten in place record for record —
@@ -767,19 +771,25 @@ export function resumableSnapshot(snapshot: TailSnapshot, fileSize: number | nul
   if (snapshot.win.lines.length === 0) {
     return { ...snapshot, offset: 0, historyStart: 0, partial: "", first: true, hasMore: false, resumeAnchor: undefined };
   }
-  const anchor = anchorOf(snapshot.win.lines);
+  const lines = snapshot.win.lines;
+  const { kept, bytes } = validatedSuffix(lines);
+  const from = lines.length - kept;
   const endsAt = Math.max(0, snapshot.offset - utf8len(snapshot.partial));
-  const resumeFrom = endsAt - utf8len(anchor);
+  const resumeFrom = endsAt - bytes;
   const behind = typeof fileSize === "number" && fileSize - resumeFrom > MAX_BEHIND_BYTES;
   if (behind || resumeFrom < 0) return null;
+  const retained = lines.slice(from);
   return {
     ...snapshot,
+    win: { lines: retained, start: snapshot.win.start + from },
+    historyStart: from === 0 ? snapshot.historyStart : Math.max(snapshot.historyStart, resumeFrom),
+    hasMore: snapshot.hasMore || from > 0,
     offset: resumeFrom,
     partial: "",
     /* Not a first read: the window below is already this transcript's tail,
        and the next forward chunk appends to it instead of replacing it. */
     first: false,
-    resumeAnchor: anchor,
+    resumeAnchor: retained.join("\n") + "\n",
   };
 }
 
@@ -877,7 +887,6 @@ export function tailStoreMemoryForTests(): { pending: number; pendingBytes: numb
 }
 
 export const TAIL_STORE_BOUNDS_FOR_TESTS = {
-  ANCHOR_BYTES,
   MAX_BEHIND_BYTES,
   MAX_BYTES_PER_PATH,
   MAX_LINES_PER_PATH,

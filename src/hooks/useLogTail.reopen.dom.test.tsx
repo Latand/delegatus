@@ -492,3 +492,92 @@ test("a reopen interrupted before its first answer still paints at once next tim
   expect(text()).not.toContain("old-");
   expect(cues).toEqual([]);
 });
+
+/* ── an unchanged suffix proves nothing about the rows before it ──────────── */
+
+/** Sixty-one records, about 8.8 kB: far past one anchor's worth, so a
+    replacement of the FIRST record leaves the window's last 4 kB untouched.
+    Record 0 is the one that gets rewritten; tool calls sit in the window so a
+    replaced row that read as an appended one would ring. */
+function longWindow(first: string): string[] {
+  const lines = [record(0, first)];
+  for (let index = 1; index < 57; index += 1) lines.push(record(index, `filler message number ${index} with some prose after it`));
+  return [...lines, ...call("tail-a"), ...call("tail-b")];
+}
+
+/** The same transcript with record 0 rewritten at the same length. */
+function replacedEarly(lines: string[]): string[] {
+  const replaced = [record(0, "new earlier message"), ...lines.slice(1)];
+  expect(bytes(transcript(replaced))).toBe(bytes(transcript(lines)));
+  return replaced;
+}
+
+for (const mode of ["memory", "persisted"] as const) {
+  const reopen = async (file: FileEntry, lines: string[]): Promise<string> => {
+    if (mode === "memory") return readThenUnmount(file, lines);
+    const body = await storeTailThenReload(file, lines);
+    cues.length = 0;
+    return body;
+  };
+
+  test(`a ${mode} reopen whose transcript was rewritten BEFORE an unchanged suffix keeps none of the old rows`, async () => {
+    const lines = longWindow("old earlier message");
+    expect(bytes(transcript(lines))).toBeGreaterThan(8_000);
+    const file = entry(`/sessions/alpha/${mode}-early-rewrite.jsonl`, bytes(transcript(lines)));
+    await reopen(file, lines);
+
+    const replacement = replacedEarly(lines);
+    mount(file);
+    /* Still painted from the cache at once. */
+    expect(commits[0]).toEqual({ lines: lines.length, loading: false });
+    const resumed = await waitForSubscriber(file.path);
+    serve(resumed, transcript(replacement));
+
+    expect(text()).not.toContain("old earlier message");
+    expect(text()).toBe(replacement.join("|"));
+    expect(cues).toEqual([]);
+
+    /* A genuine append after it still rings. */
+    serve(resumed, transcript([...replacement, ...call("fresh")]));
+    expect(text()).toBe([...replacement, ...call("fresh")].join("|"));
+    expect(cues).toEqual([`tool:${file.path}:fresh`]);
+  });
+
+  test(`a ${mode} reopen whose transcript was rewritten before an unchanged suffix AND regrew shows only current rows`, async () => {
+    const lines = longWindow("old earlier message");
+    const file = entry(`/sessions/alpha/${mode}-early-rewrite-regrown.jsonl`, bytes(transcript(lines)));
+    await reopen(file, lines);
+
+    const regrown = [...replacedEarly(lines), ...call("regrown")];
+    mount(entry(file.path, bytes(transcript(regrown))));
+    expect(commits[0]).toEqual({ lines: lines.length, loading: false });
+    const resumed = await waitForSubscriber(file.path);
+    serve(resumed, transcript(regrown));
+
+    expect(text()).not.toContain("old earlier message");
+    expect(text()).toBe(regrown.join("|"));
+    /* Rows that replaced others are not news, each shows once. */
+    expect(cues).toEqual([]);
+
+    serve(resumed, transcript([...regrown, ...call("after")]));
+    expect(text()).toBe([...regrown, ...call("after")].join("|"));
+    expect(cues).toEqual([`tool:${file.path}:after`]);
+  });
+
+  test(`a ${mode} reopen of an unchanged long transcript replays the whole window and appends without a cue for known rows`, async () => {
+    const lines = longWindow("old earlier message");
+    const file = entry(`/sessions/alpha/${mode}-long-unchanged.jsonl`, bytes(transcript(lines)));
+    const body = await reopen(file, lines);
+
+    mount(file);
+    expect(commits[0]).toEqual({ lines: lines.length, loading: false });
+    const resumed = await waitForSubscriber(file.path);
+    serve(resumed, body);
+    expect(text()).toBe(lines.join("|"));
+    expect(cues).toEqual([]);
+
+    serve(resumed, transcript([...lines, ...call("fresh")]));
+    expect(text()).toBe([...lines, ...call("fresh")].join("|"));
+    expect(cues).toEqual([`tool:${file.path}:fresh`]);
+  });
+}
