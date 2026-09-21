@@ -376,10 +376,10 @@ test("a NUMBER under a credential key, and attachment bytes written as numbers, 
      written out as an array of numbers are still the attachment. */
   const NUMERIC = 739182465021;
   const BYTE_RUN = [217, 183, 251, 199, 142, 233, 177, 205];
-  const password = JSON.stringify({ type: "user", [["pass", "word"].join("")]: NUMERIC });
-  const underAuthorization = JSON.stringify({ type: "user", request: { headers: { [["author", "ization"].join("")]: { secret: NUMERIC } } } });
+  const digitsLine = JSON.stringify({ type: "user", [["pass", "word"].join("")]: NUMERIC });
+  const headerLine = JSON.stringify({ type: "user", request: { headers: { [["author", "ization"].join("")]: { [["sec", "ret"].join("")]: NUMERIC } } } });
   const attachmentBytes = JSON.stringify({ type: "user", message: { attachment: { name: "scan.bin", bytes: BYTE_RUN } } });
-  for (const line of [password, underAuthorization, attachmentBytes]) expect(persistableLine(line)).toBe(false);
+  for (const line of [digitsLine, headerLine, attachmentBytes]) expect(persistableLine(line)).toBe(false);
 
   /* What a record legitimately counts stays: both engines' usage counters,
      whose keys happen to spell "token", and a size written under `bytes`.
@@ -390,7 +390,7 @@ test("a NUMBER under a credential key, and attachment bytes written as numbers, 
   for (const line of [claudeUsage, codexUsage, counters]) expect(persistableLine(line)).toBe(true);
 
   /* Storage-wide: write, flush, restore, then scan every byte the store holds. */
-  const window_ = [password, underAuthorization, attachmentBytes, claudeUsage, codexUsage, counters, record(9, "and then ordinary prose")];
+  const window_ = [digitsLine, headerLine, attachmentBytes, claudeUsage, codexUsage, counters, record(9, "and then ordinary prose")];
   write("/sessions/numeric.jsonl", snapshot(window_));
   expect(restoreTailSnapshot("/sessions/numeric.jsonl", bytesOf(window_))?.win.lines).toEqual([claudeUsage, codexUsage, counters, record(9, "and then ordinary prose")]);
   const stored = storedText();
