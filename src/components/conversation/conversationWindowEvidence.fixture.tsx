@@ -389,7 +389,12 @@ export type LifecycleScenario =
   | "safe-failure"
   /* The send that carries more than words. The transport behaves like an
      ordinary admitted send; what the scenario exercises is the row. */
-  | "attachment-and-context";
+  | "attachment-and-context"
+  /* A document, and a send that is nothing but a picture. Both reach the
+     engine in a shape the row's own words cannot be recognised in — see
+     `echo` below — which is the whole reason they are separate frames. */
+  | "document-attachment"
+  | "image-only";
 
 /** What the fake host does with the next admission, and what it has published. */
 interface FakeHost {
@@ -489,6 +494,31 @@ const LIFE_OPENING = JSON.stringify({
    construction: nothing here names anyone's home. */
 const LIFE_INBOX_IMAGE = "/var/tmp/llv-evidence-home/.claude/viewer-inbox/stack-trace.png";
 
+/* Where a NON-image attachment lands, and the shape the route folds into the
+   delivered text: `inbox/files/<batch>/<name>`, one path per line after the
+   operator's words (`inboxFileText`). The engine therefore journals a message
+   the row's own words do not match — which is exactly why the row cannot be
+   recognised by its text and must be recognised by the delivery's identity. */
+const LIFE_INBOX_FILE = "/var/tmp/llv-evidence-home/.claude/viewer-inbox/files/4d2a1f7c9b03/release-notes.pdf";
+
+/* The delivery identity the Codex host stamps onto the canonical
+   structured-user record (`dedup=sha256(<operation id>)`), and which
+   `/api/log/provenance` resolves back to the client message id the delivery
+   was admitted under. The fake server below answers that join for whichever
+   submission is live, exactly as the registry does from the moment it admits
+   one. */
+const LIFE_DEDUP = "7c".repeat(32);
+
+/** The production record shape: one marker line, then the delivered text. */
+const structuredUserText = (text: string) => `<!-- llv:structured-user dedup=${LIFE_DEDUP} -->\n${text}`;
+
+/* A 48x48 two-tone PNG — the same bytes the driver stages through the
+   composer, so the engine's own inline copy of an image-only send is a real
+   picture rather than a placeholder chip. */
+const LIFE_TILE_PNG = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAX0lEQVR42u3XsQkAIAwEQCcRR3AVW6d3E90g"
+  + "FhYKXpHyIVc9n3obM7pcani38wkAAAAA4Ajw+oO7PAAAAADAGUATAwAAANgDmhgAAADAHtDEAAAAAPaAJgYAAAD4DrAAlLbY"
+  + "gOGW5kkAAAAASUVORK5CYII=";
+
 /* The bytes behind that path are a browser resource load, not a `fetch`, so
    the fake transport below cannot serve them: the driver routes `/api/inbox`
    in the page itself. */
@@ -524,6 +554,16 @@ function installFakeTransport(): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     if (url === "/api/tmux/targets") return Response.json({ targets: {} });
+    if (url.startsWith("/api/log/provenance")) {
+      /* The registry writes a delivery's owner row when it ADMITS the send,
+         so this join is answerable from that moment — including for the send
+         whose acknowledgement never reached the browser. Answering it early
+         is what lets the record be bound in the render it first appears in,
+         instead of a second copy of the message being painted for as long as
+         a round trip takes. */
+      const live = readOutbox(LIFE_CARD)[0]?.id;
+      return Response.json({ messages: {}, occurrences: [], submissions: live ? { [LIFE_DEDUP]: live } : {} });
+    }
     if (url.startsWith("/api/runtime/send?")) {
       /* The original-key admission query. Nothing was journaled under the key
          in the lost-acknowledgement scenario, and saying so would settle it —
@@ -604,17 +644,49 @@ function lifecycleControls(): LifecycleControls {
     },
     echo: () => {
       const entry = readOutbox(LIFE_CARD)[0];
-      /* The engine journals the message WITH the attachment it received, as
-         the path its own copy was written to. The parser lifts that path out
-         into the conversation's own attachment card and leaves the message
-         text exactly as it was — which is why the row still recognises the
-         record as its own, and why the caption on the bubble and the card
-         below it are two different things rather than one thing twice. */
-      const carried = (entry?.images ?? 0) > 0 ? `\n${LIFE_INBOX_IMAGE}` : "";
+      const timestamp = new Date().toISOString();
+      /* THE PRODUCTION PAYLOAD, not a convenient one.
+       *
+       * A send that carried nothing but a picture reaches the rollout as a
+       * persisted user item whose content is the image and a text part that
+       * is only the marker: there are no words in it at all. The feed used
+       * to drop such a record — no text, nothing to recognise — and paint
+       * the picture as a row of its own ABOVE the message the operator
+       * already had, pushing it down the conversation.
+       *
+       * Everything else arrives as the event the engine journals, and what
+       * it journals is what it RECEIVED: the operator's words, plus one line
+       * per attachment path the route folded in (`inboxFileText`). The
+       * parser lifts an image path out into the conversation's own
+       * attachment card; a document's path is not a picture and stays in the
+       * text, so the record and the row genuinely do not share their words.
+       * Both carry the delivery's own identity on the marker, which is what
+       * the row is recognised by. */
+      if ((entry?.images ?? 0) > 0 && !entry?.text.trim()) {
+        fakeHost.lines = [LIFE_OPENING, JSON.stringify({
+          type: "response_item",
+          timestamp,
+          payload: {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_image", image_url: `data:image/png;base64,${LIFE_TILE_PNG}` },
+              { type: "text", text: structuredUserText("") },
+            ],
+          },
+        })];
+        announceHost();
+        return;
+      }
+      const carried = [
+        ...((entry?.images ?? 0) > 0 ? [LIFE_INBOX_IMAGE] : []),
+        ...((entry?.files ?? 0) > 0 ? [LIFE_INBOX_FILE] : []),
+      ];
+      const delivered = [entry?.text ?? LIFE_TEXT, ...carried].filter(Boolean).join("\n");
       fakeHost.lines = [LIFE_OPENING, JSON.stringify({
         type: "event_msg",
-        timestamp: new Date().toISOString(),
-        payload: { type: "user_message", message: `${entry?.text ?? LIFE_TEXT}${carried}` },
+        timestamp,
+        payload: { type: "user_message", message: structuredUserText(delivered) },
       })];
       announceHost();
     },

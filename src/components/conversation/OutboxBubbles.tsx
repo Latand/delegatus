@@ -74,9 +74,17 @@ function affordanceClass(coarse: boolean): string {
  *
  * Passing it is how arrival is adopted INTO the row rather than replacing it:
  * the component, the key and therefore the DOM node stay exactly as they were,
- * and only the source of the words changes. The canonical record wins over the
- * local entry wherever both can speak, because the canonical record is what the
- * agent actually received.
+ * and only the source of the words changes.
+ *
+ * The record answers for the words wherever the submission itself cannot —
+ * a row whose queue entry has aged out, a send that carried no text. Where
+ * the submission CAN speak, its own words stand: what the engine received is
+ * not always what the operator wrote. A document send reaches the agent as
+ * their message plus the inbox paths the route folded in, and painting those
+ * paths into the bubble the moment the record arrives grew the row by two
+ * lines at the one instant this slice promises nothing moves (#1950 round 2).
+ * What the submission carried is already on the row, in its own words, in
+ * the attachment caption below.
  */
 export interface CanonicalMessage {
   text: string;
@@ -127,7 +135,7 @@ export function ConversationMessageRow({
   const row = entry && !canonical
     ? messageRowModel(t, entry, { switchHold, nowMs, session })
     : null;
-  const text = canonical?.text ?? entry?.text ?? "";
+  const text = entry?.text.trim() ? entry.text : canonical?.text ?? entry?.text ?? "";
   const selectedContext = canonical?.selectedContext ?? entry?.selectedContext ?? null;
   const attachments = entry ? entry.images + (entry.files ?? 0) : 0;
   const disclosureLabel = t(open ? "outbox.hideDelivery" : "outbox.showDelivery");

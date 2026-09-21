@@ -648,13 +648,17 @@ describe("send latency slice 3: one message, one row", () => {
       { state: "document-confirmed", act: "settle", status: "delivered" },
       { state: "document-transcript", act: "echo" },
     ] },
-    /* And a send that is nothing but a picture. It has no text for a record to
-       be recognised by, so it settles on its receipt — and its row must be the
-       same size before and after that, which is the whole of the claim here. */
+    /* And a send that is nothing but a picture — through its own arrival,
+       which is where it used to break. It has no text for a record to be
+       recognised by, so the feed dropped the record and painted the engine's
+       copy of the picture as a row ABOVE the message, moving the operator's
+       own row down the conversation (round-2 P2). The record names the
+       submission it was written for, so it lands IN that row. */
     { id: "image-only", steps: [
       { state: "prepared", act: "attach-image-only" },
       { state: "submitted-image-only", act: "submit-button" },
       { state: "image-only-confirmed", act: "settle", status: "delivered" },
+      { state: "image-only-transcript", act: "echo" },
     ] },
   ];
 
@@ -757,7 +761,12 @@ describe("send latency slice 3: one message, one row", () => {
       controls: [...(row?.querySelectorAll("button") ?? [])]
         .map((button) => (button.getAttribute("aria-label") ?? button.textContent ?? "").trim())
         .filter(Boolean),
-      transcriptAttachments: document.querySelectorAll('img[src^="/api/inbox"]').length,
+      /* Counted inside the conversation, and counting an inline picture too:
+         an image-only send reaches the rollout as an inline `input_image`,
+         which the feed renders from its own bytes rather than from a path. */
+      transcriptAttachments: document.querySelectorAll(
+        '[data-log-feed-scroller] img[src^="/api/inbox"], [data-log-feed-scroller] img[src^="data:image"]',
+      ).length,
       phase: row?.getAttribute("data-message-row") ?? null,
       /* The queue's own word for this entry, kept in the record so a frame
          that reads oddly can be traced back to the state it was really in. */
@@ -1183,14 +1192,37 @@ describe("send latency slice 3: one message, one row", () => {
             .toEqual({ suffix, phase: "confirmed" });
 
           /* And a send that is nothing but a picture: no words for a record to
-             recognise it by, so it settles on its receipt — with the same
-             caption and the same box before and after. */
+             recognise it by, so it is recognised by the delivery's identity
+             instead — with the same caption, the same box and the same place
+             in the conversation through its receipt AND through the engine's
+             own record of it arriving. */
+          const imageOnlySteps = ["submitted-image-only", "image-only-confirmed", "image-only-transcript"] as const;
           const imageOnly = at(`image-only-submitted-image-only-${suffix}`);
-          const imageOnlyConfirmed = at(`image-only-image-only-confirmed-${suffix}`);
-          expect({ suffix, caption: imageOnly.inBubble }).toEqual({ suffix, caption });
-          expect({ suffix, caption: imageOnlyConfirmed.inBubble }).toEqual({ suffix, caption });
-          expect({ suffix, bubble: imageOnlyConfirmed.bubble }).toEqual({ suffix, bubble: imageOnly.bubble });
-          expect({ suffix, sameNode: imageOnlyConfirmed.sameNode, sameBody: imageOnlyConfirmed.sameBody })
+          for (const state of imageOnlySteps) {
+            const step = at(`image-only-${state}-${suffix}`);
+            expect({ suffix, state, caption: step.inBubble }).toEqual({ suffix, state, caption });
+            /* The whole box AND the coordinate: `bubble` carries `top`, the
+               offset inside the conversation's own scrolled content, so a row
+               pushed down by a picture inserted above it fails here. */
+            expect({ suffix, state, bubble: step.bubble }).toEqual({ suffix, state, bubble: imageOnly.bubble });
+            expect({ suffix, state, sameNode: step.sameNode, sameBody: step.sameBody })
+              .toEqual({ suffix, state, sameNode: true, sameBody: true });
+          }
+          /* The picture itself arrives once, as the conversation's own row
+             below the message — never a second copy of what the caption
+             already says, and never before the record carries it. */
+          const imageOnlyTranscript = at(`image-only-image-only-transcript-${suffix}`);
+          expect({ suffix, cards: imageOnly.transcriptAttachments }).toEqual({ suffix, cards: 0 });
+          expect({ suffix, cards: imageOnlyTranscript.transcriptAttachments }).toEqual({ suffix, cards: 1 });
+          expect({ suffix, phase: imageOnlyTranscript.phase }).toEqual({ suffix, phase: "confirmed" });
+
+          /* The document's own arrival, in the same two coordinates. Its
+             delivered text is the operator's words plus the inbox path the
+             route folded in, so nothing about the record's TEXT matches the
+             row — and the row stays exactly where and what it was. */
+          const documentTranscript = at(`document-attachment-document-transcript-${suffix}`);
+          expect({ suffix, bubble: documentTranscript.bubble }).toEqual({ suffix, bubble: firstDocument.bubble });
+          expect({ suffix, sameNode: documentTranscript.sameNode, sameBody: documentTranscript.sameBody })
             .toEqual({ suffix, sameNode: true, sameBody: true });
         }
       }
