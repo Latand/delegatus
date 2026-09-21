@@ -199,10 +199,10 @@ test.each([
 
 /** Exercise every artifact independently, with a settled receipt whose digest
  * must continue to describe the raw findings after either export or refusal. */
-function installExportArtifacts(texts: Record<"findings" | "output" | "stdout" | "stderr", string>) {
+function installExportArtifacts(texts: Record<"findings" | "output" | "stdout" | "stderr", string>, extension: Record<string, unknown> = {}) {
   const flow = row();
   const settled = {
-    ...flow, extension: { receiptId: "archive-receipt" },
+    ...flow, extension: { ...extension, receiptId: "archive-receipt" },
     rounds: [{ ...flow.rounds[0]!, relayPendingSettlement: null, relayDelivery: { path: flow.implementerPath, deliveredAt: "2026-08-10T03:00:00Z" } }],
   };
   put(settled as unknown as ReturnType<typeof row>);
@@ -276,6 +276,95 @@ test.each(["findings", "output", "stdout", "stderr"] as const)("HTTP export refu
       expect(response.status).toBe(503);
       expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
     }
+  }
+});
+
+const artifactKinds = ["findings", "output", "stdout", "stderr"] as const;
+const encodeMessage = (text: string, levels: number): string => levels === 0 ? text : JSON.stringify({ message: encodeMessage(text, levels - 1) });
+const artifactFormats = [
+  (text: string) => text,
+  (text: string) => `${text}\n${text}\n`,
+  (text: string) => `Diagnostic context\n\`\`\`json\n${text}\n\`\`\`\nEnd of history`,
+];
+
+async function exportArtifact(kind: typeof artifactKinds[number], text: string, extension: Record<string, unknown> = {}) {
+  const unchanged = installExportArtifacts({ findings, output: "ordinary output", stdout: "ordinary stdout", stderr: "ordinary stderr", [kind]: text }, extension);
+  const response = await exported(request(), context());
+  const bytes = await response.text();
+  const occurrences = await unchanged();
+  return { response, bytes, occurrences };
+}
+
+test.each(artifactKinds)("HTTP export refuses malformed encoded strings in %s without changing source or provenance", async kind => {
+  const marker = "invented ordinary malformed value";
+  const complete = JSON.stringify({ message: JSON.stringify({ password: marker, retained: "history" }) });
+  const malformed = [
+    complete.slice(0, complete.indexOf("history") + 3),
+    complete.slice(0, -2) + '\\q"}',
+    complete.slice(0, -2) + '\\u00"}',
+  ];
+  for (const value of malformed) for (const levels of [0, 1, 2]) for (const format of artifactFormats) {
+    const { response, bytes } = await exportArtifact(kind, format(encodeMessage(value, levels)));
+    expect(bytes).not.toContain(marker);
+    expect(response.status).toBe(503);
+    expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
+  }
+});
+
+test.each(artifactKinds)("HTTP export redacts complete decoded headers in %s and preserves ordinary history", async kind => {
+  const marker = "inventedordinaryheadervalue";
+  const headers = [
+    `Authorization: Bearer ${marker}`,
+    `Proxy-Authorization: Basic ${marker}`,
+    `Cookie: session=${marker}`,
+    `Set-Cookie: session=${marker}; HttpOnly`,
+    `Authorization: Bearer "${marker}"`,
+  ];
+  for (const header of headers) for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
+    const text = `${header}\nordinary history`;
+    const expected = `${header.slice(0, header.indexOf(":") + 1)} [redacted]\nordinary history`;
+    const { response, bytes, occurrences } = await exportArtifact(kind, format(encodeMessage(text, levels)));
+    expect(response.status).toBe(200);
+    expect(bytes).not.toContain(marker);
+    const body = JSON.parse(bytes);
+    expect(body.artifacts[0].artifacts[kind].text).toBe(format(encodeMessage(expected, levels)));
+    expect(body.row.extension.receiptId).toBe("archive-receipt");
+    expect(body.relayOccurrences).toEqual(occurrences);
+  }
+});
+
+test.each(artifactKinds)("HTTP export preserves lines and nested JSON after decoded URLs in %s", async kind => {
+  const text = "https://example.test/path?signature=private\nKEEP_NEXT_LINE\nEND";
+  const expected = "https://example.test/path?redacted\nKEEP_NEXT_LINE\nEND";
+  for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
+    const { response, bytes, occurrences } = await exportArtifact(kind, format(encodeMessage(text, levels)));
+    expect(response.status).toBe(200);
+    expect(bytes).not.toContain("signature=private");
+    const body = JSON.parse(bytes);
+    const result = body.artifacts[0].artifacts[kind].text;
+    expect(result).toBe(format(encodeMessage(expected, levels)));
+    // Extract the JSON/JSONL/fenced payload and parse every encoding layer.
+    let decoded = format === artifactFormats[2] ? result.split("\n")[2] : levels ? result.split("\n")[0] : result;
+    for (let i = 0; i < levels; i++) decoded = JSON.parse(decoded).message;
+    if (levels) expect(decoded).toBe(expected);
+    expect(body.relayOccurrences).toEqual(occurrences);
+  }
+});
+
+test.each(artifactKinds)("HTTP export preserves credential metadata in %s and retained extensions", async kind => {
+  const metadata = { tokenCount: 42, passwordChanged: false, secretary: "ordinary history", token_count: 7, PASSWORD_CHANGED: true, secretariat: "retained history" };
+  const marker = "invented ordinary classified value";
+  const credentials = Object.fromEntries(["token", "credentials", "PASSWORD", "AccessToken", "client_secret", "Api-Key", "PRIVATE KEY", "proxy_authorization", "setCookie"].map(key => [key, marker]));
+  const redacted = Object.fromEntries(Object.keys(credentials).map(key => [key, "[redacted]"]));
+  const serialize = (values: Record<string, unknown>) => JSON.stringify({ ...metadata, ...values }).replace('"PASSWORD"', '"PASS\\u0057ORD"');
+  for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
+    const { response, bytes, occurrences } = await exportArtifact(kind, format(encodeMessage(serialize(credentials), levels)), { ...metadata, ...credentials });
+    expect(response.status).toBe(200);
+    expect(bytes).not.toContain(marker);
+    const body = JSON.parse(bytes);
+    expect(body.artifacts[0].artifacts[kind].text).toBe(format(encodeMessage(serialize(redacted), levels)));
+    expect(body.row.extension).toEqual({ ...metadata, ...redacted, receiptId: "archive-receipt" });
+    expect(body.relayOccurrences).toEqual(occurrences);
   }
 });
 
