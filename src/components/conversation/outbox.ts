@@ -24,6 +24,8 @@ import { useSyncExternalStore } from "react";
 import { receiptIsAdmitted, receiptIsTerminal, type ReceiptStatus, type RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
 
+import { submissionNamesItsDelivery } from "./submissionJoin";
+
 export type OutboxState = "queued" | "delivering" | "delivered" | "failed";
 
 /** Exact server-projected launch ownership. A canonical conversation can span
@@ -379,6 +381,16 @@ export interface TranscriptEchoObservation {
    * can — as it was before.
    */
   submissionId?: string;
+  /**
+   * The record carries an identity of its own — a delivery token, a native
+   * message id — that nothing here resolves to a submission (#1950 round 3).
+   *
+   * It is somebody's delivery, and not knowing whose is not a reason to hand
+   * it to a row that shares its words: a record like this is claimed by its
+   * own identity once that resolves, and by nothing else. Absent ⇒ the record
+   * names nothing at all.
+   */
+  unresolvedSubmission?: true;
 }
 
 interface PersistedEchoObservation {
@@ -387,6 +399,21 @@ interface PersistedEchoObservation {
   /** The submission the delivery path named for this record; see
       {@link TranscriptEchoObservation.submissionId}. */
   submissionId?: string;
+  /** See {@link TranscriptEchoObservation.unresolvedSubmission}. */
+  unresolvedSubmission?: true;
+}
+
+/** The ledger form of one observation, or null when it can own nothing. A
+    record with no words is still a record when its delivery is named, or
+    carries an identity that may be named later: an attachment-only send
+    arrives exactly that way. */
+function persistedEcho(observation: TranscriptEchoObservation): PersistedEchoObservation | null {
+  const id = echoObservationId(observation);
+  const key = echoKey(observation.text);
+  const submissionId = observation.submissionId;
+  if (!id || (!key && !submissionId)) return null;
+  if (submissionId) return { id, key, submissionId };
+  return observation.unresolvedSubmission ? { id, key, unresolvedSubmission: true } : { id, key };
 }
 
 const ECHO_LEDGER_LIMIT = 512;
@@ -1456,6 +1483,13 @@ interface EchoOwner {
   retiredEchoId?: string;
   launchOwned?: true;
   /**
+   * This browser can name the delivery behind the submission — it was
+   * admitted and handed back an operation (#1950 round 3). Such a submission
+   * already HAS an identity, and a record is its own only when it names that
+   * identity: no count or occurrence of its words can take it.
+   */
+  identified?: true;
+  /**
    * Nobody could establish what happened to this submission. It may claim a
    * record the delivery path NAMES as its own, and nothing else: an outcome
    * that is unknown is not made known by another message happening to carry
@@ -1503,6 +1537,7 @@ function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly Outb
       echoBaselineIds: entry.echoBaselineIds,
       retiredEchoId: entry.retiredEchoId,
       launchOwned: entry.launchOwned,
+      ...(submissionNamesItsDelivery(entry) ? { identified: true as const } : {}),
       ...(entry.deliveryUncertain ? { uncertain: true as const } : {}),
     })),
   ].sort((left, right) => left.at - right.at);
@@ -1532,13 +1567,7 @@ export function transcriptEchoBindings(
   const { owners } = echoOwners(cardId);
   const bindings = new Map<string, string>();
   if (!owners.length) return bindings;
-  const ledger: PersistedEchoObservation[] = [];
-  for (const observation of observations) {
-    const id = echoObservationId(observation);
-    const key = echoKey(observation.text);
-    const submissionId = observation.submissionId;
-    if (id && (key || submissionId)) ledger.push({ id, key, ...(submissionId ? { submissionId } : {}) });
-  }
+  const ledger = observations.flatMap((observation) => persistedEcho(observation) ?? []);
   const claimed = new Set(owners.flatMap((owner) => owner.retiredEchoId ? [owner.retiredEchoId] : []));
   for (const owner of owners) {
     /* Tombstones bind too. An entry that aged out of the bounded queue leaves
@@ -1573,10 +1602,15 @@ export function transcriptEchoBindings(
  *    but a picture and has no words at all;
  *  - a record that names nothing keeps the occurrence rule it always had: the
  *    oldest unclaimed record of this owner's text past its own watermark…
- *  - …unless the owner's own outcome was never established. Then nothing but
- *    a record that names it can settle it: an unknown fate is not resolved by
- *    a message that happens to repeat its words, and its own receipt is the
- *    other way out.
+ *  - …but only for an owner that has no identity to be named by. A submission
+ *    this browser can name the delivery of is taken by a record that names
+ *    it, by its turn, or by its native item, and never by its words (#1950
+ *    round 3): the words are the one thing a second send of the same message
+ *    shares with it. Nor does an owner whose outcome was never established
+ *    settle on text: an unknown fate is not resolved by a message that
+ *    happens to repeat its words, and its own receipt is the other way out;
+ *  - a record that carries an identity nobody here has resolved is somebody's
+ *    delivery, so text never claims it for anybody.
  */
 function claimEcho(
   owner: EchoOwner,
@@ -1585,7 +1619,7 @@ function claimEcho(
 ): PersistedEchoObservation | undefined {
   const named = ledger.find((echo) => echo.submissionId === owner.id && !claimed.has(echo.id));
   if (named) return named;
-  if (owner.uncertain || !owner.key) return undefined;
+  if (owner.uncertain || owner.identified || !owner.key) return undefined;
   const baseline = new Set(owner.echoBaselineIds ?? []);
   let remainingBaseline = baseline.size ? 0 : (owner.echoBaseline ?? 0);
   return ledger.find((echo) => {
@@ -1594,6 +1628,12 @@ function claimEcho(
        the second send's record lands first and the first send must not eat
        it. A record that names nothing names nothing. */
     if (echo.submissionId) return false;
+    /* A record with an identity nobody resolved is somebody's delivery. The
+       one owner allowed to read it by its words is the launch prompt: the
+       spawn delivers it, not the composer, so no composer submission maps its
+       token, and it is the conversation's first message — there is nobody
+       earlier whose record it could be. */
+    if (echo.unresolvedSubmission && !owner.launchOwned) return false;
     if (echo.key !== owner.key || baseline.has(echo.id)) return false;
     if (remainingBaseline > 0) {
       remainingBaseline -= 1;
@@ -1712,19 +1752,18 @@ export function publishTranscriptEchoes(
 
   const merged = new Map(readEchoLedger(cardId).map((echo) => [echo.id, echo]));
   for (const observation of observations) {
-    const id = echoObservationId(observation);
-    const key = echoKey(observation.text);
-    const submissionId = observation.submissionId;
-    /* A record with no words is still a record when the delivery path names
-       whose it is: an attachment-only send arrives exactly that way, and
-       dropping it here is why its row could never meet its own arrival. */
-    if (!id || (!key && !submissionId)) continue;
-    merged.set(id, { id, key, ...(submissionId ? { submissionId } : {}) });
+    const echo = persistedEcho(observation);
+    if (echo) merged.set(echo.id, echo);
   }
   const ledger = [...merged.values()].slice(-ECHO_LEDGER_LIMIT);
   const previous = readEchoLedger(cardId);
+  /* Identity is part of the record: one that was unresolved when first seen
+     and is named now has changed, and the durable ledger must say so. */
   const ledgerChanged = previous.length !== ledger.length
-    || previous.some((echo, index) => echo.id !== ledger[index]?.id || echo.key !== ledger[index]?.key);
+    || previous.some((echo, index) => echo.id !== ledger[index]?.id
+      || echo.key !== ledger[index]?.key
+      || echo.submissionId !== ledger[index]?.submissionId
+      || echo.unresolvedSubmission !== ledger[index]?.unresolvedSubmission);
   if (ledgerChanged) persistEchoLedger(cardId, ledger);
   const counts = countsFromLedger(ledger);
   const countsChanged = !sameCounts(echoSnapshots.get(cardId), counts);
@@ -1786,7 +1825,13 @@ export function useTranscriptEchoes(cardId: string): TranscriptEchoCounts {
  * entries are untouched: they carry state the transcript cannot show.
  *
  * `transcriptEchoCounts` maps each trimmed transcript user-text to its occurrence
- * count in the rendered transcript.
+ * count in the rendered transcript. It answers only for a submission with no
+ * identity of its own (#1950 round 3): one this browser can name the delivery
+ * of leaves on `bound` — the submissions {@link transcriptEchoBindings} gave a
+ * record in this same render, the one binding the feed also adopts rows by —
+ * or on its persisted retirement, its turn, or its settled receipt. Counting
+ * words for it was how a second send's record hid the first send's row while
+ * the first was still delivering.
  */
 export function visibleOutbox(
   queue: readonly OutboxEntry[],
@@ -1794,6 +1839,7 @@ export function visibleOutbox(
   nowMs: number,
   paneOwner?: OutboxOwner | null,
   newestTranscriptAtMs?: number,
+  bound?: ReadonlySet<string>,
 ): OutboxEntry[] {
   const consumed = new Map<string, number>();
   const visible: OutboxEntry[] = [];
@@ -1809,7 +1855,7 @@ export function visibleOutbox(
        which for a role launch is the scaffold-plus-draft carried on `echoText`,
        not the raw draft it displays (issue #615). */
     const key = echoKey(entry.echoText ?? entry.text);
-    if (entry.retiredEchoId) {
+    if (entry.retiredEchoId || bound?.has(entry.id)) {
       const floor = Math.max(entry.echoBaseline ?? 0, consumed.get(key) ?? 0);
       consumed.set(key, floor + 1);
       continue;
@@ -1830,14 +1876,17 @@ export function visibleOutbox(
       visible.push(entry);
       continue;
     }
-    const total = transcriptEchoCounts.get(key) ?? 0;
     /* Echoes below this floor belong to messages submitted before this entry
        (its own baseline) or to earlier queued siblings that already consumed
-       them — neither retires this bubble. */
-    const floor = Math.max(entry.echoBaseline ?? 0, consumed.get(key) ?? 0);
-    if (total > floor) {
-      consumed.set(key, floor + 1);
-      continue;
+       them — neither retires this bubble. A submission with an identity takes
+       no part in the count, neither retiring on it nor consuming from it. */
+    if (!submissionNamesItsDelivery(entry)) {
+      const total = transcriptEchoCounts.get(key) ?? 0;
+      const floor = Math.max(entry.echoBaseline ?? 0, consumed.get(key) ?? 0);
+      if (total > floor) {
+        consumed.set(key, floor + 1);
+        continue;
+      }
     }
     if (entry.adoptedAt !== undefined) continue;
     if (entry.responseStartedAt !== undefined) continue;

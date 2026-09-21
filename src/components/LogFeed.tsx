@@ -787,11 +787,19 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
          any of these. */
       const deliveredEcho = item.kind === "sysmsg" && Boolean(item.deliveredMessage);
       if (item.kind !== "user" && !deliveredEcho && !submissionId && !launchEchoKeys.has(text.trim())) return [];
+      /* A record that carries an identity of its own — the delivery token in
+         its marker, the engine's id for a delivered Claude message — and
+         which nothing here resolves is somebody's delivery (#1950 round 3).
+         That stays on the observation, so its words can never hand it to a
+         row that merely says the same thing. */
+      const unresolvedSubmission = !submissionId
+        && (Boolean(submissionDedup) || (item.kind === "sysmsg" && Boolean(item.deliveredMessage?.engineMessageId)));
       return [{
         generation: transcriptGeneration,
         id: anchorKey ?? `key:${key}`,
         text,
         ...(submissionId ? { submissionId } : {}),
+        ...(unresolvedSubmission ? { unresolvedSubmission: true as const } : {}),
       }];
     });
   }, [feed.items, transcriptGeneration, launchEchoKeys, provenanceLookup, localJoin]);
@@ -879,10 +887,31 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
     return newest;
   }, [feed.items]);
+  /* ── One message, one row (send-latency slice 3) ──────────────────────────
+     Which submitted message each transcript echo belongs to. The operator's
+     row is keyed on the SUBMISSION — its idempotency key — from the instant
+     they pressed Send, so when the transcript's own record of the same message
+     arrives the feed hands it to the row that is already there instead of
+     mounting a second one beside it. The message keeps its node, whatever the
+     reader had expanded, and its place in the conversation.
+
+     Computed here, synchronously, rather than read off the entry's persisted
+     `retiredEchoId`: that is written from an effect, one frame AFTER the echo
+     first renders, and one frame is all it takes to replace the node. */
+  const echoBindings = useMemo(
+    () => memoryKey ? transcriptEchoBindings(memoryKey, transcriptEchoes) : new Map<string, string>(),
+    /* `outbox` is a dependency in substance — the binder reads the queue — and
+       naming it here is what re-binds the rows as submissions come and go. */
+    [memoryKey, transcriptEchoes, outbox],
+  );
+  const boundSubmissions = useMemo(() => new Set(echoBindings.values()), [echoBindings]);
   /* Launch bubbles fail closed without exact canonical ownership; ordinary
-     composer entries still render from this conversation-scoped queue. */
+     composer entries still render from this conversation-scoped queue. A row
+     leaves the tail on the SAME binding that adopts it into the transcript
+     (#1950 round 3), so which rows are visible and which record answers for
+     which row can never disagree. */
   const pendingOutbox = file
-    ? visibleOutbox(outbox, transcriptEchoCounts, nowMs(), paneLaunchOwner, newestTranscriptAtMs)
+    ? visibleOutbox(outbox, transcriptEchoCounts, nowMs(), paneLaunchOwner, newestTranscriptAtMs, boundSubmissions)
     : [];
   useEffect(() => {
     if (!memoryKey || !tailPath) return;
@@ -915,23 +944,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      empty transcript is not "no output" — it is a conversation mid-launch. */
   const windowTail = visibleLiveTurnItems.length > 0 || pendingOutbox.length > 0 || Boolean(launch);
 
-  /* ── One message, one row (send-latency slice 3) ──────────────────────────
-     Which submitted message each transcript echo belongs to. The operator's
-     row is keyed on the SUBMISSION — its idempotency key — from the instant
-     they pressed Send, so when the transcript's own record of the same message
-     arrives the feed hands it to the row that is already there instead of
-     mounting a second one beside it. The message keeps its node, whatever the
-     reader had expanded, and its place in the conversation.
-
-     Computed here, synchronously, rather than read off the entry's persisted
-     `retiredEchoId`: that is written from an effect, one frame AFTER the echo
-     first renders, and one frame is all it takes to replace the node. */
-  const echoBindings = useMemo(
-    () => memoryKey ? transcriptEchoBindings(memoryKey, transcriptEchoes) : new Map<string, string>(),
-    /* `outbox` is a dependency in substance — the binder reads the queue — and
-       naming it here is what re-binds the rows as submissions come and go. */
-    [memoryKey, transcriptEchoes, outbox],
-  );
   /* Session-stable, like the transcript's own row keys: once a canonical row
      has answered for a submission it keeps that key for as long as this feed
      is mounted, even after the queue and its tombstone have aged out. */
@@ -984,6 +996,25 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
     return withheld;
   }, [visibleItems, pendingOutbox, localJoin, provenanceLookup]);
+  /* The Claude form of the same wait (#1950 round 3). A delivered Claude
+     record names itself only by the engine's id, which nothing in the
+     browser can compute and the broker's ledger may join to its submission
+     a beat after the record is visible. Its words used to bind it meanwhile;
+     they no longer may, so while any of the operator's rows is still waiting
+     and the ledger has not finished answering for this id, the record waits
+     too — bounded by the lookup's own revalidation schedule, and never a
+     guess about whose it is. */
+  const withheldNativeRecords = useMemo(() => {
+    const withheld = new Set<string>();
+    if (!pendingOutbox.length) return withheld;
+    for (const { item } of visibleItems) {
+      if (item.kind !== "sysmsg") continue;
+      const id = item.deliveredMessage?.engineMessageId;
+      if (!id || provenanceLookup.forItem(item)) continue;
+      if (provenanceLookup.messagePending(id)) withheld.add(id);
+    }
+    return withheld;
+  }, [visibleItems, pendingOutbox, provenanceLookup]);
   const conversationRows = useMemo<ConversationRow[]>(() => {
     /* Which submissions the transcript is already answering for in THIS
        render. The tail below skips them, so one message can never have two
@@ -993,8 +1024,28 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
        screen (round-4 P1). The rule is the invariant, not a retirement
        timing. */
     const adopted = new Set<string>();
+    /* The operator's rows keep the order they were sent in until each one's
+       own record says otherwise (#1950 round 3). When a later send's record
+       arrives first, the earlier send is still waiting in the tail — and
+       moving the arrived one above it would slide both rows past each other
+       at the one moment nothing is supposed to move. So a waiting row that
+       was submitted BEFORE a submission whose record lands here is painted
+       just ahead of that record, keeping its node and its place; its own
+       record, when it comes, takes it from there. Rows the transcript is
+       already answering for in this render are never hoisted: they are
+       adopted where their record is. */
+    const answered = new Set<string>([...boundSubmissions, ...messageRowKeys.current.values()]);
+    const hoisted = new Set<string>();
+    const earlierWaiting = (submission: OutboxEntry): ConversationRow[] => pendingOutbox.flatMap((entry) => {
+      if (entry.id === submission.id || entry.at >= submission.at) return [];
+      if (answered.has(entry.id) || adopted.has(entry.id) || hoisted.has(entry.id)) return [];
+      hoisted.add(entry.id);
+      return [{ kind: "message", key: `msg:${entry.id}`, entry, canonical: null } as ConversationRow];
+    });
     const rows: ConversationRow[] = visibleItems.flatMap(({ anchorKey, key, item, responseDurationMs, submissionDedup }, visibleIndex) => {
       if (submissionDedup && withheldRecords.has(submissionDedup)) return [];
+      if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId
+        && withheldNativeRecords.has(item.deliveredMessage.engineMessageId)) return [];
       const answer = answerFor(visibleStartIndex + visibleIndex);
       const speakText = answer?.firstIndex === visibleStartIndex + visibleIndex ? answer.text : undefined;
       const echoSourceId = anchorKey ?? `key:${key}`;
@@ -1028,8 +1079,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            the record has no second row. */
         const carried = item.kind === "inbox-image" || item.kind === "image" || item.kind === "blob";
         const canonicalText = "text" in item ? item.text : "";
+        const waiting = earlierWaiting(boundEntry);
         if (!carried) {
-          return [{
+          return [...waiting, {
             kind: "message",
             key: boundSubmission,
             anchorKey,
@@ -1046,6 +1098,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         /* The record's anchor stays on the record's own row: two rows sharing
            one anchor would give the viewport two answers to where it was. */
         return [
+          ...waiting,
           /* The record IS arrival, so the row reads as arrived from the
              instant it lands — the same fact a bubble's own canonical text
              carries for a send that had words. It has none, so the canonical
@@ -1075,7 +1128,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            the node. */
         const bound = outbox.find((candidate) => candidate.id === rowKey.slice("msg:".length));
         adopted.add(rowKey.slice("msg:".length));
-        return [{
+        return [...(bound ? earlierWaiting(bound) : []), {
           kind: "message",
           key: rowKey,
           anchorKey,
@@ -1106,7 +1159,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       if (section === "launch") rows.push({ kind: "launch", key: "launch" });
       else if (section === "delta") rows.push({ kind: "delta", key: "delta" });
       else for (const entry of pendingOutbox) {
-        if (adopted.has(entry.id)) continue;
+        if (adopted.has(entry.id) || hoisted.has(entry.id)) continue;
         rows.push({ kind: "message", key: `msg:${entry.id}`, entry, canonical: null });
       }
     }
@@ -1114,8 +1167,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     /* `messageRowKey`/`answerFor` are read, not depended on: both are pure
        functions of the memos already named here. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleItems, visibleStartIndex, echoBindings, outbox, pendingOutbox, launch, memoryKey,
-    visibleLiveTurnItems.length, answerFor, provenanceLookup, withheldRecords]);
+  }, [visibleItems, visibleStartIndex, echoBindings, boundSubmissions, outbox, pendingOutbox, launch, memoryKey,
+    visibleLiveTurnItems.length, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords]);
   /* What this feed is painting, so the composer's receipt stack knows which
      deliveries already have a row explaining them and stops repeating them.
      Read off the ROWS rather than off the queue, and including the rows the

@@ -284,8 +284,13 @@ test("the transcript's own record is adopted into the row the operator already h
     readings.push(reading(host));
   }
 
-  /* And then the transcript's own record of the same message lands. */
-  await settle(() => { lines = [codexUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT)]; });
+  /* And then the transcript's own record of the same message lands, in the
+     shape the structured host writes it: marked with the operation the
+     receipts above named. The row is admitted, so that name — never its
+     words — is what hands the record to it (#1950 round 3). */
+  await settle(() => {
+    lines = [codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT, deliveryDedupToken("operation-one-row"))];
+  });
   await settle(() => root.render(surface()));
   const adopted = reading(host);
   readings.push(adopted);
@@ -1129,6 +1134,59 @@ test("an admitted row is not adopted by an equal-text record whose identity reso
   expect(adopted!.phase).toBe("confirmed");
   expect(adopted!.bubble).toBe(before.bubble);
   expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(2);
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("a delivered Claude record waits for its native id while the ledger read is open, then takes its row", async () => {
+  /* The record's words no longer bind it to an admitted row, and nothing in
+     the browser can compute its engine id's owner. So while the ledger has
+     not answered, the record waits: the operator keeps exactly one copy of
+     the message, on its original node, and no system card flashes beside
+     it. */
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const uuid = ["7c2e9a1b", "4f3d", "4b6a", "8d21", "1c3e5a7b9d0f"].join("-");
+  const provenance = holdProvenance();
+  const submittedAt = Date.now();
+  enqueueOutbox(CARD, { id: "key-claude-held", text: TEXT, images: 0, at: submittedAt });
+  updateOutbox(CARD, "key-claude-held", { state: "delivering", operationId: "operation-claude-held" });
+  const feed = () => feedOnly(claudeFile);
+  await settle(() => root.render(feed()));
+  const before = reading(host);
+  expect(before.rows).toBe(1);
+  const seen: { bubbles: number; systemRows: number; attached: boolean }[] = [];
+  const observer = new MutationObserver(() => {
+    seen.push({
+      bubbles: host.querySelectorAll("[data-user-bubble]").length,
+      systemRows: host.querySelectorAll("[data-feed-kind='sysmsg']").length,
+      attached: Boolean(before.row && host.contains(before.row)),
+    });
+  });
+  observer.observe(host, { childList: true, subtree: true, attributes: true, characterData: true });
+
+  await settle(() => { lines = [claudeSdkUserLine(new Date(submittedAt + 3_000).toISOString(), uuid, TEXT)]; });
+  await settle(() => root.render(feed()));
+  expect(provenance.asked()).toBeGreaterThan(0);
+  const held = reading(host);
+  expect(held.rows).toBe(1);
+  expect(held.bubbles).toBe(1);
+  expect(held.row).toBe(before.row);
+  expect(held.phase).toBe("pending");
+  expect(host.querySelectorAll("[data-feed-kind='sysmsg']")).toHaveLength(0);
+
+  await settle(() => provenance.answer({ messages: { [uuid]: { origin: "operator", submissionId: "key-claude-held" } } }));
+  await settle(() => root.render(feed()));
+  observer.disconnect();
+  const after = reading(host);
+  expect(after.rows).toBe(1);
+  expect(after.bubbles).toBe(1);
+  expect(after.row).toBe(before.row);
+  expect(after.bubble).toBe(before.bubble);
+  expect(after.position).toBe(before.position);
+  expect(after.phase).toBe("confirmed");
+  for (const state of seen) expect(state).toEqual({ bubbles: 1, systemRows: 0, attached: true });
   await act(async () => root.unmount());
   host.remove();
 });

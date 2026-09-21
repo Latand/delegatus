@@ -58,12 +58,24 @@ export interface ProvenanceLookup {
    * guess about whose the record is.
    */
   submissionPending(dedup: string | undefined): boolean;
+  /**
+   * The same question for a delivered Claude record's native id (#1950
+   * round 3): whether the evidence that could name it is still being read.
+   *
+   * A Claude record carries no token this browser can compute — only the
+   * engine's own id, which the broker's ledger joins to the submission, and
+   * which the ledger may record only after the record is already visible.
+   * Until the first read AND its bounded revalidations have answered for the
+   * id, it is "not yet"; after that it is whatever they said.
+   */
+  messagePending(engineMessageId: string | null | undefined): boolean;
 }
 
 export const NO_PROVENANCE: ProvenanceLookup = {
   forItem: () => null,
   submissionFor: () => null,
   submissionPending: () => false,
+  messagePending: () => false,
 };
 const ProvenanceContext = createContext<ProvenanceLookup>(NO_PROVENANCE);
 export const MessageProvenanceProvider = ProvenanceContext.Provider;
@@ -305,10 +317,15 @@ function lookupFor(
   data: PathProvenance | null,
   assignment: Map<Item, DeliveredMessageProvenance>,
   resolving: boolean,
+  settledMessages?: ReadonlySet<string>,
 ): ProvenanceLookup {
   const pending = (dedup: string | undefined) =>
     Boolean(dedup) && resolving && !(data && dedup! in data.submissions);
-  if (!data) return { ...NO_PROVENANCE, submissionPending: pending };
+  /* Without a settled set (a fixed lookup built for tests and replays) there
+     is no read in flight to wait for. */
+  const messagePending = (id: string | null | undefined) =>
+    Boolean(id) && settledMessages !== undefined && !settledMessages.has(id!) && !(data && id! in data.messages);
+  if (!data) return { ...NO_PROVENANCE, submissionPending: pending, messagePending };
   return {
     forItem: (item) => {
       if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId) {
@@ -319,6 +336,7 @@ function lookupFor(
     },
     submissionFor: (dedup) => (dedup ? data.submissions[dedup] ?? null : null),
     submissionPending: pending,
+    messagePending,
   };
 }
 
@@ -389,6 +407,19 @@ export function useDeliveredMessageProvenance(
      exist; the retries below keep asking for the other evidence, and a record
      is never held behind them. See {@link ProvenanceLookup.submissionPending}. */
   const [resolving, setResolving] = useState(false);
+  /* Native ids whose reads are over: the first answer and every bounded
+     revalidation after it ran, or nothing was left to ask. Only grows for a
+     path; see {@link ProvenanceLookup.messagePending}. */
+  const [settledMessages, setSettledMessages] = useState<ReadonlySet<string>>(() => new Set());
+  const settleMessages = (wanted: WantedEvidence): void => {
+    const ids = wanted.drivers.flatMap((driver) => driver.engineMessageId ? [driver.engineMessageId] : []);
+    if (!ids.length) return;
+    setSettledMessages((previous) => ids.every((id) => previous.has(id)) ? previous : new Set([...previous, ...ids]));
+  };
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a new path starts with nothing settled
+    setSettledMessages(new Set());
+  }, [path]);
   useEffect(() => {
     if (!path) return;
     const cached = provenanceCache.get(path) ?? null;
@@ -398,6 +429,7 @@ export function useDeliveredMessageProvenance(
     if (!wantedKey || !unresolvedDrivers(wanted, cached, false, Date.now())) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- nothing is outstanding for this path
       setResolving(false);
+      settleMessages(wanted);
       return;
     }
     let alive = true;
@@ -405,6 +437,7 @@ export function useDeliveredMessageProvenance(
     // eslint-disable-next-line react-hooks/set-state-in-effect -- a read of this path starts here
     setResolving(true);
     const attempt = async (retry: number): Promise<void> => {
+      let revalidating = false;
       try {
         const res = await fetch(`/api/log/provenance?path=${encodeURIComponent(path)}`);
         if (!res.ok) return;
@@ -422,12 +455,14 @@ export function useDeliveredMessageProvenance(
         if (!alive) return;
         setData(merged);
         if (retry < retryDelaysMs.length && unresolvedDrivers(wanted, merged, true, Date.now())) {
+          revalidating = true;
           timer = setTimeout(() => void attempt(retry + 1), retryDelaysMs[retry]);
         }
       } catch {
         /* quiet: absence renders as today's row */
       } finally {
         if (alive && retry === 0) setResolving(false);
+        if (alive && !revalidating) settleMessages(wanted);
       }
     };
     void attempt(0);
@@ -458,8 +493,8 @@ export function useDeliveredMessageProvenance(
     return parts.join("\n");
   }, [assignment]);
   return useMemo(
-    () => lookupFor(data, assignment, resolving),
+    () => lookupFor(data, assignment, resolving, settledMessages),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the assignment's CONTENT (assignmentKey) and the submissions it can resolve; a same-content map keeps the lookup
-    [data, assignmentKey, submissionsKey, resolving],
+    [data, assignmentKey, submissionsKey, resolving, settledMessages],
   );
 }
