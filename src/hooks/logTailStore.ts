@@ -96,10 +96,15 @@ export interface TailSnapshot {
   first: boolean;
   hasMore: boolean;
   tickTime: Date | null;
-  /** Set only on a snapshot restored from the store: the bytes the next
-      forward chunk must begin with, starting at `offset`, for this window to
-      be this file's tail. An in-memory snapshot never carries one. */
+  /** Set on every snapshot a mount resumes from — restored from the store or
+      held in this tab's memory: the bytes the next forward chunk must begin
+      with, starting at `offset`, for this window to be this file's tail. A
+      snapshot being written never carries one. */
   resumeAnchor?: string;
+  /** What the catalog reported the file's size to be when this window was
+      last written, kept in memory only. The catalog trails the tail, so a
+      later catalog size is compared with the catalog's own earlier reading. */
+  catalogSize?: number | null;
 }
 
 interface StoredTail {
@@ -614,17 +619,49 @@ function anchorOf(lines: string[]): string {
 }
 
 /**
- * The persisted tail for `path`, or null when there is none to trust.
- *
- * `fileSize` is what the catalog says the transcript is now: a file SHORTER
- * than the snapshot was rotated or rewritten, so the stored suffix is not this
- * file's suffix any more and is dropped rather than painted.
+ * `snapshot` made resumable: rewound to one `resumeAnchor` BEFORE its own end,
+ * with its decoder partial dropped, or null when it cannot be this file's tail.
  *
  * A file of the same length or longer is NOT thereby the same file — it can
  * have been compacted and regrown, or rewritten in place record for record —
- * so the returned snapshot resumes one `resumeAnchor` BEFORE its own end. The
- * consumer must require the next forward chunk to begin with those exact
- * bytes, and replace the window when it does not.
+ * so the consumer must require the next forward chunk to begin with the
+ * anchor's exact bytes, and replace the window when it does not. That holds
+ * for a window this tab still has in memory exactly as for one restored from
+ * the store: the transcript can be replaced while the pane is away.
+ *
+ * `fileSize` is what the catalog says the transcript is now; `knownSize` what
+ * it was when the window was written. SHORTER was rotated or rewritten and is
+ * refused outright, so its rows are never painted. A window too far behind the
+ * live end is refused too: measured from the RESUME point, so replaying the
+ * anchor can never push the read past the server's live window and be jumped
+ * forward. A window with no rows has nothing to anchor, and resumes as a first
+ * read of the file.
+ */
+export function resumableSnapshot(snapshot: TailSnapshot, fileSize: number | null, knownSize = snapshot.size): TailSnapshot | null {
+  /* Zero counts: a truncated file is the clearest case of "not this one". */
+  if (typeof fileSize === "number" && fileSize < knownSize) return null;
+  if (snapshot.win.lines.length === 0) {
+    return { ...snapshot, offset: 0, historyStart: 0, partial: "", first: true, hasMore: false, resumeAnchor: undefined };
+  }
+  const anchor = anchorOf(snapshot.win.lines);
+  const endsAt = Math.max(0, snapshot.offset - utf8len(snapshot.partial));
+  const resumeFrom = endsAt - utf8len(anchor);
+  const behind = typeof fileSize === "number" && fileSize - resumeFrom > MAX_BEHIND_BYTES;
+  if (behind || resumeFrom < 0) return null;
+  return {
+    ...snapshot,
+    offset: resumeFrom,
+    partial: "",
+    /* Not a first read: the window below is already this transcript's tail,
+       and the next forward chunk appends to it instead of replacing it. */
+    first: false,
+    resumeAnchor: anchor,
+  };
+}
+
+/**
+ * The persisted tail for `path`, or null when there is none to trust: older
+ * than a week, or refused by {@link resumableSnapshot}.
  */
 export function restoreTailSnapshot(path: string, fileSize: number | null): TailSnapshot | null {
   const store = storage();
@@ -638,35 +675,20 @@ export function restoreTailSnapshot(path: string, fileSize: number | null): Tail
   } catch {
     stored = null;
   }
-  if (!stored) {
-    forgetTailSnapshot(path);
-    return null;
-  }
-  const anchor = anchorOf(stored.lines);
-  const resumeFrom = stored.offset - utf8len(anchor);
-  const stale = Date.now() - stored.savedAt > MAX_AGE_MS;
-  /* Zero counts: a truncated file is the clearest case of "not this one". */
-  const shrunk = typeof fileSize === "number" && fileSize < stored.size;
-  /* Measured from the RESUME point, so replaying the anchor can never push the
-     read past the server's live window and be jumped forward. */
-  const behind = typeof fileSize === "number" && fileSize - resumeFrom > MAX_BEHIND_BYTES;
-  if (stale || shrunk || behind || resumeFrom < 0) {
-    forgetTailSnapshot(path);
-    return null;
-  }
-  return {
-    win: { lines: stored.lines, start: stored.start },
-    size: stored.size,
-    offset: resumeFrom,
-    historyStart: stored.historyStart,
-    partial: "",
-    /* Not a first read: the window below is already this transcript's tail,
-       and the next forward chunk appends to it instead of replacing it. */
-    first: false,
-    hasMore: stored.hasMore,
-    tickTime: stored.tickTime === null ? null : new Date(stored.tickTime),
-    resumeAnchor: anchor,
-  };
+  const restored = stored && Date.now() - stored.savedAt <= MAX_AGE_MS
+    ? resumableSnapshot({
+      win: { lines: stored.lines, start: stored.start },
+      size: stored.size,
+      offset: stored.offset,
+      historyStart: stored.historyStart,
+      partial: "",
+      first: false,
+      hasMore: stored.hasMore,
+      tickTime: stored.tickTime === null ? null : new Date(stored.tickTime),
+    }, fileSize)
+    : null;
+  if (!restored) forgetTailSnapshot(path);
+  return restored;
 }
 
 /** Forget one conversation's tail (the reader cleared it, or it did not hold). */

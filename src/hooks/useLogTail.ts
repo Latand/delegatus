@@ -9,7 +9,7 @@ import type { FileEntry } from "@/lib/types";
 import type { LogChunk } from "@/lib/types";
 
 import { subscribeLog } from "./logBus";
-import { forgetTailSnapshot, persistTailSnapshot, restoreTailSnapshot, type TailSnapshot } from "./logTailStore";
+import { forgetTailSnapshot, persistTailSnapshot, restoreTailSnapshot, resumableSnapshot, type TailSnapshot } from "./logTailStore";
 
 /** Longest single jsonl line we are willing to chase across history chunks. */
 const OLDER_CHUNK_HOPS = 4;
@@ -48,11 +48,23 @@ function boundedSnapshot(snapshot: TailSnapshot, cap: number): TailSnapshot {
 
 /** The tail this document can paint for `path` right now: what this tab still
     holds, or — on the first mount of a new document — what the previous one
-    persisted, validated against the size the catalog reports (#1821). */
+    persisted. Either one is validated the same way (#1821): refused when the
+    catalog reports a shorter file, and otherwise resumed one anchor before
+    its end, so the first forward chunk proves the rows are still this file's.
+    A tab's memory is not proof — the transcript can be replaced while the
+    pane is away — it only saves the paint the wait. */
 function readTailCache(path: string, cap: number, fileSize: number | null = null): TailSnapshot | null {
-  const cached = tailCache.get(path) ?? restoreTailSnapshot(path, fileSize);
-  if (!cached) return null;
+  const held = tailCache.get(path);
   tailCache.delete(path);
+  const cached = !held
+    ? restoreTailSnapshot(path, fileSize)
+    : held.resumeAnchor
+      ? held
+      : resumableSnapshot(held, fileSize, held.catalogSize ?? held.size);
+  if (!cached) {
+    if (held) forgetTailSnapshot(path);
+    return null;
+  }
   const bounded = boundedSnapshot(cached, cap);
   tailCache.set(path, bounded);
   return bounded;
@@ -152,15 +164,25 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
   const startRef = useRef(0);
   const tailRef = useRef("");
   const firstRef = useRef(true);
-  /* Bytes a window restored from the PERSISTENT store must see replayed
-     before it is believed; empty for every window this tab built itself. */
+  /* Bytes a resumed window — from the store or from this tab's memory — must
+     see replayed before it is believed; empty once they were, and for a
+     window this mount read itself. */
   const anchorRef = useRef("");
+  /* Where the window a failed anchor discarded ended, until its replacement
+     is read: see `discardRestored`. */
+  const rebaseRef = useRef<number | null>(null);
+  /* The size the catalog last reported, stored with the window. */
+  const catalogSizeRef = useRef<number | null>(file?.size ?? null);
   const genRef = useRef(0);
   const olderBusyRef = useRef(false);
 
   useEffect(() => {
     capRef.current = cap;
   }, [cap]);
+
+  useEffect(() => {
+    catalogSizeRef.current = file?.size ?? null;
+  }, [file?.size]);
 
   /* Every state write names the transcript it is for: a chunk or a history
      page that lands after the pane switched away is dropped, never merged
@@ -193,6 +215,7 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
       first: firstRef.current,
       hasMore: hasMoreRef.current,
       tickTime: tickTimeRef.current,
+      catalogSize: catalogSizeRef.current,
     });
   };
 
@@ -202,17 +225,26 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
     tailRef.current = "";
     firstRef.current = true;
     anchorRef.current = "";
+    rebaseRef.current = null;
     updateHasMore(target, false);
   };
 
   /** The restored window did not hold: forget it everywhere and let the chunk
       that disproved it be read as a first chunk, so the rows the operator ends
-      up with are this transcript's own. */
+      up with are this transcript's own.
+
+      The replacement is placed so it ENDS where the discarded window ended.
+      Everything downstream tells an appended row from a known one by its
+      index in the tail stream — the tool cues ring for an index at or past
+      the end they last heard — and rows that replaced others are not news:
+      only what the file grows by after them is. */
   const discardRestored = (target: string) => {
+    const end = winRef.current.start + winRef.current.lines.length;
     anchorRef.current = "";
     tailCache.delete(target);
     forgetTailSnapshot(target);
-    updateWin(target, { lines: [], start: 0 });
+    rebaseRef.current = end;
+    updateWin(target, { lines: [], start: end });
     offsetRef.current = 0;
     startRef.current = 0;
     tailRef.current = "";
@@ -242,6 +274,7 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
     tailRef.current = cached?.partial ?? "";
     firstRef.current = cached?.first ?? true;
     anchorRef.current = cached?.resumeAnchor ?? "";
+    rebaseRef.current = null;
     hasMoreRef.current = cached?.hasMore ?? false;
     sizeRef.current = cached?.size ?? file?.size ?? 0;
     tickTimeRef.current = cached?.tickTime ?? null;
@@ -271,8 +304,11 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
         }
         const chunk = result as LogChunk;
         if (offsetRef.current > chunk.size) {
-          resetWindow(target);
-          updateWin(target, { lines: [], start: 0 });
+          if (anchorRef.current) discardRestored(target);
+          else {
+            resetWindow(target);
+            updateWin(target, { lines: [], start: 0 });
+          }
         }
         /* A window restored from the persistent store resumes one anchor
            BEFORE it ends, and this chunk replays those bytes. They are this
@@ -324,7 +360,11 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
           const parts = data.split("\n");
           tailRef.current = parts.pop() ?? "";
           const complete = parts.map((line) => line.trim()).filter(Boolean);
-          if (offsetRef.current === 0) updateWin(target, { lines: complete, start: 0 });
+          if (offsetRef.current === 0) {
+            const rebase = rebaseRef.current;
+            rebaseRef.current = null;
+            updateWin(target, { lines: complete, start: rebase === null ? 0 : rebase - complete.length });
+          }
           else if (complete.length) {
             const prev = winRef.current;
             const merged = prev.lines.concat(complete);
