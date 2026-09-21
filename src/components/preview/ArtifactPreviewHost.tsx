@@ -1,7 +1,7 @@
 "use client";
 
 import { Download, ExternalLink, FileWarning, X } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { classifyArtifact, type ArtifactKind } from "@/lib/artifact/classify";
@@ -51,6 +51,9 @@ export function roomForSheet(viewportWidth: number, inset: number): number {
 
 interface OpenRequest {
   path: string;
+  /** The file the link names: resolved where the link was rendered, or read
+      from `path` for the `#a=` entry. */
+  target: FileLinkTarget;
   /** Bumps on every open so re-opening the same path restarts its load. */
   nonce: number;
   /** The open came from the `#a=` URL fragment (issue #884), not a clicked
@@ -62,7 +65,7 @@ interface OpenRequest {
 /** The file a request names, read by the one link resolver: whatever shape
     the link had, the preview gets a clean path plus its line and anchor. */
 export function previewTarget(spelled: string): FileLinkTarget {
-  const resolved = resolveLink(spelled);
+  const resolved = resolveLink(spelled, { viewerHosts: typeof window === "undefined" ? [] : [window.location.host] });
   return resolved?.kind === "file" ? resolved : parseFileSpelling(spelled);
 }
 
@@ -125,7 +128,11 @@ export function ArtifactPreviewHost({ mobile }: { mobile: boolean }) {
   useEffect(
     () =>
       onArtifactPreview((request) => {
-        setOpen((previous) => ({ path: request.path, nonce: (previous?.nonce ?? 0) + 1 }));
+        setOpen((previous) => ({
+          path: request.path,
+          target: request.target ?? previewTarget(request.path),
+          nonce: (previous?.nonce ?? 0) + 1,
+        }));
       }),
     [],
   );
@@ -136,7 +143,7 @@ export function ArtifactPreviewHost({ mobile }: { mobile: boolean }) {
     const applyFragment = () => {
       const path = parseArtifactFragment(window.location.hash);
       setOpen((previous) => {
-        if (path !== null) return { path, nonce: (previous?.nonce ?? 0) + 1, fromFragment: true };
+        if (path !== null) return { path, target: previewTarget(path), nonce: (previous?.nonce ?? 0) + 1, fromFragment: true };
         /* The hash moved elsewhere (Back included): a preview the fragment
            opened follows it closed; a click-opened one is URL-independent
            state and stays. */
@@ -172,32 +179,37 @@ function PreviewSheet({
 }) {
   const { t } = useLocale();
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [meta, setMeta] = useState<ArtifactMeta | null>(null);
-  const [failure, setFailure] = useState<ArtifactFailure | null>(null);
+  /* What the metadata read answered, tagged with the request it answered.
+     A newer open renders before its own read has even started, so anything
+     loaded for an earlier request is never shown with the new path — a pane
+     mounted with the previous file's ETag would ask for the new file with the
+     wrong If-Match and fail as "changed". */
+  const [loaded, setLoaded] = useState<{ request: OpenRequest; meta: ArtifactMeta | null; failure: ArtifactFailure | null } | null>(null);
+  const current = loaded?.request === open ? loaded : null;
+  const meta = current?.meta ?? null;
+  const failure = current?.failure ?? null;
   const [width, setWidth] = useState(storedWidth);
   const inset = useLeftShellInset();
   useModalLayer({ containerRef, onClose });
 
-  /* eslint-disable react-hooks/set-state-in-effect -- the meta round-trip is
-     the load this surface exists for; reset + fetch keyed to the open nonce. */
+  /* The meta round-trip is the load this surface exists for, keyed to the
+     open request; an aborted (superseded) read settles nothing. */
   useEffect(() => {
-    setMeta(null);
-    setFailure(null);
     const controller = new AbortController();
-    void fetch(artifactMetaUrl(previewTarget(open.path).path), { signal: controller.signal })
+    const settle = (meta: ArtifactMeta | null, failure: ArtifactFailure | null) => {
+      if (!controller.signal.aborted) setLoaded({ request: open, meta, failure });
+    };
+    void fetch(artifactMetaUrl(open.target.path), { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) {
-          setFailure(failureFromStatus(response.status));
+          settle(null, failureFromStatus(response.status));
           return;
         }
-        setMeta((await response.json()) as ArtifactMeta);
+        settle((await response.json()) as ArtifactMeta, null);
       })
-      .catch(() => {
-        if (!controller.signal.aborted) setFailure("error");
-      });
+      .catch(() => settle(null, "error"));
     return () => controller.abort();
   }, [open]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   /* Desktop resize: pointer-drag on the left edge, clamped so the conversation
      stays visible; persisted so the next preview opens at the same width. */
@@ -229,7 +241,7 @@ function PreviewSheet({
     [],
   );
 
-  const target = useMemo(() => previewTarget(open.path), [open.path]);
+  const target = open.target;
   const doc = documentKind(target.path);
   const name = meta?.name ?? artifactBasename(target.path);
   const kind = meta?.kind ?? classifyArtifact(target.path)?.kind ?? null;
@@ -238,7 +250,12 @@ function PreviewSheet({
     () => onReload({ ...open, nonce: open.nonce + 1 }),
     [onReload, open],
   );
-  const onPaneFailure = useCallback((code: ArtifactFailure) => setFailure(code), []);
+  /* A pane's failure belongs to the request that mounted it. */
+  const onPaneFailure = useCallback(
+    (code: ArtifactFailure) =>
+      setLoaded((previous) => (previous && previous.request === open ? { ...previous, failure: code } : previous)),
+    [open],
+  );
 
   const body = failure ? (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center" role="alert">

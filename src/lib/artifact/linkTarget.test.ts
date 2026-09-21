@@ -43,6 +43,17 @@ const SHAPES: [string, string, ReturnType<typeof file> | { kind: "viewer"; hash:
   ["#f= transcript whose name holds a #", `#f=${enc("/p/session #2.jsonl")}`, { kind: "viewer", hash: `#f=${enc("/p/session #2.jsonl")}` }],
   ["file whose name holds a #", "/workspace/notes #2.md", file("/workspace/notes #2.md")],
   ["file whose name holds a #, with an anchor", `#f=${enc("/workspace/notes #2.md#setup")}`, file("/workspace/notes #2.md", { anchor: "setup" })],
+  /* Element ids may hold `.` and `/`: after a complete file name, the `#` is the anchor. */
+  ["#f= dotted anchor, encoded", `#f=${enc(REPORT + "#section.1")}`, file(REPORT, { anchor: "section.1" })],
+  ["#f= dotted anchor, literal", `#f=${enc(REPORT)}#section.1`, file(REPORT, { anchor: "section.1" })],
+  ["viewer url, slashed anchor, encoded", `http://127.0.0.1:8898/#f=${enc(REPORT + "#part/2")}`, file(REPORT, { anchor: "part/2" })],
+  ["plain path, slashed anchor", `${REPORT}#part/2`, file(REPORT, { anchor: "part/2" })],
+  ["extensionless name with anchor", "/workspace/Makefile#install", file("/workspace/Makefile", { anchor: "install" })],
+  /* Every spelling of a transcript reaches the same conversation hash. */
+  ["file:// transcript", "file:///workspace/session.jsonl", { kind: "viewer", hash: `#f=${enc("/workspace/session.jsonl")}` }],
+  ["file:// transcript with :line", "file:///workspace/session.jsonl:12", { kind: "viewer", hash: `#f=${enc("/workspace/session.jsonl")}` }],
+  ["#f= transcript with :line, encoded", `#f=${enc("/workspace/session.jsonl:12")}`, { kind: "viewer", hash: `#f=${enc("/workspace/session.jsonl")}` }],
+  ["#f= transcript with encoded #question", `#f=${enc("/workspace/session.jsonl#question")}`, { kind: "viewer", hash: `#f=${enc("/workspace/session.jsonl")}#question` }],
   ["#c= conversation", "#c=conv-1", { kind: "viewer", hash: "#c=conv-1" }],
   ["viewer url, #p= project", "http://127.0.0.1:8898/#p=repo-1", { kind: "viewer", hash: "#p=repo-1" }],
   /* Not the viewer's. */
@@ -72,6 +83,13 @@ describe("the hash routers agree with the resolver", () => {
     const hash = `#f=${enc(REPORT + "#decision-graph")}`;
     expect(parseConversationHash(hash)).toEqual({ conversationId: null, filePath: null, project: null });
     expect(parseArtifactFragment(hash)).toBe(REPORT + "#decision-graph");
+  });
+
+  test("a transcript's :line and encoded #question never reach the conversation lookup", () => {
+    expect(parseConversationHash(`#f=${enc("/workspace/session.jsonl:12")}`).filePath).toBe("/workspace/session.jsonl");
+    expect(parseConversationHash(`#f=${enc("/workspace/session.jsonl#question")}`).filePath).toBe("/workspace/session.jsonl");
+    expect(parseConversationHash(`#f=${enc("/p/session #2.jsonl")}#question`).filePath).toBe("/p/session #2.jsonl");
+    expect(parseArtifactFragment(`#f=${enc("/workspace/session.jsonl:12")}`)).toBeNull();
   });
 
   test("a #f= naming a transcript stays a conversation and never opens the preview", () => {

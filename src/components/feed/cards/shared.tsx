@@ -37,7 +37,7 @@ export function FileRef({ file, line }: { file: string; line?: number }) {
         onClick={(event) => {
           if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
           event.preventDefault();
-          openArtifactPreview(label);
+          openArtifactPreview(label, target);
         }}
       >
         {label}

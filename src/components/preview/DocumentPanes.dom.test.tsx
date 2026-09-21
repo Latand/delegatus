@@ -40,25 +40,35 @@ function respond(route: Route): Response {
   return new Response(body, { status: route.status, headers: route.headers });
 }
 
-(globalThis as { fetch: unknown }).fetch = (input: string | URL, init?: { headers?: Record<string, string> }) => {
+/* Every file has its own ETag, and a content read carrying another file's
+   If-Match fails as the real route does. Meta answers a tick late, as over a
+   network, so a pane mounted before its own meta arrives would show. */
+const etagOf = (path: string) => `"e-${path}"`;
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+(globalThis as { fetch: unknown }).fetch = async (input: string | URL, init?: { headers?: Record<string, string> }) => {
   const url = new URL(String(input), "http://127.0.0.1:8898");
   fetchLog.push(url.pathname + url.search);
   const path = url.searchParams.get("path") ?? "";
   const file = url.pathname === "/api/artifact" ? files[path] : undefined;
-  if (!file) return Promise.resolve(respond({ status: 404, body: { error: "file not found", code: "not-found" } }));
+  if (!file) return respond({ status: 404, body: { error: "file not found", code: "not-found" } });
   const name = path.split("/").pop()!;
   if (url.searchParams.get("mode") === "meta") {
-    return Promise.resolve(
-      respond({
-        status: 200,
-        body: { name, kind: "text", mime: "text/plain; charset=utf-8", size: file.body.length, etag: '"e1"', ...(file.frame ? { frame: file.frame } : {}) },
-      }),
-    );
+    await tick();
+    return respond({
+      status: 200,
+      body: { name, kind: "text", mime: "text/plain; charset=utf-8", size: file.body.length, etag: etagOf(path), ...(file.frame ? { frame: file.frame } : {}) },
+    });
+  }
+  const ifMatch = init?.headers?.["if-match"];
+  if (ifMatch !== undefined && ifMatch !== etagOf(path)) {
+    fetchLog.push("412 " + path);
+    return respond({ status: 412, body: { error: "file changed since the preview opened", code: "changed" } });
   }
   const range = init?.headers?.range?.match(/^bytes=(\d+)-(\d+)$/);
   const start = range ? Number(range[1]) : 0;
   const end = range ? Math.min(Number(range[2]), file.body.length - 1) : file.body.length - 1;
-  return Promise.resolve(respond({ status: range ? 206 : 200, body: file.body.slice(start, end + 1) }));
+  return respond({ status: range ? 206 : 200, body: file.body.slice(start, end + 1) });
 };
 
 const WIDE_ROW = `| ${Array.from({ length: 14 }, (_, i) => `column ${i + 1}`).join(" | ")} |`;
@@ -110,6 +120,9 @@ beforeEach(() => {
       body: '<h2 id="decision-graph">Graph</h2>',
       frame: "/api/artifact/frame/SCOPE/index.html",
     },
+    "/workspace/docs/links.md": {
+      body: `# Links\n\n[The report on this host](http://viewer.example/#f=${encodeURIComponent("/workspace/reports/round-2/index.html#decision-graph")}).`,
+    },
   };
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
@@ -124,7 +137,7 @@ afterEach(async () => {
 });
 
 const settle = async () => {
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 8; i++) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -251,4 +264,62 @@ test("a :line link marks that line and scrolls it into view", async () => {
   expect(target.textContent).toContain("line three is the one");
   expect(scrolled).toContain(target);
   expect(fetchLog[0]).toBe(`/api/artifact?path=${encodeURIComponent("/workspace/src/main.ts")}&mode=meta`);
+});
+
+function click(element: Element): void {
+  element.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }) as unknown as Event);
+}
+
+test("a relative link after a Source/Rendered round trip opens the next document with its own metadata", async () => {
+  await open("/workspace/docs/guide.md");
+  await act(async () => click(sheet().querySelector('[data-preview-mode="source"]')!));
+  await settle();
+  await act(async () => click(sheet().querySelector('[data-preview-mode="rendered"]')!));
+  await settle();
+  const link = Array.from(sheet().querySelectorAll("a")).find((a) => a.textContent === "relative link")!;
+  scrolled = [];
+  await act(async () => click(link));
+  await settle();
+  /* No read of next.md ever carried guide.md's ETag. */
+  expect(fetchLog.filter((entry) => entry.startsWith("412 "))).toEqual([]);
+  expect(sheet().getAttribute("data-artifact-state")).toBe("ready");
+  expect(sheet().querySelector("h1")!.textContent).toBe("Next");
+  expect(scrolled.at(-1)!.getAttribute("data-md-anchor")).toBe("setup");
+});
+
+test("an HTML anchor holding a dot or a slash reaches the frame, encoded or literal", async () => {
+  const path = "/workspace/reports/round-2/index.html";
+  for (const [hash, anchor] of [
+    [`#f=${encodeURIComponent(path + "#section.1")}`, "section.1"],
+    [`#f=${encodeURIComponent(path)}#section.1`, "section.1"],
+    [`#f=${encodeURIComponent(path + "#part/2")}`, "part/2"],
+  ] as const) {
+    await act(async () => {
+      dom.history.replaceState(null, "", hash);
+    });
+    await act(async () => root!.render(<ArtifactPreviewHost mobile={false} />));
+    await act(async () => {
+      dom.dispatchEvent(new dom.Event("hashchange") as unknown as Event);
+    });
+    await settle();
+    expect(sheet().getAttribute("data-artifact-state")).toBe("ready");
+    expect(sheet().querySelector("iframe[data-preview-frame]")!.getAttribute("src")).toBe(
+      `/api/artifact/frame/SCOPE/index.html#${encodeURIComponent(anchor)}`,
+    );
+  }
+});
+
+test("a link to the Viewer's own non-loopback host opens the same anchored report as a loopback link", async () => {
+  dom.happyDOM.setURL("http://viewer.example/");
+  try {
+    await open("/workspace/docs/links.md");
+    const link = Array.from(sheet().querySelectorAll("a")).find((a) => a.textContent === "The report on this host")!;
+    await act(async () => click(link));
+    await settle();
+    expect(fetchLog.at(-1)).toBe(`/api/artifact?path=${encodeURIComponent("/workspace/reports/round-2/index.html")}&mode=meta`);
+    expect(sheet().getAttribute("data-artifact-state")).toBe("ready");
+    expect(sheet().querySelector("iframe[data-preview-frame]")!.getAttribute("src")).toBe("/api/artifact/frame/SCOPE/index.html#decision-graph");
+  } finally {
+    dom.happyDOM.setURL("http://127.0.0.1:8898/");
+  }
 });

@@ -60,17 +60,36 @@ export function isTranscriptPayload(path: string): boolean {
 const LINE_ANCHOR_RE = /^L(\d+)(?:C(\d+))?(?:-L?\d+(?:C\d+)?)?$/;
 const LINE_SUFFIX_RE = /:(\d+)(?::(\d+)|-\d+)?$/;
 
+/** Whether the last segment of `path` (a `:line` suffix aside) ends in a file
+    extension — the mark of a complete file name. */
+function endsInExtension(path: string): boolean {
+  const name = path.replace(LINE_SUFFIX_RE, "").split("/").pop() ?? "";
+  return /[^.]\.[A-Za-z0-9]+$/.test(name);
+}
+
+/** Where the in-file anchor starts in `path#anchor`, or -1. A `#` right after
+    a complete file name (`report.html#section.1`, `notes #2.md#setup`) opens
+    the anchor whatever the anchor holds, since element ids may contain `.` and
+    `/`. Failing that, the last `#` does when what follows holds no `/` or `.`
+    (`Makefile#install`), so `notes #2.md` stays a name. */
+function anchorStart(spelled: string): number {
+  for (let at = spelled.indexOf("#"); at >= 0; at = spelled.indexOf("#", at + 1)) {
+    if (endsInExtension(spelled.slice(0, at))) return at;
+  }
+  const last = spelled.lastIndexOf("#");
+  return last >= 0 && !/[/.]/.test(spelled.slice(last + 1)) ? last : -1;
+}
+
 /**
  * Splits `path[:line[:col]][#anchor]` into its parts. `#L12` and `#L12-L20`
  * are line anchors (the GitHub spelling), every other anchor is kept verbatim.
- * An anchor is what follows the LAST `#`, and only when it holds no `/` or
- * `.`: heading slugs and element ids do not, so `notes #2.md` stays a name.
+ * See {@link anchorStart} for which `#` opens the anchor.
  */
 export function parseFileSpelling(spelled: string): FileLinkTarget {
   let rest = spelled;
   let anchor: string | null = null;
-  const hashAt = rest.lastIndexOf("#");
-  if (hashAt >= 0 && !/[/.]/.test(rest.slice(hashAt + 1))) {
+  const hashAt = anchorStart(rest);
+  if (hashAt >= 0) {
     anchor = rest.slice(hashAt + 1) || null;
     rest = rest.slice(0, hashAt);
   }
@@ -104,8 +123,20 @@ function resolveHash(hash: string): LinkTarget | null {
      both into the same `path#anchor` spelling. */
   const spelled = decode(match[2]!);
   const target = parseFileSpelling(spelled);
-  if (key === "f" && (isTranscriptPayload(spelled.replace(/#question$/, "")) || isTranscriptPayload(target.path))) return { kind: "viewer", hash };
+  if (key === "f") {
+    const question = spelled.endsWith("#question");
+    const whole = question ? spelled.slice(0, -"#question".length) : spelled;
+    /* A transcript opens its conversation. The hash handed on names the bare
+       transcript path, whichever spelling arrived (`:12`, `%23question` or a
+       literal `#question`), so the conversation lookup matches the file. */
+    const transcript = isTranscriptPayload(whole) ? whole : isTranscriptPayload(target.path) ? target.path : null;
+    if (transcript !== null) return transcriptTarget(transcript, question);
+  }
   return isLocalPath(target.path) ? target : null;
+}
+
+function transcriptTarget(path: string, question = false): ViewerHashTarget {
+  return { kind: "viewer", hash: "#f=" + encodeURIComponent(path) + (question ? "#question" : "") };
 }
 
 /**
@@ -136,11 +167,12 @@ export function resolveLink(raw: string, options: { viewerHosts?: readonly strin
        percent-encoded like any URL path. */
     const rest = value.replace(/^file:\/\/(?:localhost)?/i, "");
     const target = parseFileSpelling(decode(rest));
-    return isLocalPath(target.path) ? target : null;
+    if (!isLocalPath(target.path)) return null;
+    return isTranscriptPayload(target.path) ? transcriptTarget(target.path) : target;
   }
   if (isLocalPath(value)) {
     const target = parseFileSpelling(value);
-    if (isTranscriptPayload(target.path)) return { kind: "viewer", hash: "#f=" + encodeURIComponent(target.path) };
+    if (isTranscriptPayload(target.path)) return transcriptTarget(target.path);
     return target;
   }
   return null;

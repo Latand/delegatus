@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 
 import { artifactContentUrl } from "@/components/preview/artifactResource";
 import { openArtifactPreview } from "@/components/preview/previewBus";
-import { resolveLink, resolveRelative } from "@/lib/artifact/linkTarget";
+import { resolveLink, resolveRelative, type FileLinkTarget } from "@/lib/artifact/linkTarget";
 
 import { CopyButton, copyText } from "./CopyButton";
 import { useHighlighted } from "./highlight";
@@ -119,19 +119,20 @@ function viewerHosts(): string[] {
 
 /** A link to a local file: its href names the resource route so copy and
     middle-click keep working, and a plain click opens the in-app preview —
-    same-document, no navigation, no history entry. The raw spelling travels
-    to the preview, which reads line and anchor through the same resolver. */
-function FileAnchor({ spelled, path, title, label }: { spelled: string; path: string; title: string; label: ReactNode }) {
+    same-document, no navigation, no history entry. The resolved target
+    travels to the preview with the spelling, so the preview never re-reads
+    the link without the host context it was resolved with. */
+function FileAnchor({ spelled, target, title, label }: { spelled: string; target: FileLinkTarget; title: string; label: ReactNode }) {
   return (
     <a
-      href={artifactContentUrl(path)}
+      href={artifactContentUrl(target.path)}
       title={title}
       data-file-link
       className={ANCHOR_CLASS}
       onClick={(event) => {
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault();
-        openArtifactPreview(spelled);
+        openArtifactPreview(spelled, target);
       }}
     >
       {label}
@@ -162,7 +163,7 @@ function Anchor({ href: raw, label }: { href: string; label: string }) {
      encoded or literal anchor, `:line` suffixes, file:// and plain paths. */
   const target = resolveLink(relative ?? href, { viewerHosts: viewerHosts() });
   if (target?.kind === "file") {
-    return <FileAnchor spelled={relative ?? href} path={target.path} title={href} label={label} />;
+    return <FileAnchor spelled={relative ?? href} target={target} title={href} label={label} />;
   }
   if (target?.kind === "viewer") {
     /* The conversation router owns these; it intercepts the in-app hash. */
