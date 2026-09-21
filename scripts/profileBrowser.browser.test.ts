@@ -207,7 +207,7 @@ const MARKER = "Fresh tail record probe.";
 
 /** The target's pane, shown or not, focused on the phone or not, with one
     existing row; the neighbour's pane beside it. */
-const APPEND_PAGE = (options: { surface: Surface; hidden?: boolean; focus?: "target" | "other" }) => `(() => {
+const APPEND_PAGE = (options: { surface: Surface; focus?: "target" | "other" }) => `(() => {
   document.body.innerHTML = '';
   const make = (path, text) => {
     const el = document.createElement('div');
@@ -217,7 +217,6 @@ const APPEND_PAGE = (options: { surface: Surface; hidden?: boolean; focus?: "tar
   };
   const target = make(${js(TARGET)}, 'target row');
   target.id = 'target';
-  if (${js(!!options.hidden)}) target.style.display = 'none';
   const other = make(${js(OTHER)}, 'other row');
   other.id = 'other';
   if (${js(options.surface)} === 'phone') {
@@ -248,9 +247,11 @@ for (const surface of ["desktop", "phone"] as const) {
   browserTest(`an appended row under a hidden target pane is never the revalidation milestone, at the ${surface} viewport`, async () => {
     await setViewport(cdp!, surface);
     const page = await fresh();
-    await page.evaluate(APPEND_PAGE({ surface, hidden: true }));
+    await page.evaluate(APPEND_PAGE({ surface }));
+    /* Armed on a pane a reader sees; the pane is hidden as the row lands. */
     const result = await page.evaluate<string>(outcome(`(() => {
       p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      setTimeout(() => { document.getElementById('target').style.display = 'none'; }, 40);
       ${appendLater("target", 50)};
       return p.appendedAt(700);
     })()`));
@@ -310,4 +311,17 @@ browserTest("on the phone, a target that is not the focused conversation cannot 
   await page.evaluate(APPEND_PAGE({ surface: "phone", focus: "other" }));
   const result = await page.evaluate<string>(outcome(`p.armAppend(${js(TARGET)}, "phone", ${js(MARKER)})`));
   expect(result).toStartWith("rejected:append armed with no active pane");
+}, 30_000);
+
+browserTest("an append cannot be armed while the pane's last row is below the fold, and can once the tail is revealed", async () => {
+  await setViewport(cdp!, "desktop");
+  const page = await fresh();
+  await page.evaluate(APPEND_PAGE({ surface: "desktop" }));
+  /* The board lays a pane out past the viewport's bottom edge. */
+  await page.evaluate(`(() => { document.getElementById('target').style.marginTop = '1200px'; return 1; })()`);
+  const refused = await page.evaluate<string>(outcome(`p.armAppend(${js(TARGET)}, "desktop", ${js(MARKER)})`));
+  expect(refused).toStartWith("rejected:append armed with the target pane's last row off screen");
+  expect(await page.evaluate<boolean>(`window.__profile.revealTail(${js(TARGET)}, "desktop")`)).toBe(true);
+  const armed = await page.evaluate<string>(outcome(`p.armAppend(${js(TARGET)}, "desktop", ${js(MARKER)})`));
+  expect(armed).toBe(`resolved:${JSON.stringify({ rows: 1, visibleRows: 1 })}`);
 }, 30_000);

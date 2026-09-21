@@ -528,17 +528,26 @@ async function runSurface(cdp: Cdp, origin: string, surface: Surface, targets: T
      timed is that ROW: the one carrying the appended record's text, new since
      the append was armed, visible in the pane that is active for the target
      (on the phone, only while the focused conversation is the target), and
-     confirmed by the same two animation frames as every reopen row. The clock
+     confirmed by the same two animation frames as every reopen row. The
+     pane's end is brought on screen first — on the desktop board it can sit
+     below the fold, where the new row is there and nobody sees it. The clock
      starts at the arming stamp, taken before the record is written, so the
      number includes the whole trip from disk to the painted frame. */
   const target = targets[0]!.entry;
   const marker = `Fresh tail record ${surface}.`;
   await openFresh(cdp, origin, surface, target);
+  await cdp.evaluate(`window.__profile.revealTail(${js(target.diskPath)}, ${js(surface)})`);
   const armed = await cdp.evaluate<{ rows: number; visibleRows: number }>(
     `window.__profile.armAppend(${js(target.diskPath)}, ${js(surface)}, ${js(marker)})`,
   );
   fs.appendFileSync(target.diskPath, appendedLine("gamma", 9_100, surface, cwdFor) + "\n");
-  const appended = await cdp.evaluate<AppendedMilestone>("window.__profile.appendedAt(40000)");
+  let appended: AppendedMilestone;
+  try {
+    appended = await cdp.evaluate<AppendedMilestone>("window.__profile.appendedAt(40000)");
+  } catch (error) {
+    const why = await cdp.evaluate<unknown>("window.__profile.appendDiagnosis()").catch(() => null);
+    throw new Error(`the appended row never became a painted milestone: ${JSON.stringify(why)}`, { cause: error });
+  }
   if (!appended.rafConfirmed) throw new Error("the appended row's milestone was not confirmed by a frame");
   if (appended.appendedRows !== 1) throw new Error(`the appended record landed as ${appended.appendedRows} rows, expected exactly one`);
   if (!appended.firstRowPreserved) throw new Error("the first row node was replaced while the record was appended");

@@ -347,10 +347,21 @@ export const PROBE = String.raw`
       const el = probe.activePane(path, surface);
       if (!el) throw new Error('append armed with no active pane for the target');
       const rows = Array.from(el.querySelectorAll('[data-feed-kind]'));
+      /* A record lands below the pane's last row: with that row off screen,
+         the appended one is too, and no frame could ever show it. */
+      if (!rows.length || !probe.visible(rows[rows.length - 1])) throw new Error('append armed with the target pane\'s last row off screen');
       if (rows.some((row) => row.textContent.includes(marker))) throw new Error('the appended record is already in the pane before it was appended');
       probe.armed = { path, surface, marker, before: new Set(rows), first: el.querySelector('[data-feed-key]'), at: performance.now() };
       return { rows: rows.length, visibleRows: probe.visibleRows(path, surface) };
     },
+    /* Bring the end of the target's pane on screen, the way a reader looks at
+       the conversation they are waiting on — a board pane can extend below the
+       fold — and resolve two frames later, with the layout settled. */
+    revealTail: (path, surface) => new Promise((resolve) => {
+      const el = probe.activePane(path, surface);
+      if (el) (el.querySelector('[data-tail-lines-start]') || el).scrollIntoView({ block: 'end' });
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve(!!el)));
+    }),
     /* The new rows carrying the appended text, in the target's active pane. */
     appendedRows: () => {
       const armed = probe.armed;
@@ -363,6 +374,25 @@ export const PROBE = String.raw`
       const el = armed ? probe.activePane(armed.path, armed.surface) : null;
       if (!el || !probe.visible(el)) return false;
       return probe.appendedRows().some((row) => probe.visible(row));
+    },
+    /* Why an armed append is not (yet) a milestone: whether the pane is
+       there and seen, and for each new row carrying the text whether it is
+       seen and where it sits against the pane's scroller. */
+    appendDiagnosis: () => {
+      const armed = probe.armed;
+      const el = armed ? probe.activePane(armed.path, armed.surface) : null;
+      if (!el) return { pane: false, focused: probe.focusedPath() };
+      const scroller = el.querySelector('[data-tail-lines-start]');
+      const all = Array.from(el.querySelectorAll('[data-feed-kind]'));
+      return {
+        pane: true,
+        paneVisible: probe.visible(el),
+        rows: all.length,
+        withMarker: all.filter((row) => row.textContent.includes(armed.marker)).map((row) => ({ fresh: !armed.before.has(row), visible: probe.visible(row), top: Math.round(row.getBoundingClientRect().top), bottom: Math.round(row.getBoundingClientRect().bottom) })),
+        lastText: all.length ? all[all.length - 1].textContent.slice(0, 80) : null,
+        scroller: scroller ? { top: Math.round(scroller.scrollTop), height: scroller.scrollHeight, client: scroller.clientHeight, box: Math.round(scroller.getBoundingClientRect().bottom) } : null,
+        viewport: [window.innerWidth, window.innerHeight],
+      };
     },
     /* The appended row's milestone through the same confirmed frames as every
        reopen row, measured from the arming stamp, with what the pane holds
