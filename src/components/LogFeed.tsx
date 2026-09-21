@@ -803,9 +803,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       }];
     });
   }, [feed.items, transcriptGeneration, launchEchoKeys, provenanceLookup, localJoin]);
+  /* Words are counted only for records that name nobody (#1950 round 3). A
+     record with an identity — resolved or not — is some submission's own,
+     and leaves a row only through the binding below; counting it as well let
+     a row that the binder refused the record to be hidden by it anyway. */
   const transcriptEchoCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const echo of transcriptEchoes) {
+      if (echo.submissionId || echo.unresolvedSubmission) continue;
       const key = echo.text.trim();
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }

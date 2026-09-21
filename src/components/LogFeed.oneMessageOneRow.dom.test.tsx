@@ -1190,3 +1190,34 @@ test("a delivered Claude record waits for its native id while the ledger read is
   await act(async () => root.unmount());
   host.remove();
 });
+
+test("a send not yet admitted is not hidden by an equal-text record that names another delivery", async () => {
+  /* The second send of a pair waits behind the wire fence with no operation
+     yet, so it has no identity to be named by. A record that names SOMEBODY's
+     delivery is still not its: the count of equal words must not hide it
+     while the binder refuses to hand it the record. */
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const submittedAt = Date.now();
+  serveProvenance({});
+  enqueueOutbox(CARD, { id: "key-waiting", text: TEXT, images: 0, at: submittedAt });
+  await settle(() => root.render(feedOnly()));
+  const before = reading(host);
+  expect(before.phase).toBe("pending");
+
+  await settle(() => {
+    lines = [codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT, deliveryDedupToken("operation-somebody-else"))];
+  });
+  await settle(() => root.render(feedOnly()));
+  await settle(() => root.render(feedOnly()));
+
+  const own = messageRows(host).find((entry) => entry.row === before.row);
+  expect(own).toBeDefined();
+  expect(own!.phase).toBe("pending");
+  expect(own!.bubble).toBe(before.bubble);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(2);
+  expect(readOutbox(CARD)[0]!.retiredEchoId).toBeUndefined();
+  await act(async () => root.unmount());
+  host.remove();
+});
