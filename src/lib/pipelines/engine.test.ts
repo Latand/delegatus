@@ -12270,8 +12270,97 @@ for (const enabled of [false, true]) {
   });
 }
 
+/** Exercise the real startup reader and its scheduled re-probes against the
+    frozen evidence produced by close and scanner reconciliation. */
+async function frozenSurvivorStartup(pipelineId: string, terminateSurvivor: () => Promise<void>) {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { adoptStructuredHostsAtStartup, structuredStartupDeferral } = await import("@/lib/runtime/startup");
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "startup-frozen-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = {
+    readSession: async (identity) => journal.readSession(identity),
+    snapshot: async () => journal.snapshot(),
+    events: async (after: number) => journal.replay(after),
+    append: async (event) => journal.append(event),
+    command: async (command) => journal.executeOperation(command),
+    effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    operationStatus: async (id, options) => options?.currentRetryLeaf ? journal.currentRetryResult(id) : journal.operationResult(id),
+    retryOperation: async (id, nextKey, options) => journal.retryOperation(id, nextKey, options),
+    transitionOperation: async (id, status, details) => journal.transitionOperation(id, status, details),
+  } as import("@/lib/runtime/client").RuntimeHostClient;
+  const members = ["codex", "claude"].map((engine) => {
+    const key = { engine: engine as "codex" | "claude", sessionId: crypto.randomUUID() };
+    const artifactPath = path.join(directory, `${key.sessionId}.jsonl`);
+    fs.writeFileSync(artifactPath, "");
+    const conversation = registry.ensureConversation(key.engine, artifactPath, null);
+    registry.upsert({ key, artifactPath, cwd: directory, accountId: null,
+      launchProfile: emptyLaunchProfile({ cwd: directory }), status: "live", host: null,
+      structuredHost: { kind: engine === "codex" ? "codex-app-server" : "claude-broker",
+        endpoint: "fake:frozen-survivor", process: null, eventCursor: 0, protocolVersion: "test",
+        writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 0, claimOwner: null, pendingAction: null });
+    registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipelineId,
+      role: "builder", slot: `member-${engine}`, stageId: "build", stageOrder: 0, round: 1,
+      parentConversationId: null });
+    registry.holdDelivery(conversation.id, "queued work", `frozen-${engine}`);
+    return { key, conversation };
+  });
+  const selected: string[] = [];
+  const scheduled: Array<() => void> = [];
+  let retired = false;
+  const dependencies: import("@/lib/runtime/startup").StructuredStartupDependencies = {
+    registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+    assertActive: () => { if (retired) throw new Error("test startup retired"); },
+    adopt: async (received, _options, _env, filter = () => true) => {
+      for (const entry of Object.values(received.readOnlySnapshot().entries)) {
+        if (entry.key.engine === "codex" && filter(entry)) selected.push(`codex:${entry.key.sessionId}`);
+      }
+      return [];
+    },
+    adoptClaude: async (received, _options, _env, filter = () => true) => {
+      for (const entry of Object.values(received.readOnlySnapshot().entries)) {
+        if (entry.key.engine === "claude" && filter(entry)) selected.push(`claude:${entry.key.sessionId}`);
+      }
+      return [];
+    },
+    schedule: (callback) => { scheduled.push(callback); return { unref() {} }; },
+  };
+  const before = structuredClone(registry.readOnlySnapshot().entries);
+  const pipelineBefore = loadPipelines().find((pipeline) => pipeline.id === pipelineId)!;
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(selected).toEqual([]);
+    expect(new Set(structuredStartupDeferral()?.hostKeys)).toEqual(new Set(members.map(({ key }) => `${key.engine}:${key.sessionId}`)));
+    expect(registry.readOnlySnapshot().entries).toEqual(before);
+    for (let probe = 0; probe < 2; probe++) {
+      expect(scheduled).toHaveLength(1);
+      scheduled.shift()!();
+      expect(selected).toEqual([]);
+      expect(structuredStartupDeferral()?.nextProbeMs).toBe(2_000 * 2 ** probe);
+      expect(registry.readOnlySnapshot().entries).toEqual(before);
+    }
+    await terminateSurvivor();
+    scheduled.shift()!();
+    for (let probe = 0; probe < 400 && structuredStartupDeferral() !== null; probe++) await Bun.sleep(5);
+    expect(structuredStartupDeferral()).toBeNull();
+    expect(selected.sort()).toEqual(members.map(({ key }) => `${key.engine}:${key.sessionId}`).sort());
+    expect(scheduled).toEqual([]);
+    // Startup observes death without moving or erasing custody evidence.
+    expect(loadPipelines().find((pipeline) => pipeline.id === pipelineId)).toEqual(pipelineBefore);
+  } finally {
+    retired = true;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 for (const enabled of [false, true]) {
-  test.each(["before-stop", "during-stop", "crash-resume", "survivor", "survivor-after-checkpoint", "survivor-crash-resume"] as const)(`reviewer identity advances during close at %s (activation: ${enabled})`, async (seam) => {
+  test.each(["before-stop", "during-stop", "crash-resume", "survivor", "survivor-after-checkpoint", "survivor-crash-resume", "survivor-startup-alive", "survivor-startup-unverified"] as const)(`reviewer identity advances during close at %s (activation: ${enabled})`, async (seam) => {
     const h = harness();
     const pipeline = await create(h.ports, [
       { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -12303,6 +12392,7 @@ for (const enabled of [false, true]) {
       { stdout: "ignore", stderr: "ignore" }) : null;
     const { captureProcessIdentity } = await import("@/lib/processIdentity");
     const survivorIdentity = survivor ? captureProcessIdentity(survivor.pid) : null;
+    if (survivorIdentity && seam === "survivor-startup-unverified") survivorIdentity.startIdentity = null;
     const stops: string[] = [];
     let closes = 0;
     h.ports.stopStageAgent = async (target) => {
@@ -12340,7 +12430,7 @@ for (const enabled of [false, true]) {
         expect(loadPipelines()[0]!.closeReport?.stopped.map((host) => host.conversationId))
           .toEqual(survivor ? ["conversation_stage_1"] : ["conversation_stage_1", "conversation_reviewer_1"]);
       }
-      if (seam === "survivor-after-checkpoint") {
+      if (seam === "survivor-after-checkpoint" || seam.startsWith("survivor-startup-")) {
         await engineModule.drainStageActivations(h.ports);
         await sync();
       }
@@ -12356,8 +12446,9 @@ for (const enabled of [false, true]) {
         await patchPipeline(pipeline.id, { action: "close" }, h.ports);
         await engineModule.drainStageActivations(h.ports);
         expect(loadPipelines()[0]!.closeReport?.stillRunning).toHaveLength(1);
-        survivor.kill();
-        await survivor.exited;
+        const terminate = async () => { survivor.kill(); await survivor.exited; };
+        if (seam.startsWith("survivor-startup-")) await frozenSurvivorStartup(pipeline.id, terminate);
+        else await terminate();
       }
       await patchPipeline(pipeline.id, { action: "close" }, h.ports);
       await engineModule.drainStageActivations(h.ports);
