@@ -28,6 +28,7 @@ import type { Flow } from "./types";
 
 export interface FlowRelayProvenanceDependencies {
   flows: () => Flow[];
+  findings?: (flow: Flow, round: Flow["rounds"][number]) => string | null;
 }
 
 /**
@@ -56,7 +57,10 @@ export function flowRelayedMessageOccurrences(
       if (!delivery?.deliveredAt || !Number.isFinite(Date.parse(delivery.deliveredAt)) || !round.findingsPath) continue;
       if (delivery.path !== transcriptPath && flow.implementerPath !== transcriptPath) continue;
       try {
-        const findings = fs.readFileSync(round.findingsPath, "utf8");
+        const findings = dependencies.findings
+          ? dependencies.findings(flow, round)
+          : fs.readFileSync(round.findingsPath, "utf8");
+        if (findings === null) continue;
         occurrences.push({
           textDigest: messageTextDigest(relayPrompt(round, findings)),
           deliveredAt: delivery.deliveredAt,
