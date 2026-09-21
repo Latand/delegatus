@@ -1034,7 +1034,7 @@ interface PipelineStartupEvidence {
   deferred: ReadonlySet<string>;
 }
 
-/** Pipeline attempts determine whether startup may create another writer.
+/** Pipeline attempts and frozen close hosts determine whether startup may create another writer.
     A failed read retains pipeline members without launch or demotion; a
     captured survivor blocks even pending work until its identity is dead. */
 function pipelineStartupEvidence(registry: AgentRegistry, available = true): PipelineStartupEvidence {
@@ -1058,9 +1058,11 @@ function pipelineStartupEvidence(registry: AgentRegistry, available = true): Pip
   const memberships = registry.readOnlySnapshot().memberships;
   for (const pipeline of pipelines) {
     const attempts = pipeline.runs.flatMap((run) => run.attempts);
-    const blocked = attempts.some((attempt) => attempt.unresolvedTermination?.survivors
+    const evidence = [...attempts, ...(pipeline.closeTeardown?.hosts ?? []).map((host) => host.evidence)];
+    const blocked = evidence.some((host) => host.unresolvedTermination?.survivors
       .some((identity) => processIdentityStatus(identity) !== "dead"));
-    // A survivor from any attempt fences every writer in the same pipeline.
+    // Reviewer synchronization can move survivors off the current attempt
+    // into frozen close custody. Either record fences every pipeline writer.
     // Memberships also retain conversations absent from an older attempt row.
     if (blocked) {
       for (const [id, entries] of Object.entries(memberships)) {

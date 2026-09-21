@@ -189,6 +189,7 @@ function stagePorts(
   const defaults = defaultPipelinePorts({ liveness: options.liveness });
   const ports: PipelinePorts = {
     ...defaults,
+    engineReadiness: () => "connected",
     now: () => new Date(Date.now() + wallClockOffsetMs).toISOString(),
     exec: (rawCommand, rawArgs) => {
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;

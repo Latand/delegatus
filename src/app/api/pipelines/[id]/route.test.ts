@@ -13,7 +13,9 @@ const pipeline = {
   }],
 };
 const closeReport = {
-  stopped: [{ stageId: "build", attempt: 1, conversationId: "conversation_stage_1", agentPath: null, paneId: null }],
+  status: "pending",
+  stopped: [],
+  pending: [{ stageId: "build", attempt: 1, conversationId: "conversation_stage_1", agentPath: null, paneId: null }],
   alreadyStopped: [],
   unconfirmed: [],
   acknowledged: [],
@@ -23,6 +25,8 @@ const closeReport = {
 };
 const refusedClose = {
   ...closeReport,
+  status: "settled",
+  pending: [],
   stopped: [],
   stillRunning: [{ stageId: "build", attempt: 1, conversationId: "conversation_stage_1", agentPath: null, paneId: null, error: "host is unreachable" }],
 };

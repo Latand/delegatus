@@ -1,3 +1,4 @@
+import { resolveLink } from "@/lib/artifact/linkTarget";
 import type { FileEntry } from "@/lib/types";
 
 export interface ConversationFileIndex {
@@ -94,12 +95,20 @@ function decode(raw: string): string {
 
 /** Parses a location hash into its conversation/file/project intent. Recognises
     the canonical `#c=` form alongside the existing `#f=` / `#p=` forms; the
-    `#question` suffix on a file link is stripped (it drives a separate scroll). */
+    `#question` suffix on a file link is stripped (it drives a separate scroll).
+    A `#f=` naming a file that is not a transcript is no conversation at all:
+    the link resolver hands it to the file preview instead. */
 export function parseConversationHash(hash: string): ConversationHash {
   const conv = hash.match(/^#c=(.+)$/);
   if (conv) return { conversationId: decode((conv[1] ?? "").replace(/#question$/, "")), filePath: null, project: null };
-  const file = hash.match(/^#f=(.+)$/);
-  if (file) return { conversationId: null, filePath: decode((file[1] ?? "").replace(/#question$/, "")), project: null };
+  if (/^#f=./.test(hash)) {
+    /* The resolver hands a transcript back with its `:line` and encoded
+       `#question` spellings normalized, so the path matches the scanned file. */
+    const target = resolveLink(hash);
+    if (target?.kind === "file") return { conversationId: null, filePath: null, project: null };
+    const file = (target?.hash ?? hash).match(/^#f=(.+)$/);
+    return { conversationId: null, filePath: decode((file?.[1] ?? "").replace(/#question$/, "")), project: null };
+  }
   const project = hash.match(/^#p=(.+)$/);
   if (project) return { conversationId: null, filePath: null, project: decode(project[1] ?? "") };
   return { conversationId: null, filePath: null, project: null };
