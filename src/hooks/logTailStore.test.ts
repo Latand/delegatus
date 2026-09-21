@@ -465,6 +465,68 @@ test("attachment bytes inside fenced, prefixed, trailing, nested or escaped JSON
   }
 });
 
+test("typed attachment blocks and Unicode-escaped keys inside embedded JSON text never reach the store", () => {
+  /* Printed JSON inside a tool's text again, in the forms the literal-key
+     reading missed: a content block whose `type` says it is an attachment
+     (its `data` short, or bytes written as numbers), and keys spelled with
+     `\u` escapes, which a decoder reads as the plain word and a pattern over
+     the text does not. Every sentinel below must be absent from the store. */
+  const PNG_B64 = ["iVBOR", "w0KGgo="].join("");
+  const BYTE_RUN = [137, 80, 78, 71, 13, 10, 26, 10];
+  const NUMERIC = 827364951;
+  const escapedBytesKey = ["by", "\\u0074", "es"].join("");
+  const escapedPasswordKey = ["pass", "\\u0077", "ord"].join("");
+  const escapedImageType = ["im", "\\u0061", "ge"].join("");
+  const imageBlock = JSON.stringify({ type: "image", source: { type: "base64", media_type: "image/png", data: PNG_B64 } });
+  const typedBytes = JSON.stringify({ type: "image", data: BYTE_RUN });
+  const escapedBytes = `{"attachment":{"${escapedBytesKey}":[${BYTE_RUN.join(",")}]}}`;
+  const escapedPassword = `{"${escapedPasswordKey}":${NUMERIC}}`;
+  const escapedType = `{"type":"${escapedImageType}","source":{"type":"base64","data":"${PNG_B64}"}}`;
+  const toolResult = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01", content }] } });
+  const codexOutput = (output: string) => JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "call_01", output } });
+  const blocked = [
+    codexOutput("prefix " + imageBlock),
+    toolResult("prefix " + imageBlock + "\ntrailing text"),
+    toolResult("```json\n" + typedBytes + "\n```"),
+    codexOutput("prefix " + escapedBytes),
+    toolResult("```\n" + escapedBytes + "\n```\ndone"),
+    codexOutput("prefix " + escapedPassword),
+    toolResult(escapedPassword + "\nexit code 0"),
+    toolResult("prefix " + escapedType + " trailing"),
+    /* Nested wrappers: the printed JSON is a string inside printed JSON. */
+    toolResult("relay: " + JSON.stringify({ body: "prefix " + imageBlock })),
+    toolResult("relay: " + JSON.stringify({ body: "prefix " + escapedBytes + " trailing" })),
+    codexOutput("relay: " + JSON.stringify({ body: { inner: "x " + escapedPassword } }) + "\nok"),
+    /* Cut off mid-block: a decoder cannot read it, so the text reading must. */
+    codexOutput("prefix " + imageBlock.slice(0, -3)),
+  ];
+  expect(blocked.map((line) => persistableLine(line))).toEqual(blocked.map(() => false));
+
+  /* Printed JSON that carries nothing stays: counters, a text block, a size
+     under an escaped key, an array of plain numbers in prose. */
+  const legit = [
+    toolResult("```json\n" + JSON.stringify({ input_tokens: 512, total_tokens: 600 }) + "\n```"),
+    codexOutput("prefix " + JSON.stringify({ type: "text", text: "hello" }) + " trailing"),
+    codexOutput(`prefix {"scanned":{"${escapedBytesKey}":20480}} trailing`),
+    toolResult("indices [1, 2, 3] and {not json} done"),
+  ];
+  for (const line of legit) expect(persistableLine(line)).toBe(true);
+
+  const window_ = [...blocked, ...legit, record(9, "and then ordinary prose")];
+  write("/sessions/typed-escaped.jsonl", snapshot(window_));
+  expect(restoreTailSnapshot("/sessions/typed-escaped.jsonl", bytesOf(window_))?.win.lines).toEqual([...legit, record(9, "and then ordinary prose")]);
+  const stored = storedText();
+  for (const sentinel of [PNG_B64, BYTE_RUN.join(","), String(NUMERIC)]) expect(stored).not.toContain(sentinel);
+  /* Each form alone, round-tripped: a tail ending on it keeps nothing. */
+  for (const line of blocked) {
+    resetTailStoreForTests();
+    write("/sessions/one.jsonl", snapshot([line]));
+    expect(restoreTailSnapshot("/sessions/one.jsonl", bytesOf([line]))).toBeNull();
+    const alone = storedText();
+    for (const sentinel of [PNG_B64, BYTE_RUN.join(","), String(NUMERIC)]) expect(alone).not.toContain(sentinel);
+  }
+});
+
 test("a structure this cannot finish reading is refused rather than assumed safe", () => {
   /* Wider and deeper than the inspection budget: "not inspected" is not
      "safe", so the line stays out. */
@@ -477,6 +539,12 @@ test("a structure this cannot finish reading is refused rather than assumed safe
   const wideLine = JSON.stringify({ type: "user", wide });
   expect(wideLine.length).toBeLessThan(BOUNDS.MAX_LINE_BYTES);
   expect(persistableLine(wideLine)).toBe(false);
+  /* Text full of unclosed brackets would make the search for embedded JSON
+     walk the rest of the text from every one of them; past its budget the
+     search stops and the line stays out. */
+  const brackets = JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "{".repeat(12_000) }] } });
+  expect(brackets.length).toBeLessThan(BOUNDS.MAX_LINE_BYTES);
+  expect(persistableLine(brackets)).toBe(false);
 });
 
 test("the throttle's own memory is bounded, before a flush as well as after", () => {

@@ -194,6 +194,10 @@ const CREDENTIAL_KEY_RE = /(?:api.?key|authorization|bearer|secret|password|pass
 const SHORT_DATA_CHARS = 64;
 const MAX_INSPECTED_NODES = 600;
 const MAX_INSPECTED_DEPTH = 12;
+/** How many characters the search for JSON embedded in text may walk, per
+    line. Each `{` or `[` is tried as the start of a document, so text full of
+    unclosed brackets costs quadratic work; past this it is refused. */
+const MAX_SCANNED_CHARS = 2_000_000;
 
 /**
  * A QUOTED credential key followed by a value that carries something, found in
@@ -218,16 +222,104 @@ const QUOTED_CREDENTIAL_VALUE_RE = /(?:(?:api.?key|authorization|bearer|secret|p
  */
 const QUOTED_ATTACHMENT_VALUE_RE = /\\*["'](?:b64|b64_json|base64|base64_?data|blob|bytes|content_bytes|file_?data|image_?data|image_url|audio_?data|thumbnail)\\*["']\s*:\s*(?:b?\\*["'](?!\\*["'])|\[(?!\s*\])|\{(?!\s*\}))/i;
 
-/** Whether a piece of TEXT may be written, judged as text alone. */
-function safeText(text: string): boolean {
+/**
+ * A QUOTED `type` key naming an attachment block, found in text. Decoded, such
+ * a block is refused whatever its `data` holds — a short base64 string or bytes
+ * as numbers — and printed JSON that a decoder cannot finish (cut off, or one
+ * escape level down) is refused the same way here.
+ */
+const QUOTED_ATTACHMENT_TYPE_RE = /\\*["']type\\*["']\s*:\s*\\*["'](?:image|audio|video|document|file|base64|input_image|input_audio|image_url|image_file)\\*["']/i;
+/** A `\uXXXX` escape at any escaping level: `"pass\u0077ord"` is the key a
+    decoder reads as the plain word, and the patterns above must read it so too. */
+const UNICODE_ESCAPE_RE = /\\+u([0-9a-fA-F]{4})/g;
+const MAX_UNESCAPE_PASSES = 4;
+
+function unescapeUnicode(text: string): string {
+  let current = text;
+  for (let pass = 0; pass < MAX_UNESCAPE_PASSES && current.includes("\\"); pass += 1) {
+    const next = current.replace(UNICODE_ESCAPE_RE, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    if (next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+function safeTextOnce(text: string): boolean {
   if (DATA_URI_RE.test(text)) return false;
   if (QUOTED_CREDENTIAL_VALUE_RE.test(text)) return false;
   if (QUOTED_ATTACHMENT_VALUE_RE.test(text)) return false;
+  if (QUOTED_ATTACHMENT_TYPE_RE.test(text)) return false;
   return redactTranscriptText(text) === text;
+}
+
+/** Whether a piece of TEXT may be written, judged as text alone — as written,
+    and with its `\u` escapes read the way a decoder reads them. */
+function safeText(text: string): boolean {
+  if (!safeTextOnce(text)) return false;
+  const unescaped = unescapeUnicode(text);
+  return unescaped === text || safeTextOnce(unescaped);
 }
 
 interface Inspection {
   nodes: number;
+  /** Characters the embedded-document search may still walk. */
+  chars: number;
+}
+
+const inspection = (): Inspection => ({ nodes: MAX_INSPECTED_NODES, chars: MAX_SCANNED_CHARS });
+
+/**
+ * Where the JSON document that opens at `start` closes: the index just past
+ * its matching bracket, or -1 when it never closes. Strings are skipped with
+ * their escapes, so a bracket inside one does not count. Every character
+ * walked is charged to the budget; an exhausted budget answers -2.
+ */
+function documentEnd(text: string, start: number, budget: Inspection): number {
+  let depth = 0;
+  let inString = false;
+  for (let index = start; index < text.length; index += 1) {
+    if ((budget.chars -= 1) < 0) return -2;
+    const char = text[index];
+    if (inString) {
+      if (char === "\\") index += 1;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{" || char === "[") depth += 1;
+    else if (char === "}" || char === "]") {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Whether every JSON document embedded in a piece of text may be written. A
+ * tool result prints JSON behind a fence, after prose or before trailing
+ * output, so the text as a whole never decodes; each `{` or `[` is tried as a
+ * document's start instead, and each one that decodes is judged by
+ * `safeValue`, with its keys decoded and its `type` read. Text that costs more
+ * than the budget to search is refused.
+ */
+function embeddedDocumentsSafe(text: string, depth: number, budget: Inspection, tainted: boolean): boolean {
+  const opener = /[{[]/g;
+  let match: RegExpExecArray | null;
+  while ((match = opener.exec(text)) !== null) {
+    const end = documentEnd(text, match.index, budget);
+    if (end === -2) return false;
+    if (end < 0) continue;
+    let nested: unknown;
+    try {
+      nested = JSON.parse(text.slice(match.index, end));
+    } catch {
+      continue;
+    }
+    if (!safeValue(nested, "", depth + 1, budget, tainted)) return false;
+    opener.lastIndex = end;
+  }
+  return true;
 }
 
 /**
@@ -262,17 +354,10 @@ function safeValue(value: unknown, key: string, depth: number, budget: Inspectio
     if (!safeText(value)) return false;
     if (!OPAQUE_KEY_RE.test(key) && BASE64_RUN_RE.test(value)) return false;
     /* One transcript record routinely carries another JSON document as a
-       string — a tool result, a relayed message, a nested envelope — and a
-       credential inside it is escaped out of every text pattern's reach. */
-    const trimmed = value.trimStart();
-    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return true;
-    let nested: unknown;
-    try {
-      nested = JSON.parse(value);
-    } catch {
-      return true;
-    }
-    return safeValue(nested, "", depth + 1, budget, marked);
+       string — a tool result, a relayed message, a nested envelope, or JSON a
+       command printed among other text — and a credential inside it is
+       escaped out of every text pattern's reach. */
+    return embeddedDocumentsSafe(value, depth, budget, marked);
   }
   if (Array.isArray(value)) {
     /* The key follows into the elements: `{"authorization": ["…"]}`. */
@@ -307,9 +392,9 @@ export function persistableLine(line: string): boolean {
   } catch {
     /* Not JSON — a plain log line. There is no key to exempt anything, so the
        whole line is judged as one unnamed string. */
-    return !BASE64_RUN_RE.test(line);
+    return !BASE64_RUN_RE.test(line) && embeddedDocumentsSafe(line, 0, inspection(), false);
   }
-  return safeValue(parsed, "", 0, { nodes: MAX_INSPECTED_NODES }, false);
+  return safeValue(parsed, "", 0, inspection(), false);
 }
 
 /* ── bounding one window ────────────────────────────────────────────────── */
