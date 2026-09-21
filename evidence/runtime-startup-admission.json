@@ -1,6 +1,6 @@
 {
   "base": "3627f27468cff17b42cc3b633264c592df377360",
-  "testedSourceHead": "f589c98b50e2574655fcbe75b2b05637b3f76248",
+  "testedSourceHead": "6ac512793845f93c8ffea4af9d3cfa7198ef4fba",
   "runtime": "Bun 1.4.0",
   "trigger": {
     "timer": "src/lib/viewerInstrumentation.ts:723-729",
@@ -80,7 +80,7 @@
     },
     {
       "file": "src/lib/runtime/startupFinalization.integration.test.ts",
-      "pass": 17,
+      "pass": 18,
       "fail": 0
     },
     {
@@ -110,7 +110,7 @@
     },
     {
       "file": "src/lib/runtime/client.test.ts",
-      "pass": 14,
+      "pass": 15,
       "fail": 0
     },
     {
@@ -150,5 +150,46 @@
   "limits": [
     "Local synthetic history and private socket evidence; no production behavior verification or deployment.",
     "The 100 ms lease budget is measured and warned, not a forced cancellation of a synchronous state transaction."
-  ]
+  ],
+  "keyedReadDeadlineFollowup": {
+    "rejectedHead": "da8842e013c4b04ebd995bf3aa9cfce503b829c0",
+    "cause": "readStartupRuntime used readSession with the default 3000 ms interactive deadline; the old slow-socket test exposed only snapshot and seeded no conversations.",
+    "red": "Both 5000 ms and 11000 ms real keyed reads scheduled a retry at 3000 ms on the rejected head; caller-specific deadline test also failed on current main.",
+    "deadlineMs": 30000,
+    "ordinaryReadDeadlineMs": 3000,
+    "socketMeasurements": [
+      {
+        "responseMs": 5000,
+        "keyedReads": 1,
+        "secondTriggerAdoptions": 0,
+        "heldDuringRequest": false,
+        "maxLeaseHoldMs": 2.270231999999851,
+        "eventLoopDelayMs": 3.256832
+      },
+      {
+        "responseMs": 11000,
+        "keyedReads": 1,
+        "secondTriggerAdoptions": 0,
+        "heldDuringRequest": false,
+        "maxLeaseHoldMs": 2.5133350000032806,
+        "eventLoopDelayMs": 7.290332
+      }
+    ],
+    "currentMainRedHead": "1fabf341a6d6017bc8bd4bfb486e5efd600061b0",
+    "currentMainRed": {
+      "secondTriggerAdoptions": 2,
+      "leaseHeldAcrossRequestMs": 5001.272333,
+      "hostsBeforeFirstYield": 40
+    },
+    "baseReplayNote": "Three regressions ran separately against an export of current main; the batch fixture exposed its journal snapshot compatibility path so the first-yield assertion was reached.",
+    "clientContract": "Explicit read timeout is bounded, stays off the wire, and leaves ordinary reads unchanged.",
+    "followupTouchedFiles": [
+      "src/lib/runtime/client.ts",
+      "src/lib/runtime/client.test.ts",
+      "src/lib/runtime/startup.ts",
+      "src/lib/runtime/startupFinalization.integration.test.ts",
+      "evidence/runtime-startup-admission.json"
+    ],
+    "selfReview": "Checked caller-local deadlines, real socket generation, seeded conversation, no retry timers left running, state lease sampling and complete hold timings."
+  }
 }
