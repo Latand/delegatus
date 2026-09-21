@@ -3,6 +3,7 @@
  *
  *   bun scripts/profile-reopen.ts [--port 3131] [--cdp-port 9343] [--out file.md]
  *                                 [--runtime <bun>] [--repeat 3] [--keep]
+ *                                 [--surface desktop|phone] [--shots <dir>]
  *
  * Answers one question with real milliseconds: when the operator reopens a
  * conversation that was on screen a moment ago, where does the wait go?
@@ -12,20 +13,40 @@
  * catalog-sized corpus — nine background projects of twenty conversations
  * each, plus one project holding the two measured targets: a small transcript
  * (a dozen records) and a large one (tens of thousands). Each case is driven
- * on a desktop viewport and on a 390 px phone viewport, and every case is
- * repeated so the table can carry a median rather than one sample.
+ * on a 1280x800 desktop viewport and a 390x844 phone viewport — both set as
+ * explicit device metrics and then read back off the page, because a window
+ * sized from the command line gives the page 1280x713 and a table that claims
+ * otherwise describes a run nobody made. Every case is repeated so the table
+ * carries a median rather than one sample.
  *
  * The four cases per viewport and target:
  *
  *   cold            a fresh document with empty storage — nothing cached
- *   reopen-session  switch away in-app and back — the in-memory tail cache
+ *   reopen-session  away until the pane is gone, then back — the in-memory
+ *                   tail cache. On the desktop the board keeps every pane of
+ *                   the current project mounted, so "away" means another
+ *                   project, and the step asserts the pane really went
  *   reopen-reload   a NEW document, storage kept — what the operator calls
  *                   "restart / reopen", and the case #1821 is about
  *   revalidate      after a reopen, the first fresh tail record appended on
  *                   disk reaching the pane
  *
- * Every row attributes its time: when /api/files answered, when the first log
- * chunk arrived, and how much of the wait sat before the first painted row.
+ * What each row attributes, and how:
+ *
+ * - the milestone is a PAINTED frame. The poll notices the rows in the DOM;
+ *   the two animation frames after it are what make the answer a frame that
+ *   was rendered. A run whose renderer produced no frame says so.
+ * - transcript bytes arrive on a server-sent event stream that never ends, so
+ *   its resource entry's `responseEnd` never lands while the page is alive —
+ *   which is why an earlier version of this script recorded every case,
+ *   including real cold opens, as having had "no log request before the
+ *   paint". The stream is instrumented where the bytes are delivered instead
+ *   (see `NETWORK_PROBE` in `profileBrowser.ts`): when it opened, when the
+ *   first chunk for THIS transcript landed, and how big it was.
+ * - the interval from those bytes to the painted frame is the client's own
+ *   parse and render, with the main-thread long-task time inside it.
+ * - a case that paints before any bytes — which is the point of the change —
+ *   reports that, and then how long revalidation took to reach the pane.
  *
  * Nothing here names a person, an account or a machine: the home, the
  * projects and every transcript are invented, and the run deletes its home.
@@ -38,6 +59,8 @@ import path from "node:path";
 import { appendedLine, longLines, shortLines, transcriptText } from "@/test-helpers/switchingFixtures";
 
 import {
+  armDocuments,
+  assertViewport,
   Cdp,
   DEFAULT_CHROME,
   launchChrome,
@@ -47,9 +70,12 @@ import {
   parseArgs,
   ProfileTable,
   seededEnvironment,
+  setViewport,
   stop,
+  VIEWPORTS,
   waitForServer,
   type Milestone,
+  type Surface,
 } from "./profileBrowser";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -65,10 +91,12 @@ const CHROME = DEFAULT_CHROME;
 /** `--dump`: print what the scanner made of the seeded home, then stop. */
 const DUMP = args.has("dump");
 const SERVER_LOG = args.get("server-log");
+/** `--json <file>`: every sample of every case, for the committed evidence. */
+const JSON_OUT = args.get("json");
 /** `--shots <dir>`: 390 px captures of the reopen moment, cold and warm. */
 const SHOTS = args.get("shots");
 /** `--surface desktop|phone`: one viewport only, for a quick iteration. */
-const SURFACES = (args.get("surface") ?? "both") === "both" ? (["desktop", "phone"] as const) : ([args.get("surface")] as unknown as readonly Surface[]);
+const SURFACES: readonly Surface[] = (args.get("surface") ?? "both") === "both" ? (["desktop", "phone"] as const) : ([args.get("surface")] as unknown as readonly Surface[]);
 
 /* ── throwaway home ─────────────────────────────────────────────────────── */
 
@@ -112,16 +140,22 @@ function write(project: string, seed: string, index: number, lines: string[], sh
   return { project, shape, diskPath, bytes: new TextEncoder().encode(text).length, records: lines.length };
 }
 
-function seedHome(): { small: Seeded; large: Seeded; other: Seeded; total: number } {
+function seedHome(): { small: Seeded; large: Seeded; other: Seeded; elsewhere: Seeded; total: number } {
   /* The measured project: the two targets plus a neighbour to switch to. */
   const small = write("gamma", "5a", 0, shortLines("gamma", cwdFor), "small");
   const large = write("gamma", "5b", 1, longLines("gamma", LARGE_RECORDS, cwdFor), "large");
   const other = write("gamma", "5c", 2, shortLines("gamma", cwdFor), "neighbour");
   let total = 3;
+  /* One conversation in ANOTHER project, which is what a desktop reopen has to
+     step away to: the board keeps every pane of the current project mounted,
+     so a switch inside it never unmounts the target and never measures a
+     reopen at all. */
+  let elsewhere: Seeded | null = null;
   for (let project = 0; project < BACKGROUND_PROJECTS; project += 1) {
     const name = `proj${(project + 1).toString().padStart(2, "0")}`;
     for (let index = 0; index < BACKGROUND_PER_PROJECT; index += 1) {
-      write(name, `${(project + 1).toString(16)}${index.toString(16)}`, index, shortLines(name, cwdFor), "background");
+      const seeded = write(name, `${(project + 1).toString(16)}${index.toString(16)}`, index, shortLines(name, cwdFor), "background");
+      if (elsewhere === null) elsewhere = seeded;
       total += 1;
     }
   }
@@ -130,7 +164,7 @@ function seedHome(): { small: Seeded; large: Seeded; other: Seeded; total: numbe
   fs.utimesSync(small.diskPath, new Date(base), new Date(base));
   fs.utimesSync(large.diskPath, new Date(base - 30_000), new Date(base - 30_000));
   fs.utimesSync(other.diskPath, new Date(base - 60_000), new Date(base - 60_000));
-  return { small, large, other, total };
+  return { small, large, other, elsewhere: elsewhere!, total };
 }
 
 /* ── recording ──────────────────────────────────────────────────────────── */
@@ -138,18 +172,60 @@ function seedHome(): { small: Seeded; large: Seeded; other: Seeded; total: numbe
 const table = new ProfileTable();
 const js = JSON.stringify;
 
-/** One measured sample: total ms to the first painted row, and where it went. */
+/**
+ * One measured sample. Every number is real: the milestone is a frame that was
+ * rendered (the DOM check plus the animation frames that carry it to the
+ * compositor), and the attribution comes from the transport the Viewer
+ * actually uses — a server-sent event stream whose resource entry would only
+ * close when the stream does.
+ */
 interface Sample {
-  /** performance.now() when the target's first feed row was in the DOM. */
+  /** ms from the clock's origin to the frame carrying the target's rows. */
   paintedMs: number;
-  /** When /api/files answered, relative to the same clock (null: never). */
-  filesMs: number | null;
-  /** When the first transcript bytes arrived (a log request's responseEnd). */
-  logMs: number | null;
+  /** ms to those rows being in the DOM; `paintedMs` minus this is the frame. */
+  detectedMs: number;
+  /** False when the renderer produced no animation frame within a second of
+      the rows appearing: the row says so rather than reporting a timer. */
+  rafConfirmed: boolean;
   /** The document's own responseEnd — how much is the HTML alone. */
   documentMs: number | null;
+  /** The browser's first contentful paint, for the document cases. */
+  fcpMs: number | null;
+  /** When /api/files answered, and how big that answer was. */
+  filesMs: number | null;
+  filesKb: number | null;
+  /** When the log stream for this step opened. */
+  streamOpenMs: number | null;
+  /** When the first stream chunk for THIS transcript arrived, before the
+      paint (null when the rows were painted without waiting for any). */
+  firstBytesMs: number | null;
+  /** When the first chunk for this transcript arrived at all — the moment
+      revalidation reached the pane, before or after the paint. */
+  revalidatedMs: number | null;
+  /** Size of that first delivered chunk, as it came over the stream. */
+  payloadKb: number | null;
+  /** Bytes in hand → rows on screen: the client's own parse and render. */
+  parseRenderMs: number | null;
+  /** Main-thread long-task time inside that interval. */
+  blockingMs: number;
+  /** Which transport delivered those bytes: the event stream, or the POST
+      polling fallback the bus uses when the stream cannot connect. */
+  via: "stream" | "poll" | null;
   /** Rows on screen at the milestone. */
   rows: number;
+  /** Where the painted window starts in the tail stream: 0 is a first read of
+      the file, a large number is a restored tail resumed in place. */
+  windowStart: number | null;
+  /** Conversations that already had a persisted tail when this document
+      started: 0 is a provably cold open, more is a provably warm one. */
+  storedTails: number;
+  /** The store's keys at that moment, shortened; a transcript path is not
+      printed in full. */
+  storeKeys: string[];
+  /** What the page asked for before the paint, as path@ms. */
+  requests: string[];
+  /** The log streams it opened before the paint. */
+  streams: string[];
 }
 
 const median = (values: number[]): number => {
@@ -160,13 +236,41 @@ const median = (values: number[]): number => {
 const round = (value: number) => Math.round(value * 10) / 10;
 const spread = (values: number[]) => `${round(Math.min(...values))}–${round(Math.max(...values))} ms over ${values.length} runs`;
 
+/** The median of a field that a case may legitimately never have. */
+function medianOf(samples: Sample[], pick: (sample: Sample) => number | null): number | null {
+  const values = samples.map(pick).filter((value): value is number => value !== null);
+  return values.length === samples.length && values.length > 0 ? median(values) : null;
+}
+
+/** Every sample of every case, so the evidence file can carry the raw numbers
+    and not only the medians the table shows. */
+const collected: Array<{ surface: string; step: string; samples: Sample[]; notes: string }> = [];
+
 function recordSamples(surface: string, step: string, samples: Sample[], notes = ""): void {
+  collected.push({ surface, step, samples, notes });
   const painted = samples.map((sample) => sample.paintedMs);
+  const files = medianOf(samples, (sample) => sample.filesMs);
+  const firstBytes = medianOf(samples, (sample) => sample.firstBytesMs);
+  const revalidated = medianOf(samples, (sample) => sample.revalidatedMs);
+  const payload = medianOf(samples, (sample) => sample.payloadKb);
+  const parseRender = medianOf(samples, (sample) => sample.parseRenderMs);
+  const document_ = medianOf(samples, (sample) => sample.documentMs);
+  const fcp = medianOf(samples, (sample) => sample.fcpMs);
+  const stream = medianOf(samples, (sample) => sample.streamOpenMs);
   const attribution = [
-    samples.every((sample) => sample.documentMs !== null) ? `document ${median(samples.map((s) => s.documentMs!))}ms` : "",
-    samples.every((sample) => sample.filesMs !== null) ? `/api/files answered ${median(samples.map((s) => s.filesMs!))}ms` : "no /api/files before the paint",
-    samples.every((sample) => sample.logMs !== null) ? `first log bytes ${median(samples.map((s) => s.logMs!))}ms` : "no log request before the paint",
-    `rows ${median(samples.map((s) => s.rows))}`,
+    document_ === null ? "" : `document ${document_}ms`,
+    fcp === null ? "" : `first contentful paint ${fcp}ms`,
+    files === null ? "no /api/files before the paint" : `/api/files answered ${files}ms`,
+    stream === null ? "" : `log stream opened ${stream}ms`,
+    firstBytes === null
+      ? `painted before any transcript bytes${revalidated === null ? "" : `; revalidated ${revalidated}ms`}`
+      : `first transcript bytes ${firstBytes}ms${payload === null ? "" : ` (${payload} kB)`}`,
+    samples.every((sample) => sample.via === "poll") ? "delivered by the POST polling fallback" : "",
+    parseRender === null ? "" : `bytes→rows ${parseRender}ms (main thread ${median(samples.map((sample) => sample.blockingMs))}ms)`,
+    `frame +${median(samples.map((sample) => round(sample.paintedMs - sample.detectedMs)))}ms`,
+    `tails in store at document start ${samples.map((sample) => sample.storedTails).join("/")}`,
+    samples.every((sample) => sample.rafConfirmed) ? "" : "FRAME NOT CONFIRMED",
+    `rows ${median(samples.map((sample) => sample.rows))}`,
   ].filter(Boolean).join("; ");
   table.record(surface, step, { ms: median(painted), frames: "" as unknown as number, seen: {} } as Milestone,
     [notes, spread(painted), attribution].filter(Boolean).join("; "));
@@ -175,51 +279,107 @@ function recordSamples(surface: string, step: string, samples: Sample[], notes =
 /* ── in-page measurement ────────────────────────────────────────────────── */
 
 /**
- * Wait for the target's first painted feed row, then read the attribution out
- * of the page's own resource timeline. `origin` is the clock's zero: the
- * document's navigation start for a fresh document, or the stamp taken just
- * before the gesture for an in-app step.
+ * Wait for the frame that shows the target's rows, then read the attribution
+ * out of the network probe and the page's own timelines. `origin` is the
+ * clock's zero: the document's navigation start for a fresh document, or the
+ * stamp taken just before the gesture for an in-app step.
+ *
+ * `revalidateMs` is how long the sample may then wait for the transcript bytes
+ * that confirm the painted rows — which is the whole point of a case that
+ * paints before it asks.
  */
-function sampleExpression(check: string, originExpression: string, timeoutMs: number, rowsExpression: string): string {
+function sampleExpression(options: {
+  check: string;
+  origin: string;
+  timeoutMs: number;
+  rows: string;
+  target: string;
+  revalidateMs?: number;
+}): string {
+  const revalidateMs = options.revalidateMs ?? 20_000;
   return `(async () => {
     const p = window.__profile;
-    const origin = ${originExpression};
-    await p.until(() => (${check}), ${timeoutMs});
-    const painted = performance.now();
-    const at = (predicate) => {
-      const entry = performance.getEntriesByType('resource').filter(predicate).sort((a, b) => a.responseEnd - b.responseEnd)[0];
-      return entry ? Math.round((entry.responseEnd - origin) * 10) / 10 : null;
+    const origin = ${options.origin};
+    const target = ${js(options.target)};
+    /* When transcript bytes for THIS conversation first reached the page.
+       Normally that is a chunk on the event stream; when the stream cannot
+       connect — Chrome holds six sockets per origin and the Viewer's stream
+       never ends — the bus polls POST /api/logs instead, and that request is
+       the delivery. Both are reported, with which transport it was. */
+    const bytesFor = () => {
+      const net = p.net(origin, Number.MAX_SAFE_INTEGER);
+      let best = null;
+      const consider = (candidate) => {
+        if (candidate.at < origin) return;
+        if (best === null || candidate.at < best.at) best = candidate;
+      };
+      for (const stream of net.allStreams) {
+        const seen = stream.paths[target];
+        if (seen) consider({ at: seen.at, bytes: seen.bytes, via: 'stream' });
+      }
+      /* The EARLIEST delivery, whichever transport it came on: a stream that
+         reconnects later must not hide a poll that already carried the rows. */
+      for (const entry of net.requests) {
+        if (entry.end === null) continue;
+        if (!entry.url.includes('/api/logs') || entry.url.includes('/api/logs/stream')) continue;
+        consider({ at: entry.end, bytes: entry.bytes || 0, via: 'poll' });
+      }
+      return best;
     };
+    const milestone = await p.paintedAt(() => (${options.check}), ${options.timeoutMs});
+    const painted = milestone.painted;
+    const rows = ${options.rows};
+    const atPaint = (() => { const seen = bytesFor(); return seen && seen.at <= painted ? seen : null; })();
+    let revalidated = atPaint;
+    if (revalidated === null) {
+      try {
+        await p.until(() => bytesFor() !== null, ${revalidateMs});
+        revalidated = bytesFor();
+      } catch (error) { revalidated = null; }
+    }
+    const net = p.net(origin, painted);
+    const rel = (value) => (value === null || value === undefined ? null : Math.round((value - origin) * 10) / 10);
+    const kb = (chars) => Math.round(chars / 102.4) / 10;
+    const files = net.requests.filter((entry) => entry.url.includes('/api/files')).sort((a, b) => a.end - b.end)[0] || null;
+    const stream = net.streams.sort((a, b) => a.open - b.open)[0] || null;
     const nav = performance.getEntriesByType('navigation')[0];
+    const from = atPaint ? atPaint.at : origin;
+    const blocking = net.longtasks
+      .filter((entry) => entry.start + entry.duration > from && entry.start < painted)
+      .reduce((total, entry) => total + Math.min(entry.duration, painted - entry.start), 0);
     return {
-      paintedMs: Math.round((painted - origin) * 10) / 10,
-      filesMs: at((entry) => entry.name.includes('/api/files') && entry.responseEnd >= origin && entry.responseEnd <= painted),
-      logMs: at((entry) => /\\/api\\/logs?(\\/|\\?|$)/.test(entry.name) && entry.responseEnd >= origin && entry.responseEnd <= painted),
-      documentMs: nav && nav.responseEnd >= origin && nav.responseEnd <= painted ? Math.round((nav.responseEnd - origin) * 10) / 10 : null,
-      rows: ${rowsExpression},
+      paintedMs: rel(painted),
+      detectedMs: rel(milestone.detected),
+      rafConfirmed: !!milestone.rafConfirmed,
+      documentMs: nav && nav.responseEnd >= origin && nav.responseEnd <= painted ? rel(nav.responseEnd) : null,
+      fcpMs: origin === 0 && net.paint['first-contentful-paint'] !== undefined ? net.paint['first-contentful-paint'] : null,
+      filesMs: files ? rel(files.end) : null,
+      filesKb: files && files.bytes ? kb(files.bytes) : null,
+      streamOpenMs: stream ? rel(stream.open) : null,
+      firstBytesMs: atPaint ? rel(atPaint.at) : null,
+      revalidatedMs: revalidated ? rel(revalidated.at) : null,
+      payloadKb: revalidated ? kb(revalidated.bytes) : null,
+      via: revalidated ? revalidated.via : null,
+      parseRenderMs: atPaint ? Math.round((painted - atPaint.at) * 10) / 10 : null,
+      blockingMs: Math.round(blocking * 10) / 10,
+      rows: rows,
+      windowStart: p.windowStart(target),
+      storedTails: net.storedTails,
+      storeKeys: net.storeKeys,
+      streams: net.streams.map((entry) => 'stream@' + rel(entry.open) + ' first ' + rel(entry.firstChunkAt) + ' paths ' + Object.keys(entry.paths).length),
+      requests: net.requests.slice().sort((a, b) => a.end - b.end).slice(-40).map((entry) => {
+        const at = entry.url.indexOf('/api');
+        return (at >= 0 ? entry.url.slice(at, at + 60) : entry.url.slice(0, 60)) + '@' + rel(entry.end);
+      }),
     };
   })()`;
 }
 
 /* ── scenarios ──────────────────────────────────────────────────────────── */
 
-type Surface = "desktop" | "phone";
-
 interface Target {
   entry: Seeded;
   label: string;
-}
-
-async function setViewport(cdp: Cdp, surface: Surface): Promise<void> {
-  if (surface === "phone") {
-    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
-    await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
-    await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "pointer", value: "coarse" }, { name: "hover", value: "none" }] });
-    return;
-  }
-  await cdp.send("Emulation.clearDeviceMetricsOverride");
-  await cdp.send("Emulation.setEmulatedMedia", { features: [] });
-  await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false });
 }
 
 /** The check that the target's feed is painted, per surface. */
@@ -235,18 +395,47 @@ function rowsExpression(surface: Surface, target: Seeded): string {
 
 const deepLink = (origin: string, entry: Seeded) => `${origin}/#f=${encodeURIComponent(entry.diskPath)}`;
 
+function sampleFor(surface: Surface, target: Seeded, origin: string, timeoutMs: number): string {
+  return sampleExpression({
+    check: paintedCheck(surface, target),
+    origin,
+    timeoutMs,
+    rows: rowsExpression(surface, target),
+    target: target.diskPath,
+  });
+}
+
+/** Leave the app document, closing the log streams it opened first: their
+    sockets are what the NEXT document would otherwise queue behind. */
+async function leavePage(cdp: Cdp): Promise<void> {
+  try {
+    await cdp.evaluate("(window.__net && window.__net.closeStreams ? window.__net.closeStreams() : 0)");
+  } catch {
+    /* already on about:blank, or the document went away under the call */
+  }
+  await navigate(cdp, "about:blank");
+}
+
 /** A fresh document at the target's deep link, measured from navigation start. */
 async function openFresh(cdp: Cdp, origin: string, surface: Surface, target: Seeded, timeoutMs = 120_000): Promise<Sample> {
-  await navigate(cdp, "about:blank");
+  await leavePage(cdp);
   await navigate(cdp, deepLink(origin, target));
-  return cdp.evaluate<Sample>(sampleExpression(paintedCheck(surface, target), "0", timeoutMs, rowsExpression(surface, target)));
+  return cdp.evaluate<Sample>(sampleFor(surface, target, "0", timeoutMs));
 }
 
 /** Empty every client store, so the next document is a true cold open. The
     app document is left first: a store cleared under a live page races the
     page's own writes, and an evaluate in flight across it dies with it. */
 async function clearStorage(cdp: Cdp, origin: string): Promise<void> {
-  await navigate(cdp, "about:blank");
+  /* In the page first: the CDP clear is asynchronous with respect to the
+     document, and a "cold" open that still found a persisted tail is not the
+     case the row claims to measure. `storedTails` below proves which it was. */
+  try {
+    await cdp.evaluate("(() => { try { localStorage.clear(); sessionStorage.clear(); return 1; } catch (error) { return 0; } })()");
+  } catch {
+    /* already on about:blank */
+  }
+  await leavePage(cdp);
   await cdp.send("Storage.clearDataForOrigin", { origin, storageTypes: "all" });
 }
 
@@ -263,29 +452,72 @@ async function retrying<T>(what: string, run: () => Promise<T>): Promise<T> {
   }
 }
 
-async function runSurface(cdp: Cdp, origin: string, surface: Surface, targets: Target[], other: Seeded): Promise<void> {
+/**
+ * Step away from the target far enough that coming back is a REOPEN.
+ *
+ * On the phone one conversation is on screen at a time, so the neighbour in
+ * the same project is enough. On the desktop the board keeps every pane of the
+ * current project mounted with its rows in the DOM: a switch inside the
+ * project leaves the target's rows exactly where they were, and a milestone
+ * that only asks for rows is then already true before the gesture — which is
+ * what made the in-app desktop numbers sub-millisecond and meaningless. So the
+ * desktop steps into ANOTHER project, and the step asserts the target's pane
+ * is really gone before anything is timed.
+ */
+async function stepAway(cdp: Cdp, surface: Surface, target: Seeded, neighbour: Seeded, elsewhere: Seeded): Promise<void> {
+  const away = surface === "phone" ? neighbour : elsewhere;
+  await retrying("in-app step away", async () => {
+    await cdp.evaluate(`location.hash = ${js(`#f=${encodeURIComponent(away.diskPath)}`)}`);
+    await cdp.evaluate(sampleFor(surface, away, "0", 60_000));
+  });
+  const gone = await cdp.evaluate<{ rows: number; focused: string | null }>(
+    `(() => { const p = window.__profile; return { rows: ${rowsExpression(surface, target)}, focused: p.focusedPath() }; })()`,
+  );
+  const left = surface === "phone" ? gone.focused !== target.diskPath : gone.rows === 0;
+  if (!left) {
+    throw new Error(`the step away left the target on screen (rows ${gone.rows}, focused ${gone.focused}): coming back would not be a reopen`);
+  }
+}
+
+/**
+ * A cold open that is provably cold. The page keeps a throttled write of its
+ * own pending, so a store cleared while the document is still alive can be
+ * rewritten in the milliseconds before it goes away — and a "cold" row that
+ * actually found a tail measures the opposite of what it claims. The document
+ * reports what it started with, so the sample is simply taken again.
+ */
+async function coldSample(cdp: Cdp, origin: string, surface: Surface, entry: Seeded): Promise<Sample> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await clearStorage(cdp, origin);
+    const sample = await retrying("cold open", () => openFresh(cdp, origin, surface, entry));
+    if (sample.storedTails <= 0) return sample;
+    console.log("  ! the cold document still found a persisted tail (the page rewrote it as the store was cleared); taking the sample again");
+  }
+  throw new Error("could not open a document with an empty store");
+}
+
+async function runSurface(cdp: Cdp, origin: string, surface: Surface, targets: Target[], other: Seeded, elsewhere: Seeded): Promise<void> {
   await setViewport(cdp, surface);
+  await navigate(cdp, deepLink(origin, targets[0]!.entry));
+  const viewport = await assertViewport(cdp, surface);
+  console.log(`  viewport ${viewport.width}x${viewport.height} at dpr ${viewport.dpr}`);
 
   for (const { entry, label } of targets) {
     const cold: Sample[] = [];
     const reload: Sample[] = [];
     const session: Sample[] = [];
     for (let run = 0; run < REPEAT; run += 1) {
-      await clearStorage(cdp, origin);
-      cold.push(await retrying("cold open", () => openFresh(cdp, origin, surface, entry)));
+      cold.push(await coldSample(cdp, origin, surface, entry));
       /* Same browser profile, same storage, a brand new document: the reopen
          the operator performs with a reload, a respawn or a resume. */
       reload.push(await retrying("reopen after reload", () => openFresh(cdp, origin, surface, entry)));
 
-      /* In-app: away to the neighbour conversation and back, no navigation. */
-      await retrying("in-app step away", async () => {
-        await cdp.evaluate(`location.hash = ${js(`#f=${encodeURIComponent(other.diskPath)}`)}`);
-        await cdp.evaluate(sampleExpression(paintedCheck(surface, other), "0", 60_000, rowsExpression(surface, other)));
-      });
+      /* In-app, no navigation: away until the pane is gone, then back. */
+      await stepAway(cdp, surface, entry, other, elsewhere);
       session.push(await retrying("reopen in session", () => cdp.evaluate<Sample>(`(async () => {
         const since = performance.now();
         location.hash = ${js(`#f=${encodeURIComponent(entry.diskPath)}`)};
-        return (${sampleExpression(paintedCheck(surface, entry), "since", 60_000, rowsExpression(surface, entry))});
+        return (${sampleFor(surface, entry, "since", 60_000)});
       })()`)));
     }
     recordSamples(surface, `cold open, ${label} (empty storage, since navigation start)`, cold);
@@ -326,7 +558,7 @@ async function runSurface(cdp: Cdp, origin: string, surface: Surface, targets: T
 async function captureReopenMoment(cdp: Cdp, origin: string, target: Seeded, dir: string, label: string, cold: boolean): Promise<void> {
   fs.mkdirSync(dir, { recursive: true });
   if (cold) await clearStorage(cdp, origin);
-  else await navigate(cdp, "about:blank");
+  else await leavePage(cdp);
   const shoot = async (name: string): Promise<void> => {
     const shot = await cdp.send<{ data: string }>("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
     fs.writeFileSync(path.join(dir, name), Buffer.from(shot.data, "base64"));
@@ -375,7 +607,7 @@ async function serverTimings(origin: string, small: Seeded, large: Seeded): Prom
 /* ── main ───────────────────────────────────────────────────────────────── */
 
 async function main(): Promise<void> {
-  const { small, large, other, total } = seedHome();
+  const { small, large, other, elsewhere, total } = seedHome();
   const env = seededEnvironment(root, { nodeEnv: "production" });
   const origin = `http://127.0.0.1:${PORT}`;
   if (!fs.existsSync(path.join(repoRoot, ".next", "BUILD_ID"))) {
@@ -415,6 +647,9 @@ async function main(): Promise<void> {
     cdp = await Cdp.connect(await pageWebSocketUrl(CDP_PORT));
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
+    /* Before the first document: the stream and paint instrumentation, and a
+       foregrounded page, without which no frame is a measurement. */
+    await armDocuments(cdp);
 
     /* One warm-up document: the first request of a production server still
        loads its route modules, and that belongs to no case under measurement. */
@@ -426,8 +661,8 @@ async function main(): Promise<void> {
       { entry: large, label: `large transcript (${large.records} records, ${Math.round(large.bytes / 1024)} kB)` },
     ];
     for (const surface of SURFACES) {
-      console.log(surface === "phone" ? "phone 390×844" : "desktop 1280×800");
-      await runSurface(cdp, origin, surface, targets, other);
+      console.log(`${surface} ${VIEWPORTS[surface].width}×${VIEWPORTS[surface].height}`);
+      await runSurface(cdp, origin, surface, targets, other, elsewhere);
     }
 
     if (SHOTS) {
@@ -441,7 +676,7 @@ async function main(): Promise<void> {
     }
 
     const markdown = [
-      table.markdown("#1821 reopen profile (real browser: headless Chrome, production build, throwaway home)", "median ms to the first painted feed row"),
+      table.markdown("#1821 reopen profile (real browser: headless Chrome, production build, throwaway home)", "median ms to the painted frame carrying the rows"),
       "",
       "Server-side, measured against the same production server:",
       ...server_notes.map((note) => `- ${note}`),
@@ -449,6 +684,17 @@ async function main(): Promise<void> {
     ].join("\n");
     console.log(`\n${markdown}`);
     if (OUT) fs.writeFileSync(OUT, markdown);
+    if (JSON_OUT) {
+      fs.writeFileSync(JSON_OUT, `${JSON.stringify({
+        viewports: Object.fromEntries(SURFACES.map((surface) => [surface, VIEWPORTS[surface]])),
+        corpus: { seededTranscripts: total, projects: BACKGROUND_PROJECTS + 1, smallRecords: small.records, largeRecords: large.records, largeKb: Math.round(large.bytes / 1024) },
+        samplesPerCase: REPEAT,
+        server: server_notes,
+        rows: table.rows,
+        cases: collected,
+      }, null, 2)}\n`);
+      console.log(`raw samples → ${JSON_OUT}`);
+    }
   } finally {
     cdp?.close();
     await stop(chrome);

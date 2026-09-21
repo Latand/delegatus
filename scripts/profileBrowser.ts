@@ -128,8 +128,50 @@ export function launchChrome(options: { cdpPort: number; userDataDir: string; ho
     "--disable-gpu",
     "--hide-scrollbars",
     "--window-size=1280,800",
+    /* A profile whose milestone is a PAINTED frame cannot run on a renderer
+       Chrome has decided is in the background: animation frames are throttled
+       to a crawl there and every number becomes the throttle's. */
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-features=CalculateNativeWinOcclusion",
     "about:blank",
   ], { env: { ...process.env, HOME: options.home }, stdio: "ignore" });
+}
+
+/* ── viewports ──────────────────────────────────────────────────────────── */
+
+export type Surface = "desktop" | "phone";
+
+/** The two viewports every profile here reports, as explicit metrics. The
+    desktop one is an override like the phone's on purpose: a window sized
+    1280x800 from the command line gives the PAGE 1280x713, and a table that
+    says 1280x800 then describes something that was never measured. */
+export const VIEWPORTS: Record<Surface, { width: number; height: number; deviceScaleFactor: number; mobile: boolean }> = {
+  desktop: { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false },
+  phone: { width: 390, height: 844, deviceScaleFactor: 2, mobile: true },
+};
+
+export async function setViewport(cdp: Cdp, surface: Surface): Promise<void> {
+  await cdp.send("Emulation.setDeviceMetricsOverride", VIEWPORTS[surface]);
+  await cdp.send("Emulation.setTouchEmulationEnabled", surface === "phone" ? { enabled: true, maxTouchPoints: 5 } : { enabled: false });
+  await cdp.send("Emulation.setEmulatedMedia", {
+    features: surface === "phone"
+      ? [{ name: "pointer", value: "coarse" }, { name: "hover", value: "none" }]
+      : [{ name: "pointer", value: "fine" }, { name: "hover", value: "hover" }],
+  });
+}
+
+/** What the PAGE actually got, which is the only viewport worth reporting. */
+export async function assertViewport(cdp: Cdp, surface: Surface): Promise<{ width: number; height: number; dpr: number }> {
+  const seen = await cdp.evaluate<{ width: number; height: number; dpr: number }>(
+    "({ width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio })",
+  );
+  const want = VIEWPORTS[surface];
+  if (seen.width !== want.width || seen.height !== want.height) {
+    throw new Error(`${surface} viewport is ${seen.width}x${seen.height}, not the ${want.width}x${want.height} this profile reports`);
+  }
+  return seen;
 }
 
 /* ── raw CDP ────────────────────────────────────────────────────────────── */
@@ -239,6 +281,15 @@ export const PROBE = String.raw`
     chip: (path, title) => Array.from(document.querySelectorAll('button[title]')).find((b) => b.title === title) || null,
     chipActive: (title) => { const b = probe.chip(null, title); return !!(b && b.className.includes('border-accent/60')); },
     firstRow: (path) => { const el = pane(path); return el ? el.querySelector('[data-feed-key]') : null; },
+    /* Where the rendered window starts in the tail stream, straight off the
+       scroller. A window restored from the persisted tail starts deep in the
+       file; a first read of the same file starts at 0. It is the one signal
+       that says WHICH path produced the rows on screen. */
+    windowStart: (path) => {
+      const el = pane(path) || probe.focusedPane();
+      const scroller = el ? el.querySelector('[data-tail-lines-start]') : document.querySelector('[data-tail-lines-start]');
+      return scroller ? Number(scroller.getAttribute('data-tail-lines-start')) : null;
+    },
     /* Poll until every named check holds; report when EACH one first held. */
     untilEach: (checks, timeoutMs) => new Promise((resolve, reject) => {
       const start = performance.now();
@@ -260,6 +311,44 @@ export const PROBE = String.raw`
     requestsSince: (sinceMs) => performance.getEntriesByType('resource')
       .filter((entry) => entry.startTime >= sinceMs && entry.name.includes('/api/'))
       .map((entry) => { const u = new URL(entry.name); return { at: Math.round(entry.startTime - sinceMs), ms: Math.round(entry.duration), name: (u.pathname + u.search).slice(0, 90) }; }),
+    /* The milestone a reader can SEE. The poll is what notices the DOM; the
+       two animation frames after it are what make the answer a frame that was
+       rendered rather than a timer reading — the first callback runs before
+       the paint of the frame the change is in, the second after it. A renderer
+       that is not producing frames at all (a throttled background tab) is
+       reported as such instead of being silently timed by the fallback. */
+    paintedAt: (check, timeoutMs) => probe.until(check, timeoutMs).then((milestone) => new Promise((resolve) => {
+      const detected = performance.now();
+      let settled = false;
+      const done = (rafConfirmed) => {
+        if (settled) return;
+        settled = true;
+        resolve({ ...milestone, detected: Math.round(detected * 10) / 10, painted: Math.round(performance.now() * 10) / 10, rafConfirmed });
+      };
+      const fallback = setTimeout(() => done(false), 1000);
+      requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(fallback); done(true); }));
+    })),
+    /* What the network probe recorded for this document, trimmed to one step.
+       Both bounds are performance.now() stamps; a whole document starts at 0. */
+    net: (since, until) => {
+      const net = window.__net;
+      if (!net) return null;
+      const within = (at) => at !== null && at >= since && at <= until;
+      const requests = net.requests.filter((entry) => within(entry.end));
+      const streams = net.streams.filter((entry) => entry.open >= since && entry.open <= until);
+      return {
+        requests: requests.map((entry) => ({ url: entry.url, start: entry.start, end: entry.end, bytes: entry.bytes })),
+        streams: streams.map((entry) => ({ url: entry.url, open: entry.open, connected: entry.connected, firstChunkAt: entry.firstChunkAt, bytes: entry.bytes, chunks: entry.chunks, paths: entry.paths })),
+        /* Every stream, so a step that rides a connection opened earlier can
+           still find the chunk that carried its transcript. */
+        allStreams: net.streams.map((entry) => ({ open: entry.open, paths: entry.paths })),
+        paint: net.paint,
+        storedTails: net.storedTails,
+        storeKeys: net.storeKeys || [],
+        streamCount: net.streams.length,
+        longtasks: net.longtasks.filter((entry) => entry.start + entry.duration >= since && entry.start <= until),
+      };
+    },
     /* Poll on a short timer until check() holds; resolve with real ms since the
        call and the animation frames that elapsed meanwhile. Headless Chrome
        throttles requestAnimationFrame for an unfocused page, so the frame
@@ -290,6 +379,143 @@ export const PROBE = String.raw`
   window.__profile = probe;
 })();
 `;
+
+/**
+ * Installed BEFORE any application code, in every document: what the page's
+ * own resource timeline cannot answer.
+ *
+ * The Viewer carries transcript bytes on a server-sent event stream that never
+ * ends, and a resource entry's `responseEnd` for such a stream lands when the
+ * stream CLOSES — long after the rows it delivered were painted, which is why
+ * a reopen used to be recorded as having had no log request at all. So the
+ * stream is instrumented where the bytes actually arrive: when it opened, when
+ * the first chunk for each transcript landed, and how many bytes that was.
+ * `fetch` is wrapped for the same reason on the request side, and the paint
+ * and long-task observers give the client-side half of the attribution.
+ */
+export const NETWORK_PROBE = String.raw`
+(() => {
+  /* What this document STARTS with, read before a line of application code
+     runs: how many conversations already have a persisted tail here. It is
+     what makes a "cold open" row provably cold and a "reopen" row provably
+     warm, instead of both being claims about what the driver meant to set up.
+     Read again when the ORIGIN changes under the same global: Chrome reuses
+     the window of a frame's initial empty document for the first real
+     navigation into it, and that first reading was of an opaque origin's
+     empty storage — which is not what the document that follows can see. */
+  const readStore = (into) => {
+    try {
+      let count = 0;
+      const keys = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (!key) continue;
+        /* Shortened: a transcript path is a private path. */
+        keys.push(key.length > 40 ? key.slice(0, 12) + '…' + key.slice(-12) : key);
+        if (key.indexOf('llvTail:') === 0 && key.indexOf(':index') < 0) count += 1;
+      }
+      into.storedTails = count;
+      into.storeKeys = keys;
+    } catch (error) {
+      into.storedTails = -1;
+      into.storeKeys = [];
+    }
+    into.storeOrigin = location.origin;
+  };
+  if (window.__net) {
+    if (window.__net.storeOrigin !== location.origin) readStore(window.__net);
+    return;
+  }
+  const round = (value) => Math.round(value * 10) / 10;
+  const net = { requests: [], streams: [], paint: {}, longtasks: [] };
+  window.__net = net;
+  readStore(net);
+  try {
+    new PerformanceObserver((list) => { for (const entry of list.getEntries()) net.paint[entry.name] = round(entry.startTime); }).observe({ type: 'paint', buffered: true });
+  } catch (error) { net.paintObserver = String(error); }
+  try {
+    new PerformanceObserver((list) => { for (const entry of list.getEntries()) net.longtasks.push({ start: round(entry.startTime), duration: round(entry.duration) }); }).observe({ type: 'longtask', buffered: true });
+  } catch (error) { net.longtaskObserver = String(error); }
+  const realFetch = window.fetch;
+  window.fetch = function (input, init) {
+    const url = String(typeof input === 'string' ? input : (input && input.url) || input);
+    const entry = { url: url.slice(0, 200), start: round(performance.now()), end: null, bytes: null };
+    if (net.requests.length < 2000) net.requests.push(entry);
+    const settle = (response) => {
+      entry.end = round(performance.now());
+      const length = response && response.headers ? response.headers.get('content-length') : null;
+      entry.bytes = length === null || length === undefined ? null : Number(length);
+      return response;
+    };
+    return realFetch.call(this, input, init).then(settle, (error) => { entry.end = round(performance.now()); throw error; });
+  };
+  const sources = [];
+  /* Every stream this document opened, closed on demand. A driven sequence of
+     documents otherwise leaves one never-ending stream per document holding a
+     socket, and Chrome allows six per origin over HTTP/1.1: the next document
+     then waits ~57 s for one to be freed, which is a property of the DRIVER,
+     not of a reopen. A real reader never opens twelve documents in a minute.
+     (The Viewer's stream never ending is real, and is #1958.) */
+  net.closeStreams = () => {
+    let closed = 0;
+    for (const source of sources) {
+      try { source.close(); closed += 1; } catch (error) { /* already gone */ }
+    }
+    sources.length = 0;
+    return closed;
+  };
+  const RealEventSource = window.EventSource;
+  if (RealEventSource) {
+    const Patched = function (url, config) {
+      const source = new RealEventSource(url, config);
+      sources.push(source);
+      const record = { url: String(url).slice(0, 160), open: round(performance.now()), connected: null, firstChunkAt: null, chunks: 0, bytes: 0, paths: {} };
+      if (net.streams.length < 500) net.streams.push(record);
+      const ids = {};
+      try {
+        const subs = JSON.parse(decodeURIComponent(String(url).split('subs=')[1] || '[]'));
+        for (const sub of subs) ids[String(sub.id)] = sub.path;
+      } catch (error) { record.subsError = String(error); }
+      source.addEventListener('open', () => { record.connected = round(performance.now()); });
+      source.addEventListener('chunk', (event) => {
+        const at = round(performance.now());
+        const data = event.data || '';
+        /* The subscriber id only. Parsing a 768 kB payload here would BE the
+           measurement; its length is the payload size we want to report. */
+        const id = /^\{"id":"([^"]{1,12})"/.exec(data);
+        const path = id ? ids[id[1]] : undefined;
+        record.chunks += 1;
+        record.bytes += data.length;
+        if (record.firstChunkAt === null) record.firstChunkAt = at;
+        if (path) {
+          const seen = record.paths[path];
+          if (!seen) record.paths[path] = { at: at, bytes: data.length, chunks: 1 };
+          else { seen.bytes += data.length; seen.chunks += 1; }
+        }
+      });
+      return source;
+    };
+    Patched.prototype = RealEventSource.prototype;
+    Patched.CONNECTING = RealEventSource.CONNECTING;
+    Patched.OPEN = RealEventSource.OPEN;
+    Patched.CLOSED = RealEventSource.CLOSED;
+    window.EventSource = Patched;
+  }
+})();
+`;
+
+/** What one measured step saw on the wire and on the main thread. */
+export interface NetworkTrace {
+  requests: Array<{ url: string; start: number; end: number; bytes: number | null }>;
+  streams: Array<{ url: string; open: number; connected: number | null; firstChunkAt: number | null; bytes: number; chunks: number; paths: Record<string, { at: number; bytes: number; chunks: number }> }>;
+  allStreams: Array<{ open: number; paths: Record<string, { at: number; bytes: number; chunks: number }> }>;
+  paint: Record<string, number>;
+  /** Persisted conversation tails present when the document started. */
+  storedTails: number;
+  storeKeys: string[];
+  streamCount: number;
+  longtasks: Array<{ start: number; duration: number }>;
+}
 
 export interface Milestone {
   ms: number;
@@ -374,4 +600,11 @@ export async function navigate(cdp: Cdp, url: string): Promise<void> {
   await cdp.send("Page.navigate", { url });
   await loaded;
   await cdp.evaluate(PROBE);
+}
+
+/** Install the network probe for every document this target will load, and
+    keep the page in the foreground so its frames are produced at all. */
+export async function armDocuments(cdp: Cdp): Promise<void> {
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: NETWORK_PROBE });
+  await cdp.send("Page.bringToFront");
 }

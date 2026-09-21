@@ -1,200 +1,1566 @@
 {
   "issue": 1821,
-  "what": "Time from opening a conversation to its first painted feed row, on a production build, before and after the persisted tail cache.",
-  "driver": "bun scripts/profile-reopen.ts --repeat 3",
+  "what": "Time from opening a conversation to the PAINTED frame that carries its first feed rows, on a production build, before and after the persisted tail cache.",
+  "driver": "bun scripts/profile-reopen.ts --surface <desktop|phone> --repeat 3 --json <file>",
   "runtime": "the Bun pinned in the Dockerfile, serving `next start` (never `next dev`)",
-  "browser": "headless Chrome over raw CDP; desktop 1280x800 and phone 390x844",
+  "browser": "headless Chrome over raw CDP, foregrounded, with background throttling disabled",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "deviceScaleFactor": 1,
+      "mobile": false
+    },
+    "phone": {
+      "width": 390,
+      "height": 844,
+      "deviceScaleFactor": 2,
+      "mobile": true
+    }
+  },
+  "milestone": "the DOM check for the target's rows plus the two animation frames that carry them to the compositor; every sample reports whether a frame was actually produced (`rafConfirmed`).",
+  "attribution": {
+    "storedTails": "conversations with a persisted tail present when the document STARTED, read before any application code ran: 0 proves a cold open, 1 proves a warm one.",
+    "firstBytesMs": "when transcript bytes for this conversation first reached the page BEFORE the paint, on whichever transport delivered them (`via`: the event stream, or the POST polling fallback). Null means the rows were painted without waiting for any.",
+    "revalidatedMs": "when those bytes arrived at all, before or after the paint.",
+    "parseRenderMs": "bytes in hand → the painted frame: the client's own parse and render, with `blockingMs` the main-thread long-task time inside it.",
+    "payloadKb": "size of that first delivered chunk as it came over the wire.",
+    "note": "A resource entry's responseEnd cannot report this: the Viewer's log stream never ends, so its entry closes only when the page does."
+  },
   "corpus": {
     "seededTranscripts": 183,
     "projects": 10,
-    "smallTargetRecords": 12,
-    "largeTargetRecords": 12000,
-    "largeTargetKb": 3546,
-    "note": "Invented transcripts in a throwaway home under the temp root; no account, no operator state."
+    "smallRecords": 12,
+    "largeRecords": 12000,
+    "largeKb": 3616
   },
   "samplesPerCase": 3,
-  "statistic": "median of 3, with the min-max spread in the attribution string",
+  "statistic": "median of 3, with the min-max spread and the per-sample attribution in the strings; the raw samples are below each case.",
+  "server": {
+    "before": [
+      "GET /api/files?view=summary: median 9.4 ms (6.1–59.9 ms over 5 runs)",
+      "POST /api/logs, small transcript (3 kB on disk): median 5.2 ms (4.2–10.3 ms over 5 runs)",
+      "POST /api/logs, large transcript (3616 kB on disk): median 8.5 ms (7.8–9.2 ms over 5 runs)"
+    ],
+    "after": [
+      "GET /api/files?view=summary: median 5.3 ms (4.8–56.4 ms over 5 runs)",
+      "POST /api/logs, small transcript (3 kB on disk): median 3.9 ms (3.4–8.2 ms over 5 runs)",
+      "POST /api/logs, large transcript (3616 kB on disk): median 7.3 ms (6.6–12.4 ms over 5 runs)"
+    ]
+  },
   "cases": [
     {
       "surface": "desktop",
       "step": "cold open, small transcript (12 records, 3 kB) (empty storage, since navigation start)",
       "before": {
-        "medianMs": "484.2",
-        "attribution": "353\u2013497.2 ms over 3 runs; document 9.2ms; /api/files answered 182.5ms; no log request before the paint; rows 12"
+        "medianMs": 425.2,
+        "attribution": "393.2–471.2 ms over 3 runs; document 5.3ms; first contentful paint 56ms; /api/files answered 122ms; log stream opened 380.2ms; first transcript bytes 385.4ms (3.9 kB); bytes→rows 43ms (main thread 0ms); frame +16.3ms; tails in store at document start 0/0/0; rows 12",
+        "samples": [
+          {
+            "paintedMs": 471.2,
+            "detectedMs": 454,
+            "rafConfirmed": true,
+            "documentMs": 5.5,
+            "fcpMs": 56,
+            "filesMs": 166.5,
+            "filesKb": null,
+            "streamOpenMs": 418.2,
+            "firstBytesMs": 424.9,
+            "revalidatedMs": 424.9,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 46.3,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 393.2,
+            "detectedMs": 380.3,
+            "rafConfirmed": true,
+            "documentMs": 5.3,
+            "fcpMs": 56,
+            "filesMs": 98.6,
+            "filesKb": null,
+            "streamOpenMs": 344.3,
+            "firstBytesMs": 350.2,
+            "revalidatedMs": 350.2,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 43,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 425.2,
+            "detectedMs": 408.9,
+            "rafConfirmed": true,
+            "documentMs": 4.7,
+            "fcpMs": 64,
+            "filesMs": 122,
+            "filesKb": null,
+            "streamOpenMs": 380.2,
+            "firstBytesMs": 385.4,
+            "revalidatedMs": 385.4,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 39.8,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "380.1",
-        "attribution": "274.3\u2013408.6 ms over 3 runs; document 5.9ms; /api/files answered 115.9ms; no log request before the paint; rows 12"
+        "medianMs": 450.1,
+        "attribution": "428–538.5 ms over 3 runs; document 5.4ms; first contentful paint 64ms; /api/files answered 138.5ms; log stream opened 406.5ms; first transcript bytes 412.2ms (3.9 kB); bytes→rows 37.9ms (main thread 0ms); frame +16.8ms; tails in store at document start 0/0/0; rows 12",
+        "samples": [
+          {
+            "paintedMs": 538.5,
+            "detectedMs": 518.5,
+            "rafConfirmed": true,
+            "documentMs": 6.6,
+            "fcpMs": 64,
+            "filesMs": 192.5,
+            "filesKb": null,
+            "streamOpenMs": 489.1,
+            "firstBytesMs": 500.5,
+            "revalidatedMs": 500.5,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 38,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 428,
+            "detectedMs": 411.2,
+            "rafConfirmed": true,
+            "documentMs": 5.4,
+            "fcpMs": 76,
+            "filesMs": 138.5,
+            "filesKb": null,
+            "streamOpenMs": 389.6,
+            "firstBytesMs": 395.9,
+            "revalidatedMs": 395.9,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 32.1,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 450.1,
+            "detectedMs": 446,
+            "rafConfirmed": true,
+            "documentMs": 5.2,
+            "fcpMs": 56,
+            "filesMs": 112.6,
+            "filesKb": null,
+            "streamOpenMs": 406.5,
+            "firstBytesMs": 412.2,
+            "revalidatedMs": 412.2,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 37.9,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          }
+        ]
       }
     },
     {
       "surface": "desktop",
       "step": "reopen after reload, small transcript (12 records, 3 kB) (new document, storage kept)",
       "before": {
-        "medianMs": "461.2",
-        "attribution": "338.9\u201357686.1 ms over 3 runs; document 6.1ms; /api/files answered 146.4ms; no log request before the paint; rows 12"
+        "medianMs": 324.3,
+        "attribution": "324.1–326 ms over 3 runs; document 5.6ms; first contentful paint 56ms; /api/files answered 115.7ms; log stream opened 280.1ms; first transcript bytes 285.9ms (3.9 kB); bytes→rows 40.1ms (main thread 0ms); frame +14.8ms; tails in store at document start 0/0/0; rows 12",
+        "samples": [
+          {
+            "paintedMs": 324.1,
+            "detectedMs": 309.3,
+            "rafConfirmed": true,
+            "documentMs": 5.9,
+            "fcpMs": 56,
+            "filesMs": 115.7,
+            "filesKb": null,
+            "streamOpenMs": 281.4,
+            "firstBytesMs": 287,
+            "revalidatedMs": 287,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 37.1,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 324.3,
+            "detectedMs": 305.1,
+            "rafConfirmed": true,
+            "documentMs": 5.6,
+            "fcpMs": 56,
+            "filesMs": 120.8,
+            "filesKb": null,
+            "streamOpenMs": 275.3,
+            "firstBytesMs": 281.1,
+            "revalidatedMs": 281.1,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 43.2,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 326,
+            "detectedMs": 316.2,
+            "rafConfirmed": true,
+            "documentMs": 4.3,
+            "fcpMs": 52,
+            "filesMs": 105.1,
+            "filesKb": null,
+            "streamOpenMs": 280.1,
+            "firstBytesMs": 285.9,
+            "revalidatedMs": 285.9,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 40.1,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "197.5",
-        "attribution": "194.2\u2013269.8 ms over 3 runs; document 6.2ms; /api/files answered 107.5ms; no log request before the paint; rows 12"
+        "medianMs": 266.1,
+        "attribution": "260–374.5 ms over 3 runs; document 5.3ms; first contentful paint 56ms; /api/files answered 124.6ms; painted before any transcript bytes; revalidated 334.6ms; frame +36.1ms; tails in store at document start 1/1/1; rows 12",
+        "samples": [
+          {
+            "paintedMs": 374.5,
+            "detectedMs": 333.7,
+            "rafConfirmed": true,
+            "documentMs": 10.1,
+            "fcpMs": 88,
+            "filesMs": 188.8,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 402.4,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 72,
+            "rows": 12,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 260,
+            "detectedMs": 223.9,
+            "rafConfirmed": true,
+            "documentMs": 5.1,
+            "fcpMs": 52,
+            "filesMs": 124.6,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 334.6,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 90,
+            "rows": 12,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 266.1,
+            "detectedMs": 232,
+            "rafConfirmed": true,
+            "documentMs": 5.3,
+            "fcpMs": 56,
+            "filesMs": 116.3,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 292.7,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 58,
+            "rows": 12,
+            "storedTails": 1
+          }
+        ]
       }
     },
     {
       "surface": "desktop",
       "step": "reopen in the same session, small transcript (12 records, 3 kB) (in-app, since the gesture)",
       "before": {
-        "medianMs": "1",
-        "attribution": "0.8\u20131.6 ms over 3 runs; no /api/files before the paint; no log request before the paint; rows 12"
+        "medianMs": 66.4,
+        "attribution": "63.1–78.8 ms over 3 runs; /api/files answered 54.5ms; painted before any transcript bytes; revalidated 119.2ms; frame +12.1ms; tails in store at document start 0/0/0; rows 12",
+        "samples": [
+          {
+            "paintedMs": 66.4,
+            "detectedMs": 54.3,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 54.5,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 112.3,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 63.1,
+            "detectedMs": 53.6,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 49.9,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 125.5,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 78.8,
+            "detectedMs": 62.5,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 59.3,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 119.2,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "0.6",
-        "attribution": "0.6\u20130.8 ms over 3 runs; no /api/files before the paint; no log request before the paint; rows 12"
+        "medianMs": 94.3,
+        "attribution": "62.2–94.7 ms over 3 runs; /api/files answered 66.7ms; painted before any transcript bytes; revalidated 127.2ms; frame +23.5ms; tails in store at document start 1/1/1; rows 12",
+        "samples": [
+          {
+            "paintedMs": 94.3,
+            "detectedMs": 70.8,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 70.2,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 129.5,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 52,
+            "rows": 12,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 62.2,
+            "detectedMs": 52.5,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 48.3,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 109.8,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 94.7,
+            "detectedMs": 68.2,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 66.7,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 127.2,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 1
+          }
+        ]
       }
     },
     {
       "surface": "desktop",
-      "step": "cold open, large transcript (12000 records, 3546 kB) (empty storage, since navigation start)",
+      "step": "cold open, large transcript (12000 records, 3616 kB) (empty storage, since navigation start)",
       "before": {
-        "medianMs": "611.8",
-        "attribution": "471.6\u2013801 ms over 3 runs; document 7.3ms; /api/files answered 162.8ms; no log request before the paint; rows 300"
+        "medianMs": 497.9,
+        "attribution": "496.1–526.6 ms over 3 runs; document 3.9ms; first contentful paint 52ms; /api/files answered 109.8ms; log stream opened 359.4ms; first transcript bytes 376.2ms (847.7 kB); bytes→rows 149.1ms (main thread 96ms); frame +30.9ms; tails in store at document start 0/0/0; rows 300",
+        "samples": [
+          {
+            "paintedMs": 497.9,
+            "detectedMs": 466.8,
+            "rafConfirmed": true,
+            "documentMs": 3.9,
+            "fcpMs": 48,
+            "filesMs": 109.8,
+            "filesKb": null,
+            "streamOpenMs": 359.4,
+            "firstBytesMs": 376.2,
+            "revalidatedMs": 376.2,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 121.7,
+            "blockingMs": 87,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 496.1,
+            "detectedMs": 465.2,
+            "rafConfirmed": true,
+            "documentMs": 3.9,
+            "fcpMs": 52,
+            "filesMs": 98.1,
+            "filesKb": null,
+            "streamOpenMs": 335.6,
+            "firstBytesMs": 347,
+            "revalidatedMs": 347,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 149.1,
+            "blockingMs": 96,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 526.6,
+            "detectedMs": 501.2,
+            "rafConfirmed": true,
+            "documentMs": 4.5,
+            "fcpMs": 60,
+            "filesMs": 111.5,
+            "filesKb": null,
+            "streamOpenMs": 365.1,
+            "firstBytesMs": 376.3,
+            "revalidatedMs": 376.3,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 150.3,
+            "blockingMs": 105,
+            "rows": 300,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "681.9",
-        "attribution": "424.4\u2013772.5 ms over 3 runs; document 10.8ms; /api/files answered 139.5ms; no log request before the paint; rows 300"
+        "medianMs": 528.6,
+        "attribution": "520–544.6 ms over 3 runs; document 4.7ms; first contentful paint 56ms; /api/files answered 110.6ms; log stream opened 371.4ms; first transcript bytes 383.3ms (847.7 kB); bytes→rows 148.5ms (main thread 96ms); frame +34.7ms; tails in store at document start 0/0/0; rows 300",
+        "samples": [
+          {
+            "paintedMs": 520,
+            "detectedMs": 477.4,
+            "rafConfirmed": true,
+            "documentMs": 4.7,
+            "fcpMs": 56,
+            "filesMs": 110.6,
+            "filesKb": null,
+            "streamOpenMs": 359.9,
+            "firstBytesMs": 371.5,
+            "revalidatedMs": 371.5,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 148.5,
+            "blockingMs": 95,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 528.6,
+            "detectedMs": 493.9,
+            "rafConfirmed": true,
+            "documentMs": 4.8,
+            "fcpMs": 56,
+            "filesMs": 99.1,
+            "filesKb": null,
+            "streamOpenMs": 371.4,
+            "firstBytesMs": 383.3,
+            "revalidatedMs": 383.3,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 145.3,
+            "blockingMs": 96,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 544.6,
+            "detectedMs": 519.3,
+            "rafConfirmed": true,
+            "documentMs": 4.7,
+            "fcpMs": 64,
+            "filesMs": 111.2,
+            "filesKb": null,
+            "streamOpenMs": 384.9,
+            "firstBytesMs": 396,
+            "revalidatedMs": 396,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 148.6,
+            "blockingMs": 96,
+            "rows": 300,
+            "storedTails": 0
+          }
+        ]
       }
     },
     {
       "surface": "desktop",
-      "step": "reopen after reload, large transcript (12000 records, 3546 kB) (new document, storage kept)",
+      "step": "reopen after reload, large transcript (12000 records, 3616 kB) (new document, storage kept)",
       "before": {
-        "medianMs": "632.3",
-        "attribution": "467.5\u201357384.2 ms over 3 runs; document 17.1ms; /api/files answered 260.4ms; no log request before the paint; rows 300"
+        "medianMs": 392.9,
+        "attribution": "388.8–489.8 ms over 3 runs; document 4.3ms; first contentful paint 60ms; /api/files answered 122.1ms; log stream opened 262.4ms; first transcript bytes 273ms (847.7 kB); bytes→rows 119.9ms (main thread 83ms); frame +34.3ms; tails in store at document start 0/0/0; rows 300",
+        "samples": [
+          {
+            "paintedMs": 392.9,
+            "detectedMs": 358.5,
+            "rafConfirmed": true,
+            "documentMs": 4.3,
+            "fcpMs": 60,
+            "filesMs": 122.1,
+            "filesKb": null,
+            "streamOpenMs": 262.4,
+            "firstBytesMs": 273,
+            "revalidatedMs": 273,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 119.9,
+            "blockingMs": 83,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 489.8,
+            "detectedMs": 459.7,
+            "rafConfirmed": true,
+            "documentMs": 4.2,
+            "fcpMs": 64,
+            "filesMs": 166.4,
+            "filesKb": null,
+            "streamOpenMs": 333.5,
+            "firstBytesMs": 346.1,
+            "revalidatedMs": 346.1,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 143.7,
+            "blockingMs": 95,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 388.8,
+            "detectedMs": 354.5,
+            "rafConfirmed": true,
+            "documentMs": 4.3,
+            "fcpMs": 56,
+            "filesMs": 116.2,
+            "filesKb": null,
+            "streamOpenMs": 259.4,
+            "firstBytesMs": 269.2,
+            "revalidatedMs": 269.2,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 119.6,
+            "blockingMs": 83,
+            "rows": 300,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "367.8",
-        "attribution": "227.7\u201357122.3 ms over 3 runs; document 19.1ms; /api/files answered 176.2ms; no log request before the paint; rows 60"
+        "medianMs": 352,
+        "attribution": "332.2–404 ms over 3 runs; document 5.9ms; first contentful paint 84ms; /api/files answered 134.9ms; painted before any transcript bytes; revalidated 484.7ms; frame +67.3ms; tails in store at document start 1/1/1; rows 300",
+        "samples": [
+          {
+            "paintedMs": 404,
+            "detectedMs": 336.7,
+            "rafConfirmed": true,
+            "documentMs": 6,
+            "fcpMs": 84,
+            "filesMs": 144.8,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 529.3,
+            "payloadKb": 4.5,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 143,
+            "rows": 300,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 332.2,
+            "detectedMs": 277.6,
+            "rafConfirmed": true,
+            "documentMs": 5.9,
+            "fcpMs": 104,
+            "filesMs": 134.9,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 466.3,
+            "payloadKb": 4.5,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 64,
+            "rows": 300,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 352,
+            "detectedMs": 272.4,
+            "rafConfirmed": true,
+            "documentMs": 4.8,
+            "fcpMs": 80,
+            "filesMs": 114.1,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 484.7,
+            "payloadKb": 4.5,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 114,
+            "rows": 300,
+            "storedTails": 1
+          }
+        ]
       }
     },
     {
       "surface": "desktop",
-      "step": "reopen in the same session, large transcript (12000 records, 3546 kB) (in-app, since the gesture)",
+      "step": "reopen in the same session, large transcript (12000 records, 3616 kB) (in-app, since the gesture)",
       "before": {
-        "medianMs": "1.7",
-        "attribution": "1.4\u20132.2 ms over 3 runs; no /api/files before the paint; no log request before the paint; rows 300"
+        "medianMs": 168.3,
+        "attribution": "138–185.5 ms over 3 runs; /api/files answered 110ms; painted before any transcript bytes; revalidated 248.7ms; frame +56ms; tails in store at document start 0/0/0; rows 300",
+        "samples": [
+          {
+            "paintedMs": 168.3,
+            "detectedMs": 112.3,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 110,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 248.7,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 96,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 185.5,
+            "detectedMs": 127.4,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 125.2,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 291.4,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 108,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 138,
+            "detectedMs": 86.3,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 84,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 214.3,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 70,
+            "rows": 300,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "0.9",
-        "attribution": "0.9\u20131 ms over 3 runs; no /api/files before the paint; no log request before the paint; rows 300"
-      }
-    },
-    {
-      "surface": "desktop",
-      "step": "revalidate after a reopen: fresh record on disk \u2192 appended row",
-      "before": {
-        "medianMs": "83",
-        "attribution": "rows 12 \u2192 13; first row node preserved yes"
-      },
-      "after": {
-        "medianMs": "10",
-        "attribution": "rows 12 \u2192 13; first row node preserved yes"
+        "medianMs": 136.9,
+        "attribution": "84.2–142.9 ms over 3 runs; /api/files answered 75.6ms; painted before any transcript bytes; revalidated 235.8ms; frame +61.3ms; tails in store at document start 1/1/1; rows 300",
+        "samples": [
+          {
+            "paintedMs": 84.2,
+            "detectedMs": 55.6,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 78.7,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 235.8,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 60,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 136.9,
+            "detectedMs": 75.6,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 73.6,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 224,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 50,
+            "rows": 300,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 142.9,
+            "detectedMs": 80.5,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 75.6,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 246.3,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 108,
+            "rows": 300,
+            "storedTails": 1
+          }
+        ]
       }
     },
     {
       "surface": "phone",
       "step": "cold open, small transcript (12 records, 3 kB) (empty storage, since navigation start)",
       "before": {
-        "medianMs": "310.1",
-        "attribution": "293\u2013370.5 ms over 3 runs; document 10.9ms; /api/files answered 123.8ms; no log request before the paint; rows 13"
+        "medianMs": 314.5,
+        "attribution": "310.8–423.2 ms over 3 runs; document 4ms; first contentful paint 52ms; /api/files answered 93.9ms; log stream opened 271.8ms; first transcript bytes 283.7ms (3.9 kB); bytes→rows 37.6ms (main thread 0ms); frame +23.1ms; tails in store at document start 0/0/0; rows 12",
+        "samples": [
+          {
+            "paintedMs": 423.2,
+            "detectedMs": 399.6,
+            "rafConfirmed": true,
+            "documentMs": 5.4,
+            "fcpMs": 56,
+            "filesMs": 199.6,
+            "filesKb": null,
+            "streamOpenMs": 379.7,
+            "firstBytesMs": 385.6,
+            "revalidatedMs": 385.6,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 37.6,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 314.5,
+            "detectedMs": 292.4,
+            "rafConfirmed": true,
+            "documentMs": 4,
+            "fcpMs": 44,
+            "filesMs": 93.9,
+            "filesKb": null,
+            "streamOpenMs": 271.8,
+            "firstBytesMs": 283.7,
+            "revalidatedMs": 283.7,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 30.8,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 310.8,
+            "detectedMs": 287.7,
+            "rafConfirmed": true,
+            "documentMs": 3.9,
+            "fcpMs": 52,
+            "filesMs": 90.5,
+            "filesKb": null,
+            "streamOpenMs": 267.7,
+            "firstBytesMs": 273,
+            "revalidatedMs": 273,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 37.8,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "334.5",
-        "attribution": "326\u2013334.7 ms over 3 runs; document 5.5ms; /api/files answered 109.4ms; no log request before the paint; rows 13"
+        "medianMs": 385.7,
+        "attribution": "358.5–631.3 ms over 3 runs; document 10.4ms; first contentful paint 76ms; /api/files answered 152.3ms; log stream opened 349.4ms; first transcript bytes 357ms (3.9 kB); bytes→rows 28.7ms (main thread 0ms); frame +16.9ms; tails in store at document start 0/0/0; rows 12",
+        "samples": [
+          {
+            "paintedMs": 631.3,
+            "detectedMs": 613.7,
+            "rafConfirmed": true,
+            "documentMs": 16.7,
+            "fcpMs": 100,
+            "filesMs": 290.9,
+            "filesKb": null,
+            "streamOpenMs": 551.3,
+            "firstBytesMs": 566.1,
+            "revalidatedMs": 566.1,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 65.2,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 358.5,
+            "detectedMs": 341.6,
+            "rafConfirmed": true,
+            "documentMs": 5.8,
+            "fcpMs": 60,
+            "filesMs": 116.1,
+            "filesKb": null,
+            "streamOpenMs": 312,
+            "firstBytesMs": 331.1,
+            "revalidatedMs": 331.1,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 27.4,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 385.7,
+            "detectedMs": 369.9,
+            "rafConfirmed": true,
+            "documentMs": 10.4,
+            "fcpMs": 76,
+            "filesMs": 152.3,
+            "filesKb": null,
+            "streamOpenMs": 349.4,
+            "firstBytesMs": 357,
+            "revalidatedMs": 357,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 28.7,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          }
+        ]
       }
     },
     {
       "surface": "phone",
       "step": "reopen after reload, small transcript (12 records, 3 kB) (new document, storage kept)",
       "before": {
-        "medianMs": "245.5",
-        "attribution": "235.7\u2013274 ms over 3 runs; document 5.7ms; /api/files answered 131.2ms; no log request before the paint; rows 13"
+        "medianMs": 235.4,
+        "attribution": "218.4–249.5 ms over 3 runs; document 6.4ms; first contentful paint 52ms; /api/files answered 106.9ms; log stream opened 200.2ms; first transcript bytes 206ms (3.9 kB); bytes→rows 29.4ms (main thread 0ms); frame +19.9ms; tails in store at document start 0/0/0; rows 12",
+        "samples": [
+          {
+            "paintedMs": 235.4,
+            "detectedMs": 215.5,
+            "rafConfirmed": true,
+            "documentMs": 6.8,
+            "fcpMs": 56,
+            "filesMs": 106.9,
+            "filesKb": null,
+            "streamOpenMs": 200.2,
+            "firstBytesMs": 206,
+            "revalidatedMs": 206,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 29.4,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 249.5,
+            "detectedMs": 226.4,
+            "rafConfirmed": true,
+            "documentMs": 6.4,
+            "fcpMs": 52,
+            "filesMs": 111.9,
+            "filesKb": null,
+            "streamOpenMs": 206.6,
+            "firstBytesMs": 212,
+            "revalidatedMs": 212,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 37.5,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 218.4,
+            "detectedMs": 200,
+            "rafConfirmed": true,
+            "documentMs": 4.8,
+            "fcpMs": 52,
+            "filesMs": 95.2,
+            "filesKb": null,
+            "streamOpenMs": 183.1,
+            "firstBytesMs": 189.4,
+            "revalidatedMs": 189.4,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": 29,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "224.1",
-        "attribution": "215.1\u2013283.4 ms over 3 runs; document 4.2ms; /api/files answered 109.2ms; no log request before the paint; rows 13"
+        "medianMs": 246.4,
+        "attribution": "222.2–259.4 ms over 3 runs; document 6.8ms; first contentful paint 72ms; /api/files answered 132.9ms; painted before any transcript bytes; revalidated 293.9ms; frame +14.2ms; tails in store at document start 1/1/1; rows 12",
+        "samples": [
+          {
+            "paintedMs": 246.4,
+            "detectedMs": 238.7,
+            "rafConfirmed": true,
+            "documentMs": 17,
+            "fcpMs": 96,
+            "filesMs": 160.3,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 294.9,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 222.2,
+            "detectedMs": 208,
+            "rafConfirmed": true,
+            "documentMs": 5.8,
+            "fcpMs": 64,
+            "filesMs": 132.5,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 261.5,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 259.4,
+            "detectedMs": 235,
+            "rafConfirmed": true,
+            "documentMs": 6.8,
+            "fcpMs": 72,
+            "filesMs": 132.9,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 293.9,
+            "payloadKb": 3.9,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 1
+          }
+        ]
       }
     },
     {
       "surface": "phone",
       "step": "reopen in the same session, small transcript (12 records, 3 kB) (in-app, since the gesture)",
       "before": {
-        "medianMs": "27.1",
-        "attribution": "22.6\u201336.7 ms over 3 runs; no /api/files before the paint; first log bytes 26.9ms; rows 13"
+        "medianMs": 35.1,
+        "attribution": "33.3–35.9 ms over 3 runs; no /api/files before the paint; painted before any transcript bytes; revalidated 83.2ms; frame +9.9ms; tails in store at document start 0/0/0; rows 12",
+        "samples": [
+          {
+            "paintedMs": 35.9,
+            "detectedMs": 26,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": null,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 83.2,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 33.3,
+            "detectedMs": 25.9,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 31.9,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 84,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 35.1,
+            "detectedMs": 25.1,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 29.7,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 81.8,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "27.3",
-        "attribution": "22.8\u201331.5 ms over 3 runs; no /api/files before the paint; first log bytes 27ms; rows 13"
+        "medianMs": 39.2,
+        "attribution": "38.4–59.5 ms over 3 runs; no /api/files before the paint; painted before any transcript bytes; revalidated 95.7ms; frame +8.7ms; tails in store at document start 1/1/1; rows 12",
+        "samples": [
+          {
+            "paintedMs": 59.5,
+            "detectedMs": 50.8,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": null,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 113.3,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 38.4,
+            "detectedMs": 29.1,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 37,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 92.1,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 39.2,
+            "detectedMs": 30.9,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 37.4,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 95.7,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 12,
+            "storedTails": 1
+          }
+        ]
       }
     },
     {
       "surface": "phone",
-      "step": "cold open, large transcript (12000 records, 3546 kB) (empty storage, since navigation start)",
+      "step": "cold open, large transcript (12000 records, 3616 kB) (empty storage, since navigation start)",
       "before": {
-        "medianMs": "471.5",
-        "attribution": "384.9\u2013488.7 ms over 3 runs; document 5.9ms; /api/files answered 121ms; no log request before the paint; rows 300"
+        "medianMs": 375.9,
+        "attribution": "371.4–411.4 ms over 3 runs; document 5ms; first contentful paint 52ms; /api/files answered 106ms; log stream opened 266ms; first transcript bytes 277.1ms (847.7 kB); bytes→rows 98.8ms (main thread 71ms); frame +25.8ms; tails in store at document start 0/0/0; rows 300",
+        "samples": [
+          {
+            "paintedMs": 371.4,
+            "detectedMs": 345.6,
+            "rafConfirmed": true,
+            "documentMs": 4.1,
+            "fcpMs": 48,
+            "filesMs": 106,
+            "filesKb": null,
+            "streamOpenMs": 264.5,
+            "firstBytesMs": 275,
+            "revalidatedMs": 275,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 96.4,
+            "blockingMs": 67,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 411.4,
+            "detectedMs": 382.9,
+            "rafConfirmed": true,
+            "documentMs": 5.1,
+            "fcpMs": 64,
+            "filesMs": 134.8,
+            "filesKb": null,
+            "streamOpenMs": 288.8,
+            "firstBytesMs": 301.3,
+            "revalidatedMs": 301.3,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 110.1,
+            "blockingMs": 78,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 375.9,
+            "detectedMs": 351.2,
+            "rafConfirmed": true,
+            "documentMs": 5,
+            "fcpMs": 52,
+            "filesMs": 101.5,
+            "filesKb": null,
+            "streamOpenMs": 266,
+            "firstBytesMs": 277.1,
+            "revalidatedMs": 277.1,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 98.8,
+            "blockingMs": 71,
+            "rows": 300,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "408.7",
-        "attribution": "394.2\u2013439.8 ms over 3 runs; document 5.9ms; /api/files answered 127.4ms; no log request before the paint; rows 300"
+        "medianMs": 568.2,
+        "attribution": "456.8–1182.6 ms over 3 runs; document 7.9ms; first contentful paint 76ms; /api/files answered 181.4ms; log stream opened 382.1ms; first transcript bytes 397.5ms (847.7 kB); bytes→rows 170.7ms (main thread 114ms); frame +29.8ms; tails in store at document start 0/0/0; rows 300",
+        "samples": [
+          {
+            "paintedMs": 568.2,
+            "detectedMs": 538.4,
+            "rafConfirmed": true,
+            "documentMs": 9.2,
+            "fcpMs": 76,
+            "filesMs": 181.4,
+            "filesKb": null,
+            "streamOpenMs": 382.1,
+            "firstBytesMs": 397.5,
+            "revalidatedMs": 397.5,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 170.7,
+            "blockingMs": 114,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 1182.6,
+            "detectedMs": 1144.7,
+            "rafConfirmed": true,
+            "documentMs": 7.9,
+            "fcpMs": 112,
+            "filesMs": 404.9,
+            "filesKb": null,
+            "streamOpenMs": 809,
+            "firstBytesMs": 854.9,
+            "revalidatedMs": 854.9,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 327.7,
+            "blockingMs": 244,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 456.8,
+            "detectedMs": 428.5,
+            "rafConfirmed": true,
+            "documentMs": 4.9,
+            "fcpMs": 52,
+            "filesMs": 107.6,
+            "filesKb": null,
+            "streamOpenMs": 318.2,
+            "firstBytesMs": 330.8,
+            "revalidatedMs": 330.8,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 126,
+            "blockingMs": 84,
+            "rows": 300,
+            "storedTails": 0
+          }
+        ]
       }
     },
     {
       "surface": "phone",
-      "step": "reopen after reload, large transcript (12000 records, 3546 kB) (new document, storage kept)",
+      "step": "reopen after reload, large transcript (12000 records, 3616 kB) (new document, storage kept)",
       "before": {
-        "medianMs": "350.5",
-        "attribution": "346.3\u2013364 ms over 3 runs; document 5.4ms; /api/files answered 138.6ms; no log request before the paint; rows 300"
+        "medianMs": 338.2,
+        "attribution": "308.9–378.4 ms over 3 runs; document 4.9ms; first contentful paint 60ms; /api/files answered 111.5ms; log stream opened 205ms; first transcript bytes 216.1ms (847.7 kB); bytes→rows 122.1ms (main thread 84ms); frame +26.7ms; tails in store at document start 0/0/0; rows 300",
+        "samples": [
+          {
+            "paintedMs": 338.2,
+            "detectedMs": 302.6,
+            "rafConfirmed": true,
+            "documentMs": 4.9,
+            "fcpMs": 60,
+            "filesMs": 111.5,
+            "filesKb": null,
+            "streamOpenMs": 205,
+            "firstBytesMs": 216.1,
+            "revalidatedMs": 216.1,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 122.1,
+            "blockingMs": 84,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 308.9,
+            "detectedMs": 282.2,
+            "rafConfirmed": true,
+            "documentMs": 4.4,
+            "fcpMs": 56,
+            "filesMs": 106,
+            "filesKb": null,
+            "streamOpenMs": 196.5,
+            "firstBytesMs": 206.4,
+            "revalidatedMs": 206.4,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 102.5,
+            "blockingMs": 72,
+            "rows": 300,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 378.4,
+            "detectedMs": 356,
+            "rafConfirmed": true,
+            "documentMs": 5.4,
+            "fcpMs": 60,
+            "filesMs": 114.7,
+            "filesKb": null,
+            "streamOpenMs": 214.5,
+            "firstBytesMs": 227.6,
+            "revalidatedMs": 227.6,
+            "payloadKb": 847.7,
+            "via": "stream",
+            "parseRenderMs": 150.8,
+            "blockingMs": 110,
+            "rows": 300,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "234.2",
-        "attribution": "233.3\u2013276.3 ms over 3 runs; document 6.7ms; /api/files answered 142.3ms; no log request before the paint; rows 60"
+        "medianMs": 419.6,
+        "attribution": "329.9–729.4 ms over 3 runs; document 8.2ms; first contentful paint 120ms; /api/files answered 191.3ms; painted before any transcript bytes; revalidated 516.2ms; frame +58.4ms; tails in store at document start 1/1/1; rows 300",
+        "samples": [
+          {
+            "paintedMs": 419.6,
+            "detectedMs": 344.1,
+            "rafConfirmed": true,
+            "documentMs": 8.2,
+            "fcpMs": 120,
+            "filesMs": 191.3,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 516.2,
+            "payloadKb": 4.5,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 133,
+            "rows": 300,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 729.4,
+            "detectedMs": 671,
+            "rafConfirmed": true,
+            "documentMs": 8.7,
+            "fcpMs": 516,
+            "filesMs": 577.5,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 817.1,
+            "payloadKb": 4.5,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 364,
+            "rows": 300,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 329.9,
+            "detectedMs": 281.3,
+            "rafConfirmed": true,
+            "documentMs": 6.7,
+            "fcpMs": 72,
+            "filesMs": 166.3,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 415.3,
+            "payloadKb": 4.5,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 60,
+            "rows": 300,
+            "storedTails": 1
+          }
+        ]
       }
     },
     {
       "surface": "phone",
-      "step": "reopen in the same session, large transcript (12000 records, 3546 kB) (in-app, since the gesture)",
+      "step": "reopen in the same session, large transcript (12000 records, 3616 kB) (in-app, since the gesture)",
       "before": {
-        "medianMs": "68.6",
-        "attribution": "63.7\u201378.6 ms over 3 runs; no /api/files before the paint; first log bytes 68.4ms; rows 60"
+        "medianMs": 60.2,
+        "attribution": "59.6–74.4 ms over 3 runs; /api/files answered 58ms; painted before any transcript bytes; revalidated 179ms; frame +11.6ms; tails in store at document start 0/0/0; rows 60",
+        "samples": [
+          {
+            "paintedMs": 59.6,
+            "detectedMs": 49.7,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 57.7,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 167.7,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 60,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 60.2,
+            "detectedMs": 48.6,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 58,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 179,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 60,
+            "storedTails": 0
+          },
+          {
+            "paintedMs": 74.4,
+            "detectedMs": 61.3,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 72,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 202.7,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 55,
+            "rows": 60,
+            "storedTails": 0
+          }
+        ]
       },
       "after": {
-        "medianMs": "41.5",
-        "attribution": "33.4\u201348 ms over 3 runs; no /api/files before the paint; first log bytes 41ms; rows 60"
+        "medianMs": 73.7,
+        "attribution": "52.1–75.5 ms over 3 runs; /api/files answered 64.1ms; painted before any transcript bytes; revalidated 244.5ms; frame +20.8ms; tails in store at document start 1/1/1; rows 60",
+        "samples": [
+          {
+            "paintedMs": 73.7,
+            "detectedMs": 48.5,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 64.1,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 379.7,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 60,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 75.5,
+            "detectedMs": 54.7,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 70.2,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 244.5,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 60,
+            "storedTails": 1
+          },
+          {
+            "paintedMs": 52.1,
+            "detectedMs": 36.5,
+            "rafConfirmed": true,
+            "documentMs": null,
+            "fcpMs": null,
+            "filesMs": 46.5,
+            "filesKb": null,
+            "streamOpenMs": null,
+            "firstBytesMs": null,
+            "revalidatedMs": 195.1,
+            "payloadKb": 0.1,
+            "via": "stream",
+            "parseRenderMs": null,
+            "blockingMs": 0,
+            "rows": 60,
+            "storedTails": 1
+          }
+        ]
+      }
+    },
+    {
+      "surface": "desktop",
+      "step": "revalidate after a reopen: fresh record on disk → appended row",
+      "before": {
+        "medianMs": 72,
+        "attribution": "rows 12 → 13; first row node preserved yes"
+      },
+      "after": {
+        "medianMs": 14,
+        "attribution": "rows 12 → 13; first row node preserved yes"
       }
     },
     {
       "surface": "phone",
-      "step": "revalidate after a reopen: fresh record on disk \u2192 appended row",
+      "step": "revalidate after a reopen: fresh record on disk → appended row",
       "before": {
-        "medianMs": "14",
-        "attribution": "rows 13 \u2192 14; first row node preserved yes"
+        "medianMs": 12,
+        "attribution": "rows 12 → 13; first row node preserved yes"
       },
       "after": {
-        "medianMs": "14",
-        "attribution": "rows 13 \u2192 14; first row node preserved yes"
+        "medianMs": 15,
+        "attribution": "rows 12 → 13; first row node preserved yes"
       }
     }
   ],
-  "server": {
-    "before": [
-      "GET /api/files?view=summary: median 36.2 ms (6\u201350.1 ms over 5 runs)",
-      "POST /api/logs, small transcript (3 kB on disk): median 4.3 ms (3.6\u201312.9 ms over 5 runs)",
-      "POST /api/logs, large transcript (3546 kB on disk): median 8.1 ms (7.6\u201310.3 ms over 5 runs)"
-    ],
-    "after": [
-      "GET /api/files?view=summary: median 32.8 ms (5.4\u201337 ms over 5 runs)",
-      "POST /api/logs, small transcript (3 kB on disk): median 3.1 ms (2.7\u201312 ms over 5 runs)",
-      "POST /api/logs, large transcript (3546 kB on disk): median 7.1 ms (6.5\u20137.6 ms over 5 runs)"
-    ]
-  },
-  "knownArtifact": "Some reopen samples show the document itself taking ~57 s. Chrome holds six HTTP/1.1 sockets per origin and the Viewer log stream never ends, so a driven sequence of documents can find every socket held; the median is unaffected and the spread shows it."
+  "captures": "390 px captures of the reopen moment and of the settled frame that follows were taken with --shots and reviewed; rasters are not committed."
 }
