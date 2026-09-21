@@ -37,10 +37,12 @@ turns an otherwise quiet migration pass into tens of seconds of registry reads.
 Grant validation must remain intact; eliminating unnecessary per-conversation
 reads addresses the amplification at its caller.
 
-With that caller filtered to active migrations and pending deliveries, the
-same copied registry completed in 0.770 s: one `pendingDeliveries` call
-(2.9 ms), three conversation reads, and the initial snapshot. This is isolated
-replay evidence; the live worker was not changed or restarted.
+With that caller filtered to actionable work, a subsequent replay on the
+registry copy completed in 0.801 s: one `pendingDeliveries` call (2.9 ms), one
+conversation read, and the initial snapshot. Parked failed migrations with
+held or assigned delivery residue are also excluded; uncertain prior
+actuations retain their reconciliation path. This is isolated replay evidence;
+the live worker was not changed or restarted.
 
 The earlier terminal-turn replay established progress with an idle readable
 host. It did not establish progress during a runtime-host transport timeout.

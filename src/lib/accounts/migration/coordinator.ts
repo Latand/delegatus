@@ -1002,16 +1002,23 @@ export async function reconcileMigrations(
     if (owner) await cleanupDiscardedSuccessor(provider, pending.receipt, owner, registry);
   });
   const pendingDeliveries = new Set<ViewerConversationId>();
+  const uncertainDeliveries = new Set<ViewerConversationId>();
   await forEachCooperatively(Object.values(before.heldDeliveries), (item) => {
     if (item.state !== "delivered" && item.state !== "failed"
       && (item.state !== "delivery-uncertain" || delivery.reconcileUncertain)) {
-      pendingDeliveries.add(registry.canonicalConversationId(item.conversationId));
+      const id = registry.canonicalConversationId(item.conversationId);
+      pendingDeliveries.add(id);
+      if (item.state === "delivery-uncertain") uncertainDeliveries.add(id);
     }
   });
   await forEachCooperatively(Object.values(before.conversations), async (snapshotConversation) => {
     // A keyed delivery read may assemble grant provenance across the registry.
     // Inventory already tells us which conversations need that read (#1983).
     const hasDelivery = pendingDeliveries.has(snapshotConversation.id);
+    // A failed migration needs an explicit retry. Only reconciliation of an
+    // uncertain prior actuation can make progress while it remains parked.
+    if (snapshotConversation.migration?.phase === "failed-recoverable"
+      && !uncertainDeliveries.has(snapshotConversation.id)) return;
     const activeMigration = snapshotConversation.migration !== null
       && !terminalMigrationPhase(snapshotConversation.migration.phase);
     if (!hasDelivery && !activeMigration) return;

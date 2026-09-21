@@ -57,6 +57,7 @@ test("historical failures and orphaned applying rows perform no conversation or 
     for (const row of rows.slice(0, 13)) {
       const requested = registry.requestConversationReseat(row.id, "account-b");
       registry.transitionConversationMigration(row.id, requested.migration!.revision, [requested.migration!.phase], { phase: "failed-recoverable", error: "old failure" });
+      registry.holdDelivery(row.id, "preserve this held message", `held-${row.id}`, "text", [], null);
     }
     for (const [i, row] of rows.slice(13, 15).entries()) registry.claimConversationReconfigure(row.id, {
       operationId: `orphan-${i}`, revision: 1, profile: { model: "gpt-5.6-sol", effort: "high", fast: false }, accountId: "account-b",
