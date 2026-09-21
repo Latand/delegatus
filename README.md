@@ -15,7 +15,7 @@ pipelines, from a desktop browser or your phone.
   follows new output live, and every conversation has its own link.
 - **Keep work on a board.** Each project has a task board with Inbox,
   Assigned, Blocked and Done columns. A task card shows the agents working on
-  it and whether they are working, waiting or finished. An Overview board
+  it and whether they are working, waiting or done. An Overview board
   collects what is running across all projects.
 - **Start and talk to agents.** Launch a Claude or Codex agent from a task or
   the Create button, pick the model and reasoning effort, and send messages,
@@ -84,7 +84,7 @@ see each call as a card.
 ![A Claude Code conversation: an edit shown as a diff, a test run with its output, and the answer](docs/media/readme/conversation.svg)
 
 A card reads *working* while the agent is in the middle of a turn and
-*finished* once its final answer lands, so you can tell a busy agent from one
+*done* once its final answer lands, so you can tell a busy agent from one
 waiting for you. When an agent stops on a question, the question appears with
 its options and your answer goes straight back to it.
 
@@ -105,8 +105,8 @@ it to see the stage graph and each stage's conversation side by side.
 
 ![A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation](docs/media/readme/pipeline.svg)
 
-Reviewers run with read-only access and start fresh each round, so a review
-reads the whole diff without the builder's context. See
+Reviewers run with read-only access in a conversation of their own, so a
+review reads the whole diff without the builder's context. See
 [docs/pipelines.md](docs/pipelines.md) for stage definitions, roles and the
 HTTP API.
 
@@ -142,8 +142,8 @@ key; after the first visit the server sets a cookie for 30 days, and
 
 On a phone the Viewer opens a layout of its own: a project list, the board,
 and one conversation at a time with the composer at the bottom. Accounts and
-limits are one tap away in the board's menu. Push notifications can tell you
-when an agent needs you.
+limits are in the board's ⋯ menu. Push notifications, once enabled, tell
+you when an agent asks you a question.
 
 Anyone who has the tailnet URL can read every transcript and start commands
 through the Viewer, so treat it as a secret.
@@ -165,8 +165,9 @@ through the Viewer, so treat it as a secret.
 ## MCP server for agents
 
 The package includes `agent-log-viewer-mcp`, a local stdio MCP server that
-runs Viewer services in the same process and state as the Viewer. Register it
-under the name `viewer`:
+runs Viewer services against the same state as the Viewer. With the package
+installed globally (`bun add -g agent-log-viewer`), register it under the name
+`viewer`:
 
 ```bash
 # Claude Code
@@ -183,7 +184,7 @@ From a clone, point the command at `bin/mcp-server.mjs` instead, or run
 `scripts/install-mcp.sh`, which registers the server for your Claude Code and
 Codex configurations and for every account the Viewer manages.
 
-The tools cover:
+The tools include:
 
 - **conversations:** `list_conversations`, `get_conversation`,
   `conversation_messages`, `search_transcripts`, `send_message`,
