@@ -2633,10 +2633,9 @@ test.each(["codex", "claude"] as const)(
       expect(replacementAttempts).toBe(0);
       expect(startupLogs).toHaveLength(1);
       expect(startupLogs[0]![0]).toBe("[structured hosts] startup adoption failed; retry scheduled");
-      expect(startupLogs[0]![1]).toBeInstanceOf(Error);
-      expect((startupLogs[0]![1] as Error).message).toBe(
-        `structured startup left 1 eligible host(s) owned by the incumbent Viewer: ${engine}:${sessionId}`,
-      );
+      expect(startupLogs[0]![1]).toEqual({
+        category: "runtime-host-unavailable", attempt: 1, retryInMs: 100,
+      });
       const refused = registry.readOnlySnapshot().entries[`${engine}:${sessionId}`]!;
       expect(refused.structuredHost?.process).toEqual(identities.engine);
       expect(refused.claimOwner).toBe(`structured-host:${JSON.stringify(identities.viewer)}`);
@@ -2978,7 +2977,7 @@ test("startup retry admits one orchestrator recovery nudge after the first runti
     refreshTranscriptState: async () => {},
     adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => {
       const entry = received.readOnlySnapshot().entries[`codex:${sessionId}`]!;
-      if (adoptionAttempts > 0 || !shouldAdopt(entry)) return [];
+      if (!shouldAdopt(entry)) return [];
       adoptionAttempts += 1;
       const processIdentity = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
       const claimed = received.claimStructuredHost(entry.key, processIdentity, { allowUnhosted: true });
@@ -3161,7 +3160,7 @@ test.each(["busy", "terminal"] as const)(
     refreshTranscriptState: async () => {},
     adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => {
       const entry = received.readOnlySnapshot().entries[`codex:${sessionId}`]!;
-      if (adoptionAttempts > 0 || !shouldAdopt(entry)) return [];
+      if (!shouldAdopt(entry)) return [];
       adoptionAttempts += 1;
       const processIdentity = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
       const claimed = received.claimStructuredHost(entry.key, processIdentity, { allowUnhosted: true });
@@ -3260,7 +3259,7 @@ test.each(["terminal", "superseded"] as const)(
 
 test("a busy Codex turn advances after container replacement without operator messaging", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-codex-continuation-"));
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  let registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "11111111-2222-0222-0222-111111111111";
   const { artifactPath, conversation } = addStructuredRestartConversation(registry, directory, {
     sessionId,
@@ -3336,6 +3335,10 @@ test("a busy Codex turn advances after container replacement without operator me
     structuredHost: { ...entry.structuredHost!, writerClaimEpoch: 4 },
   });
 
+  // A replacement Viewer constructs a fresh registry; reconnects in the
+  // existing boot above must keep its completed startup pass.
+  await bindStructuredDeliveryQueue([], { registry, client: null });
+  registry = new AgentRegistry(registry.filename);
   await startup();
   await waitFor(() => nextLedger.writes.length === 1);
   expect(nextLedger.writes).toEqual([expect.objectContaining({

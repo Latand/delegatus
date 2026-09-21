@@ -53,6 +53,21 @@ test("snapshot forwards its abort signal and settles exactly once on external ab
   expect((settled as Error).message).toBe("runtime host request cancelled");
 });
 
+test("startup snapshot deadline is caller-local and never sent to the runtime host", async () => {
+  const requests: unknown[] = [];
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    requests.push(request.params);
+    setTimeout(() => {
+      if (!socket.destroyed) socket.end(JSON.stringify({ id: request.id, ok: true, result: { revision: 9 } }) + "\n");
+    }, 80);
+  });
+  const client = new UnixRuntimeHostClient(socketPath, 20, 20, 20);
+  expect(await client.snapshot(undefined, { timeoutMs: 500 })).toEqual({ revision: 9 } as never);
+  await expect(client.snapshot()).rejects.toThrow("runtime host request timed out");
+  expect(requests).toEqual([undefined, undefined]);
+});
+
 test("a timeout, a late response, and a socket teardown settle the call exactly once", async () => {
   let respond: ((frame: string, socket: net.Socket) => void) | null = null;
   const socketPath = serve((frame, socket) => { respond?.(frame, socket); });
