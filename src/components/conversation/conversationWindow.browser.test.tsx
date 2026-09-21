@@ -1445,7 +1445,7 @@ describe("send latency slice 3: one message, one row", () => {
               host.reset();
               host.scenario(id);
               host.arrange(keys);
-            }, [scenario.id, [...scenario.arrange]] as const);
+            }, [scenario.id, [...scenario.arrange]] as [string, string[]]);
             await page.waitForTimeout(260);
             for (const step of scenario.steps) {
               if (step.records.length) {
