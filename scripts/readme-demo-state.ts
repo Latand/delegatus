@@ -83,22 +83,32 @@ export function retargetFixtureState(home: string, ids: Record<DemoProject, stri
 
 /* ── the pipeline the README shows ──────────────────────────────────────── */
 
+/* Each record has to pass the store's own validator (src/lib/pipelines/store.ts
+   isPipeline), or the Viewer refuses to boot on it: a role-bound stage carries
+   a non-empty scaffold, the worktree and branch derive from the id, and fail
+   edges sit on run stages only. */
 const STAGE_ROLES = {
-  builder: { engine: "claude", model: "claude-opus-4-1", effort: "high", access: "read-write" },
+  builder: { engine: "claude", model: "opus", effort: "high", access: "read-write" },
   reviewer: { engine: "codex", model: "gpt-5.6-sol", effort: "xhigh", access: "read-only" },
-  verifier: { engine: "claude", model: "claude-sonnet-4-5", effort: "medium", access: "read-only" },
+  verifier: { engine: "claude", model: "sonnet", effort: "medium", access: "read-only" },
 } as const;
 
 type RoleId = keyof typeof STAGE_ROLES;
 
+const SCAFFOLDS: Record<RoleId, string> = {
+  builder: "You are a Builder. Implement the pinned task with focused checks and report the evidence.",
+  reviewer: "You are a Reviewer. Read the full diff against the acceptance criteria and report a verdict.",
+  verifier: "You are a Verifier. Run the gates and confirm the change renders where it should.",
+};
+
 function effectiveRole(roleId: RoleId) {
-  return { roleId, ...STAGE_ROLES[roleId], promptScaffold: null };
+  return { roleId, ...STAGE_ROLES[roleId], promptScaffold: SCAFFOLDS[roleId] };
 }
 
 function stage(id: string, roleId: RoleId, prompt: string, next: string | null, onFail: { to: string; maxRounds: number } | null = null) {
   return {
     id,
-    kind: roleId === "reviewer" ? "review-loop" : "run",
+    kind: "run",
     role: { roleId },
     prompt,
     next,
@@ -117,7 +127,7 @@ function attempt(
   completedAt: string | null,
   verdict: { status: string; findings: string[] } | null,
   output: string | null,
-  agentPath: string | null,
+  activatedBy: { stageId: string; attempt: number; edge: string } | null = null,
 ) {
   return {
     n: 1,
@@ -127,16 +137,25 @@ function attempt(
     launchId: null,
     conversationId: null,
     sessionId: null,
-    agentPath,
+    agentPath: null,
     paneId: null,
     flowId: null,
     startedAt,
     completedAt,
     input: null,
-    activatedBy: null,
+    activatedBy,
     output,
     verdict,
     error: null,
+  };
+}
+
+/** Same derivation as the store's pipelineIdentity. */
+function identity(id: string, task: string, repoDir: string) {
+  const slug = task.toLowerCase().replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "task";
+  return {
+    worktreeDir: path.join(path.dirname(repoDir), `${path.basename(repoDir)}-pipeline-${id}`),
+    branch: `pipeline/${slug}-${id}`,
   };
 }
 
@@ -150,19 +169,19 @@ export function buildDemoPipelines(home: string, ids: Record<DemoProject, string
   const forgeDir = path.join(projectsRoot(home), "forge");
 
   const stages = [
-    stage("build", "builder", "Implement the readiness strip and cover it with tests.", "review"),
-    stage("review", "reviewer", "Review the full diff and report the verdict through stage_report.", "verify", { to: "build", maxRounds: 3 }),
-    stage("verify", "verifier", "Run the gates and confirm the strip renders at 390 px.", null),
+    stage("build", "builder", "Implement {{task}} and cover it with tests.", "review"),
+    stage("review", "reviewer", "Review the full diff against the acceptance criteria.", "verify", { to: "build", maxRounds: 3 }),
+    stage("verify", "verifier", "Run the gates and confirm the result at 390 px.", null),
   ];
 
+  const runningTask = "Readiness strip in the dashboard footer";
   const running = {
-    id: "pipeline-atlas-readiness",
-    task: "Readiness strip in the dashboard footer",
+    id: "4c9e21d7",
+    task: runningTask,
     taskIds: ["task-demo-polish"],
     project: ids.atlas,
     repoDir: atlasDir,
-    worktreeDir: path.join(projectsRoot(home), "atlas-readiness"),
-    branch: "pipeline/readiness-strip",
+    ...identity("4c9e21d7", runningTask, atlasDir),
     baseBranch: "main",
     baseRef: "",
     lastPassedCommit: "",
@@ -172,9 +191,9 @@ export function buildDemoPipelines(home: string, ids: Record<DemoProject, string
     runs: [
       {
         stageId: "build",
-        attempts: [attempt("builder", "passed", instant(10, 20), instant(10, 46), { status: "pass", findings: [] }, "Readiness strip renders from the board counts; footer tests added.", null)],
+        attempts: [attempt("builder", "passed", instant(10, 20), instant(10, 46), { status: "pass", findings: [] }, "Readiness strip renders from the board counts; footer tests added.")],
       },
-      { stageId: "review", attempts: [attempt("reviewer", "running", instant(10, 48), null, null, null, null)] },
+      { stageId: "review", attempts: [attempt("reviewer", "running", instant(10, 48), null, null, null, { stageId: "build", attempt: 1, edge: "pass" })] },
       { stageId: "verify", attempts: [] },
     ],
     cursor: { stageId: "review", state: "running", input: null, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } },
@@ -188,20 +207,20 @@ export function buildDemoPipelines(home: string, ids: Record<DemoProject, string
     hiddenAt: null,
   };
 
+  const landedTask = "Deterministic review evidence";
   const landed = {
     ...running,
-    id: "pipeline-forge-evidence",
-    task: "Deterministic review evidence",
+    id: "8f30b6a2",
+    task: landedTask,
     taskIds: ["task-demo-review-evidence"],
     project: ids.forge,
     repoDir: forgeDir,
-    worktreeDir: path.join(projectsRoot(home), "forge-evidence"),
-    branch: "pipeline/review-evidence",
+    ...identity("8f30b6a2", landedTask, forgeDir),
     spec: "Compare both deterministic render passes and publish the difference.",
     runs: [
-      { stageId: "build", attempts: [attempt("builder", "passed", instant(9, 10), instant(9, 24), { status: "pass", findings: [] }, "Both passes compared.", null)] },
-      { stageId: "review", attempts: [attempt("reviewer", "passed", instant(9, 25), instant(9, 38), { status: "pass", findings: [] }, "No findings.", null)] },
-      { stageId: "verify", attempts: [attempt("verifier", "passed", instant(9, 39), instant(9, 52), { status: "pass", findings: [] }, "Gates green.", null)] },
+      { stageId: "build", attempts: [attempt("builder", "passed", instant(9, 10), instant(9, 24), { status: "pass", findings: [] }, "Both passes compared.")] },
+      { stageId: "review", attempts: [attempt("reviewer", "passed", instant(9, 25), instant(9, 38), { status: "pass", findings: [] }, "No findings.", { stageId: "build", attempt: 1, edge: "pass" })] },
+      { stageId: "verify", attempts: [attempt("verifier", "passed", instant(9, 39), instant(9, 52), { status: "pass", findings: [] }, "Gates green.", { stageId: "review", attempt: 1, edge: "pass" })] },
     ],
     cursor: null,
     state: "completed",
