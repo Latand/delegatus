@@ -938,6 +938,7 @@ test("p0_282 empty-host replay terminalizes at the durable startup deadline and 
 
 function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
+    readSession: async (identity) => journal.readSession(identity),
     snapshot: async () => journal.snapshot(),
     events: async (after) => journal.replay(after),
     waitEvents: async (after) => journal.replay(after),

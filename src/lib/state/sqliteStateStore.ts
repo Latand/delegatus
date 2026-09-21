@@ -1207,9 +1207,11 @@ export class SqliteStateCollection<T> {
     beforePersist?: (context: StateMutationContext<T>) => void,
     controllerOnly = false,
     lockWaitMs?: number,
+    observeHold?: (heldMs: number) => void,
   ): Promise<R> {
     assertSqliteWriteAuthority(this.filename);
     const lease = await this.acquireLease(lockWaitMs);
+    const acquiredAt = performance.now();
     try {
       const source = controllerOnly ? this.loadControllerReadonly() : this.loadReadonly();
       const session = this.track(source);
@@ -1218,6 +1220,7 @@ export class SqliteStateCollection<T> {
       });
     } finally {
       await this.releaseLease(lease);
+      observeHold?.(performance.now() - acquiredAt);
     }
   }
 

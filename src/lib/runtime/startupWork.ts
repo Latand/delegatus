@@ -11,5 +11,7 @@ export async function forEachStartupBatch<T>(
     const failure = outcomes.find((outcome) => outcome.status === "rejected");
     if (failure?.status === "rejected") throw failure.reason;
     assertActive();
+    // Resolved promises only drain microtasks; timers and socket I/O need a turn.
+    if (offset + 16 < items.length) await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
 }
