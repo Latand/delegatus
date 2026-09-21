@@ -4866,13 +4866,13 @@ test.each(["dead", "live"] as const)("settled archived Codex handoff with a %s e
   process.env.LLV_STATE_DIR = directory;
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
-  const sessionId = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+  const sessionId = "aaaaaaaa-1111-0111-0111-aaaaaaaaaaaa";
   const { conversation } = addStructuredRestartConversation(registry, directory, { sessionId, status, turn: "terminal" });
   const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
   // Read-only incident shape: settled archived attempt, structured entry and
   // a handoff. Selection allows owed work before checking stage settlement.
   registry.upsert({ ...entry, pendingAction: "handoff" });
-  const healthyId = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
+  const healthyId = "bbbbbbbb-2222-0222-0222-bbbbbbbbbbbb";
   addStructuredRestartConversation(registry, directory, { sessionId: healthyId, status: "live", turn: "busy" });
   const role = { roleId: null, engine: "codex" as const, model: "gpt-5.6-sol", effort: "high" as const, access: "read-write" as const, promptScaffold: null };
   const pipeline = buildPipeline({ id: "fixture-archived", task: "settled handoff", project: "fixture", repoDir: directory,
@@ -4964,7 +4964,7 @@ test("a host deferred during reconciliation is retained while startup reaches re
   const registry = new AgentRegistry(path.join(directory, "registry.json"));
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   const { conversation } = addStructuredRestartConversation(registry, directory, {
-    sessionId: "cccccccc-3333-4333-8333-cccccccccccc", engine: "claude", status: "live", turn: "terminal",
+    sessionId: "cccccccc-3333-0333-0333-cccccccccccc", engine: "claude", status: "live", turn: "terminal",
   });
   const before = structuredClone(registry.readOnlySnapshot().entries);
   let deferred = false;
