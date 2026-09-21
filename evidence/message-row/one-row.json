@@ -70,6 +70,34 @@
       "rowDetached": false,
       "bodyDetached": false
     },
+    "document-held-join-phone-390-dark-en": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "image-only-held-join-phone-390-dark-en": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "lost-ack-held-join-phone-390-dark-en": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "claude-canonical-phone-390-dark-en": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
     "success-phone-390-dark-uk": {
       "batches": 12,
       "maxBubbles": 1,
@@ -121,6 +149,34 @@
     },
     "image-only-phone-390-dark-uk": {
       "batches": 9,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "document-held-join-phone-390-dark-uk": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "image-only-held-join-phone-390-dark-uk": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "lost-ack-held-join-phone-390-dark-uk": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "claude-canonical-phone-390-dark-uk": {
+      "batches": 10,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -182,6 +238,34 @@
       "rowDetached": false,
       "bodyDetached": false
     },
+    "document-held-join-phone-390-light-en": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "image-only-held-join-phone-390-light-en": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "lost-ack-held-join-phone-390-light-en": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "claude-canonical-phone-390-light-en": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
     "success-phone-390-light-uk": {
       "batches": 12,
       "maxBubbles": 1,
@@ -238,6 +322,34 @@
       "rowDetached": false,
       "bodyDetached": false
     },
+    "document-held-join-phone-390-light-uk": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "image-only-held-join-phone-390-light-uk": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "lost-ack-held-join-phone-390-light-uk": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "claude-canonical-phone-390-light-uk": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
     "success-desktop-1280-dark-en": {
       "batches": 12,
       "maxBubbles": 1,
@@ -260,7 +372,7 @@
       "bodyDetached": false
     },
     "lost-acknowledgement-desktop-1280-dark-en": {
-      "batches": 9,
+      "batches": 8,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -289,6 +401,34 @@
     },
     "image-only-desktop-1280-dark-en": {
       "batches": 9,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "document-held-join-desktop-1280-dark-en": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "image-only-held-join-desktop-1280-dark-en": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "lost-ack-held-join-desktop-1280-dark-en": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "claude-canonical-desktop-1280-dark-en": {
+      "batches": 10,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -350,6 +490,34 @@
       "rowDetached": false,
       "bodyDetached": false
     },
+    "document-held-join-desktop-1280-dark-uk": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "image-only-held-join-desktop-1280-dark-uk": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "lost-ack-held-join-desktop-1280-dark-uk": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "claude-canonical-desktop-1280-dark-uk": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
     "success-desktop-1280-light-en": {
       "batches": 12,
       "maxBubbles": 1,
@@ -406,6 +574,34 @@
       "rowDetached": false,
       "bodyDetached": false
     },
+    "document-held-join-desktop-1280-light-en": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "image-only-held-join-desktop-1280-light-en": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "lost-ack-held-join-desktop-1280-light-en": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "claude-canonical-desktop-1280-light-en": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
     "success-desktop-1280-light-uk": {
       "batches": 12,
       "maxBubbles": 1,
@@ -428,7 +624,7 @@
       "bodyDetached": false
     },
     "lost-acknowledgement-desktop-1280-light-uk": {
-      "batches": 9,
+      "batches": 8,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -457,6 +653,34 @@
     },
     "image-only-desktop-1280-light-uk": {
       "batches": 9,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "document-held-join-desktop-1280-light-uk": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "image-only-held-join-desktop-1280-light-uk": {
+      "batches": 13,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "lost-ack-held-join-desktop-1280-light-uk": {
+      "batches": 10,
+      "maxBubbles": 1,
+      "minBubbles": 1,
+      "rowDetached": false,
+      "bodyDetached": false
+    },
+    "claude-canonical-desktop-1280-light-uk": {
+      "batches": 10,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -492,7 +716,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_21d64b14-e1c4-4412-928b-b6f08a5f86ba",
+            "id": "op_c0964d5f-8d79-414d-bbee-fc60bd67f0d4",
             "state": "delivered"
           }
         ],
@@ -526,7 +750,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_21d64b14-e1c4-4412-928b-b6f08a5f86ba",
+            "id": "op_c0964d5f-8d79-414d-bbee-fc60bd67f0d4",
             "state": "delivered"
           }
         ],
@@ -562,7 +786,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_182e0bb2-1aba-4f0a-ace3-52b549048c46",
+            "id": "op_0752a3ef-6912-4528-ae75-ee8f9a750dfe",
             "state": "delivered"
           }
         ],
@@ -596,7 +820,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_182e0bb2-1aba-4f0a-ace3-52b549048c46",
+            "id": "op_0752a3ef-6912-4528-ae75-ee8f9a750dfe",
             "state": "delivered"
           }
         ],
@@ -632,7 +856,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_6bf00193-9bac-46c0-a918-5eba665052d5",
+            "id": "op_9784b317-bb22-421e-a4ee-9e11fd652ad9",
             "state": "delivered"
           }
         ],
@@ -666,7 +890,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_6bf00193-9bac-46c0-a918-5eba665052d5",
+            "id": "op_9784b317-bb22-421e-a4ee-9e11fd652ad9",
             "state": "delivered"
           }
         ],
@@ -702,7 +926,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_d642f3c6-17d9-4d91-a776-4de7b6b3b71c",
+            "id": "op_ec1d5185-d488-46a5-ab7f-a14a82112c6c",
             "state": "delivered"
           }
         ],
@@ -736,7 +960,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_d642f3c6-17d9-4d91-a776-4de7b6b3b71c",
+            "id": "op_ec1d5185-d488-46a5-ab7f-a14a82112c6c",
             "state": "delivered"
           }
         ],
@@ -772,7 +996,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_83c6b73a-a6df-47f2-9b14-4c0e45160897",
+            "id": "op_306516e2-d3ac-4944-9a8f-512a0796363c",
             "state": "delivered"
           }
         ],
@@ -806,7 +1030,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_83c6b73a-a6df-47f2-9b14-4c0e45160897",
+            "id": "op_306516e2-d3ac-4944-9a8f-512a0796363c",
             "state": "delivered"
           }
         ],
@@ -842,7 +1066,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_ea7a59cf-44fc-4c09-afd1-f0b4d29cafb6",
+            "id": "op_5f3e5b3a-615e-4320-b4d7-96c22d173cd3",
             "state": "delivered"
           }
         ],
@@ -876,7 +1100,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_ea7a59cf-44fc-4c09-afd1-f0b4d29cafb6",
+            "id": "op_5f3e5b3a-615e-4320-b4d7-96c22d173cd3",
             "state": "delivered"
           }
         ],
@@ -912,7 +1136,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_f658ebfc-63b8-4e07-9b99-89c1e597fa06",
+            "id": "op_27c470c5-48e1-461f-890f-7d500ee99068",
             "state": "delivered"
           }
         ],
@@ -946,7 +1170,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_f658ebfc-63b8-4e07-9b99-89c1e597fa06",
+            "id": "op_27c470c5-48e1-461f-890f-7d500ee99068",
             "state": "delivered"
           }
         ],
@@ -982,7 +1206,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_0f71c890-1bf9-4f70-8251-d7e445154ddd",
+            "id": "op_e4921b30-1de1-485a-80c3-eb6d83cdf52f",
             "state": "delivered"
           }
         ],
@@ -1016,7 +1240,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_0f71c890-1bf9-4f70-8251-d7e445154ddd",
+            "id": "op_e4921b30-1de1-485a-80c3-eb6d83cdf52f",
             "state": "delivered"
           }
         ],
@@ -1053,7 +1277,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_21d64b14-e1c4-4412-928b-b6f08a5f86ba",
+          "id": "op_c0964d5f-8d79-414d-bbee-fc60bd67f0d4",
           "state": "delivering"
         }
       ],
@@ -1087,7 +1311,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_21d64b14-e1c4-4412-928b-b6f08a5f86ba",
+          "id": "op_c0964d5f-8d79-414d-bbee-fc60bd67f0d4",
           "state": "delivering"
         }
       ],
@@ -1121,7 +1345,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_21d64b14-e1c4-4412-928b-b6f08a5f86ba",
+          "id": "op_c0964d5f-8d79-414d-bbee-fc60bd67f0d4",
           "state": "delivered"
         }
       ],
@@ -1155,7 +1379,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_21d64b14-e1c4-4412-928b-b6f08a5f86ba",
+          "id": "op_c0964d5f-8d79-414d-bbee-fc60bd67f0d4",
           "state": "delivered"
         }
       ],
@@ -1189,7 +1413,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_9139b8d5-bc59-4f5d-a74b-5bdfb43cf533",
+          "id": "op_b7f32e82-13eb-41d4-8a8a-3a8db2939f7d",
           "state": "delivering"
         }
       ],
@@ -1223,7 +1447,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_9139b8d5-bc59-4f5d-a74b-5bdfb43cf533",
+          "id": "op_b7f32e82-13eb-41d4-8a8a-3a8db2939f7d",
           "state": "delivering"
         }
       ],
@@ -1257,7 +1481,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_9139b8d5-bc59-4f5d-a74b-5bdfb43cf533",
+          "id": "op_b7f32e82-13eb-41d4-8a8a-3a8db2939f7d",
           "state": "delivering"
         }
       ],
@@ -1291,7 +1515,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_9139b8d5-bc59-4f5d-a74b-5bdfb43cf533",
+          "id": "op_b7f32e82-13eb-41d4-8a8a-3a8db2939f7d",
           "state": "delivered"
         }
       ],
@@ -1325,7 +1549,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_9139b8d5-bc59-4f5d-a74b-5bdfb43cf533",
+          "id": "op_b7f32e82-13eb-41d4-8a8a-3a8db2939f7d",
           "state": "delivered"
         }
       ],
@@ -1359,7 +1583,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_3d0f5093-031e-4581-8bc9-65e1d1144435",
+          "id": "op_2c35b0f8-5f2d-4d39-b36a-7f613d9d052c",
           "state": "delivering"
         }
       ],
@@ -1393,7 +1617,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_3d0f5093-031e-4581-8bc9-65e1d1144435",
+          "id": "op_2c35b0f8-5f2d-4d39-b36a-7f613d9d052c",
           "state": "delivering"
         }
       ],
@@ -1427,7 +1651,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_3d0f5093-031e-4581-8bc9-65e1d1144435",
+          "id": "op_2c35b0f8-5f2d-4d39-b36a-7f613d9d052c",
           "state": "delivering"
         }
       ],
@@ -1461,7 +1685,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_3d0f5093-031e-4581-8bc9-65e1d1144435",
+          "id": "op_2c35b0f8-5f2d-4d39-b36a-7f613d9d052c",
           "state": "delivered"
         }
       ],
@@ -1495,7 +1719,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_3d0f5093-031e-4581-8bc9-65e1d1144435",
+          "id": "op_2c35b0f8-5f2d-4d39-b36a-7f613d9d052c",
           "state": "delivered"
         }
       ],
@@ -1529,7 +1753,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_2388513c-fbc7-49d0-be7b-d8af4caf44e3",
+          "id": "op_40c9022d-029c-44ca-aca9-2d84df6102c4",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -1565,7 +1789,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_2388513c-fbc7-49d0-be7b-d8af4caf44e3",
+          "id": "op_40c9022d-029c-44ca-aca9-2d84df6102c4",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -1600,7 +1824,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_2388513c-fbc7-49d0-be7b-d8af4caf44e3",
+          "id": "op_40c9022d-029c-44ca-aca9-2d84df6102c4",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -1637,7 +1861,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_8266c931-8c19-437b-8b9c-13a23d53a39c",
+          "id": "op_e75d90c4-4c07-4807-95a6-d5e7987dd3b4",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -1675,7 +1899,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_8266c931-8c19-437b-8b9c-13a23d53a39c",
+          "id": "op_e75d90c4-4c07-4807-95a6-d5e7987dd3b4",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -1728,7 +1952,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ac385bbe-b45c-4dd5-9bd4-de0ff447fa87",
+          "id": "op_5ded1889-2e76-4389-94df-811a342916ce",
           "state": "delivering"
         }
       ],
@@ -1762,7 +1986,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_ac385bbe-b45c-4dd5-9bd4-de0ff447fa87",
+          "id": "op_5ded1889-2e76-4389-94df-811a342916ce",
           "state": "delivered"
         }
       ],
@@ -1796,7 +2020,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_ac385bbe-b45c-4dd5-9bd4-de0ff447fa87",
+          "id": "op_5ded1889-2e76-4389-94df-811a342916ce",
           "state": "delivered"
         }
       ],
@@ -1848,7 +2072,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_8fb852de-a22d-42dd-956f-931ae059864e",
+          "id": "op_47d7cec7-6b5f-4e47-a833-5a97eefca036",
           "state": "delivering"
         }
       ],
@@ -1882,7 +2106,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_8fb852de-a22d-42dd-956f-931ae059864e",
+          "id": "op_47d7cec7-6b5f-4e47-a833-5a97eefca036",
           "state": "delivered"
         }
       ],
@@ -1916,7 +2140,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_8fb852de-a22d-42dd-956f-931ae059864e",
+          "id": "op_47d7cec7-6b5f-4e47-a833-5a97eefca036",
           "state": "delivered"
         }
       ],
@@ -1968,7 +2192,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_39bd32d8-6ec4-4ab3-b204-b169ff9b70f8",
+          "id": "op_8bd2df34-80ef-4f47-bce3-85fdae4bdb6a",
           "state": "delivering"
         }
       ],
@@ -2002,7 +2226,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_39bd32d8-6ec4-4ab3-b204-b169ff9b70f8",
+          "id": "op_8bd2df34-80ef-4f47-bce3-85fdae4bdb6a",
           "state": "delivered"
         }
       ],
@@ -2036,7 +2260,540 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_39bd32d8-6ec4-4ab3-b204-b169ff9b70f8",
+          "id": "op_8bd2df34-80ef-4f47-bce3-85fdae4bdb6a",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-prepared-phone-390-dark-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-submitted-with-document-phone-390-dark-en": {
+      "state": "held-submitted-with-document",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_248d9e89-1ea4-4fd9-b32d-db09e37b7b34",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-confirmed-phone-390-dark-en": {
+      "state": "held-document-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_248d9e89-1ea4-4fd9-b32d-db09e37b7b34",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-transcript-phone-390-dark-en": {
+      "state": "held-document-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_248d9e89-1ea4-4fd9-b32d-db09e37b7b34",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-released-phone-390-dark-en": {
+      "state": "held-document-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_248d9e89-1ea4-4fd9-b32d-db09e37b7b34",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-prepared-phone-390-dark-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-submitted-image-only-phone-390-dark-en": {
+      "state": "held-submitted-image-only",
+      "bubbles": 1,
+      "bubble": {
+        "width": 59,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_29b394ce-604a-4621-87cc-feb30a9299d3",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-confirmed-phone-390-dark-en": {
+      "state": "held-image-only-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 59,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_29b394ce-604a-4621-87cc-feb30a9299d3",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-transcript-phone-390-dark-en": {
+      "state": "held-image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 59,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_29b394ce-604a-4621-87cc-feb30a9299d3",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-released-phone-390-dark-en": {
+      "state": "held-image-only-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 59,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_29b394ce-604a-4621-87cc-feb30a9299d3",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-acknowledgement-phone-390-dark-en": {
+      "state": "held-lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_4f469cd7-405d-46fb-a110-56509389c87a",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-ack-transcript-phone-390-dark-en": {
+      "state": "held-lost-ack-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_4f469cd7-405d-46fb-a110-56509389c87a",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-ack-released-phone-390-dark-en": {
+      "state": "held-lost-ack-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_4f469cd7-405d-46fb-a110-56509389c87a",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-prepared-phone-390-dark-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-submitted-phone-390-dark-en": {
+      "state": "claude-submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_b14f1eb3-de61-4bf2-8d7c-3e76065f6a69",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-confirmed-phone-390-dark-en": {
+      "state": "claude-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_b14f1eb3-de61-4bf2-8d7c-3e76065f6a69",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-transcript-phone-390-dark-en": {
+      "state": "claude-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_b14f1eb3-de61-4bf2-8d7c-3e76065f6a69",
           "state": "delivered"
         }
       ],
@@ -2070,7 +2827,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_182e0bb2-1aba-4f0a-ace3-52b549048c46",
+          "id": "op_0752a3ef-6912-4528-ae75-ee8f9a750dfe",
           "state": "delivering"
         }
       ],
@@ -2104,7 +2861,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_182e0bb2-1aba-4f0a-ace3-52b549048c46",
+          "id": "op_0752a3ef-6912-4528-ae75-ee8f9a750dfe",
           "state": "delivering"
         }
       ],
@@ -2138,7 +2895,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_182e0bb2-1aba-4f0a-ace3-52b549048c46",
+          "id": "op_0752a3ef-6912-4528-ae75-ee8f9a750dfe",
           "state": "delivered"
         }
       ],
@@ -2172,7 +2929,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_182e0bb2-1aba-4f0a-ace3-52b549048c46",
+          "id": "op_0752a3ef-6912-4528-ae75-ee8f9a750dfe",
           "state": "delivered"
         }
       ],
@@ -2206,7 +2963,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_d191b5a9-f2e7-4133-b0fb-944061a70767",
+          "id": "op_b233f47e-c6c2-4370-a896-325c32ec48bb",
           "state": "delivering"
         }
       ],
@@ -2240,7 +2997,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_d191b5a9-f2e7-4133-b0fb-944061a70767",
+          "id": "op_b233f47e-c6c2-4370-a896-325c32ec48bb",
           "state": "delivering"
         }
       ],
@@ -2274,7 +3031,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_d191b5a9-f2e7-4133-b0fb-944061a70767",
+          "id": "op_b233f47e-c6c2-4370-a896-325c32ec48bb",
           "state": "delivering"
         }
       ],
@@ -2308,7 +3065,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_d191b5a9-f2e7-4133-b0fb-944061a70767",
+          "id": "op_b233f47e-c6c2-4370-a896-325c32ec48bb",
           "state": "delivered"
         }
       ],
@@ -2342,7 +3099,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_d191b5a9-f2e7-4133-b0fb-944061a70767",
+          "id": "op_b233f47e-c6c2-4370-a896-325c32ec48bb",
           "state": "delivered"
         }
       ],
@@ -2376,7 +3133,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a46074fc-46ac-4f7b-97ba-f3805d0e4cd3",
+          "id": "op_abd790b8-a260-47ee-91c7-a7be37b1fdc0",
           "state": "delivering"
         }
       ],
@@ -2410,7 +3167,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a46074fc-46ac-4f7b-97ba-f3805d0e4cd3",
+          "id": "op_abd790b8-a260-47ee-91c7-a7be37b1fdc0",
           "state": "delivering"
         }
       ],
@@ -2444,7 +3201,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a46074fc-46ac-4f7b-97ba-f3805d0e4cd3",
+          "id": "op_abd790b8-a260-47ee-91c7-a7be37b1fdc0",
           "state": "delivering"
         }
       ],
@@ -2478,7 +3235,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_a46074fc-46ac-4f7b-97ba-f3805d0e4cd3",
+          "id": "op_abd790b8-a260-47ee-91c7-a7be37b1fdc0",
           "state": "delivered"
         }
       ],
@@ -2512,7 +3269,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_a46074fc-46ac-4f7b-97ba-f3805d0e4cd3",
+          "id": "op_abd790b8-a260-47ee-91c7-a7be37b1fdc0",
           "state": "delivered"
         }
       ],
@@ -2546,7 +3303,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_3f98c932-2a1f-48c2-95ff-d7a72b0f414d",
+          "id": "op_9d58f156-6099-49f3-88e8-c94d20ef2a07",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -2582,7 +3339,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_3f98c932-2a1f-48c2-95ff-d7a72b0f414d",
+          "id": "op_9d58f156-6099-49f3-88e8-c94d20ef2a07",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -2617,7 +3374,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_3f98c932-2a1f-48c2-95ff-d7a72b0f414d",
+          "id": "op_9d58f156-6099-49f3-88e8-c94d20ef2a07",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -2654,7 +3411,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_e6a50137-1b88-4539-8573-34d8c50c6de7",
+          "id": "op_29fc31f4-cb9f-4bba-a0f2-ef36b9ab0261",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -2692,7 +3449,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_e6a50137-1b88-4539-8573-34d8c50c6de7",
+          "id": "op_29fc31f4-cb9f-4bba-a0f2-ef36b9ab0261",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -2745,7 +3502,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a34ed434-54f5-4cd8-8ddc-1d3e4a8cfd19",
+          "id": "op_b115abb7-9734-497b-ab3e-22caea86b1fa",
           "state": "delivering"
         }
       ],
@@ -2779,7 +3536,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_a34ed434-54f5-4cd8-8ddc-1d3e4a8cfd19",
+          "id": "op_b115abb7-9734-497b-ab3e-22caea86b1fa",
           "state": "delivered"
         }
       ],
@@ -2813,7 +3570,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_a34ed434-54f5-4cd8-8ddc-1d3e4a8cfd19",
+          "id": "op_b115abb7-9734-497b-ab3e-22caea86b1fa",
           "state": "delivered"
         }
       ],
@@ -2865,7 +3622,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_36738bc6-9fae-48bc-ae29-0423901b0cf5",
+          "id": "op_1a460e92-dccf-4732-9157-5aaa89ef106f",
           "state": "delivering"
         }
       ],
@@ -2899,7 +3656,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_36738bc6-9fae-48bc-ae29-0423901b0cf5",
+          "id": "op_1a460e92-dccf-4732-9157-5aaa89ef106f",
           "state": "delivered"
         }
       ],
@@ -2933,7 +3690,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_36738bc6-9fae-48bc-ae29-0423901b0cf5",
+          "id": "op_1a460e92-dccf-4732-9157-5aaa89ef106f",
           "state": "delivered"
         }
       ],
@@ -2985,7 +3742,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_891f2a54-0633-45f4-841d-ee8b58e0506f",
+          "id": "op_5f3d555c-6108-46eb-aa2b-c76e369dedb1",
           "state": "delivering"
         }
       ],
@@ -3019,7 +3776,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_891f2a54-0633-45f4-841d-ee8b58e0506f",
+          "id": "op_5f3d555c-6108-46eb-aa2b-c76e369dedb1",
           "state": "delivered"
         }
       ],
@@ -3053,7 +3810,540 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_891f2a54-0633-45f4-841d-ee8b58e0506f",
+          "id": "op_5f3d555c-6108-46eb-aa2b-c76e369dedb1",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-prepared-phone-390-dark-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-submitted-with-document-phone-390-dark-uk": {
+      "state": "held-submitted-with-document",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_061dabd0-d8a3-4a20-b2dd-6e82b4e8126d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-confirmed-phone-390-dark-uk": {
+      "state": "held-document-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_061dabd0-d8a3-4a20-b2dd-6e82b4e8126d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-transcript-phone-390-dark-uk": {
+      "state": "held-document-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_061dabd0-d8a3-4a20-b2dd-6e82b4e8126d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-released-phone-390-dark-uk": {
+      "state": "held-document-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_061dabd0-d8a3-4a20-b2dd-6e82b4e8126d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-prepared-phone-390-dark-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-submitted-image-only-phone-390-dark-uk": {
+      "state": "held-submitted-image-only",
+      "bubbles": 1,
+      "bubble": {
+        "width": 74,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_d8df08fa-8311-4ded-9c6d-e953376d0d7c",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-confirmed-phone-390-dark-uk": {
+      "state": "held-image-only-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 74,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_d8df08fa-8311-4ded-9c6d-e953376d0d7c",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-transcript-phone-390-dark-uk": {
+      "state": "held-image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 74,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_d8df08fa-8311-4ded-9c6d-e953376d0d7c",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-released-phone-390-dark-uk": {
+      "state": "held-image-only-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 74,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_d8df08fa-8311-4ded-9c6d-e953376d0d7c",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-acknowledgement-phone-390-dark-uk": {
+      "state": "held-lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_32352e4b-c16a-42fc-8c4e-cdc7bf809bc6",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-ack-transcript-phone-390-dark-uk": {
+      "state": "held-lost-ack-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_32352e4b-c16a-42fc-8c4e-cdc7bf809bc6",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-ack-released-phone-390-dark-uk": {
+      "state": "held-lost-ack-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_32352e4b-c16a-42fc-8c4e-cdc7bf809bc6",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-prepared-phone-390-dark-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-submitted-phone-390-dark-uk": {
+      "state": "claude-submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_cc4306fc-e964-4659-9189-359385ee3db9",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-confirmed-phone-390-dark-uk": {
+      "state": "claude-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_cc4306fc-e964-4659-9189-359385ee3db9",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-transcript-phone-390-dark-uk": {
+      "state": "claude-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_cc4306fc-e964-4659-9189-359385ee3db9",
           "state": "delivered"
         }
       ],
@@ -3087,7 +4377,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_6bf00193-9bac-46c0-a918-5eba665052d5",
+          "id": "op_9784b317-bb22-421e-a4ee-9e11fd652ad9",
           "state": "delivering"
         }
       ],
@@ -3121,7 +4411,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_6bf00193-9bac-46c0-a918-5eba665052d5",
+          "id": "op_9784b317-bb22-421e-a4ee-9e11fd652ad9",
           "state": "delivering"
         }
       ],
@@ -3155,7 +4445,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_6bf00193-9bac-46c0-a918-5eba665052d5",
+          "id": "op_9784b317-bb22-421e-a4ee-9e11fd652ad9",
           "state": "delivered"
         }
       ],
@@ -3189,7 +4479,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_6bf00193-9bac-46c0-a918-5eba665052d5",
+          "id": "op_9784b317-bb22-421e-a4ee-9e11fd652ad9",
           "state": "delivered"
         }
       ],
@@ -3223,7 +4513,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a2a96756-4d9b-47aa-a321-912e7b3e44b0",
+          "id": "op_991a7ddb-9a41-45ae-88c3-3cae1ccf10d6",
           "state": "delivering"
         }
       ],
@@ -3257,7 +4547,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a2a96756-4d9b-47aa-a321-912e7b3e44b0",
+          "id": "op_991a7ddb-9a41-45ae-88c3-3cae1ccf10d6",
           "state": "delivering"
         }
       ],
@@ -3291,7 +4581,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a2a96756-4d9b-47aa-a321-912e7b3e44b0",
+          "id": "op_991a7ddb-9a41-45ae-88c3-3cae1ccf10d6",
           "state": "delivering"
         }
       ],
@@ -3325,7 +4615,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_a2a96756-4d9b-47aa-a321-912e7b3e44b0",
+          "id": "op_991a7ddb-9a41-45ae-88c3-3cae1ccf10d6",
           "state": "delivered"
         }
       ],
@@ -3359,7 +4649,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_a2a96756-4d9b-47aa-a321-912e7b3e44b0",
+          "id": "op_991a7ddb-9a41-45ae-88c3-3cae1ccf10d6",
           "state": "delivered"
         }
       ],
@@ -3393,7 +4683,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7fca4d23-2927-48c3-9c4d-060a927cf572",
+          "id": "op_4475bc26-9127-4d72-872d-f3346fe4cb0b",
           "state": "delivering"
         }
       ],
@@ -3427,7 +4717,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7fca4d23-2927-48c3-9c4d-060a927cf572",
+          "id": "op_4475bc26-9127-4d72-872d-f3346fe4cb0b",
           "state": "delivering"
         }
       ],
@@ -3461,7 +4751,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7fca4d23-2927-48c3-9c4d-060a927cf572",
+          "id": "op_4475bc26-9127-4d72-872d-f3346fe4cb0b",
           "state": "delivering"
         }
       ],
@@ -3495,7 +4785,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_7fca4d23-2927-48c3-9c4d-060a927cf572",
+          "id": "op_4475bc26-9127-4d72-872d-f3346fe4cb0b",
           "state": "delivered"
         }
       ],
@@ -3529,7 +4819,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_7fca4d23-2927-48c3-9c4d-060a927cf572",
+          "id": "op_4475bc26-9127-4d72-872d-f3346fe4cb0b",
           "state": "delivered"
         }
       ],
@@ -3563,7 +4853,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_55af7329-60ef-47c4-bb2e-0c4156a32d55",
+          "id": "op_b497e808-b7ad-49d8-967b-452007bbf4c2",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -3599,7 +4889,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_55af7329-60ef-47c4-bb2e-0c4156a32d55",
+          "id": "op_b497e808-b7ad-49d8-967b-452007bbf4c2",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -3634,7 +4924,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_55af7329-60ef-47c4-bb2e-0c4156a32d55",
+          "id": "op_b497e808-b7ad-49d8-967b-452007bbf4c2",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -3671,7 +4961,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_f0ed7f50-f93b-4906-8e57-72c68db27af1",
+          "id": "op_e859ec46-a761-4673-b736-7be2784c0658",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -3709,7 +4999,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_f0ed7f50-f93b-4906-8e57-72c68db27af1",
+          "id": "op_e859ec46-a761-4673-b736-7be2784c0658",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -3762,7 +5052,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_aabde12f-79f6-4fdd-a109-ab6a52e4b311",
+          "id": "op_4b686f8f-b022-40dd-8e95-f3d109e15100",
           "state": "delivering"
         }
       ],
@@ -3796,7 +5086,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_aabde12f-79f6-4fdd-a109-ab6a52e4b311",
+          "id": "op_4b686f8f-b022-40dd-8e95-f3d109e15100",
           "state": "delivered"
         }
       ],
@@ -3830,7 +5120,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_aabde12f-79f6-4fdd-a109-ab6a52e4b311",
+          "id": "op_4b686f8f-b022-40dd-8e95-f3d109e15100",
           "state": "delivered"
         }
       ],
@@ -3882,7 +5172,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_63b46885-bb8d-4a57-9cbc-d8088ea5147a",
+          "id": "op_2543887f-10c5-4c3d-9b85-47cf74dab42d",
           "state": "delivering"
         }
       ],
@@ -3916,7 +5206,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_63b46885-bb8d-4a57-9cbc-d8088ea5147a",
+          "id": "op_2543887f-10c5-4c3d-9b85-47cf74dab42d",
           "state": "delivered"
         }
       ],
@@ -3950,7 +5240,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_63b46885-bb8d-4a57-9cbc-d8088ea5147a",
+          "id": "op_2543887f-10c5-4c3d-9b85-47cf74dab42d",
           "state": "delivered"
         }
       ],
@@ -4002,7 +5292,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_66a23087-8c2c-4b32-9e66-7a7426854a6b",
+          "id": "op_e62d1103-59d9-43b9-a69d-3421a39908cf",
           "state": "delivering"
         }
       ],
@@ -4036,7 +5326,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_66a23087-8c2c-4b32-9e66-7a7426854a6b",
+          "id": "op_e62d1103-59d9-43b9-a69d-3421a39908cf",
           "state": "delivered"
         }
       ],
@@ -4070,7 +5360,540 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_66a23087-8c2c-4b32-9e66-7a7426854a6b",
+          "id": "op_e62d1103-59d9-43b9-a69d-3421a39908cf",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-prepared-phone-390-light-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-submitted-with-document-phone-390-light-en": {
+      "state": "held-submitted-with-document",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2da3dbf3-9836-4509-97eb-e0e09b022877",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-confirmed-phone-390-light-en": {
+      "state": "held-document-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_2da3dbf3-9836-4509-97eb-e0e09b022877",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-transcript-phone-390-light-en": {
+      "state": "held-document-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_2da3dbf3-9836-4509-97eb-e0e09b022877",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-released-phone-390-light-en": {
+      "state": "held-document-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_2da3dbf3-9836-4509-97eb-e0e09b022877",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-prepared-phone-390-light-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-submitted-image-only-phone-390-light-en": {
+      "state": "held-submitted-image-only",
+      "bubbles": 1,
+      "bubble": {
+        "width": 59,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_3d2eeed9-e6d6-400a-951e-9a6c3269594b",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-confirmed-phone-390-light-en": {
+      "state": "held-image-only-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 59,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_3d2eeed9-e6d6-400a-951e-9a6c3269594b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-transcript-phone-390-light-en": {
+      "state": "held-image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 59,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_3d2eeed9-e6d6-400a-951e-9a6c3269594b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-released-phone-390-light-en": {
+      "state": "held-image-only-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 59,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_3d2eeed9-e6d6-400a-951e-9a6c3269594b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-acknowledgement-phone-390-light-en": {
+      "state": "held-lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_935f0996-5493-45e3-8d19-a12aee46b669",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-ack-transcript-phone-390-light-en": {
+      "state": "held-lost-ack-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_935f0996-5493-45e3-8d19-a12aee46b669",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-ack-released-phone-390-light-en": {
+      "state": "held-lost-ack-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_935f0996-5493-45e3-8d19-a12aee46b669",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-prepared-phone-390-light-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-submitted-phone-390-light-en": {
+      "state": "claude-submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_5706db2e-e85e-4ee2-b300-e3f94126761d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-confirmed-phone-390-light-en": {
+      "state": "claude-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_5706db2e-e85e-4ee2-b300-e3f94126761d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-transcript-phone-390-light-en": {
+      "state": "claude-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_5706db2e-e85e-4ee2-b300-e3f94126761d",
           "state": "delivered"
         }
       ],
@@ -4104,7 +5927,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_d642f3c6-17d9-4d91-a776-4de7b6b3b71c",
+          "id": "op_ec1d5185-d488-46a5-ab7f-a14a82112c6c",
           "state": "delivering"
         }
       ],
@@ -4138,7 +5961,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_d642f3c6-17d9-4d91-a776-4de7b6b3b71c",
+          "id": "op_ec1d5185-d488-46a5-ab7f-a14a82112c6c",
           "state": "delivering"
         }
       ],
@@ -4172,7 +5995,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_d642f3c6-17d9-4d91-a776-4de7b6b3b71c",
+          "id": "op_ec1d5185-d488-46a5-ab7f-a14a82112c6c",
           "state": "delivered"
         }
       ],
@@ -4206,7 +6029,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_d642f3c6-17d9-4d91-a776-4de7b6b3b71c",
+          "id": "op_ec1d5185-d488-46a5-ab7f-a14a82112c6c",
           "state": "delivered"
         }
       ],
@@ -4240,7 +6063,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_d00c8f36-b57a-42bc-a1f6-bf2c96a55de6",
+          "id": "op_06982933-dac7-4c5f-b0e8-fa77dc614518",
           "state": "delivering"
         }
       ],
@@ -4274,7 +6097,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_d00c8f36-b57a-42bc-a1f6-bf2c96a55de6",
+          "id": "op_06982933-dac7-4c5f-b0e8-fa77dc614518",
           "state": "delivering"
         }
       ],
@@ -4308,7 +6131,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_d00c8f36-b57a-42bc-a1f6-bf2c96a55de6",
+          "id": "op_06982933-dac7-4c5f-b0e8-fa77dc614518",
           "state": "delivering"
         }
       ],
@@ -4342,7 +6165,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_d00c8f36-b57a-42bc-a1f6-bf2c96a55de6",
+          "id": "op_06982933-dac7-4c5f-b0e8-fa77dc614518",
           "state": "delivered"
         }
       ],
@@ -4376,7 +6199,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_d00c8f36-b57a-42bc-a1f6-bf2c96a55de6",
+          "id": "op_06982933-dac7-4c5f-b0e8-fa77dc614518",
           "state": "delivered"
         }
       ],
@@ -4410,7 +6233,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_eb4d57bb-e546-4113-96fb-d3fc51c469c0",
+          "id": "op_95cb4234-7e9c-4be9-bda3-0f4d9a53e8ae",
           "state": "delivering"
         }
       ],
@@ -4444,7 +6267,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_eb4d57bb-e546-4113-96fb-d3fc51c469c0",
+          "id": "op_95cb4234-7e9c-4be9-bda3-0f4d9a53e8ae",
           "state": "delivering"
         }
       ],
@@ -4478,7 +6301,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_eb4d57bb-e546-4113-96fb-d3fc51c469c0",
+          "id": "op_95cb4234-7e9c-4be9-bda3-0f4d9a53e8ae",
           "state": "delivering"
         }
       ],
@@ -4512,7 +6335,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_eb4d57bb-e546-4113-96fb-d3fc51c469c0",
+          "id": "op_95cb4234-7e9c-4be9-bda3-0f4d9a53e8ae",
           "state": "delivered"
         }
       ],
@@ -4546,7 +6369,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_eb4d57bb-e546-4113-96fb-d3fc51c469c0",
+          "id": "op_95cb4234-7e9c-4be9-bda3-0f4d9a53e8ae",
           "state": "delivered"
         }
       ],
@@ -4580,7 +6403,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_2666e9f4-79b3-4ff1-b65f-f9bc7250dec3",
+          "id": "op_c326419f-4962-4f1b-88e3-59135f8f2709",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -4616,7 +6439,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_2666e9f4-79b3-4ff1-b65f-f9bc7250dec3",
+          "id": "op_c326419f-4962-4f1b-88e3-59135f8f2709",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -4651,7 +6474,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_2666e9f4-79b3-4ff1-b65f-f9bc7250dec3",
+          "id": "op_c326419f-4962-4f1b-88e3-59135f8f2709",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -4688,7 +6511,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_165e1639-7811-4a7b-804f-2771d0217555",
+          "id": "op_f26ba3fc-da0f-4caa-bd49-0b5d04fd9550",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -4726,7 +6549,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_165e1639-7811-4a7b-804f-2771d0217555",
+          "id": "op_f26ba3fc-da0f-4caa-bd49-0b5d04fd9550",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -4779,7 +6602,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_645354a6-7a24-4088-8a4a-bbeb4b8a7936",
+          "id": "op_c782bb9a-d8e9-4afe-8a5d-73cfe8200364",
           "state": "delivering"
         }
       ],
@@ -4813,7 +6636,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_645354a6-7a24-4088-8a4a-bbeb4b8a7936",
+          "id": "op_c782bb9a-d8e9-4afe-8a5d-73cfe8200364",
           "state": "delivered"
         }
       ],
@@ -4847,7 +6670,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_645354a6-7a24-4088-8a4a-bbeb4b8a7936",
+          "id": "op_c782bb9a-d8e9-4afe-8a5d-73cfe8200364",
           "state": "delivered"
         }
       ],
@@ -4899,7 +6722,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_2810e03b-1a96-4526-a3c9-a163773e7030",
+          "id": "op_c35ae76e-8565-40ac-a83d-c81705803b21",
           "state": "delivering"
         }
       ],
@@ -4933,7 +6756,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_2810e03b-1a96-4526-a3c9-a163773e7030",
+          "id": "op_c35ae76e-8565-40ac-a83d-c81705803b21",
           "state": "delivered"
         }
       ],
@@ -4967,7 +6790,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_2810e03b-1a96-4526-a3c9-a163773e7030",
+          "id": "op_c35ae76e-8565-40ac-a83d-c81705803b21",
           "state": "delivered"
         }
       ],
@@ -5019,7 +6842,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_d38a8183-3463-4fb7-9832-cb915ff5b6bb",
+          "id": "op_315eae19-353a-4c48-bd7d-6b84b07a329b",
           "state": "delivering"
         }
       ],
@@ -5053,7 +6876,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_d38a8183-3463-4fb7-9832-cb915ff5b6bb",
+          "id": "op_315eae19-353a-4c48-bd7d-6b84b07a329b",
           "state": "delivered"
         }
       ],
@@ -5087,7 +6910,540 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_d38a8183-3463-4fb7-9832-cb915ff5b6bb",
+          "id": "op_315eae19-353a-4c48-bd7d-6b84b07a329b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-prepared-phone-390-light-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-submitted-with-document-phone-390-light-uk": {
+      "state": "held-submitted-with-document",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_7b3b638d-6a48-4eb3-b9dd-596023b6ab18",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-confirmed-phone-390-light-uk": {
+      "state": "held-document-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_7b3b638d-6a48-4eb3-b9dd-596023b6ab18",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-transcript-phone-390-light-uk": {
+      "state": "held-document-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_7b3b638d-6a48-4eb3-b9dd-596023b6ab18",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "document-held-join-held-document-released-phone-390-light-uk": {
+      "state": "held-document-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 80,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_7b3b638d-6a48-4eb3-b9dd-596023b6ab18",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-prepared-phone-390-light-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-submitted-image-only-phone-390-light-uk": {
+      "state": "held-submitted-image-only",
+      "bubbles": 1,
+      "bubble": {
+        "width": 74,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_6af5fad5-0bf0-4f25-8972-c3ce84feb461",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-confirmed-phone-390-light-uk": {
+      "state": "held-image-only-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 74,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_6af5fad5-0bf0-4f25-8972-c3ce84feb461",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-transcript-phone-390-light-uk": {
+      "state": "held-image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 74,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_6af5fad5-0bf0-4f25-8972-c3ce84feb461",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-held-join-held-image-only-released-phone-390-light-uk": {
+      "state": "held-image-only-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 74,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_6af5fad5-0bf0-4f25-8972-c3ce84feb461",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-acknowledgement-phone-390-light-uk": {
+      "state": "held-lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2c51a1ad-7283-49b9-aedd-9e8cc76ad7a2",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-ack-transcript-phone-390-light-uk": {
+      "state": "held-lost-ack-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2c51a1ad-7283-49b9-aedd-9e8cc76ad7a2",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "lost-ack-held-join-held-lost-ack-released-phone-390-light-uk": {
+      "state": "held-lost-ack-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 62,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_2c51a1ad-7283-49b9-aedd-9e8cc76ad7a2",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-prepared-phone-390-light-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-submitted-phone-390-light-uk": {
+      "state": "claude-submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_152c0267-206c-48f1-961c-24584a905c38",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-confirmed-phone-390-light-uk": {
+      "state": "claude-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_152c0267-206c-48f1-961c-24584a905c38",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "claude-canonical-claude-transcript-phone-390-light-uk": {
+      "state": "claude-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 292,
+        "height": 105,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_152c0267-206c-48f1-961c-24584a905c38",
           "state": "delivered"
         }
       ],
@@ -5121,7 +7477,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_83c6b73a-a6df-47f2-9b14-4c0e45160897",
+          "id": "op_306516e2-d3ac-4944-9a8f-512a0796363c",
           "state": "delivering"
         }
       ],
@@ -5155,7 +7511,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_83c6b73a-a6df-47f2-9b14-4c0e45160897",
+          "id": "op_306516e2-d3ac-4944-9a8f-512a0796363c",
           "state": "delivering"
         }
       ],
@@ -5189,7 +7545,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_83c6b73a-a6df-47f2-9b14-4c0e45160897",
+          "id": "op_306516e2-d3ac-4944-9a8f-512a0796363c",
           "state": "delivered"
         }
       ],
@@ -5223,7 +7579,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_83c6b73a-a6df-47f2-9b14-4c0e45160897",
+          "id": "op_306516e2-d3ac-4944-9a8f-512a0796363c",
           "state": "delivered"
         }
       ],
@@ -5257,7 +7613,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_9c31cbdf-34c2-46e3-8b39-e8266b514613",
+          "id": "op_2067f330-f81a-4ebf-bf56-2a4b83e1a6fc",
           "state": "delivering"
         }
       ],
@@ -5291,7 +7647,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_9c31cbdf-34c2-46e3-8b39-e8266b514613",
+          "id": "op_2067f330-f81a-4ebf-bf56-2a4b83e1a6fc",
           "state": "delivering"
         }
       ],
@@ -5325,7 +7681,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_9c31cbdf-34c2-46e3-8b39-e8266b514613",
+          "id": "op_2067f330-f81a-4ebf-bf56-2a4b83e1a6fc",
           "state": "delivering"
         }
       ],
@@ -5359,7 +7715,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_9c31cbdf-34c2-46e3-8b39-e8266b514613",
+          "id": "op_2067f330-f81a-4ebf-bf56-2a4b83e1a6fc",
           "state": "delivered"
         }
       ],
@@ -5393,7 +7749,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_9c31cbdf-34c2-46e3-8b39-e8266b514613",
+          "id": "op_2067f330-f81a-4ebf-bf56-2a4b83e1a6fc",
           "state": "delivered"
         }
       ],
@@ -5427,7 +7783,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_4f2f5cd4-e17d-44a2-bb2c-c2e5f760f57e",
+          "id": "op_341f30f1-4f5d-462f-9a35-97fa51af5901",
           "state": "delivering"
         }
       ],
@@ -5461,7 +7817,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_4f2f5cd4-e17d-44a2-bb2c-c2e5f760f57e",
+          "id": "op_341f30f1-4f5d-462f-9a35-97fa51af5901",
           "state": "delivering"
         }
       ],
@@ -5495,7 +7851,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_4f2f5cd4-e17d-44a2-bb2c-c2e5f760f57e",
+          "id": "op_341f30f1-4f5d-462f-9a35-97fa51af5901",
           "state": "delivering"
         }
       ],
@@ -5529,7 +7885,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_4f2f5cd4-e17d-44a2-bb2c-c2e5f760f57e",
+          "id": "op_341f30f1-4f5d-462f-9a35-97fa51af5901",
           "state": "delivered"
         }
       ],
@@ -5563,7 +7919,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_4f2f5cd4-e17d-44a2-bb2c-c2e5f760f57e",
+          "id": "op_341f30f1-4f5d-462f-9a35-97fa51af5901",
           "state": "delivered"
         }
       ],
@@ -5597,7 +7953,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_c5105bc2-34f7-43ba-b8a1-dba86af7af5f",
+          "id": "op_2eef8c52-a3a5-474e-a9f3-4170011076dc",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -5633,7 +7989,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_c5105bc2-34f7-43ba-b8a1-dba86af7af5f",
+          "id": "op_2eef8c52-a3a5-474e-a9f3-4170011076dc",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -5668,7 +8024,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_c5105bc2-34f7-43ba-b8a1-dba86af7af5f",
+          "id": "op_2eef8c52-a3a5-474e-a9f3-4170011076dc",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -5705,7 +8061,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_5b4ba0fb-5e02-4775-80cb-c978a25f237b",
+          "id": "op_852ff87f-f1bb-4b29-9698-462650822e9d",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -5743,7 +8099,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_5b4ba0fb-5e02-4775-80cb-c978a25f237b",
+          "id": "op_852ff87f-f1bb-4b29-9698-462650822e9d",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -5796,7 +8152,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_55e08286-1cbf-404f-826f-1a3b17c7a539",
+          "id": "op_415f9219-5201-4c87-87ef-c06764b838c0",
           "state": "delivering"
         }
       ],
@@ -5830,7 +8186,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_55e08286-1cbf-404f-826f-1a3b17c7a539",
+          "id": "op_415f9219-5201-4c87-87ef-c06764b838c0",
           "state": "delivered"
         }
       ],
@@ -5864,7 +8220,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_55e08286-1cbf-404f-826f-1a3b17c7a539",
+          "id": "op_415f9219-5201-4c87-87ef-c06764b838c0",
           "state": "delivered"
         }
       ],
@@ -5916,7 +8272,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_8f16211d-65b9-45ca-a693-4aa36900123b",
+          "id": "op_86a347b4-bcd8-4171-8e47-0d0b201f2ffe",
           "state": "delivering"
         }
       ],
@@ -5950,7 +8306,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_8f16211d-65b9-45ca-a693-4aa36900123b",
+          "id": "op_86a347b4-bcd8-4171-8e47-0d0b201f2ffe",
           "state": "delivered"
         }
       ],
@@ -5984,7 +8340,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_8f16211d-65b9-45ca-a693-4aa36900123b",
+          "id": "op_86a347b4-bcd8-4171-8e47-0d0b201f2ffe",
           "state": "delivered"
         }
       ],
@@ -6036,7 +8392,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_1000ba8a-ead6-4f4e-8d33-b4d3644e5eb3",
+          "id": "op_939099d0-8538-4fec-a316-a76b6bf2e774",
           "state": "delivering"
         }
       ],
@@ -6070,7 +8426,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_1000ba8a-ead6-4f4e-8d33-b4d3644e5eb3",
+          "id": "op_939099d0-8538-4fec-a316-a76b6bf2e774",
           "state": "delivered"
         }
       ],
@@ -6104,7 +8460,540 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_1000ba8a-ead6-4f4e-8d33-b4d3644e5eb3",
+          "id": "op_939099d0-8538-4fec-a316-a76b6bf2e774",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-prepared-desktop-1280-dark-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-submitted-with-document-desktop-1280-dark-en": {
+      "state": "held-submitted-with-document",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_8a071fe2-ec0c-42d0-8c9d-925b39bdb19c",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-confirmed-desktop-1280-dark-en": {
+      "state": "held-document-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_8a071fe2-ec0c-42d0-8c9d-925b39bdb19c",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-transcript-desktop-1280-dark-en": {
+      "state": "held-document-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_8a071fe2-ec0c-42d0-8c9d-925b39bdb19c",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-released-desktop-1280-dark-en": {
+      "state": "held-document-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_8a071fe2-ec0c-42d0-8c9d-925b39bdb19c",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-prepared-desktop-1280-dark-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-submitted-image-only-desktop-1280-dark-en": {
+      "state": "held-submitted-image-only",
+      "bubbles": 1,
+      "bubble": {
+        "width": 67,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_5d50f150-bfbf-4bbb-b2f6-28590e137388",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-confirmed-desktop-1280-dark-en": {
+      "state": "held-image-only-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 67,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_5d50f150-bfbf-4bbb-b2f6-28590e137388",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-transcript-desktop-1280-dark-en": {
+      "state": "held-image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 67,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_5d50f150-bfbf-4bbb-b2f6-28590e137388",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-released-desktop-1280-dark-en": {
+      "state": "held-image-only-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 67,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_5d50f150-bfbf-4bbb-b2f6-28590e137388",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-acknowledgement-desktop-1280-dark-en": {
+      "state": "held-lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2ce7cd3b-3df9-44b7-a33b-aed1b28e4c2a",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-ack-transcript-desktop-1280-dark-en": {
+      "state": "held-lost-ack-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2ce7cd3b-3df9-44b7-a33b-aed1b28e4c2a",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-ack-released-desktop-1280-dark-en": {
+      "state": "held-lost-ack-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_2ce7cd3b-3df9-44b7-a33b-aed1b28e4c2a",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-prepared-desktop-1280-dark-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-submitted-desktop-1280-dark-en": {
+      "state": "claude-submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_215c5b01-6d92-4b06-b2da-04a252676113",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-confirmed-desktop-1280-dark-en": {
+      "state": "claude-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_215c5b01-6d92-4b06-b2da-04a252676113",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-transcript-desktop-1280-dark-en": {
+      "state": "claude-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_215c5b01-6d92-4b06-b2da-04a252676113",
           "state": "delivered"
         }
       ],
@@ -6138,7 +9027,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ea7a59cf-44fc-4c09-afd1-f0b4d29cafb6",
+          "id": "op_5f3e5b3a-615e-4320-b4d7-96c22d173cd3",
           "state": "delivering"
         }
       ],
@@ -6172,7 +9061,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ea7a59cf-44fc-4c09-afd1-f0b4d29cafb6",
+          "id": "op_5f3e5b3a-615e-4320-b4d7-96c22d173cd3",
           "state": "delivering"
         }
       ],
@@ -6206,7 +9095,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_ea7a59cf-44fc-4c09-afd1-f0b4d29cafb6",
+          "id": "op_5f3e5b3a-615e-4320-b4d7-96c22d173cd3",
           "state": "delivered"
         }
       ],
@@ -6240,7 +9129,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_ea7a59cf-44fc-4c09-afd1-f0b4d29cafb6",
+          "id": "op_5f3e5b3a-615e-4320-b4d7-96c22d173cd3",
           "state": "delivered"
         }
       ],
@@ -6274,7 +9163,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_0c968840-c905-4d76-ab1e-23b993858833",
+          "id": "op_06354e4b-1e7d-485a-8185-34e7c55cfadf",
           "state": "delivering"
         }
       ],
@@ -6308,7 +9197,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_0c968840-c905-4d76-ab1e-23b993858833",
+          "id": "op_06354e4b-1e7d-485a-8185-34e7c55cfadf",
           "state": "delivering"
         }
       ],
@@ -6342,7 +9231,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_0c968840-c905-4d76-ab1e-23b993858833",
+          "id": "op_06354e4b-1e7d-485a-8185-34e7c55cfadf",
           "state": "delivering"
         }
       ],
@@ -6376,7 +9265,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_0c968840-c905-4d76-ab1e-23b993858833",
+          "id": "op_06354e4b-1e7d-485a-8185-34e7c55cfadf",
           "state": "delivered"
         }
       ],
@@ -6410,7 +9299,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_0c968840-c905-4d76-ab1e-23b993858833",
+          "id": "op_06354e4b-1e7d-485a-8185-34e7c55cfadf",
           "state": "delivered"
         }
       ],
@@ -6444,7 +9333,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_12991e75-6283-4732-9087-2edff1ccfed8",
+          "id": "op_743a8884-bcc5-41df-81aa-558f7a75f766",
           "state": "delivering"
         }
       ],
@@ -6478,7 +9367,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_12991e75-6283-4732-9087-2edff1ccfed8",
+          "id": "op_743a8884-bcc5-41df-81aa-558f7a75f766",
           "state": "delivering"
         }
       ],
@@ -6512,7 +9401,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_12991e75-6283-4732-9087-2edff1ccfed8",
+          "id": "op_743a8884-bcc5-41df-81aa-558f7a75f766",
           "state": "delivering"
         }
       ],
@@ -6546,7 +9435,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_12991e75-6283-4732-9087-2edff1ccfed8",
+          "id": "op_743a8884-bcc5-41df-81aa-558f7a75f766",
           "state": "delivered"
         }
       ],
@@ -6580,7 +9469,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_12991e75-6283-4732-9087-2edff1ccfed8",
+          "id": "op_743a8884-bcc5-41df-81aa-558f7a75f766",
           "state": "delivered"
         }
       ],
@@ -6614,7 +9503,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_e7f57f35-5ef8-4218-9773-cf1e6fc0ce58",
+          "id": "op_36a53f48-d479-4b02-ac75-aa262b038ea9",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -6650,7 +9539,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_e7f57f35-5ef8-4218-9773-cf1e6fc0ce58",
+          "id": "op_36a53f48-d479-4b02-ac75-aa262b038ea9",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -6685,7 +9574,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_e7f57f35-5ef8-4218-9773-cf1e6fc0ce58",
+          "id": "op_36a53f48-d479-4b02-ac75-aa262b038ea9",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -6722,7 +9611,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_cd7e9785-4724-418f-ab2a-037b6ba0a0b4",
+          "id": "op_6ef53545-2fda-4701-88eb-978d1e568b47",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -6760,7 +9649,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_cd7e9785-4724-418f-ab2a-037b6ba0a0b4",
+          "id": "op_6ef53545-2fda-4701-88eb-978d1e568b47",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -6813,7 +9702,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_9216e823-ef2f-4eea-9d6b-1d8108ae7d11",
+          "id": "op_40599655-5307-452c-a772-da39a854064c",
           "state": "delivering"
         }
       ],
@@ -6847,7 +9736,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_9216e823-ef2f-4eea-9d6b-1d8108ae7d11",
+          "id": "op_40599655-5307-452c-a772-da39a854064c",
           "state": "delivered"
         }
       ],
@@ -6881,7 +9770,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_9216e823-ef2f-4eea-9d6b-1d8108ae7d11",
+          "id": "op_40599655-5307-452c-a772-da39a854064c",
           "state": "delivered"
         }
       ],
@@ -6933,7 +9822,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_37ff7bd7-4bf5-410a-b644-33e2d01dc21c",
+          "id": "op_b92d8593-b61d-4457-a091-2d288fbeffa8",
           "state": "delivering"
         }
       ],
@@ -6967,7 +9856,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_37ff7bd7-4bf5-410a-b644-33e2d01dc21c",
+          "id": "op_b92d8593-b61d-4457-a091-2d288fbeffa8",
           "state": "delivered"
         }
       ],
@@ -7001,7 +9890,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_37ff7bd7-4bf5-410a-b644-33e2d01dc21c",
+          "id": "op_b92d8593-b61d-4457-a091-2d288fbeffa8",
           "state": "delivered"
         }
       ],
@@ -7053,7 +9942,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_754ab159-7e48-4c10-9878-f1d9980f0b02",
+          "id": "op_9aa4d539-03a8-41d1-8f70-eb7d934eb69a",
           "state": "delivering"
         }
       ],
@@ -7087,7 +9976,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_754ab159-7e48-4c10-9878-f1d9980f0b02",
+          "id": "op_9aa4d539-03a8-41d1-8f70-eb7d934eb69a",
           "state": "delivered"
         }
       ],
@@ -7121,7 +10010,540 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_754ab159-7e48-4c10-9878-f1d9980f0b02",
+          "id": "op_9aa4d539-03a8-41d1-8f70-eb7d934eb69a",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-prepared-desktop-1280-dark-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-submitted-with-document-desktop-1280-dark-uk": {
+      "state": "held-submitted-with-document",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_eb61a1d4-35db-4d88-8650-fbfcc67db54d",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-confirmed-desktop-1280-dark-uk": {
+      "state": "held-document-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_eb61a1d4-35db-4d88-8650-fbfcc67db54d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-transcript-desktop-1280-dark-uk": {
+      "state": "held-document-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_eb61a1d4-35db-4d88-8650-fbfcc67db54d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-released-desktop-1280-dark-uk": {
+      "state": "held-document-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_eb61a1d4-35db-4d88-8650-fbfcc67db54d",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-prepared-desktop-1280-dark-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-submitted-image-only-desktop-1280-dark-uk": {
+      "state": "held-submitted-image-only",
+      "bubbles": 1,
+      "bubble": {
+        "width": 82,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_2f2e5d43-bf9b-4a96-8c40-2ce026eab07b",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-confirmed-desktop-1280-dark-uk": {
+      "state": "held-image-only-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 82,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_2f2e5d43-bf9b-4a96-8c40-2ce026eab07b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-transcript-desktop-1280-dark-uk": {
+      "state": "held-image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 82,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_2f2e5d43-bf9b-4a96-8c40-2ce026eab07b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-released-desktop-1280-dark-uk": {
+      "state": "held-image-only-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 82,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_2f2e5d43-bf9b-4a96-8c40-2ce026eab07b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-acknowledgement-desktop-1280-dark-uk": {
+      "state": "held-lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_ac39bd66-e55b-4f91-8dfc-8c44fe812999",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-ack-transcript-desktop-1280-dark-uk": {
+      "state": "held-lost-ack-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_ac39bd66-e55b-4f91-8dfc-8c44fe812999",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-ack-released-desktop-1280-dark-uk": {
+      "state": "held-lost-ack-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_ac39bd66-e55b-4f91-8dfc-8c44fe812999",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-prepared-desktop-1280-dark-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-submitted-desktop-1280-dark-uk": {
+      "state": "claude-submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_22c544b0-b4a0-421a-bb87-6e5f27338ab5",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-confirmed-desktop-1280-dark-uk": {
+      "state": "claude-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_22c544b0-b4a0-421a-bb87-6e5f27338ab5",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-transcript-desktop-1280-dark-uk": {
+      "state": "claude-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_22c544b0-b4a0-421a-bb87-6e5f27338ab5",
           "state": "delivered"
         }
       ],
@@ -7155,7 +10577,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_f658ebfc-63b8-4e07-9b99-89c1e597fa06",
+          "id": "op_27c470c5-48e1-461f-890f-7d500ee99068",
           "state": "delivering"
         }
       ],
@@ -7189,7 +10611,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_f658ebfc-63b8-4e07-9b99-89c1e597fa06",
+          "id": "op_27c470c5-48e1-461f-890f-7d500ee99068",
           "state": "delivering"
         }
       ],
@@ -7223,7 +10645,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_f658ebfc-63b8-4e07-9b99-89c1e597fa06",
+          "id": "op_27c470c5-48e1-461f-890f-7d500ee99068",
           "state": "delivered"
         }
       ],
@@ -7257,7 +10679,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_f658ebfc-63b8-4e07-9b99-89c1e597fa06",
+          "id": "op_27c470c5-48e1-461f-890f-7d500ee99068",
           "state": "delivered"
         }
       ],
@@ -7291,7 +10713,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_de4ca91d-cfe0-49c2-afeb-8c0be0df738d",
+          "id": "op_c1ffa351-1f33-4202-8919-32aa0054a97d",
           "state": "delivering"
         }
       ],
@@ -7325,7 +10747,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_de4ca91d-cfe0-49c2-afeb-8c0be0df738d",
+          "id": "op_c1ffa351-1f33-4202-8919-32aa0054a97d",
           "state": "delivering"
         }
       ],
@@ -7359,7 +10781,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_de4ca91d-cfe0-49c2-afeb-8c0be0df738d",
+          "id": "op_c1ffa351-1f33-4202-8919-32aa0054a97d",
           "state": "delivering"
         }
       ],
@@ -7393,7 +10815,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_de4ca91d-cfe0-49c2-afeb-8c0be0df738d",
+          "id": "op_c1ffa351-1f33-4202-8919-32aa0054a97d",
           "state": "delivered"
         }
       ],
@@ -7427,7 +10849,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_de4ca91d-cfe0-49c2-afeb-8c0be0df738d",
+          "id": "op_c1ffa351-1f33-4202-8919-32aa0054a97d",
           "state": "delivered"
         }
       ],
@@ -7461,7 +10883,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_357e43ea-4f64-4219-b9ba-6905a1224ae8",
+          "id": "op_ad7f0ce4-1873-4973-9464-539a7afba471",
           "state": "delivering"
         }
       ],
@@ -7495,7 +10917,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_357e43ea-4f64-4219-b9ba-6905a1224ae8",
+          "id": "op_ad7f0ce4-1873-4973-9464-539a7afba471",
           "state": "delivering"
         }
       ],
@@ -7529,7 +10951,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_357e43ea-4f64-4219-b9ba-6905a1224ae8",
+          "id": "op_ad7f0ce4-1873-4973-9464-539a7afba471",
           "state": "delivering"
         }
       ],
@@ -7563,7 +10985,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_357e43ea-4f64-4219-b9ba-6905a1224ae8",
+          "id": "op_ad7f0ce4-1873-4973-9464-539a7afba471",
           "state": "delivered"
         }
       ],
@@ -7597,7 +11019,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_357e43ea-4f64-4219-b9ba-6905a1224ae8",
+          "id": "op_ad7f0ce4-1873-4973-9464-539a7afba471",
           "state": "delivered"
         }
       ],
@@ -7631,7 +11053,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_953f3095-a752-40a6-84c4-dbbe160dcbfb",
+          "id": "op_46191834-85e0-45ea-950b-bb4ea969544b",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -7667,7 +11089,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_953f3095-a752-40a6-84c4-dbbe160dcbfb",
+          "id": "op_46191834-85e0-45ea-950b-bb4ea969544b",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -7702,7 +11124,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_953f3095-a752-40a6-84c4-dbbe160dcbfb",
+          "id": "op_46191834-85e0-45ea-950b-bb4ea969544b",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -7739,7 +11161,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_704170b2-b93a-4576-8eac-3aae255328e9",
+          "id": "op_c85801a0-ba15-45e7-88b7-369ac604c828",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -7777,7 +11199,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_704170b2-b93a-4576-8eac-3aae255328e9",
+          "id": "op_c85801a0-ba15-45e7-88b7-369ac604c828",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -7830,7 +11252,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_2f29b16d-9984-4d49-adde-8acc2fbfc847",
+          "id": "op_032d9c61-7a0f-4005-b1e4-2b81c7ea42f3",
           "state": "delivering"
         }
       ],
@@ -7864,7 +11286,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_2f29b16d-9984-4d49-adde-8acc2fbfc847",
+          "id": "op_032d9c61-7a0f-4005-b1e4-2b81c7ea42f3",
           "state": "delivered"
         }
       ],
@@ -7898,7 +11320,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_2f29b16d-9984-4d49-adde-8acc2fbfc847",
+          "id": "op_032d9c61-7a0f-4005-b1e4-2b81c7ea42f3",
           "state": "delivered"
         }
       ],
@@ -7950,7 +11372,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_2a6af570-b4fb-4c55-a21b-332370c41387",
+          "id": "op_bf65d63a-e0d8-40aa-8419-1be920e2f1e5",
           "state": "delivering"
         }
       ],
@@ -7984,7 +11406,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_2a6af570-b4fb-4c55-a21b-332370c41387",
+          "id": "op_bf65d63a-e0d8-40aa-8419-1be920e2f1e5",
           "state": "delivered"
         }
       ],
@@ -8018,7 +11440,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_2a6af570-b4fb-4c55-a21b-332370c41387",
+          "id": "op_bf65d63a-e0d8-40aa-8419-1be920e2f1e5",
           "state": "delivered"
         }
       ],
@@ -8070,7 +11492,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_5067ecaf-9aa9-4ead-b38f-92d2857ac1a5",
+          "id": "op_28e42441-1e15-4cef-8cc7-2ee280bf4d04",
           "state": "delivering"
         }
       ],
@@ -8104,7 +11526,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_5067ecaf-9aa9-4ead-b38f-92d2857ac1a5",
+          "id": "op_28e42441-1e15-4cef-8cc7-2ee280bf4d04",
           "state": "delivered"
         }
       ],
@@ -8138,7 +11560,540 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_5067ecaf-9aa9-4ead-b38f-92d2857ac1a5",
+          "id": "op_28e42441-1e15-4cef-8cc7-2ee280bf4d04",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-prepared-desktop-1280-light-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-submitted-with-document-desktop-1280-light-en": {
+      "state": "held-submitted-with-document",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_42a9db0f-0d85-4eed-828e-e0c83f5f9889",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-confirmed-desktop-1280-light-en": {
+      "state": "held-document-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_42a9db0f-0d85-4eed-828e-e0c83f5f9889",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-transcript-desktop-1280-light-en": {
+      "state": "held-document-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_42a9db0f-0d85-4eed-828e-e0c83f5f9889",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-released-desktop-1280-light-en": {
+      "state": "held-document-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 attachment",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_42a9db0f-0d85-4eed-828e-e0c83f5f9889",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-prepared-desktop-1280-light-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-submitted-image-only-desktop-1280-light-en": {
+      "state": "held-submitted-image-only",
+      "bubbles": 1,
+      "bubble": {
+        "width": 67,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_071ac508-4433-4092-884f-bf018f1faa57",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-confirmed-desktop-1280-light-en": {
+      "state": "held-image-only-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 67,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_071ac508-4433-4092-884f-bf018f1faa57",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-transcript-desktop-1280-light-en": {
+      "state": "held-image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 67,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_071ac508-4433-4092-884f-bf018f1faa57",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-released-desktop-1280-light-en": {
+      "state": "held-image-only-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 67,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_071ac508-4433-4092-884f-bf018f1faa57",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-acknowledgement-desktop-1280-light-en": {
+      "state": "held-lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_20d7ec79-48ec-4e2b-8ac1-6dbfe29cbc16",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-ack-transcript-desktop-1280-light-en": {
+      "state": "held-lost-ack-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_20d7ec79-48ec-4e2b-8ac1-6dbfe29cbc16",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-ack-released-desktop-1280-light-en": {
+      "state": "held-lost-ack-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_20d7ec79-48ec-4e2b-8ac1-6dbfe29cbc16",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-prepared-desktop-1280-light-en": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-submitted-desktop-1280-light-en": {
+      "state": "claude-submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Sent — waiting for confirmation. Show delivery details",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Sent — waiting for confirmation. Show delivery details"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_c5b6296f-3f2a-4449-aa65-c3eb9c5c6ea8",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-confirmed-desktop-1280-light-en": {
+      "state": "claude-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_c5b6296f-3f2a-4449-aa65-c3eb9c5c6ea8",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-transcript-desktop-1280-light-en": {
+      "state": "claude-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_c5b6296f-3f2a-4449-aa65-c3eb9c5c6ea8",
           "state": "delivered"
         }
       ],
@@ -8172,7 +12127,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_0f71c890-1bf9-4f70-8251-d7e445154ddd",
+          "id": "op_e4921b30-1de1-485a-80c3-eb6d83cdf52f",
           "state": "delivering"
         }
       ],
@@ -8206,7 +12161,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_0f71c890-1bf9-4f70-8251-d7e445154ddd",
+          "id": "op_e4921b30-1de1-485a-80c3-eb6d83cdf52f",
           "state": "delivering"
         }
       ],
@@ -8240,7 +12195,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_0f71c890-1bf9-4f70-8251-d7e445154ddd",
+          "id": "op_e4921b30-1de1-485a-80c3-eb6d83cdf52f",
           "state": "delivered"
         }
       ],
@@ -8274,7 +12229,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_0f71c890-1bf9-4f70-8251-d7e445154ddd",
+          "id": "op_e4921b30-1de1-485a-80c3-eb6d83cdf52f",
           "state": "delivered"
         }
       ],
@@ -8308,7 +12263,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_fd9ad1e2-44b0-47b2-a91f-b9244110b661",
+          "id": "op_502e30ac-8c78-494a-9a49-7600bd3f0ae0",
           "state": "delivering"
         }
       ],
@@ -8342,7 +12297,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_fd9ad1e2-44b0-47b2-a91f-b9244110b661",
+          "id": "op_502e30ac-8c78-494a-9a49-7600bd3f0ae0",
           "state": "delivering"
         }
       ],
@@ -8376,7 +12331,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_fd9ad1e2-44b0-47b2-a91f-b9244110b661",
+          "id": "op_502e30ac-8c78-494a-9a49-7600bd3f0ae0",
           "state": "delivering"
         }
       ],
@@ -8410,7 +12365,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_fd9ad1e2-44b0-47b2-a91f-b9244110b661",
+          "id": "op_502e30ac-8c78-494a-9a49-7600bd3f0ae0",
           "state": "delivered"
         }
       ],
@@ -8444,7 +12399,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_fd9ad1e2-44b0-47b2-a91f-b9244110b661",
+          "id": "op_502e30ac-8c78-494a-9a49-7600bd3f0ae0",
           "state": "delivered"
         }
       ],
@@ -8478,7 +12433,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_6fb75da2-03dd-4500-96d7-c8b4c6cd1572",
+          "id": "op_144d34ad-6208-4bfc-b67b-31266e9cf848",
           "state": "delivering"
         }
       ],
@@ -8512,7 +12467,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_6fb75da2-03dd-4500-96d7-c8b4c6cd1572",
+          "id": "op_144d34ad-6208-4bfc-b67b-31266e9cf848",
           "state": "delivering"
         }
       ],
@@ -8546,7 +12501,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_6fb75da2-03dd-4500-96d7-c8b4c6cd1572",
+          "id": "op_144d34ad-6208-4bfc-b67b-31266e9cf848",
           "state": "delivering"
         }
       ],
@@ -8580,7 +12535,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_6fb75da2-03dd-4500-96d7-c8b4c6cd1572",
+          "id": "op_144d34ad-6208-4bfc-b67b-31266e9cf848",
           "state": "delivered"
         }
       ],
@@ -8614,7 +12569,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_6fb75da2-03dd-4500-96d7-c8b4c6cd1572",
+          "id": "op_144d34ad-6208-4bfc-b67b-31266e9cf848",
           "state": "delivered"
         }
       ],
@@ -8648,7 +12603,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7faa1d14-d81c-44fc-b6ea-e25f305c39b4",
+          "id": "op_098df6ff-16f5-4d8f-b6ef-53252bd1b675",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -8684,7 +12639,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7faa1d14-d81c-44fc-b6ea-e25f305c39b4",
+          "id": "op_098df6ff-16f5-4d8f-b6ef-53252bd1b675",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -8719,7 +12674,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_7faa1d14-d81c-44fc-b6ea-e25f305c39b4",
+          "id": "op_098df6ff-16f5-4d8f-b6ef-53252bd1b675",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -8756,7 +12711,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_80658f77-84d7-44f3-ae97-eec3fec69647",
+          "id": "op_089fc3e5-beac-46ab-911d-f01615484733",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -8794,7 +12749,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_80658f77-84d7-44f3-ae97-eec3fec69647",
+          "id": "op_089fc3e5-beac-46ab-911d-f01615484733",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -8847,7 +12802,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_090a1787-7f3d-4cc9-984e-e83e789150d2",
+          "id": "op_c5de4ca2-d06e-46ba-867f-3a804e8aaa05",
           "state": "delivering"
         }
       ],
@@ -8881,7 +12836,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_090a1787-7f3d-4cc9-984e-e83e789150d2",
+          "id": "op_c5de4ca2-d06e-46ba-867f-3a804e8aaa05",
           "state": "delivered"
         }
       ],
@@ -8915,7 +12870,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_090a1787-7f3d-4cc9-984e-e83e789150d2",
+          "id": "op_c5de4ca2-d06e-46ba-867f-3a804e8aaa05",
           "state": "delivered"
         }
       ],
@@ -8967,7 +12922,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_c7022ed3-4bb8-4155-b6dc-000568df7b8e",
+          "id": "op_62ce25b4-f6ab-4d03-9b84-06f46dfea7a0",
           "state": "delivering"
         }
       ],
@@ -9001,7 +12956,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_c7022ed3-4bb8-4155-b6dc-000568df7b8e",
+          "id": "op_62ce25b4-f6ab-4d03-9b84-06f46dfea7a0",
           "state": "delivered"
         }
       ],
@@ -9035,7 +12990,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_c7022ed3-4bb8-4155-b6dc-000568df7b8e",
+          "id": "op_62ce25b4-f6ab-4d03-9b84-06f46dfea7a0",
           "state": "delivered"
         }
       ],
@@ -9087,7 +13042,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_f29be76d-4750-4c20-9d58-22c21f02cf64",
+          "id": "op_7edef4a6-189d-421f-9c66-928a4d873e7f",
           "state": "delivering"
         }
       ],
@@ -9121,7 +13076,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_f29be76d-4750-4c20-9d58-22c21f02cf64",
+          "id": "op_7edef4a6-189d-421f-9c66-928a4d873e7f",
           "state": "delivered"
         }
       ],
@@ -9155,7 +13110,540 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_f29be76d-4750-4c20-9d58-22c21f02cf64",
+          "id": "op_7edef4a6-189d-421f-9c66-928a4d873e7f",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-prepared-desktop-1280-light-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-submitted-with-document-desktop-1280-light-uk": {
+      "state": "held-submitted-with-document",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_4c253794-2b89-4268-8cac-d2863def4c40",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-confirmed-desktop-1280-light-uk": {
+      "state": "held-document-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_4c253794-2b89-4268-8cac-d2863def4c40",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-transcript-desktop-1280-light-uk": {
+      "state": "held-document-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_4c253794-2b89-4268-8cac-d2863def4c40",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "document-held-join-held-document-released-desktop-1280-light-uk": {
+      "state": "held-document-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 63,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.1 вкладення",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_4c253794-2b89-4268-8cac-d2863def4c40",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-prepared-desktop-1280-light-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-submitted-image-only-desktop-1280-light-uk": {
+      "state": "held-submitted-image-only",
+      "bubbles": 1,
+      "bubble": {
+        "width": 82,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_53982e20-e77a-4084-9464-4093c921073b",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-confirmed-desktop-1280-light-uk": {
+      "state": "held-image-only-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 82,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_53982e20-e77a-4084-9464-4093c921073b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-transcript-desktop-1280-light-uk": {
+      "state": "held-image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 82,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_53982e20-e77a-4084-9464-4093c921073b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-held-join-held-image-only-released-desktop-1280-light-uk": {
+      "state": "held-image-only-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 82,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_53982e20-e77a-4084-9464-4093c921073b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-acknowledgement-desktop-1280-light-uk": {
+      "state": "held-lost-acknowledgement",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_284c6d2d-2ca3-4986-b8be-424bf816463c",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-ack-transcript-desktop-1280-light-uk": {
+      "state": "held-lost-ack-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_284c6d2d-2ca3-4986-b8be-424bf816463c",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "lost-ack-held-join-held-lost-ack-released-desktop-1280-light-uk": {
+      "state": "held-lost-ack-released",
+      "bubbles": 1,
+      "bubble": {
+        "width": 495,
+        "height": 44,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "Check what is blocking the release and tell me which lane owns it.",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_284c6d2d-2ca3-4986-b8be-424bf816463c",
+          "state": "delivering",
+          "deliveryUncertain": true
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-prepared-desktop-1280-light-uk": {
+      "state": "prepared",
+      "bubbles": 0,
+      "bubble": null,
+      "topWithinRow": null,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "",
+      "badge": "",
+      "inBubble": "",
+      "controls": [],
+      "transcriptAttachments": 0,
+      "phase": null,
+      "outboxState": null,
+      "queue": [],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-submitted-desktop-1280-light-uk": {
+      "state": "claude-submitted",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": false,
+      "sameBody": false,
+      "aside": "Надіслано — очікує підтвердження. Показати деталі доставки",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Надіслано — очікує підтвердження. Показати деталі доставки"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "pending",
+      "outboxState": "delivering",
+      "queue": [
+        {
+          "id": "op_47988df6-4d90-446b-ac50-49ffb95fc54e",
+          "state": "delivering"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-confirmed-desktop-1280-light-uk": {
+      "state": "claude-confirmed",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 0,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_47988df6-4d90-446b-ac50-49ffb95fc54e",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "claude-canonical-claude-transcript-desktop-1280-light-uk": {
+      "state": "claude-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 602,
+        "height": 66,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "release-blockers",
+      "inBubble": "release-blockersCheck what is blocking the release and tell me which lane owns it.1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": null,
+      "queue": [
+        {
+          "id": "op_47988df6-4d90-446b-ac50-49ffb95fc54e",
           "state": "delivered"
         }
       ],
