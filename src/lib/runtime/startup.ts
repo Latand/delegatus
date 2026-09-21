@@ -1084,10 +1084,12 @@ function pipelineStartupEvidence(registry: AgentRegistry, available = true): Pip
 }
 
 export interface StructuredStartupDependencies {
-  /** Release retirement stops at awaited phase boundaries while retaining admission. */
+  /** Release retirement stops at awaited phase boundaries. */
   assertActive?: () => void;
   registry?: AgentRegistry;
   client?: RuntimeHostClient | null;
+  /** Observe complete lease holds, including state loading and release. */
+  observeLeaseHold?: (heldMs: number) => void;
   /** Process and transcript readers behind the restart-recovery evidence. */
   liveness?: TurnLivenessDependencies;
   /** Whether the delivery controller resolves a host this pass adopted. */
@@ -1208,6 +1210,8 @@ async function adoptStructuredHostsPass(
   resumeDeferred: ReadonlySet<string> | null = null,
 ): Promise<AdoptedStructuredHost[]> {
   const assertActive = dependencies.assertActive ?? (() => {});
+  const admitState = <T>(admit: (available: boolean) => Promise<T>, phase = "startup evidence") =>
+    withPipelineStartupAdmission(admit, phase, dependencies.observeLeaseHold);
   assertActive();
   assertDarwinStructuredRuntime();
   const registry = dependencies.registry ?? agentRegistry();
@@ -1250,7 +1254,7 @@ async function adoptStructuredHostsPass(
   // Each writer claim below re-resolves pipeline evidence in its own short hold.
   assertActive();
   const readEvidence = () => (dependencies.pipelineEvidence ?? pipelineStartupEvidence)(registry);
-  let pipelineEvidence = await withPipelineStartupAdmission(async (available) =>
+  let pipelineEvidence = await admitState(async (available) =>
     available ? readEvidence() : pipelineStartupEvidence(registry, false));
   {
     assertActive();
@@ -1289,7 +1293,7 @@ async function adoptStructuredHostsPass(
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key)));
     const signals = await structuredStartupSignals(registry, client);
-    pipelineEvidence = await withPipelineStartupAdmission(async (available) =>
+    pipelineEvidence = await admitState(async (available) =>
       available ? readEvidence() : pipelineStartupEvidence(registry, false), "reading startup signals");
     /* Only a continuation not yet admitted forces its row's adoption. One the
        queue holds is pending work of its own, which makes the row eligible for
@@ -1346,7 +1350,7 @@ async function adoptStructuredHostsPass(
       );
     }
     const claimHost = (entry: AgentRegistryEntry, owner: ProcessIdentity) =>
-      withPipelineStartupAdmission(async (available) => {
+      admitState(async (available) => {
         assertActive();
         const evidence = available ? readEvidence() : pipelineStartupEvidence(registry, false);
         const conversation = registry.conversationForPath(entry.artifactPath);
@@ -1493,7 +1497,7 @@ async function adoptStructuredHostsPass(
       ? await interruptedCodexContinuations(registry, client, candidateCodexHosts)
       : new Map<string, RuntimeOperationResult>();
     await demoteSkippedStructuredRegistryHosts(registry, shouldRetainCandidateOrAdopt, (entry, mutation) =>
-      withPipelineStartupAdmission(async (available) => {
+      admitState(async (available) => {
         assertActive();
         const evidence = available ? readEvidence() : pipelineStartupEvidence(registry, false);
         const conversation = registry.conversationForPath(entry.artifactPath);
@@ -1601,7 +1605,7 @@ async function adoptStructuredHostsPass(
        whole of it waits for the re-probe; without one it runs now, so an
        unrelated lane's queued or superseded launch is reconciled by this boot
        whatever another pipeline's survivor is doing. */
-    pipelineEvidence = await withPipelineStartupAdmission(async (available) =>
+    pipelineEvidence = await admitState(async (available) =>
       available ? readEvidence() : pipelineStartupEvidence(registry, false), "recovering pending spawns");
     const fencedReceipts = fencedPendingSpawnReceipts(registry, pipelineEvidence.deferred);
     if (client && fencedReceipts.length === 0) {

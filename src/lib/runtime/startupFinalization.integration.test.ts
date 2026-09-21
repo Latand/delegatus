@@ -596,6 +596,7 @@ test("startup never holds a state lease across a five second host request", asyn
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
   let heldDuringRequest = false;
   let longestHoldMs = 0;
+  const holds: number[] = [];
   let calls = 0;
   const client = { ...f.client, snapshot: async () => {
     calls++;
@@ -610,9 +611,12 @@ test("startup never holds a state lease across a five second host request", asyn
   } };
   try {
     await adoptStructuredHostsAtStartup({ registry: f.registry, client,
+      observeLeaseHold: (heldMs) => holds.push(heldMs),
       refreshTranscriptState: async () => {}, adopt: async () => [], adoptClaude: async () => [], orchestratorSeats: () => [],
     });
-    console.log(JSON.stringify({ heldDuringRequest, longestHoldMs }));
+    console.log(JSON.stringify({ heldDuringRequest, longestHoldMs, maxLeaseHoldMs: Math.max(...holds) }));
+    expect(holds.length).toBeGreaterThan(0);
+    expect(Math.max(...holds)).toBeLessThan(100);
     expect(calls).toBeGreaterThan(0);
     expect(heldDuringRequest).toBe(false);
     expect(longestHoldMs).toBeLessThan(100);
@@ -627,10 +631,14 @@ test("startup never holds a state lease across a five second host request", asyn
 test("production startup yields between historical publication batches and skips completed publications", async () => {
   const f = fixture(0, true, 40);
   let published = 0;
+  let sessionReads = 0;
   let publishedAtFirstYield: number | null = null;
   let yieldProbe: ReturnType<typeof setTimeout> | undefined;
   const client = { ...f.client,
-    readSession: async (identity: Parameters<NonNullable<RuntimeHostClient["readSession"]>>[0]) => f.journal.readSession(identity),
+    readSession: async (identity: Parameters<NonNullable<RuntimeHostClient["readSession"]>>[0]) => {
+      sessionReads++;
+      return f.journal.readSession(identity);
+    },
     snapshot: async () => { throw new Error("startup must use keyed session reads"); },
     append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => {
     if (event.kind === "session-status") {
@@ -647,9 +655,12 @@ test("production startup yields between historical publication batches and skips
     expect(publishedAtFirstYield).not.toBeNull();
     expect(publishedAtFirstYield!).toBeLessThanOrEqual(16);
     const before = published;
+    const readsBefore = sessionReads;
+    console.log(JSON.stringify({ published, publishedAtFirstYield }));
     const { completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
     await completeStructuredDeliveryQueueStartup([]);
     expect(published).toBe(before);
+    expect(sessionReads).toBe(readsBefore);
   } finally {
     if (yieldProbe) clearTimeout(yieldProbe);
     await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });

@@ -981,11 +981,12 @@ export async function withPipelineMutation<T>(
     (): void;
     (records: readonly Pipeline[]): void;
   }) => Promise<T> | T,
+  observeHold?: (heldMs: number) => void,
 ): Promise<T> {
   return refuseBusyBeforeAdmission((admitted) => pipelineStore().mutate((pipelines, persist) => {
     admitted();
     return mutate(pipelines, persist);
-  }, undefined, false, pipelineLockWaitMs()));
+  }, undefined, false, pipelineLockWaitMs(), observeHold));
 }
 
 export async function withPipelineControllerMutation<T>(
@@ -997,13 +998,15 @@ export async function withPipelineControllerMutation<T>(
   return pipelineStore().mutate(mutate, undefined, true);
 }
 
-/** Hold the existing cross-process mutation lease through startup admission.
+/** Short startup state admission under the existing cross-process lease.
+ * Callers finish host and transcript I/O before entering this callback.
  * Unavailable state or authority permits only the caller's deferred path.
  * Never reinterpret a failure inside admission as permission to run it again.
  */
 export async function withPipelineStartupAdmission<T>(
   admit: (available: boolean) => Promise<T>,
   phase = "startup evidence",
+  observeHold?: (heldMs: number) => void,
 ): Promise<T> {
   let entered = false;
   try {
@@ -1012,13 +1015,12 @@ export async function withPipelineStartupAdmission<T>(
     loadPipelinesForStartup();
     return await withPipelineMutation(() => {
       entered = true;
-      const started = performance.now();
-      return admit(true).finally(() => {
-        const heldMs = performance.now() - started;
-        if (heldMs > 100) console.warn("[structured hosts] state lease exceeded budget", {
-          phase, collection: "pipelines", heldMs: Math.round(heldMs), budgetMs: 100,
-        });
+      return admit(true);
+    }, (heldMs) => {
+      if (heldMs > 100) console.warn("[structured hosts] state lease exceeded budget", {
+        phase, collection: "pipelines", heldMs: Math.round(heldMs), budgetMs: 100,
       });
+      observeHold?.(heldMs);
     });
   } catch (error) {
     if (entered) throw error;

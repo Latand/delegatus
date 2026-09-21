@@ -1297,7 +1297,7 @@ export async function bindStructuredDeliveryQueue(
       setStructuredDeliveryKick(null);
     }
   };
-  const publishedFallbacks = new Set<string>();
+  const publishedFallbacks = new Map<string, string>();
   let completion = Promise.resolve();
   const complete = (items: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive: () => void = () => {}) => {
     completion = completion.catch(() => {}).then(async () => {
@@ -1351,13 +1351,13 @@ export async function bindStructuredDeliveryQueue(
         if (registrations.has(id)) return;
         const entry = startupSnapshot.entries[id];
         if (!entry?.structuredHost && entry?.host?.kind !== "tmux") return;
-        const publicationKey = `${id}:${entry.updatedAt}:${conversation.turn.observedAt}`;
-        if (publishedFallbacks.has(publicationKey)) return;
+        const publicationKey = JSON.stringify(registrySessionProjection(registry, conversation.id));
+        if (publishedFallbacks.get(conversation.id) === publicationKey) return;
         const current = client.readSession
-          ? await client.readSession({ conversationId: conversation.id })
+          ? await client.readSession({ conversationId: conversation.id }).catch(() => null)
           : runtimeSessions.get(conversation.id);
         await publishCurrentFallback(conversation.id, current ?? undefined);
-        publishedFallbacks.add(publicationKey);
+        publishedFallbacks.set(conversation.id, publicationKey);
       }, assertActive);
       if (superseded()) {
         const successor = state.completeActive;
