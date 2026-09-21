@@ -83,7 +83,12 @@ type CachedRow = { valueJson: string; parsed: unknown };
     the assembled decision left on it: one for an entry or a receipt, one per
     generation for a conversation. */
 type RecordedGrant = { storedJson: string | undefined; lists: readonly (readonly string[] | undefined)[] };
-type GrantDecisions = { revision: number; rows: ReadonlyMap<string, RecordedGrant> };
+/** `stamp` names the stored database the decision ran over (see
+    `SqliteAgentRegistryStore.storeStamp`), so the record is only ever applied
+    to exactly that database: the decision also reads the lineage edges and
+    every other row attesting to the one being read, and a commit rewriting any
+    of them without a revision would otherwise leave the old answer standing. */
+type GrantDecisions = { revision: number; stamp: string; rows: ReadonlyMap<string, RecordedGrant> };
 type GrantProfileRow = { launchProfile?: { mcpServers?: string[] } | null; generations?: { launchProfile?: { mcpServers?: string[] } }[] };
 
 const grantDecisionKey = (collection: string, key: string) => `${collection}\u0000${key}`;
@@ -99,6 +104,7 @@ function grantLists(collection: string, row: GrantProfileRow): (string[] | undef
 function recordGrantDecisions(
   file: RegistryFile,
   revision: number,
+  stamp: string,
   storedJson: (collection: RowCollection, key: string) => string | undefined,
 ): GrantDecisions {
   const rows = new Map<string, RecordedGrant>();
@@ -110,7 +116,7 @@ function recordGrantDecisions(
       });
     }
   }
-  return { revision, rows };
+  return { revision, stamp, rows };
 }
 
 /** Gives one row what the assembled decision gave it, but only when the row is
@@ -221,6 +227,8 @@ export interface SqliteRegistryStoreOptions {
 declare const DECIDED: unique symbol;
 export type DecidedRegistryFile = RegistryFile & { readonly [DECIDED]: true };
 
+type StampedSnapshot = SqliteRegistrySnapshot & { stamp: string };
+
 interface LazyRegistrySnapshot extends SqliteRegistrySnapshot {
   file: DecidedRegistryFile;
   changes(): RegistryChanges;
@@ -264,7 +272,9 @@ export class SqliteAgentRegistryStore {
   private onRevisionQuery: (() => void) | undefined;
   private readonly rowCache = new Map<RowCollection, Map<string, CachedRow>>();
   private revisionCache: { signature: string; revision: number } | null = null;
-  private readOnlyCache: SqliteRegistrySnapshot | null = null;
+  /** Stamped like the grant record: a complete snapshot is only ever handed
+      out again over exactly the database it was loaded from. */
+  private readOnlyCache: StampedSnapshot | null = null;
   /** What the assembled grant decision (#739) returned for every grant-bearing
       row at one stored revision. A keyed read of a row claiming more than the
       baseline otherwise assembles, clones and decides the whole file, per read:
@@ -433,16 +443,18 @@ export class SqliteAgentRegistryStore {
   }
 
   snapshot(): SqliteRegistrySnapshot {
-    return this.loadSnapshot(false);
+    const { file, revision } = this.loadSnapshot(false);
+    return { file, revision };
   }
 
-  private loadSnapshot(useRowCache: boolean): SqliteRegistrySnapshot {
+  private loadSnapshot(useRowCache: boolean): StampedSnapshot {
     this.onSnapshotLoad?.();
     this.db.exec("BEGIN");
     try {
       const snapshot = this.loadInTransaction(useRowCache);
+      const stamp = this.storeStamp();
       this.db.exec("COMMIT");
-      return snapshot;
+      return { ...snapshot, stamp };
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
@@ -468,7 +480,10 @@ export class SqliteAgentRegistryStore {
 
   readOnlySnapshot(): SqliteRegistrySnapshot {
     const revision = this.revision();
-    if (this.readOnlyCache?.revision === revision) return this.readOnlyCache;
+    /* The revision alone cannot say the rows are the ones cached: a commit that
+       rewrites a row without advancing it would leave the decision over the old
+       rows standing in every whole-file read. */
+    if (this.readOnlyCache?.revision === revision && this.readOnlyCache.stamp === this.storeStamp()) return this.readOnlyCache;
     this.readOnlyCache = this.loadSnapshot(true);
     return this.readOnlyCache;
   }
@@ -813,6 +828,7 @@ export class SqliteAgentRegistryStore {
       const waitStartedAt = performance.now();
       this.beginMutationWrite();
       let revision: number;
+      let stamps = { before: "", after: "" };
       const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
       try {
         this.onWriterWait?.(performance.now() - waitStartedAt);
@@ -821,7 +837,12 @@ export class SqliteAgentRegistryStore {
           continue;
         }
         revision = changed ? current.revision + 1 : current.revision;
-        if (changed) this.persistChanges(current.file, changes, revision);
+        if (changed) {
+          // Inside the write lock, so no other connection commits in between.
+          const before = this.storeStamp();
+          this.persistChanges(current.file, changes, revision);
+          stamps = { before, after: this.storeStamp() };
+        }
         this.db.exec("COMMIT");
       } catch (error) {
         try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
@@ -831,7 +852,7 @@ export class SqliteAgentRegistryStore {
         this.secureFiles();
         // A narrow delivery commit must not clone populated snapshot maps.
         if (options.updateSnapshotCache === false) this.readOnlyCache = null;
-        this.updateCachesAfterCommit(current.file, changes, revision);
+        this.updateCachesAfterCommit(current.file, changes, revision, stamps);
         this.rememberRevision(revision);
       }
       if (includeSnapshot) {
@@ -955,6 +976,11 @@ export class SqliteAgentRegistryStore {
        revision, so the decision over it is the one recorded for that revision. */
     const unchanged = () => reorderedCollections.size === 0
       && [...dirtyRows.values()].every((rows) => rows.size === 0);
+    /* Read at most once: nothing this transaction does writes the database, so
+       the stored state it sees cannot move under it. */
+    let transactionStamp: string | undefined;
+    const stamp = () => transactionStamp ??= this.storeStamp();
+    const recordHolds = () => this.grantDecisions?.revision === revision && this.grantDecisions.stamp === stamp();
     let grantsDecided = false;
     let decidingGrants = false;
     const decideGrants = () => {
@@ -965,7 +991,7 @@ export class SqliteAgentRegistryStore {
         reboundAssembledMcpGrants(file, this.mcpGrantPolicy);
         grantsDecided = true;
         if (recordable) {
-          this.grantDecisions = recordGrantDecisions(file, revision, (collection, key) =>
+          this.grantDecisions = recordGrantDecisions(file, revision, stamp(), (collection, key) =>
             this.rowCache.get(collection)?.get(key)?.valueJson);
         }
       } finally {
@@ -985,7 +1011,7 @@ export class SqliteAgentRegistryStore {
       if (!GRANT_COLLECTIONS.has(collection) || grantsDecided || decidingGrants
         || !rowClaimsBeyondBaselineGrant(row)) return row;
       if (recordedDecisions === undefined) {
-        if (readOnly && unchanged() && this.grantDecisions?.revision !== revision) {
+        if (readOnly && unchanged() && !recordHolds()) {
           /* The same decision over the same revision, read in this transaction
              by the eager loader: it neither clones every row nor wraps it for
              mutation tracking, and it leaves the complete snapshot the next
@@ -993,9 +1019,11 @@ export class SqliteAgentRegistryStore {
              takes it: it decides the shared parsed rows in place, and a
              mutation persists the rows its decision rewrites. */
           const snapshot = this.loadInTransaction(true);
-          if (this.readOnlyCache?.revision !== revision) this.readOnlyCache = snapshot;
+          if (this.readOnlyCache?.revision !== revision || this.readOnlyCache.stamp !== stamp()) {
+            this.readOnlyCache = { file: snapshot.file, revision, stamp: stamp() };
+          }
         }
-        recordedDecisions = this.grantDecisions?.revision === revision && unchanged() ? this.grantDecisions : null;
+        recordedDecisions = unchanged() && recordHolds() ? this.grantDecisions : null;
       }
       if (recordedDecisions && (dirtyRows.get(collection)?.has(key)
         || applyRecordedGrantDecision(recordedDecisions, collection, key, storedJson, row,
@@ -1339,14 +1367,18 @@ export class SqliteAgentRegistryStore {
     file: RegistryFile,
     changes: RegistryChanges,
     revision: number,
+    stamps: { before: string; after: string },
   ): void {
     /* Only the grant collections are inputs to the decision; a commit that
-       touched none of them leaves every recorded decision what it was. */
+       touched none of them leaves every recorded decision what it was, provided
+       the database it was recorded over is exactly the one this commit wrote
+       to: nothing else committed and nothing else was written since. */
     this.grantDecisions = this.grantDecisions?.revision === revision - 1
+      && this.grantDecisions.stamp === stamps.before
       && ![...changes.rows.keys(), ...changes.order].some((collection) => GRANT_COLLECTIONS.has(collection))
-      ? { ...this.grantDecisions, revision }
+      ? { ...this.grantDecisions, revision, stamp: stamps.after }
       : null;
-    const cachedSnapshot = this.readOnlyCache?.revision === revision - 1
+    const cachedSnapshot = this.readOnlyCache?.revision === revision - 1 && this.readOnlyCache.stamp === stamps.before
       ? this.readOnlyCache
       : null;
     const nextFile = cachedSnapshot ? { ...cachedSnapshot.file } : null;
@@ -1389,7 +1421,7 @@ export class SqliteAgentRegistryStore {
       for (const field of changes.meta) {
         (nextFile as unknown as Record<string, unknown>)[field] = structuredClone(file[field]);
       }
-      this.readOnlyCache = { file: nextFile, revision };
+      this.readOnlyCache = { file: nextFile, revision, stamp: stamps.after };
     } else {
       this.readOnlyCache = null;
     }
@@ -1466,6 +1498,19 @@ export class SqliteAgentRegistryStore {
       this.db.query("UPDATE registry_rows SET row_order = ? WHERE collection = ? AND row_key = ? AND row_order != ?")
         .run(order, collection, key, order);
     }
+  }
+
+  /** Names the stored database as this connection sees it, in two O(1)
+      counters: `data_version` moves on every commit by any other connection,
+      in this process or another, whatever it wrote and whether or not it
+      advanced the revision; `total_changes()` moves on every row this
+      connection writes, including writes a rollback discarded. Read inside a
+      transaction, it is fixed for the transaction's snapshot. */
+  private storeStamp(): string {
+    const stamp = this.db.query<{ dataVersion: number; changes: number }, []>(
+      "SELECT (SELECT data_version FROM pragma_data_version) AS dataVersion, total_changes() AS changes",
+    ).get()!;
+    return `${stamp.dataVersion}:${stamp.changes}`;
   }
 
   private meta(key: string): string | null {
