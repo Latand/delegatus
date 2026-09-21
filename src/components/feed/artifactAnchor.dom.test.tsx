@@ -142,3 +142,15 @@ test("file:// and plain-path links to any local file open the preview, never a d
   }
   expect(opened).toEqual(["file:///workspace/a%20b/notes.md#setup", "/workspace/out/build"]);
 });
+
+test("a transcript link opens its conversation whichever spelling it has", async () => {
+  await renderMd("Read [one](file:///workspace/session.jsonl), [two](file:///workspace/session.jsonl:12) and [three](/workspace/session.jsonl:12).");
+  const anchors = [...dom.document.querySelectorAll("a")] as unknown as HTMLAnchorElement[];
+  expect(anchors.map((a) => a.getAttribute("href"))).toEqual(Array(3).fill(`#f=${encodeURIComponent("/workspace/session.jsonl")}`));
+  for (const a of anchors) {
+    await act(async () => {
+      a.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event);
+    });
+  }
+  expect(opened).toEqual([]);
+});
