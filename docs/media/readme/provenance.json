@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "4039c1c253ded23a669847bb2653e3e39bf758daab29ea8515a086f861952432",
+  "generatorSha256": "e94faa2c0c2cfa25e678f8103b9fab6eaf693163ef17cf52551490a45142d879",
   "seed": "scripts/readme-demo-state.ts",
   "seedSha256": "8f2451583658be2f7e83fbb840d94e19a114379f635f828692ae17ccb3350c0a",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
@@ -59,8 +59,8 @@
         "height": 844
       },
       "colorScheme": "dark",
-      "rasterTiles": 4,
-      "sha256": "b60eb91d9b632128c73ce3f7a7e360584189ad14ebeaed0ee46647ebe34f6332"
+      "rasterTiles": 5,
+      "sha256": "19ea66a25e1b2db88bad1192538840fc75312a01d1d40242c73d0ecca03bbdfa"
     }
   ]
 }

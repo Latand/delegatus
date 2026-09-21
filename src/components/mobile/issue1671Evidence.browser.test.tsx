@@ -1240,3 +1240,296 @@ browserTest("#1865: the phone names a stage and its attempt in the queue row and
   fs.writeFileSync(path.join(LABELS_EVIDENCE, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 300_000);
+
+/*
+ * #1978 at 390x844 in both colour schemes, and at 1280x960 for the desktop's
+ * copy controls, on the conversation the fixture gives a shell call and an
+ * assigned task (`?toolcard=1`):
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#1978"
+ *
+ * Everything is read as ink, the client rects of text clipped by every
+ * overflow ancestor, because box-only overlap checks have passed over real
+ * overlaps in this repository:
+ *
+ *   - the command's and the output's copy controls neither touch nor overlap,
+ *     no glyph of the card sits under either, and no call's copy control
+ *     hangs past its call into the next one; the desktop keeps its small
+ *     22 px controls;
+ *   - with the task strip right above the feed, the first visible feed row
+ *     starts at or below the strip's bottom edge, and no glyph line and no
+ *     control straddles the feed's top edge: following the tail, after the card opens, and at rest
+ *     after a drag released it from the tail, with the first lines of a
+ *     result taller than the screen under the strip at a sweep of offsets
+ *     (every stop comes to rest), and once the conversation is closed to the
+ *     board and opened again.
+ *
+ * Readings go to `evidence/issue-1978/phone.json`; frames to `.artifacts/issue-1978/`.
+ */
+const EDGE_OUT = path.resolve(".artifacts/issue-1978");
+const EDGE_EVIDENCE = path.resolve("evidence/issue-1978");
+
+interface InkReading {
+  command: Rect | null;
+  output: Rect | null;
+  controlsOverlap: number;
+  controlsGap: number | null;
+  inkUnderControls: string[];
+  stripBottom: number | null;
+  feedTop: number;
+  cutLines: Array<{ text: string; top: number; bottom: number }>;
+  firstRow: { key: string; top: number; bottom: number } | null;
+  slivers: Array<{ key: string; top: number; bottom: number }>;
+  overhangs: Array<{ label: string; by: number }>;
+  tail: { spacer: number | null; fromBottom: number };
+}
+
+/* Runs in the page. The ink walk is the test's own: every text node under the
+   feed, never the product's sampled probe. */
+const readInk = (page: Page) => page.evaluate((): InkReading => {
+  interface Box { l: number; t: number; r: number; b: number }
+  const box = (element: Element): Box => {
+    const r = element.getBoundingClientRect();
+    return { l: r.left, t: r.top, r: r.right, b: r.bottom };
+  };
+  const area = (a: Box, b: Box) => Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l)) * Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
+  /* From the element holding the text itself: a capped output clips its own
+     overflowing lines. */
+  const clip = (element: Element, stop: Element | null = null): Box => {
+    let out: Box = { l: -Infinity, t: -Infinity, r: Infinity, b: Infinity };
+    for (let parent: Element | null = element; parent && parent !== stop; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (/(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
+        const p = box(parent);
+        out = { l: Math.max(out.l, p.l), t: Math.max(out.t, p.t), r: Math.min(out.r, p.r), b: Math.min(out.b, p.b) };
+      }
+    }
+    return out;
+  };
+  /* `full` is a line clipped only by the containers inside the feed (a long
+     output scrolls in its own capped box): a line the feed's edge cuts is
+     found by it, and text clipped out of sight never is. */
+  const ink = (root: Element) => {
+    const feedElement = document.querySelector("[data-log-feed-scroller]");
+    const out: Array<{ text: string; full: Box; seen: Box | null }> = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim() || !node.parentElement) continue;
+      if (getComputedStyle(node.parentElement).visibility === "hidden") continue;
+      const c = clip(node.parentElement);
+      const inside = clip(node.parentElement, feedElement);
+      range.selectNodeContents(node);
+      for (const q of range.getClientRects()) {
+        if (q.width <= 0 || q.height <= 0) continue;
+        const full = { l: Math.max(q.left, inside.l), t: Math.max(q.top, inside.t), r: Math.min(q.right, inside.r), b: Math.min(q.bottom, inside.b) };
+        if (full.r <= full.l || full.b <= full.t) continue;
+        const seen = { l: Math.max(full.l, c.l), t: Math.max(full.t, c.t), r: Math.min(full.r, c.r), b: Math.min(full.b, c.b) };
+        out.push({ text: node.textContent.trim().slice(0, 48), full, seen: seen.r > seen.l && seen.b > seen.t ? seen : null });
+      }
+    }
+    return out;
+  };
+  const feed = document.querySelector("[data-log-feed-scroller]")!;
+  const feedBox = box(feed);
+  const edge = feedBox.t + feed.clientTop;
+  /* The command's control sits in the command block, whose parent is the
+     card's readable body; the output's control is the body's other one. */
+  const command = document.querySelector('[aria-label="Copy command"]');
+  const body = command?.parentElement?.parentElement ?? null;
+  const output = body?.querySelector('[aria-label="Copy output"]') ?? null;
+  const controls = [command, output].filter((element): element is Element => !!element);
+  const under = body ? ink(body).filter((line) => line.seen && controls.some((control) => area(line.seen!, box(control)) > 0.25)).map((line) => line.text) : [];
+  const strip = document.querySelector("[data-task-relations]");
+  const rect = (element: Element | null): Rect | null => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  };
+  return {
+    command: rect(command ?? null),
+    output: rect(output),
+    controlsOverlap: command && output ? area(box(command), box(output)) : 0,
+    controlsGap: command && output ? box(output).t - box(command).b : null,
+    inkUnderControls: under,
+    stripBottom: strip ? box(strip).b : null,
+    feedTop: edge,
+    cutLines: [
+      ...ink(feed),
+      /* A control sliced by the edge is a cut row as much as a line is. */
+      ...[...feed.querySelectorAll("button")].map((control) => ({ text: `<${control.tagName.toLowerCase()} ${control.getAttribute("aria-label") ?? ""}>`, full: box(control) })),
+    ].filter((line) => line.full.t < edge - 0.5 && line.full.b > edge + 0.5 && line.full.r > feedBox.l && line.full.l < feedBox.r)
+      .map((line) => ({ text: line.text, top: line.full.t, bottom: line.full.b })),
+    tail: (() => {
+      const spacer = feed.querySelector<HTMLElement>("[data-feed-tail-spacer]");
+      return { spacer: spacer?.getBoundingClientRect().height ?? null, fromBottom: feed.scrollHeight - feed.clientHeight - feed.scrollTop };
+    })(),
+    /* Every copy control of a run's calls stays inside its own call: one that
+       hangs past the call's box lands on the next call's header. */
+    overhangs: [...feed.querySelectorAll<HTMLElement>("li button[aria-label^='Copy']")]
+      .map((control) => ({ label: control.getAttribute("aria-label") ?? "", by: box(control).b - box(control.closest("li")!).b }))
+      .filter((control) => control.by > 0.5),
+    /* A row of any size left showing only its frame (a card's bottom border
+       and padding) under the edge reads as a cut row too. */
+    slivers: [...feed.querySelectorAll<HTMLElement>("[data-feed-key], li, [data-tool-row]")]
+      .filter((row) => box(row).t < edge && box(row).b > edge + 1 && box(row).b - edge <= 16)
+      .map((row) => ({ key: row.dataset.feedKey ?? row.tagName.toLowerCase(), top: box(row).t, bottom: box(row).b })),
+    firstRow: (() => {
+      /* A row is a feed row or a row inside one (a run's numbered call, a
+         bullet, a tool line), outer before inner; the first visible one that
+         fits in three quarters of the feed is the one that must start whole.
+         Scroll offsets are whole CSS pixels and rows lay out on half ones, so
+         a predecessor can show a sliver of up to one pixel under the edge;
+         visible means showing more than that. */
+      const fit = feed.clientHeight * 0.75;
+      const row = [...feed.querySelectorAll<HTMLElement>("[data-feed-key], li, [data-tool-row]")]
+        .find((candidate) => box(candidate).b > edge + 1 && box(candidate).b - box(candidate).t <= fit);
+      return row ? { key: row.dataset.feedKey ?? `${row.tagName.toLowerCase()}: ${(row.textContent ?? "").slice(0, 40)}`, top: box(row).t, bottom: box(row).b } : null;
+    })(),
+  };
+});
+
+/* The feed at rest: its scroll position unchanged across 400 ms, so momentum
+   and any settling move have run out before anything is read. */
+async function feedAtRest(page: Page): Promise<void> {
+  let last = Number.NaN;
+  let still = 0;
+  for (let i = 0; i < 60 && still < 4; i += 1) {
+    await pause(page, 100);
+    const top = await page.evaluate(() => document.querySelector("[data-log-feed-scroller]")?.scrollTop ?? 0);
+    still = top === last ? still + 1 : 0;
+    last = top;
+  }
+  if (still < 4) throw new Error("the feed never came to rest");
+}
+
+browserTest("#1978: a command card's copy controls stay apart and off the text, and the task strip never cuts a line", async () => {
+  fs.mkdirSync(EDGE_OUT, { recursive: true });
+  fs.mkdirSync(EDGE_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = [
+    { viewport: { width: 390, height: 844 }, scheme: "dark" },
+    { viewport: { width: 390, height: 844 }, scheme: "light" },
+    { viewport: { width: 1280, height: 960 }, scheme: "dark" },
+  ] as const;
+  try {
+    for (const { viewport, scheme } of cases) {
+      const phone = viewport.width < 640;
+      const key = `${viewport.width}-${scheme}`;
+      const fail = (label: string) => failures.push(`${key}: ${label}`);
+      const context = await browser.newContext({ viewport, hasTouch: phone, isMobile: phone, deviceScaleFactor: 2, colorScheme: scheme });
+      await context.addInitScript(() => { localStorage.setItem("llv_lang", "en"); });
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        await page.goto(`${fixtureBase}/?toolcard=1#f=${encodeURIComponent(RUNNING_PATH)}`);
+        await page.waitForSelector("[data-log-feed-scroller]", { timeout: 20_000 });
+        await page.getByText("The projection replays every band", { exact: false }).first().waitFor({ timeout: 20_000 });
+        await pause(page, 900);
+        const readings: Record<string, InkReading> = {};
+        await feedAtRest(page);
+        readings.following = await readInk(page);
+
+        /* Open the run from its line, as the operator does: the phone folds
+           it to one line, the desktop shows it as a group. */
+        if (phone) {
+          const r = await page.locator("[data-mobile-run-fold]").last().boundingBox();
+          if (!r) throw new Error("the run's line is not on screen");
+          await touch(cdp, [[r.x + r.width / 2, r.y + r.height / 2]]);
+        } else if (!(await page.locator('[aria-label="Copy command"]').count())) {
+          await page.locator("[data-log-feed-scroller] summary").last().click();
+        }
+        await page.waitForSelector('[aria-label="Copy command"]', { timeout: 5_000 });
+        await pause(page, 900);
+        await feedAtRest(page);
+        readings.opened = await readInk(page);
+        await page.screenshot({ path: path.join(EDGE_OUT, `${key}-opened.png`) });
+
+        if (phone) {
+          /* A call taller than the screen: open the long result in full, then
+             wheel its first lines under the strip at a sweep of offsets. Its
+             lines and its copy control meet the edge together there, where
+             clearing one used to cut the other and the feed stepped between
+             two positions forever. Every stop must come to rest clean. */
+          await page.locator("[data-log-feed-scroller] li", { hasText: "bands.ts" }).getByText("show all output").first().tap();
+          await feedAtRest(page);
+          await page.mouse.move(viewport.width / 2, viewport.height / 2);
+          for (const offset of [2, 7, 13, 19, 26, 34, 43, 55]) {
+            const delta = await page.evaluate((into) => {
+              const feed = document.querySelector("[data-log-feed-scroller]")!;
+              const long = [...feed.querySelectorAll("li pre")].find((pre) => pre.textContent?.includes("band(0)"));
+              if (!long) throw new Error("the long result is not open");
+              return long.getBoundingClientRect().top - (feed.getBoundingClientRect().top + feed.clientTop) + into;
+            }, offset);
+            await page.mouse.wheel(0, delta);
+            await feedAtRest(page);
+            readings[`long-${offset}`] = await readInk(page);
+          }
+          await page.screenshot({ path: path.join(EDGE_OUT, `${key}-long.png`) });
+
+          /* Bring the card to the top edge, then leave the tail by drags of
+             uneven lengths; each rest is read once the feed has settled. */
+          for (const distance of [137, 211, 173]) {
+            const feed = await rectOf(page, "[data-log-feed-scroller]");
+            const x = feed!.x + feed!.width / 2;
+            const y = feed!.y + feed!.height / 2;
+            await touch(cdp, along([x, y - distance / 2], [x, y + distance / 2]), 24);
+            await pause(page, 1_200);
+            await feedAtRest(page);
+            readings[`rest-${distance}`] = await readInk(page);
+          }
+          await page.screenshot({ path: path.join(EDGE_OUT, `${key}-rest.png`) });
+          /* Close to the board and come back to the conversation through
+             history: the feed comes back where it was left and still rests
+             on a row. */
+          await page.evaluate(() => { location.hash = "#p=atlas"; });
+          await pause(page, 900);
+          await page.goBack();
+          await page.getByText("The projection replays every band", { exact: false }).first().waitFor({ timeout: 10_000 });
+          await pause(page, 1_200);
+          await feedAtRest(page);
+          readings.reopened = await readInk(page);
+          await page.screenshot({ path: path.join(EDGE_OUT, `${key}-reopened.png`) });
+        }
+
+        results.push({ key, viewport, scheme, readings, pageErrors });
+        const opened = readings.opened!;
+        if (!opened.command || !opened.output) fail(`the card shows both copy controls: ${JSON.stringify(opened)}`);
+        if (opened.controlsOverlap > 0) fail(`the copy controls overlap by ${opened.controlsOverlap} px²`);
+        if (opened.controlsGap !== null && opened.controlsGap <= 0) fail(`the copy controls touch: the output's starts ${opened.controlsGap} px below the command's`);
+        if (opened.inkUnderControls.length) fail(`text under a copy control: ${JSON.stringify(opened.inkUnderControls)}`);
+        /* Phone only: the desktop's 22 px control overhangs a one-line output
+           by ~2.6 px today, and the desktop keeps its present look. */
+        if (phone && opened.overhangs.length) fail(`copy controls hang past their call: ${JSON.stringify(opened.overhangs)}`);
+        const size = phone ? 44 : 22;
+        for (const control of [opened.command, opened.output]) {
+          if (control && (Math.abs(control.width - size) > 0.5 || Math.abs(control.height - size) > 0.5)) fail(`a copy control is ${control.width}x${control.height}, expected ${size}`);
+        }
+        if (phone) {
+          for (const [moment, reading] of Object.entries(readings)) {
+            if (reading.stripBottom === null) fail(`${moment}: no task strip above the feed`);
+            else if (reading.feedTop < reading.stripBottom - 0.5) fail(`${moment}: the feed starts above the strip's bottom edge`);
+            if (reading.cutLines.length) fail(`${moment}: lines cut by the feed's top edge: ${JSON.stringify(reading.cutLines)}`);
+            if (reading.slivers.length) fail(`${moment}: rows showing only a sliver under the edge: ${JSON.stringify(reading.slivers)}`);
+            if (!reading.firstRow) fail(`${moment}: no feed row on screen`);
+            else if (reading.stripBottom !== null && reading.firstRow.top < reading.stripBottom) fail(`${moment}: the first visible row starts at ${reading.firstRow.top}, above the strip's bottom ${reading.stripBottom}: ${JSON.stringify(reading.firstRow)}`);
+          }
+        }
+        if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(EDGE_EVIDENCE, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);

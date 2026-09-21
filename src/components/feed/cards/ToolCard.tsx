@@ -117,10 +117,16 @@ function ToolMeta({ event }: { event: ToolEvent }) {
 /* The full redacted command, the hero of the block: bare monospace on the
    shared sunken well (no nested card/border — those only stacked chrome the
    user did not open), wrapped instead of scrolled so a long line stays fully
-   visible and never forces document-level horizontal overflow on 390px. */
+   visible and never forces document-level horizontal overflow on 390px.
+
+   The block is at least as tall as its copy control (#1978). A one-line
+   command is ~20px, and on a coarse pointer the control is 44px pinned 6px
+   down, so it hung 30px into the output below — over the output's own copy
+   control, pinned 6px into that block. 50px is the inset plus the coarse
+   size; the fine pointer's 22px control already fits beside one line. */
 function CommandBlock({ command }: { command: string }) {
   return (
-    <div className="group/cmd relative">
+    <div className="group/cmd relative [@media(pointer:coarse)]:min-h-[50px]">
       <pre className={`max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] py-0.5 font-mono text-ui text-primary ${ACTION_GUTTER}`}>
         <span className="select-none text-muted">$ </span>
         {command}
@@ -132,6 +138,15 @@ function CommandBlock({ command }: { command: string }) {
       />
     </div>
   );
+}
+
+/* The same rule for an output's copy control (#1978): pinned 6px down, or 20px
+   under a stdout/stderr heading, a 44px coarse-pointer control overhung a
+   one-line output by 14px, past its call's box and into the next call's
+   header. The frame holds it; an empty output renders nothing and gets none. */
+function OutputFrame({ output, heading, children }: { output: string; heading?: string; children: ReactNode }) {
+  if (!output.trim()) return null;
+  return <div className={heading ? "[@media(pointer:coarse)]:min-h-[64px]" : "[@media(pointer:coarse)]:min-h-[50px]"}>{children}</div>;
 }
 
 /* The expanded readable body of a tool call (issue #475): chips, the auditable
@@ -162,23 +177,27 @@ export function ToolBody({ event }: { event: ToolEvent }) {
             heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}
           />
         ) : (
-          <OutputPreview
-            output={event.outputPreview}
-            truncated={event.outputTruncated}
-            lang={event.lang}
-            heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}
-          />
+          <OutputFrame output={event.outputPreview} heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}>
+            <OutputPreview
+              output={event.outputPreview}
+              truncated={event.outputTruncated}
+              lang={event.lang}
+              heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}
+            />
+          </OutputFrame>
         )
       ) : null}
       {event.stderr !== undefined ? (
-        <OutputPreview
-          output={event.stderr}
-          truncated={Boolean(event.stderrTruncated)}
-          heading={tr("tools.stderr")}
-          tone="err"
-          copyLabel={tr("tools.copyStderr")}
-          showAllLabel={tr("tools.showStderr")}
-        />
+        <OutputFrame output={event.stderr} heading={tr("tools.stderr")}>
+          <OutputPreview
+            output={event.stderr}
+            truncated={Boolean(event.stderrTruncated)}
+            heading={tr("tools.stderr")}
+            tone="err"
+            copyLabel={tr("tools.copyStderr")}
+            showAllLabel={tr("tools.showStderr")}
+          />
+        </OutputFrame>
       ) : null}
     </div>
   );
@@ -210,7 +229,11 @@ function ToolOutputBlocks({
           return <ImageCard key={index} media={block.media} data={block.data} w={block.w} h={block.h} bytes={block.bytes} initialView="chip" inset />;
         }
         const text = block.type === "text" ? block.text : `[${tr("render.imageOutput")}]`;
-        const node = <OutputPreview key={index} output={text} truncated={truncated && index === lastText} lang={lang} heading={firstText ? heading : undefined} />;
+        const node = (
+          <OutputFrame key={index} output={text} heading={firstText ? heading : undefined}>
+            <OutputPreview output={text} truncated={truncated && index === lastText} lang={lang} heading={firstText ? heading : undefined} />
+          </OutputFrame>
+        );
         firstText = false;
         return node;
       })}

@@ -8,6 +8,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { useToolActivityCues } from "@/hooks/useToolActivityCues";
 import { accountIdFromPath } from "@/lib/accounts/badge";
+import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { conversationIdentity, isLaunchPlaceholder } from "@/lib/accounts/identity";
 import { activeCardMigration, cardMigrationState, migrationHoldsDelivery, migrationTargetName } from "@/lib/accounts/migration";
 import { getLocale, translate, useLocale } from "@/lib/i18n";
@@ -54,6 +55,7 @@ import { BoundedLru } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
 import { createSpeakableAnswerResolver } from "./feed/speakableAnswer";
 import { isSubagent } from "./projectModel";
+import { restingDelta, tailPlan } from "./feedTopEdge";
 import { TaskHeader } from "./TaskHeader";
 import { TurnStatusBar } from "./TurnStatusBar";
 import { logFeedDependencies } from "./logFeedDependencies";
@@ -109,6 +111,19 @@ const EMPTY_FEED: FeedSnapshot = { items: [], hiddenServiceCount: 0 };
     is treated as layout settling (content-visibility estimates, pane resizes)
     and glued again. Input-tagged releases bypass this window. */
 const GLUE_SETTLE_MS = 300;
+
+/* Read at call time: the glue runs from effects bound once at mount, and a
+   render-scope `useIsMobile()` value would be the one from that first render. */
+function onPhoneLayout(): boolean {
+  return typeof window !== "undefined" && window.matchMedia?.(MOBILE_LAYOUT_QUERY).matches === true;
+}
+
+/** Quiet time after the last scroll event before a released phone feed moves
+    to the nearest line boundary (#1978): momentum has ended by then. */
+const REST_ALIGN_MS = 160;
+/** Settles in a row, without the operator's input between them, before the
+    feed stops trying; one is the norm, the band clearance makes a second rare. */
+const MAX_AUTO_ALIGNS = 3;
 
 type ScrollCause =
   | { kind: "programmatic" }
@@ -422,6 +437,63 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
   };
 
+  /* #1978: on the phone the feed never rests with its first visible row
+     sliced by the top edge (the pane's task strip sits right on it).
+     Following the tail, the bottom is pinned, so there are two levers: step
+     back into the blank space under the last row, which reveals the cut row
+     whole and keeps the tail inside the follow band, or grow a spacer under
+     the last row by the part of the cut row still showing, so it leaves
+     whole. Measured from a zero spacer each time, so the result depends on
+     the content alone. The spacer sits outside `content`, whose resize
+     observer would otherwise re-glue. */
+  const tailSpacer = useRef<HTMLDivElement | null>(null);
+  const restTimer = useRef<number | null>(null);
+  const autoAlignRef = useRef<{ delta: number; count: number } | null>(null);
+  const alignFollowedTop = (el: HTMLElement) => {
+    const spacer = tailSpacer.current;
+    if (!spacer) return;
+    const hadSpacer = spacer.style.height !== "" && spacer.style.height !== "0px";
+    spacer.style.height = "0px";
+    if (hadSpacer) el.scrollTop = el.scrollHeight;
+    if (!onPhoneLayout()) return;
+    const last = content.current?.lastElementChild;
+    const viewportBottom = el.getBoundingClientRect().top + el.clientTop + el.clientHeight;
+    const slack = last ? Math.max(0, viewportBottom - last.getBoundingClientRect().bottom) : 0;
+    const plan = tailPlan(el, slack);
+    if (!plan) return;
+    if ("back" in plan) {
+      el.scrollTop -= plan.back;
+      return;
+    }
+    spacer.style.height = `${plan.spacer}px`;
+    el.scrollTop = el.scrollHeight;
+  };
+  /* Released from the tail, a feed that came to rest mid-line moves by the
+     shorter way to a line boundary, once the finger is off the glass and the
+     momentum has run out. */
+  const scheduleRestAlign = () => {
+    if (!onPhoneLayout()) return;
+    if (restTimer.current !== null) window.clearTimeout(restTimer.current);
+    restTimer.current = window.setTimeout(() => {
+      restTimer.current = null;
+      const el = scroller.current;
+      if (!el || magnetRef.current || feedTouchRef.current) return;
+      const delta = restingDelta(el);
+      if (!delta) return;
+      /* A settle never undoes the one before it, and gives up after a few
+         in a row: the operator's next touch, wheel or key starts afresh. */
+      const previous = autoAlignRef.current;
+      if (previous && (Math.sign(previous.delta) !== Math.sign(delta) || previous.count >= MAX_AUTO_ALIGNS)) return;
+      autoAlignRef.current = { delta, count: (previous?.count ?? 0) + 1 };
+      markProgrammaticScroll();
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      el.scrollBy({ top: delta, behavior: reduce ? "auto" : "smooth" });
+    }, REST_ALIGN_MS);
+  };
+  useEffect(() => () => {
+    if (restTimer.current !== null) window.clearTimeout(restTimer.current);
+  }, []);
+
   const markProgrammaticScroll = () => {
     if (scrollCauseRef.current?.kind !== "user") {
       scrollCauseRef.current = { kind: "programmatic" };
@@ -437,6 +509,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     if (!el || !magnetRef.current) return;
     markProgrammaticScroll();
     el.scrollTop = el.scrollHeight;
+    alignFollowedTop(el);
     const pendingUser = scrollCauseRef.current;
     if (pendingUser?.kind === "user") pendingUser.fromBottom = distanceFromBottom(el);
   };
@@ -687,7 +760,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     if (!el || !inner) return;
     const observer = new ResizeObserver(() => {
       if (magnetRef.current) glue();
-      else restorePendingPosition();
+      else {
+        restorePendingPosition();
+        /* Rows that grew or shrank above a released feed move it without a
+           scroll event; it settles on a row edge again (#1978), as a fresh
+           layout, since a settle's own scroll never resizes anything. */
+        autoAlignRef.current = null;
+        scheduleRestAlign();
+      }
     });
     observer.observe(inner);
     observer.observe(el);
@@ -1213,6 +1293,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const markUserScroll = (direction: number | null): void => {
     const el = scroller.current;
     if (!el) return;
+    autoAlignRef.current = null;
     scrollCauseRef.current = {
       kind: "user",
       fromBottom: distanceFromBottom(el),
@@ -1313,6 +1394,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         onPointerDownCapture={(event) => {
           if (event.button === 0 && pointerHitsVerticalScrollbar(event.currentTarget, event.clientX)) {
             scrollbarPointerRef.current = { fromBottom: distanceFromBottom(event.currentTarget) };
+            autoAlignRef.current = null;
             scrollCauseRef.current = null;
           }
         }}
@@ -1330,7 +1412,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           feedTouchRef.current = { x: touch.clientX, y: touch.clientY };
           if (Math.abs(deltaY) > Math.abs(deltaX)) markUserScroll(deltaY);
         }}
-        onTouchEndCapture={() => { feedTouchRef.current = null; }}
+        onTouchEndCapture={() => {
+          feedTouchRef.current = null;
+          scheduleRestAlign();
+        }}
         onTouchCancelCapture={() => { feedTouchRef.current = null; }}
         onKeyDownCapture={(event) => {
           if (["ArrowUp", "Home", "PageUp"].includes(event.key)) markUserScroll(-1);
@@ -1377,6 +1462,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
             });
           }
           if (el.scrollTop < 120 && canRevealOlder && !tail.loadingOlder && !tail.loading) revealOlder();
+          if (!magnetRef.current) scheduleRestAlign();
         }}
       >
       <PrependViewport scroller={scroller} identity={`${memoryKey}\0${tailPath}`}
@@ -1546,6 +1632,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         )}
         </div>
       </PrependViewport>
+      <div ref={tailSpacer} aria-hidden data-feed-tail-spacer className="h-0" />
       </div>
     </div>
     {/* Bottom working-status slot: live elapsed from the transcript receipt.
