@@ -178,3 +178,28 @@ test("an unsafe role is dropped at encode time, so the marker stays one line", (
   expect(encoded.startsWith("<!-- llv:structured-user origin=agent -->\n")).toBe(true);
   expect(decodeCodexStructuredUserText(encoded).origin).toEqual({ kind: "agent" });
 });
+
+test("a record whose only content is the marker decodes as a message with no words", () => {
+  /* An attachment-only send has nothing to put after the marker, and the
+     newline that would separate them can be trimmed away on the way back.
+     Read as text, that record printed the Viewer's own delivery comment at
+     the operator; read as what it is, it is their message, identified. */
+  const dedup = "c4".repeat(32);
+  const written = encodeCodexStructuredUserText("", undefined, null, { kind: "operator" }, dedup);
+  for (const value of [written, written.trimEnd()]) {
+    const decoded = decodeCodexStructuredUserText(value);
+    expect(decoded.structured).toBe(true);
+    expect(decoded.text).toBe("");
+    expect(decoded.deliveryDedup).toBe(dedup);
+    expect(decoded.origin).toEqual({ kind: "operator" });
+  }
+});
+
+test("the bare marker decodes with or without its trailing newline", () => {
+  const withNewline = encodeCodexStructuredUserText("");
+  expect(decodeCodexStructuredUserText(withNewline)).toMatchObject({ structured: true, text: "" });
+  expect(decodeCodexStructuredUserText(withNewline.trimEnd())).toMatchObject({ structured: true, text: "" });
+  /* And text that merely BEGINS like the marker is still the operator's. */
+  expect(decodeCodexStructuredUserText("<!-- llv:structured-user --> and then some"))
+    .toMatchObject({ structured: false });
+});

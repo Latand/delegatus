@@ -968,6 +968,13 @@ test.each(["terminal", "demoted-superseded", "new-generation", "superseded-durin
   let supersedenceDuringSignals = 0;
   const client = {
     ...baseClient,
+    readSession: async (identity: Parameters<NonNullable<RuntimeHostClient["readSession"]>>[0]) => {
+      if (failStartupSignalsAfterDiscard) {
+        failStartupSignalsAfterDiscard = false;
+        throw new RuntimeHostUnavailableError("runtime socket failed after retained host discard");
+      }
+      return baseClient.readSession!(identity);
+    },
     snapshot: async () => {
       if (failStartupSignalsAfterDiscard) {
         failStartupSignalsAfterDiscard = false;
@@ -4793,7 +4800,7 @@ test("deferred pipeline evidence completes the pass with both engines retained, 
     deferred = new Set(blocked.map((item) => item.conversation.id));
     scheduled.shift()!.callback();
     await until(() => structuredStartupDeferral()?.fencedReceipts === 0, "the re-probe pass");
-    expect(new Set(selected)).toEqual(new Set([unrelated.conversation.generations.at(-1)!.id]));
+    expect(selected).toEqual([]); // No unrelated adoption during deferred recovery.
     retainedRows();
     expect(receiptState(fencedLaunch)).toBe("failed");
     expect(receiptState(freeLaunch)).toBe("failed");
@@ -4808,11 +4815,43 @@ test("deferred pipeline evidence completes the pass with both engines retained, 
     selected.length = 0;
     scheduled.shift()!.callback();
     await until(() => structuredStartupDeferral() === null, "the admitting pass");
-    expect(new Set(selected).size).toBe(3);
+    expect(new Set(selected).size).toBe(2);
     expect(scheduled).toEqual([]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("startup rechecks pipeline evidence under a short lease before claiming a host", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-claim-race-"));
+  const { registry, conversation } = structuredRestartFixture(directory, "codex", "unhosted");
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  let fenced = false;
+  let claimAttempted = false;
+  const before = structuredClone(registry.readOnlySnapshot().entries);
+  try {
+    await expect(adoptStructuredHostsAtStartup({
+      registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [],
+      refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set<string>(), deferred: new Set(fenced ? [conversation.id] : []) }),
+      adopt: async (received, _options, _env, _filter, _processed, hooks) => {
+        // A close records its survivor after selection, before the writer claim.
+        fenced = true;
+        claimAttempted = true;
+        const entry = Object.values(received.readOnlySnapshot().entries)[0]!;
+        await hooks!.claimHost!(entry, { pid: process.pid, startIdentity: "fixture-owner" });
+        throw new Error("a fenced host reached launch");
+      },
+      adoptClaude: async () => [],
+    })).rejects.toThrow("pipeline startup evidence changed before host claim");
+    expect(claimAttempted).toBe(true);
+    expect(registry.readOnlySnapshot().entries).toEqual(before);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });

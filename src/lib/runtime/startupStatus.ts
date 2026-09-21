@@ -97,6 +97,16 @@ export function markStructuredHostStartupReady(): void {
   setStatus("ready", { ...current, phase: "ready" });
 }
 
+/** A keyed session read proves delivery ownership only. It cannot complete
+ * the adoption pass or clear its retry state. */
+export function markStructuredRuntimeSessionRecovered(): void {
+  if (startupStore.__llvStructuredHostStartupFailed === true) {
+    console.error("[structured hosts] runtime session recovered; startup still incomplete", {
+      source: "message-admission", phase: startupStore.__llvStructuredHostStartupProgress?.phase ?? null,
+    });
+  }
+}
+
 export function didStructuredHostStartupFail(): boolean {
   return startupStore.__llvStructuredHostStartupFailed === true;
 }

@@ -24,6 +24,7 @@ import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText";
+import { deliveryDedupToken } from "./deliveryDedup";
 import { CodexReplayFrameReducer, ReplayFrameOverflowError, sanitizeCodexImageFrame, shrinkReducedReplayFrame, type ImageSink, type ReplayFrameBudgets } from "./codexImageFrames";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
@@ -579,9 +580,10 @@ const ROLLOUT_TURNS_CACHE_LIMIT = 32;
 const ROLLOUT_DELIVERY_SCAN_CHUNK_BYTES = 1024 * 1024;
 const STRUCTURED_USER_MARKER_FRAGMENT = Buffer.from("llv:structured-user");
 
-function codexDeliveryDedup(operationId: string): string {
-  return createHash("sha256").update(operationId).digest("hex");
-}
+/* One definition, shared with the read-side join that resolves this token
+   back to the submission it belongs to (`submissionIdentity.ts`). Two copies
+   of the same hash is a join that silently stops matching. */
+const codexDeliveryDedup = deliveryDedupToken;
 type RolloutStructuredUserDelivery =
   | { payloadKind: "text" | "content"; payloadDigest: string }
   | { payloadKind: "conflict"; payloadDigest: null };

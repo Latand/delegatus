@@ -90,12 +90,14 @@ export function isRuntimeHostTransportFailure(error: unknown): boolean {
 }
 
 export interface RuntimeHostClient {
+  /** Stable listener identity; reconnecting to the same socket preserves it. */
+  startupGeneration?(): Promise<string | null>;
   nativeQueueRead?(conversationId: string): Promise<NativeQueueRecord[]>;
   nativeQueueTransition?(operationId: string, transition: NativeQueueTransition): Promise<RuntimeOperationResult>;
   /** Canonical proof for an entry whose add operation was compacted (#1664).
       Answers the settled entry; there is no operation receipt to answer. */
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
-  readSession?(identity: RuntimeSessionRead): Promise<RuntimeSession | null>;
+  readSession?(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null>;
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
@@ -147,8 +149,10 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   nativeQueueSettleCompacted(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement> {
     return this.call("native-queue-settle-compacted", { ...request }) as Promise<NativeQueueCompactedSettlement>;
   }
-  readSession(identity: RuntimeSessionRead): Promise<RuntimeSession | null> {
-    return this.call("session-read", { ...identity }) as Promise<RuntimeSession | null>;
+  readSession(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null> {
+    // Startup can wait for a slow host without changing interactive deadlines
+    // or sending the caller's transport policy over the wire.
+    return this.call("session-read", { ...identity }, options?.timeoutMs ?? this.timeoutMs) as Promise<RuntimeSession | null>;
   }
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot> {
     // The deadline belongs to this caller, never to the wire protocol.
@@ -206,6 +210,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs) as Promise<ViewerDeploymentReceipt>; }
   cancelViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-cancel", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-read", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
+  startupGeneration(): Promise<string | null> { return this.deploymentListGeneration(); }
   private async deploymentListGeneration(): Promise<string | null> {
     try {
       const stat = fs.statSync(this.socketPath, { bigint: true });

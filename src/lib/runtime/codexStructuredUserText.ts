@@ -27,7 +27,15 @@ import { messageOriginRole, type MessageOrigin } from "./messageOrigin";
  */
 
 const STRUCTURED_USER_MARKER = "<!-- llv:structured-user -->\n";
-const MARKER_WITH_ATTRIBUTES = /^<!-- llv:structured-user((?: [a-z0-9]+=[^ >]+)+) -->\n/;
+/* The newline after the marker is what SEPARATES it from the message, so a
+   record with no message has nothing to separate: a send that carried only an
+   attachment is written as the marker and nothing else, and whatever handles
+   the record on the way back may trim the trailing newline off it. Accepting
+   end-of-string there is what stops such a record decoding as a message whose
+   text IS the marker — which is how an image-only send printed its own
+   delivery comment at the operator instead of being recognised as theirs. */
+const MARKER_WITH_ATTRIBUTES = /^<!-- llv:structured-user((?: [a-z0-9]+=[^ >]+)+) -->(?:\n|$)/;
+const BARE_MARKER = /^<!-- llv:structured-user -->(?:\n|$)/;
 const ATTRIBUTE = /(?:^| )([a-z0-9]+)=([^ >]+)/g;
 const SHA256 = /^[a-f0-9]{64}$/;
 
@@ -95,11 +103,12 @@ export function decodeCodexStructuredUserText(value: string): DecodedCodexStruct
       ...(deliveryDedup ? { deliveryDedup } : {}),
     };
   }
-  if (!value.startsWith(STRUCTURED_USER_MARKER)) {
+  const bare = value.match(BARE_MARKER);
+  if (!bare) {
     return { text: value, structured: false, contentDigest: null, selectedContext: null, origin: null };
   }
   return {
-    text: value.slice(STRUCTURED_USER_MARKER.length),
+    text: value.slice(bare[0].length),
     structured: true,
     contentDigest: null,
     selectedContext: null,

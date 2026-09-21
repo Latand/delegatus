@@ -40,7 +40,7 @@ import {
   type StructuredImageRef,
 } from "./structuredContent";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
-import { markStructuredHostStartupReady } from "./startupStatus";
+import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 
 export interface StructuredMessageRequest {
   path: string;
@@ -708,7 +708,7 @@ export async function deliverHeldStructuredMessage(
     console.error("[structured delivery] runtime session read failed", error);
     return heldOutcomeDuringRuntimeSynchronization(request, registry);
   }
-  recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredHostStartupReady);
+  recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session) {
     const owner = persistedCurrentOwner(request, registry);
     if (owner?.kind === "legacy") {
@@ -834,7 +834,7 @@ export async function enqueueStructuredMessage(
       synchronizationImageAdmission(dependencies, rawImages),
     );
   }
-  recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredHostStartupReady);
+  recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session) {
     const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
