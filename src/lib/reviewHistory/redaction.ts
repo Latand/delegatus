@@ -2,7 +2,26 @@ import { redactMonitorText } from "@/lib/monitor/redact";
 import { ArchiveReadError } from "./reader";
 
 const SECRET_FIELD = /(?:token|secret|password|passwd|pwd|api[_-]?key|authorization|bearer|cookie|credential|private[_-]?key)/i;
-const JSON_FIELD = /("(?:\\.|[^"\\])*")(\s*:\s*)("(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[\[{])/g;
+// Recognize the key before asking for its value: a truncated value must not
+// make a sensitive field invisible. Standalone strings can also encode JSON.
+const JSON_STRING = /("(?:\\[\s\S]|[^"\\])*")(\s*:\s*)?/g;
+const MAX_ENCODED_DEPTH = 8;
+
+function quotedValueEnd(text: string, start: number): number {
+  for (let i = start + 1; i < text.length; i++) {
+    if (text[i] === "\\") i++;
+    else if (text[i] === '"') return i + 1;
+  }
+  throw new ArchiveReadError("ARCHIVE_UNAVAILABLE", 503);
+}
+
+function sensitiveValueEnd(text: string, start: number): number {
+  if (text[start] === '"') return quotedValueEnd(text, start);
+  if (text[start] === "{" || text[start] === "[") return compoundValueEnd(text, start);
+  const scalar = /^(?:-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(?=[\s,}\]]|$)/.exec(text.slice(start));
+  if (scalar) return start + scalar[0].length;
+  throw new ArchiveReadError("ARCHIVE_UNAVAILABLE", 503);
+}
 
 /** Find the whole compound value, ignoring delimiters inside JSON strings.
  * Refuse a truncated or mismatched sensitive value rather than export its tail. */
@@ -26,18 +45,31 @@ function compoundValueEnd(text: string, start: number): number {
 
 /** Artifact bodies can contain JSON/JSONL inside prose or fenced code. Match
  * complete values, including nested objects/arrays and escaped quotes, so no
- * credential suffix survives. Keep unrelated text byte-for-byte. */
-function redactStructuredText(text: string): string {
-  const fields = new RegExp(JSON_FIELD);
+ * credential suffix survives. Decode strings at a bounded depth to inspect
+ * serialized log messages; only re-encode strings whose contents changed. */
+function redactStructuredText(text: string, depth = 0): string {
+  if (depth > MAX_ENCODED_DEPTH) throw new ArchiveReadError("ARCHIVE_TOO_LARGE", 413);
+  const fields = new RegExp(JSON_STRING);
   const parts: string[] = [];
   let copied = 0;
   for (let match; (match = fields.exec(text));) {
-    const [, key, separator, value] = match;
-    let field = key;
-    try { field = JSON.parse(key); } catch { /* Malformed keys still get the literal field check. */ }
-    if (!SECRET_FIELD.test(field)) continue;
-    if (value === "{" || value === "[") fields.lastIndex = compoundValueEnd(text, fields.lastIndex - 1);
-    parts.push(text.slice(copied, match.index), `${key}${separator}"[redacted]"`);
+    const [, token, separator] = match;
+    let decoded: string;
+    try { decoded = JSON.parse(token); } catch {
+      // Ordinary quoted prose need not be JSON; still check a malformed key.
+      if (!separator || !SECRET_FIELD.test(token)) continue;
+      decoded = token;
+    }
+    let replacement: string;
+    if (separator && SECRET_FIELD.test(decoded)) {
+      fields.lastIndex = sensitiveValueEnd(text, fields.lastIndex);
+      replacement = `${token}${separator}"[redacted]"`;
+    } else {
+      const redacted = redactStructuredText(decoded, depth + 1);
+      if (redacted === decoded) continue;
+      replacement = JSON.stringify(redacted) + (separator ?? "");
+    }
+    parts.push(text.slice(copied, match.index), replacement);
     copied = fields.lastIndex;
   }
   parts.push(text.slice(copied));
