@@ -395,6 +395,76 @@ test("HTTP export refuses encoded strings beyond the decoding bound", async () =
   expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_TOO_LARGE" });
 });
 
+test.each([...artifactKinds])("HTTP export redacts acronym credential suffixes in %s and extensions", async kind => {
+  const marker = "ordinaryProbeMarker";
+  const metadata = { tokenCount: 42, passwordChanged: false, secretary: "ordinary history", APITokenCount: 3, DBPasswordChanged: true };
+  const credentials = Object.fromEntries(["API_TOKEN", "APIToken", "DBPassword", "HTTPAuthorization", "TLSPrivateKey", "DBPasswordHash"].map(key => [key, marker]));
+  const redacted = Object.fromEntries(Object.keys(credentials).map(key => [key, "[redacted]"]));
+  for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
+    const { response, bytes, occurrences } = await exportArtifact(kind, format(encodeMessage(JSON.stringify({ ...metadata, ...credentials }), levels)), { ...metadata, ...credentials });
+    expect(response.status).toBe(200);
+    expect(bytes).not.toContain(marker);
+    const body = JSON.parse(bytes);
+    expect(body.artifacts[0].artifacts[kind].text).toBe(format(encodeMessage(JSON.stringify({ ...metadata, ...redacted }), levels)));
+    expect(body.row.extension).toEqual({ ...metadata, ...redacted, receiptId: "archive-receipt" });
+    expect(body.relayOccurrences).toEqual(occurrences);
+  }
+});
+
+test.each([...artifactKinds])("HTTP export redacts complete single-quoted credentials in %s", async kind => {
+  const marker = "ordinaryProbeMarker";
+  const values = [
+    `password='${marker} tail ${marker}'`,
+    `{'password':'${marker}'}`,
+    `{'DBPassword':'${marker} \\' quoted ${marker}', 'retained':'ordinary history'}`,
+    `APIToken='${marker} \\\\ ${marker}'`,
+    `{'credentials': {'nested': '${marker} } ] \\' ${marker}'}}`,
+    `{'message': '{"password":"${marker}"}'}`,
+  ];
+  const replacements = [
+    "password='[redacted]'",
+    "{'password':\"[redacted]\"}",
+    "{'DBPassword':\"[redacted]\", 'retained':'ordinary history'}",
+    "APIToken='[redacted]'",
+    "{'credentials': \"[redacted]\"}",
+    "{'message': '{\"password\":\"[redacted]\"}'}",
+  ];
+  for (const [index, value] of values.entries()) for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
+    const { response, bytes, occurrences } = await exportArtifact(kind, format(encodeMessage(`${value} KEEP_FOLLOWING_PROSE`, levels)));
+    expect(response.status).toBe(200);
+    expect(bytes).not.toContain(marker);
+    const body = JSON.parse(bytes);
+    expect(body.artifacts[0].artifacts[kind].text).toBe(format(encodeMessage(`${replacements[index]} KEEP_FOLLOWING_PROSE`, levels)));
+    expect(body.row.extension.receiptId).toBe("archive-receipt");
+    expect(body.relayOccurrences).toEqual(occurrences);
+  }
+});
+
+test.each([...artifactKinds])("HTTP export refuses unterminated single-quoted credentials in %s", async kind => {
+  const marker = "ordinaryProbeMarker";
+  for (const prefix of ["password=", "{'password':", "{'credentials': {'nested':"]) for (const tail of ["", "\\", "\\'", "\\\\"]) {
+    for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
+      const { response, bytes } = await exportArtifact(kind, format(encodeMessage(`${prefix}'${marker} tail ${marker}${tail}`, levels)));
+      expect(bytes).not.toContain(marker);
+      expect(response.status).toBe(503);
+      expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
+    }
+  }
+});
+
+test.each([...artifactKinds])("HTTP export preserves harmless quoted backslashes in %s", async kind => {
+  const prose = [String.raw`Use "\d+" for digits.`, String.raw`Use '\d+' for digits.`, String.raw`Use "\q" literally.`, `Don't change "ordinary prose" or the user's words.`];
+  for (const text of prose) for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
+    const original = format(encodeMessage(text, levels));
+    const { response, bytes, occurrences } = await exportArtifact(kind, original);
+    expect(response.status).toBe(200);
+    const body = JSON.parse(bytes);
+    expect(body.artifacts[0].artifacts[kind].text).toBe(original);
+    expect(body.row.extension.receiptId).toBe("archive-receipt");
+    expect(body.relayOccurrences).toEqual(occurrences);
+  }
+});
+
 test.each([
   '{"credentials":{"value":"synthetic ordinary secret"',
   '{"password":["synthetic ordinary secret"}',
