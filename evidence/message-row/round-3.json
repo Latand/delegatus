@@ -1,0 +1,246 @@
+{
+  "readings": {
+    "twin-reversed-before-phone-390": {
+      "state": "before",
+      "bubbles": 2,
+      "rows": [
+        {
+          "id": "key-twin-first",
+          "phase": "pending",
+          "top": 152,
+          "height": 61.5,
+          "sameNode": false,
+          "progress": 1
+        },
+        {
+          "id": "key-twin-second",
+          "phase": "pending",
+          "top": 225.5,
+          "height": 61.5,
+          "sameNode": false,
+          "progress": 1
+        }
+      ]
+    },
+    "twin-reversed-after-second-echo-phone-390": {
+      "state": "after-second-echo",
+      "bubbles": 2,
+      "rows": [
+        {
+          "id": "key-twin-first",
+          "phase": "pending",
+          "top": 152,
+          "height": 61.5,
+          "sameNode": true,
+          "progress": 1
+        },
+        {
+          "id": "key-twin-second",
+          "phase": "confirmed",
+          "top": 225.5,
+          "height": 61.5,
+          "sameNode": true,
+          "progress": 0
+        }
+      ]
+    },
+    "twin-reversed-after-first-echo-phone-390": {
+      "state": "after-first-echo",
+      "bubbles": 2,
+      "rows": [
+        {
+          "id": "key-twin-second",
+          "phase": "confirmed",
+          "top": 152,
+          "height": 61.5,
+          "sameNode": true,
+          "progress": 0
+        },
+        {
+          "id": "key-twin-first",
+          "phase": "confirmed",
+          "top": 303.5,
+          "height": 61.5,
+          "sameNode": true,
+          "progress": 0
+        }
+      ]
+    },
+    "foreign-equal-text-before-phone-390": {
+      "state": "before",
+      "bubbles": 1,
+      "rows": [
+        {
+          "id": "key-admitted",
+          "phase": "pending",
+          "top": 152,
+          "height": 61.5,
+          "sameNode": false,
+          "progress": 1
+        }
+      ]
+    },
+    "foreign-equal-text-foreign-arrived-phone-390": {
+      "state": "foreign-arrived",
+      "bubbles": 2,
+      "rows": [
+        {
+          "id": "key-admitted",
+          "phase": "pending",
+          "top": 225.5,
+          "height": 61.5,
+          "sameNode": true,
+          "progress": 1
+        }
+      ]
+    },
+    "foreign-equal-text-own-arrived-phone-390": {
+      "state": "own-arrived",
+      "bubbles": 2,
+      "rows": [
+        {
+          "id": "key-admitted",
+          "phase": "confirmed",
+          "top": 303.5,
+          "height": 61.5,
+          "sameNode": true,
+          "progress": 0
+        }
+      ]
+    },
+    "twin-reversed-before-desktop-1280": {
+      "state": "before",
+      "bubbles": 2,
+      "rows": [
+        {
+          "id": "key-twin-first",
+          "phase": "pending",
+          "top": 114.5,
+          "height": 44,
+          "sameNode": false,
+          "progress": 1
+        },
+        {
+          "id": "key-twin-second",
+          "phase": "pending",
+          "top": 170.5,
+          "height": 44,
+          "sameNode": false,
+          "progress": 1
+        }
+      ]
+    },
+    "twin-reversed-after-second-echo-desktop-1280": {
+      "state": "after-second-echo",
+      "bubbles": 2,
+      "rows": [
+        {
+          "id": "key-twin-first",
+          "phase": "pending",
+          "top": 114.5,
+          "height": 44,
+          "sameNode": true,
+          "progress": 1
+        },
+        {
+          "id": "key-twin-second",
+          "phase": "confirmed",
+          "top": 170.5,
+          "height": 44,
+          "sameNode": true,
+          "progress": 0
+        }
+      ]
+    },
+    "twin-reversed-after-first-echo-desktop-1280": {
+      "state": "after-first-echo",
+      "bubbles": 2,
+      "rows": [
+        {
+          "id": "key-twin-second",
+          "phase": "confirmed",
+          "top": 114.5,
+          "height": 44,
+          "sameNode": true,
+          "progress": 0
+        },
+        {
+          "id": "key-twin-first",
+          "phase": "confirmed",
+          "top": 232.5,
+          "height": 44,
+          "sameNode": true,
+          "progress": 0
+        }
+      ]
+    },
+    "foreign-equal-text-before-desktop-1280": {
+      "state": "before",
+      "bubbles": 1,
+      "rows": [
+        {
+          "id": "key-admitted",
+          "phase": "pending",
+          "top": 114.5,
+          "height": 44,
+          "sameNode": false,
+          "progress": 1
+        }
+      ]
+    },
+    "foreign-equal-text-foreign-arrived-desktop-1280": {
+      "state": "foreign-arrived",
+      "bubbles": 2,
+      "rows": [
+        {
+          "id": "key-admitted",
+          "phase": "pending",
+          "top": 170.5,
+          "height": 44,
+          "sameNode": true,
+          "progress": 1
+        }
+      ]
+    },
+    "foreign-equal-text-own-arrived-desktop-1280": {
+      "state": "own-arrived",
+      "bubbles": 2,
+      "rows": [
+        {
+          "id": "key-admitted",
+          "phase": "confirmed",
+          "top": 232.5,
+          "height": 44,
+          "sameNode": true,
+          "progress": 0
+        }
+      ]
+    }
+  },
+  "watches": {
+    "twin-reversed-phone-390": {
+      "batches": 9,
+      "minBubbles": 2,
+      "maxBubbles": 2,
+      "detached": []
+    },
+    "foreign-equal-text-phone-390": {
+      "batches": 9,
+      "minBubbles": 1,
+      "maxBubbles": 2,
+      "detached": []
+    },
+    "twin-reversed-desktop-1280": {
+      "batches": 9,
+      "minBubbles": 2,
+      "maxBubbles": 2,
+      "detached": []
+    },
+    "foreign-equal-text-desktop-1280": {
+      "batches": 9,
+      "minBubbles": 1,
+      "maxBubbles": 2,
+      "detached": []
+    }
+  }
+}
