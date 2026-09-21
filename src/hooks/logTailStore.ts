@@ -192,8 +192,14 @@ const ATTACHMENT_TYPE_RE = /^(?:image|audio|video|document|file|base64|input_ima
 const CREDENTIAL_KEY_RE = /(?:api.?key|authorization|bearer|secret|password|passwd|pwd|cookie)|token$/i;
 /** A `data` field this short is a field; longer is a payload. */
 const SHORT_DATA_CHARS = 64;
-const MAX_INSPECTED_NODES = 600;
-const MAX_INSPECTED_DEPTH = 12;
+/** Decoded values one line may cost. JSON printed inside a tool's text is
+    inspected too, so a record that relays a command's structured output
+    reaches about six hundred of them; a line is at most `MAX_LINE_BYTES`, so
+    this bounds a pathological one without refusing that. */
+const MAX_INSPECTED_NODES = 2_000;
+/** Each JSON document printed inside a string adds a level, and real records
+    relay a command's output that relays another's. */
+const MAX_INSPECTED_DEPTH = 24;
 /** How many characters the search for JSON embedded in text may walk, per
     line. Each `{` or `[` is tried as the start of a document, so text full of
     unclosed brackets costs quadratic work; past this it is refused. */
@@ -882,4 +888,5 @@ export const TAIL_STORE_BOUNDS_FOR_TESTS = {
   MAX_LINE_BYTES,
   MAX_AGE_MS,
   WRITE_INTERVAL_MS,
+  MAX_INSPECTED_NODES,
 };

@@ -535,7 +535,7 @@ test("a structure this cannot finish reading is refused rather than assumed safe
   expect(persistableLine(JSON.stringify({ type: "user", deep }))).toBe(false);
   /* Wider than the NODE budget while staying well inside the line bound, so
      it is the inspection that refuses this one and not the record's size. */
-  const wide = Object.fromEntries(Array.from({ length: 700 }, (_, index) => [`f${index}`, index]));
+  const wide = Array.from({ length: BOUNDS.MAX_INSPECTED_NODES + 100 }, () => 0);
   const wideLine = JSON.stringify({ type: "user", wide });
   expect(wideLine.length).toBeLessThan(BOUNDS.MAX_LINE_BYTES);
   expect(persistableLine(wideLine)).toBe(false);
