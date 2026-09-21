@@ -89,7 +89,7 @@ interface ProbeResult {
   stderr: string;
 }
 
-function runProbe(mode: "resolve" | "load-stores" | "open-registry", environment: Record<string, string | undefined>): ProbeResult {
+function runProbe(mode: "resolve" | "load-stores" | "open-registry" | "resolve-then-disown" | "resolve-then-chdir", environment: Record<string, string | undefined>): ProbeResult {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries({ ...process.env, ...environment })) {
     if (value !== undefined) env[key] = value;
@@ -195,6 +195,32 @@ describe("the operator's state directory", () => {
       const resolved = JSON.parse(owned.stdout.trim()) as { stateDirectory: string };
       expect(path.resolve(resolved.stateDirectory)).toBe(path.resolve(STATE_DIRECTORY));
     }
+  });
+
+  test("a resolved state directory is decided again when the owner changes, never remembered past it (#1987)", () => {
+    const temporary = temporaryRoot();
+    const probe = runProbe("resolve-then-disown", { ...operatorEnvironment(temporary), [STATE_OWNER_ENV]: "viewer" });
+    expect(probe.status).toBe(0);
+    const resolved = JSON.parse(probe.stdout.trim()) as { stateDirectory: string; afterDisown: string };
+    expect(path.resolve(resolved.stateDirectory)).toBe(path.resolve(STATE_DIRECTORY));
+    expect(resolved.afterDisown).toBe("refused: UnownedStateAccessError");
+  });
+
+  test("a relative config root is decided again after the working directory changes (#1987)", () => {
+    const temporary = temporaryRoot();
+    const probe = runProbe("resolve-then-chdir", {
+      ...operatorEnvironment(temporary),
+      XDG_CONFIG_HOME: ".config",
+      /* Observation-worker mode runs no legacy migration: only the admission
+         is exercised, and nothing is written anywhere. */
+      LLV_RESOURCE_OBSERVATION_WORKER: "1",
+      PROBE_FIRST_CWD: temporary,
+      PROBE_SECOND_CWD: OPERATOR_HOME,
+    });
+    expect(probe.status).toBe(0);
+    const resolved = JSON.parse(probe.stdout.trim()) as { stateDirectory: string; afterChdir: string };
+    expect(resolved.stateDirectory).toBe(path.resolve(temporary, ".config", "agent-log-viewer", "state"));
+    expect(resolved.afterChdir).toBe("refused: UnownedStateAccessError");
   });
 
   test("an owner that holds no release fence still runs no startup mutation", () => {

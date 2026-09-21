@@ -3,9 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { Database } from "bun:sqlite";
+
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { projectInfoFromCwd } from "@/lib/scanner/describe";
+import { resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "@/lib/state/sqliteStateStore";
 import type { FileEntry } from "@/lib/types";
 
+import { resolveProjectAttribution } from "./projectResolution";
 import { overlayResourceSessionTitles, overlaySessionTitles, registryProjectionForSnapshot } from "./titleProjection";
 import { writeSessionTitle } from "./titleStore";
 
@@ -175,6 +180,58 @@ test("issue 798: the registry projection is cached per snapshot revision, not pe
      rebuilding over every conversation. */
   fs.writeFileSync(registry.filename, fs.readFileSync(registry.filename));
   expect(registryProjectionForSnapshot(snapshot)).toBe(projection);
+});
+
+test("issue 1987: a registry projection reads the project-resolution state once, not once per conversation", () => {
+  /* A retained registry holds thousands of conversations. Each project
+     attribution used to re-read the state database's collection revisions,
+     which held the event loop for seconds on every registry revision the
+     resource route projected. */
+  const database = new Database(path.join(stateDir, "state.sqlite"));
+  database.run("CREATE TABLE state_collections (collection TEXT PRIMARY KEY, revision INTEGER NOT NULL)");
+  database.run("INSERT INTO state_collections (collection, revision) VALUES ('flows', 7), ('workflows', 3)");
+  database.close();
+  const cwdRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-title-proj-cwd-"));
+  try {
+    const cwds = Array.from({ length: 60 }, (_, index) => {
+      const cwd = path.join(cwdRoot, `project-${index}`);
+      fs.mkdirSync(cwd);
+      return cwd;
+    });
+    const conversations: Record<string, unknown> = {};
+    for (let index = 0; index < 3_000; index += 1) {
+      const id = `conversation_${index}`;
+      conversations[id] = {
+        id,
+        engine: "claude",
+        generations: [{
+          id: `generation-${index}`,
+          path: `/home/user/.claude/projects/p/${index}.jsonl`,
+          accountId: null,
+          launchProfile: { cwd: cwds[index % cwds.length], project: null },
+        }],
+        continuityPaths: [],
+        projectOwnership: null,
+      };
+    }
+    const snapshot = { conversations, conversationAliases: {} } as unknown as Parameters<typeof registryProjectionForSnapshot>[0];
+
+    resetStateReadonlyConnectionCountForTests();
+    const projection = registryProjectionForSnapshot(snapshot);
+    expect(stateReadonlyConnectionCountForTests()).toBeLessThanOrEqual(5);
+
+    expect(projection.projectByPath.size).toBe(3_000);
+    for (const index of [0, 59, 60, 2_999]) {
+      const pathname = `/home/user/.claude/projects/p/${index}.jsonl`;
+      const cwd = cwds[index % cwds.length];
+      const expected = resolveProjectAttribution({ cwd, launchProfileProject: null }).project;
+      expect(expected).toBeTruthy();
+      expect(projection.projectByPath.get(pathname)).toBe(expected!);
+      expect(projection.projectMetadataByPath.get(pathname)?.displayName).toBe(projectInfoFromCwd(cwd)!.displayName);
+    }
+  } finally {
+    fs.rmSync(cwdRoot, { recursive: true, force: true });
+  }
 });
 
 function setRegistryConversation() {

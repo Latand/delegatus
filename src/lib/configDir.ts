@@ -70,13 +70,15 @@ const MIGRATED_SENTINEL = ".migrated-from-legacy";
  */
 export function migrateLegacyDir(target: string, legacy: string): void {
   if (process.env.LLV_RESOURCE_OBSERVATION_WORKER === "1") return;
+  /* A finished migration has nothing left to decide. Asked first, it spares
+     every later `statePath()` the ownership checks below (#1987). */
+  if (migrated.has(target)) return;
   /* A migration is a state-mutating startup step (#1905): against the
      operator's own directories only the serving Viewer or the runtime host
      runs it. Everyone else reads what that migration already produced — the
      sentinel has been in place since the move — so standing down is the
      honest answer, never a refusal that would take a reader down with it. */
   if (!mayRunStateStartupMutation(target)) return;
-  if (migrated.has(target)) return;
   /* A copy-once move of live state is a startup step, and this one is reached
      from a module scope (`INBOX_DIR`) and from every `statePath()` call. A
      `next build` worker loading route modules therefore ran it against the
