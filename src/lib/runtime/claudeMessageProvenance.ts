@@ -51,23 +51,42 @@ function spawnEntryProvenance(
   return { origin: "agent", ...(role ? { senderRole: role } : {}) };
 }
 
+/**
+ * The submission this ledger entry belongs to (#1950 round 2). The ledger
+ * files an entry under the DELIVERY OPERATION's id; the registry keeps which
+ * client message id admitted that operation, and that key is the outbox row's
+ * own id. A retry writes a second operation under the same key, so both
+ * ledger entries name one submission — which is what the row needs.
+ */
+function entrySubmissionId(entryId: string, snapshot: () => RegistryFile): string | undefined {
+  try {
+    return snapshot().deliveryOperationOwners?.[entryId]?.clientMessageId ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function entryProvenance(
   state: ClaudeDeliveryState,
   transcriptPath: string,
   snapshot: () => RegistryFile,
 ): DeliveredMessageProvenance | null {
   const entry = state.entry;
+  const submissionId = entrySubmissionId(entry.id, snapshot);
   if (entry.origin) {
     const role = entry.origin.kind === "agent" ? messageOriginRole(entry.origin.role) : undefined;
     return {
       origin: entry.origin.kind,
       ...(role ? { senderRole: role } : {}),
       ...(entry.origin.kind === "operator" && entry.selectedContext ? { selectedContext: entry.selectedContext } : {}),
+      ...(submissionId ? { submissionId } : {}),
     };
   }
   /* Pre-#1117 evidence. A selected-context capture exists only on operator
      composer sends; a spawn operation id resolves through its launch receipt. */
-  if (entry.selectedContext) return { origin: "operator", selectedContext: entry.selectedContext };
+  if (entry.selectedContext) {
+    return { origin: "operator", selectedContext: entry.selectedContext, ...(submissionId ? { submissionId } : {}) };
+  }
   if (entry.id.startsWith(SPAWN_MESSAGE_PREFIX)) return spawnEntryProvenance(entry.id, transcriptPath, snapshot());
   return null;
 }

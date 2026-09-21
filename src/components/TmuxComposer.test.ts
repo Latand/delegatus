@@ -7,6 +7,7 @@ import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import { translate } from "@/lib/i18n";
 
 import { payloadAttemptState } from "@/lib/composerSubmissionPayloads";
+import { messageRowModel } from "./conversation/messageRow";
 
 import { deliveryAttemptKey, mergeRuntimeReceipts, payloadReceiptEvidence, RuntimeComposerReceipts, structuredComposerSession } from "./TmuxComposer";
 
@@ -254,7 +255,13 @@ test("the production runtime receipt list exposes recovery actions for failures"
   expect(html.match(/min-h-11/g)?.length).toBe(3);
 });
 
-test("a queued structured send renders as a quiet optimistic user message", () => {
+test("a routine queued send paints nothing beside the composer", () => {
+  /* Send-latency slice 3. A message that is simply moving used to be painted
+     TWICE: once as its own row in the feed, and once again here as an
+     "optimistic" copy of itself with the queue's bookkeeping under it. That
+     second surface is what made one send read as a pile of states, so it is
+     gone — a delivery with nothing to decide about says nothing here, and the
+     message's own row carries the one quiet affordance instead. */
   const html = renderToStaticMarkup(
     createElement(RuntimeComposerReceipts, {
       receipts: [{
@@ -273,39 +280,64 @@ test("a queued structured send renders as a quiet optimistic user message", () =
     }),
   );
 
-  expect(html).toContain('data-optimistic-message="true"');
-  expect(html).toContain("keep going");
-  expect(html).toContain('data-receipt-wait="awaiting-handover"');
-  expect(html).not.toContain("animate-pulse");
+  expect(html).toBe("");
+  expect(html).not.toContain("keep going");
+  expect(html).not.toContain("data-optimistic-message");
   expect(html).not.toContain("Queued for durable delivery");
 });
 
-test("an optimistic automatic retry shows human busy feedback", () => {
-  const html = renderToStaticMarkup(
+test("an automatic busy retry is the owning message row's evidence, in the operator's language", () => {
+  /* The queue re-attempting a delivery by itself is still worth saying — it is
+     why a message is taking longer than usual. It is a fact about ONE message,
+     so it reads on that message's disclosure rather than as a second row
+     beside the composer, and it reads as a sentence rather than as the
+     reason code the journal writes. */
+  const entry = {
+    id: "key-auto-retry",
+    text: "keep going",
+    images: 0,
+    at: Date.parse("2026-07-13T00:00:00.000Z"),
+    state: "delivering" as const,
+    deliveryReceipt: {
+      operationId: "op-auto-retry",
+      idempotencyKey: "key-auto-retry",
+      conversationId: "conv-one",
+      kind: "steer",
+      status: "queued",
+      reason: "delivery-auto-retry",
+      at: "2026-07-13T00:00:00.000Z",
+      revision: 3,
+    } as RuntimeReceipt,
+  };
+  const en = messageRowModel((key, params) => translate("en", key, params), entry,
+    { nowMs: Date.parse("2026-07-13T00:00:01.000Z") });
+  expect(en.phase).toBe("pending");
+  /* The resting row still reads ONE stable sentence: the retry is transport. */
+  expect(en.status).toBe(translate("en", "outbox.awaitingConfirmation"));
+  expect(en.transport).toBe(translate("en", "runtime.receipt.busyRetry"));
+  expect(en.transport).toContain("agent is busy");
+  expect(en.transport).not.toContain("delivery-auto-retry");
+  const uk = messageRowModel((key, params) => translate("uk", key, params), entry,
+    { nowMs: Date.parse("2026-07-13T00:00:01.000Z") });
+  expect(uk.transport).toBe(translate("uk", "runtime.receipt.busyRetry"));
+  expect(translate("en", "runtime.receipt.busyRetry")).toBe("Couldn’t deliver — agent is busy, we’ll retry");
+  expect(translate("uk", "runtime.receipt.busyRetry")).toBe("Не вдалося доставити — агент зайнятий, повторимо");
+
+  /* And the composer no longer paints a second copy of the message for it:
+     no optimistic bubble, no busy sentence, no reason code. A bare operation
+     chip is all that is left, and it says nothing the row is saying. */
+  const beside = renderToStaticMarkup(
     createElement(RuntimeComposerReceipts, {
-      receipts: [{
-        operationId: "op-auto-retry",
-        idempotencyKey: "key-auto-retry",
-        conversationId: "conv-one",
-        kind: "steer",
-        status: "queued",
-        reason: "delivery-auto-retry",
-        text: "keep going",
-        at: "2026-07-13T00:00:00.000Z",
-        revision: 3,
-      }],
+      receipts: [entry.deliveryReceipt],
       nowMs: Date.parse("2026-07-13T00:00:01.000Z"),
       onRetry: () => {},
       onEdit: () => {},
     }),
   );
-
-  expect(html).toContain("animate-spin");
-  expect(html).toContain("agent is busy");
-  expect(translate("en", "runtime.receipt.busyRetry")).toBe("Couldn’t deliver — agent is busy, we’ll retry");
-  expect(translate("uk", "runtime.receipt.busyRetry")).toBe("Не вдалося доставити — агент зайнятий, повторимо");
-  expect(html).not.toContain("delivery-auto-retry");
-  expect(html).not.toContain("thread/read");
+  expect(beside).not.toContain("data-optimistic-message");
+  expect(beside).not.toContain("keep going");
+  expect(beside).not.toContain("agent is busy");
+  expect(beside).not.toContain("delivery-auto-retry");
 });
 
 test("a bounded receipt summary keeps retry while withholding lossy edit", () => {
