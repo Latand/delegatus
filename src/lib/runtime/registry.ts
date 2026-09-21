@@ -414,7 +414,7 @@ export async function reapSeveredStructuredHost(
 export async function demoteSkippedStructuredRegistryHosts(
   registry: AgentRegistry,
   shouldAdopt: StructuredHostAdoptionFilter,
-  admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T> = async (_entry, mutation) => mutation(),
+  admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => mutation(),
 ): Promise<void> {
   const rows = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
     entry.structuredHost && !shouldAdopt(entry));
@@ -430,8 +430,10 @@ export async function demoteSkippedStructuredRegistryHosts(
       && host.activeFlags.length === 0;
     if (alreadyDead) continue;
     const conversation = registry.conversationForPath(entry.artifactPath);
-    if (conversation
-      && await admit(entry, () => reconcileDeadStructuredRegistryHost(registry, conversation.id, entry.key))) continue;
+    if (conversation) {
+      const reconciled = await admit(entry, () => reconcileDeadStructuredRegistryHost(registry, conversation.id, entry.key));
+      if (reconciled === undefined || reconciled) continue;
+    }
     const owner = captureProcessIdentity(process.pid);
     try {
       await registry.withOperationLock(entry.key, owner, async () => {
@@ -445,12 +447,14 @@ export async function demoteSkippedStructuredRegistryHosts(
           allowUnhosted: true,
           reclaimUnverifiedOwner: true,
         }));
+        if (claimed === undefined) return;
         if (!claimed) {
           const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
           const orphan = current?.structuredHost?.kind === "claude-broker"
             ? current.structuredHost.process
             : null;
-          if (orphan && await terminateVerifiedStructuredOrphan(orphan, current?.claimOwner ?? null)) {
+          if (orphan && current && !shouldAdopt(current)
+            && await terminateVerifiedStructuredOrphan(orphan, current.claimOwner ?? null)) {
             claimed = await admit(entry, () => registry.claimStructuredHost(entry.key, owner, {
               allowUnhosted: true,
               reclaimUnverifiedOwner: true,
@@ -468,10 +472,17 @@ export async function demoteSkippedStructuredRegistryHosts(
           pendingAttention: [],
           activeFlags: [],
         }, "dead", claim.claimOwner!, claim.claimEpoch, true));
+        if (demoted === undefined) {
+          registry.releaseStructuredHostClaim(entry.key, claim.claimOwner!, claim.claimEpoch);
+          return;
+        }
         if (!demoted) throw new Error("structured host writer claim is stale");
       });
     } catch (error) {
-      if (!(error instanceof Error) || error.message !== "agent registry is busy") throw error;
+      if (!(error instanceof Error) || error.message !== "agent registry is busy") {
+        if (error instanceof Error) Object.assign(error, { hostKey: sessionKeyId(entry.key) });
+        throw error;
+      }
     }
   }
 }
@@ -562,7 +573,10 @@ export async function adoptCodexRegistryHosts(
         }
       });
     } catch (error) {
-      if (!(error instanceof Error) || error.message !== "agent registry is busy") throw error;
+      if (!(error instanceof Error) || error.message !== "agent registry is busy") {
+        if (error instanceof Error) Object.assign(error, { hostKey: sessionKeyId(entry.key) });
+        throw error;
+      }
     } finally {
       processed?.(entry);
     }
@@ -656,7 +670,10 @@ export async function adoptClaudeRegistryHosts(
         }
       });
     } catch (error) {
-      if (!(error instanceof Error) || error.message !== "agent registry is busy") throw error;
+      if (!(error instanceof Error) || error.message !== "agent registry is busy") {
+        if (error instanceof Error) Object.assign(error, { hostKey: sessionKeyId(entry.key) });
+        throw error;
+      }
     } finally {
       processed?.(entry);
     }

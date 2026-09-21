@@ -2641,7 +2641,7 @@ test.each(["codex", "claude"] as const)(
       expect(replacementAttempts).toBe(0);
       expect(startupLogs).toHaveLength(1);
       expect(startupLogs[0]![0]).toBe("[structured hosts] startup adoption failed; retry scheduled");
-      expect(startupLogs[0]![1]).toEqual({
+      expect(startupLogs[0]![1]).toMatchObject({
         category: "runtime-host-unavailable", attempt: 1, retryInMs: 100,
       });
       const refused = registry.readOnlySnapshot().entries[`${engine}:${sessionId}`]!;
@@ -4883,7 +4883,7 @@ test.each(["dead", "live"] as const)("settled archived Codex handoff with a %s e
   pipeline.closedAt = "2026-08-30T01:00:00.000Z";
   pipeline.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: role, launchId: null,
     conversationId: conversation.id, sessionId, agentPath: entry.artifactPath, paneId: null, flowId: null,
-    startedAt: pipeline.createdAt, completedAt: pipeline.closedAt, output: null, verdict: null, error: null });
+    startedAt: pipeline.createdAt, completedAt: pipeline.closedAt, input: null, activatedBy: null, output: null, verdict: null, error: null });
   fs.writeFileSync(path.join(directory, "pipelines.json"), JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [] }));
   fs.writeFileSync(path.join(directory, "pipelines-archive.json"), JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [pipeline] }));
   expect(loadPipelinesForStartup()).toHaveLength(1);
@@ -4936,4 +4936,50 @@ test("startup retry logs the error and host key and exposes its failure category
   expect(structuredStartupStatus()).toMatchObject({ state: "failed", failureCategory: "runtime-host-unavailable" });
   await runStructuredHostStartup(async () => {});
   expect(structuredStartupStatus()?.failureCategory).toBeNull();
+});
+
+test.each(["codex", "claude"] as const)("production %s claim failures retain their host key in the startup retry log", async (engine) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-claim-diagnostic-"));
+  const { registry, sessionId } = structuredRestartFixture(directory, engine, "unhosted");
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const claim = spyOn(registry, "claimStructuredHost").mockImplementation(() => {
+    throw new RuntimeHostUnavailableError("claim authority unavailable");
+  });
+  const logged: unknown[][] = [];
+  try {
+    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup({
+      registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+    }), (...args) => { logged.push(args); }, { schedule: () => ({ unref() {} }) });
+    expect(logged[0]?.[1]).toMatchObject({ message: "claim authority unavailable", hostKey: `${engine}:${sessionId}` });
+  } finally {
+    claim.mockRestore();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a host deferred during reconciliation is retained while startup reaches ready", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-reconciliation-fence-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const { conversation } = addStructuredRestartConversation(registry, directory, {
+    sessionId: "cccccccc-3333-4333-8333-cccccccccccc", engine: "claude", status: "live", turn: "terminal",
+  });
+  const before = structuredClone(registry.readOnlySnapshot().entries);
+  let deferred = false;
+  try {
+    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup({
+      registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set<string>(), deferred: new Set(deferred ? [conversation.id] : []) }),
+      adopt: async () => [], adoptClaude: async () => { deferred = true; return []; },
+      schedule: () => ({ unref() {} }),
+    }), () => {}, { schedule: () => ({ unref() {} }) });
+    expect(structuredStartupStatus()?.state).toBe("ready");
+    expect(registry.readOnlySnapshot().entries).toEqual(before);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

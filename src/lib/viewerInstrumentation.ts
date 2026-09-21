@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 
 import { statePath } from "@/lib/configDir";
+import { redactBounded } from "@/lib/monitor/redact";
 import { RuntimeHostUnavailableError } from "@/lib/runtime/client";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import {
@@ -585,7 +586,7 @@ const TRANSIENT_IO_CODES = new Set([
 ]);
 const DATA_CORRUPTION_CODES = new Set(["SQLITE_CORRUPT", "SQLITE_NOTADB"]);
 
-function startupErrorField(error: unknown, field: "code" | "name" | "message"): string {
+function startupErrorField(error: unknown, field: "code" | "name" | "message" | "hostKey"): string {
   if (typeof error !== "object" || error === null || !(field in error)) return "";
   const value = error[field as keyof typeof error];
   return typeof value === "string" ? value : "";
@@ -694,17 +695,23 @@ export async function runStructuredHostStartup(
       resolveReady?.();
       if (attempts > 1) log("[structured hosts] startup adoption recovered", { attempts });
     } catch (error) {
-      markStructuredHostStartupFailed();
       if (options.signal?.aborted) {
+        markStructuredHostStartupFailed();
         finished = true;
         rejectReady?.(error);
         throw error;
       }
       const classification = classifyStructuredHostStartupError(error);
+      markStructuredHostStartupFailed(classification.category);
+      const diagnostic = {
+        message: redactBounded(startupErrorField(error, "message") || String(error), 1_000),
+        hostKey: startupErrorField(error, "hostKey") || null,
+      };
       if (classification.disposition === "terminal") {
         finished = true;
         options.signal?.removeEventListener("abort", aborted);
         log("[structured hosts] startup adoption failed", {
+          ...diagnostic,
           category: classification.category,
           attempt: attempts,
           action: classification.action,
@@ -718,6 +725,7 @@ export async function runStructuredHostStartup(
       retryMs = Math.min(retryMs * 2, maxRetryMs);
       retryPending = true;
       log("[structured hosts] startup adoption failed; retry scheduled", {
+        ...diagnostic,
         category: classification.category, attempt: attempts, retryInMs: delayMs,
       });
       schedule(() => {
