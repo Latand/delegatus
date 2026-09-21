@@ -299,7 +299,7 @@ test("an HTML anchor holding a dot or a slash reaches the frame, encoded or lite
     });
     await act(async () => root!.render(<ArtifactPreviewHost mobile={false} />));
     await act(async () => {
-      dom.dispatchEvent(new dom.Event("hashchange") as unknown as Event);
+      dom.dispatchEvent(new dom.Event("hashchange"));
     });
     await settle();
     expect(sheet().getAttribute("data-artifact-state")).toBe("ready");
