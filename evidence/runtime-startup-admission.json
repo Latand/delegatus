@@ -1,0 +1,154 @@
+{
+  "base": "3627f27468cff17b42cc3b633264c592df377360",
+  "testedSourceHead": "f589c98b50e2574655fcbe75b2b05637b3f76248",
+  "runtime": "Bun 1.4.0",
+  "trigger": {
+    "timer": "src/lib/viewerInstrumentation.ts:723-729",
+    "prematureReadyCallers": "src/lib/runtime/structuredMessageDelivery.ts:711,837 (base calls markStructuredHostStartupReady)",
+    "providedLog": "llv-seat-startup-log.txt",
+    "failureLines": [
+      864,
+      868
+    ],
+    "prematureReadyLines": [
+      872,
+      878
+    ],
+    "retryLines": [
+      885,
+      891
+    ],
+    "scheduledRetryMs": 292697,
+    "observedRetryMs": 292713.886,
+    "attributionLimit": "The supplied log identifies the retry timer by timing but omits the ready caller. Code and a red/green message-admission regression prove the premature-ready path; new source-tagged diagnostics distinguish it."
+  },
+  "observedProduction": {
+    "window": "2026-09-21T03:53Z/2026-09-21T04:38Z",
+    "passes": 15,
+    "readyPhaseStates": 7,
+    "failedPhaseStates": 23,
+    "pipelineLeaseHoldSeconds": [
+      100,
+      135
+    ],
+    "pipelineDeadlineFailures": 15,
+    "runtimeRequestTimeouts": 185,
+    "longPhaseSeconds": [
+      97,
+      215,
+      313
+    ]
+  },
+  "redGreen": {
+    "moduleRealmReadyLatch": {
+      "baseAdoptionCallsOnSecondTrigger": 2,
+      "headAdoptionCallsOnSecondTrigger": 0
+    },
+    "slowHost": {
+      "requestMs": 5000,
+      "baseLeaseHeldAcrossRequestMs": 5000.613832,
+      "headLeaseHeldAcrossRequestMs": 0,
+      "headMaximumCompleteLeaseHoldMs": 1.396034,
+      "assertedBudgetMs": 100,
+      "overBudgetWarningIncludesPhase": true
+    },
+    "publicationBatches": {
+      "hosts": 40,
+      "baseHostsBeforeFirstYield": 40,
+      "headHostsBeforeFirstYield": 16,
+      "repeatCompletionExtraReads": 0,
+      "repeatCompletionExtraPublications": 0
+    },
+    "prematureReadiness": {
+      "baseStateAfterOneSessionRead": "ready",
+      "headStateAfterOneSessionRead": "failed"
+    }
+  },
+  "retainedHistory": {
+    "conversations": 8078,
+    "entries": 5188,
+    "receipts": 6623,
+    "elapsedMs": 18259.695996,
+    "globalSnapshots": 0,
+    "keyedSessionReads": 14610
+  },
+  "tests": [
+    {
+      "file": "src/lib/runtime/startup.test.ts",
+      "pass": 100,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/runtime/startupFinalization.integration.test.ts",
+      "pass": 17,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.test.ts",
+      "pass": 70,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/pipelines/store.test.ts",
+      "pass": 25,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/runtime/registryPersistence.test.ts",
+      "pass": 12,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryController.test.ts",
+      "pass": 4,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryRebind.test.ts",
+      "pass": 13,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/runtime/client.test.ts",
+      "pass": 14,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/runtime/structuredSpawn.integration.test.ts",
+      "pass": 88,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/runtime/structuredDelivery.integration.test.ts",
+      "pass": 38,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/runtime/startupStatus.test.ts",
+      "pass": 4,
+      "fail": 0
+    },
+    {
+      "file": "src/instrumentation.test.ts",
+      "pass": 46,
+      "fail": 0
+    },
+    {
+      "file": "src/lib/state/sqliteStateStore.bounded.test.ts",
+      "pass": 3,
+      "fail": 0
+    }
+  ],
+  "fixtureRepair": "The spawn suite had 14 identical failures on the base and candidate because its journal client omitted readSession. Supplying that existing capability makes all 88 tests pass.",
+  "gates": {
+    "tscCommand": "bunx tsc --noEmit",
+    "tscExit": 0,
+    "privacy": "pass with commit checking",
+    "buildCommand": "NODE_OPTIONS=--max-old-space-size=8192 bun run build",
+    "buildExit": 0
+  },
+  "limits": [
+    "Local synthetic history and private socket evidence; no production behavior verification or deployment.",
+    "The 100 ms lease budget is measured and warned, not a forced cancellation of a synchronous state transaction."
+  ]
+}
