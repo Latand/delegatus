@@ -314,14 +314,19 @@ export const PROBE = String.raw`
         const clips = style.overflowX !== 'visible' || style.overflowY !== 'visible' || /paint|strict|content/.test(style.contain);
         if (!clips) continue;
         /* An ancestor clips to its padding box: inside the border, and not
-           over its own scrollbars. */
+           over its own scrollbars. Its box is in viewport pixels, its client
+           metrics in its own layout pixels: under a scaled ancestor — the
+           desktop board scales its whole world — the two differ, so the
+           insets and sizes are converted by the ratio the box was scaled by. */
         const outer = node.getBoundingClientRect();
-        const clipLeft = outer.left + node.clientLeft;
-        const clipTop = outer.top + node.clientTop;
+        const scaleX = node.offsetWidth > 0 ? outer.width / node.offsetWidth : 1;
+        const scaleY = node.offsetHeight > 0 ? outer.height / node.offsetHeight : 1;
+        const clipLeft = outer.left + node.clientLeft * scaleX;
+        const clipTop = outer.top + node.clientTop * scaleY;
         left = Math.max(left, clipLeft);
         top = Math.max(top, clipTop);
-        right = Math.min(right, clipLeft + node.clientWidth);
-        bottom = Math.min(bottom, clipTop + node.clientHeight);
+        right = Math.min(right, clipLeft + node.clientWidth * scaleX);
+        bottom = Math.min(bottom, clipTop + node.clientHeight * scaleY);
       }
       return right > left && bottom > top;
     },

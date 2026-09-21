@@ -79,7 +79,16 @@ afterAll(async () => {
   cdp?.close();
   await stop(chrome);
   server?.stop(true);
-  if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+  /* Chrome's helper processes can still be writing the profile as the main
+     process exits, so one removal can leave a half-emptied directory. */
+  for (let attempt = 0; scratch && fs.existsSync(scratch) && attempt < 20; attempt += 1) {
+    try {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    } catch {
+      /* still being written; retried below */
+    }
+    if (fs.existsSync(scratch)) await Bun.sleep(250);
+  }
 });
 
 const js = JSON.stringify;
@@ -325,3 +334,90 @@ browserTest("an append cannot be armed while the pane's last row is below the fo
   const armed = await page.evaluate<string>(outcome(`p.armAppend(${js(TARGET)}, "desktop", ${js(MARKER)})`));
   expect(armed).toBe(`resolved:${JSON.stringify({ rows: 1, visibleRows: 1 })}`);
 }, 30_000);
+
+/* ── a scaled world: the desktop board scales its whole canvas ──────────────── */
+
+/** The target's pane inside a world scaled to half size, the way the desktop
+    board scales its canvas: a 100px-high clipping scroller with a 10px border
+    ends at viewport y=60 and clips its content at y=55. The rows' boxes are in
+    viewport space, the scroller's clientHeight is not, so a clip computed from
+    the two unconverted would reach y=110 and admit a row it hides. `rows` are
+    `[marginTop, key, text]` for each row, in layout pixels. */
+const SCALED_PANE = (surface: Surface, rows: Array<[number, string, string]>) => `(() => {
+  document.body.innerHTML = '';
+  const world = document.createElement('div');
+  world.style.cssText = 'transform:scale(.5);transform-origin:0 0';
+  const pane = document.createElement('div');
+  pane.id = 'target';
+  pane.setAttribute('data-link-path', ${js(TARGET)});
+  pane.style.cssText = 'height:100px;border:10px solid black;overflow:hidden';
+  pane.innerHTML = ${js(rows.map(([top, key, text]) => `<div data-feed-kind="prose" data-feed-key="${key}" style="height:40px;margin-top:${top}px">${text}</div>`).join(""))};
+  world.appendChild(pane);
+  if (${js(surface)} === 'phone') {
+    const focused = document.createElement('div');
+    focused.setAttribute('data-testid', 'mobile-focused-pane');
+    focused.appendChild(world);
+    document.body.appendChild(focused);
+  } else document.body.appendChild(world);
+  const box = pane.getBoundingClientRect();
+  return { pane: [box.top, box.bottom], rows: Array.from(pane.children).map((row) => { const r = row.getBoundingClientRect(); return [r.top, r.bottom]; }) };
+})()`;
+
+for (const surface of ["desktop", "phone"] as const) {
+  browserTest(`a row a SCALED pane clips out of sight is never painted, and is once scrolled into view, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await assertViewport(page, surface);
+    const layout = await page.evaluate<{ pane: number[]; rows: number[][] }>(SCALED_PANE(surface, [[120, "k0", "target row"]]));
+    /* The pane ends at y=60 on screen; the row sits wholly below its clip. */
+    expect(layout.pane).toEqual([0, 60]);
+    expect(layout.rows).toEqual([[65, 85]]);
+    expect(await page.evaluate<number>(`window.__profile.visibleRows(${js(TARGET)}, ${js(surface)})`)).toBe(0);
+    const clipped = await page.evaluate<string>(outcome(`p.paintedAt(() => p.targetPainted(${js(TARGET)}, ${js(surface)}), 700)`));
+    expect(clipped).toStartWith("rejected:milestone not reached");
+
+    const scrolled = await page.evaluate<string>(outcome(`(() => {
+      setTimeout(() => { document.getElementById('target').scrollTop = 100; }, 100);
+      return p.paintedAt(() => p.targetPainted(${js(TARGET)}, ${js(surface)}), 5000);
+    })()`));
+    expect(scrolled).toStartWith("resolved:");
+    expect((JSON.parse(scrolled.slice("resolved:".length)) as { rafConfirmed: boolean }).rafConfirmed).toBe(true);
+  }, 30_000);
+
+  browserTest(`an appended row a SCALED pane clips is not the revalidation milestone until revealed, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await assertViewport(page, surface);
+    await page.evaluate(SCALED_PANE(surface, [[0, "k0", "target row"]]));
+    /* Lands 80px below the existing row: layout 120..160, screen 65..85. */
+    const appendClipped = (delayMs: number) => `setTimeout(() => {
+      const row = document.createElement('div');
+      row.setAttribute('data-feed-kind', 'prose');
+      row.setAttribute('data-feed-key', 'k1');
+      row.style.cssText = 'height:40px;margin-top:80px';
+      row.textContent = ${js(MARKER)};
+      document.getElementById('target').appendChild(row);
+    }, ${delayMs})`;
+    const clipped = await page.evaluate<string>(outcome(`(() => {
+      p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      ${appendClipped(50)};
+      return p.appendedAt(700);
+    })()`));
+    expect(clipped).toStartWith("rejected:milestone not reached");
+    expect(await page.evaluate<number[]>(`(() => { const r = document.querySelector('[data-feed-key="k1"]').getBoundingClientRect(); return [r.top, r.bottom]; })()`)).toEqual([65, 85]);
+
+    /* The same append, then the pane scrolled to show it: a confirmed milestone. */
+    await page.evaluate(SCALED_PANE(surface, [[0, "k0", "target row"]]));
+    const revealed = await page.evaluate<string>(outcome(`(() => {
+      p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      ${appendClipped(50)};
+      setTimeout(() => { document.getElementById('target').scrollTop = 100; }, 250);
+      return p.appendedAt(5000);
+    })()`));
+    expect(revealed).toStartWith("resolved:");
+    const milestone = JSON.parse(revealed.slice("resolved:".length)) as { rafConfirmed: boolean; detectedMs: number; appendedRows: number };
+    expect(milestone.rafConfirmed).toBe(true);
+    expect(milestone.detectedMs).toBeGreaterThanOrEqual(245);
+    expect(milestone.appendedRows).toBe(1);
+  }, 30_000);
+}
