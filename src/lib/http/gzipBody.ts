@@ -11,12 +11,21 @@ const gzipAsync = promisify(gzip);
 export function acceptsGzip(request: Request): boolean {
   const header = request.headers.get("accept-encoding");
   if (!header) return false;
-  return header.split(",").some((part) => {
+  let gzip: number | null = null;
+  let wildcard: number | null = null;
+  for (const part of header.split(",")) {
     const [coding, ...parameters] = part.trim().toLowerCase().split(";");
-    if (coding.trim() !== "gzip" && coding.trim() !== "*") return false;
+    const name = coding!.trim();
+    if (name !== "gzip" && name !== "*") continue;
     const quality = parameters.map((parameter) => parameter.trim()).find((parameter) => parameter.startsWith("q="));
-    return quality === undefined || Number(quality.slice(2)) > 0;
-  });
+    const value = quality === undefined ? 1 : Number(quality.slice(2));
+    const weight = Number.isFinite(value) ? value : 0;
+    if (name === "gzip") gzip = Math.max(gzip ?? 0, weight);
+    else wildcard = Math.max(wildcard ?? 0, weight);
+  }
+  /* An explicit gzip entry decides, whatever the wildcard says; `*` covers
+     gzip only when gzip is not named at all. */
+  return (gzip ?? wildcard ?? 0) > 0;
 }
 
 /** Compress on the zlib thread pool, so a large body never blocks the
