@@ -8,7 +8,7 @@ export type PipelineSandbox = "full" | "restricted";
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
 export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedRevision";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
@@ -298,8 +298,25 @@ export type PipelineStageReportEntry = {
   summary: string | null;
 };
 
+export const MAX_DECISION_ANSWER_CHARS = 12_000;
+
+/** Accepted answers are append-only, including their original request fence. */
+export type PipelineDecisionAnswer = {
+  clientRequestId: string;
+  expectedRevision: string;
+  stageId: string;
+  attempt: number;
+  nextAttempt: number;
+  question: string;
+  answer: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor;
+  at: string;
+};
+
 export type PipelineStageAttempt = {
   n: number;
+  /** Answer that created this continuation; forces lease-free activation. */
+  decisionAnswerId?: string;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
   historical?: boolean;
   state: PipelineAttemptState;
@@ -609,6 +626,7 @@ export type Pipeline = {
   pos?: { x: number; y: number };
   /** Accepted graph edits, oldest first, at most MAX_PIPELINE_GRAPH_EDITS. */
   graphEdits?: PipelineGraphEdit[];
+  decisionAnswers?: PipelineDecisionAnswer[];
   /** Accepted stage completion calls, oldest first, at most
       MAX_PIPELINE_STAGE_REPORTS (graph slice 2). */
   stageReports?: PipelineStageReportEntry[];
@@ -648,6 +666,7 @@ export const PIPELINE_ACTIONS = [
   "pause",
   "resume",
   "retry-stage",
+  "resolve-decision",
   "skip-stage",
   "override-stage",
   "link-task",
@@ -662,6 +681,12 @@ export const PIPELINE_ACTIONS = [
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
 
 export type PatchPipelineRequest = {
+  /** Required for resolve-decision, preserved as its durable receipt key. */
+  clientRequestId?: string;
+  /** Opaque revision returned by get_pipeline or the pipeline detail route. */
+  expectedRevision?: string;
+  /** Answer to the settled question, up to MAX_DECISION_ANSWER_CHARS. */
+  answer?: string;
   expectedOwner?: string;
   expectedEpoch?: number;
   acceptedSha?: string;
@@ -690,7 +715,7 @@ export type PatchPipelineRequest = {
       and `get_pipeline` answer both. A plan that no longer has it answers 409
       `STAGE_CHANGED` and is left unchanged. */
   expectedStageDigest?: string;
-  /** for retry-stage and skip-stage: the stage the caller saw the pipeline
+  /** for retry-stage, skip-stage and resolve-decision: the stage the caller saw the pipeline
       waiting on. A pipeline no longer waiting on it answers 409 `STAGE_CHANGED`
       before anything is closed, reset or started. Deliberately not `stageId`,
       which on retry-stage names a launch-receipt retry. */

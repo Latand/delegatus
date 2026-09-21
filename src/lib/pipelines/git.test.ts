@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 
-import { commitPipelineStage, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
@@ -87,6 +87,144 @@ test("a real stale dirty checkout provisions from the freshly fetched origin/mai
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("async provisioning preserves the synchronous base and adoption decisions", async () => {
+  const sha = "a".repeat(40);
+  for (const input of [{}, { baseBranch: "release" }, { baseBranch: "release", baseRef: sha }, { baseBranch: "../bad" }]) {
+    for (const fetchCode of [0, 1, 124, 137]) {
+      const commands: string[] = [];
+      const exec: ExecPort = (command, args) => {
+        commands.push([command, ...args].join(" "));
+        return args.includes("fetch") ? { code: fetchCode, stdout: "", stderr: "fetch error" }
+          : { code: 0, stdout: sha, stderr: "" };
+      };
+      const expected = resolvePipelineBase("/repo", input, exec);
+      const expectedCommands = commands.splice(0);
+      expect(await resolvePipelineBaseAsync("/repo", input, async (command, args, cwd) => exec(command, args, cwd))).toEqual(expected);
+      expect(commands).toEqual(expectedCommands);
+    }
+  }
+  const subject = { ...pipeline(), baseBranch: "main", baseRef: sha };
+  for (const addCode of [0, 1]) {
+    for (const head of [sha, "b".repeat(40)]) {
+      const exec: ExecPort = (_command, args) => args[0] === "worktree" && args[1] === "list"
+        ? { code: 0, stdout: `worktree ${subject.worktreeDir}\0HEAD ${head}\0branch refs/heads/${subject.branch}\0\0`, stderr: "" }
+        : args[0] === "worktree" ? { code: addCode, stdout: "", stderr: "exists" }
+        : { code: 0, stdout: args.includes("--abbrev-ref") ? subject.branch : head, stderr: "" };
+      expect(await provisionPipelineWorktreeAsync(subject, async (command, args, cwd) => exec(command, args, cwd)))
+        .toEqual(provisionPipelineWorktree(subject, exec));
+    }
+  }
+});
+
+test("async Git fetch and checkout pin a real advanced remote and adopt only that head", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-async-base-"));
+  try {
+    const origin = path.join(root, "origin.git");
+    const source = path.join(root, "source");
+    git(root, "init", "--bare", "--initial-branch=main", origin);
+    git(root, "clone", origin, source);
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "base");
+    git(source, "push", "origin", "main");
+    const previous = git(source, "rev-parse", "HEAD");
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "advance");
+    git(source, "push", "origin", "main");
+    const current = git(source, "rev-parse", "HEAD");
+    git(source, "checkout", "--detach", previous);
+    fs.writeFileSync(path.join(source, "dirty.txt"), "preserve");
+    const base = await resolvePipelineBaseAsync(source, {}, realProvisionExec);
+    expect(base).toEqual({ ok: true, baseBranch: "main", baseRef: current });
+    const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(root, "lane"), baseBranch: "main", baseRef: current };
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: current, baseBranch: "main" });
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: current, baseBranch: "main" });
+    expect((await provisionPipelineWorktreeAsync({ ...subject, baseRef: previous }, realProvisionExec)).ok).toBe(false);
+    expect(git(source, "rev-parse", "HEAD")).toBe(previous);
+    expect(fs.readFileSync(path.join(source, "dirty.txt"), "utf8")).toBe("preserve");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("async exec reports launch errors, pre-abort, and a killed timeout without continuing", async () => {
+  expect((await realProvisionExec("missing-provision-command", [], publicationState)).code).not.toBe(0);
+  const abort = new AbortController();
+  abort.abort();
+  const marker = path.join(publicationState, "must-not-exist");
+  const result = await realProvisionExec("touch", [marker], publicationState, abort.signal);
+  expect(result.stderr).toBe("pipeline provisioning cancelled");
+  expect(fs.existsSync(marker)).toBe(false);
+  const calls: string[] = [];
+  const base = await resolvePipelineBaseAsync(publicationState, {}, async (command, args, cwd) => {
+    calls.push(args.join(" "));
+    return realProvisionExec(command, [args[0]!, "0.05s", process.execPath, "-e", "setTimeout(() => {}, 5000)"], cwd);
+  });
+  expect(base).toEqual({ ok: false, error: "fetching origin/main: git fetch timed out after 60s" });
+  expect(calls).toHaveLength(1);
+});
+
+for (const interruption of ["timeout", "cancellation"] as const) {
+  test(`async checkout rejects ${interruption} and cannot adopt its incomplete worktree on retry`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interrupted-checkout-"));
+    const source = path.join(root, "source");
+    const marker = path.join(root, "smudge-started");
+    const abort = new AbortController();
+    let pending: ReturnType<typeof provisionPipelineWorktreeAsync> | undefined;
+    try {
+      fs.mkdirSync(source);
+      git(source, "init", "--initial-branch=main");
+      fs.writeFileSync(path.join(source, ".gitattributes"), "tracked.txt filter=slow\n");
+      fs.writeFileSync(path.join(source, "tracked.txt"), "complete file\n");
+      git(source, "add", ".");
+      git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "-m", "base");
+      git(source, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
+      git(source, "config", "filter.slow.required", "true");
+      const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(root, "lane"), baseBranch: "main", baseRef: git(source, "rev-parse", "HEAD") };
+      pending = provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal) => {
+        // Exercise a real killed checkout without making this regression wait
+        // sixty seconds. All probes still use the production asynchronous port.
+        if (interruption === "timeout" && args[0] === "worktree" && args[1] === "add") {
+          return realProvisionExec("timeout", ["--signal=KILL", "0.5s", command, ...args], cwd, signal);
+        }
+        return realProvisionExec(command, args, cwd, signal);
+      }, abort.signal);
+      for (let attempt = 0; attempt < 200 && !fs.existsSync(marker); attempt += 1) await Bun.sleep(10);
+      expect(fs.existsSync(marker)).toBe(true);
+      if (interruption === "cancellation") abort.abort();
+      const result = await pending;
+      expect(git(subject.worktreeDir, "branch", "--show-current")).toBe(subject.branch);
+      expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(subject.baseRef);
+      expect(git(source, "worktree", "list", "--porcelain")).toContain("locked initializing");
+      expect(fs.existsSync(path.join(subject.worktreeDir, "tracked.txt"))).toBe(false);
+      fs.writeFileSync(path.join(subject.worktreeDir, "keep.txt"), "preserve partial checkout\n");
+      const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+      expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve partial checkout\n");
+      expect(result.ok).toBe(false);
+      expect(retry.ok).toBe(false);
+    } finally {
+      abort.abort();
+      await pending;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 10_000);
+}
+
+test("async adoption rejects missing tracked files and retains a complete checkout with untracked files", async () => {
+  const source = path.join(publicationState, "source");
+  fs.mkdirSync(source);
+  git(source, "init", "--initial-branch=main");
+  fs.writeFileSync(path.join(source, "tracked.txt"), "complete file\n");
+  git(source, "add", ".");
+  git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "-m", "base");
+  const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(publicationState, "lane"), baseBranch: "main", baseRef: git(source, "rev-parse", "HEAD") };
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  fs.writeFileSync(path.join(subject.worktreeDir, "keep.txt"), "preserve\n");
+  git(source, "worktree", "lock", "--reason", "initializing", subject.worktreeDir);
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(false);
+  git(source, "worktree", "unlock", subject.worktreeDir);
+  git(source, "worktree", "lock", "--reason", "preserve checkout", subject.worktreeDir);
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  fs.unlinkSync(path.join(subject.worktreeDir, "tracked.txt"));
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(false);
+  expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve\n");
 });
 
 test("default base fetches and resolves origin/main without inspecting a dirty stale checkout", () => {

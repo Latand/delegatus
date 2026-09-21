@@ -82,6 +82,7 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
+  registryRowsMatching, registryKeysMatching, registryConversationsForPath,
   sqliteRegistryStoreImported,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
@@ -1083,10 +1084,17 @@ function migrationReadinessSignature(
   engine: Extract<AgentEngine, "claude" | "codex">,
   paths: ReadonlySet<string>,
 ): string {
-  const index = migrationReadinessIndex(file);
-  return JSON.stringify(Object.values(file.conversations)
-    .filter((conversation) => conversation.engine === engine
-      && paths.has(conversation.generations.at(-1)?.path ?? ""))
+  const conversations = [...new Map([...paths].flatMap(path => registryConversationsForPath(file, path))
+    .filter(conversation => conversation.engine === engine && paths.has(conversation.generations.at(-1)?.path ?? ""))
+    .map(conversation => [conversation.id, conversation])).values()];
+  const deliveries = conversations.flatMap(conversation => registryRowsMatching(file, "heldDeliveries", "conversationId", conversation.id));
+  const index: MigrationReadinessIndex = {
+    uncertainDeliveryConversationIds: new Set(deliveries.filter(row => row.state === "delivery-uncertain").map(row => row.conversationId)),
+    pendingDeliveryConversationIds: new Set(deliveries.filter(row => row.state !== "delivered").map(row => row.conversationId)),
+    activeHostPaths: new Set([...paths].filter(path => registryRowsMatching(file, "entries", "artifactPath", path)
+      .some(entry => ["starting", "live", "idle", "handoff"].includes(entry.status)))),
+  };
+  return JSON.stringify(conversations
     .map((conversation) => [conversation.id, migrationReadiness(file, conversation, index)])
     .sort(([left], [right]) => left.localeCompare(right)));
 }
@@ -2025,16 +2033,29 @@ function heldDeliveryRequestDigest(
   ])).digest("hex");
 }
 
+/** Reverse alias traversal uses the value index, including aliases of aliases. */
+function conversationIdentities(file: RegistryFile, id: ViewerConversationId): ViewerConversationId[] {
+  const canonicalId = resolveConversationAlias(file, id);
+  const ids = new Set<ViewerConversationId>([canonicalId]);
+  for (const current of ids) {
+    for (const alias of registryKeysMatching(file, "conversationAliases", "alias", current)) ids.add(alias as ViewerConversationId);
+  }
+  return [...ids].filter(identity => resolveConversationAlias(file, identity) === canonicalId);
+}
+
+function conversationRows<C extends "heldDeliveries" | "deliveryOperationOwners" | "deliveryEvidenceCompactions">(
+  file: RegistryFile, collection: C, id: ViewerConversationId,
+): RegistryFile[C][string][] {
+  return registryRowsMatching(file, collection, "conversationId", conversationIdentities(file, id));
+}
+
 function heldDeliveryRequestDigests(
   file: RegistryFile,
   conversationId: ViewerConversationId,
   text: string,
   command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId">,
 ): Set<string> {
-  const identities = new Set<ViewerConversationId>([conversationId]);
-  for (const alias of Object.keys(file.conversationAliases) as ViewerConversationId[]) {
-    if (resolveConversationAlias(file, alias) === conversationId) identities.add(alias);
-  }
+  const identities = conversationIdentities(file, conversationId);
   return new Set([...identities].map((identity) => heldDeliveryRequestDigest(identity, text, command)));
 }
 
@@ -2276,7 +2297,7 @@ function inspectDeliveryReservation(
   commandInput: HeldDeliveryCommandInput,
 ): DeliveryReservationInspection {
   const canonicalId = resolveConversationAlias(file, conversationId);
-  let existing = clientMessageId ? Object.values(file.heldDeliveries).find((item) =>
+  let existing = clientMessageId ? conversationRows(file, "heldDeliveries", canonicalId).find((item) =>
     resolveConversationAlias(file, item.conversationId) === canonicalId
     && item.clientMessageId === clientMessageId) : undefined;
   const requestedCommand = canonicalHeldDeliveryCommand(commandInput, existing?.id ?? "pending-delivery");
@@ -2302,8 +2323,7 @@ function inspectDeliveryReservation(
   }
   let terminalOperationRetry: DeliveryOperationOwner | null = null;
   if (!existing && commandInput.operationId) {
-    const ownedDelivery = Object.values(file.heldDeliveries).find((item) =>
-      item.command.operationId === requestedCommand.operationId);
+    const ownedDelivery = registryRowsMatching(file, "heldDeliveries", "command.operationId", requestedCommand.operationId)[0];
     const operationOwner = file.deliveryOperationOwners[requestedCommand.operationId]
       ?? (ownedDelivery?.requestDigest ? {
         conversationId: ownedDelivery.conversationId,
@@ -2510,7 +2530,7 @@ function dropCompactedHeldDelivery(file: RegistryFile, delivery: HeldDelivery): 
 
 function compactDeliveryOperationOwners(file: RegistryFile, onlyConversationId?: ViewerConversationId): void {
   const terminalGroups = new Map<ViewerConversationId, Array<[string, DeliveryOperationOwner]>>();
-  for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
+  for (const [operationId, owner] of (onlyConversationId ? conversationRows(file, "deliveryOperationOwners", onlyConversationId).map(owner => [owner.command.operationId, owner] as const) : Object.entries(file.deliveryOperationOwners))) {
     if (owner.terminalState === null) continue;
     const canonicalId = resolveConversationAlias(file, owner.conversationId);
     if (onlyConversationId && canonicalId !== resolveConversationAlias(file, onlyConversationId)) continue;
@@ -2545,7 +2565,7 @@ function terminalDeliveryExpired(delivery: HeldDelivery, nowMs: number | undefin
 }
 
 function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: ViewerConversationId, nowMs?: number): number {
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  for (const delivery of (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries))) {
     /* Every accepted send gets its row, including the ordinary one whose
        operation id the reservation generated for itself (#1131). The exception
        used to be free — the reservation IS the record under that id — and it
@@ -2573,7 +2593,7 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
   }
   const deliveredGroups = new Map<ViewerConversationId, HeldDelivery[]>();
   const failedGroups = new Map<ViewerConversationId, HeldDelivery[]>();
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  for (const delivery of (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries))) {
     const canonicalId = resolveConversationAlias(file, delivery.conversationId);
     if (onlyConversationId && canonicalId !== resolveConversationAlias(file, onlyConversationId)) continue;
     if (delivery.state === "delivered") {
@@ -2611,7 +2631,7 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
     }
   }
   for (const [conversationId, deliveries] of failedGroups) {
-    const activeCount = Object.values(file.heldDeliveries).filter((delivery) =>
+    const activeCount = (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries)).filter((delivery) =>
       resolveConversationAlias(file, delivery.conversationId) === conversationId
       && ["held", "assigned", "delivery-uncertain"].includes(delivery.state)).length;
     const retainedFailed = Math.max(0, Math.min(50, 99 - activeCount));
@@ -4593,9 +4613,9 @@ export class AgentRegistry {
     }
   }
 
-  private mutate<T>(fn: (file: RegistryFile) => T): T {
+  private mutate<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean } = {}): T {
     const startedAt = performance.now();
-    const result = this.mutateStorage(fn);
+    const result = this.mutateStorage(fn, options);
     this.transactionCount += 1;
     this.recordMetric(this.transactionDurations, performance.now() - startedAt);
     const second = Math.floor(this.now() / 1_000);
@@ -4606,18 +4626,20 @@ export class AgentRegistry {
     return result;
   }
 
-  private mutateStorage<T>(fn: (file: RegistryFile) => T): T {
-    /* Every mutation sweeps the staged supersedence edges (issue #383) after
-       its own writes, so whichever transition marks a predecessor host dead —
+  private mutateStorage<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean }): T {
+    /* Host-state mutations sweep staged supersedence edges (issue #383) after
+       their own writes, so whichever transition marks a predecessor host dead —
        terminate, recovery, reconcile — retires its round in that same
        transaction, and an operator's discard within `fn` is final. */
     const mutator = (file: RegistryFile): T => {
       const result = fn(file);
-      commitPendingSupersedenceInFile(file);
+      // Delivery-only transitions cannot change the host eligibility used by
+      // supersedence. Host mutations still settle every staged edge atomically.
+      if (!options.deliveryOnly) commitPendingSupersedenceInFile(file);
       return result;
     };
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
-      const mutation = this.sqliteStore!.mutate(mutator, false);
+      const mutation = this.sqliteStore!.mutate(mutator, false, { updateSnapshotCache: !options.deliveryOnly });
       if (this.sqliteMode === "read") {
         this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
         if (this.mirrorDirty) this.scheduleRollbackMirrorForCadence();
@@ -4701,6 +4723,53 @@ export class AgentRegistry {
       return snapshot;
     }
     return readFile(this.filename, this.mcpGrantPolicy);
+  }
+
+  private readKeyed<T>(reader: (file: RegistryFile) => T): T {
+    return this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot());
+  }
+
+  /** A detached delivery view for one conversation, including historical aliases. */
+  conversationDeliverySnapshot(target: { conversationId?: string | null; path?: string }): RegistryFile {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const id = target.conversationId ? resolveConversationAlias(file, target.conversationId as ViewerConversationId)
+        : target.path ? registryConversationsForPath(file, target.path)[0]?.id : undefined;
+      if (!id) return result;
+      const conversation = file.conversations[id];
+      for (const identity of conversationIdentities(file, id)) {
+        if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+      }
+      if (conversation) {
+        result.conversations[id] = clone(conversation);
+        const generation = conversation.generations.at(-1);
+        if (generation) {
+          const key = `${conversation.engine}:${generation.id}`;
+          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+      }
+      for (const collection of ["heldDeliveries", "deliveryOperationOwners", "deliveryEvidenceCompactions"] as const) {
+        for (const key of registryKeysMatching(file, collection, "conversationId", conversationIdentities(file, id))) {
+          (result[collection] as Record<string, unknown>)[key] = clone(file[collection][key]);
+        }
+      }
+      return result;
+    });
+  }
+
+  deliverySnapshotForOperation(operationId: string): RegistryFile {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const owner = file.deliveryOperationOwners[operationId];
+      if (owner) {
+        result.deliveryOperationOwners[operationId] = clone(owner);
+        const delivery = file.heldDeliveries[owner.deliveryId];
+        if (delivery) result.heldDeliveries[delivery.id] = clone(delivery);
+      }
+      for (const delivery of registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)) result.heldDeliveries[delivery.id] = clone(delivery);
+      return result;
+    });
   }
 
   /** Resolves only the requested snapshot placeholders. SQLite-backed modes use
@@ -6693,13 +6762,14 @@ export class AgentRegistry {
   }
 
   conversationForPath(artifactPath: string): RegistryConversation | null {
-    const conversation = Object.values(this.readOnlySnapshot().conversations)
-      .find((candidate) => conversationOwnsPath(candidate, artifactPath));
-    return conversation ? clone(conversation) : null;
+    return this.readKeyed(file => {
+      const conversation = registryConversationsForPath(file, artifactPath)[0];
+      return conversation ? clone(conversation) : null;
+    });
   }
 
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
-    return resolveConversationAlias(this.readOnlySnapshot(), id);
+    return this.readKeyed(file => resolveConversationAlias(file, id));
   }
 
   /** Records the terminal predecessor → successor edge (issue #383) outside
@@ -6725,7 +6795,7 @@ export class AgentRegistry {
   /** The alias-canonical end of a supersedence chain (the one conversation in
       the chain that is not itself superseded). */
   supersedenceChainTail(id: ViewerConversationId): ViewerConversationId {
-    return supersedenceChainTail(this.readOnlySnapshot(), id);
+    return this.readKeyed(file => supersedenceChainTail(file, id));
   }
 
   /** Pre-flight for a supersedence claim: the actively hosted chain end that
@@ -6764,9 +6834,10 @@ export class AgentRegistry {
   }
 
   conversation(id: ViewerConversationId): RegistryConversation | null {
-    const snapshot = this.readOnlySnapshot();
-    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
-    return conversation ? clone(conversation) : null;
+    return this.readKeyed(file => {
+      const conversation = file.conversations[resolveConversationAlias(file, id)];
+      return conversation ? clone(conversation) : null;
+    });
   }
 
   launchProfileForPath(artifactPath: string): LaunchProfile | null {
@@ -7080,7 +7151,7 @@ export class AgentRegistry {
   }
 
   engineRouting(engine: Extract<AgentEngine, "claude" | "codex">): { activeAccountId: string | null; revision: number } {
-    return clone(this.readOnlySnapshot().engineRouting[engine]);
+    return this.readKeyed(file => clone(file.engineRouting[engine]));
   }
 
   migrationScope(engine: Extract<AgentEngine, "claude" | "codex">, targetId: string): MigrationScopeCounts {
@@ -8003,7 +8074,7 @@ export class AgentRegistry {
         error: null,
       };
       compactDeliveryReservations(file, canonicalId, this.now());
-      const count = Object.values(file.heldDeliveries).filter((item) =>
+      const count = conversationRows(file, "heldDeliveries", canonicalId).filter((item) =>
         item.conversationId === canonicalId
         && ["held", "assigned", "delivery-uncertain"].includes(item.state)).length;
       if (count >= 100) throw new Error("held delivery limit reached for conversation");
@@ -8024,7 +8095,7 @@ export class AgentRegistry {
         settledAt: null,
       };
       return place(held);
-    });
+    }, { deliveryOnly: true });
   }
 
   /** Resolves conflicts and terminal replays without mutating the registry.
@@ -8039,15 +8110,14 @@ export class AgentRegistry {
     contentDigest: string | null,
     commandInput: HeldDeliveryCommandInput = {},
   ): HeldDelivery | null {
-    const snapshot = this.readOnlySnapshot();
-    return terminalDeliveryReplay(
+    return this.readKeyed(snapshot => terminalDeliveryReplay(
       inspectDeliveryReservation(snapshot, conversationId, text, clientMessageId, contentDigest, commandInput),
       text,
       clientMessageId,
       payloadKind,
       runtimeImages,
       contentDigest,
-    );
+    ));
   }
 
   /**
@@ -8102,7 +8172,7 @@ export class AgentRegistry {
     conversationId: ViewerConversationId | string,
     clientMessageId: string,
   ): DeliveryAdmissionEvidence {
-    const snapshot = this.readOnlySnapshot();
+    const snapshot = this.conversationDeliverySnapshot({ conversationId });
     const canonicalId = resolveConversationAlias(snapshot, conversationId as ViewerConversationId);
     const reserved = Object.values(snapshot.heldDeliveries).find((item) =>
       resolveConversationAlias(snapshot, item.conversationId) === canonicalId
@@ -8147,7 +8217,7 @@ export class AgentRegistry {
   }
 
   pendingDeliveries(conversationId: ViewerConversationId): HeldDelivery[] {
-    const snapshot = this.readOnlySnapshot();
+    const snapshot = this.conversationDeliverySnapshot({ conversationId });
     const canonicalId = resolveConversationAlias(snapshot, conversationId);
     return clone(Object.values(snapshot.heldDeliveries)
       .filter((item) => item.conversationId === canonicalId && item.state !== "delivered")
@@ -8160,7 +8230,7 @@ export class AgentRegistry {
       if (!delivery) throw new Error("held delivery is unknown");
       if (delivery.state !== "delivered") terminalizeHeldDelivery(file, delivery, reason);
       return clone(delivery);
-    });
+    }, { deliveryOnly: true });
   }
 
   /** Expires pending work whose target has two terminal proofs: a durable
@@ -8229,7 +8299,7 @@ export class AgentRegistry {
       syncDeliveryOperationOwnerState(file, delivery);
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       return clone(delivery);
-    });
+    }, { deliveryOnly: true });
   }
 
   recordDeliveryArtifacts(id: string, artifactPaths: string[]): HeldDelivery {
@@ -8362,7 +8432,7 @@ export class AgentRegistry {
       const settled = clone(delivery);
       if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
       return settled;
-    });
+    }, { deliveryOnly: true });
   }
 
   recordDeliveryOutcomeForOperation(
@@ -8533,7 +8603,7 @@ export class AgentRegistry {
       const delivery = file.heldDeliveries[id];
       if (!delivery) throw new Error("held delivery is unknown");
       return clone(placeDeliveryForRetryInFile(file, delivery, allowUncertain));
-    });
+    }, { deliveryOnly: true });
   }
 
   rollbackConversationMigration(id: ViewerConversationId, expectedRevision?: number): RegistryConversation {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { getPipeline, patchPipeline, type PipelineCloseReport } from "@/lib/pipelines/engine";
+import { pipelineRevision } from "@/lib/pipelines/store";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { PIPELINE_ACTIONS, type PatchPipelineRequest, type Pipeline, type PipelineAction, type PipelineGraphEdit, type PipelineGuardErrorCode, type PipelineGuardField, type PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 
-const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage"]);
+const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision"]);
 
 type PipelineApiError = ApiError & {
   code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED;
@@ -32,7 +33,7 @@ type PipelineApiError = ApiError & {
 export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-): Promise<NextResponse<{ ok: true; pipeline: Pipeline; stageDigests: Record<string, string>; graphDigest: string } | ApiError>> {
+): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; stageDigests: Record<string, string>; graphDigest: string } | ApiError>> {
   const { id } = await ctx.params;
   try {
     const pipeline = getPipeline(id);
@@ -40,7 +41,7 @@ export async function GET(
     /* #1695 C7 and graph slice 1: the digests a guarded graph edit names as
        `expectedStageDigest` — a stage's for override-stage and set-edge, the
        whole plan's for add-stage, remove-stage and reorder-stage. */
-    return NextResponse.json({ ok: true, pipeline, stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
+    return NextResponse.json({ ok: true, pipeline, revision: pipelineRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
   }
@@ -49,7 +50,7 @@ export async function GET(
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-): Promise<NextResponse<{ ok: true; pipeline: Pipeline; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit } | PipelineApiError>> {
+): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit } | PipelineApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   let body: PatchPipelineRequest;
@@ -79,7 +80,7 @@ export async function PATCH(
       ...(result.close ? { close: result.close } : {}),
     }, { status: result.status ?? 400 });
     if (CONTROLLER_ACTIONS.has(body.action)) requestPipelineTick();
-    return NextResponse.json({ ok: true, pipeline: result.pipeline, ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}) });
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}) });
   } catch (error) {
     /* #1766: nothing was admitted, so the same action may be repeated. */
     if (error instanceof StoreBusyBeforeAdmissionError) {

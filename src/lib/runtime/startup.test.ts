@@ -383,6 +383,7 @@ test("server startup says so when a Claude row no account owns loses its MCP gra
 
 function runtimeJournalClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
+    readSession: async (identity) => journal.readSession(identity),
     snapshot: async () => journal.snapshot(),
     append: async (event) => journal.append(event),
     command: async (command) => journal.executeOperation(command),
@@ -764,6 +765,76 @@ test("startup socket recovery retains a partially adopted host and drains its he
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+for (const engine of ["codex", "claude"] as const) test(`startup retains each ${engine} host when a later row fails within the same adoption batch`, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-batch-"));
+  const { registry, sessionId, conversation } = structuredRestartFixture(directory, engine, "unhosted");
+  const firstKey = { engine, sessionId };
+  const secondKey = { engine, sessionId: "cccccccc-cccc-0ccc-0ccc-cccccccccccc" };
+  const secondPath = path.join(directory, `${secondKey.sessionId}.jsonl`);
+  fs.writeFileSync(secondPath, "");
+  const second = registry.ensureConversation(engine, secondPath, null);
+  registry.upsert({ ...registry.snapshot().entries[`${engine}:${sessionId}`]!, key: secondKey, artifactPath: secondPath });
+  const firstDelivery = registry.holdDelivery(conversation.id, "first pending message", "first-batch-send");
+  const secondDelivery = registry.holdDelivery(second.id, "second pending message", "second-batch-send");
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  const created: string[] = [];
+  const ledger = createFakeDeliveryLedger();
+  const identity = captureProcessIdentity(process.pid);
+  const makeHost = async (id: string) => {
+    created.push(id);
+    const host = new FakeEngineHost(ledger);
+    const state = await host.health();
+    return Object.assign(host, {
+      health: async () => ({ ...state, pid: identity.pid, processStartIdentity: identity.startIdentity, sessionKey: id }),
+      setWriterFence: () => {},
+      onStateChange: () => () => {},
+    }) as never;
+  };
+  const claim = registry.claimStructuredHost.bind(registry);
+  let failSecond = true;
+  const claimSpy = spyOn(registry, "claimStructuredHost").mockImplementation((key, owner, options) => {
+    if (key.sessionId === secondKey.sessionId && failSecond) throw new Error("injected later-row storage failure");
+    return claim(key, owner, options);
+  });
+  const dependencies: StructuredStartupDependencies = {
+    registry, client, refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
+    adopt: engine === "codex"
+      ? (registry, options, env, filter, processed, hooks) => adoptCodexRegistryHosts(registry, options, { ...process.env, ...env, LLV_STRUCTURED_HOSTS: "1" }, filter, processed, { ...hooks, adoptHost: makeHost })
+      : async () => [],
+    adoptClaude: engine === "claude"
+      ? (registry, options, env, filter, processed, hooks) => adoptClaudeRegistryHosts(registry, options, { ...process.env, ...env, LLV_STRUCTURED_HOSTS: "1" }, filter, processed, { ...hooks, adoptHost: makeHost })
+      : async () => [],
+  };
+  try {
+    await expect(adoptStructuredHostsAtStartup(dependencies)).rejects.toThrow("injected later-row storage failure");
+    expect(created).toEqual([sessionId]);
+    failSecond = false;
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(hasStructuredDeliveryHost(firstKey)).toBe(true);
+    expect(hasStructuredDeliveryHost(secondKey)).toBe(true);
+    expect(created).toEqual([sessionId, secondKey.sessionId]);
+    expect(structuredStartupHosts().map(item => item.key)).toEqual([firstKey, secondKey]);
+    for (const target of [conversation, second]) {
+      await drainHeldDeliveries(target.id, {
+        deliver: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+          conversationId: target.id, path, deliveryId: delivery.id, clientMessageId,
+          text: delivery.text, command: delivery.command,
+        }, { enabled: () => true, client: () => client, registry: () => registry }) ?? "delivery-uncertain",
+      }, registry);
+      await drainHeldDeliveries(target.id, {
+        deliver: async () => { throw new Error("a settled message must not be resent"); },
+      }, registry);
+    }
+    expect(ledger.writes.map(write => write.id)).toEqual([firstDelivery.command.operationId, secondDelivery.command.operationId]);
+  } finally {
+    claimSpy.mockRestore();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    registry.close(); journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -2562,10 +2633,9 @@ test.each(["codex", "claude"] as const)(
       expect(replacementAttempts).toBe(0);
       expect(startupLogs).toHaveLength(1);
       expect(startupLogs[0]![0]).toBe("[structured hosts] startup adoption failed; retry scheduled");
-      expect(startupLogs[0]![1]).toBeInstanceOf(Error);
-      expect((startupLogs[0]![1] as Error).message).toBe(
-        `structured startup left 1 eligible host(s) owned by the incumbent Viewer: ${engine}:${sessionId}`,
-      );
+      expect(startupLogs[0]![1]).toEqual({
+        category: "runtime-host-unavailable", attempt: 1, retryInMs: 100,
+      });
       const refused = registry.readOnlySnapshot().entries[`${engine}:${sessionId}`]!;
       expect(refused.structuredHost?.process).toEqual(identities.engine);
       expect(refused.claimOwner).toBe(`structured-host:${JSON.stringify(identities.viewer)}`);
@@ -2907,7 +2977,7 @@ test("startup retry admits one orchestrator recovery nudge after the first runti
     refreshTranscriptState: async () => {},
     adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => {
       const entry = received.readOnlySnapshot().entries[`codex:${sessionId}`]!;
-      if (adoptionAttempts > 0 || !shouldAdopt(entry)) return [];
+      if (!shouldAdopt(entry)) return [];
       adoptionAttempts += 1;
       const processIdentity = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
       const claimed = received.claimStructuredHost(entry.key, processIdentity, { allowUnhosted: true });
@@ -3090,7 +3160,7 @@ test.each(["busy", "terminal"] as const)(
     refreshTranscriptState: async () => {},
     adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => {
       const entry = received.readOnlySnapshot().entries[`codex:${sessionId}`]!;
-      if (adoptionAttempts > 0 || !shouldAdopt(entry)) return [];
+      if (!shouldAdopt(entry)) return [];
       adoptionAttempts += 1;
       const processIdentity = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
       const claimed = received.claimStructuredHost(entry.key, processIdentity, { allowUnhosted: true });
@@ -3189,7 +3259,7 @@ test.each(["terminal", "superseded"] as const)(
 
 test("a busy Codex turn advances after container replacement without operator messaging", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-codex-continuation-"));
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  let registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "11111111-2222-0222-0222-111111111111";
   const { artifactPath, conversation } = addStructuredRestartConversation(registry, directory, {
     sessionId,
@@ -3265,6 +3335,10 @@ test("a busy Codex turn advances after container replacement without operator me
     structuredHost: { ...entry.structuredHost!, writerClaimEpoch: 4 },
   });
 
+  // A replacement Viewer constructs a fresh registry; reconnects in the
+  // existing boot above must keep its completed startup pass.
+  await bindStructuredDeliveryQueue([], { registry, client: null });
+  registry = new AgentRegistry(registry.filename);
   await startup();
   await waitFor(() => nextLedger.writes.length === 1);
   expect(nextLedger.writes).toEqual([expect.objectContaining({

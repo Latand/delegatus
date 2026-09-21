@@ -349,6 +349,118 @@ test("the view switch marks its selected side", async () => {
   expect(host.querySelector('button[data-view-tab="kanban"]')!.getAttribute("aria-pressed")).toBe("false");
 });
 
+/* The switch's own boxes, as the bar draws them: the group and its segments. */
+const viewSwitch = (host: HTMLElement) => bar(host).querySelector("[data-project-view-tabs]") as HTMLElement;
+const viewSegments = (host: HTMLElement) => Array.from(viewSwitch(host).querySelectorAll("button[data-view-tab]")) as HTMLElement[];
+
+test("the selected side is painted as well as announced, and the group is one 32 px box", async () => {
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+
+  const group = viewSwitch(host);
+  /* One bordered 32 px group, the height every other control in the bar has. */
+  expect(group.className).toContain("h-8");
+  expect(group.className).toContain("border");
+  expect(group.className).toContain("shrink-0");
+  /* Nothing lets the group take the row's spare width, which is how it grew into one wide pill. */
+  for (const stretch of ["w-full", "flex-1", "grow"]) expect(group.className).not.toContain(stretch);
+
+  const [board, list] = viewSegments(host);
+  expect(board!.getAttribute("aria-pressed")).toBe("true");
+  expect(list!.getAttribute("aria-pressed")).toBe("false");
+  /* The pressed segment paints differently from the quiet one: the defect this
+     replaced announced the side and painted both alike. */
+  expect(board!.className).not.toBe(list!.className);
+  expect(board!.className).toContain("text-accent");
+  expect(list!.className).toContain("text-secondary");
+  expect(list!.className).not.toContain("text-accent");
+
+  /* And the paint follows the view, rather than staying on the side it started. */
+  click(list);
+  expect(await waitFor(() => viewSegments(host)[1]?.getAttribute("aria-pressed") === "true")).toBe(true);
+  const [boardAfter, listAfter] = viewSegments(host);
+  expect(listAfter!.className).toContain("text-accent");
+  expect(boardAfter!.className).toContain("text-secondary");
+});
+
+test("both segments are ordinary buttons, so the switch is reachable from the keyboard", async () => {
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+
+  for (const segment of viewSegments(host)) {
+    expect(segment.tagName).toBe("BUTTON");
+    expect(segment.getAttribute("type")).toBe("button");
+    expect(segment.hasAttribute("tabindex")).toBe(false);
+    expect(segment.hasAttribute("disabled")).toBe(false);
+    expect(segment.className).toContain("focus-visible:ring");
+  }
+  viewSegments(host)[1]!.focus();
+  expect(dom.document.activeElement?.getAttribute("data-view-tab")).toBe("list");
+});
+
+/* The bound: a narrow segment is a fixed 32 px square (w-8) and carries no text,
+   so neither locale can widen it; two of them plus the group's two 1 px borders
+   is the whole switch. happy-dom lays nothing out, so the bound is read off the
+   boxes the bar asks for; a browser measures the group at exactly these 66 px
+   at 1280 in both locales, against 32 px for a bare icon control beside it. */
+const NARROW_SWITCH_BOUND = 2 * 32 + 2;
+
+async function assertNarrowSwitchBound(lang: "en" | "uk") {
+  barWidth = 1032;
+  setLocale(lang);
+  try {
+    const host = mount();
+    expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+    await settle();
+
+    const segments = viewSegments(host);
+    expect(segments).toHaveLength(2);
+    let bound = 2;
+    for (const segment of segments) {
+      /* A fixed square, never padding that grows with the label. */
+      expect(segment.className).toContain("w-8");
+      expect(segment.className).not.toContain("px-3");
+      expect(text(segment)).toBe("");
+      expect(segment.querySelector("svg")).not.toBeNull();
+      bound += 32;
+    }
+    expect(bound).toBeLessThanOrEqual(NARROW_SWITCH_BOUND);
+    /* The words are still there for a pointer and for assistive technology. */
+    const names = [translate(lang, "kanban.viewTab"), translate(lang, "dash.viewList")];
+    for (const [index, segment] of segments.entries()) {
+      expect(segment.getAttribute("aria-label")).toBe(names[index]!);
+      expect(segment.getAttribute("title")).toBe(names[index]!);
+    }
+  } finally {
+    setLocale("en");
+  }
+}
+
+test("narrow, the switch is bounded to two fixed squares that say their names in the title", async () => {
+  await assertNarrowSwitchBound("en");
+});
+
+test("uk: the narrow switch keeps that bound, with the Ukrainian names in the title", async () => {
+  await assertNarrowSwitchBound("uk");
+});
+
+test("wide, each segment carries its own label once: no segment holds both names", async () => {
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+
+  const segments = viewSegments(host);
+  expect(segments).toHaveLength(2);
+  expect(text(segments[0]!)).toBe(en["kanban.viewTab"]);
+  expect(text(segments[1]!)).toBe(en["dash.viewList"]);
+  /* One label per segment and no third segment: the group cannot read as one
+     wide control holding «Board» and «Conversations» together. */
+  expect(text(viewSwitch(host))).toBe(`${en["kanban.viewTab"]}${en["dash.viewList"]}`);
+  for (const segment of segments) expect(segment.className).toContain("px-3");
+});
+
 test("every control the two bars held is still reachable, wide", async () => {
   const host = mount([alphaOf(), betaOf()]);
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);

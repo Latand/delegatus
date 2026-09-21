@@ -50,9 +50,13 @@ import {
 type AdoptedStructuredHost = AdoptedCodexHost | AdoptedClaudeHost;
 let adoptedHosts: AdoptedStructuredHost[] = [];
 let retryAdoptedHosts: AdoptedStructuredHost[] = [];
-/* The startup retry loop re-enters every second at its ceiling, and a Viewer
-   with no runtime socket defers on every pass; one line per boot says it. */
+/* The retry runner logs each failure; this diagnostic names the deferred work once. */
 let deferredAdoptionLogged = false;
+const STARTUP_SNAPSHOT_TIMEOUT_MS = 30_000;
+const startupPasses = new WeakMap<AgentRegistry, {
+  pending?: Promise<AdoptedStructuredHost[]>;
+  ready?: AdoptedStructuredHost[];
+}>();
 
 /** Rows a completed pass left exactly as they were because their pipeline's
     evidence (an alive or unverifiable survivor, an unreadable record) does not
@@ -839,7 +843,7 @@ async function structuredStartupSignals(
       admittedMessages: new Map(),
     };
   }
-  const runtime = await client.snapshot();
+  const runtime = await client.snapshot(undefined, { timeoutMs: STARTUP_SNAPSHOT_TIMEOUT_MS });
   /* #1846: an account pick waits for the conversation's next engagement, so on its own it is no work that
      needs a host at startup. Its message, once there is one, is. */
   const waitingSwitches = new Set<string>();
@@ -1133,6 +1137,33 @@ export function claudeStartupHostOptions(
 export async function adoptStructuredHostsAtStartup(
   dependencies: StructuredStartupDependencies = {},
 ): Promise<AdoptedStructuredHost[]> {
+  return startStructuredHostPass(dependencies);
+}
+
+function startStructuredHostPass(
+  dependencies: StructuredStartupDependencies,
+  resumeDeferred = false,
+): Promise<AdoptedStructuredHost[]> {
+  dependencies.assertActive?.();
+  const registry = dependencies.registry ?? agentRegistry();
+  let state = startupPasses.get(registry);
+  if (!state) {
+    state = {};
+    startupPasses.set(registry, state);
+  }
+  if (state.pending) return state.pending;
+  if (state.ready && !resumeDeferred) return Promise.resolve(state.ready);
+  const current = state;
+  // Install the shared promise before entering any asynchronous startup work.
+  current.pending = Promise.resolve().then(() => adoptStructuredHostsPass({ ...dependencies, registry }))
+    .then((hosts) => { current.ready = hosts; return hosts; })
+    .finally(() => { current.pending = undefined; });
+  return current.pending;
+}
+
+async function adoptStructuredHostsPass(
+  dependencies: StructuredStartupDependencies,
+): Promise<AdoptedStructuredHost[]> {
   const assertActive = dependencies.assertActive ?? (() => {});
   assertActive();
   assertDarwinStructuredRuntime();
@@ -1238,11 +1269,12 @@ export async function adoptStructuredHostsAtStartup(
       lastEventByHost,
       interruptedHostKeys,
     );
+    const retainedHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
     const shouldAdopt: StructuredHostAdoptionFilter = (entry) => {
       // Let an adopter return the handles it already created. Throwing from
       // its per-row progress callback would discard that partial result.
       try { assertActive(); } catch { return false; }
-      return eligible(entry);
+      return !retainedHostKeys.has(sessionKeyId(entry.key)) && eligible(entry);
     };
     const adoptionCandidates = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
       entry.structuredHost && shouldAdopt(entry));
@@ -1274,6 +1306,13 @@ export async function adoptStructuredHostsAtStartup(
     const reportProgress = (phase: StructuredHostStartupPhase) => {
       assertActive();
       markStructuredHostStartupProgress({ phase, completedHosts, totalHosts });
+    };
+    // A later row may throw after earlier hosts have launched and acquired
+    // writer claims. Keep each handle before the batch can reject, so the
+    // retry can publish it instead of waiting on its own engine forever.
+    const onAdopted = (item: AdoptedStructuredHost) => {
+      nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, [item]);
+      rememberStructuredStartupRetry(nextAdoptedHosts, orchestratorRecoveries);
     };
     reportProgress("adopting Codex hosts");
     const resolveCodexOwner = dependencies.resolveCodexOwner ?? ((entry: AgentRegistryEntry) =>
@@ -1314,6 +1353,7 @@ export async function adoptStructuredHostsAtStartup(
         totalHosts = Math.max(totalHosts, completedHosts);
         markStructuredHostStartupProgress({ phase: "adopting Codex hosts", completedHosts, totalHosts });
       },
+      { onAdopted },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, codex);
@@ -1349,6 +1389,7 @@ export async function adoptStructuredHostsAtStartup(
         totalHosts = Math.max(totalHosts, completedHosts);
         markStructuredHostStartupProgress({ phase: "adopting Claude hosts", completedHosts, totalHosts });
       },
+      { onAdopted },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount + claudeCandidateCount);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, claude);
@@ -1460,7 +1501,7 @@ export async function adoptStructuredHostsAtStartup(
         interruptions,
         unresolvedAfterAdoption,
         orchestratorSeats(),
-        admittedRuntimeMessages(registry, await client.snapshot()),
+        admittedRuntimeMessages(registry, await client.snapshot(undefined, { timeoutMs: STARTUP_SNAPSHOT_TIMEOUT_MS })),
         pipelineEvidence.settled,
       );
       const continuationFailures = await deliverInterruptionContinuations(
@@ -1598,7 +1639,7 @@ async function reprobeDeferredStructuredStartup(
     return;
   }
   try {
-    await adoptStructuredHostsAtStartup(dependencies);
+    await startStructuredHostPass(dependencies, true);
   } catch (error) {
     console.error("[structured hosts] deferred pipeline adoption pass failed; re-probing", {
       error: error instanceof Error ? error.message : String(error),
@@ -1676,4 +1717,5 @@ export async function releaseStructuredHostsForViewerDemotion(
     }
   }
   if (failures.length) throw new AggregateError(failures, "structured hosts did not all cross the release boundary");
+  startupPasses.delete(agentRegistry());
 }

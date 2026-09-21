@@ -481,6 +481,7 @@ export async function adoptCodexRegistryHosts(
   processed?: StructuredHostAdoptionProgress,
   dependencies: {
     adoptHost?: (sessionId: string, options: CodexAppServerHostOptions) => Promise<CodexAppServerHost>;
+    onAdopted?: (item: AdoptedCodexHost) => void;
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
@@ -527,6 +528,7 @@ export async function adoptCodexRegistryHosts(
             : await CodexAppServerHost.adopt(entry.key.sessionId, options);
           await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch);
           adopted.push({ key: entry.key, host });
+          dependencies.onAdopted?.({ key: entry.key, host });
         } catch (error) {
           if (error instanceof StructuredHostAdoptionCleanupError
             && error.host instanceof CodexAppServerHost) {
@@ -572,6 +574,7 @@ export async function adoptClaudeRegistryHosts(
   processed?: StructuredHostAdoptionProgress,
   dependencies: {
     adoptHost?: (sessionId: string, options: ClaudeStreamBrokerHostOptions) => Promise<ClaudeStreamBrokerHost>;
+    onAdopted?: (item: AdoptedClaudeHost) => void;
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
@@ -617,6 +620,7 @@ export async function adoptClaudeRegistryHosts(
             : await ClaudeStreamBrokerHost.adopt(entry.key.sessionId, options);
           await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch);
           adopted.push({ key: entry.key, host });
+          dependencies.onAdopted?.({ key: entry.key, host });
         } catch (error) {
           if (error instanceof StructuredHostAdoptionCleanupError
             && error.host instanceof ClaudeStreamBrokerHost) {
