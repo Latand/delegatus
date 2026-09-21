@@ -165,6 +165,7 @@ for (const responseMs of [5_000, 11_000]) test(`slow startup keyed read complete
   const transport = new UnixRuntimeHostClient(socketPath);
   const client: RuntimeHostClient = {
     ...f.client, snapshot: transport.snapshot.bind(transport), readSession: transport.readSession.bind(transport),
+    startupGeneration: transport.startupGeneration.bind(transport),
   };
   let passes = 0;
   let adoptions = 0;
