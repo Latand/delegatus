@@ -12,6 +12,7 @@ import { reviewHistorySelectionSource, MAX_ROW_BYTES } from "./reader";
 import { readArchiveArtifact, MAX_ARTIFACT_BYTES } from "./archiveArtifacts";
 import { relayPrompt } from "./relayPrompt";
 import { relayClientMessageId } from "./relayIdentity";
+import { flowRelayedMessageOccurrences } from "./relayProvenance";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import type { Flow, Round } from "./types";
 
@@ -194,6 +195,101 @@ test.each([
     clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round),
   }]);
   expect(snapshot()).toBe(before);
+});
+
+/** Exercise every artifact independently, with a settled receipt whose digest
+ * must continue to describe the raw findings after either export or refusal. */
+function installExportArtifacts(texts: Record<"findings" | "output" | "stdout" | "stderr", string>) {
+  const flow = row();
+  const settled = {
+    ...flow, extension: { receiptId: "archive-receipt" },
+    rounds: [{ ...flow.rounds[0]!, relayPendingSettlement: null, relayDelivery: { path: flow.implementerPath, deliveredAt: "2026-08-10T03:00:00Z" } }],
+  };
+  put(settled as unknown as ReturnType<typeof row>);
+  const artifactDirectory = path.dirname(flow.rounds[0]!.findingsPath);
+  fs.mkdirSync(artifactDirectory, { recursive: true });
+  const paths = {
+    findings: flow.rounds[0]!.findingsPath,
+    output: path.join(artifactDirectory, "round-1-last-message.md"),
+    stdout: path.join(artifactDirectory, "round-1-stdout.log"),
+    stderr: path.join(artifactDirectory, "round-1-stderr.txt"),
+  };
+  for (const kind of Object.keys(paths) as (keyof typeof paths)[]) fs.writeFileSync(paths[kind], texts[kind]);
+  const before = snapshot();
+  const occurrences = [{
+    textDigest: messageTextDigest(relayPrompt(settled.rounds[0] as unknown as Round, texts.findings)),
+    deliveredAt: "2026-08-10T03:00:00Z", origin: "agent" as const, senderRole: "reviewer" as const,
+    clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round),
+  }];
+  return async () => {
+    for (const kind of Object.keys(paths) as (keyof typeof paths)[]) expect(fs.readFileSync(paths[kind], "utf8")).toBe(texts[kind]);
+    const stored = db.query("SELECT value_json FROM state_rows WHERE collection='flows' AND row_key=?").get(flow.id) as { value_json: string };
+    const raw = JSON.parse(stored.value_json);
+    expect(raw).toEqual(settled);
+    expect(flowRelayedMessageOccurrences(raw.implementerPath, {
+      flows: () => [raw], findings: () => fs.readFileSync(paths.findings, "utf8"),
+    })).toEqual(occurrences);
+    expect(snapshot()).toBe(before);
+    return occurrences;
+  };
+}
+
+test.each(["message", "array", "recursive"].flatMap(shape => [
+  { shape, valueKind: "scalar", credential: 'invented ordinary credential with "quotes" and \\ escapes' },
+  { shape, valueKind: "object", credential: { value: "invented ordinary credential", nested: ["invented ordinary credential"] } },
+  { shape, valueKind: "array", credential: ["invented ordinary credential", { value: "invented ordinary credential" }] },
+]))("HTTP export redacts encoded $valueKind credentials in $shape strings", async ({ shape, credential }) => {
+  const payload = (value: unknown) => JSON.stringify({ retained: "ordinary history", credentials: value, password: value }).replace('"credentials"', '"creden\\u0074ials"');
+  const wrap = (text: string) => {
+    if (shape === "array") return JSON.stringify([text, "ordinary array text"]);
+    if (shape === "recursive") text = JSON.stringify({ message: JSON.stringify({ message: text }) });
+    return JSON.stringify({ message: `Diagnostic context\n\`\`\`json\n${text}\n\`\`\`\nEnd of history`, retained: "ordinary outer text" });
+  };
+  const encoded = wrap(payload(credential));
+  const redacted = wrap(payload("[redacted]"));
+  const formats = (text: string) => ({
+    findings: `${findings}\n${text}`, output: text, stdout: `${text}\n${text}\n`,
+    stderr: `Diagnostic context\n\`\`\`json\n${text}\n\`\`\`\nEnd of history`,
+  });
+  const unchanged = installExportArtifacts(formats(encoded));
+  const response = await exported(request(), context());
+  const bytes = await response.text();
+  const occurrences = await unchanged();
+  expect(response.status).toBe(200);
+  expect(bytes).not.toContain("invented ordinary credential");
+  const body = JSON.parse(bytes);
+  expect(body.redacted).toBe(true);
+  for (const [kind, text] of Object.entries(formats(redacted))) expect(body.artifacts[0].artifacts[kind].text).toBe(text);
+  expect(body.row.extension.receiptId).toBe("archive-receipt");
+  expect(body.relayOccurrences).toEqual(occurrences);
+});
+
+test.each(["findings", "output", "stdout", "stderr"] as const)("HTTP export refuses truncated quoted credentials in %s without changing provenance", async kind => {
+  const truncated = '{"password":"invented ordinary credential';
+  for (const value of [truncated, `${truncated}\\`, `${truncated}\\"`, `${truncated}\\u00`, truncated.replace('"password"', '"pass\\u0077ord"')]) {
+    for (const text of [value, `{"retained":"ordinary history"}\n${value}`, `Diagnostic context\n\`\`\`json\n${value}`, JSON.stringify({ message: value })]) {
+      const unchanged = installExportArtifacts({ findings, output: "ordinary output", stdout: "ordinary stdout", stderr: "ordinary stderr", [kind]: text });
+      const response = await exported(request(), context());
+      const bytes = await response.text();
+      await unchanged();
+      expect(bytes).not.toContain("invented ordinary credential");
+      expect(response.status).toBe(503);
+      expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
+    }
+  }
+});
+
+test("HTTP export refuses encoded strings beyond the decoding bound", async () => {
+  const credential = "invented ordinary credential";
+  let text = JSON.stringify({ password: credential });
+  for (let i = 0; i < 10; i++) text = JSON.stringify({ message: text });
+  const unchanged = installExportArtifacts({ findings: text, output: text, stdout: text, stderr: text });
+  const response = await exported(request(), context());
+  const bytes = await response.text();
+  await unchanged();
+  expect(bytes).not.toContain("invented ordinary credential");
+  expect(response.status).toBe(413);
+  expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_TOO_LARGE" });
 });
 
 test.each([
