@@ -68,6 +68,30 @@ test("startup snapshot deadline is caller-local and never sent to the runtime ho
   expect(requests).toEqual([undefined, undefined]);
 });
 
+test("startup keyed read deadline is bounded and leaves interactive reads and wire parameters unchanged", async () => {
+  const requests: unknown[] = [];
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    requests.push(request.params);
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (!socket.destroyed) socket.end(JSON.stringify({ id: request.id, ok: true, result: null }) + "\n");
+    }, 80);
+    timers.add(timer);
+  });
+  const client = new UnixRuntimeHostClient(socketPath, 20);
+  const identity = { conversationId: "conversation_slow" };
+  try {
+    expect(await client.readSession(identity, { timeoutMs: 500 })).toBeNull();
+    await expect(client.readSession(identity)).rejects.toThrow("runtime host request timed out");
+    await expect(client.readSession(identity, { timeoutMs: 30 })).rejects.toThrow("runtime host request timed out");
+    expect(requests).toEqual([identity, identity, identity]);
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+  }
+});
+
 test("a timeout, a late response, and a socket teardown settle the call exactly once", async () => {
   let respond: ((frame: string, socket: net.Socket) => void) | null = null;
   const socketPath = serve((frame, socket) => { respond?.(frame, socket); });

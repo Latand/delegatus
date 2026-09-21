@@ -125,12 +125,21 @@ function fixture(failedCount: number, fullHistory = false, historyCount = 8078) 
   return { directory, registry, journal, client };
 }
 
-test("slow startup snapshot stays responsive and concurrent reconnects never repeat a ready pass", async () => {
+for (const responseMs of [5_000, 11_000]) test(`slow startup keyed read completes after ${responseMs} ms and reconnects reuse ready`, async () => {
   const f = fixture(0);
-  const socketPath = path.join(isolated, "sockets", "slow-startup.sock");
+  const conversation = f.registry.ensureConversation("codex", path.join(f.directory, "slow.jsonl"), null);
+  const { savePipelines } = await import("@/lib/pipelines/store");
+  savePipelines([]);
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
+  const socketPath = path.join(isolated, "sockets", `slow-${responseMs}.sock`);
   const connections = new Set<net.Socket>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
-  let snapshotCalls = 0;
+  const requests: { method: string; params: unknown }[] = [];
+  let heldDuringRequest = false;
+  const observeLeases = () => {
+    const row = db.query("SELECT count(*) AS n FROM state_leases").get() as { n: number };
+    heldDuringRequest ||= row.n > 0;
+  };
   const server = net.createServer((socket) => {
     connections.add(socket);
     socket.on("error", () => {});
@@ -141,52 +150,71 @@ test("slow startup snapshot stays responsive and concurrent reconnects never rep
       if (!buffer.includes("\n")) return;
       const request = JSON.parse(buffer.slice(0, buffer.indexOf("\n")));
       buffer = "";
-      snapshotCalls += 1;
+      requests.push({ method: request.method, params: request.params });
+      observeLeases();
       const timer = setTimeout(() => {
         timers.delete(timer);
-        if (!socket.destroyed) socket.end(JSON.stringify({ id: request.id, ok: true, result: f.journal.snapshot() }) + "\n");
-      }, snapshotCalls <= 1 ? 11_000 : 0);
+        observeLeases();
+        const result = request.method === "session-read" ? f.journal.readSession(request.params) : f.journal.snapshot();
+        if (!socket.destroyed) socket.end(JSON.stringify({ id: request.id, ok: true, result }) + "\n");
+      }, responseMs);
       timers.add(timer);
     });
   });
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
   const transport = new UnixRuntimeHostClient(socketPath);
-  const client: RuntimeHostClient = { ...f.client, snapshot: transport.snapshot.bind(transport) };
+  const client: RuntimeHostClient = {
+    ...f.client, snapshot: transport.snapshot.bind(transport), readSession: transport.readSession.bind(transport),
+  };
   let passes = 0;
-  let attempts = 0;
+  let adoptions = 0;
+  const holds: number[] = [];
   const retries: number[] = [];
   const dependencies = {
     registry: f.registry, client, orchestratorSeats: () => [],
+    observeLeaseHold: (heldMs: number) => holds.push(heldMs),
     refreshTranscriptState: async () => { passes += 1; },
-    adopt: async () => [], adoptClaude: async () => [],
+    adopt: async () => { adoptions++; return []; },
+    adoptClaude: async () => { adoptions++; return []; },
   };
   const delay = monitorEventLoopDelay({ resolution: 10 });
   delay.enable();
+  const sampler = setInterval(observeLeases, 10);
   try {
+    // Record retries without scheduling them: a failed read must fail this test,
+    // rather than leave the runner retrying in the background after the test.
     await runStructuredHostStartup(async () => {
-      attempts += 1;
       await Promise.all([
         adoptStructuredHostsAtStartup(dependencies),
         adoptStructuredHostsAtStartup(dependencies),
       ]);
-    }, () => {}, { waitUntilReady: true, schedule: (callback, ms) => {
-      retries.push(ms);
-      return setTimeout(callback, ms);
-    } });
-    await adoptStructuredHostsAtStartup(dependencies);
-    expect(structuredStartupStatus()?.state).toBe("ready");
-    expect(attempts).toBe(1);
-    expect(passes).toBe(1);
+    }, () => {}, { schedule: (_callback, ms) => { retries.push(ms); return { unref() {} }; } });
     expect(retries).toEqual([]);
-    expect(snapshotCalls).toBeGreaterThanOrEqual(1);
+    expect(structuredStartupStatus()?.state).toBe("ready");
+    expect(adoptions).toBe(2);
+    const firstPassAdoptions = adoptions;
+    const firstPassReads = requests.length;
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(adoptions - firstPassAdoptions).toBe(0);
+    expect(requests.length - firstPassReads).toBe(0);
+    expect(passes).toBe(1);
+    expect(requests).toEqual([{ method: "session-read", params: { conversationId: conversation.id } }]);
+    expect(heldDuringRequest).toBe(false);
+    expect(holds.length).toBeGreaterThan(0);
+    expect(Math.max(...holds)).toBeLessThan(100);
     expect(delay.max / 1e6).toBeLessThan(500);
+    console.log(JSON.stringify({ responseMs, keyedReads: requests.length, secondTriggerAdoptions: adoptions - firstPassAdoptions,
+      heldDuringRequest, maxLeaseHoldMs: Math.max(...holds), eventLoopDelayMs: delay.max / 1e6 }));
   } finally {
+    clearInterval(sampler);
     delay.disable();
     for (const timer of timers) clearTimeout(timer);
     for (const socket of connections) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    db.close();
     await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
     f.journal.close();
+    f.registry.close();
   }
 }, 30_000);
 
