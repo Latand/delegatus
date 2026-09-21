@@ -222,8 +222,12 @@ interface Sample {
   /** Where the painted window starts in the tail stream: 0 is a first read of
       the file, a large number is a restored tail resumed in place. */
   windowStart: number | null;
-  /** Conversations that already had a persisted tail when this document
-      started: 0 is a provably cold open, more is a provably warm one. */
+  /** Conversations with a persisted tail in the store as this document's
+      first script read it. A hint only, never proof: Chrome hands a new
+      renderer its own snapshot of the origin's storage, and a tail the
+      previous document wrote on its way out can be missing from that snapshot
+      and still be restored by the app a few milliseconds later. Which path
+      painted is read off the paint itself — see `paintedFromCache`. */
   storedTails: number;
   /** The store's keys at that moment, shortened; a transcript path is not
       printed in full. */
@@ -241,6 +245,11 @@ const median = (values: number[]): number => {
 };
 const round = (value: number) => Math.round(value * 10) / 10;
 const spread = (values: number[]) => `${round(Math.min(...values))}–${round(Math.max(...values))} ms over ${values.length} runs`;
+
+/** Rows on screen before a single byte of this transcript reached the page
+    can only have come from a cached tail. That is the proof a sample is warm,
+    and its absence the proof it is cold. */
+const paintedFromCache = (sample: Sample): boolean => sample.firstBytesMs === null;
 
 /** The median of a field that a case may legitimately never have. */
 function medianOf(samples: Sample[], pick: (sample: Sample) => number | null): number | null {
@@ -274,7 +283,7 @@ function recordSamples(surface: string, step: string, samples: Sample[], notes =
     samples.every((sample) => sample.via === "poll") ? "delivered by the POST polling fallback" : "",
     parseRender === null ? "" : `bytes→rows ${parseRender}ms (main thread ${median(samples.map((sample) => sample.blockingMs))}ms)`,
     `frame +${median(samples.map((sample) => round(sample.paintedMs - sample.detectedMs)))}ms`,
-    `tails in store at document start ${samples.map((sample) => sample.storedTails).join("/")}`,
+    `painted from the cached tail in ${samples.filter(paintedFromCache).length} of ${samples.length}`,
     `rows ${median(samples.map((sample) => sample.rows))}`,
   ].filter(Boolean).join("; ");
   table.record(surface, step, { ms: median(painted), frames: "" as unknown as number, seen: {} } as Milestone,
@@ -416,7 +425,7 @@ async function openFresh(cdp: Cdp, origin: string, surface: Surface, target: See
 async function clearStorage(cdp: Cdp, origin: string): Promise<void> {
   /* In the page first: the CDP clear is asynchronous with respect to the
      document, and a "cold" open that still found a persisted tail is not the
-     case the row claims to measure. `storedTails` below proves which it was. */
+     case the row claims to measure. `coldSample` below checks which it was. */
   try {
     await cdp.evaluate("(() => { try { localStorage.clear(); sessionStorage.clear(); return 1; } catch (error) { return 0; } })()");
   } catch {
@@ -470,14 +479,16 @@ async function stepAway(cdp: Cdp, surface: Surface, target: Seeded, neighbour: S
  * A cold open that is provably cold. The page keeps a throttled write of its
  * own pending, so a store cleared while the document is still alive can be
  * rewritten in the milliseconds before it goes away — and a "cold" row that
- * actually found a tail measures the opposite of what it claims. The document
- * reports what it started with, so the sample is simply taken again.
+ * actually found a tail measures the opposite of what it claims. A sample
+ * whose rows were on screen before any of the transcript's bytes arrived was
+ * painted from a cache, whatever the store looked like to the document's
+ * first script, so it is simply taken again.
  */
 async function coldSample(cdp: Cdp, origin: string, surface: Surface, entry: Seeded): Promise<Sample> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     await clearStorage(cdp, origin);
     const sample = await retrying("cold open", () => openFresh(cdp, origin, surface, entry));
-    if (sample.storedTails <= 0) return sample;
+    if (sample.storedTails <= 0 && !paintedFromCache(sample)) return sample;
     console.log("  ! the cold document still found a persisted tail (the page rewrote it as the store was cleared); taking the sample again");
   }
   throw new Error("could not open a document with an empty store");
