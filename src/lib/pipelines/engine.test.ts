@@ -12271,7 +12271,7 @@ for (const enabled of [false, true]) {
 }
 
 for (const enabled of [false, true]) {
-  test.each(["before-stop", "during-stop", "crash-resume", "survivor", "survivor-after-checkpoint"] as const)(`reviewer identity advances during close at %s (activation: ${enabled})`, async (seam) => {
+  test.each(["before-stop", "during-stop", "crash-resume", "survivor", "survivor-after-checkpoint", "survivor-crash-resume"] as const)(`reviewer identity advances during close at %s (activation: ${enabled})`, async (seam) => {
     const h = harness();
     const pipeline = await create(h.ports, [
       { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -12286,10 +12286,12 @@ for (const enabled of [false, true]) {
       reviewerPath: `/codex/reviewer-${n}.jsonl`, startedAt: h.ports.now() });
     flow.rounds = [round(1) as never];
     flow.state = "reviewing";
+    let newerAttempt: import("./types").PipelineStageAttempt | undefined;
     const sync = async () => {
       const { withPipelineMutation } = await import("./store");
       await withPipelineMutation((pipelines, persist) => {
         expect(reconcileEmbeddedReviewFlows(pipelines, [flow], h.ports.now())).toBe(true);
+        if (flow.rounds.length === 2) newerAttempt = structuredClone(pipelines[0]!.runs[1]!.attempts[0]!);
         persist();
       });
     };
@@ -12304,10 +12306,14 @@ for (const enabled of [false, true]) {
     let closes = 0;
     h.ports.stopStageAgent = async (target) => {
       stops.push(target.conversationId!);
+      if (target.conversationId === "conversation_reviewer_2") {
+        expect(target.launchId).toBe("review-launch-2");
+        expect(loadPipelines()[0]!.runs[1]!.attempts[0]).toEqual(newerAttempt!);
+      }
       if (target.conversationId === "conversation_reviewer_1" && (seam === "during-stop" || (seam === "survivor" && stops.length === 2))) {
         await sync();
       }
-      if (target.conversationId === "conversation_reviewer_1" && stops.length === 2 && survivorIdentity) {
+      if (target.conversationId === "conversation_reviewer_1" && stops.length === 2 && survivorIdentity && seam !== "survivor-crash-resume") {
         return { outcome: "unresolved", error: "descendant survived", survivors: [survivorIdentity] };
       }
       return { outcome: "not-running" };
@@ -12316,19 +12322,23 @@ for (const enabled of [false, true]) {
     try {
       await patchPipeline(pipeline.id, { action: "close" }, h.ports);
       flow.rounds.push(round(2) as never);
-      if (seam === "before-stop" || seam === "crash-resume") await sync();
-      if (seam === "crash-resume") {
+      const crash = seam === "crash-resume" || seam === "survivor-crash-resume";
+      if (seam === "before-stop" || crash) await sync();
+      if (crash) {
         const child = Bun.spawn([process.execPath, "-e", `
           const { defaultPipelinePorts, drainStageActivations } = await import("./src/lib/pipelines/engine.ts");
           await drainStageActivations({ ...defaultPipelinePorts(), stopStageAgent: async (target) => {
             if (target.conversationId === "conversation_reviewer_2") process.exit(0);
+            if (target.conversationId === "conversation_reviewer_1" && ${JSON.stringify(survivorIdentity)} !== null) {
+              return { outcome: "unresolved", error: "descendant survived", survivors: [${JSON.stringify(survivorIdentity)}] };
+            }
             return { outcome: "stopped" };
           } });
           process.exit(2);
         `], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
         expect(await child.exited).toBe(0);
         expect(loadPipelines()[0]!.closeReport?.stopped.map((host) => host.conversationId))
-          .toEqual(["conversation_stage_1", "conversation_reviewer_1"]);
+          .toEqual(survivor ? ["conversation_stage_1"] : ["conversation_stage_1", "conversation_reviewer_1"]);
       }
       if (seam === "survivor-after-checkpoint") {
         await engineModule.drainStageActivations(h.ports);
@@ -12353,7 +12363,7 @@ for (const enabled of [false, true]) {
       await engineModule.drainStageActivations(h.ports);
       await patchPipeline(pipeline.id, { action: "close" }, h.ports);
       await engineModule.drainStageActivations(h.ports);
-      expect(stops).toEqual(seam === "crash-resume" ? ["conversation_reviewer_2"]
+      expect(stops).toEqual(crash ? ["conversation_reviewer_2", ...(survivor ? ["conversation_reviewer_1", "conversation_reviewer_1"] : [])]
         : ["conversation_stage_1", "conversation_reviewer_1", "conversation_reviewer_2",
           ...(survivor ? ["conversation_reviewer_1", "conversation_reviewer_1"] : [])]);
       expect(closes).toBe(1);

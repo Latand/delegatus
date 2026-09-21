@@ -6031,13 +6031,14 @@ function closeHostIdentity(target: Pick<PipelineStageHostRef, "launchId" | "conv
     : JSON.stringify([target.agentPath, target.paneId]);
 }
 
-/** Merge newly materialized hosts into custody in the same mutation as their
- * adoption, and again at drain checkpoints before a snapshot can settle it. */
+/** Evidence stays attached to the host even when its stage seats a new reviewer. */
 function closeHostEvidence(attempt: PipelineStageAttempt): PipelineCloseHostEvidence {
   const { effectiveRole, startedAt, state, error, completedAt, verdict, unresolvedTermination } = attempt;
   return structuredClone({ effectiveRole, startedAt, state, error, completedAt, verdict, unresolvedTermination });
 }
 
+/** Merge newly materialized hosts into custody in the same mutation as their
+ * adoption, and again at drain checkpoints before a snapshot can settle it. */
 function retainCloseHosts(pipeline: Pipeline, report = pipeline.closeReport, plan = pipeline.closeTeardown): boolean {
   if (!plan || !report) return false;
   const recorded = new Set([...report.pending, ...report.stopped, ...report.alreadyStopped,
