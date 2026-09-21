@@ -31,6 +31,16 @@ function encodeQuoted(text: string, quote: string): string {
   return "'" + json.slice(1, -1).replace(/\\[\s\S]|'/g, part => part === '\\"' ? '"' : part === "'" ? "\\'" : part) + "'";
 }
 
+/** An invalid quoted token can still carry a raw log assignment or a mapping
+ * with the opposite quote style. Never send those through the prose fallback. */
+function containsSensitiveAssignment(text: string): boolean {
+  const keys = /(["'])([^"']+)\1\s*[:=]|([\w.-]+)\s*[:=]/g;
+  for (let match; (match = keys.exec(text));) {
+    if (sensitiveKey(match[2] ?? match[3])) return true;
+  }
+  return false;
+}
+
 function quotedValueEnd(text: string, start: number): number {
   for (let i = start + 1; i < text.length; i++) {
     // A physical newline cannot close a log/JSON scalar. Otherwise the opening
@@ -111,11 +121,11 @@ function redactStructuredText(text: string, depth = 0): string {
     let decoded: string;
     try { decoded = decodeQuoted(token); } catch {
       // Simple unmatched/multiline quotation in prose is still ordinary text.
-      // Structured delimiters, escaped quotes or a key separator are ambiguous:
+      // Escaped quotes, credential assignments or a key separator are ambiguous:
       // never skip a failed decode and export the uninspected encoded contents.
       // A lone backslash in quoted prose (for example a regex) does not make
       // that prose JSON. Credential values were already handled above.
-      if (separator || /[{\[]|\\["']/.test(token)) throw new ArchiveReadError("ARCHIVE_UNAVAILABLE", 503);
+      if (separator || /\\["']/.test(token) || containsSensitiveAssignment(token)) throw new ArchiveReadError("ARCHIVE_UNAVAILABLE", 503);
       parts.push(redactPlainText(prefix), redactPlainText(token));
       copied = fields.lastIndex;
       continue;

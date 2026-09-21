@@ -413,11 +413,13 @@ test.each([...artifactKinds])("HTTP export redacts acronym credential suffixes i
 
 test.each([...artifactKinds])("HTTP export redacts complete single-quoted credentials in %s", async kind => {
   const marker = "ordinaryProbeMarker";
+  const assignmentKey = "password";
+  const acronymKey = "APIToken";
   const values = [
-    `password='${marker} tail ${marker}'`,
+    `${assignmentKey}='${marker} tail ${marker}'`,
     `{'password':'${marker}'}`,
     `{'DBPassword':'${marker} \\' quoted ${marker}', 'retained':'ordinary history'}`,
-    `APIToken='${marker} \\\\ ${marker}'`,
+    `${acronymKey}='${marker} \\\\ ${marker}'`,
     `{'credentials': {'nested': '${marker} } ] \\' ${marker}'}}`,
     `{'message': '{"password":"${marker}"}'}`,
   ];
@@ -453,7 +455,7 @@ test.each([...artifactKinds])("HTTP export refuses unterminated single-quoted cr
 });
 
 test.each([...artifactKinds])("HTTP export preserves harmless quoted backslashes in %s", async kind => {
-  const prose = [String.raw`Use "\d+" for digits.`, String.raw`Use '\d+' for digits.`, String.raw`Use "\q" literally.`, `Don't change "ordinary prose" or the user's words.`];
+  const prose = [String.raw`Use "\d+" for digits.`, String.raw`Use '\d+' for digits.`, String.raw`Use "\q" literally.`, String.raw`Use "[\d]+" and "\d{2}" for digits.`, `Don't change "ordinary prose" or the user's words.`];
   for (const text of prose) for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
     const original = format(encodeMessage(text, levels));
     const { response, bytes, occurrences } = await exportArtifact(kind, original);
@@ -462,6 +464,18 @@ test.each([...artifactKinds])("HTTP export preserves harmless quoted backslashes
     expect(body.artifacts[0].artifacts[kind].text).toBe(original);
     expect(body.row.extension.receiptId).toBe("archive-receipt");
     expect(body.relayOccurrences).toEqual(occurrences);
+  }
+});
+
+test.each([...artifactKinds])("HTTP export refuses malformed quoted text carrying credential assignments in %s", async kind => {
+  const marker = "ordinaryProbeMarker";
+  const key = "password";
+  const values = [`"Use \\q ${key}='${marker} tail ${marker}'"`, `"Use \\q {'PRIVATE KEY':'${marker}'}"`];
+  for (const value of values) for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
+    const { response, bytes } = await exportArtifact(kind, format(encodeMessage(value, levels)));
+    expect(bytes).not.toContain(marker);
+    expect(response.status).toBe(503);
+    expect(JSON.parse(bytes)).toEqual({ error: "ARCHIVE_UNAVAILABLE" });
   }
 });
 
