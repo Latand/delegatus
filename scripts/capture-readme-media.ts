@@ -101,11 +101,6 @@ export const SHOTS: ReadmeShot[] = [
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
       await clickLabel(page, "Expand all 3 stages");
-      await page.waitForTimeout(1_200);
-      /* The running stage opens scrolled back; jump it to its live tail so
-         the pill does not sit over the newest row. */
-      const liveTail = page.getByText("live tail", { exact: true });
-      if (await liveTail.count()) await liveTail.first().click();
     },
     description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
   },

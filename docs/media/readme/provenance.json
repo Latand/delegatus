@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "classification": "synthetic",
+  "generator": "scripts/capture-readme-media.ts",
+  "generatorSha256": "b77c17af973a0452d8313484638858e767caeb5994300d53581b633fd7c93955",
+  "seed": "scripts/readme-demo-state.ts",
+  "seedSha256": "8ad484ecbe0a2df76f47c7f8ce1fcf2c3e8db9d0a7fc1caef0ff8b9f3a5dff63",
+  "command": "bun run build && bun scripts/capture-readme-media.ts",
+  "assets": [
+    {
+      "path": "board.svg",
+      "description": "A project's board: tasks by status, the agents working on each, and a running pipeline; account limits in the sidebar.",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "colorScheme": "dark",
+      "rasterTiles": 14,
+      "sha256": "4c5416535b00992f7fa7efd03f3425cca13ebda33d8488072077114f86a0fc34"
+    },
+    {
+      "path": "conversation.svg",
+      "description": "A Claude Code conversation read as a chat: an edit shown as a diff, a test run with its output, and the answer.",
+      "viewport": {
+        "width": 1280,
+        "height": 960
+      },
+      "colorScheme": "dark",
+      "rasterTiles": 22,
+      "sha256": "0ca664f89dd5096d6d0f8808b98dc5fc13ad574a045f330117fa748fd5d27fa3"
+    },
+    {
+      "path": "pipeline.svg",
+      "description": "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "colorScheme": "dark",
+      "rasterTiles": 25,
+      "sha256": "11cfccc806329585913a347b93404aea14b24b73ecee37a9f9e4ac8724c0e387"
+    },
+    {
+      "path": "accounts.svg",
+      "description": "Claude accounts with their five-hour, weekly and per-model limits; switch the active account or add one here.",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "colorScheme": "dark",
+      "rasterTiles": 16,
+      "sha256": "fb90ff739193c2eb8b801a9e6b4d7fb8fa2dbb35f92900153b972d4472ef32b4"
+    },
+    {
+      "path": "phone-conversation.svg",
+      "description": "The same conversation on a 390 px phone screen, its test run expanded.",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "colorScheme": "dark",
+      "rasterTiles": 4,
+      "sha256": "eda546f555d90b474ce4157b32cc20d38f9772e5318c51c76c4dc316810a5b4a"
+    }
+  ]
+}
