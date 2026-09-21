@@ -167,3 +167,58 @@ test("a re-read after a delivery settles is fresh evidence the reaper's delivery
   await reconcileMigrationInventory(registry, [entry(transcript)]);
   expect(registry.snapshot()).toEqual(before);
 });
+
+function openTurn(transcript: string) {
+  fs.appendFileSync(transcript, record("event_msg", { type: "task_started" }, "2026-09-22T10:00:05.000Z"));
+  const past = new Date(Date.now() - 10 * 60_000);
+  fs.utimesSync(transcript, past, past);
+}
+
+test("an incomplete read keeps the open turn and its observation, and the next complete read still lands", async () => {
+  const { registry, transcript } = fixture();
+  openTurn(transcript);
+  const open = { activity: "live", activityReason: "jsonl_turn_open" } as Partial<FileEntry>;
+  await reconcileMigrationInventory(registry, [entry(transcript, open)]);
+  const busy = registry.conversationForPath(transcript)!;
+  expect(busy.turn.state).toBe("busy");
+
+  /* A scan that recorded more bytes than the file can give back is not a read. */
+  await tick();
+  const short = entry(transcript, open);
+  await reconcileMigrationInventory(registry, [{ ...short, size: short.size + 4096 }]);
+  expect(registry.conversationForPath(transcript)!.turn).toEqual(busy.turn);
+
+  fs.appendFileSync(transcript, record("event_msg", { type: "task_complete" }, "2026-09-22T10:00:06.000Z"));
+  await tick();
+  await reconcileMigrationInventory(registry, [entry(transcript)]);
+  const finished = registry.conversationForPath(transcript)!;
+  expect(finished.turn.state).toBe("terminal");
+  expect(Date.parse(finished.turn.observedAt!)).toBeGreaterThan(Date.parse(busy.turn.observedAt!));
+});
+
+test("an open turn over an unchanged transcript stays busy and is not rewritten", async () => {
+  const { registry, transcript } = fixture();
+  openTurn(transcript);
+  const open = { activity: "live", activityReason: "jsonl_turn_open" } as Partial<FileEntry>;
+  await reconcileMigrationInventory(registry, [entry(transcript, open)]);
+  const before = registry.snapshot();
+  const conversation = registry.conversationForPath(transcript)!;
+  expect(conversation.turn.state).toBe("busy");
+
+  await tick();
+  await reconcileMigrationInventory(registry, [entry(transcript, open)]);
+  expect(registry.snapshot()).toEqual(before);
+});
+
+test("an identity change over an unchanged transcript is still written", async () => {
+  const { registry, transcript } = fixture();
+  await reconcileMigrationInventory(registry, [entry(transcript)]);
+  const first = registry.conversationForPath(transcript)!;
+
+  await tick();
+  await reconcileMigrationInventory(registry, [entry(transcript, { project: "regrouped" })]);
+
+  const moved = registry.conversationForPath(transcript)!;
+  expect(moved.generations.at(-1)!.launchProfile.project).toBe("regrouped");
+  expect(moved.turn).toEqual(first.turn);
+});
