@@ -1,10 +1,16 @@
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { ArchiveReadError } from "./reader";
 
-const SECRET_FIELD = /(?:token|secret|password|passwd|pwd|api[_-]?key|authorization|bearer|cookie|credential|private[_-]?key)/i;
+// Classify credential names and credential suffixes at word boundaries. Counts,
+// flags and ordinary words (tokenCount, passwordChanged, secretary) stay data.
+const SECRET_FIELD = /(?:^|_)(?:tokens?|secrets?|passwords?|passwd|pwd|api_?keys?|authorization|bearer|cookies?|credentials?|private_?keys?|secret_?key|access_?token|refresh_?token|client_?secret)(?:_?(?:value|hash))?$/i;
+function sensitiveKey(key: string): boolean {
+  const separated = key.replace(/[\s.-]+/g, "_");
+  return SECRET_FIELD.test(separated) || SECRET_FIELD.test(separated.replace(/([a-z0-9])([A-Z])/g, "$1_$2"));
+}
 // Recognize the key before asking for its value: a truncated value must not
 // make a sensitive field invisible. Standalone strings can also encode JSON.
-const JSON_STRING = /("(?:\\[\s\S]|[^"\\])*")(\s*:\s*)?/g;
+const JSON_STRING = /("(?:\\[\s\S]|[^"\\])*(?:"|\\?$))(\s*:\s*)?/g;
 const MAX_ENCODED_DEPTH = 8;
 
 function quotedValueEnd(text: string, start: number): number {
@@ -43,44 +49,10 @@ function compoundValueEnd(text: string, start: number): number {
   throw new ArchiveReadError("ARCHIVE_UNAVAILABLE", 503);
 }
 
-/** Artifact bodies can contain JSON/JSONL inside prose or fenced code. Match
- * complete values, including nested objects/arrays and escaped quotes, so no
- * credential suffix survives. Decode strings at a bounded depth to inspect
- * serialized log messages; only re-encode strings whose contents changed. */
-function redactStructuredText(text: string, depth = 0): string {
-  if (depth > MAX_ENCODED_DEPTH) throw new ArchiveReadError("ARCHIVE_TOO_LARGE", 413);
-  const fields = new RegExp(JSON_STRING);
-  const parts: string[] = [];
-  let copied = 0;
-  for (let match; (match = fields.exec(text));) {
-    const [, token, separator] = match;
-    let decoded: string;
-    try { decoded = JSON.parse(token); } catch {
-      // Ordinary quoted prose need not be JSON; still check a malformed key.
-      if (!separator || !SECRET_FIELD.test(token)) continue;
-      decoded = token;
-    }
-    let replacement: string;
-    if (separator && SECRET_FIELD.test(decoded)) {
-      fields.lastIndex = sensitiveValueEnd(text, fields.lastIndex);
-      replacement = `${token}${separator}"[redacted]"`;
-    } else {
-      const redacted = redactStructuredText(decoded, depth + 1);
-      if (redacted === decoded) continue;
-      replacement = JSON.stringify(redacted) + (separator ?? "");
-    }
-    parts.push(text.slice(copied, match.index), replacement);
-    copied = fields.lastIndex;
-  }
-  parts.push(text.slice(copied));
-  return parts.join("");
-}
-
-/** The export is private even after best-effort redaction. Preserve original
- * fields and receipt identities; never advertise arbitrary prose as public. */
-export function redactArchive(value: unknown, depth = 0): unknown {
-  if (depth > 64) throw new ArchiveReadError("ARCHIVE_TOO_LARGE", 413);
-  if (typeof value === "string") return redactMonitorText(redactStructuredText(value)).replace(/https?:\/\/[^\s<>"']+/g, match => {
+/** Redact only decoded text or the gaps between quoted tokens. Running this
+ * over re-encoded strings would treat JSON escapes as URL/header content. */
+function redactPlainText(text: string): string {
+  return redactMonitorText(text).replace(/https?:\/\/[^\s<>"'\\]+/g, match => {
     try {
       const url = new URL(match);
       url.username = ""; url.password = "";
@@ -89,7 +61,64 @@ export function redactArchive(value: unknown, depth = 0): unknown {
       return url.toString();
     } catch { return "[redacted-url]"; }
   });
+}
+
+/** Artifact bodies can contain JSON/JSONL inside prose or fenced code. Decode
+ * each quoted token before applying all secret rules, then keep its serialized
+ * representation opaque to the enclosing pass. Malformed encoded tokens cannot
+ * be safely inspected, including a token truncated after its embedded secret. */
+function redactStructuredText(text: string, depth = 0): string {
+  if (depth > MAX_ENCODED_DEPTH) throw new ArchiveReadError("ARCHIVE_TOO_LARGE", 413);
+  // A raw header owns its whole physical line, even when its value has quotes.
+  // This also runs on every decoded message before splitting quoted tokens.
+  text = text.replace(/(^|\n)([ \t]*(?:(?:proxy-)?authorization|(?:set-)?cookie)[ \t]*:[^\r\n]*)/gi,
+    (_match, newline: string, header: string) => newline + redactMonitorText(header));
+  const fields = new RegExp(JSON_STRING);
+  const parts: string[] = [];
+  let copied = 0;
+  for (let match; (match = fields.exec(text));) {
+    const [, token, separator] = match;
+    const prefix = text.slice(copied, match.index);
+    // Keep quoted log assignments covered when the outer pass no longer sees
+    // the quoted value. Refuse truncation just as for a sensitive JSON field.
+    const assignment = /(?:^|[\s{,])([\w.-]+)\s*[:=]\s*$/.exec(prefix);
+    if (assignment && sensitiveKey(assignment[1])) {
+      quotedValueEnd(text, match.index);
+      parts.push(redactPlainText(prefix), '"[redacted]"', separator ?? "");
+      copied = fields.lastIndex;
+      continue;
+    }
+    let decoded: string;
+    try { decoded = JSON.parse(token); } catch {
+      // Simple unmatched/multiline quotation in prose is still ordinary text.
+      // Escapes, structured delimiters or a key separator make it ambiguous:
+      // never skip a failed decode and export the uninspected encoded contents.
+      if (separator || /[\\{\[]/.test(token)) throw new ArchiveReadError("ARCHIVE_UNAVAILABLE", 503);
+      parts.push(redactPlainText(prefix), redactPlainText(token));
+      copied = fields.lastIndex;
+      continue;
+    }
+    let replacement: string;
+    if (separator && sensitiveKey(decoded)) {
+      fields.lastIndex = sensitiveValueEnd(text, fields.lastIndex);
+      replacement = `${token}${separator}"[redacted]"`;
+    } else {
+      const redacted = redactStructuredText(decoded, depth + 1);
+      replacement = (redacted === decoded ? token : JSON.stringify(redacted)) + (separator ?? "");
+    }
+    parts.push(redactPlainText(prefix), replacement);
+    copied = fields.lastIndex;
+  }
+  parts.push(redactPlainText(text.slice(copied)));
+  return parts.join("");
+}
+
+/** The export is private even after best-effort redaction. Preserve original
+ * fields and receipt identities; never advertise arbitrary prose as public. */
+export function redactArchive(value: unknown, depth = 0): unknown {
+  if (depth > 64) throw new ArchiveReadError("ARCHIVE_TOO_LARGE", 413);
+  if (typeof value === "string") return redactStructuredText(value);
   if (Array.isArray(value)) return value.map(item => redactArchive(item, depth + 1));
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, SECRET_FIELD.test(key) ? "[redacted]" : redactArchive(item, depth + 1)]));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sensitiveKey(key) ? "[redacted]" : redactArchive(item, depth + 1)]));
   return value;
 }

@@ -354,7 +354,7 @@ test.each(artifactKinds)("HTTP export preserves lines and nested JSON after deco
 test.each(artifactKinds)("HTTP export preserves credential metadata in %s and retained extensions", async kind => {
   const metadata = { tokenCount: 42, passwordChanged: false, secretary: "ordinary history", token_count: 7, PASSWORD_CHANGED: true, secretariat: "retained history" };
   const marker = "invented ordinary classified value";
-  const credentials = Object.fromEntries(["token", "credentials", "PASSWORD", "AccessToken", "client_secret", "Api-Key", "PRIVATE KEY", "proxy_authorization", "setCookie"].map(key => [key, marker]));
+  const credentials = Object.fromEntries(["token", "credentials", "PASSWORD", "AccessToken", "client_secret", "Api-Key", "PRIVATE KEY", "proxy_authorization", "setCookie", "pAsSwOrD", "aPiKeY", "clientSecret", "password_hash", "apiKeys"].map(key => [key, marker]));
   const redacted = Object.fromEntries(Object.keys(credentials).map(key => [key, "[redacted]"]));
   const serialize = (values: Record<string, unknown>) => JSON.stringify({ ...metadata, ...values }).replace('"PASSWORD"', '"PASS\\u0057ORD"');
   for (const levels of [0, 1, 2, 3]) for (const format of artifactFormats) {
@@ -364,6 +364,20 @@ test.each(artifactKinds)("HTTP export preserves credential metadata in %s and re
     const body = JSON.parse(bytes);
     expect(body.artifacts[0].artifacts[kind].text).toBe(format(encodeMessage(serialize(redacted), levels)));
     expect(body.row.extension).toEqual({ ...metadata, ...redacted, receiptId: "archive-receipt" });
+    expect(body.relayOccurrences).toEqual(occurrences);
+  }
+});
+
+test("HTTP export retains plain-text secret rules across quoted log boundaries", async () => {
+  const marker = "invented ordinary assignment value";
+  const text = `Diagnostic password="${marker}"\nordinary history with "quoted words"\nunfinished "ordinary prose`;
+  const expected = `Diagnostic password="[redacted]"\nordinary history with "quoted words"\nunfinished "ordinary prose`;
+  for (const kind of artifactKinds) for (const levels of [0, 1, 2, 3]) {
+    const { response, bytes, occurrences } = await exportArtifact(kind, encodeMessage(text, levels));
+    expect(response.status).toBe(200);
+    expect(bytes).not.toContain(marker);
+    const body = JSON.parse(bytes);
+    expect(body.artifacts[0].artifacts[kind].text).toBe(encodeMessage(expected, levels));
     expect(body.relayOccurrences).toEqual(occurrences);
   }
 });
