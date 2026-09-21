@@ -368,11 +368,25 @@ export interface TranscriptEchoObservation {
   /** Stable absolute feed anchor, e.g. `row:<source line>:<ordinal>`. */
   id: string;
   text: string;
+  /**
+   * WHICH submission this record is the transcript's copy of (#1950 round 2),
+   * as the delivery path itself recorded it: the client message id that
+   * admitted the delivery, which is the outbox row's own id.
+   *
+   * Present ⇒ the record belongs to that submission and to no other, whatever
+   * any row's text says. Absent ⇒ nothing about the record names a
+   * submission, and the occurrence watermark below is the only thing that
+   * can — as it was before.
+   */
+  submissionId?: string;
 }
 
 interface PersistedEchoObservation {
   id: string;
   key: string;
+  /** The submission the delivery path named for this record; see
+      {@link TranscriptEchoObservation.submissionId}. */
+  submissionId?: string;
 }
 
 const ECHO_LEDGER_LIMIT = 512;
@@ -389,6 +403,9 @@ interface PersistedOccurrenceTombstone {
   retiredEchoId?: string;
   retiredAt?: number;
   launchOwned?: true;
+  /** The submission aged out with its outcome still unestablished; it keeps
+      the identity-only claim rule above. */
+  uncertain?: true;
 }
 
 /** Unresolved owners consume future echoes oldest-first. Preserve the oldest
@@ -755,7 +772,11 @@ function occurrenceTombstone(entry: OutboxEntry): PersistedOccurrenceTombstone |
     && !entry.retiredEchoId
   ) return null;
   const key = echoKey(entry.echoText ?? entry.text);
-  if (!key) return null;
+  /* A submission with no words of its own — a send that was nothing but an
+     attachment — still owns its record, because the record NAMES it. Only a
+     row with neither a text to be recognised by nor a claimed record has
+     nothing left to remember. */
+  if (!key && !entry.retiredEchoId) return null;
   return {
     id: entry.id,
     key,
@@ -765,6 +786,7 @@ function occurrenceTombstone(entry: OutboxEntry): PersistedOccurrenceTombstone |
     ...(entry.retiredEchoId ? { retiredEchoId: entry.retiredEchoId } : {}),
     ...(entry.retiredAt !== undefined ? { retiredAt: entry.retiredAt } : {}),
     ...(entry.launchOwned ? { launchOwned: true as const } : {}),
+    ...(entry.deliveryUncertain ? { uncertain: true as const } : {}),
   };
 }
 
@@ -1411,7 +1433,10 @@ const EMPTY_ECHO_COUNTS: TranscriptEchoCounts = new Map();
 
 function countsFromLedger(ledger: readonly PersistedEchoObservation[]): TranscriptEchoCounts {
   const counts = new Map<string, number>();
-  for (const echo of ledger) counts.set(echo.key, (counts.get(echo.key) ?? 0) + 1);
+  for (const echo of ledger) {
+    if (!echo.key) continue;
+    counts.set(echo.key, (counts.get(echo.key) ?? 0) + 1);
+  }
   return counts;
 }
 
@@ -1430,6 +1455,14 @@ interface EchoOwner {
   echoBaselineIds?: string[];
   retiredEchoId?: string;
   launchOwned?: true;
+  /**
+   * Nobody could establish what happened to this submission. It may claim a
+   * record the delivery path NAMES as its own, and nothing else: an outcome
+   * that is unknown is not made known by another message happening to carry
+   * the same words (round-2 P1). Its own receipt settles it elsewhere; here
+   * it simply waits.
+   */
+  uncertain?: true;
 }
 
 /** Everything in this conversation that can own a transcript echo, oldest
@@ -1449,6 +1482,7 @@ function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly Outb
       echoBaselineIds: entry.echoBaselineIds,
       retiredEchoId: entry.retiredEchoId,
       launchOwned: entry.launchOwned,
+      uncertain: entry.uncertain,
     })),
     /* Every live submission owns echoes, INCLUDING one whose acknowledgement
        was lost. Excluding those was how a message with an unknown outcome got
@@ -1469,6 +1503,7 @@ function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly Outb
       echoBaselineIds: entry.echoBaselineIds,
       retiredEchoId: entry.retiredEchoId,
       launchOwned: entry.launchOwned,
+      ...(entry.deliveryUncertain ? { uncertain: true as const } : {}),
     })),
   ].sort((left, right) => left.at - right.at);
   return { owners, queue, tombstones };
@@ -1501,7 +1536,8 @@ export function transcriptEchoBindings(
   for (const observation of observations) {
     const id = echoObservationId(observation);
     const key = echoKey(observation.text);
-    if (id && key) ledger.push({ id, key });
+    const submissionId = observation.submissionId;
+    if (id && (key || submissionId)) ledger.push({ id, key, ...(submissionId ? { submissionId } : {}) });
   }
   const claimed = new Set(owners.flatMap((owner) => owner.retiredEchoId ? [owner.retiredEchoId] : []));
   for (const owner of owners) {
@@ -1521,15 +1557,43 @@ export function transcriptEchoBindings(
   return bindings;
 }
 
-/** The oldest unclaimed echo of this owner's text past its own watermark. */
+/**
+ * The record this owner may claim.
+ *
+ * Identity first, and identity alone where there is any (#1950 round 2). The
+ * delivery path records WHICH submission it wrote — the client message id it
+ * was admitted under, which is this owner's own id — and the feed carries that
+ * onto the observation. So:
+ *
+ *  - a record that names a submission belongs to THAT submission and to no
+ *    other. It is never handed to a row because their words agree, which is
+ *    what let an unrelated arrival settle somebody else's send, and it binds
+ *    a record whose words do NOT agree — the document whose delivered text
+ *    carries the inbox paths the row never showed, the send that is nothing
+ *    but a picture and has no words at all;
+ *  - a record that names nothing keeps the occurrence rule it always had: the
+ *    oldest unclaimed record of this owner's text past its own watermark…
+ *  - …unless the owner's own outcome was never established. Then nothing but
+ *    a record that names it can settle it: an unknown fate is not resolved by
+ *    a message that happens to repeat its words, and its own receipt is the
+ *    other way out.
+ */
 function claimEcho(
   owner: EchoOwner,
   ledger: readonly PersistedEchoObservation[],
   claimed: ReadonlySet<string>,
 ): PersistedEchoObservation | undefined {
+  const named = ledger.find((echo) => echo.submissionId === owner.id && !claimed.has(echo.id));
+  if (named) return named;
+  if (owner.uncertain || !owner.key) return undefined;
   const baseline = new Set(owner.echoBaselineIds ?? []);
   let remainingBaseline = baseline.size ? 0 : (owner.echoBaseline ?? 0);
   return ledger.find((echo) => {
+    /* A record that names a DIFFERENT submission is that submission's, even
+       while the queue has not reached it yet — the out-of-order case, where
+       the second send's record lands first and the first send must not eat
+       it. A record that names nothing names nothing. */
+    if (echo.submissionId) return false;
     if (echo.key !== owner.key || baseline.has(echo.id)) return false;
     if (remainingBaseline > 0) {
       remainingBaseline -= 1;
@@ -1650,8 +1714,12 @@ export function publishTranscriptEchoes(
   for (const observation of observations) {
     const id = echoObservationId(observation);
     const key = echoKey(observation.text);
-    if (!id || !key) continue;
-    merged.set(id, { id, key });
+    const submissionId = observation.submissionId;
+    /* A record with no words is still a record when the delivery path names
+       whose it is: an attachment-only send arrives exactly that way, and
+       dropping it here is why its row could never meet its own arrival. */
+    if (!id || (!key && !submissionId)) continue;
+    merged.set(id, { id, key, ...(submissionId ? { submissionId } : {}) });
   }
   const ledger = [...merged.values()].slice(-ECHO_LEDGER_LIMIT);
   const previous = readEchoLedger(cardId);
@@ -1746,6 +1814,22 @@ export function visibleOutbox(
       consumed.set(key, floor + 1);
       continue;
     }
+    /* An outcome nobody could establish keeps its row until something can
+       establish it. Three things can, and a count of matching texts is not
+       among them (#1950 round 2): a transcript record the delivery path NAMES
+       as this submission's — which retires the row above, through
+       `retiredEchoId` — the assistant output of the turn it created, or the
+       server's own answer under its original key. Another message repeating
+       its words establishes nothing, and reading it as proof was how a
+       message whose fate was unknown went quietly confirmed while it was
+       still marked uncertain, taking its Check status away with it.
+
+       It consumes no occurrence either: the record it did not claim belongs
+       to whichever submission did send it. */
+    if (entry.deliveryUncertain && entry.responseStartedAt === undefined && entry.adoptedAt === undefined) {
+      visible.push(entry);
+      continue;
+    }
     const total = transcriptEchoCounts.get(key) ?? 0;
     /* Echoes below this floor belong to messages submitted before this entry
        (its own baseline) or to earlier queued siblings that already consumed
@@ -1753,16 +1837,6 @@ export function visibleOutbox(
     const floor = Math.max(entry.echoBaseline ?? 0, consumed.get(key) ?? 0);
     if (total > floor) {
       consumed.set(key, floor + 1);
-      continue;
-    }
-    /* An outcome nobody could establish keeps its row until something can
-       establish it. The transcript's own record is that something, and it is
-       read ABOVE this line: the engine journaled the message, which is what
-       the lost acknowledgement failed to tell us. Without such a record the
-       row stays — unknown is neither delivered nor lost — whatever the local
-       state the failed request left behind says. */
-    if (entry.deliveryUncertain && entry.responseStartedAt === undefined && entry.adoptedAt === undefined) {
-      visible.push(entry);
       continue;
     }
     if (entry.adoptedAt !== undefined) continue;

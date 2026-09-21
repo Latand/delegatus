@@ -743,19 +743,36 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   }, [outbox]);
   const transcriptEchoes = useMemo(() => {
     if (!transcriptGeneration) return [];
-    return feed.items.flatMap(({ anchorKey, key, item }) => {
+    return feed.items.flatMap(({ anchorKey, key, item, submissionDedup }) => {
       const text = "text" in item ? item.text : "";
-      if (!text.trim()) return [];
+      /* WHICH submission wrote this row, from the delivery path's own record
+         of it (#1950 round 2) — the marker the Codex host stamps onto the
+         canonical record, resolved through the registry, or the Claude
+         ledger's own join. This is an identity, so it answers for rows text
+         never could: a document, whose delivered words carry the inbox paths
+         the row never showed, and a send that is nothing but a picture, which
+         has no words to be recognised by at all. */
+      const submissionId = provenanceLookup.submissionFor(submissionDedup)
+        ?? provenanceLookup.forItem(item)?.submissionId
+        ?? undefined;
+      if (!text.trim() && !submissionId) return [];
       /* A genuine user bubble is always an echo, and so is a delivered
          structured message (#1117): the system-kind row carrying a ledger join
          identity IS the send's transcript echo, whatever the renderer resolves
          it into. Any other non-user row only echoes the launch when it exactly
-         carries a launch-owned bubble's own identity. */
+         carries a launch-owned bubble's own identity — or when the delivery
+         path names the submission it was written for, which is stronger than
+         any of these. */
       const deliveredEcho = item.kind === "sysmsg" && Boolean(item.deliveredMessage);
-      if (item.kind !== "user" && !deliveredEcho && !launchEchoKeys.has(text.trim())) return [];
-      return [{ generation: transcriptGeneration, id: anchorKey ?? `key:${key}`, text }];
+      if (item.kind !== "user" && !deliveredEcho && !submissionId && !launchEchoKeys.has(text.trim())) return [];
+      return [{
+        generation: transcriptGeneration,
+        id: anchorKey ?? `key:${key}`,
+        text,
+        ...(submissionId ? { submissionId } : {}),
+      }];
     });
-  }, [feed.items, transcriptGeneration, launchEchoKeys]);
+  }, [feed.items, transcriptGeneration, launchEchoKeys, provenanceLookup]);
   const transcriptEchoCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const echo of transcriptEchoes) {
@@ -933,11 +950,34 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
        screen (round-4 P1). The rule is the invariant, not a retirement
        timing. */
     const adopted = new Set<string>();
-    const rows: ConversationRow[] = visibleItems.map(({ anchorKey, key, item, responseDurationMs }, visibleIndex) => {
+    const rows: ConversationRow[] = visibleItems.flatMap(({ anchorKey, key, item, responseDurationMs }, visibleIndex) => {
       const answer = answerFor(visibleStartIndex + visibleIndex);
       const speakText = answer?.firstIndex === visibleStartIndex + visibleIndex ? answer.text : undefined;
       const echoSourceId = anchorKey ?? `key:${key}`;
       const rowKey = item.kind === "user" ? messageRowKey(echoSourceId, key) : key;
+      /* A record that carries no bubble of its own — a send that was nothing
+         but an attachment — still belongs to a submission, and the delivery
+         path says which (#1950 round 2). Its attachment card would otherwise
+         be inserted ABOVE the row the operator already has, pushing that row
+         down by the height of the picture at the one moment this slice
+         promises nothing moves. The message takes the place its record
+         occupies and the attachment follows it, exactly as it does for a send
+         that had words too. */
+      const boundSubmission = item.kind === "user" ? "" : messageRowKey(echoSourceId, "");
+      const boundId = boundSubmission ? boundSubmission.slice("msg:".length) : "";
+      const boundEntry = boundId && !adopted.has(boundId)
+        ? outbox.find((candidate) => candidate.id === boundId) ?? null
+        : null;
+      if (boundEntry) {
+        adopted.add(boundId);
+        /* The record's anchor stays on the record's own row: two rows sharing
+           one anchor would give the viewport two answers to where it was. */
+        return [
+          { kind: "message", key: boundSubmission, anchorKey: null, entry: boundEntry, canonical: null } as ConversationRow,
+          { kind: "item", key: rowKey, anchorKey, item, speakText,
+            ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow,
+        ];
+      }
       /* Only a row the operator's own queue claimed becomes a message row: it
          is provably their submission, so it can never be the relay or mandate
          card that `FeedItem` resolves an unclaimed user row into. */
@@ -951,7 +991,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            the node. */
         const bound = outbox.find((candidate) => candidate.id === rowKey.slice("msg:".length));
         adopted.add(rowKey.slice("msg:".length));
-        return {
+        return [{
           kind: "message",
           key: rowKey,
           anchorKey,
@@ -970,9 +1010,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               ?? null,
           },
           ...(responseDurationMs !== undefined ? { responseDurationMs } : {}),
-        };
+        } as ConversationRow];
       }
-      return { kind: "item", key: rowKey, anchorKey, item, speakText, ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) };
+      return [{ kind: "item", key: rowKey, anchorKey, item, speakText, ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow];
     });
     for (const section of orderedConversationTail({
       launch: Boolean(launch),

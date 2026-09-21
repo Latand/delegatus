@@ -31,9 +31,20 @@ export interface ProvenanceLookup {
   /** Delivery evidence for one feed row — the Claude ledger's id join first,
       then the occurrence join — or null when nothing proves its authorship. */
   forItem(item: Item): DeliveredMessageProvenance | null;
+  /**
+   * WHICH submission a delivery identity belongs to (#1950 round 2): the
+   * `dedup` token a structured Codex record carries in its own marker,
+   * resolved to the client message id that admitted it — the id of the outbox
+   * row the operator is looking at.
+   *
+   * Null is the honest answer and it binds nothing. A token that resolves to
+   * nothing is a delivery this browser cannot name, which is precisely NOT a
+   * reason to hand the record to whichever row happens to share its words.
+   */
+  submissionFor(dedup: string | undefined): string | null;
 }
 
-export const NO_PROVENANCE: ProvenanceLookup = { forItem: () => null };
+export const NO_PROVENANCE: ProvenanceLookup = { forItem: () => null, submissionFor: () => null };
 const ProvenanceContext = createContext<ProvenanceLookup>(NO_PROVENANCE);
 export const MessageProvenanceProvider = ProvenanceContext.Provider;
 
@@ -45,6 +56,9 @@ type ProvenanceMap = Record<string, DeliveredMessageProvenance>;
 interface PathProvenance {
   messages: ProvenanceMap;
   occurrences: DeliveredMessageOccurrence[];
+  /** `dedup token → submission id`, straight from the registry's own record
+      of which client message id admitted which delivery operation. */
+  submissions: Record<string, string>;
 }
 
 /* Browser-wide, so a revisited conversation answers from memory and a pane
@@ -89,6 +103,14 @@ function parseMandate(value: unknown): MandateDelivery | null {
     : { kind: "unqualified" };
 }
 
+/** A submission id is this browser's own idempotency key travelling back to
+    it. Bounded and marker-safe so a corrupt record can only cost the join. */
+const SUBMISSION_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function parseSubmissionId(value: unknown): string | undefined {
+  return typeof value === "string" && SUBMISSION_ID.test(value) ? value : undefined;
+}
+
 function parseProvenance(entry: unknown): DeliveredMessageProvenance | null {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
   const body = entry as Record<string, unknown>;
@@ -96,12 +118,27 @@ function parseProvenance(entry: unknown): DeliveredMessageProvenance | null {
   const senderRole = messageOriginRole(body.senderRole);
   const selectedContext = parseSelectedContextRef(body.selectedContext);
   const mandate = parseMandate(body.mandate);
+  const submissionId = parseSubmissionId(body.submissionId);
   return {
     origin: body.origin,
     ...(senderRole ? { senderRole } : {}),
     ...(selectedContext ? { selectedContext } : {}),
     ...(mandate ? { mandate } : {}),
+    ...(submissionId ? { submissionId } : {}),
   };
+}
+
+const DEDUP_TOKEN = /^[a-f0-9]{64}$/;
+
+function parseSubmissions(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const parsed: Record<string, string> = {};
+  for (const [token, id] of Object.entries(value as Record<string, unknown>)) {
+    if (!DEDUP_TOKEN.test(token)) continue;
+    const submissionId = parseSubmissionId(id);
+    if (submissionId) parsed[token] = submissionId;
+  }
+  return parsed;
 }
 
 function parseProvenanceMessages(value: unknown): ProvenanceMap {
@@ -152,6 +189,11 @@ interface WantedDriver {
   /** Bounded trigger token; collisions only cost a skipped refetch, never a
       wrong join — resolution always compares the full digest. */
   token: string;
+  /** The record's own delivery identity, when it carries one (#1950 round 2).
+      Unresolved until the registry names its submission, and a row whose
+      submission is unnamed is exactly the row that must not be bound by its
+      words — so it drives a fetch on its own. */
+  dedup?: string;
 }
 
 interface WantedEvidence {
@@ -166,7 +208,8 @@ interface WantedEvidence {
 function wantedEvidence(items: readonly FeedEntry[]): WantedEvidence {
   const drivers: WantedDriver[] = [];
   const candidates: Item[] = [];
-  for (const { item } of items) {
+  const seenDedup = new Set<string>();
+  for (const { item, submissionDedup } of items) {
     const candidate = occurrenceCandidate(item);
     if (candidate) candidates.push(item);
     const token = candidate ? candidateDigests(candidate)[0].slice(0, 16) : "";
@@ -174,6 +217,12 @@ function wantedEvidence(items: readonly FeedEntry[]): WantedEvidence {
       drivers.push({ item, engineMessageId: item.deliveredMessage.engineMessageId, tsMs: candidate?.tsMs ?? Number.NaN, token });
     } else if (item.kind === "user" && !item.selectedContext && candidate) {
       drivers.push({ item, engineMessageId: null, tsMs: candidate.tsMs, token });
+    }
+    /* One driver per RECORD, not per row: an image-only send paints several
+       attachment rows that share one identity, and they need one answer. */
+    if (submissionDedup && !seenDedup.has(submissionDedup)) {
+      seenDedup.add(submissionDedup);
+      drivers.push({ item, engineMessageId: null, tsMs: candidate?.tsMs ?? Number.NaN, token, dedup: submissionDedup });
     }
   }
   return { drivers, candidates };
@@ -187,6 +236,11 @@ function unresolvedDrivers(wanted: WantedEvidence, data: PathProvenance | null, 
   if (!data) return true;
   const assigned = assignDeliveredOccurrences(wanted.candidates, data.occurrences);
   return wanted.drivers.some((driver) => {
+    /* A delivery identity revalidates on its own terms: the registry writes
+       the owner row at admission, so an unresolved token is either a send
+       this conversation never made or one whose record has not been read
+       back yet — and only a refetch can tell those apart. */
+    if (driver.dedup) return !(driver.dedup in data.submissions);
     if (driver.engineMessageId && driver.engineMessageId in data.messages) return false;
     if (assigned.has(driver.item)) return false;
     if (driver.engineMessageId) return true;
@@ -219,6 +273,7 @@ function lookupFor(data: PathProvenance | null, assignment: Map<Item, DeliveredM
       }
       return assignment.get(item) ?? null;
     },
+    submissionFor: (dedup) => (dedup ? data.submissions[dedup] ?? null : null),
   };
 }
 
@@ -228,11 +283,18 @@ function lookupFor(data: PathProvenance | null, assignment: Map<Item, DeliveredM
  * and the renderer without a fetch.
  */
 export function provenanceLookupFor(
-  data: { messages?: ProvenanceMap; occurrences?: readonly DeliveredMessageOccurrence[] },
+  data: {
+    messages?: ProvenanceMap;
+    occurrences?: readonly DeliveredMessageOccurrence[];
+    submissions?: Record<string, string>;
+  },
   items: Iterable<Item>,
 ): ProvenanceLookup {
   const occurrences = [...(data.occurrences ?? [])];
-  return lookupFor({ messages: data.messages ?? {}, occurrences }, assignDeliveredOccurrences(items, occurrences));
+  return lookupFor(
+    { messages: data.messages ?? {}, occurrences, submissions: data.submissions ?? {} },
+    assignDeliveredOccurrences(items, occurrences),
+  );
 }
 
 const NO_OCCURRENCES: readonly DeliveredMessageOccurrence[] = [];
@@ -249,7 +311,7 @@ export function useDeliveredMessageProvenance(path: string | null, items: readon
     [path, items],
   );
   const wantedKey = useMemo(
-    () => wanted.drivers.map((driver) => driver.engineMessageId ?? driver.token).join("\n"),
+    () => wanted.drivers.map((driver) => driver.dedup ?? driver.engineMessageId ?? driver.token).join("\n"),
     [wanted],
   );
   /* The fetch effect keys on the bounded `wantedKey` alone — `wanted` changes
@@ -274,11 +336,15 @@ export function useDeliveredMessageProvenance(path: string | null, items: readon
       try {
         const res = await fetch(`/api/log/provenance?path=${encodeURIComponent(path)}`);
         if (!res.ok) return;
-        const json = (await res.json()) as { messages?: unknown; occurrences?: unknown };
+        const json = (await res.json()) as { messages?: unknown; occurrences?: unknown; submissions?: unknown };
         const previous = provenanceCache.get(path);
         const merged: PathProvenance = {
           messages: { ...(previous?.messages ?? {}), ...parseProvenanceMessages(json.messages) },
           occurrences: mergeOccurrences(previous?.occurrences ?? [], parseOccurrences(json.occurrences)),
+          /* Only grows: a delivery's owner row is immutable once written, and
+             the registry compacting it later must not unbind a row the
+             operator is already looking at. */
+          submissions: { ...(previous?.submissions ?? {}), ...parseSubmissions(json.submissions) },
         };
         provenanceCache.set(path, merged);
         if (!alive) return;
@@ -303,6 +369,10 @@ export function useDeliveredMessageProvenance(path: string | null, items: readon
   /* Every feed re-parse yields a new assignment map over the SAME row objects;
      the lookup only changes identity — re-rendering every memoized row — when
      a row's resolution actually changed. */
+  const submissionsKey = useMemo(
+    () => Object.keys(data?.submissions ?? {}).sort().join("\n"),
+    [data],
+  );
   const assignmentKey = useMemo(() => {
     const parts: string[] = [];
     for (const [item, provenance] of assignment) {
@@ -315,7 +385,7 @@ export function useDeliveredMessageProvenance(path: string | null, items: readon
   }, [assignment]);
   return useMemo(
     () => lookupFor(data, assignment),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the assignment's CONTENT (assignmentKey); a same-content map keeps the lookup
-    [data, assignmentKey],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the assignment's CONTENT (assignmentKey) and the submissions it can resolve; a same-content map keeps the lookup
+    [data, assignmentKey, submissionsKey],
   );
 }
