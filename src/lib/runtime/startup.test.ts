@@ -13,6 +13,7 @@ import {
   type OrchestratorSeat,
 } from "@/lib/orchestrator/seats";
 import { procBackend } from "@/lib/proc";
+import { buildPipeline, loadPipelinesForStartup, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { turnStateFromRecords } from "@/lib/scanner/activity";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -1255,7 +1256,7 @@ function addStructuredRestartConversation(
     engine?: "codex" | "claude";
     sessionId: string;
     status: "live" | "idle" | "dead" | "unhosted";
-    turn: "busy" | "terminal" | "unknown";
+    turn: "busy" | "idle" | "terminal" | "unknown";
     activeTurnRef?: string | null;
     endpoint?: string;
     transcriptRecords?: Record<string, unknown>[];
@@ -2640,7 +2641,7 @@ test.each(["codex", "claude"] as const)(
       expect(replacementAttempts).toBe(0);
       expect(startupLogs).toHaveLength(1);
       expect(startupLogs[0]![0]).toBe("[structured hosts] startup adoption failed; retry scheduled");
-      expect(startupLogs[0]![1]).toEqual({
+      expect(startupLogs[0]![1]).toMatchObject({
         category: "runtime-host-unavailable", attempt: 1, retryInMs: 100,
       });
       const refused = registry.readOnlySnapshot().entries[`${engine}:${sessionId}`]!;
@@ -4825,7 +4826,7 @@ test("deferred pipeline evidence completes the pass with both engines retained, 
 });
 
 
-test("startup rechecks pipeline evidence under a short lease before claiming a host", async () => {
+test.each(["settled", "deferred"] as const)("startup skips a newly %s host under a short claim lease and reaches ready", async (changed) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-claim-race-"));
   const { registry, conversation } = structuredRestartFixture(directory, "codex", "unhosted");
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
@@ -4833,21 +4834,148 @@ test("startup rechecks pipeline evidence under a short lease before claiming a h
   let claimAttempted = false;
   const before = structuredClone(registry.readOnlySnapshot().entries);
   try {
-    await expect(adoptStructuredHostsAtStartup({
+    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup({
       registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [],
       refreshTranscriptState: async () => {},
-      pipelineEvidence: () => ({ settled: new Set<string>(), deferred: new Set(fenced ? [conversation.id] : []) }),
+      pipelineEvidence: () => ({ settled: new Set(changed === "settled" && fenced ? [conversation.id] : []), deferred: new Set(changed === "deferred" && fenced ? [conversation.id] : []) }),
       adopt: async (received, _options, _env, _filter, _processed, hooks) => {
         // A close records its survivor after selection, before the writer claim.
         fenced = true;
         claimAttempted = true;
         const entry = Object.values(received.readOnlySnapshot().entries)[0]!;
-        await hooks!.claimHost!(entry, { pid: process.pid, startIdentity: "fixture-owner" });
-        throw new Error("a fenced host reached launch");
+        expect(await hooks!.claimHost!(entry, { pid: process.pid, startIdentity: "fixture-owner" })).toBeNull();
+        expect(_filter!(entry)).toBe(false);
+        return [];
       },
       adoptClaude: async () => [],
-    })).rejects.toThrow("pipeline startup evidence changed before host claim");
+      schedule: () => ({ unref() {} }),
+    }), () => {}, { schedule: () => ({ unref() {} }) });
     expect(claimAttempted).toBe(true);
+    expect(structuredStartupStatus()?.state).toBe("ready");
+    expect(registry.readOnlySnapshot().entries).toEqual(before);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each(["dead", "live"] as const)("settled archived Codex handoff with a %s entry completes its first startup pass", async (status) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-settled-handoff-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionId = "aaaaaaaa-1111-0111-0111-aaaaaaaaaaaa";
+  const { conversation } = addStructuredRestartConversation(registry, directory, { sessionId, status, turn: "idle" });
+  const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  // Read-only incident shape: settled archived attempt, structured entry and
+  // a handoff. Selection allows owed work before checking stage settlement.
+  registry.upsert({ ...entry, pendingAction: "handoff" });
+  const healthyId = "bbbbbbbb-2222-0222-0222-bbbbbbbbbbbb";
+  addStructuredRestartConversation(registry, directory, { sessionId: healthyId, status: "live", turn: "busy" });
+  const role = { roleId: null, engine: "codex" as const, model: "gpt-5.6-sol", effort: "high" as const, access: "read-write" as const, promptScaffold: null };
+  const pipeline = buildPipeline({ id: "fixture-archived", task: "settled handoff", project: "fixture", repoDir: directory,
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-08-30T00:00:00.000Z" });
+  pipeline.state = "closed";
+  pipeline.cursor = null;
+  pipeline.closedAt = "2026-08-30T01:00:00.000Z";
+  pipeline.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: role, launchId: null,
+    conversationId: conversation.id, sessionId, agentPath: entry.artifactPath, paneId: null, flowId: null,
+    startedAt: pipeline.createdAt, completedAt: pipeline.closedAt, input: null, activatedBy: null, output: null, verdict: null, error: null });
+  fs.writeFileSync(path.join(directory, "pipelines.json"), JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [] }));
+  fs.writeFileSync(path.join(directory, "pipelines-archive.json"), JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [pipeline] }));
+  expect(loadPipelinesForStartup()).toHaveLength(1);
+  const launched: string[] = [];
+  const failures: string[] = [];
+  let retries = 0;
+  const dependencies: StructuredStartupDependencies = {
+    registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+    resolveCodexOwner: () => null, adoptClaude: async () => [],
+    adopt: (received, options, env, filter, processed, hooks) => adoptCodexRegistryHosts(received, options, env, filter, processed, {
+      ...hooks,
+      adoptHost: (async (id: string) => {
+        launched.push(id);
+        return Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), {
+          status: "idle", sessionKey: id, endpoint: "fake:startup", pid: null, processStartIdentity: null,
+          eventCursor: 0, protocolVersion: "fixture", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+        }), { setWriterFence: () => {}, onStateChange: () => () => {} });
+      }) as never,
+    }),
+  };
+  try {
+    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup(dependencies).catch((error) => {
+      failures.push(error.message);
+      throw error;
+    }), () => {}, {
+      schedule: () => { retries += 1; return { unref() {} }; },
+    });
+    expect(failures).toEqual([]);
+    expect(retries).toBe(0);
+    expect(structuredStartupStatus()?.state).toBe("ready");
+    expect(launched).toEqual([sessionId, healthyId]);
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(launched).toHaveLength(2);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("startup retry logs the error and host key and exposes its failure category", async () => {
+  const logged: unknown[][] = [];
+  const failure = Object.assign(new RuntimeHostUnavailableError("host claim dependency unavailable"), { hostKey: "codex:fixture-host" });
+  await runStructuredHostStartup(async () => { throw failure; }, (...args) => { logged.push(args); }, {
+    jitterRatio: 0, schedule: () => ({ unref() {} }),
+  });
+  expect(logged[0]?.[1]).toMatchObject({ message: failure.message, hostKey: failure.hostKey, category: "runtime-host-unavailable" });
+  expect(structuredStartupStatus()).toMatchObject({ state: "failed", failureCategory: "runtime-host-unavailable" });
+  await runStructuredHostStartup(async () => {});
+  expect(structuredStartupStatus()?.failureCategory).toBeNull();
+});
+
+test.each(["codex", "claude"] as const)("production %s claim failures retain their host key in the startup retry log", async (engine) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-claim-diagnostic-"));
+  const { registry, sessionId } = structuredRestartFixture(directory, engine, "unhosted");
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const claim = spyOn(registry, "claimStructuredHost").mockImplementation(() => {
+    throw new RuntimeHostUnavailableError("claim authority unavailable");
+  });
+  const logged: unknown[][] = [];
+  try {
+    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup({
+      registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+    }), (...args) => { logged.push(args); }, { schedule: () => ({ unref() {} }) });
+    expect(logged[0]?.[1]).toMatchObject({ message: "claim authority unavailable", hostKey: `${engine}:${sessionId}` });
+  } finally {
+    claim.mockRestore();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a host deferred during reconciliation is retained while startup reaches ready", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-reconciliation-fence-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const { conversation } = addStructuredRestartConversation(registry, directory, {
+    sessionId: "cccccccc-3333-0333-0333-cccccccccccc", engine: "claude", status: "live", turn: "terminal",
+  });
+  const before = structuredClone(registry.readOnlySnapshot().entries);
+  let deferred = false;
+  try {
+    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup({
+      registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set<string>(), deferred: new Set(deferred ? [conversation.id] : []) }),
+      adopt: async () => [], adoptClaude: async () => { deferred = true; return []; },
+      schedule: () => ({ unref() {} }),
+    }), () => {}, { schedule: () => ({ unref() {} }) });
+    expect(structuredStartupStatus()?.state).toBe("ready");
     expect(registry.readOnlySnapshot().entries).toEqual(before);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });

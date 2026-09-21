@@ -575,9 +575,9 @@ function assertAdoptedHostsAreClaimed(
   if (unclaimed.length === 0) return;
   const keys = unclaimed.map((item) => sessionKeyId(item.key));
   console.error("[structured hosts] adopted hosts were left unclaimed by the delivery controller", { keys });
-  throw new RuntimeHostUnavailableError(
+  throw Object.assign(new RuntimeHostUnavailableError(
     `structured delivery controller did not claim ${unclaimed.length} adopted host(s): ${keys.join(", ")}`,
-  );
+  ), { hostKey: keys[0] });
 }
 
 /** Every row selected before adoption must end the pass with a host published
@@ -621,9 +621,9 @@ function assertEligibleHostsResolved(
   if (contested.length === 0) return;
   const keys = contested.map((entry) => sessionKeyId(entry.key));
   console.error("[structured hosts] eligible hosts remain owned by the incumbent Viewer; retrying startup", { keys });
-  throw new RuntimeHostUnavailableError(
+  throw Object.assign(new RuntimeHostUnavailableError(
     `structured startup left ${keys.length} eligible host(s) owned by the incumbent Viewer: ${keys.join(", ")}`,
-  );
+  ), { hostKey: keys[0] });
 }
 
 function interruptedCodexContinuationOperationId(sessionId: string, claimEpoch: number): string {
@@ -1319,12 +1319,14 @@ async function adoptStructuredHostsPass(
       interruptedHostKeys,
     );
     const retainedHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
+    const skippedHostKeys = new Set<string>();
     const shouldAdopt: StructuredHostAdoptionFilter = (entry) => {
       // Let an adopter return the handles it already created. Throwing from
       // its per-row progress callback would discard that partial result.
       try { assertActive(); } catch { return false; }
       return (!resumeDeferred || resumeDeferred.has(sessionKeyId(entry.key)))
-        && !retainedHostKeys.has(sessionKeyId(entry.key)) && eligible(entry);
+        && !retainedHostKeys.has(sessionKeyId(entry.key))
+        && !skippedHostKeys.has(sessionKeyId(entry.key)) && eligible(entry);
     };
     const adoptionCandidates = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
       entry.structuredHost && shouldAdopt(entry));
@@ -1345,17 +1347,25 @@ async function adoptStructuredHostsPass(
         deferredAdoptionLogged = true;
         console.error("[structured hosts] deferring adoption until a delivery controller can claim it", { keys });
       }
-      throw new RuntimeHostUnavailableError(
+      throw Object.assign(new RuntimeHostUnavailableError(
         `structured delivery controller is unavailable; deferred adoption of ${keys.length} host(s): ${keys.join(", ")}`,
-      );
+      ), { hostKey: keys[0] });
     }
     const claimHost = (entry: AgentRegistryEntry, owner: ProcessIdentity) =>
       admitState(async (available) => {
         assertActive();
         const evidence = available ? readEvidence() : pipelineStartupEvidence(registry, false);
         const conversation = registry.conversationForPath(entry.artifactPath);
-        if (conversation && (evidence.deferred.has(conversation.id) || evidence.settled.has(conversation.id))) {
-          throw new RuntimeHostUnavailableError("pipeline startup evidence changed before host claim");
+        const id = conversation && registry.canonicalConversationId(conversation.id);
+        // Selection deliberately admits owed work on already-settled stages.
+        // Only a new settlement invalidates that selection. A new survivor or
+        // unreadable authority always defers it, including owed work.
+        if (id && (evidence.deferred.has(id)
+          || (evidence.settled.has(id) && !pipelineEvidence.settled.has(id)))) {
+          const key = sessionKeyId(entry.key);
+          skippedHostKeys.add(key);
+          if (evidence.deferred.has(id)) deferredHostKeys.add(key);
+          return null;
         }
         const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
         if (!current || !shouldAdopt(current)) return null;
@@ -1486,6 +1496,7 @@ async function adoptStructuredHostsPass(
          (#1281). Whatever can read the artifact next decides. */
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key))
+      || skippedHostKeys.has(sessionKeyId(entry.key))
       || unreadableTranscripts.has(sessionKeyId(entry.key))
       || shouldAdopt(entry);
     const candidateCodexHosts = nextAdoptedHosts.filter(
@@ -1501,8 +1512,10 @@ async function adoptStructuredHostsPass(
         assertActive();
         const evidence = available ? readEvidence() : pipelineStartupEvidence(registry, false);
         const conversation = registry.conversationForPath(entry.artifactPath);
-        if (conversation && evidence.deferred.has(conversation.id)) {
-          throw new RuntimeHostUnavailableError("pipeline startup evidence changed before host reconciliation");
+        if (conversation && evidence.deferred.has(registry.canonicalConversationId(conversation.id))) {
+          deferredHostKeys.add(sessionKeyId(entry.key));
+          skippedHostKeys.add(sessionKeyId(entry.key));
+          return;
         }
         return mutation();
       }, "reconciling structured hosts"));
@@ -1535,7 +1548,8 @@ async function adoptStructuredHostsPass(
     assertActive();
     const finalHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
     const shouldPublish: StructuredHostAdoptionFilter = (entry) =>
-      finalHostKeys.has(sessionKeyId(entry.key)) || finalShouldAdopt(entry);
+      finalHostKeys.has(sessionKeyId(entry.key))
+      || (!skippedHostKeys.has(sessionKeyId(entry.key)) && finalShouldAdopt(entry));
     const interruptedCodex = interruptedCodexConversations(
       registry,
       shouldPublish,

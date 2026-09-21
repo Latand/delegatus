@@ -23,6 +23,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import {
   candidateLogExcerpt,
   hasViewerDeploymentCapability,
+  promotedViewerReadinessPhase,
   probeExcerpt,
   viewerDeploymentRegistryBackendMode,
   viewerDeploymentReleaseReady,
@@ -205,12 +206,15 @@ test("issue 1268: a failed structured-host adoption pass makes the serving Viewe
       completedHosts: 7,
       totalHosts: 19,
     });
-    markStructuredHostStartupFailed();
+    markStructuredHostStartupFailed("runtime-host-unavailable");
 
     const response = deploymentCapability();
+    const body = await response.text();
+    const progress = viewerDeploymentStructuredHostStartup(response.status, body);
+    expect(promotedViewerReadinessPhase(progress)).toContain("adopting Claude hosts - runtime-host-unavailable");
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({
+    expect(JSON.parse(body)).toMatchObject({
       error: "structured host startup adoption is retrying after a failed pass",
       structuredDeliveryController: "ready",
       structuredHostStartup: {
@@ -218,6 +222,7 @@ test("issue 1268: a failed structured-host adoption pass makes the serving Viewe
         phase: "adopting Claude hosts",
         completedHosts: 7,
         totalHosts: 19,
+        failureCategory: "runtime-host-unavailable",
       },
     });
   } finally {

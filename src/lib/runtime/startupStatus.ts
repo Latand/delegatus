@@ -35,6 +35,7 @@ export interface StructuredHostStartupStatus extends StructuredHostStartupProgre
   updatedAt: string;
   phaseStartedAt?: string;
   pid?: number;
+  failureCategory?: string | null;
 }
 
 function pendingStatus(): StructuredHostStartupStatus {
@@ -78,6 +79,7 @@ function setStatus(
     updatedAt: now,
     phaseStartedAt: changed ? now : previous?.phaseStartedAt ?? now,
     pid: process.pid,
+    failureCategory: state === "ready" ? null : previous?.failureCategory ?? null,
   };
 }
 
@@ -85,10 +87,11 @@ export function markStructuredHostStartupProgress(progress: StructuredHostStartu
   setStatus(startupStore.__llvStructuredHostStartupFailed === true ? "failed" : "pending", progress);
 }
 
-export function markStructuredHostStartupFailed(): void {
+export function markStructuredHostStartupFailed(category?: string): void {
   startupStore.__llvStructuredHostStartupFailed = true;
   const current = startupStore.__llvStructuredHostStartupProgress ?? pendingStatus();
   setStatus("failed", current);
+  if (category) startupStore.__llvStructuredHostStartupProgress!.failureCategory = category;
 }
 
 export function markStructuredHostStartupReady(): void {

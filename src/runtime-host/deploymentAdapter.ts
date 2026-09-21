@@ -50,7 +50,9 @@ const ACTION_TIMEOUTS: Record<AdapterAction, number | null> = {
      contains, so the adapter reports its own named reason instead of being
      killed mid-wait and leaving the operator a bare phase string. */
   promote: PROMOTE_ACTION_TIMEOUT_MS,
-  "verify-promoted": null,
+  // Healthy startup has taken 176s at history scale. Allow five minutes for
+  // serving and MCP readiness, then join the adapter and enter rollback.
+  "verify-promoted": 5 * 60_000,
   rollback: 90_000,
   retire: 60_000,
   "retain-only": 60_000,

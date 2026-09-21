@@ -18,6 +18,7 @@ import {
 } from "../src/runtime-host/mcpHealthProbeAdmissionChannel";
 import { probeMcpRuntime } from "../src/runtime-host/mcpRuntimeProbe";
 import { RuntimeHostFence } from "../src/runtime-host/runtimeHostFence";
+import { HostCommandViewerDeploymentAdapter } from "../src/runtime-host/deploymentAdapter";
 import { serveRuntimeHost } from "../src/runtime-host/socket";
 import {
   completeHotStatePreparation,
@@ -333,6 +334,45 @@ function composeSnapshot(): string {
     },
   });
 }
+
+test("bounded promoted verification retains the real 503 startup phase and category through a failed probe", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-promoted-startup-bound-"));
+  const state = path.join(sandbox, "state");
+  const bin = path.join(sandbox, "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(path.join(state, "deployments", "compose"), { recursive: true });
+  let capabilityProbes = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (new URL(request.url).pathname === "/api/runtime/deployments/capabilities/v1") {
+      if (++capabilityProbes > 1) return new Response("temporary probe failure", { status: 500 });
+      return Response.json({ releaseReady: false, structuredHostStartup: {
+        state: "failed", phase: "adopting Codex hosts", completedHosts: 0, totalHosts: 2,
+        failureCategory: "runtime-host-unavailable",
+      } }, { status: 503 });
+    }
+    return new Response('<script src="/_next/static/fixture.js"></script>');
+  } });
+  const candidate = { ...release, endpoint: `http://127.0.0.1:${server.port}` };
+  fs.writeFileSync(path.join(state, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), composeSnapshot());
+  fs.writeFileSync(path.join(bin, "docker"), '#!/bin/sh\nif [ "$1 $2" = "container inspect" ]; then exit 0; fi\nif [ "$1" = inspect ]; then echo running; exit 0; fi\nexit 1\n', { mode: 0o755 });
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const executable = path.join(bin, "adapter");
+  fs.writeFileSync(executable, `#!/bin/sh\nexport PATH=${quote(bin)}:"$PATH"\nexport LLV_STATE_DIR=${quote(state)}\nexport LLV_VIEWER_PORT=${server.port}\nexec ${quote(process.execPath)} ${quote(adapter)} "$@"\n`, { mode: 0o755 });
+  const processFile = path.join(state, "adapter-process.json");
+  const bounded = HostCommandViewerDeploymentAdapter.fromExecutable(executable, {
+    stateFile: processFile, timeouts: { "verify-promoted": 3_000 },
+  });
+  try {
+    await expect(bounded.verifyPromoted(candidate)).rejects.toThrow(
+      "adoption 0 of 2 - adopting Codex hosts - runtime-host-unavailable",
+    );
+    expect(capabilityProbes).toBeGreaterThan(1);
+    expect(fs.existsSync(processFile)).toBe(false);
+  } finally {
+    await server.stop(true);
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+});
 
 async function runAction(options: {
   action: "promote" | "retain-only" | "rollback" | "complete-host-handoff" | "reconcile-mcp-runtime" | "verify-candidate";
