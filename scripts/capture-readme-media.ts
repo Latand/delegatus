@@ -58,39 +58,60 @@ export type ReadmeShot = {
 const DESKTOP = { width: 1280, height: 800 };
 const PHONE = { width: 390, height: 844 };
 
+const clickLabel = (page: Page, label: string) => page.locator(`[aria-label="${label}"]`).first().click();
+const clickText = (page: Page, text: string) => page.getByText(text, { exact: false }).first().click();
+/* A project without an orchestrator opens with the create draft unfolded;
+   the board shots fold it to its one-line bar. */
+const foldOrchestrator = (page: Page) => clickLabel(page, "Collapse the orchestrator chat (O)");
+
 export const SHOTS: ReadmeShot[] = [
   {
     id: "board",
-    target: { kind: "overview" },
+    target: { kind: "project", project: "harbor-api" },
     viewport: DESKTOP,
-    requiredText: ["Idempotent refunds", "Lazy-load the product grid", "Offline drafts"],
+    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes"],
     absentText: ["tmux"],
-    description: "The overview board: tasks from every project by status, with the agents working on each and a running pipeline.",
+    prepare: foldOrchestrator,
+    description: "A project's board: tasks by status, the agents working on each, and a running pipeline; account limits in the sidebar.",
   },
   {
     id: "conversation",
     target: { kind: "conversation", key: "refunds-builder" },
-    viewport: DESKTOP,
-    requiredText: ["Idempotency-Key", "4 pass"],
-    description: "A Claude Code conversation read as a chat, with tool cards for search, file reads, edits and a test run.",
+    viewport: { width: 1280, height: 960 },
+    requiredText: ["Idempotency-Key", "4 pass", "UPDATE"],
+    prepare: async (page) => {
+      await clickLabel(page, "Open as a full pane");
+      await page.waitForTimeout(800);
+      await clickText(page, "1 search");
+      await page.waitForTimeout(500);
+      await clickText(page, "wrote 1 file");
+    },
+    description: "A Claude Code conversation read as a chat: an edit shown as a diff, a test run with its output, and the answer.",
   },
   {
     id: "pipeline",
     target: { kind: "project", project: "harbor-api" },
     viewport: DESKTOP,
-    requiredText: ["Idempotent refunds", "Build", "Review", "Verify"],
-    description: "A project board with a pipeline card: build passed, a Codex reviewer running, verify waiting.",
+    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting"],
+    prepare: async (page) => {
+      await foldOrchestrator(page);
+      await page.waitForTimeout(500);
+      await clickLabel(page, "Expand all 3 stages");
+    },
+    description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
   },
   {
     id: "accounts",
-    target: { kind: "overview" },
+    target: { kind: "project", project: "harbor-api" },
     viewport: DESKTOP,
-    requiredText: ["Work", "Main"],
+    requiredText: ["Claude accounts", "Work", "Main", "Opus"],
     prepare: async (page) => {
-      await page.click('button[aria-label="Claude accounts — switch or add"]');
+      await foldOrchestrator(page);
+      await page.waitForTimeout(500);
+      await clickLabel(page, "Claude accounts — switch or add");
       await page.waitForSelector('[role="dialog"][aria-label="Claude accounts"]');
     },
-    description: "Claude accounts with their five-hour and weekly limits; the active one can be switched from here.",
+    description: "Claude accounts with their five-hour, weekly and per-model limits; switch the active account or add one here.",
   },
   {
     id: "phone-conversation",

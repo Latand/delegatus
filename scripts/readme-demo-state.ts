@@ -52,6 +52,8 @@ type Step =
 
 type Conversation = {
   key: string;
+  /** The name the operator gave it, as the rename action stores it. */
+  title: string;
   project: DemoProject;
   model: string;
   /** Minutes before capture of the first record. */
@@ -70,6 +72,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
   return [
     {
       key: "refunds-builder",
+      title: "Idempotent refunds",
       project: "harbor-api",
       model: "claude-opus-5",
       startedMinutesAgo: 34,
@@ -84,14 +87,14 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
         },
         {
           tool: "Read",
-          input: { file_path: `${harbor}/src/refunds/handler.ts`, offset: 40, limit: 24 },
+          input: { file_path: `src/refunds/handler.ts`, offset: 40, limit: 24 },
           result: "40\t\n41\t/** POST /refunds */\n42\texport async function createRefund(req: Request): Promise<Response> {\n43\t  const body = RefundRequest.parse(await req.json());\n44\t  const charge = await payments.refund(body.chargeId, body.amount);\n45\t  const row = await db.refunds.insert({ ...body, providerId: charge.id });\n46\t  return Response.json(row, { status: 201 });\n47\t}",
         },
         { say: "The handler calls the payment provider before it records anything, so a client that retries after a timeout gets refunded twice. I'll store the key and the response in the same transaction as the refund row, and answer a repeated key from that row." },
         {
           tool: "Write",
           input: {
-            file_path: `${harbor}/migrations/0042_idempotency_keys.sql`,
+            file_path: `migrations/0042_idempotency_keys.sql`,
             content: "CREATE TABLE idempotency_keys (\n  key text PRIMARY KEY,\n  request_hash text NOT NULL,\n  response jsonb NOT NULL,\n  created_at timestamptz NOT NULL DEFAULT now()\n);\n",
           },
           result: "File created successfully at: migrations/0042_idempotency_keys.sql",
@@ -99,7 +102,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
         {
           tool: "Edit",
           input: {
-            file_path: `${harbor}/src/refunds/handler.ts`,
+            file_path: `src/refunds/handler.ts`,
             old_string: "  const body = RefundRequest.parse(await req.json());\n  const charge = await payments.refund(body.chargeId, body.amount);",
             new_string: "  const body = RefundRequest.parse(await req.json());\n  const key = req.headers.get(\"Idempotency-Key\");\n  const replay = key ? await idempotency.lookup(key, body) : null;\n  if (replay) return Response.json(replay.response, { status: replay.status });\n  const charge = await payments.refund(body.chargeId, body.amount);",
           },
@@ -110,11 +113,12 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
           input: { command: "bun test src/refunds", description: "Run the refunds tests" },
           result: "src/refunds/handler.test.ts:\n✓ creates a refund [12.40ms]\n✓ answers a repeated key with the stored response [4.10ms]\n✓ rejects a reused key with a different body (409) [3.20ms]\n✓ refunds normally without a key [2.90ms]\n\n 4 pass\n 0 fail\n 11 expect() calls\nRan 4 tests across 1 file. [188.00ms]",
         },
-        { say: "Done. `POST /refunds` now honours an `Idempotency-Key` header:\n\n- a repeated key with the same body returns the first response and never calls the provider again;\n- the same key with a different body answers **409**;\n- requests without a key behave exactly as before.\n\nThe key and the response are written in the refund's transaction (migration `0042`), so a crash between the charge and the insert cannot leave a key without its row. Four tests cover it." },
+        { say: "Done. `POST /refunds` now honours an `Idempotency-Key` header. A repeated key with the same body returns the first response without calling the provider again, the same key with a different body answers **409**, and requests without a key behave as before.\n\nThe key and the response are written in the refund's transaction (migration `0042`), so a crash between the charge and the insert cannot leave a key without its row." },
       ],
     },
     {
       key: "key-rotation",
+      title: "Signing key rotation",
       project: "harbor-api",
       model: "claude-opus-5",
       startedMinutesAgo: 9,
@@ -128,10 +132,11 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
           result: "src/webhooks/sign.ts:4:const secret = env.WEBHOOK_SECRET;\nsrc/webhooks/verify.ts:7:  const expected = hmac(env.WEBHOOK_SECRET, payload);",
         },
       ],
-      midTurn: { tool: "Edit", input: { file_path: `${harbor}/src/webhooks/verify.ts`, old_string: "  const expected = hmac(env.WEBHOOK_SECRET, payload);", new_string: "  const accepted = keyRing.verifying(now).map((key) => hmac(key, payload));" } },
+      midTurn: { tool: "Edit", input: { file_path: `src/webhooks/verify.ts`, old_string: "  const expected = hmac(env.WEBHOOK_SECRET, payload);", new_string: "  const accepted = keyRing.verifying(now).map((key) => hmac(key, payload));" } },
     },
     {
       key: "charges-pagination",
+      title: "Charges pagination",
       project: "harbor-api",
       model: "claude-sonnet-5",
       startedMinutesAgo: 210,
@@ -148,6 +153,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
     },
     {
       key: "cart-rounding",
+      title: "Cart rounding",
       project: "lumen-web",
       model: "claude-sonnet-5",
       startedMinutesAgo: 95,
@@ -162,7 +168,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
         {
           tool: "Edit",
           input: {
-            file_path: `${lumen}/src/cart/CartSummary.tsx`,
+            file_path: `src/cart/CartSummary.tsx`,
             old_string: "  const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);",
             new_string: "  const total = sumCents(items.map((item) => lineCents(item)));",
           },
@@ -178,6 +184,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
     },
     {
       key: "product-grid",
+      title: "Lazy product grid",
       project: "lumen-web",
       model: "claude-sonnet-5",
       startedMinutesAgo: 6,
@@ -191,10 +198,11 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
           result: "LCP  2.84 s (median of 5)\nbytes on first load  4.1 MB\nimages requested  48",
         },
       ],
-      midTurn: { tool: "Edit", input: { file_path: `${lumen}/src/catalog/ProductGrid.tsx`, old_string: "<img src={product.image}", new_string: "<img loading=\"lazy\" src={product.image}" } },
+      midTurn: { tool: "Edit", input: { file_path: `src/catalog/ProductGrid.tsx`, old_string: "<img src={product.image}", new_string: "<img loading=\"lazy\" src={product.image}" } },
     },
     {
       key: "offline-drafts",
+      title: "Offline edit queue",
       project: "fieldnotes",
       model: "claude-opus-5",
       startedMinutesAgo: 12,
@@ -204,14 +212,15 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
         { say: "I'll put a small write-ahead queue in front of the sync client so edits survive an app restart." },
         {
           tool: "Read",
-          input: { file_path: `${field}/src/sync/client.ts` },
+          input: { file_path: `src/sync/client.ts` },
           result: "1\timport { api } from \"../api\";\n2\t\n3\texport async function saveNote(note: Note) {\n4\t  return api.put(`/notes/${note.id}`, note);\n5\t}",
         },
       ],
-      midTurn: { tool: "Write", input: { file_path: `${field}/src/sync/queue.ts`, content: "export class EditQueue {}\n" } },
+      midTurn: { tool: "Write", input: { file_path: `src/sync/queue.ts`, content: "export class EditQueue {}\n" } },
     },
     {
       key: "import-profile",
+      title: "Import profiling",
       project: "quarry",
       model: "claude-opus-5",
       startedMinutesAgo: 140,
@@ -278,10 +287,10 @@ function codexReviewRollout(cwd: string, sessionId: string, now: number): { line
     { type: "turn_context", timestamp: step(1), payload: { cwd, model: "gpt-5.6-sol", effort: "xhigh", approval_policy: "never", sandbox_policy: { type: "read-only" } } },
     { type: "event_msg", timestamp: step(2), payload: { type: "user_message", message: "Review the idempotent refunds change against the acceptance criteria: a repeated key never reaches the provider, a reused key with a different body answers 409, and requests without a key are unchanged." } },
     { type: "event_msg", timestamp: step(9), payload: { type: "agent_message", message: "Reading the diff against main first, then the tests that claim each criterion.", phase: "commentary" } },
-    { type: "response_item", timestamp: step(4), payload: { type: "function_call", name: "shell", call_id: "call-review-1", arguments: JSON.stringify({ command: ["git", "diff", "--stat", "main...HEAD"] }) } },
+    { type: "response_item", timestamp: step(4), payload: { type: "function_call", name: "shell", call_id: "call-review-1", arguments: JSON.stringify({ command: "git diff --stat main...HEAD" }) } },
     { type: "response_item", timestamp: step(2), payload: { type: "function_call_output", call_id: "call-review-1", output: " migrations/0042_idempotency_keys.sql |  6 ++++\n src/refunds/handler.test.ts          | 58 +++++++++++++++\n src/refunds/handler.ts               | 19 ++++-\n src/refunds/idempotency.ts           | 41 ++++++++++\n 4 files changed, 122 insertions(+), 2 deletions(-)" } },
     { type: "event_msg", timestamp: step(20), payload: { type: "agent_message", message: "The lookup and the insert share one transaction. Checking what happens when two requests with the same key arrive together.", phase: "commentary" } },
-    { type: "response_item", timestamp: step(3), payload: { type: "function_call", name: "shell", call_id: "call-review-2", arguments: JSON.stringify({ command: ["bun", "test", "src/refunds"] }) } },
+    { type: "response_item", timestamp: step(3), payload: { type: "function_call", name: "shell", call_id: "call-review-2", arguments: JSON.stringify({ command: "bun test src/refunds" }) } },
   ];
   return { lines: lines.map((line) => JSON.stringify(line)), lastAt: at, stamp: iso(start) };
 }
@@ -462,6 +471,9 @@ export function seedDemoHome(home: string, stateDir: string, now: number): DemoL
     files[conversation.key] = write(path.join(folder, `${sessionId}.jsonl`), lines, lastAt);
   }
 
+  const titles = claudeConversations(dirs).map((conversation) => ({ key: conversation.key, title: conversation.title }));
+  titles.push({ key: "refunds-review", title: "Review: idempotent refunds" });
+
   const reviewId = demoSessionId("refunds-review");
   const review = codexReviewRollout(dirs["harbor-api"], reviewId, now);
   const day = review.stamp.slice(0, 10).split("-");
@@ -472,6 +484,10 @@ export function seedDemoHome(home: string, stateDir: string, now: number): DemoL
   const json = (name: string, value: unknown) => fs.writeFileSync(path.join(stateDir, name), `${JSON.stringify(value, null, 2)}\n`, "utf8");
   json("tasks.json", buildTasks(layout, files));
   json("pipelines.json", buildPipelines(layout, files));
+  json("session-titles.json", {
+    version: 1,
+    titles: titles.map(({ key, title }) => ({ key: `path:${files[key]!.path}`, title, revision: 1, updatedAt: iso(now - 60_000) })),
+  });
   json("resources.json", {
     system: { ramTotal: 32 * 2 ** 30, ramAvailable: 19 * 2 ** 30, swapTotal: 8 * 2 ** 30, swapUsed: 0, capturedAt: iso(now) },
     sessions: [],
