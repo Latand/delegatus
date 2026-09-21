@@ -536,7 +536,9 @@ function lifecycleReceipt(key: string, status: string, extra: Record<string, unk
     conversationId: LIFE_CARD,
     kind: "send",
     status,
-    text: LIFE_TEXT,
+    /* The receipt summarises the message it is about, so a send that carried
+       no words must not be summarised with somebody else's. */
+    text: readOutbox(LIFE_CARD).find((entry) => entry.id === key)?.text ?? LIFE_TEXT,
     at: new Date().toISOString(),
     admittedAt: new Date(Date.now() - 45_000).toISOString(),
     revision: lifecycleRevision,

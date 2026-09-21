@@ -15,28 +15,28 @@
   },
   "watches": {
     "success-phone-390-dark-en": {
-      "batches": 11,
+      "batches": 12,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "queued-behind-turn-phone-390-dark-en": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "held-for-host-phone-390-dark-en": {
-      "batches": 16,
+      "batches": 17,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "lost-acknowledgement-phone-390-dark-en": {
-      "batches": 7,
+      "batches": 8,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -50,7 +50,7 @@
       "bodyDetached": false
     },
     "attachment-and-context-phone-390-dark-en": {
-      "batches": 10,
+      "batches": 11,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -64,35 +64,35 @@
       "bodyDetached": false
     },
     "image-only-phone-390-dark-en": {
-      "batches": 6,
+      "batches": 9,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "success-phone-390-dark-uk": {
-      "batches": 11,
+      "batches": 12,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "queued-behind-turn-phone-390-dark-uk": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "held-for-host-phone-390-dark-uk": {
-      "batches": 16,
+      "batches": 17,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "lost-acknowledgement-phone-390-dark-uk": {
-      "batches": 7,
+      "batches": 8,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -106,7 +106,7 @@
       "bodyDetached": false
     },
     "attachment-and-context-phone-390-dark-uk": {
-      "batches": 10,
+      "batches": 11,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -120,35 +120,35 @@
       "bodyDetached": false
     },
     "image-only-phone-390-dark-uk": {
-      "batches": 6,
+      "batches": 9,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "success-phone-390-light-en": {
-      "batches": 11,
+      "batches": 12,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "queued-behind-turn-phone-390-light-en": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "held-for-host-phone-390-light-en": {
-      "batches": 16,
+      "batches": 17,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "lost-acknowledgement-phone-390-light-en": {
-      "batches": 7,
+      "batches": 8,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -162,7 +162,7 @@
       "bodyDetached": false
     },
     "attachment-and-context-phone-390-light-en": {
-      "batches": 10,
+      "batches": 11,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -176,35 +176,35 @@
       "bodyDetached": false
     },
     "image-only-phone-390-light-en": {
-      "batches": 6,
+      "batches": 9,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "success-phone-390-light-uk": {
-      "batches": 11,
+      "batches": 12,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "queued-behind-turn-phone-390-light-uk": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "held-for-host-phone-390-light-uk": {
-      "batches": 16,
+      "batches": 17,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "lost-acknowledgement-phone-390-light-uk": {
-      "batches": 7,
+      "batches": 8,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -218,7 +218,7 @@
       "bodyDetached": false
     },
     "attachment-and-context-phone-390-light-uk": {
-      "batches": 10,
+      "batches": 11,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -232,35 +232,35 @@
       "bodyDetached": false
     },
     "image-only-phone-390-light-uk": {
-      "batches": 6,
+      "batches": 9,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "success-desktop-1280-dark-en": {
-      "batches": 11,
+      "batches": 12,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "queued-behind-turn-desktop-1280-dark-en": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "held-for-host-desktop-1280-dark-en": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "lost-acknowledgement-desktop-1280-dark-en": {
-      "batches": 7,
+      "batches": 8,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -274,7 +274,7 @@
       "bodyDetached": false
     },
     "attachment-and-context-desktop-1280-dark-en": {
-      "batches": 10,
+      "batches": 11,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -288,35 +288,35 @@
       "bodyDetached": false
     },
     "image-only-desktop-1280-dark-en": {
-      "batches": 6,
+      "batches": 9,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "success-desktop-1280-dark-uk": {
-      "batches": 11,
+      "batches": 12,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "queued-behind-turn-desktop-1280-dark-uk": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "held-for-host-desktop-1280-dark-uk": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "lost-acknowledgement-desktop-1280-dark-uk": {
-      "batches": 7,
+      "batches": 9,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -330,7 +330,7 @@
       "bodyDetached": false
     },
     "attachment-and-context-desktop-1280-dark-uk": {
-      "batches": 10,
+      "batches": 11,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -344,35 +344,35 @@
       "bodyDetached": false
     },
     "image-only-desktop-1280-dark-uk": {
-      "batches": 6,
+      "batches": 9,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "success-desktop-1280-light-en": {
-      "batches": 11,
+      "batches": 12,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "queued-behind-turn-desktop-1280-light-en": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "held-for-host-desktop-1280-light-en": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "lost-acknowledgement-desktop-1280-light-en": {
-      "batches": 7,
+      "batches": 8,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -386,7 +386,7 @@
       "bodyDetached": false
     },
     "attachment-and-context-desktop-1280-light-en": {
-      "batches": 10,
+      "batches": 11,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -400,35 +400,35 @@
       "bodyDetached": false
     },
     "image-only-desktop-1280-light-en": {
-      "batches": 6,
+      "batches": 9,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "success-desktop-1280-light-uk": {
-      "batches": 11,
+      "batches": 12,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "queued-behind-turn-desktop-1280-light-uk": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "held-for-host-desktop-1280-light-uk": {
-      "batches": 14,
+      "batches": 15,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
       "bodyDetached": false
     },
     "lost-acknowledgement-desktop-1280-light-uk": {
-      "batches": 7,
+      "batches": 8,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -442,7 +442,7 @@
       "bodyDetached": false
     },
     "attachment-and-context-desktop-1280-light-uk": {
-      "batches": 10,
+      "batches": 11,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -456,7 +456,7 @@
       "bodyDetached": false
     },
     "image-only-desktop-1280-light-uk": {
-      "batches": 6,
+      "batches": 9,
       "maxBubbles": 1,
       "minBubbles": 1,
       "rowDetached": false,
@@ -492,7 +492,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_ec645457-d4f6-43b9-8e62-59b9c4833ba8",
+            "id": "op_2c8d1fa1-d86a-4827-8d5b-bc5f6fb33582",
             "state": "delivered"
           }
         ],
@@ -526,7 +526,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_ec645457-d4f6-43b9-8e62-59b9c4833ba8",
+            "id": "op_2c8d1fa1-d86a-4827-8d5b-bc5f6fb33582",
             "state": "delivered"
           }
         ],
@@ -562,7 +562,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_664e3868-24ab-45af-92db-47db3c9e8764",
+            "id": "op_f59185d8-5074-40a3-9958-2e338a54f4ec",
             "state": "delivered"
           }
         ],
@@ -596,7 +596,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_664e3868-24ab-45af-92db-47db3c9e8764",
+            "id": "op_f59185d8-5074-40a3-9958-2e338a54f4ec",
             "state": "delivered"
           }
         ],
@@ -632,7 +632,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_39cdf74c-7460-4241-ab0e-58053039334c",
+            "id": "op_09ba56ab-e126-4af2-a132-ebed4cbd662c",
             "state": "delivered"
           }
         ],
@@ -666,7 +666,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_39cdf74c-7460-4241-ab0e-58053039334c",
+            "id": "op_09ba56ab-e126-4af2-a132-ebed4cbd662c",
             "state": "delivered"
           }
         ],
@@ -702,7 +702,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_816e50ba-83ab-40b0-9a9b-2c7098669fc2",
+            "id": "op_b0e4a19d-2f71-4772-a6cf-a0129132832f",
             "state": "delivered"
           }
         ],
@@ -736,7 +736,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_816e50ba-83ab-40b0-9a9b-2c7098669fc2",
+            "id": "op_b0e4a19d-2f71-4772-a6cf-a0129132832f",
             "state": "delivered"
           }
         ],
@@ -772,7 +772,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_36cab42e-310e-476e-bad7-0c92b6cbf582",
+            "id": "op_07ee2198-ba7b-44fe-9350-d721c097e5d5",
             "state": "delivered"
           }
         ],
@@ -806,7 +806,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_36cab42e-310e-476e-bad7-0c92b6cbf582",
+            "id": "op_07ee2198-ba7b-44fe-9350-d721c097e5d5",
             "state": "delivered"
           }
         ],
@@ -842,7 +842,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_7006f17f-c869-4e50-942d-49f4c7dbc680",
+            "id": "op_9d8b354a-6746-430e-b904-00c2283b75d1",
             "state": "delivered"
           }
         ],
@@ -876,7 +876,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_7006f17f-c869-4e50-942d-49f4c7dbc680",
+            "id": "op_9d8b354a-6746-430e-b904-00c2283b75d1",
             "state": "delivered"
           }
         ],
@@ -912,7 +912,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_0015f9c2-3fd0-4744-8737-fdc50209d5c2",
+            "id": "op_772733cf-9c2c-4b71-bd7e-e945cb8d1d95",
             "state": "delivered"
           }
         ],
@@ -946,7 +946,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_0015f9c2-3fd0-4744-8737-fdc50209d5c2",
+            "id": "op_772733cf-9c2c-4b71-bd7e-e945cb8d1d95",
             "state": "delivered"
           }
         ],
@@ -982,7 +982,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_a25a6c87-454b-47b0-866c-1bf49566ac81",
+            "id": "op_9da05c7b-2179-41c8-a65e-45c78181b1cd",
             "state": "delivered"
           }
         ],
@@ -1016,7 +1016,7 @@
         "outboxState": null,
         "queue": [
           {
-            "id": "op_a25a6c87-454b-47b0-866c-1bf49566ac81",
+            "id": "op_9da05c7b-2179-41c8-a65e-45c78181b1cd",
             "state": "delivered"
           }
         ],
@@ -1053,7 +1053,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ec645457-d4f6-43b9-8e62-59b9c4833ba8",
+          "id": "op_2c8d1fa1-d86a-4827-8d5b-bc5f6fb33582",
           "state": "delivering"
         }
       ],
@@ -1087,7 +1087,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ec645457-d4f6-43b9-8e62-59b9c4833ba8",
+          "id": "op_2c8d1fa1-d86a-4827-8d5b-bc5f6fb33582",
           "state": "delivering"
         }
       ],
@@ -1121,7 +1121,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_ec645457-d4f6-43b9-8e62-59b9c4833ba8",
+          "id": "op_2c8d1fa1-d86a-4827-8d5b-bc5f6fb33582",
           "state": "delivered"
         }
       ],
@@ -1155,7 +1155,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_ec645457-d4f6-43b9-8e62-59b9c4833ba8",
+          "id": "op_2c8d1fa1-d86a-4827-8d5b-bc5f6fb33582",
           "state": "delivered"
         }
       ],
@@ -1189,7 +1189,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_48b6d9f2-9198-4f32-af89-3c01acec2c2f",
+          "id": "op_c25ffd13-67c0-4c32-951f-b9697cd902f7",
           "state": "delivering"
         }
       ],
@@ -1223,7 +1223,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_48b6d9f2-9198-4f32-af89-3c01acec2c2f",
+          "id": "op_c25ffd13-67c0-4c32-951f-b9697cd902f7",
           "state": "delivering"
         }
       ],
@@ -1257,7 +1257,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_48b6d9f2-9198-4f32-af89-3c01acec2c2f",
+          "id": "op_c25ffd13-67c0-4c32-951f-b9697cd902f7",
           "state": "delivering"
         }
       ],
@@ -1291,7 +1291,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_48b6d9f2-9198-4f32-af89-3c01acec2c2f",
+          "id": "op_c25ffd13-67c0-4c32-951f-b9697cd902f7",
           "state": "delivered"
         }
       ],
@@ -1325,7 +1325,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_48b6d9f2-9198-4f32-af89-3c01acec2c2f",
+          "id": "op_c25ffd13-67c0-4c32-951f-b9697cd902f7",
           "state": "delivered"
         }
       ],
@@ -1359,7 +1359,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_16a287d3-c9d0-46bb-9f5f-36c1f11f3751",
+          "id": "op_e7aa439d-39d0-4892-8a2e-d332aec7e7bb",
           "state": "delivering"
         }
       ],
@@ -1393,7 +1393,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_16a287d3-c9d0-46bb-9f5f-36c1f11f3751",
+          "id": "op_e7aa439d-39d0-4892-8a2e-d332aec7e7bb",
           "state": "delivering"
         }
       ],
@@ -1427,7 +1427,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_16a287d3-c9d0-46bb-9f5f-36c1f11f3751",
+          "id": "op_e7aa439d-39d0-4892-8a2e-d332aec7e7bb",
           "state": "delivering"
         }
       ],
@@ -1461,7 +1461,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_16a287d3-c9d0-46bb-9f5f-36c1f11f3751",
+          "id": "op_e7aa439d-39d0-4892-8a2e-d332aec7e7bb",
           "state": "delivered"
         }
       ],
@@ -1495,7 +1495,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_16a287d3-c9d0-46bb-9f5f-36c1f11f3751",
+          "id": "op_e7aa439d-39d0-4892-8a2e-d332aec7e7bb",
           "state": "delivered"
         }
       ],
@@ -1529,7 +1529,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_524864a2-730b-4b72-90e5-3e9edc00582f",
+          "id": "op_6a092f90-4f1c-422a-b0e5-2105cf2f40c7",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -1565,7 +1565,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_524864a2-730b-4b72-90e5-3e9edc00582f",
+          "id": "op_6a092f90-4f1c-422a-b0e5-2105cf2f40c7",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -1600,7 +1600,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_524864a2-730b-4b72-90e5-3e9edc00582f",
+          "id": "op_6a092f90-4f1c-422a-b0e5-2105cf2f40c7",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -1637,7 +1637,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_ce0a085c-e621-4b86-bea3-0136c62e0721",
+          "id": "op_a4469c27-f25d-48c6-a4da-219919e3f266",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -1675,7 +1675,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_ce0a085c-e621-4b86-bea3-0136c62e0721",
+          "id": "op_a4469c27-f25d-48c6-a4da-219919e3f266",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -1728,7 +1728,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_9a87c7df-8e6f-4ffb-af25-550d38090bde",
+          "id": "op_d516d0ba-9aa7-4d55-a155-50b5bedd177b",
           "state": "delivering"
         }
       ],
@@ -1762,7 +1762,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_9a87c7df-8e6f-4ffb-af25-550d38090bde",
+          "id": "op_d516d0ba-9aa7-4d55-a155-50b5bedd177b",
           "state": "delivered"
         }
       ],
@@ -1796,7 +1796,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_9a87c7df-8e6f-4ffb-af25-550d38090bde",
+          "id": "op_d516d0ba-9aa7-4d55-a155-50b5bedd177b",
           "state": "delivered"
         }
       ],
@@ -1848,7 +1848,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_716a2726-cd77-4e2c-8fa3-92b0c37dd9d0",
+          "id": "op_a1884551-143c-422c-8fc1-eeee593f165b",
           "state": "delivering"
         }
       ],
@@ -1882,7 +1882,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_716a2726-cd77-4e2c-8fa3-92b0c37dd9d0",
+          "id": "op_a1884551-143c-422c-8fc1-eeee593f165b",
           "state": "delivered"
         }
       ],
@@ -1916,7 +1916,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_716a2726-cd77-4e2c-8fa3-92b0c37dd9d0",
+          "id": "op_a1884551-143c-422c-8fc1-eeee593f165b",
           "state": "delivered"
         }
       ],
@@ -1968,7 +1968,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_6c5ab034-6be1-4e73-b12c-d7341fbc518e",
+          "id": "op_2838b567-d142-4aa0-b643-71244973cf89",
           "state": "delivering"
         }
       ],
@@ -2002,7 +2002,41 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_6c5ab034-6be1-4e73-b12c-d7341fbc518e",
+          "id": "op_2838b567-d142-4aa0-b643-71244973cf89",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-image-only-transcript-phone-390-dark-en": {
+      "state": "image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 59,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_2838b567-d142-4aa0-b643-71244973cf89",
           "state": "delivered"
         }
       ],
@@ -2036,7 +2070,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_664e3868-24ab-45af-92db-47db3c9e8764",
+          "id": "op_f59185d8-5074-40a3-9958-2e338a54f4ec",
           "state": "delivering"
         }
       ],
@@ -2070,7 +2104,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_664e3868-24ab-45af-92db-47db3c9e8764",
+          "id": "op_f59185d8-5074-40a3-9958-2e338a54f4ec",
           "state": "delivering"
         }
       ],
@@ -2104,7 +2138,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_664e3868-24ab-45af-92db-47db3c9e8764",
+          "id": "op_f59185d8-5074-40a3-9958-2e338a54f4ec",
           "state": "delivered"
         }
       ],
@@ -2138,7 +2172,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_664e3868-24ab-45af-92db-47db3c9e8764",
+          "id": "op_f59185d8-5074-40a3-9958-2e338a54f4ec",
           "state": "delivered"
         }
       ],
@@ -2172,7 +2206,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_cc56e71f-3fb0-43d1-838f-d5d3d5ae17a7",
+          "id": "op_31044e34-1fe2-435b-a531-280f80958a05",
           "state": "delivering"
         }
       ],
@@ -2206,7 +2240,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_cc56e71f-3fb0-43d1-838f-d5d3d5ae17a7",
+          "id": "op_31044e34-1fe2-435b-a531-280f80958a05",
           "state": "delivering"
         }
       ],
@@ -2240,7 +2274,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_cc56e71f-3fb0-43d1-838f-d5d3d5ae17a7",
+          "id": "op_31044e34-1fe2-435b-a531-280f80958a05",
           "state": "delivering"
         }
       ],
@@ -2274,7 +2308,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_cc56e71f-3fb0-43d1-838f-d5d3d5ae17a7",
+          "id": "op_31044e34-1fe2-435b-a531-280f80958a05",
           "state": "delivered"
         }
       ],
@@ -2308,7 +2342,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_cc56e71f-3fb0-43d1-838f-d5d3d5ae17a7",
+          "id": "op_31044e34-1fe2-435b-a531-280f80958a05",
           "state": "delivered"
         }
       ],
@@ -2342,7 +2376,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_1d52a91b-45cf-45fc-97b3-fea484910755",
+          "id": "op_c0de2371-2811-4be2-b821-ad281980fc4b",
           "state": "delivering"
         }
       ],
@@ -2376,7 +2410,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_1d52a91b-45cf-45fc-97b3-fea484910755",
+          "id": "op_c0de2371-2811-4be2-b821-ad281980fc4b",
           "state": "delivering"
         }
       ],
@@ -2410,7 +2444,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_1d52a91b-45cf-45fc-97b3-fea484910755",
+          "id": "op_c0de2371-2811-4be2-b821-ad281980fc4b",
           "state": "delivering"
         }
       ],
@@ -2444,7 +2478,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_1d52a91b-45cf-45fc-97b3-fea484910755",
+          "id": "op_c0de2371-2811-4be2-b821-ad281980fc4b",
           "state": "delivered"
         }
       ],
@@ -2478,7 +2512,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_1d52a91b-45cf-45fc-97b3-fea484910755",
+          "id": "op_c0de2371-2811-4be2-b821-ad281980fc4b",
           "state": "delivered"
         }
       ],
@@ -2512,7 +2546,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_aefd89d5-f8ae-4278-826c-bf37e52e0b5d",
+          "id": "op_435b6244-adc7-4667-a33c-388d1c76e455",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -2548,7 +2582,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_aefd89d5-f8ae-4278-826c-bf37e52e0b5d",
+          "id": "op_435b6244-adc7-4667-a33c-388d1c76e455",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -2583,7 +2617,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_aefd89d5-f8ae-4278-826c-bf37e52e0b5d",
+          "id": "op_435b6244-adc7-4667-a33c-388d1c76e455",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -2620,7 +2654,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_4e87ffd3-0c82-4ed8-971d-ede2643d7ae4",
+          "id": "op_55860fae-7a2a-4a8f-81cf-68cb43fdea64",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -2658,7 +2692,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_4e87ffd3-0c82-4ed8-971d-ede2643d7ae4",
+          "id": "op_55860fae-7a2a-4a8f-81cf-68cb43fdea64",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -2711,7 +2745,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ce99ba5e-ee0b-4100-8501-88e9d4f1b2ca",
+          "id": "op_2cbd0433-517f-4857-b945-19c1401576b2",
           "state": "delivering"
         }
       ],
@@ -2745,7 +2779,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_ce99ba5e-ee0b-4100-8501-88e9d4f1b2ca",
+          "id": "op_2cbd0433-517f-4857-b945-19c1401576b2",
           "state": "delivered"
         }
       ],
@@ -2779,7 +2813,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_ce99ba5e-ee0b-4100-8501-88e9d4f1b2ca",
+          "id": "op_2cbd0433-517f-4857-b945-19c1401576b2",
           "state": "delivered"
         }
       ],
@@ -2831,7 +2865,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7ff1f4ba-5934-4e48-a36d-2f18657433dd",
+          "id": "op_0e1d9f48-3323-4795-8e25-8b3fa68f48ab",
           "state": "delivering"
         }
       ],
@@ -2865,7 +2899,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_7ff1f4ba-5934-4e48-a36d-2f18657433dd",
+          "id": "op_0e1d9f48-3323-4795-8e25-8b3fa68f48ab",
           "state": "delivered"
         }
       ],
@@ -2899,7 +2933,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_7ff1f4ba-5934-4e48-a36d-2f18657433dd",
+          "id": "op_0e1d9f48-3323-4795-8e25-8b3fa68f48ab",
           "state": "delivered"
         }
       ],
@@ -2951,7 +2985,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_2510f9c5-7b5b-4d75-ba9d-05452f3d59fa",
+          "id": "op_e30e5e49-e0d3-438a-b14d-5a970375e34b",
           "state": "delivering"
         }
       ],
@@ -2985,7 +3019,41 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_2510f9c5-7b5b-4d75-ba9d-05452f3d59fa",
+          "id": "op_e30e5e49-e0d3-438a-b14d-5a970375e34b",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-image-only-transcript-phone-390-dark-uk": {
+      "state": "image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 74,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_e30e5e49-e0d3-438a-b14d-5a970375e34b",
           "state": "delivered"
         }
       ],
@@ -3019,7 +3087,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_39cdf74c-7460-4241-ab0e-58053039334c",
+          "id": "op_09ba56ab-e126-4af2-a132-ebed4cbd662c",
           "state": "delivering"
         }
       ],
@@ -3053,7 +3121,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_39cdf74c-7460-4241-ab0e-58053039334c",
+          "id": "op_09ba56ab-e126-4af2-a132-ebed4cbd662c",
           "state": "delivering"
         }
       ],
@@ -3087,7 +3155,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_39cdf74c-7460-4241-ab0e-58053039334c",
+          "id": "op_09ba56ab-e126-4af2-a132-ebed4cbd662c",
           "state": "delivered"
         }
       ],
@@ -3121,7 +3189,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_39cdf74c-7460-4241-ab0e-58053039334c",
+          "id": "op_09ba56ab-e126-4af2-a132-ebed4cbd662c",
           "state": "delivered"
         }
       ],
@@ -3155,7 +3223,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_e6d160ce-169a-4e30-82a0-ae79116ab5c6",
+          "id": "op_343e6854-8de9-4f5b-a185-baa5bb7262cd",
           "state": "delivering"
         }
       ],
@@ -3189,7 +3257,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_e6d160ce-169a-4e30-82a0-ae79116ab5c6",
+          "id": "op_343e6854-8de9-4f5b-a185-baa5bb7262cd",
           "state": "delivering"
         }
       ],
@@ -3223,7 +3291,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_e6d160ce-169a-4e30-82a0-ae79116ab5c6",
+          "id": "op_343e6854-8de9-4f5b-a185-baa5bb7262cd",
           "state": "delivering"
         }
       ],
@@ -3257,7 +3325,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_e6d160ce-169a-4e30-82a0-ae79116ab5c6",
+          "id": "op_343e6854-8de9-4f5b-a185-baa5bb7262cd",
           "state": "delivered"
         }
       ],
@@ -3291,7 +3359,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_e6d160ce-169a-4e30-82a0-ae79116ab5c6",
+          "id": "op_343e6854-8de9-4f5b-a185-baa5bb7262cd",
           "state": "delivered"
         }
       ],
@@ -3325,7 +3393,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_977def83-8604-41bb-b4f9-8cbfce733e11",
+          "id": "op_ca1ac897-0d51-4c54-abbc-7948a3ad1a94",
           "state": "delivering"
         }
       ],
@@ -3359,7 +3427,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_977def83-8604-41bb-b4f9-8cbfce733e11",
+          "id": "op_ca1ac897-0d51-4c54-abbc-7948a3ad1a94",
           "state": "delivering"
         }
       ],
@@ -3393,7 +3461,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_977def83-8604-41bb-b4f9-8cbfce733e11",
+          "id": "op_ca1ac897-0d51-4c54-abbc-7948a3ad1a94",
           "state": "delivering"
         }
       ],
@@ -3427,7 +3495,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_977def83-8604-41bb-b4f9-8cbfce733e11",
+          "id": "op_ca1ac897-0d51-4c54-abbc-7948a3ad1a94",
           "state": "delivered"
         }
       ],
@@ -3461,7 +3529,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_977def83-8604-41bb-b4f9-8cbfce733e11",
+          "id": "op_ca1ac897-0d51-4c54-abbc-7948a3ad1a94",
           "state": "delivered"
         }
       ],
@@ -3495,7 +3563,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_654eaec4-701a-4172-8ec5-e20240413886",
+          "id": "op_3cba91d9-1266-4b48-ae41-290d53d48b02",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -3531,7 +3599,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_654eaec4-701a-4172-8ec5-e20240413886",
+          "id": "op_3cba91d9-1266-4b48-ae41-290d53d48b02",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -3566,7 +3634,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_654eaec4-701a-4172-8ec5-e20240413886",
+          "id": "op_3cba91d9-1266-4b48-ae41-290d53d48b02",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -3603,7 +3671,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_41c19a2c-1a90-4a61-981e-dc10b86e71d3",
+          "id": "op_7491dd03-9d12-4928-a3f5-ed5be0ce1bec",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -3641,7 +3709,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_41c19a2c-1a90-4a61-981e-dc10b86e71d3",
+          "id": "op_7491dd03-9d12-4928-a3f5-ed5be0ce1bec",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -3694,7 +3762,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ffcda477-cdd8-45bd-99ed-b672e9cf08b8",
+          "id": "op_5918694c-cb2e-43b3-9e66-23c4488b2063",
           "state": "delivering"
         }
       ],
@@ -3728,7 +3796,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_ffcda477-cdd8-45bd-99ed-b672e9cf08b8",
+          "id": "op_5918694c-cb2e-43b3-9e66-23c4488b2063",
           "state": "delivered"
         }
       ],
@@ -3762,7 +3830,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_ffcda477-cdd8-45bd-99ed-b672e9cf08b8",
+          "id": "op_5918694c-cb2e-43b3-9e66-23c4488b2063",
           "state": "delivered"
         }
       ],
@@ -3814,7 +3882,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_5c4896ba-b1e2-4b2c-b8fc-fdbfd5f9b96e",
+          "id": "op_0f44c9c0-d939-492b-9fd8-f7f494d6292c",
           "state": "delivering"
         }
       ],
@@ -3848,7 +3916,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_5c4896ba-b1e2-4b2c-b8fc-fdbfd5f9b96e",
+          "id": "op_0f44c9c0-d939-492b-9fd8-f7f494d6292c",
           "state": "delivered"
         }
       ],
@@ -3882,7 +3950,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_5c4896ba-b1e2-4b2c-b8fc-fdbfd5f9b96e",
+          "id": "op_0f44c9c0-d939-492b-9fd8-f7f494d6292c",
           "state": "delivered"
         }
       ],
@@ -3934,7 +4002,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_2d7ecf44-f991-41bc-968e-0dc2e3744a25",
+          "id": "op_0f3847e2-26f9-4b9e-b67a-8d03c7fee939",
           "state": "delivering"
         }
       ],
@@ -3968,7 +4036,41 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_2d7ecf44-f991-41bc-968e-0dc2e3744a25",
+          "id": "op_0f3847e2-26f9-4b9e-b67a-8d03c7fee939",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-image-only-transcript-phone-390-light-en": {
+      "state": "image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 59,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_0f3847e2-26f9-4b9e-b67a-8d03c7fee939",
           "state": "delivered"
         }
       ],
@@ -4002,7 +4104,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_816e50ba-83ab-40b0-9a9b-2c7098669fc2",
+          "id": "op_b0e4a19d-2f71-4772-a6cf-a0129132832f",
           "state": "delivering"
         }
       ],
@@ -4036,7 +4138,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_816e50ba-83ab-40b0-9a9b-2c7098669fc2",
+          "id": "op_b0e4a19d-2f71-4772-a6cf-a0129132832f",
           "state": "delivering"
         }
       ],
@@ -4070,7 +4172,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_816e50ba-83ab-40b0-9a9b-2c7098669fc2",
+          "id": "op_b0e4a19d-2f71-4772-a6cf-a0129132832f",
           "state": "delivered"
         }
       ],
@@ -4104,7 +4206,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_816e50ba-83ab-40b0-9a9b-2c7098669fc2",
+          "id": "op_b0e4a19d-2f71-4772-a6cf-a0129132832f",
           "state": "delivered"
         }
       ],
@@ -4138,7 +4240,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_cf80eca8-2828-4d50-9d43-88494eeee2f7",
+          "id": "op_70015d82-e3a1-4b86-976f-9ed69a2c6596",
           "state": "delivering"
         }
       ],
@@ -4172,7 +4274,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_cf80eca8-2828-4d50-9d43-88494eeee2f7",
+          "id": "op_70015d82-e3a1-4b86-976f-9ed69a2c6596",
           "state": "delivering"
         }
       ],
@@ -4206,7 +4308,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_cf80eca8-2828-4d50-9d43-88494eeee2f7",
+          "id": "op_70015d82-e3a1-4b86-976f-9ed69a2c6596",
           "state": "delivering"
         }
       ],
@@ -4240,7 +4342,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_cf80eca8-2828-4d50-9d43-88494eeee2f7",
+          "id": "op_70015d82-e3a1-4b86-976f-9ed69a2c6596",
           "state": "delivered"
         }
       ],
@@ -4274,7 +4376,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_cf80eca8-2828-4d50-9d43-88494eeee2f7",
+          "id": "op_70015d82-e3a1-4b86-976f-9ed69a2c6596",
           "state": "delivered"
         }
       ],
@@ -4308,7 +4410,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ad7235a7-4ec6-4aae-bbe3-1b4f30d63b19",
+          "id": "op_b89c351d-f023-4c8c-90f3-987da2ca66e7",
           "state": "delivering"
         }
       ],
@@ -4342,7 +4444,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ad7235a7-4ec6-4aae-bbe3-1b4f30d63b19",
+          "id": "op_b89c351d-f023-4c8c-90f3-987da2ca66e7",
           "state": "delivering"
         }
       ],
@@ -4376,7 +4478,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ad7235a7-4ec6-4aae-bbe3-1b4f30d63b19",
+          "id": "op_b89c351d-f023-4c8c-90f3-987da2ca66e7",
           "state": "delivering"
         }
       ],
@@ -4410,7 +4512,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_ad7235a7-4ec6-4aae-bbe3-1b4f30d63b19",
+          "id": "op_b89c351d-f023-4c8c-90f3-987da2ca66e7",
           "state": "delivered"
         }
       ],
@@ -4444,7 +4546,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_ad7235a7-4ec6-4aae-bbe3-1b4f30d63b19",
+          "id": "op_b89c351d-f023-4c8c-90f3-987da2ca66e7",
           "state": "delivered"
         }
       ],
@@ -4478,7 +4580,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_239486c4-2261-4501-90dd-cdf0648d9433",
+          "id": "op_1919c26c-ff7e-496d-87b2-32847be268be",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -4514,7 +4616,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_239486c4-2261-4501-90dd-cdf0648d9433",
+          "id": "op_1919c26c-ff7e-496d-87b2-32847be268be",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -4549,7 +4651,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_239486c4-2261-4501-90dd-cdf0648d9433",
+          "id": "op_1919c26c-ff7e-496d-87b2-32847be268be",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -4586,7 +4688,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_fd6f5318-7e60-45b4-9719-a485f8a43da5",
+          "id": "op_9085c68e-4162-408e-90dd-682c02b16239",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -4624,7 +4726,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_fd6f5318-7e60-45b4-9719-a485f8a43da5",
+          "id": "op_9085c68e-4162-408e-90dd-682c02b16239",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -4677,7 +4779,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_82b80061-21f9-4883-a926-b94409a5ab28",
+          "id": "op_3f7dec17-171d-463d-8e5b-d87896598e52",
           "state": "delivering"
         }
       ],
@@ -4711,7 +4813,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_82b80061-21f9-4883-a926-b94409a5ab28",
+          "id": "op_3f7dec17-171d-463d-8e5b-d87896598e52",
           "state": "delivered"
         }
       ],
@@ -4745,7 +4847,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_82b80061-21f9-4883-a926-b94409a5ab28",
+          "id": "op_3f7dec17-171d-463d-8e5b-d87896598e52",
           "state": "delivered"
         }
       ],
@@ -4797,7 +4899,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_fb8a67b9-b4a7-4857-b9fb-bc7a3bf7a2f9",
+          "id": "op_0626215c-9522-4b24-be37-5b2f14169040",
           "state": "delivering"
         }
       ],
@@ -4831,7 +4933,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_fb8a67b9-b4a7-4857-b9fb-bc7a3bf7a2f9",
+          "id": "op_0626215c-9522-4b24-be37-5b2f14169040",
           "state": "delivered"
         }
       ],
@@ -4865,7 +4967,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_fb8a67b9-b4a7-4857-b9fb-bc7a3bf7a2f9",
+          "id": "op_0626215c-9522-4b24-be37-5b2f14169040",
           "state": "delivered"
         }
       ],
@@ -4917,7 +5019,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_959065ac-5c82-4c43-ab76-84fac2a76967",
+          "id": "op_f02e3ccf-e9f1-4666-820e-d88069a7b78e",
           "state": "delivering"
         }
       ],
@@ -4951,7 +5053,41 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_959065ac-5c82-4c43-ab76-84fac2a76967",
+          "id": "op_f02e3ccf-e9f1-4666-820e-d88069a7b78e",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "image-only-image-only-transcript-phone-390-light-uk": {
+      "state": "image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 74,
+        "height": 37,
+        "opacity": "1",
+        "fontSize": "15px",
+        "padding": "9px/12px/9px/12px",
+        "radius": "12px",
+        "right": 24,
+        "top": 152
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_f02e3ccf-e9f1-4666-820e-d88069a7b78e",
           "state": "delivered"
         }
       ],
@@ -4985,7 +5121,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_36cab42e-310e-476e-bad7-0c92b6cbf582",
+          "id": "op_07ee2198-ba7b-44fe-9350-d721c097e5d5",
           "state": "delivering"
         }
       ],
@@ -5019,7 +5155,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_36cab42e-310e-476e-bad7-0c92b6cbf582",
+          "id": "op_07ee2198-ba7b-44fe-9350-d721c097e5d5",
           "state": "delivering"
         }
       ],
@@ -5053,7 +5189,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_36cab42e-310e-476e-bad7-0c92b6cbf582",
+          "id": "op_07ee2198-ba7b-44fe-9350-d721c097e5d5",
           "state": "delivered"
         }
       ],
@@ -5087,7 +5223,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_36cab42e-310e-476e-bad7-0c92b6cbf582",
+          "id": "op_07ee2198-ba7b-44fe-9350-d721c097e5d5",
           "state": "delivered"
         }
       ],
@@ -5121,7 +5257,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ecd8192f-366f-44a3-a9ea-fc8930d0a686",
+          "id": "op_ff15c910-6ca2-4254-b5f2-5f6d180f3d47",
           "state": "delivering"
         }
       ],
@@ -5155,7 +5291,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ecd8192f-366f-44a3-a9ea-fc8930d0a686",
+          "id": "op_ff15c910-6ca2-4254-b5f2-5f6d180f3d47",
           "state": "delivering"
         }
       ],
@@ -5189,7 +5325,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ecd8192f-366f-44a3-a9ea-fc8930d0a686",
+          "id": "op_ff15c910-6ca2-4254-b5f2-5f6d180f3d47",
           "state": "delivering"
         }
       ],
@@ -5223,7 +5359,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_ecd8192f-366f-44a3-a9ea-fc8930d0a686",
+          "id": "op_ff15c910-6ca2-4254-b5f2-5f6d180f3d47",
           "state": "delivered"
         }
       ],
@@ -5257,7 +5393,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_ecd8192f-366f-44a3-a9ea-fc8930d0a686",
+          "id": "op_ff15c910-6ca2-4254-b5f2-5f6d180f3d47",
           "state": "delivered"
         }
       ],
@@ -5291,7 +5427,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_1b29b365-43fa-4686-a6f9-88df4fe69f53",
+          "id": "op_409380c6-8aa7-4048-987c-a858c20517af",
           "state": "delivering"
         }
       ],
@@ -5325,7 +5461,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_1b29b365-43fa-4686-a6f9-88df4fe69f53",
+          "id": "op_409380c6-8aa7-4048-987c-a858c20517af",
           "state": "delivering"
         }
       ],
@@ -5359,7 +5495,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_1b29b365-43fa-4686-a6f9-88df4fe69f53",
+          "id": "op_409380c6-8aa7-4048-987c-a858c20517af",
           "state": "delivering"
         }
       ],
@@ -5393,7 +5529,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_1b29b365-43fa-4686-a6f9-88df4fe69f53",
+          "id": "op_409380c6-8aa7-4048-987c-a858c20517af",
           "state": "delivered"
         }
       ],
@@ -5427,7 +5563,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_1b29b365-43fa-4686-a6f9-88df4fe69f53",
+          "id": "op_409380c6-8aa7-4048-987c-a858c20517af",
           "state": "delivered"
         }
       ],
@@ -5461,7 +5597,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_b0f5bdca-3664-4bf1-a7f0-1bf2e65a1fd5",
+          "id": "op_ca29de63-c115-4027-b58e-9dbd74966761",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -5497,7 +5633,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_b0f5bdca-3664-4bf1-a7f0-1bf2e65a1fd5",
+          "id": "op_ca29de63-c115-4027-b58e-9dbd74966761",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -5532,7 +5668,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_b0f5bdca-3664-4bf1-a7f0-1bf2e65a1fd5",
+          "id": "op_ca29de63-c115-4027-b58e-9dbd74966761",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -5569,7 +5705,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_bd75e720-bb64-486e-8bf7-5c8d494dae00",
+          "id": "op_edc8e8b9-a4e9-427d-ae07-fe8b931c721e",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -5607,7 +5743,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_bd75e720-bb64-486e-8bf7-5c8d494dae00",
+          "id": "op_edc8e8b9-a4e9-427d-ae07-fe8b931c721e",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -5660,7 +5796,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_9d3296bf-dcb7-4892-b763-84d5c88431c3",
+          "id": "op_c7ff4da1-222e-4527-8536-0c45faacb1bf",
           "state": "delivering"
         }
       ],
@@ -5694,7 +5830,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_9d3296bf-dcb7-4892-b763-84d5c88431c3",
+          "id": "op_c7ff4da1-222e-4527-8536-0c45faacb1bf",
           "state": "delivered"
         }
       ],
@@ -5728,7 +5864,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_9d3296bf-dcb7-4892-b763-84d5c88431c3",
+          "id": "op_c7ff4da1-222e-4527-8536-0c45faacb1bf",
           "state": "delivered"
         }
       ],
@@ -5780,7 +5916,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_72c80af7-f972-48ef-b271-6bd676251df0",
+          "id": "op_a5586c01-fa80-4746-9f78-d89036bae508",
           "state": "delivering"
         }
       ],
@@ -5814,7 +5950,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_72c80af7-f972-48ef-b271-6bd676251df0",
+          "id": "op_a5586c01-fa80-4746-9f78-d89036bae508",
           "state": "delivered"
         }
       ],
@@ -5848,7 +5984,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_72c80af7-f972-48ef-b271-6bd676251df0",
+          "id": "op_a5586c01-fa80-4746-9f78-d89036bae508",
           "state": "delivered"
         }
       ],
@@ -5900,7 +6036,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_e4723123-b91e-47e7-9068-7cfcb6e9adf2",
+          "id": "op_27d243e1-d5ab-42b6-ada8-0461acb77931",
           "state": "delivering"
         }
       ],
@@ -5934,7 +6070,41 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_e4723123-b91e-47e7-9068-7cfcb6e9adf2",
+          "id": "op_27d243e1-d5ab-42b6-ada8-0461acb77931",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-image-only-transcript-desktop-1280-dark-en": {
+      "state": "image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 67,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_27d243e1-d5ab-42b6-ada8-0461acb77931",
           "state": "delivered"
         }
       ],
@@ -5968,7 +6138,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7006f17f-c869-4e50-942d-49f4c7dbc680",
+          "id": "op_9d8b354a-6746-430e-b904-00c2283b75d1",
           "state": "delivering"
         }
       ],
@@ -6002,7 +6172,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7006f17f-c869-4e50-942d-49f4c7dbc680",
+          "id": "op_9d8b354a-6746-430e-b904-00c2283b75d1",
           "state": "delivering"
         }
       ],
@@ -6036,7 +6206,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_7006f17f-c869-4e50-942d-49f4c7dbc680",
+          "id": "op_9d8b354a-6746-430e-b904-00c2283b75d1",
           "state": "delivered"
         }
       ],
@@ -6070,7 +6240,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_7006f17f-c869-4e50-942d-49f4c7dbc680",
+          "id": "op_9d8b354a-6746-430e-b904-00c2283b75d1",
           "state": "delivered"
         }
       ],
@@ -6104,7 +6274,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a3a4954b-2f21-4eb3-8ba7-04a49e86d6a3",
+          "id": "op_97b93eca-911d-41de-a548-6d3175781727",
           "state": "delivering"
         }
       ],
@@ -6138,7 +6308,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a3a4954b-2f21-4eb3-8ba7-04a49e86d6a3",
+          "id": "op_97b93eca-911d-41de-a548-6d3175781727",
           "state": "delivering"
         }
       ],
@@ -6172,7 +6342,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a3a4954b-2f21-4eb3-8ba7-04a49e86d6a3",
+          "id": "op_97b93eca-911d-41de-a548-6d3175781727",
           "state": "delivering"
         }
       ],
@@ -6206,7 +6376,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_a3a4954b-2f21-4eb3-8ba7-04a49e86d6a3",
+          "id": "op_97b93eca-911d-41de-a548-6d3175781727",
           "state": "delivered"
         }
       ],
@@ -6240,7 +6410,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_a3a4954b-2f21-4eb3-8ba7-04a49e86d6a3",
+          "id": "op_97b93eca-911d-41de-a548-6d3175781727",
           "state": "delivered"
         }
       ],
@@ -6274,7 +6444,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_164d79d6-d922-4fe5-8bf8-505a77f02f15",
+          "id": "op_b3e8bade-a8d5-4bb2-a63c-16fd324076ad",
           "state": "delivering"
         }
       ],
@@ -6308,7 +6478,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_164d79d6-d922-4fe5-8bf8-505a77f02f15",
+          "id": "op_b3e8bade-a8d5-4bb2-a63c-16fd324076ad",
           "state": "delivering"
         }
       ],
@@ -6342,7 +6512,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_164d79d6-d922-4fe5-8bf8-505a77f02f15",
+          "id": "op_b3e8bade-a8d5-4bb2-a63c-16fd324076ad",
           "state": "delivering"
         }
       ],
@@ -6376,7 +6546,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_164d79d6-d922-4fe5-8bf8-505a77f02f15",
+          "id": "op_b3e8bade-a8d5-4bb2-a63c-16fd324076ad",
           "state": "delivered"
         }
       ],
@@ -6410,7 +6580,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_164d79d6-d922-4fe5-8bf8-505a77f02f15",
+          "id": "op_b3e8bade-a8d5-4bb2-a63c-16fd324076ad",
           "state": "delivered"
         }
       ],
@@ -6444,7 +6614,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_91734420-ebec-4c60-8a79-7ac640714182",
+          "id": "op_8866d296-f65a-45a6-b3bd-6dcdcc8bdcb3",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -6480,7 +6650,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_91734420-ebec-4c60-8a79-7ac640714182",
+          "id": "op_8866d296-f65a-45a6-b3bd-6dcdcc8bdcb3",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -6515,7 +6685,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_91734420-ebec-4c60-8a79-7ac640714182",
+          "id": "op_8866d296-f65a-45a6-b3bd-6dcdcc8bdcb3",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -6552,7 +6722,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_a348c0ca-fd9d-463c-87af-0446fecbefcc",
+          "id": "op_66226d30-26f2-41e7-a00c-ee9ef506aaf0",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -6590,7 +6760,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_a348c0ca-fd9d-463c-87af-0446fecbefcc",
+          "id": "op_66226d30-26f2-41e7-a00c-ee9ef506aaf0",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -6643,7 +6813,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_10bb045a-1308-4c5a-8c0d-7e2398846ae9",
+          "id": "op_5524105b-d92b-4e6c-b4a5-a0b9c77cddc6",
           "state": "delivering"
         }
       ],
@@ -6677,7 +6847,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_10bb045a-1308-4c5a-8c0d-7e2398846ae9",
+          "id": "op_5524105b-d92b-4e6c-b4a5-a0b9c77cddc6",
           "state": "delivered"
         }
       ],
@@ -6711,7 +6881,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_10bb045a-1308-4c5a-8c0d-7e2398846ae9",
+          "id": "op_5524105b-d92b-4e6c-b4a5-a0b9c77cddc6",
           "state": "delivered"
         }
       ],
@@ -6763,7 +6933,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_0c918444-da71-4794-8e1b-6196c4d17f31",
+          "id": "op_993bc0e3-1ab9-4044-b761-97c18dcbc14c",
           "state": "delivering"
         }
       ],
@@ -6797,7 +6967,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_0c918444-da71-4794-8e1b-6196c4d17f31",
+          "id": "op_993bc0e3-1ab9-4044-b761-97c18dcbc14c",
           "state": "delivered"
         }
       ],
@@ -6831,7 +7001,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_0c918444-da71-4794-8e1b-6196c4d17f31",
+          "id": "op_993bc0e3-1ab9-4044-b761-97c18dcbc14c",
           "state": "delivered"
         }
       ],
@@ -6883,7 +7053,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a6552f9d-87e2-450e-8da0-9493be1d42d3",
+          "id": "op_d719ab3f-2693-41ee-8a19-e70fc1329872",
           "state": "delivering"
         }
       ],
@@ -6917,7 +7087,41 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_a6552f9d-87e2-450e-8da0-9493be1d42d3",
+          "id": "op_d719ab3f-2693-41ee-8a19-e70fc1329872",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-image-only-transcript-desktop-1280-dark-uk": {
+      "state": "image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 82,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_d719ab3f-2693-41ee-8a19-e70fc1329872",
           "state": "delivered"
         }
       ],
@@ -6951,7 +7155,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_0015f9c2-3fd0-4744-8737-fdc50209d5c2",
+          "id": "op_772733cf-9c2c-4b71-bd7e-e945cb8d1d95",
           "state": "delivering"
         }
       ],
@@ -6985,7 +7189,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_0015f9c2-3fd0-4744-8737-fdc50209d5c2",
+          "id": "op_772733cf-9c2c-4b71-bd7e-e945cb8d1d95",
           "state": "delivering"
         }
       ],
@@ -7019,7 +7223,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_0015f9c2-3fd0-4744-8737-fdc50209d5c2",
+          "id": "op_772733cf-9c2c-4b71-bd7e-e945cb8d1d95",
           "state": "delivered"
         }
       ],
@@ -7053,7 +7257,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_0015f9c2-3fd0-4744-8737-fdc50209d5c2",
+          "id": "op_772733cf-9c2c-4b71-bd7e-e945cb8d1d95",
           "state": "delivered"
         }
       ],
@@ -7087,7 +7291,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_3d8344d8-faea-4e41-b02f-ebb9dcb79c1d",
+          "id": "op_838c02a3-4728-4b5a-80b1-07dbe83f0726",
           "state": "delivering"
         }
       ],
@@ -7121,7 +7325,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_3d8344d8-faea-4e41-b02f-ebb9dcb79c1d",
+          "id": "op_838c02a3-4728-4b5a-80b1-07dbe83f0726",
           "state": "delivering"
         }
       ],
@@ -7155,7 +7359,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_3d8344d8-faea-4e41-b02f-ebb9dcb79c1d",
+          "id": "op_838c02a3-4728-4b5a-80b1-07dbe83f0726",
           "state": "delivering"
         }
       ],
@@ -7189,7 +7393,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_3d8344d8-faea-4e41-b02f-ebb9dcb79c1d",
+          "id": "op_838c02a3-4728-4b5a-80b1-07dbe83f0726",
           "state": "delivered"
         }
       ],
@@ -7223,7 +7427,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_3d8344d8-faea-4e41-b02f-ebb9dcb79c1d",
+          "id": "op_838c02a3-4728-4b5a-80b1-07dbe83f0726",
           "state": "delivered"
         }
       ],
@@ -7257,7 +7461,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_041db3bf-5f91-4283-aa71-556342110db1",
+          "id": "op_c5a3325b-ee31-457e-bfe8-6dbbf615ac6a",
           "state": "delivering"
         }
       ],
@@ -7291,7 +7495,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_041db3bf-5f91-4283-aa71-556342110db1",
+          "id": "op_c5a3325b-ee31-457e-bfe8-6dbbf615ac6a",
           "state": "delivering"
         }
       ],
@@ -7325,7 +7529,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_041db3bf-5f91-4283-aa71-556342110db1",
+          "id": "op_c5a3325b-ee31-457e-bfe8-6dbbf615ac6a",
           "state": "delivering"
         }
       ],
@@ -7359,7 +7563,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_041db3bf-5f91-4283-aa71-556342110db1",
+          "id": "op_c5a3325b-ee31-457e-bfe8-6dbbf615ac6a",
           "state": "delivered"
         }
       ],
@@ -7393,7 +7597,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_041db3bf-5f91-4283-aa71-556342110db1",
+          "id": "op_c5a3325b-ee31-457e-bfe8-6dbbf615ac6a",
           "state": "delivered"
         }
       ],
@@ -7427,7 +7631,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7e3662c1-f1ef-49bb-a458-09ba4a56de77",
+          "id": "op_8099d662-bc33-48e6-82b1-0ee4f001f3c5",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -7463,7 +7667,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7e3662c1-f1ef-49bb-a458-09ba4a56de77",
+          "id": "op_8099d662-bc33-48e6-82b1-0ee4f001f3c5",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -7498,7 +7702,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_7e3662c1-f1ef-49bb-a458-09ba4a56de77",
+          "id": "op_8099d662-bc33-48e6-82b1-0ee4f001f3c5",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -7535,7 +7739,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_fd592769-23e5-4c4d-8618-8f274def28d4",
+          "id": "op_b9806aaf-0d77-4f18-9b24-498b43389449",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -7573,7 +7777,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_fd592769-23e5-4c4d-8618-8f274def28d4",
+          "id": "op_b9806aaf-0d77-4f18-9b24-498b43389449",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -7626,7 +7830,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_e64e7280-836c-4ef2-a07e-e5dafe8fdf60",
+          "id": "op_f5d70f44-ef8d-4405-bbdb-3c5f8e50d21b",
           "state": "delivering"
         }
       ],
@@ -7660,7 +7864,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_e64e7280-836c-4ef2-a07e-e5dafe8fdf60",
+          "id": "op_f5d70f44-ef8d-4405-bbdb-3c5f8e50d21b",
           "state": "delivered"
         }
       ],
@@ -7694,7 +7898,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_e64e7280-836c-4ef2-a07e-e5dafe8fdf60",
+          "id": "op_f5d70f44-ef8d-4405-bbdb-3c5f8e50d21b",
           "state": "delivered"
         }
       ],
@@ -7746,7 +7950,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_7105038f-6e94-4fd9-9962-070c51a01b34",
+          "id": "op_c3a27ed9-5285-4a95-bd39-49c8c0d51c2f",
           "state": "delivering"
         }
       ],
@@ -7780,7 +7984,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_7105038f-6e94-4fd9-9962-070c51a01b34",
+          "id": "op_c3a27ed9-5285-4a95-bd39-49c8c0d51c2f",
           "state": "delivered"
         }
       ],
@@ -7814,7 +8018,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_7105038f-6e94-4fd9-9962-070c51a01b34",
+          "id": "op_c3a27ed9-5285-4a95-bd39-49c8c0d51c2f",
           "state": "delivered"
         }
       ],
@@ -7866,7 +8070,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_23d210b4-bbbd-4537-90bd-f088d1b10e60",
+          "id": "op_18b3a2ef-bdf2-4625-9d37-db1ce9f616d1",
           "state": "delivering"
         }
       ],
@@ -7900,7 +8104,41 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_23d210b4-bbbd-4537-90bd-f088d1b10e60",
+          "id": "op_18b3a2ef-bdf2-4625-9d37-db1ce9f616d1",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-image-only-transcript-desktop-1280-light-en": {
+      "state": "image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 67,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 image",
+      "controls": [
+        "Copy message (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_18b3a2ef-bdf2-4625-9d37-db1ce9f616d1",
           "state": "delivered"
         }
       ],
@@ -7934,7 +8172,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a25a6c87-454b-47b0-866c-1bf49566ac81",
+          "id": "op_9da05c7b-2179-41c8-a65e-45c78181b1cd",
           "state": "delivering"
         }
       ],
@@ -7968,7 +8206,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a25a6c87-454b-47b0-866c-1bf49566ac81",
+          "id": "op_9da05c7b-2179-41c8-a65e-45c78181b1cd",
           "state": "delivering"
         }
       ],
@@ -8002,7 +8240,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_a25a6c87-454b-47b0-866c-1bf49566ac81",
+          "id": "op_9da05c7b-2179-41c8-a65e-45c78181b1cd",
           "state": "delivered"
         }
       ],
@@ -8036,7 +8274,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_a25a6c87-454b-47b0-866c-1bf49566ac81",
+          "id": "op_9da05c7b-2179-41c8-a65e-45c78181b1cd",
           "state": "delivered"
         }
       ],
@@ -8070,7 +8308,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a11828c6-55cb-4eb7-b24c-4452c505bbd3",
+          "id": "op_732082bf-d1d6-4e5d-81d6-162ad7b7b29e",
           "state": "delivering"
         }
       ],
@@ -8104,7 +8342,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a11828c6-55cb-4eb7-b24c-4452c505bbd3",
+          "id": "op_732082bf-d1d6-4e5d-81d6-162ad7b7b29e",
           "state": "delivering"
         }
       ],
@@ -8138,7 +8376,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_a11828c6-55cb-4eb7-b24c-4452c505bbd3",
+          "id": "op_732082bf-d1d6-4e5d-81d6-162ad7b7b29e",
           "state": "delivering"
         }
       ],
@@ -8172,7 +8410,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_a11828c6-55cb-4eb7-b24c-4452c505bbd3",
+          "id": "op_732082bf-d1d6-4e5d-81d6-162ad7b7b29e",
           "state": "delivered"
         }
       ],
@@ -8206,7 +8444,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_a11828c6-55cb-4eb7-b24c-4452c505bbd3",
+          "id": "op_732082bf-d1d6-4e5d-81d6-162ad7b7b29e",
           "state": "delivered"
         }
       ],
@@ -8240,7 +8478,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_f58aa382-6160-495e-8afc-88eefe428601",
+          "id": "op_923d930e-75ac-4279-9731-4f51be300f5f",
           "state": "delivering"
         }
       ],
@@ -8274,7 +8512,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_f58aa382-6160-495e-8afc-88eefe428601",
+          "id": "op_923d930e-75ac-4279-9731-4f51be300f5f",
           "state": "delivering"
         }
       ],
@@ -8308,7 +8546,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_f58aa382-6160-495e-8afc-88eefe428601",
+          "id": "op_923d930e-75ac-4279-9731-4f51be300f5f",
           "state": "delivering"
         }
       ],
@@ -8342,7 +8580,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_f58aa382-6160-495e-8afc-88eefe428601",
+          "id": "op_923d930e-75ac-4279-9731-4f51be300f5f",
           "state": "delivered"
         }
       ],
@@ -8376,7 +8614,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_f58aa382-6160-495e-8afc-88eefe428601",
+          "id": "op_923d930e-75ac-4279-9731-4f51be300f5f",
           "state": "delivered"
         }
       ],
@@ -8410,7 +8648,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_5aefc6dd-b5d1-4727-9f39-b4b951fe46a3",
+          "id": "op_e4140379-389b-4982-897a-09fa20ade174",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -8446,7 +8684,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_5aefc6dd-b5d1-4727-9f39-b4b951fe46a3",
+          "id": "op_e4140379-389b-4982-897a-09fa20ade174",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -8481,7 +8719,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_5aefc6dd-b5d1-4727-9f39-b4b951fe46a3",
+          "id": "op_e4140379-389b-4982-897a-09fa20ade174",
           "state": "delivering",
           "deliveryUncertain": true
         }
@@ -8518,7 +8756,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_1100e4da-715e-4922-a4fe-e2ef3f8cc149",
+          "id": "op_2daf99f5-5018-4cf7-9281-1e3820df448f",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -8556,7 +8794,7 @@
       "outboxState": "failed",
       "queue": [
         {
-          "id": "op_1100e4da-715e-4922-a4fe-e2ef3f8cc149",
+          "id": "op_2daf99f5-5018-4cf7-9281-1e3820df448f",
           "state": "failed",
           "error": "structured host recovery failed after 12 contended attempts: account is busy"
         }
@@ -8609,7 +8847,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_c8fbc01e-ed22-42b2-aedc-fb8488d2c12e",
+          "id": "op_e03e7c07-afd0-4139-9df8-961979b0800f",
           "state": "delivering"
         }
       ],
@@ -8643,7 +8881,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_c8fbc01e-ed22-42b2-aedc-fb8488d2c12e",
+          "id": "op_e03e7c07-afd0-4139-9df8-961979b0800f",
           "state": "delivered"
         }
       ],
@@ -8677,7 +8915,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_c8fbc01e-ed22-42b2-aedc-fb8488d2c12e",
+          "id": "op_e03e7c07-afd0-4139-9df8-961979b0800f",
           "state": "delivered"
         }
       ],
@@ -8729,7 +8967,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_ad512520-c86d-4fc4-a7aa-e65d9ee52b98",
+          "id": "op_24de27ee-3a52-4cc6-af52-69dcf06199ce",
           "state": "delivering"
         }
       ],
@@ -8763,7 +9001,7 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_ad512520-c86d-4fc4-a7aa-e65d9ee52b98",
+          "id": "op_24de27ee-3a52-4cc6-af52-69dcf06199ce",
           "state": "delivered"
         }
       ],
@@ -8797,7 +9035,7 @@
       "outboxState": null,
       "queue": [
         {
-          "id": "op_ad512520-c86d-4fc4-a7aa-e65d9ee52b98",
+          "id": "op_24de27ee-3a52-4cc6-af52-69dcf06199ce",
           "state": "delivered"
         }
       ],
@@ -8849,7 +9087,7 @@
       "outboxState": "delivering",
       "queue": [
         {
-          "id": "op_6844ff73-a569-4e28-bcd5-e684ee7684b0",
+          "id": "op_6e63d5f8-e9bb-4924-a1b8-cd614d05ea56",
           "state": "delivering"
         }
       ],
@@ -8883,7 +9121,41 @@
       "outboxState": "delivered",
       "queue": [
         {
-          "id": "op_6844ff73-a569-4e28-bcd5-e684ee7684b0",
+          "id": "op_6e63d5f8-e9bb-4924-a1b8-cd614d05ea56",
+          "state": "delivered"
+        }
+      ],
+      "overflowX": 0,
+      "viewportWidth": 1280
+    },
+    "image-only-image-only-transcript-desktop-1280-light-uk": {
+      "state": "image-only-transcript",
+      "bubbles": 1,
+      "bubble": {
+        "width": 82,
+        "height": 39,
+        "opacity": "1",
+        "fontSize": "16px",
+        "padding": "10px/16px/10px/16px",
+        "radius": "12px",
+        "right": 134,
+        "top": 115
+      },
+      "topWithinRow": 0,
+      "sameNode": true,
+      "sameBody": true,
+      "aside": "",
+      "badge": "",
+      "inBubble": "1 картинка",
+      "controls": [
+        "Скопіювати повідомлення (Markdown)"
+      ],
+      "transcriptAttachments": 1,
+      "phase": "confirmed",
+      "outboxState": "delivered",
+      "queue": [
+        {
+          "id": "op_6e63d5f8-e9bb-4924-a1b8-cd614d05ea56",
           "state": "delivered"
         }
       ],

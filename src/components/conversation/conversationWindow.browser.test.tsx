@@ -1205,8 +1205,12 @@ describe("send latency slice 3: one message, one row", () => {
                offset inside the conversation's own scrolled content, so a row
                pushed down by a picture inserted above it fails here. */
             expect({ suffix, state, bubble: step.bubble }).toEqual({ suffix, state, bubble: imageOnly.bubble });
-            expect({ suffix, state, sameNode: step.sameNode, sameBody: step.sameBody })
-              .toEqual({ suffix, state, sameNode: true, sameBody: true });
+            /* The first frame is where the node is MARKED, so it cannot
+               answer whether it survived anything; every later one must. */
+            if (state !== imageOnlySteps[0]) {
+              expect({ suffix, state, sameNode: step.sameNode, sameBody: step.sameBody })
+                .toEqual({ suffix, state, sameNode: true, sameBody: true });
+            }
           }
           /* The picture itself arrives once, as the conversation's own row
              below the message — never a second copy of what the caption
