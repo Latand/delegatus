@@ -314,7 +314,10 @@ test("a queued admission after remount still clears the persisted generation exa
     expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.deliveryUncertain).toBeUndefined();
     expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.awaitingTurn).toBe(true);
     expect(host.querySelectorAll('[data-receipt-uncertain-retry]')).toHaveLength(0);
-    expect(host.querySelector("[data-receipt-preview]")?.textContent).toBe(prompt);
+    /* And nothing is painted beside the composer for it: an admitted delivery
+       waiting for a turn is ordinary progress, and since send-latency slice 3
+       the message's own row is the one place that carries it. */
+    expect(host.querySelector("[data-runtime-receipt-stack]")).toBeNull();
   } finally {
     flushSync(() => root.unmount());
     publishReceipts([]);

@@ -226,10 +226,14 @@ test("#1362 dismissing the collapsed notice clears the whole group and leaves a 
   expect(clickAction(dismiss)).toBe(true);
   expect(batches).toEqual([["op-retry-2", "op-retry-1", "op-retry-0"]]);
 
+  /* With the failures dismissed nothing here needs a decision any more, and
+     since send-latency slice 3 a delivery that is merely still moving paints
+     nothing beside the composer: the message's own row carries it. The
+     dismissal did not touch that delivery — it is still pending, and still
+     rendered wherever its message is. */
   rerender(mounted, { receipts: [pending, ...threeRetries()], dismissed: new Set(batches.flat()), onDismiss: () => {} });
   expect(mounted.host.querySelector("details[data-delivery-notice]")).toBeNull();
-  expect(mounted.summary().querySelector("[data-receipt-pending-count]")).not.toBeNull();
-  expect(mounted.summary().textContent).toContain(translate("en", "runtime.receipt.summary", { count: 1 }));
+  expect(mounted.host.querySelector("[data-runtime-receipt-stack]")).toBeNull();
 
   rerender(mounted, { receipts: threeRetries(), dismissed: new Set(batches.flat()), onDismiss: () => {} });
   expect(mounted.host.textContent).toBe("");

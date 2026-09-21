@@ -2,10 +2,13 @@
  * P1 round-2 — the queued message's ONE delivery state has to carry the hold.
  *
  * The card already collapsed a held message to a single statement: its outbox
- * bubble. But during the pending window that bubble said only "Delivering" — a
+ * row. But during the pending window that row said only "Delivering" — a
  * spinner with no reason, in the exact phase the operator says an account switch
- * is hardest to follow. The bubble now says what it is waiting for, and it stays
- * the only place that says it: no second banner, no second receipt.
+ * is hardest to follow. The row's delivery evidence now says what it is waiting
+ * for, and it stays the only place that says it: no second banner, no second
+ * receipt. Since send-latency slice 3 that evidence sits under the message's
+ * own progress affordance instead of in front of the operator, so this file
+ * reads it there.
  *
  * What may NOT change: a settled entry keeps its own word. A failure stays a
  * failure and keeps its retry, switch or no switch.
@@ -48,8 +51,11 @@ async function render(node: React.ReactElement): Promise<HTMLElement> {
   return host;
 }
 
-const chipText = (host: HTMLElement) =>
+const statusText = (host: HTMLElement) =>
   Array.from(host.querySelectorAll("[data-outbox-status]")).map((node) => node.textContent ?? "");
+/** The delivery evidence each row publishes, in row order. */
+const transportText = (host: HTMLElement) =>
+  Array.from(host.querySelectorAll("[data-outbox-progress]")).map((node) => node.getAttribute("title") ?? "");
 
 test("an unsettled bubble on a switching card says it waits for the switch, named or not", async () => {
   for (const locale of ["en", "uk"] as const) {
@@ -62,7 +68,7 @@ test("an unsettled bubble on a switching card says it waits for the switch, name
         switchHold={{ label: "Account B" }}
       />,
     );
-    expect(chipText(named)).toEqual([translate(locale, "outbox.heldForSwitch", { label: "Account B" })]);
+    expect(transportText(named)).toEqual([translate(locale, "outbox.heldForSwitch", { label: "Account B" })]);
     expect(named.textContent).not.toContain(translate(locale, "outbox.delivering"));
 
     /* The whole pending window publishes no target identity, so the nameless
@@ -76,7 +82,7 @@ test("an unsettled bubble on a switching card says it waits for the switch, name
         switchHold={{ label: null }}
       />,
     );
-    expect(chipText(nameless)).toEqual([translate(locale, "outbox.heldForSwitchUnnamed")]);
+    expect(transportText(nameless)).toEqual([translate(locale, "outbox.heldForSwitchUnnamed")]);
     expect(nameless.textContent).not.toContain("«»");
     document.body.replaceChildren();
   }
@@ -94,7 +100,10 @@ test("with no switch running the bubble reads exactly as before", async () => {
       onRetry={() => {}}
     />,
   );
-  expect(chipText(host)).toEqual([translate("en", "outbox.delivering")]);
+  expect(transportText(host)).toEqual([translate("en", "outbox.delivering")]);
+  /* And the row the operator looks at says the one stable thing, switch or no
+     switch: the transport's words never reach it. */
+  expect(statusText(host)).toEqual([translate("en", "outbox.awaitingConfirmation")]);
   document.body.replaceChildren();
 });
 
@@ -109,8 +118,10 @@ test("a failed delivery keeps its own failure and its retry through a switch", a
     />,
   );
   /* Tidying a real failure into a hold would strand the operator's message with
-     nothing to act on. */
-  expect(chipText(host)).toEqual(["pane is gone"]);
+     nothing to act on. The reason reads in the interface language and keeps the
+     runtime's own sentence behind it. */
+  expect(statusText(host)).toEqual([translate("en", "outbox.failure.generic")]);
+  expect(host.querySelector("[data-outbox-reason]")?.getAttribute("title")).toBe("pane is gone");
   expect(host.querySelector("[data-outbox-retry='key-failed']")).toBeTruthy();
   document.body.replaceChildren();
 });
