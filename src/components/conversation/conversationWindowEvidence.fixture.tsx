@@ -32,6 +32,7 @@ import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxCom
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
+import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
@@ -394,11 +395,33 @@ export type LifecycleScenario =
      engine in a shape the row's own words cannot be recognised in — see
      `echo` below — which is the whole reason they are separate frames. */
   | "document-attachment"
-  | "image-only";
+  | "image-only"
+  /* The same arrivals with the provenance read held open for the whole walk
+     (#1950 round 2, second round). The join must already be in hand when the
+     record lands, or — for the one delivery the browser was never told the
+     name of — the record must wait rather than paint a second copy. */
+  | "document-held-join"
+  | "lost-ack-held-join"
+  | "image-only-held-join"
+  /* A Claude conversation: the delivered record parses as a system row, and
+     the renderer turns it back into the operator's bubble from the ledger's
+     join. It must take the row the operator already has. */
+  | "claude-canonical";
+
+/** The scenarios whose admission the server never acknowledged. */
+const LOST_ACK_SCENARIOS: ReadonlySet<LifecycleScenario> = new Set(["lost-acknowledgement", "lost-ack-held-join"]);
 
 /** What the fake host does with the next admission, and what it has published. */
 interface FakeHost {
   scenario: LifecycleScenario;
+  /** Which engine's conversation the window is showing. */
+  engine: "codex" | "claude";
+  /** `/api/log/provenance` does not answer while this is set. */
+  provenanceHeld: boolean;
+  /** The requests waiting on the held read. */
+  provenanceWaiting: (() => void)[];
+  /** The reference the last admitted send carried, as the ledger records it. */
+  selectedContext: unknown;
   host: string;
   turn: string;
   receipts: RuntimeReceipt[];
@@ -409,6 +432,10 @@ interface FakeHost {
 
 const fakeHost: FakeHost = {
   scenario: "success",
+  engine: "codex",
+  provenanceHeld: false,
+  provenanceWaiting: [],
+  selectedContext: null,
   host: "hosted",
   turn: "idle",
   receipts: [],
@@ -433,8 +460,10 @@ function useFakeHost(): number {
 const LIFE_SESSION = () => ({
   session: {
     conversationId: LIFE_CARD,
-    sessionKey: { engine: "codex", sessionId: "codex-session-lifecycle" },
-    hostKind: "codex-app-server",
+    sessionKey: fakeHost.engine === "claude"
+      ? { engine: "claude", sessionId: "claude-session-lifecycle" }
+      : { engine: "codex", sessionId: "codex-session-lifecycle" },
+    hostKind: fakeHost.engine === "claude" ? "claude-broker" : "codex-app-server",
     host: fakeHost.host,
     turn: fakeHost.turn,
     provenance: "structured",
@@ -446,7 +475,7 @@ const LIFE_SESSION = () => ({
     flowId: null,
     workflowId: null,
     cwd: "viewer",
-    artifactPath: LIFE_PATH,
+    artifactPath: lifeFile().path,
     capabilities: {
       steer: false,
       structuredAttention: false,
@@ -462,7 +491,7 @@ const LIFE_SESSION = () => ({
   structuredControlsEnabled: true,
 } as unknown as RuntimeSessionView);
 
-const LIFE_FILE = {
+const LIFE_CODEX_FILE = {
   path: LIFE_PATH,
   root: "codex-sessions",
   name: "message-lifecycle.jsonl",
@@ -479,6 +508,17 @@ const LIFE_FILE = {
   mtime: 1,
   size: 1,
 } as unknown as FileEntry;
+
+const LIFE_CLAUDE_FILE = {
+  ...(LIFE_CODEX_FILE as unknown as Record<string, unknown>),
+  path: "/claude-message-lifecycle.jsonl",
+  root: "claude-projects",
+  name: "claude-message-lifecycle.jsonl",
+  engine: "claude",
+  fmt: "claude",
+} as unknown as FileEntry;
+
+const lifeFile = (): FileEntry => (fakeHost.engine === "claude" ? LIFE_CLAUDE_FILE : LIFE_CODEX_FILE);
 
 /** The agent's last turn, so the row is photographed where it really sits. */
 const LIFE_OPENING = JSON.stringify({
@@ -501,16 +541,23 @@ const LIFE_INBOX_IMAGE = "/var/tmp/llv-evidence-home/.claude/viewer-inbox/stack-
    recognised by its text and must be recognised by the delivery's identity. */
 const LIFE_INBOX_FILE = "/var/tmp/llv-evidence-home/.claude/viewer-inbox/files/4d2a1f7c9b03/release-notes.pdf";
 
-/* The delivery identity the Codex host stamps onto the canonical
-   structured-user record (`dedup=sha256(<operation id>)`), and which
-   `/api/log/provenance` resolves back to the client message id the delivery
-   was admitted under. The fake server below answers that join for whichever
-   submission is live, exactly as the registry does from the moment it admits
-   one. */
-const LIFE_DEDUP = "7c".repeat(32);
+/* The operation the fake server admits a key under — the same id every
+   receipt below carries, and the id whose hash the host stamps onto the
+   canonical structured-user record (`dedup=sha256(<operation id>)`). Computed
+   with the host's own function, so the token on the record is the token a
+   real delivery of this key would carry: the browser can recompute it from
+   the operation id it was told, and the registry resolves it for the one it
+   was not. */
+const lifeOperationId = (key: string) => `operation-${key}`;
 
 /** The production record shape: one marker line, then the delivered text. */
-const structuredUserText = (text: string) => `<!-- llv:structured-user dedup=${LIFE_DEDUP} -->\n${text}`;
+const structuredUserText = (key: string, text: string) =>
+  `<!-- llv:structured-user dedup=${deliveryDedupToken(lifeOperationId(key))} -->\n${text}`;
+
+/* The transcript uuid the Claude broker's ledger records for the delivered
+   message — the id `/api/log/provenance` joins to the submission. Assembled
+   from parts: an invented id, not anyone's. */
+const LIFE_CLAUDE_UUID = ["6e2a9c14", "7b3d", "4f10", "8a55", "c1d2e3f4a5b6"].join("-");
 
 /* A 48x48 two-tone PNG — the same bytes the driver stages through the
    composer, so the engine's own inline copy of an image-only send is a real
@@ -531,7 +578,7 @@ let lifecycleRevision = 0;
 function lifecycleReceipt(key: string, status: string, extra: Record<string, unknown> = {}): RuntimeReceipt {
   lifecycleRevision += 1;
   return {
-    operationId: `operation-${key}`,
+    operationId: lifeOperationId(key),
     idempotencyKey: key,
     conversationId: LIFE_CARD,
     kind: "send",
@@ -557,14 +604,33 @@ function installFakeTransport(): void {
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     if (url === "/api/tmux/targets") return Response.json({ targets: {} });
     if (url.startsWith("/api/log/provenance")) {
+      /* The review's own probe: the join held open for as long as the
+         scenario says, so nothing about the row may depend on it arriving. */
+      if (fakeHost.provenanceHeld) {
+        await new Promise<void>((resolve) => { fakeHost.provenanceWaiting.push(resolve); });
+      }
       /* The registry writes a delivery's owner row when it ADMITS the send,
          so this join is answerable from that moment — including for the send
-         whose acknowledgement never reached the browser. Answering it early
-         is what lets the record be bound in the render it first appears in,
-         instead of a second copy of the message being painted for as long as
-         a round trip takes. */
+         whose acknowledgement never reached the browser. */
       const live = readOutbox(LIFE_CARD)[0]?.id;
-      return Response.json({ messages: {}, occurrences: [], submissions: live ? { [LIFE_DEDUP]: live } : {} });
+      if (fakeHost.engine === "claude") {
+        return Response.json({
+          messages: live ? {
+            [LIFE_CLAUDE_UUID]: {
+              origin: "operator",
+              submissionId: live,
+              ...(fakeHost.selectedContext ? { selectedContext: fakeHost.selectedContext } : {}),
+            },
+          } : {},
+          occurrences: [],
+          submissions: {},
+        });
+      }
+      return Response.json({
+        messages: {},
+        occurrences: [],
+        submissions: live ? { [deliveryDedupToken(lifeOperationId(live))]: live } : {},
+      });
     }
     if (url.startsWith("/api/runtime/send?")) {
       /* The original-key admission query. Nothing was journaled under the key
@@ -574,9 +640,11 @@ function installFakeTransport(): void {
       return Response.json({ outcome: "unknown" });
     }
     if (url === "/api/runtime/send") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { idempotencyKey: string };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { idempotencyKey: string; selectedContext?: unknown };
       if (fakeHost.release) await new Promise<void>((resolve) => { fakeHost.release = resolve; });
-      if (fakeHost.scenario === "lost-acknowledgement") throw new TypeError("Network disconnected");
+      /* What the ledger records beside the delivery: the reference it carried. */
+      fakeHost.selectedContext = body.selectedContext ?? null;
+      if (LOST_ACK_SCENARIOS.has(fakeHost.scenario)) throw new TypeError("Network disconnected");
       if (fakeHost.scenario === "safe-failure") {
         /* A refusal ABOVE the delivery attempt: nothing journaled, no
            operation minted, nothing on any wire. A 4xx says that; the 503 the
@@ -613,6 +681,9 @@ interface LifecycleControls {
   settle(status: "delivered" | "queued" | "uncertain"): void;
   /** The transcript's own record of the message arrives. */
   echo(): void;
+  /** Hold `/api/log/provenance` open, and answer every held read. */
+  holdProvenance(): void;
+  releaseProvenance(): void;
   /** Point the view at a card, so the next submission captures a reference to
       it exactly as the operator's own selection would (#844). */
   select(label: string): void;
@@ -624,7 +695,17 @@ interface LifecycleControls {
 
 function lifecycleControls(): LifecycleControls {
   return {
-    scenario: (next) => { fakeHost.scenario = next; announceHost(); },
+    scenario: (next) => {
+      fakeHost.scenario = next;
+      fakeHost.engine = next === "claude-canonical" ? "claude" : "codex";
+      announceHost();
+    },
+    holdProvenance: () => { fakeHost.provenanceHeld = true; },
+    releaseProvenance: () => {
+      fakeHost.provenanceHeld = false;
+      for (const resolve of fakeHost.provenanceWaiting.splice(0)) resolve();
+      announceHost();
+    },
     axes: (host, turn) => { fakeHost.host = host; fakeHost.turn = turn; announceHost(); },
     hold: () => { fakeHost.release = () => undefined; },
     release: () => { const release = fakeHost.release; fakeHost.release = null; release?.(); announceHost(); },
@@ -646,7 +727,31 @@ function lifecycleControls(): LifecycleControls {
     },
     echo: () => {
       const entry = readOutbox(LIFE_CARD)[0];
+      const key = entry?.id ?? "unknown-key";
       const timestamp = new Date().toISOString();
+      /* A Claude delivery journals an SDK-sourced user record: the words, and
+         any picture as a native image part beside them. It carries no marker;
+         its uuid is what the broker's ledger joins to the submission. */
+      if (fakeHost.engine === "claude") {
+        fakeHost.lines = [LIFE_OPENING, JSON.stringify({
+          type: "user",
+          uuid: LIFE_CLAUDE_UUID,
+          timestamp,
+          promptSource: "sdk",
+          sessionId: "claude-session-lifecycle",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: entry?.text || LIFE_TEXT },
+              ...((entry?.images ?? 0) > 0
+                ? [{ type: "image", source: { type: "base64", media_type: "image/png", data: LIFE_TILE_PNG } }]
+                : []),
+            ],
+          },
+        })];
+        announceHost();
+        return;
+      }
       /* THE PRODUCTION PAYLOAD, not a convenient one.
        *
        * A send that carried nothing but a picture reaches the rollout as a
@@ -673,7 +778,7 @@ function lifecycleControls(): LifecycleControls {
             role: "user",
             content: [
               { type: "input_image", image_url: `data:image/png;base64,${LIFE_TILE_PNG}` },
-              { type: "text", text: structuredUserText("") },
+              { type: "text", text: structuredUserText(key, "") },
             ],
           },
         })];
@@ -688,7 +793,7 @@ function lifecycleControls(): LifecycleControls {
       fakeHost.lines = [LIFE_OPENING, JSON.stringify({
         type: "event_msg",
         timestamp,
-        payload: { type: "user_message", message: structuredUserText(delivered) },
+        payload: { type: "user_message", message: structuredUserText(key, delivered) },
       })];
       announceHost();
     },
@@ -703,6 +808,10 @@ function lifecycleControls(): LifecycleControls {
        the store and freezes every row at whatever it last painted. */
     reset: () => {
       fakeHost.receipts = [];
+      fakeHost.engine = "codex";
+      fakeHost.provenanceHeld = false;
+      for (const resolve of fakeHost.provenanceWaiting.splice(0)) resolve();
+      fakeHost.selectedContext = null;
       fakeHost.lines = [LIFE_OPENING];
       fakeHost.host = "hosted";
       fakeHost.turn = "idle";
@@ -719,10 +828,10 @@ function LifecycleFixture() {
   return (
     <div data-evidence-case="lifecycle" className="flex min-h-dvh flex-col bg-canvas text-primary">
       <div className="flex min-h-0 flex-1 flex-col">
-        <LogFeed file={LIFE_FILE} showSvc={false} lineFilter="" onStatus={() => undefined}
+        <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
           paused={false} follow setFollow={() => undefined} />
       </div>
-      <TmuxComposer file={LIFE_FILE} />
+      <TmuxComposer file={lifeFile()} />
     </div>
   );
 }

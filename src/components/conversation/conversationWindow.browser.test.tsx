@@ -581,9 +581,16 @@ describe("send latency slice 3: one message, one row", () => {
     | { state: string; act: "settle"; status: "delivered" | "queued" | "uncertain" }
     | { state: string; act: "axes"; host: string; turn: string }
     | { state: string; act: "echo" }
+    /* The provenance read the scenario held open finally answers. */
+    | { state: string; act: "release-provenance" }
     | { state: string; act: "disclose"; target: "progress" | "reason" };
 
-  const SCENARIOS: { id: string; steps: Step[] }[] = [
+  /* `holdProvenance` holds `/api/log/provenance` open from before the
+     submission to the step that releases it — the independent review's own
+     probe (#1950 round 2, second round), which put two copies of a document
+     and of a lost acknowledgement on screen and pushed an image-only row down
+     by its own picture for as long as the response took. */
+  const SCENARIOS: { id: string; holdProvenance?: true; steps: Step[] }[] = [
     /* An ordinary send that simply works, all the way to the transcript's own
        record being adopted into the row the operator already had. */
     { id: "success", steps: [
@@ -659,6 +666,40 @@ describe("send latency slice 3: one message, one row", () => {
       { state: "submitted-image-only", act: "submit-button" },
       { state: "image-only-confirmed", act: "settle", status: "delivered" },
       { state: "image-only-transcript", act: "echo" },
+    ] },
+    /* The same three arrivals with the join held open the whole way. The
+       document and the picture were admitted, so this browser already holds
+       the operation id their records name and binds them itself. The lost
+       acknowledgement was never named to it: its record waits for the join
+       instead of painting a second copy, and lands in the row when it comes. */
+    { id: "document-held-join", holdProvenance: true, steps: [
+      { state: "prepared", act: "attach-document" },
+      { state: "held-submitted-with-document", act: "submit-button" },
+      { state: "held-document-confirmed", act: "settle", status: "delivered" },
+      { state: "held-document-transcript", act: "echo" },
+      { state: "held-document-released", act: "release-provenance" },
+    ] },
+    { id: "image-only-held-join", holdProvenance: true, steps: [
+      { state: "prepared", act: "attach-image-only" },
+      { state: "held-submitted-image-only", act: "submit-button" },
+      { state: "held-image-only-confirmed", act: "settle", status: "delivered" },
+      { state: "held-image-only-transcript", act: "echo" },
+      { state: "held-image-only-released", act: "release-provenance" },
+    ] },
+    { id: "lost-ack-held-join", holdProvenance: true, steps: [
+      { state: "held-lost-acknowledgement", act: "submit-button" },
+      { state: "held-lost-ack-transcript", act: "echo" },
+      { state: "held-lost-ack-released", act: "release-provenance" },
+    ] },
+    /* A Claude conversation, with a picture and a card reference riding the
+       send. Its record parses as a system row that the renderer resolves back
+       into the operator's bubble, and left beside the submission's row that
+       was a second confirmed bubble at both widths, settled or not. */
+    { id: "claude-canonical", steps: [
+      { state: "prepared", act: "attach-and-select" },
+      { state: "claude-submitted", act: "submit-button" },
+      { state: "claude-confirmed", act: "settle", status: "delivered" },
+      { state: "claude-transcript", act: "echo" },
     ] },
   ];
 
@@ -890,11 +931,12 @@ describe("send latency slice 3: one message, one row", () => {
                 await page.reload();
                 await page.waitForSelector('[data-evidence-case="lifecycle"]');
                 await page.waitForSelector("textarea");
-                await page.evaluate((id) => {
+                await page.evaluate(([id, hold]) => {
                   const host = (window as unknown as { llvHost: Record<string, (...args: unknown[]) => void> }).llvHost;
                   host.reset();
                   host.scenario(id);
-                }, scenario.id);
+                  if (hold) host.holdProvenance();
+                }, [scenario.id, Boolean(scenario.holdProvenance)] as const);
                 await page.waitForTimeout(60);
                 let marked = false;
                 for (const step of scenario.steps) {
@@ -938,6 +980,10 @@ describe("send latency slice 3: one message, one row", () => {
                     await page.evaluate(() => (window as unknown as {
                       llvHost: { echo(): void };
                     }).llvHost.echo());
+                  } else if (step.act === "release-provenance") {
+                    await page.evaluate(() => (window as unknown as {
+                      llvHost: { releaseProvenance(): void };
+                    }).llvHost.releaseProvenance());
                   } else if (step.act === "disclose") {
                     await page.click(step.target === "progress" ? "[data-outbox-progress]" : "[data-outbox-reason]");
                   }
@@ -1228,6 +1274,54 @@ describe("send latency slice 3: one message, one row", () => {
           expect({ suffix, bubble: documentTranscript.bubble }).toEqual({ suffix, bubble: firstDocument.bubble });
           expect({ suffix, sameNode: documentTranscript.sameNode, sameBody: documentTranscript.sameBody })
             .toEqual({ suffix, sameNode: true, sameBody: true });
+
+          /* The join held open for the whole walk. Every frame after the first
+             is the node the first one marked, in the same box at the same
+             place in the conversation — through the record's arrival AND
+             through the read finally answering, which must change nothing. */
+          const walks = [
+            ["document-held-join", ["held-submitted-with-document", "held-document-confirmed", "held-document-transcript", "held-document-released"]],
+            ["image-only-held-join", ["held-submitted-image-only", "held-image-only-confirmed", "held-image-only-transcript", "held-image-only-released"]],
+            ["lost-ack-held-join", ["held-lost-acknowledgement", "held-lost-ack-transcript", "held-lost-ack-released"]],
+            ["claude-canonical", ["claude-submitted", "claude-confirmed", "claude-transcript"]],
+          ] as const;
+          for (const [id, states] of walks) {
+            const start = at(`${id}-${states[0]}-${suffix}`);
+            for (const state of states.slice(1)) {
+              const step = at(`${id}-${state}-${suffix}`);
+              expect({ suffix, id, state, bubble: step.bubble }).toEqual({ suffix, id, state, bubble: start.bubble });
+              expect({ suffix, id, state, sameNode: step.sameNode, sameBody: step.sameBody })
+                .toEqual({ suffix, id, state, sameNode: true, sameBody: true });
+            }
+          }
+          /* The document binds while the read is still open: arrived, its own
+             words, its caption, and no picture of a file that is not one. */
+          const heldDocument = at(`document-held-join-held-document-transcript-${suffix}`);
+          expect({ suffix, phase: heldDocument.phase }).toEqual({ suffix, phase: "confirmed" });
+          expect({ suffix, caption: heldDocument.inBubble.includes(documentCaption) }).toEqual({ suffix, caption: true });
+          expect({ suffix, cards: heldDocument.transcriptAttachments }).toEqual({ suffix, cards: 0 });
+          /* The picture binds while the read is open, and arrives once. */
+          for (const state of ["held-image-only-transcript", "held-image-only-released"] as const) {
+            const step = at(`image-only-held-join-${state}-${suffix}`);
+            expect({ suffix, state, phase: step.phase }).toEqual({ suffix, state, phase: "confirmed" });
+            expect({ suffix, state, cards: step.transcriptAttachments }).toEqual({ suffix, state, cards: 1 });
+          }
+          /* The lost acknowledgement's record waits for the join: still the
+             one pending row with its question, not settled by its words. */
+          const heldLost = at(`lost-ack-held-join-held-lost-ack-transcript-${suffix}`);
+          expect({ suffix, phase: heldLost.phase }).toEqual({ suffix, phase: "pending" });
+          expect(heldLost.aside).toContain(translate(lang, "outbox.awaitingConfirmation"));
+          const releasedLost = at(`lost-ack-held-join-held-lost-ack-released-${suffix}`);
+          expect({ suffix, phase: releasedLost.phase }).toEqual({ suffix, phase: "confirmed" });
+          /* Claude: one bubble (the global count above), the reference and the
+             caption carried through, and the picture exactly once. */
+          const claudeArrived = at(`claude-canonical-claude-transcript-${suffix}`);
+          expect({ suffix, phase: claudeArrived.phase }).toEqual({ suffix, phase: "confirmed" });
+          expect({ suffix, badge: claudeArrived.badge.includes("release-blockers") }).toEqual({ suffix, badge: true });
+          expect({ suffix, caption: claudeArrived.inBubble.includes(caption) }).toEqual({ suffix, caption: true });
+          expect({ suffix, cards: at(`claude-canonical-claude-confirmed-${suffix}`).transcriptAttachments })
+            .toEqual({ suffix, cards: 0 });
+          expect({ suffix, cards: claudeArrived.transcriptAttachments }).toEqual({ suffix, cards: 1 });
         }
       }
     }
