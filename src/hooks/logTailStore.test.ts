@@ -343,14 +343,44 @@ test("an attachment's bytes are refused in every shape a transcript writes them"
   expect(storedText()).not.toContain(PAYLOAD);
 });
 
+test("a thinking block's signature is kept, so a real transcript still has a tail to cache", () => {
+  /* The record most of a Claude transcript is made of: a thinking block, and
+     the opaque attestation over it that every one of them carries. Judged as
+     raw text that attestation reads as encoded bytes, and refusing it refused
+     nearly every assistant record — the store then held a handful of lines
+     where its budget is four hundred, which is not a first paint. */
+  const signed = (index: number) => JSON.stringify({
+    type: "assistant",
+    uuid: `t-${index}`,
+    message: { role: "assistant", content: [{ type: "thinking", thinking: `weighing option ${index}`, signature: "Er".repeat(600) }, { type: "text", text: `answer ${index}` }] },
+  });
+  expect(persistableLine(signed(0))).toBe(true);
+
+  const window_ = Array.from({ length: 40 }, (_, index) => signed(index));
+  write("/sessions/thinking.jsonl", snapshot(window_));
+  expect(restoreTailSnapshot("/sessions/thinking.jsonl", bytesOf(window_))?.win.lines.length).toBe(40);
+
+  /* The exemption is the KEY, and it is only the encoded-run test that it
+     lifts: the same bytes under any other key are still a payload, a key that
+     is itself a payload is refused, and a signature below a credential key
+     stays refused because its ancestor marked it. */
+  expect(persistableLine(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", note: "Er".repeat(600) }] } }))).toBe(false);
+  expect(persistableLine(JSON.stringify({ type: "assistant", ["Er".repeat(600)]: 1 }))).toBe(false);
+  expect(persistableLine(JSON.stringify({ type: "assistant", [keyNamed("access", "token")]: { signature: SENTINEL } }))).toBe(false);
+});
+
 test("a structure this cannot finish reading is refused rather than assumed safe", () => {
   /* Wider and deeper than the inspection budget: "not inspected" is not
      "safe", so the line stays out. */
   let deep: unknown = SENTINEL;
   for (let level = 0; level < 40; level += 1) deep = { level, child: deep };
   expect(persistableLine(JSON.stringify({ type: "user", deep }))).toBe(false);
-  const wide = Object.fromEntries(Array.from({ length: 400 }, (_, index) => [`field${index}`, `value ${index}`]));
-  expect(persistableLine(JSON.stringify({ type: "user", wide }))).toBe(false);
+  /* Wider than the NODE budget while staying well inside the line bound, so
+     it is the inspection that refuses this one and not the record's size. */
+  const wide = Object.fromEntries(Array.from({ length: 700 }, (_, index) => [`f${index}`, index]));
+  const wideLine = JSON.stringify({ type: "user", wide });
+  expect(wideLine.length).toBeLessThan(BOUNDS.MAX_LINE_BYTES);
+  expect(persistableLine(wideLine)).toBe(false);
 });
 
 test("the throttle's own memory is bounded, before a flush as well as after", () => {

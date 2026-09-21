@@ -48,8 +48,13 @@ const MAX_LINES_PER_PATH = 400;
 const MAX_PATHS = 8;
 /** The whole store's line-byte budget — and the throttle queue's. */
 const MAX_BYTES_TOTAL = 384 * 1024;
-/** A line this long is an attachment, a pasted frame or a dumped payload. */
-const MAX_LINE_BYTES = 8 * 1024;
+/** A line this long is a dumped payload rather than a message. It is a COST
+    bound, not the attachment check — the structured pass below is that — so it
+    is set where it stops one record from spending a whole path's budget: at
+    most six of these fit, and a tool result of this size is already past what
+    a first paint is for. Measured against real transcripts at 8 kB it was the
+    binding limit on how much tail survived, not the payloads. */
+const MAX_LINE_BYTES = 16 * 1024;
 /** Older than this is not a conversation that "was just on screen". */
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /**
@@ -143,16 +148,30 @@ const keyFor = (path: string) => KEY_PREFIX + path;
  * on the structure the line decodes to.
  *
  * The raw pass is the repository's own transcript redactor — it changes a text
- * exactly when it recognises a credential in it — plus the two shapes encoded
- * bytes take in a line. The structured pass is what the raw pass cannot do:
- * a quoted JSON key whose value is a credential, an attachment block whose
- * bytes sit under a `data` field, and the same thing one level of escaping
- * down. Anything the structured pass cannot finish reading inside its budget
- * is refused, because "not inspected" is not "safe".
+ * exactly when it recognises a credential in it — plus the data URI an
+ * inlined attachment always carries. The structured pass is what the raw pass
+ * cannot do: a quoted JSON key whose value is a credential, an attachment
+ * block whose bytes sit under a `data` field, and the same thing one level of
+ * escaping down. Anything the structured pass cannot finish reading inside its
+ * budget is refused, because "not inspected" is not "safe".
+ *
+ * A run of encoded bytes is judged in the STRUCTURED pass, where the key that
+ * names it is known, and never on the raw line. Tested on the raw line it
+ * refused every Claude record that carries a thinking block, because such a
+ * record ends with a `signature` — an opaque attestation over the block, no
+ * user content in it at all — and that is most assistant records in a real
+ * transcript. The tail it left was a median of five lines where the budget is
+ * four hundred, which is not a first paint. So the run test skips exactly the
+ * keys below and applies everywhere else, including to key names themselves.
  */
 const DATA_URI_RE = /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/i;
 /** A run this long with no separator in it is encoded bytes, not prose. */
 const BASE64_RUN_RE = /[A-Za-z0-9+/]{192,}={0,2}/;
+/** Keys whose value is known-opaque and known-harmless: bytes that are neither
+    a credential nor an attachment, and that the record is not a record
+    without. Narrow on purpose — a key admitted here is exempt from the encoded
+    run test and from nothing else, and a sensitive ancestor still refuses it. */
+const OPAQUE_KEY_RE = /^signature$/i;
 /** Keys whose value IS an attachment's bytes, in every engine's transcripts. */
 const ATTACHMENT_VALUE_KEY_RE = /^(?:b64|b64_json|base64|base64_?data|blob|bytes|content_bytes|file_?data|image_?data|image_url|audio_?data|thumbnail)$/i;
 /** The `type` an attachment content block carries; `data` under one of these
@@ -164,10 +183,9 @@ const SHORT_DATA_CHARS = 64;
 const MAX_INSPECTED_NODES = 600;
 const MAX_INSPECTED_DEPTH = 12;
 
-/** Whether a piece of TEXT may be written, judged as text. */
+/** Whether a piece of TEXT may be written, judged as text alone. */
 function safeText(text: string): boolean {
   if (DATA_URI_RE.test(text)) return false;
-  if (BASE64_RUN_RE.test(text)) return false;
   return redactTranscriptText(text) === text;
 }
 
@@ -190,6 +208,7 @@ function safeValue(value: unknown, key: string, depth: number, budget: Inspectio
     if (marked) return false;
     if (key.toLowerCase() === "data" && value.length > SHORT_DATA_CHARS) return false;
     if (!safeText(value)) return false;
+    if (!OPAQUE_KEY_RE.test(key) && BASE64_RUN_RE.test(value)) return false;
     /* One transcript record routinely carries another JSON document as a
        string — a tool result, a relayed message, a nested envelope — and a
        credential inside it is escaped out of every text pattern's reach. */
@@ -213,6 +232,9 @@ function safeValue(value: unknown, key: string, depth: number, budget: Inspectio
   if (typeof type === "string" && ATTACHMENT_TYPE_RE.test(type)) return false;
   for (const field in record) {
     if (!Object.hasOwn(record, field)) continue;
+    /* The run test skips a value its KEY exempts, so the key itself may not be
+       where a payload hides. */
+    if (BASE64_RUN_RE.test(field)) return false;
     if (!safeValue(record[field], field, depth + 1, budget, marked)) return false;
   }
   return true;
@@ -231,8 +253,9 @@ export function persistableLine(line: string): boolean {
   try {
     parsed = JSON.parse(line);
   } catch {
-    /* Not JSON — a plain log line. The text pass above is the whole judge. */
-    return true;
+    /* Not JSON — a plain log line. There is no key to exempt anything, so the
+       whole line is judged as one unnamed string. */
+    return !BASE64_RUN_RE.test(line);
   }
   return safeValue(parsed, "", 0, { nodes: MAX_INSPECTED_NODES }, false);
 }
