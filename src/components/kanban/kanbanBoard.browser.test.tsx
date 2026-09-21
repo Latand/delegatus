@@ -6791,3 +6791,41 @@ describe("live turn rows on a phone", () => {
     expect(failures).toEqual([]);
   }, 300_000);
 });
+
+
+describe("#1972 stopped launches in the production task reader", () => {
+  browserTest("closed launch dismisses from the board while the parked launch stays retryable", async () => {
+    const out = path.resolve(".artifacts/stopped-launches");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=stopped-launches`, { width: 1280, height: 900 }, "light", "en");
+      await page.waitForSelector(card("t-stopped"));
+      await page.locator(card("t-stopped")).scrollIntoViewIfNeeded();
+
+      await page.locator(`${card("t-stopped")} [data-pipeline="p-closed"] .pchip[data-stage="build"]`).click();
+      const closed = page.locator('[data-reader-path="spawn:launch-closed"]');
+      await closed.locator("[data-launch-dismiss]").waitFor({ state: "visible" });
+      expect(await closed.locator("[data-launch-retry]").count()).toBe(0);
+      expect(await closed.locator("textarea, [data-agent-control-strip]").count()).toBe(0);
+      const bounds = await closed.locator("[data-launch-dismiss]").boundingBox();
+      expect(bounds?.width).toBeGreaterThan(0);
+      await page.screenshot({ path: path.join(out, "closed-launch.png") });
+      await closed.locator("[data-launch-dismiss]").click();
+      await closed.waitFor({ state: "detached" });
+      await page.waitForFunction(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string; path?: string }> } }).evidence.boardMutations
+        .some((mutation) => mutation.kind === "close" && mutation.path === "spawn:launch-closed"));
+      expect(await page.locator(`${card("t-stopped")} .tile[data-member="spawn:launch-closed"]`).count()).toBe(0);
+      await page.locator(`${card("t-stopped")} [data-pipeline="p-needs_decision"] .pchip[data-stage="build"]`).click();
+      const parked = page.locator('[data-reader-path="spawn:launch-needs_decision"]');
+      await parked.locator("[data-launch-retry]").waitFor({ state: "visible" });
+      await page.screenshot({ path: path.join(out, "parked-launch.png") });
+      expect(pageErrors).toEqual([]);
+      await context.close();
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+  }, 60_000);
+});
