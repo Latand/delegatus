@@ -38,6 +38,8 @@ pipelines, from a desktop browser or your phone.
   tasks, pipelines and conversations you use.
 - **English or Ukrainian** interface.
 
+<a id="run"></a>
+
 ## Quick start
 
 You need [Bun](https://bun.sh) 1.4 or newer, and the Claude Code and/or Codex
@@ -161,6 +163,8 @@ through the Viewer, so treat it as a secret.
   the provider.
 - **Voice conversation.** A Codex agent that the Viewer hosts offers a
   continuous voice conversation from its composer.
+
+<a id="connect-an-orchestrator-through-mcp"></a>
 
 ## MCP server for agents
 
