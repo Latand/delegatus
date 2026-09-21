@@ -198,7 +198,7 @@ function renderBlock(block: Block, key: number): ReactNode {
     case "code":
       return <CodeBlock key={key} code={block.code} lang={block.lang} />;
     case "table":
-      return <MdTable key={key} rows={block.rows} />;
+      return <MdTable key={key} rows={block.rows} document />;
     case "images":
       return <MdImageRow key={key} images={block.images} />;
     case "rule":

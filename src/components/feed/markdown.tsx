@@ -275,7 +275,14 @@ export function md(text: string): ReactNode {
 const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
 const TABLE_SEP_CELL_RE = /^:?-{1,}:?$/;
 
-export function MdTable({ rows }: { rows: string[] }) {
+/* A document's table keeps each cell at its content's width, up to a readable
+   measure, and scrolls sideways inside its own box; left to the table
+   algorithm on a phone, every cell collapsed to one word per line. */
+function DocumentCell({ children }: { children: ReactNode }) {
+  return <div className="w-max max-w-[36ch]">{children}</div>;
+}
+
+export function MdTable({ rows, document = false }: { rows: string[]; document?: boolean }) {
   const parsed = rows.map((row) =>
     row
       .trim()
@@ -289,13 +296,13 @@ export function MdTable({ rows }: { rows: string[] }) {
   const body = hasHeader ? parsed.slice(2) : parsed;
   return (
     <div className="my-1.5 max-w-full overflow-x-auto">
-      <table className="border-collapse text-[12.5px]">
+      <table className={`border-collapse text-[12.5px] ${document ? "[overflow-wrap:normal]" : ""}`}>
         {head ? (
           <thead>
             <tr>
               {head.map((cell, i) => (
                 <th key={i} className="border border-border bg-sunken px-2.5 py-1 text-left font-semibold">
-                  {md(cell)}
+                  {document ? <DocumentCell>{md(cell)}</DocumentCell> : md(cell)}
                 </th>
               ))}
             </tr>
@@ -306,7 +313,7 @@ export function MdTable({ rows }: { rows: string[] }) {
             <tr key={i}>
               {row.map((cell, j) => (
                 <td key={j} className="border border-border px-2.5 py-1 align-top">
-                  {md(cell)}
+                  {document ? <DocumentCell>{md(cell)}</DocumentCell> : md(cell)}
                 </td>
               ))}
             </tr>

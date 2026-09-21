@@ -182,7 +182,9 @@ export function TextPane({
     scrollRef.current?.querySelector(`[data-preview-line="${targetIndex}"]`)?.scrollIntoView({ block: "center" });
   }, [reachedTarget, targetIndex, highlightedLines]);
 
-  const gutterWidth = `${Math.max(String(lines.length).length, 3)}ch`;
+  /* The digits plus the gutter's own padding (px-1.5 on each side): sized to
+     the digits alone, a three-digit number spilled into the line beside it. */
+  const gutterWidth = `calc(${Math.max(String(lines.length).length, 3)}ch + 0.75rem)`;
 
   /* Same touch-target contract as the host header: 44 px controls on mobile. */
   const control = mobile ? "h-11 w-11" : "h-7 w-7";
@@ -254,7 +256,9 @@ export function TextPane({
               <span
                 data-line-number
                 aria-hidden
-                className="sticky left-0 shrink-0 select-none border-r border-border bg-sunken px-1.5 text-right text-muted"
+                className={`sticky left-0 shrink-0 select-none border-r border-border px-1.5 text-right ${
+                  index === targetIndex ? "bg-warning/30 font-semibold text-primary" : "bg-sunken text-muted"
+                }`}
                 style={{ width: gutterWidth, minWidth: gutterWidth }}
               >
                 {index + 1}

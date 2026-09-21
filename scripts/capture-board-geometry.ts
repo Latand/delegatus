@@ -3202,8 +3202,7 @@ ${section("next", "Next round", 5)}
     ...Array.from({ length: 5 }, (_, s) => [
       `## Step ${s + 1}: ${["Freeze the branch", "Build the candidate", "Verify under the pinned runtime", "Promote", "Announce"][s]}`,
       "",
-      ...Array.from({ length: 3 }, (_, p) => `Paragraph ${p + 1} of step ${s + 1}. The candidate carries its own manifest, and every check below names the process it exercised, so a green result can be traced to the run that produced it.`),
-      "",
+      ...Array.from({ length: 3 }, (_, p) => [`Paragraph ${p + 1} of step ${s + 1}. The candidate carries its own manifest, and every check below names the process it exercised, so a green result can be traced to the run that produced it.`, ""]).flat(),
       "- The gate reads the manifest, never the branch name.",
       "- A failed check stops the train:",
       "  - the candidate stays staged,",
@@ -3233,7 +3232,7 @@ ${section("next", "Next round", 5)}
     "",
     "> A check that stays green against a subject that should fail is not a check.",
     "",
-    ...Array.from({ length: 4 }, (_, s) => [`## Appendix ${String.fromCharCode(65 + s)}`, "", ...Array.from({ length: 4 }, (_, p) => `Appendix paragraph ${p + 1}: the long tail of the guide, so the anchor has somewhere to scroll to.`), ""].join("\n")),
+    ...Array.from({ length: 4 }, (_, s) => [`## Appendix ${String.fromCharCode(65 + s)}`, "", ...Array.from({ length: 4 }, (_, p) => [`Appendix paragraph ${p + 1}: the long tail of the guide, so the anchor has somewhere to scroll to.`, ""]).flat()].join("\n")),
   ].join("\n");
   fs.writeFileSync(PREVIEW_GUIDE, guide, "utf8");
   fs.writeFileSync(path.join(path.dirname(PREVIEW_GUIDE), "verify.md"), "# Verification\n\n## Bun runtime\n\nRun both halves under the pinned runtime.\n", "utf8");
@@ -3276,6 +3275,7 @@ function readPreview() {
       scrollTop: md.scrollTop,
       headings: document.querySelectorAll("[data-md-document] [data-md-anchor]").length,
       tableScrollsInside: tableBox ? tableBox.scrollWidth > tableBox.clientWidth : null,
+      tallestTableRow: Math.round(Math.max(0, ...[...document.querySelectorAll("[data-md-document] tr")].map((row) => row.getBoundingClientRect().height))),
       images: [...document.querySelectorAll<HTMLImageElement>("[data-md-document] img")].map((img) => ({ loaded: img.complete && img.naturalWidth > 0, src: img.getAttribute("src") })),
       wideTableHeadingTop: wide ? Math.round(wide.getBoundingClientRect().top - scrollTop) : null,
       codeBlocks: document.querySelectorAll("[data-md-document] pre").length,
@@ -3286,7 +3286,7 @@ function readPreview() {
     line: target ? {
       index: target.getAttribute("data-preview-line"),
       visible: (() => { const t = target.getBoundingClientRect(); const s = textScroller!.getBoundingClientRect(); return t.top >= s.top && t.bottom <= s.bottom; })(),
-      text: target.textContent?.slice(0, 80) ?? "",
+      text: target.textContent?.slice(0, 200) ?? "",
     } : null,
   };
 }
@@ -3380,10 +3380,12 @@ async function filePreviewMain(): Promise<void> {
 
       /* The source toggle. */
       await page.click('[data-preview-mode="source"]').catch(() => {});
-      await page.waitForSelector('[data-preview-line="0"]', { timeout: 10_000 }).catch(() => {});
+      await page.waitForSelector('[data-preview-line="1"]', { timeout: 15_000 }).catch(() => {});
       const htmlSource = await page.evaluate(readPreview);
+      const firstLine = await page.evaluate(() => document.querySelector('[data-preview-line="0"]')?.textContent ?? "");
       common("html-source", htmlSource);
       must(htmlSource.frame === null, `${tag} html-source: the frame is still shown`);
+      must(firstLine.includes("<!doctype html>"), `${tag} html-source: the source view shows «${firstLine.slice(0, 60)}»`);
       await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-html-source.png`) });
 
       /* 2. A long markdown guide: top, then its wide-table anchor. */
@@ -3401,6 +3403,8 @@ async function filePreviewMain(): Promise<void> {
       common("markdown-anchor", mdAnchor);
       must(Boolean(mdAnchor.markdown && mdAnchor.markdown.scrollTop > 0 && mdAnchor.markdown.wideTableHeadingTop !== null && Math.abs(mdAnchor.markdown.wideTableHeadingTop) <= 40), `${tag} markdown: the anchor did not bring its heading up ${JSON.stringify(mdAnchor.markdown && { scrollTop: mdAnchor.markdown.scrollTop, top: mdAnchor.markdown.wideTableHeadingTop })}`);
       must(Boolean(mdAnchor.markdown?.tableScrollsInside), `${tag} markdown: the wide table does not scroll inside its own box`);
+      /* Squeezed to the viewport, every cell broke to one word per line and a row grew to 450 px. */
+      must((mdAnchor.markdown?.tallestTableRow ?? 0) <= 80, `${tag} markdown: a table row is ${mdAnchor.markdown?.tallestTableRow}px tall`);
       await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-markdown-anchor.png`) });
       report[`${tag}-markdown-anchor`] = mdAnchor;
 
