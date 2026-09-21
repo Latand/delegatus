@@ -34,7 +34,7 @@ const SHAPES: [string, string, ReturnType<typeof file> | { kind: "viewer"; hash:
   ["~/ path", "~/checkout/docs/spec.md", file("~/checkout/docs/spec.md")],
   ["escaped parens (markdown target)", "/workspace/Home_\\(draft\\).md", file("/workspace/Home_(draft).md")],
   /* Transcripts stay with the conversation router, exactly as spelled. */
-  ["#f= transcript", `#f=${enc("/home/u/.claude/projects/p/s.jsonl")}`, { kind: "viewer", hash: `#f=${enc("/home/u/.claude/projects/p/s.jsonl")}` }],
+  ["#f= transcript", `#f=${enc("/workspace/.claude/projects/p/s.jsonl")}`, { kind: "viewer", hash: `#f=${enc("/workspace/.claude/projects/p/s.jsonl")}` }],
   ["#f= transcript with #question", `#f=${enc("/p/s.jsonl")}#question`, { kind: "viewer", hash: `#f=${enc("/p/s.jsonl")}#question` }],
   ["viewer url, #f= transcript", `http://127.0.0.1:8898/#f=${enc("/p/s.jsonl")}`, { kind: "viewer", hash: `#f=${enc("/p/s.jsonl")}` }],
   ["#f= launch placeholder", "#f=spawn%3Alaunch-1", { kind: "viewer", hash: "#f=spawn%3Alaunch-1" }],
