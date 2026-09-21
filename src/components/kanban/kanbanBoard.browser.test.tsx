@@ -6858,12 +6858,13 @@ describe("columns balanced on large screens, stage pills and heads on one line",
    *     dot, the engine mark, the model and the effort bars keep their size;
    *   - a column head is one line: its title, count and counters inside the
    *     head, the counters truncating before anything wraps.
-   * BALANCE_CAPTURE_LABEL names the record. With `main` (the stylesheet and
+   * BALANCE_CAPTURE_LABEL names the record, written to
+   * src/components/kanban/evidence/column-balance/<label>.json. With `main` (the stylesheet and
    * components of the base, this fixture and driver on top) the same checks
    * are recorded and must fail: the negative control.
    */
   const label = process.env.BALANCE_CAPTURE_LABEL?.trim() || "branch";
-  const EVIDENCE = path.resolve("evidence/kanban-column-balance");
+  const EVIDENCE = path.resolve("src/components/kanban/evidence/column-balance");
   const measure = `(() => {
     const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
     const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });

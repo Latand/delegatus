@@ -684,7 +684,10 @@ const HEAD_CASES: Array<{ name: string; pipeline: () => Pipeline; en: [string, s
   { name: "paused", pipeline: () => headPipeline("paused", "green", "running", { pausedState: "running" }), en: ["paused", "Green"], uk: ["пауза", "Green"] },
   { name: "completed", pipeline: () => headPipeline("completed", "build", "passed", { cursor: null, closedAt: iso(300) }), en: ["completed", null], uk: ["завершено", null] },
   { name: "closed", pipeline: () => headPipeline("closed", "build", "failed", { cursor: null, closedAt: iso(300), restored: true }), en: ["closed", null], uk: ["закрито", null] },
-  { name: "failed-stage", pipeline: () => headPipeline("paused", "build", "failed", { cursor: null, pausedState: null }), en: ["paused", "Build failed"], uk: ["пауза", "Build не пройдено"] },
+  { name: "failed-stage", pipeline: () => headPipeline("paused", "build", "failed", { cursor: null, pausedState: null }), en: ["paused", "Build"], uk: ["пауза", "Build"] },
+  /* A stage parked on the operator under a paused pipeline, and a stage on its second attempt: still the name alone. */
+  { name: "paused-decision", pipeline: () => headPipeline("paused", "build", "needs_decision", { pausedState: "running" }), en: ["paused", "Build"], uk: ["пауза", "Build"] },
+  { name: "second-attempt", pipeline: () => ({ ...headPipeline("running", "green", "running"), runs: [{ stageId: "green", attempts: [attempt(1, "failed", implement1, 2400), attempt(2, "running", implement1, 1200)] }] }) as unknown as Pipeline, en: ["stages running", "Green"], uk: ["етапи виконуються", "Green"] },
 ];
 
 for (const locale of ["en", "uk"] as const) {
