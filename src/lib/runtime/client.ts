@@ -277,6 +277,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       socket.setEncoding("utf8");
       const startedAt = performance.now();
       let frame = "";
+      let frameBytes = 0;
       let settled = false;
       const timer = setTimeout(() => {
         const elapsedMs = performance.now() - startedAt;
@@ -298,10 +299,16 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       signal?.addEventListener("abort", onAbort, { once: true });
       socket.once("error", () => finish(new RuntimeHostUnavailableError("runtime host is unavailable")));
       socket.on("data", (chunk: Buffer | string) => {
-        frame += String(chunk);
-        if (Buffer.byteLength(frame) > MAX_RESPONSE_FRAME_BYTES) return finish(new RuntimeHostUnavailableError("runtime host response exceeds limit"));
-        const newline = frame.indexOf("\n");
-        if (newline < 0) return;
+        /* Measure and search only the chunk that arrived. Re-measuring and
+           re-scanning the whole frame on every chunk made a snapshot-sized
+           answer quadratic, hundreds of milliseconds on the event loop (#1987). */
+        const text = String(chunk);
+        frame += text;
+        frameBytes += Buffer.byteLength(text);
+        if (frameBytes > MAX_RESPONSE_FRAME_BYTES) return finish(new RuntimeHostUnavailableError("runtime host response exceeds limit"));
+        const newlineInChunk = text.indexOf("\n");
+        if (newlineInChunk < 0) return;
+        const newline = frame.length - text.length + newlineInChunk;
         try {
           const response = JSON.parse(frame.slice(0, newline)) as RuntimeSocketResponse;
           if (response.id !== request.id) return finish(new RuntimeHostUnavailableError("runtime host response id mismatch"));

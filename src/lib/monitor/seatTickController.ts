@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+
+import { yieldToRuntime } from "@/lib/cooperative";
 import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
@@ -7,7 +9,8 @@ import { canonicalOrchestratorProject, type StillbornSeatRollback } from "@/lib/
 import { recordSeatProjectSuccessions } from "@/lib/orchestrator/seatProjectIdentity";
 import { RUNTIME_IDEMPOTENCY_KEY_LIMIT, runtimeIdempotencyKeyAdmissible } from "@/lib/runtime/contracts";
 import { createTask, patchTask } from "@/lib/tasks/commands";
-import { mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasks, mutateTasksFile } from "@/lib/tasks/store";
+import type { BoardTask } from "@/lib/tasks/types";
 
 import {
   MONITOR_REF_PREFIX,
@@ -256,11 +259,15 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
      is the one writer here that runs on a timer against whatever state dir the
      process is pointed at, so a stale path would put a real board card in
      someone else's board. In the Viewer both readings are identical. */
+  const file = statePath("tasks.json");
+  /* Most checks decide nothing new: the condition is still clear, or its card
+     already says what it should. Such a check is answered from a read, and
+     only a real create, close or rewrite takes the write below, which rebuilds
+     and fingerprints every task under the lease (#1987). A card that changes
+     between this read and a later check is simply seen by that check. */
+  if (seatTickCardIsCurrent(project, card, at, loadTasks(file))) return true;
   return mutateTasksFile<boolean>((state) => {
-    const existing = state.tasks.find((task) =>
-      canonicalOrchestratorProject(task.project) === project
-      && task.status !== "done"
-      && monitorRefIn(task.text) === card.ref);
+    const existing = standingSeatTickCard(state.tasks, project, card);
     if (card.state === "resolved") {
       if (!existing) return { state: undefined, result: true };
       const closed = patchTask(state.tasks, existing.id, { status: "done" });
@@ -295,7 +302,24 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
     if (!created.ok) return { state: undefined, result: false };
     if (created.replay) return { state: undefined, result: true };
     return { state: { tasks: created.tasks, recentCreates: created.recentCreates }, result: true };
-  }, statePath("tasks.json"));
+  }, file);
+}
+
+function standingSeatTickCard(tasks: readonly BoardTask[], project: string, card: SeatTickCard): BoardTask | undefined {
+  return tasks.find((task) =>
+    canonicalOrchestratorProject(task.project) === project
+    && task.status !== "done"
+    && monitorRefIn(task.text) === card.ref);
+}
+
+/** Whether the board already holds exactly what {@link ensureSeatTickCard}
+    would leave there, so the check has nothing to write. */
+function seatTickCardIsCurrent(project: string, card: SeatTickCard, at: string, tasks: readonly BoardTask[]): boolean {
+  const existing = standingSeatTickCard(tasks, project, card);
+  if (card.state === "resolved") return !existing;
+  if (!existing) return false;
+  if (card.state !== "open") return true;
+  return existing.text === cardText(project, card, at);
 }
 
 /**
@@ -1129,6 +1153,10 @@ async function check(
      launch it was activated on, so this check opens on the seat the operator
      can actually reach rather than on a provisional one whose launch died. */
   const rollbackDetail = await reconcileProvisionalSeat(canonical, dependencies);
+  /* Each phase rebuilds the whole task state at least once; the event loop
+     runs between them so one check is never one long block (#1987). The
+     phases already read fresh state, as they do after any real I/O. */
+  await yieldToRuntime();
 
   /* Then, before anything else is READ, let alone decided: settle the wake
      this project left outstanding. It comes before the rest because both of
@@ -1152,6 +1180,7 @@ async function check(
     now: opening,
     wakeIntervalMs: openingInterval,
   });
+  await yieldToRuntime();
   const settled = await reconcileOutstandingWake({
     project: canonical,
     state: drained,
@@ -1166,7 +1195,9 @@ async function check(
     wakeIntervalMs: openingInterval,
   });
 
+  await yieldToRuntime();
   const gathered = await gatherSeatTickInput(canonical, settled, policy, sources);
+  await yieldToRuntime();
   const at = new Date(gathered.now).toISOString();
   /* The gather's own row, not the one it was handed: a first check seals the
      event cursor at the journal head while reading it, and re-deriving the row
@@ -1566,7 +1597,14 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   }
   followProjectSuccessions(dependencies.recordSuccessions);
   const records: SeatTickRunRecord[] = [];
+  let first = true;
   for (const project of seatTickProjects(sources)) {
+    /* One project's check at a time, with the event loop between them. Every
+       phase below awaits promises that are usually already settled, so without
+       this a sweep over thirty-odd seats ran as one block of several seconds
+       and every HTTP request waited behind it (#1987). */
+    if (!first) await yieldToRuntime();
+    first = false;
     try {
       const record = await runSeatTickCheck(project, { ...dependencies, sources });
       if (record) records.push(record);

@@ -288,3 +288,35 @@ test("a keyed session frame preserves UTF-8 characters split across socket chunk
   const client = new UnixRuntimeHostClient(socketPath);
   expect(await client.readSession({ conversationId: "conversation_utf8" })).toMatchObject({ liveTurn: { text } });
 });
+
+test("issue 1987: a snapshot-sized frame is measured once per byte, not once per chunk", async () => {
+  /* The runtime snapshot is several megabytes. Re-measuring and re-scanning the
+     whole accumulated frame on every socket chunk made receiving one quadratic
+     and held the Viewer's event loop for hundreds of milliseconds. */
+  const payload = "x".repeat(8 * 1024 * 1024);
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    const reply = Buffer.from(JSON.stringify({ id: request.id, ok: true, result: { conversationId: "conversation_large", liveTurn: { text: payload } } }) + "\n");
+    let offset = 0;
+    const writeNext = () => {
+      if (offset >= reply.length) return socket.end();
+      const next = Math.min(reply.length, offset + 64 * 1024);
+      socket.write(reply.subarray(offset, next), writeNext);
+      offset = next;
+    };
+    writeNext();
+  });
+  let measured = 0;
+  const byteLength = Buffer.byteLength;
+  const spy = spyOn(Buffer, "byteLength").mockImplementation(((value: Parameters<typeof Buffer.byteLength>[0], encoding?: BufferEncoding) => {
+    if (typeof value === "string") measured += value.length;
+    return byteLength(value, encoding);
+  }) as typeof Buffer.byteLength);
+  try {
+    const session = await new UnixRuntimeHostClient(socketPath).readSession({ conversationId: "conversation_large" });
+    expect((session as { liveTurn: { text: string } }).liveTurn.text.length).toBe(payload.length);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(measured).toBeLessThan(payload.length * 2);
+});

@@ -10,6 +10,8 @@ import path from "node:path";
  *   bun src/lib/state/fixtures/stateOwnershipProbe.ts resolve
  *   bun src/lib/state/fixtures/stateOwnershipProbe.ts load-stores
  *   bun src/lib/state/fixtures/stateOwnershipProbe.ts open-registry
+ *   bun src/lib/state/fixtures/stateOwnershipProbe.ts resolve-then-disown
+ *   bun src/lib/state/fixtures/stateOwnershipProbe.ts resolve-then-chdir
  *
  * `resolve` prints the state directory it reached. `load-stores` additionally
  * walks the path the incident took: the instrumentation entry point, then a
@@ -29,6 +31,38 @@ async function main(): Promise<void> {
       stateDirectory: path.dirname(statePath("probe")),
       tasks: state.tasks.length,
     }));
+    return;
+  }
+
+  if (mode === "resolve-then-disown") {
+    /* The same process resolves as an owner, then loses its claim (#1987): a
+       remembered admission must not outlive the owner that earned it. */
+    const owned = path.dirname(statePath("probe"));
+    delete process.env.LLV_STATE_OWNER;
+    let afterDisown: string;
+    try {
+      afterDisown = path.dirname(statePath("probe"));
+    } catch (error) {
+      afterDisown = error instanceof Error ? `refused: ${error.name}` : "refused";
+    }
+    console.log(JSON.stringify({ stateDirectory: owned, afterDisown }));
+    return;
+  }
+
+  if (mode === "resolve-then-chdir") {
+    /* A relative config root resolves against the working directory, so the
+       same environment names a sandbox from one directory and the operator's
+       installation from another (#1987). */
+    process.chdir(process.env.PROBE_FIRST_CWD!);
+    const first = path.resolve(path.dirname(statePath("probe")));
+    process.chdir(process.env.PROBE_SECOND_CWD!);
+    let afterChdir: string;
+    try {
+      afterChdir = path.resolve(path.dirname(statePath("probe")));
+    } catch (error) {
+      afterChdir = error instanceof Error ? `refused: ${error.name}` : "refused";
+    }
+    console.log(JSON.stringify({ stateDirectory: first, afterChdir }));
     return;
   }
 
