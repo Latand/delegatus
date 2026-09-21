@@ -41,7 +41,7 @@ afterAll(() => {
   fs.rmSync(isolated, { recursive: true, force: true });
 });
 
-function fixture(failedCount: number, fullHistory = false) {
+function fixture(failedCount: number, fullHistory = false, historyCount = 8078) {
   const directory = fs.mkdtempSync(path.join(isolated, "fixture-"));
   const filename = path.join(directory, "registry.json");
   const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
@@ -77,7 +77,7 @@ function fixture(failedCount: number, fullHistory = false) {
     const conversation = Object.values(data.conversations)[0]!;
     data.entries = {};
     data.conversations = {};
-    for (let i = 0; i < 8078; i++) {
+    for (let i = 0; i < historyCount; i++) {
       const id = `conversation_history_${i}` as const;
       const sessionId = `history_${i}`;
       const artifactPath = path.join(directory, `${sessionId}.jsonl`);
@@ -564,3 +564,92 @@ test("the full retained history completes within the promoted serving budget", a
     f.journal.close();
   }
 }, 130_000);
+
+
+test("ready startup survives a second module realm without any adoption calls", async () => {
+  const f = fixture(0);
+  let adoptions = 0;
+  const dependencies = {
+    registry: f.registry, client: f.client, refreshTranscriptState: async () => {},
+    adopt: async () => { adoptions++; return []; },
+    adoptClaude: async () => { adoptions++; return []; }, orchestratorSeats: () => [],
+  };
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(adoptions).toBe(2);
+    adoptions = 0;
+    const routeRealm = await import(`./startup?${"ready-route-realm"}`);
+    await routeRealm.adoptStructuredHostsAtStartup(dependencies);
+    expect(adoptions).toBe(0);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    f.journal.close();
+    f.registry.close();
+  }
+});
+
+test("startup never holds a state lease across a five second host request", async () => {
+  const f = fixture(0);
+  const { savePipelines } = await import("@/lib/pipelines/store");
+  savePipelines([]);
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
+  let heldDuringRequest = false;
+  let longestHoldMs = 0;
+  let calls = 0;
+  const client = { ...f.client, snapshot: async () => {
+    calls++;
+    if (calls === 1) {
+      const start = performance.now();
+      const held = db.query("SELECT count(*) AS n FROM state_leases").get() as { n: number };
+      await Bun.sleep(5_000);
+      heldDuringRequest = held.n > 0;
+      if (heldDuringRequest) longestHoldMs = performance.now() - start;
+    }
+    return f.journal.snapshot();
+  } };
+  try {
+    await adoptStructuredHostsAtStartup({ registry: f.registry, client,
+      refreshTranscriptState: async () => {}, adopt: async () => [], adoptClaude: async () => [], orchestratorSeats: () => [],
+    });
+    console.log(JSON.stringify({ heldDuringRequest, longestHoldMs }));
+    expect(calls).toBeGreaterThan(0);
+    expect(heldDuringRequest).toBe(false);
+    expect(longestHoldMs).toBeLessThan(100);
+  } finally {
+    db.close();
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    f.journal.close();
+    f.registry.close();
+  }
+}, 15_000);
+
+test("production startup yields between historical publication batches and skips completed publications", async () => {
+  const f = fixture(0, true, 40);
+  let published = 0;
+  let publishedAtFirstYield: number | null = null;
+  let yieldProbe: ReturnType<typeof setTimeout> | undefined;
+  const client = { ...f.client, append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => {
+    if (event.kind === "session-status") {
+      published++;
+      if (published === 1) yieldProbe = setTimeout(() => { publishedAtFirstYield = published; }, 0);
+    }
+    return f.client.append(event);
+  } };
+  try {
+    await adoptStructuredHostsAtStartup({ registry: f.registry, client,
+      refreshTranscriptState: async () => {}, adopt: async () => [], adoptClaude: async () => [], orchestratorSeats: () => [],
+    });
+    expect(published).toBe(40);
+    expect(publishedAtFirstYield).not.toBeNull();
+    expect(publishedAtFirstYield!).toBeLessThanOrEqual(16);
+    const before = published;
+    const { completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(published).toBe(before);
+  } finally {
+    if (yieldProbe) clearTimeout(yieldProbe);
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    f.journal.close();
+    f.registry.close();
+  }
+}, 30_000);
