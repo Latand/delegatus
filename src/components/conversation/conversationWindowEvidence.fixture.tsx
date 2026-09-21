@@ -527,6 +527,22 @@ const LIFE_OPENING = JSON.stringify({
   payload: { type: "agent_message", message: "The release branch is green again. Anything else you want me to look at?" },
 });
 
+/* The same turn as a Claude transcript journals it. A conversation the
+   operator is already in has something above the message; an empty one grows
+   a «start of the conversation» line the moment its first record lands, which
+   would move the row for a reason that has nothing to do with the record. */
+const LIFE_CLAUDE_OPENING = JSON.stringify({
+  type: "assistant",
+  timestamp: "2026-09-19T09:14:00.000Z",
+  uuid: ["0c4e8a21", "5f6b", "4d3c", "9b7a", "e2f1a0b9c8d7"].join("-"),
+  message: {
+    role: "assistant",
+    content: [{ type: "text", text: "The release branch is green again. Anything else you want me to look at?" }],
+  },
+});
+
+const lifeOpening = () => (fakeHost.engine === "claude" ? LIFE_CLAUDE_OPENING : LIFE_OPENING);
+
 /* Where the agent's own copy of a pasted image lands. The transcript carries
    that path inside the message it journals, and the feed renders it as the
    conversation's own attachment card — which is what makes the caption on the
@@ -698,6 +714,7 @@ function lifecycleControls(): LifecycleControls {
     scenario: (next) => {
       fakeHost.scenario = next;
       fakeHost.engine = next === "claude-canonical" ? "claude" : "codex";
+      fakeHost.lines = [lifeOpening()];
       announceHost();
     },
     holdProvenance: () => { fakeHost.provenanceHeld = true; },
@@ -733,7 +750,7 @@ function lifecycleControls(): LifecycleControls {
          any picture as a native image part beside them. It carries no marker;
          its uuid is what the broker's ledger joins to the submission. */
       if (fakeHost.engine === "claude") {
-        fakeHost.lines = [LIFE_OPENING, JSON.stringify({
+        fakeHost.lines = [lifeOpening(), JSON.stringify({
           type: "user",
           uuid: LIFE_CLAUDE_UUID,
           timestamp,
@@ -770,7 +787,7 @@ function lifecycleControls(): LifecycleControls {
        * Both carry the delivery's own identity on the marker, which is what
        * the row is recognised by. */
       if ((entry?.images ?? 0) > 0 && !entry?.text.trim()) {
-        fakeHost.lines = [LIFE_OPENING, JSON.stringify({
+        fakeHost.lines = [lifeOpening(), JSON.stringify({
           type: "response_item",
           timestamp,
           payload: {
@@ -790,7 +807,7 @@ function lifecycleControls(): LifecycleControls {
         ...((entry?.files ?? 0) > 0 ? [LIFE_INBOX_FILE] : []),
       ];
       const delivered = [entry?.text ?? LIFE_TEXT, ...carried].filter(Boolean).join("\n");
-      fakeHost.lines = [LIFE_OPENING, JSON.stringify({
+      fakeHost.lines = [lifeOpening(), JSON.stringify({
         type: "event_msg",
         timestamp,
         payload: { type: "user_message", message: structuredUserText(key, delivered) },
