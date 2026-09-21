@@ -624,6 +624,7 @@ export class StructuredDeliveryQueue {
   private readonly targetErrors = new Map<string, string>();
   private readonly passRetry = new RetryBackoff();
   private readonly reconfigureRetries = new Map<string, RetryBackoff>();
+  private readonly nativeExecutionRetries = new Map<string, RetryBackoff>();
   private lastPassError: string | null = null;
   /** This executor's identity, minted per instance and never persisted beyond
       the `delivering` rows it writes. A successor instance — in this process or
@@ -758,7 +759,7 @@ export class StructuredDeliveryQueue {
     for (const operationId of this.reconfigureRetries.keys()) {
       if (!listed.has(operationId)) this.reconfigureRetries.delete(operationId);
     }
-    if (rawEffects.length === 0) return;
+    if (rawEffects.length === 0) { this.nativeExecutionRetries.clear(); return; }
     const grouped = new Map<string, DeliveryEffect[]>();
     const targetPreparations = new Map<string, Array<() => Promise<void>>>();
     const prepareTarget = (conversationId: string, prepare: () => Promise<void>) => {
@@ -815,6 +816,10 @@ export class StructuredDeliveryQueue {
       target.push(effect);
       grouped.set(effect.conversationId, target);
     }
+    const nativeTargets = new Set(effects.filter(effect => effect.kind === "native-queue").map(effect => effect.conversationId));
+    for (const id of this.nativeExecutionRetries.keys()) {
+      if (!nativeTargets.has(id)) this.nativeExecutionRetries.delete(id);
+    }
     const conversationIds = new Set([...grouped.keys(), ...targetPreparations.keys()]);
     const targets: Array<[string, () => Promise<boolean>]> = [...conversationIds].map((conversationId) => [
       conversationId,
@@ -854,7 +859,31 @@ export class StructuredDeliveryQueue {
     if (failures.length > 0) this.retrySoon();
   }
 
+  /** Native execution has its own target budget: a parked pick or a successful
+      send elsewhere must not reset a failed journal read. Keep the original
+      effect/receipt in custody, and let controls reach their own drain. */
+  private async executeNative(effect: Extract<DeliveryEffect, { kind: "native-queue" }>, reason?: string): Promise<boolean> {
+    const retry = this.nativeExecutionRetries.get(effect.conversationId) ?? new RetryBackoff();
+    this.nativeExecutionRetries.set(effect.conversationId, retry);
+    if (!retry.ready()) { this.retrySoon(); return false; }
+    try {
+      if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
+      await this.port.nativeQueueExecute(effect, reason);
+      this.nativeExecutionRetries.delete(effect.conversationId);
+      return true;
+    } catch (error) {
+      retry.fail();
+      this.retrySoon();
+      throw error;
+    }
+  }
+
   private async drainTarget(effects: DeliveryEffect[]): Promise<boolean> {
+    if (effects.length > 0 && effects.every(effect => effect.kind === "native-queue")
+      && this.nativeExecutionRetries.get(effects[0]!.conversationId)?.ready() === false) {
+      this.retrySoon();
+      return true;
+    }
     const latestSwitch = effects.filter(isReconfigureEffect).reduce<StructuredReconfigureEffect | null>(
       (latest, effect) => !latest || effect.eventSeq > latest.eventSeq ? effect : latest, null);
     if (!effects.some(isControlEffect) && latestSwitch
@@ -865,13 +894,25 @@ export class StructuredDeliveryQueue {
     }
     const openEffects: DeliveryEffect[] = [];
     const durableStatuses = new Map<string, StructuredOperationStatus | null>();
+    let nativeReceiptUnavailable = false;
     for (const effect of effects) {
+      if (effect.kind === "native-queue" && this.nativeExecutionRetries.get(effect.conversationId)?.ready() === false) {
+        nativeReceiptUnavailable = true;
+        continue;
+      }
       const durable = await this.readStatus(effect.operationId);
       if (!durable.readable) {
         if (isReconfigureEffect(effect)) {
           const retry = this.reconfigureRetries.get(effect.operationId) ?? new RetryBackoff();
           retry.fail();
           this.reconfigureRetries.set(effect.operationId, retry);
+        }
+        if (effect.kind === "native-queue") {
+          const retry = this.nativeExecutionRetries.get(effect.conversationId) ?? new RetryBackoff();
+          retry.fail();
+          this.nativeExecutionRetries.set(effect.conversationId, retry);
+          nativeReceiptUnavailable = true;
+          continue;
         }
         return this.fenceUnavailable();
       }
@@ -892,7 +933,10 @@ export class StructuredDeliveryQueue {
       durableStatuses.set(effect.operationId, durable.value);
       openEffects.push(effect);
     }
-    effects = openEffects;
+    // An unreadable native receipt retains the message/switch barrier, while
+    // interrupt/answer/kill can still use their independently readable receipts.
+    effects = nativeReceiptUnavailable ? openEffects.filter(isControlEffect) : openEffects;
+    if (nativeReceiptUnavailable) this.retrySoon();
     const killedGenerations = new Set<string>();
     const reconfigures = effects.filter(isReconfigureEffect);
     const currentReconfigure = reconfigures.reduce<StructuredReconfigureEffect | null>(
@@ -966,8 +1010,7 @@ export class StructuredDeliveryQueue {
       if (hold && isEngagement(effect)) {
         const reason = `account switch failed: ${hold.reason}`;
         if (effect.kind === "native-queue") {
-          if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
-          await this.port.nativeQueueExecute(effect, reason);
+          if (!await this.executeNative(effect, reason)) return true;
         } else if (durableStatuses.get(effect.operationId)?.status === "delivering") {
           // A switch failure cannot establish the fate of an earlier actuation.
           this.retrySoon();
@@ -978,9 +1021,9 @@ export class StructuredDeliveryQueue {
         continue;
       }
       if (effect.kind === "native-queue") {
-        if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
         const boundary = this.successfulKillBoundaries.get(effect.conversationId);
-        await this.port.nativeQueueExecute(effect, boundary && effect.eventSeq <= boundary.eventSeq ? "conversation was intentionally terminated" : undefined);
+        if (!await this.executeNative(effect, boundary && effect.eventSeq <= boundary.eventSeq
+          ? "conversation was intentionally terminated" : undefined)) return true;
         continue;
       }
       const killBoundary = this.successfulKillBoundaries.get(effect.conversationId);
@@ -1232,7 +1275,7 @@ export class StructuredDeliveryQueue {
       }
       await this.transitionUnlessSettled(effect.operationId, "delivered", { turnId: receipt.turnId });
     }
-    return false;
+    return nativeReceiptUnavailable;
   }
 
   /**

@@ -49,3 +49,49 @@ host. It did not establish progress during a runtime-host transport timeout.
 The incident log separately records bursts of `native-queue-read` timeouts
 about 15 ms apart. Neither the worker measurement nor that earlier replay
 establishes that a currently unreadable host is idle.
+
+## Revision observation
+
+A subsequent read-only two-second sample still found a busy worker at 99.5%
+CPU, 1.86 GB RSS and 145 MB/s logical reads. The read-only SQLite inventory
+contained 9,757 conversations, the same 13 failed-recoverable migrations and
+two orphaned applying reconfigures. This confirms the observed workload still
+exists; it does not imply the branch has been deployed.
+
+The production delivery-controller regression reproduced 606 native queue
+reads in 60 simulated seconds with 100-ms admission wakes, a parked account
+pick and six successful sends on another conversation. Execution bypassed
+the background reconciliation deadline, and the parked target prevented the
+whole-pass failure budget from activating. Native execution now keeps its own
+per-conversation deadline; unrelated success cannot reset it. Original native
+records and receipts remain unchanged while the socket cannot answer, and an
+interrupt on the same conversation still progresses.
+
+## Behavioral regression evidence
+
+The same acceptance files and shared fixture were copied into an export of
+merge base `e2dd7970a`; production code in that export was unchanged. All
+failures below are assertions reached through the production controllers.
+External account/provider I/O, host adapters, process/board writers and clocks
+are isolated. Registry, journal, queue, scheduler and migration decisions run
+their production implementations. The socket fault accepts requests and never
+answers; no test connects to an operator listener.
+
+| Acceptance | Merge-base behavior | Fixed behavior |
+| --- | --- | --- |
+| Terminal provider-error pick | Receipt remains queued | Applied, migration committed, successor on chosen account |
+| Slow inventory pass | Second scan before a full idle minute | No scan until a full minute after completion |
+| Historical migration residue | 339 conversation/delivery reads in three cycles | Zero such reads; 13 failed migrations retained |
+| Native background reconciliation | 601 reads per simulated minute | At most 7 reads |
+| Native execution plus parked pick and healthy sends | 1,200 requests per simulated minute | At most 14 total requests including background reconciliation; six healthy sends and one same-target interrupt complete |
+| Native receipt read timeout | Same-target interrupt cannot progress | Interrupt completes; total requests remain bounded by 14 |
+| Unanswered effect-batch socket | 600 requests per simulated minute | At most 7 requests |
+| Applying switch with unreadable host | 600 host checks per simulated minute | At most 6 checks; unrelated send and replacement choice progress |
+| Message held behind failed switch | Send remains queued | Journal and delivery record settle failed; rendered card shows reason and resend control |
+| MCP pick with unspecified Codex speed | Account selection refused | Account selection admitted with `fast: false` |
+
+The pre-revision branch separately reproduced 606 native requests in the
+mixed-target case. This identifies the execution bypass left after the first
+background-only backoff fix. Bounds are asserted over 60 seconds of simulated
+time with admission wakes every 100 ms. The controller-level tests supersede
+the earlier helper-only scheduler and supplied-receipt regression claims.

@@ -2,15 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { afterEach, expect, setSystemTime, test } from "bun:test";
-import { AgentRegistry } from "@/lib/agent/registry";
-import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
+import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
-import { RuntimeJournal } from "@/runtime-host/journal";
 import { UnixRuntimeHostClient, type RuntimeHostClient } from "./client";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
-import { StructuredDeliveryQueue, type StructuredDeliveryEffect } from "./structuredDeliveryQueue";
+import { NativeCodexQueue } from "./nativeCodexQueue";
 import { FakeEngineHost } from "./fixtures/fakeEngineHost";
 import type { EngineHost } from "./engineHost";
 
@@ -22,33 +20,9 @@ afterEach(async () => {
 });
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-switch-"));
-  roots.push(root);
-  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-  const transcript = path.join(root, "source.jsonl");
-  fs.writeFileSync(transcript, JSON.stringify({ type: "event_msg", payload: {
-    type: "task_complete", error: { codex_error_info: "usage_limit_exceeded" },
-  } }) + "\n");
-  const profile = emptyLaunchProfile({ cwd: root, model: "gpt-5.6-sol", effort: "high", fast: false });
-  registry.reconcileConversations([{ engine: "codex", path: transcript, accountId: "account-a", launchProfile: profile,
-    turn: { state: "terminal", source: "lifecycle", terminalAt: new Date().toISOString() }, observedAt: new Date().toISOString() }]);
-  const conversation = registry.conversationForPath(transcript)!;
-  const key = { engine: "codex" as const, sessionId: conversation.generations.at(-1)!.id };
-  registry.upsert({ key, artifactPath: transcript, cwd: root, accountId: "account-a", launchProfile: profile,
-    status: "idle", host: null, structuredHost: { kind: "codex-app-server", endpoint: "fake:host", process: null,
-      eventCursor: 0, protocolVersion: "fake", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
-    claimEpoch: 1, claimOwner: "fixture", pendingAction: null });
-  const journal = new RuntimeJournal(path.join(root, "journal.sqlite"), { structuredHosts: true });
-  const host = Object.assign(new FakeEngineHost(), { onStateChange: () => () => {} });
-  const client = {
-    append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
-    producerCursor: async () => 0,
-    snapshot: async () => journal.snapshot(),
-    effectBatch: async (kinds: string[], after: number) => journal.effectBatch(100, kinds, after),
-    operationStatus: async (id: string) => journal.operationResult(id),
-    transitionOperation: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => journal.transitionOperation(...args),
-  } as unknown as RuntimeHostClient;
-  return { root, registry, conversation, key, journal, host, client };
+  const f = migrationDeliveryFixture();
+  roots.push(f.root);
+  return f;
 }
 
 test("production controller applies a pick after usage_limit_exceeded without another message or turn end", async () => {
@@ -97,9 +71,7 @@ test("production native-queue reconciliation bounds retries despite sixty second
   } finally { await bindStructuredDeliveryQueue([], { client: null }); f.journal.close(); f.registry.close(); }
 });
 
-test("a runtime socket that never answers receives at most six drain requests per minute", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-silent-"));
-  roots.push(root);
+async function silentRuntime(root: string) {
   const sockets = new Set<net.Socket>();
   let requests = 0;
   const server = net.createServer(socket => {
@@ -108,57 +80,128 @@ test("a runtime socket that never answers receives at most six drain requests pe
     socket.on("close", () => sockets.delete(socket));
     socket.on("data", () => requests++);
   });
-  const socketPath = path.join(root, "host.sock");
+  const socketPath = process.platform === "win32"
+    ? `\\\\.\\pipe\\llv-silent-${crypto.randomUUID()}` : path.join(root, "host.sock");
   await new Promise<void>(resolve => server.listen(socketPath, resolve));
-  const client = new UnixRuntimeHostClient(socketPath, 10);
-  const queue = new StructuredDeliveryQueue({ effects: (kinds, after) => client.effectBatch(kinds, after), transition: async () => {} }, () => null);
-  try {
-    const start = Date.now();
-    for (let elapsed = 0; elapsed < 60_000; elapsed += 15) {
-      setSystemTime(start + elapsed);
-      await queue.drain().catch(() => {});
-    }
-    expect(requests).toBe(6);
-  } finally {
-    for (const socket of sockets) socket.destroy();
-    await new Promise<void>(resolve => server.close(() => resolve()));
-  }
-});
-
-test("an applying switch backs off without delaying other sends or a new account pick", async () => {
-  let applies = 0;
-  let healthReads = 0;
-  let statusReads = 0;
-  const host = new FakeEngineHost();
-  const health = host.health.bind(host);
-  host.health = async () => { healthReads++; return health(); };
-  const other = new FakeEngineHost();
-  let sent = false;
-  let replacementApplied = false;
-  const switches: StructuredDeliveryEffect[] = [{ id: "pending-switch", kind: "runtime.reconfigure", eventSeq: 1,
-    payload: { operationId: "pending-switch", conversationId: "conversation_pending", model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "account-b" } }];
-  const queue = new StructuredDeliveryQueue({
-    terminalTurn: () => true,
-    effects: async () => [...switches, ...sent ? [] : [{ id: "other-send", kind: "runtime.send", eventSeq: 2,
-      payload: { operationId: "other-send", conversationId: "conversation_other", text: "continue", policy: "queue" } }]],
-    status: async () => { statusReads++; return { status: "queued" }; },
-    transition: async (id, status) => {
-      if (id === "other-send" && status === "delivered") sent = true;
-      if (id === "replacement" && status === "applied") replacementApplied = true;
+  return { client: new UnixRuntimeHostClient(socketPath, 10, 10, 10), requests: () => requests,
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>(resolve => server.close(() => resolve()));
     },
-  }, id => id === "conversation_other" ? other : host, undefined, undefined, undefined,
-  async effect => { applies++; return effect.operationId === "replacement" ? "applied" : "pending"; });
-  const start = Date.now();
-  for (let elapsed = 0; elapsed < 60_000; elapsed += 100) {
-    setSystemTime(start + elapsed);
-    await queue.drain();
+  };
+}
+
+function addTarget(f: ReturnType<typeof fixture>, name: string) {
+  const entry = f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!;
+  const pathname = path.join(f.root, `${name}.jsonl`);
+  fs.writeFileSync(pathname, "");
+  f.registry.reconcileConversations([{ engine: "codex", path: pathname, accountId: "account-a",
+    launchProfile: entry.launchProfile!, turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date().toISOString() }]);
+  const conversation = f.registry.conversationForPath(pathname)!;
+  const key = { engine: "codex" as const, sessionId: conversation.generations.at(-1)!.id };
+  f.registry.upsert({ ...entry, key, artifactPath: pathname });
+  const host = Object.assign(new FakeEngineHost(), { onStateChange: () => () => {} });
+  return { key, host, conversation };
+}
+
+test.each(["native-read", "receipt-read"] as const)("production controller bounds total native execution and reconciliation reads with parked and successful targets (%s)", async fault => {
+  const f = fixture();
+  const silent = await silentRuntime(f.root);
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  const parked = addTarget(f, "parked");
+  const healthy = addTarget(f, "healthy");
+  const native = new NativeCodexQueue({ rpc: async () => { throw new Error("must not actuate an unreadable queue"); } }, f.key.sessionId);
+  const nativeHost = Object.assign(f.host, { nativeQueue: { queue: native,
+    prepare: async () => [], evidence: async () => null, sendWithdrawn: async () => { throw new Error("unexpected send"); },
+  } });
+  let interrupts = 0;
+  nativeHost.interrupt = async () => { interrupts++; };
+  const health = nativeHost.health.bind(nativeHost);
+  nativeHost.health = async () => ({ ...await health(), status: "active", activeTurnRef: "native-turn", activeFlags: ["native-queue"] });
+  f.client.nativeQueueRead = id => silent.client.nativeQueueRead!(id);
+  f.client.nativeQueueTransition = async (id, change) => f.journal.nativeQueueTransition(id, change);
+  if (fault === "receipt-read") {
+    const operationStatus = f.client.operationStatus.bind(f.client);
+    f.client.operationStatus = (id, options) => id === "native-send"
+      ? silent.client.operationStatus(id, options) : operationStatus(id, options);
   }
-  expect(applies).toBe(6);
-  expect(healthReads).toBe(6);
-  expect(statusReads).toBeLessThanOrEqual(30);
-  expect(other.ledger.writes).toHaveLength(1);
-  switches.push({ id: "replacement", kind: "runtime.reconfigure", eventSeq: 3,
-    payload: { ...switches[0]!.payload, operationId: "replacement", accountId: "account-c" } });
-  await queue.drain();
-  expect(replacementApplied).toBe(true);
-});
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: nativeHost }, parked, healthy], { registry: f.registry, client: f.client });
+    f.journal.executeOperation({ kind: "native-queue", operationId: "native-send", idempotencyKey: "native-send",
+      conversationId: f.conversation.id, action: "add", text: "preserve original payload", binding: { threadId: f.key.sessionId, accountId: "account-a" } });
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "parked-pick", idempotencyKey: "parked-pick",
+      conversationId: parked.conversation.id, model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "account-b" });
+    const original = f.journal.nativeQueueRead(f.conversation.id)[0]!;
+    const start = Date.now();
+    for (let elapsed = 0; elapsed < 60_000; elapsed += 100) {
+      setSystemTime(start + elapsed);
+      if (elapsed % 10_000 === 0) f.journal.executeOperation({ kind: "send", operationId: `healthy-${elapsed}`, idempotencyKey: `healthy-${elapsed}`,
+        conversationId: healthy.conversation.id, text: "continue", policy: "queue" });
+      if (elapsed === 50_000) f.journal.executeOperation({ kind: "interrupt", operationId: "native-interrupt", idempotencyKey: "native-interrupt",
+        conversationId: f.conversation.id });
+      await kickStructuredDeliveryQueue();
+    }
+    expect(interrupts).toBe(1);
+    expect(f.journal.operationResult("native-interrupt")?.receipt.status).toBe("interrupted");
+    expect(healthy.host.ledger.writes).toHaveLength(6);
+    expect(f.journal.operationResult("parked-pick")?.receipt.status).toBe("queued");
+    expect(f.journal.operationResult("native-send")?.receipt.status).toBe("queued");
+    expect(f.journal.nativeQueueRead(f.conversation.id)[0]).toEqual(original);
+    expect(silent.requests()).toBeGreaterThan(1);
+    expect(silent.requests()).toBeLessThanOrEqual(14);
+  } finally { await f.cleanup(); await silent.close(); errors.mockRestore(); }
+}, 20_000);
+
+test("production controller bounds effect reads when the runtime socket never answers", async () => {
+  const f = fixture();
+  const silent = await silentRuntime(f.root);
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client });
+    f.client.effectBatch = (kinds, after) => silent.client.effectBatch(kinds, after);
+    const start = Date.now();
+    for (let elapsed = 0; elapsed < 60_000; elapsed += 100) {
+      setSystemTime(start + elapsed);
+      await kickStructuredDeliveryQueue();
+    }
+    expect(silent.requests()).toBeGreaterThan(1);
+    expect(silent.requests()).toBeLessThanOrEqual(7);
+  } finally { await f.cleanup(); await silent.close(); errors.mockRestore(); }
+}, 20_000);
+
+test("production applying switch bounds unreadable host checks while other sends and a replacement pick progress", async () => {
+  const f = fixture();
+  const other = addTarget(f, "other");
+  const silent = await silentRuntime(f.root);
+  let unavailable = false;
+  const health = f.host.health.bind(f.host);
+  f.host.health = async () => { if (unavailable) await silent.client.snapshot(); return health(); };
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }, other], { registry: f.registry, client: f.client,
+      reconfigure: { validateAccount: async () => { throw new Error("replacement account requires authentication"); } },
+    });
+    unavailable = true;
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "applying", idempotencyKey: "applying",
+      conversationId: f.conversation.id, model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "account-b" });
+    f.journal.transitionOperation("applying", "applying");
+    f.registry.claimConversationReconfigure(f.conversation.id, { operationId: "applying", revision: 1,
+      profile: { model: "gpt-5.6-sol", effort: "high", fast: false }, accountId: "account-b" });
+    f.journal.executeOperation({ kind: "send", operationId: "other-send", idempotencyKey: "other-send",
+      conversationId: other.conversation.id, text: "continue", policy: "queue" });
+    const start = Date.now();
+    for (let elapsed = 0; elapsed < 60_000; elapsed += 100) {
+      setSystemTime(start + elapsed);
+      await kickStructuredDeliveryQueue();
+    }
+    expect(other.host.ledger.writes).toHaveLength(1);
+    expect(f.journal.operationResult("applying")?.receipt.status).toBe("applying");
+    expect(silent.requests()).toBeGreaterThan(1);
+    expect(silent.requests()).toBeLessThanOrEqual(6);
+    unavailable = false;
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "replacement", idempotencyKey: "replacement",
+      conversationId: f.conversation.id, model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "account-c" });
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("applying")?.receipt.reason).toBe("superseded");
+    expect(f.journal.operationResult("replacement")?.receipt.status).toBe("failed");
+  } finally { await f.cleanup(); await silent.close(); }
+}, 20_000);

@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,41 +10,83 @@ import { emptyLaunchProfile, type SuccessorProviderPort } from "./contracts";
 import { QuotaController, type QuotaProbePort } from "./quotaController";
 
 const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-account-controller-"));
-const { AccountMigrationController, createMigrationDeliveryPort, reconcileAccountMigrationCycle, pollAccountMigrationInventory } = await import("./controller");
+const { AccountMigrationController, createMigrationDeliveryPort, reconcileAccountMigrationCycle, startAccountMigrationController } = await import("./controller");
 
 afterAll(() => {
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
-test("inventory polling idles for a minute after completion, including a slow pass", async () => {
+test("production inventory scheduler leaves a full idle minute after a slow scan completes", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "idle-scheduler.json"));
   let clock = 0;
-  let ticks = 0;
-  let finish: (() => void) | undefined;
-  const timers = new Map<() => void, number>();
-  const stop = pollAccountMigrationInventory({ poll: async () => {
-    ticks++;
-    if (ticks === 1) await new Promise<void>(resolve => { finish = resolve; });
-  } }, (run, delay) => { timers.set(run, clock + delay); return () => { timers.delete(run); }; });
-  const advance = async (ms: number) => {
-    clock += ms;
-    for (const [run, due] of timers) if (due <= clock) { timers.delete(run); run(); }
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  let scans = 0;
+  let finishScan!: () => void;
+  const timers = new Map<object, { run: () => void; due: number; interval: number }>();
+  const schedule = (run: () => void, delay: number, interval = 0) => {
+    const handle = { unref() {} };
+    timers.set(handle, { run, due: clock + delay, interval });
+    return handle;
   };
-  await advance(1000);
-  expect(ticks).toBe(1);
-  await advance(180_000);
-  expect(ticks).toBe(1);
-  finish!();
-  await advance(0);
-  await advance(59_999);
-  expect(ticks).toBe(1);
-  await advance(1);
-  expect(ticks).toBe(2);
-  await advance(59_999);
-  expect(ticks).toBe(2);
-  stop();
-  await advance(60_000);
-  expect(ticks).toBe(2);
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => {
+      scans++;
+      if (scans === 1) await new Promise<void>(resolve => { finishScan = resolve; });
+      return { files: [], projectCatalog: [], complete: true };
+    },
+    // External board/process/account writes are isolated. Inventory and migration
+    // reconciliation, the controller's poll/running fence and its scheduler are real.
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {}, reconcileFiles: async () => {},
+    reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+  });
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const keys = ["__llvAccountMigrationController", "__llvAccountMigrationStopPolling", "__llvAccountMigrationTimer",
+    "__llvAccountMigrationInitialTimer", "__llvAccountMigrationBootstrapStarted"];
+  const saved = new Map(keys.map(key => [key, globals[key]]));
+  const worker = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+  const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay: number) => schedule(run, delay)) as never);
+  const interval = spyOn(globalThis, "setInterval").mockImplementation(((run: () => void, delay: number) => schedule(run, delay, delay)) as never);
+  const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((handle: object) => { timers.delete(handle); }) as never);
+  const advance = async (ms: number) => {
+    const until = clock + ms;
+    while (true) {
+      const next = [...timers].filter(([, timer]) => timer.due <= until).sort((a, b) => a[1].due - b[1].due)[0];
+      if (!next) break;
+      const [handle, timer] = next;
+      clock = timer.due;
+      if (timer.interval) timer.due += timer.interval; else timers.delete(handle);
+      timer.run();
+      await Promise.resolve();
+    }
+    clock = until;
+  };
+  try {
+    for (const key of keys) delete globals[key];
+    globals.__llvAccountMigrationController = controller;
+    process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = "1";
+    await startAccountMigrationController();
+    await advance(1000);
+    expect(scans).toBe(1);
+    await advance(180_000);
+    expect(scans).toBe(1);
+    const running = controller.poll();
+    finishScan();
+    await running;
+    await Promise.resolve(); await Promise.resolve();
+    await advance(59_000);
+    expect(scans).toBe(1);
+    await advance(1000);
+    expect(scans).toBe(2);
+    await controller.poll();
+  } finally {
+    (globals.__llvAccountMigrationStopPolling as (() => void) | undefined)?.();
+    await controller.poll();
+    timeout.mockRestore(); interval.mockRestore(); clear.mockRestore();
+    for (const [key, value] of saved) { if (value === undefined) delete globals[key]; else globals[key] = value; }
+    if (worker === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+    else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = worker;
+    registry.close();
+  }
 });
 
 test("historical failures and orphaned applying rows perform no conversation or delivery reads per migration tick", async () => {
@@ -68,8 +110,14 @@ test("historical failures and orphaned applying rows perform no conversation or 
       registry[method] = ((id: Parameters<typeof original>[0]) => { reads++; return original(id); }) as never;
     }
     const provider: SuccessorProviderPort = { create: async () => { throw new Error("no actionable migration"); }, verify: async () => {} };
-    const controller = new AccountMigrationController(registry, { tick: async () => {} },
-      () => reconcileAccountMigrationCycle(registry, { tick: async () => {} }, provider, { deliver: async () => { throw new Error("no actionable delivery"); } }));
+    const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+      scan: async () => ({ files: [], projectCatalog: [], complete: true }),
+      reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {},
+      reconcileHandoffOwnership: async () => {}, reconcileFiles: async () => {},
+      reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+      reconcileMigrationCycle: (r, q) => reconcileAccountMigrationCycle(r, q, provider,
+        { deliver: async () => { throw new Error("no actionable delivery"); } }),
+    });
     for (let tick = 0; tick < 3; tick++) await controller.poll();
     expect(reads).toBe(0);
     expect(Object.values(registry.readOnlySnapshot().conversations).filter(row => row.migration?.phase === "failed-recoverable")).toHaveLength(13);

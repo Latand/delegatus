@@ -8,8 +8,9 @@
  * cause, the full sentence and its remediation live behind expand/hover, and
  * dismissing the notice clears the group.
  *
- * Self-contained: the receipt stack is rendered directly, so nothing here mocks
- * a module, touches the runtime bus, or reads any state directory.
+ * The receipt stack is rendered directly. The held-switch regression derives
+ * its receipt through the production controller with an isolated journal and
+ * registry; the other cases provide presentation fixtures.
  */
 import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
@@ -18,6 +19,8 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 import { setLocale, translate, type Locale } from "@/lib/i18n";
+
+import { migrationDeliveryFixture, failHeldSwitch } from "@/test-helpers/migrationDelivery";
 
 import type { RuntimeReceipt } from "./runtime/runtimeModel";
 
@@ -62,14 +65,23 @@ function receipt(overrides: Partial<RuntimeReceipt> & { operationId: string }): 
 const threeRetries = (): RuntimeReceipt[] => [2, 1, 0].map((second) =>
   receipt({ operationId: `op-retry-${second}`, at: `2026-08-31T10:00:0${second}.000Z` }));
 
-test("a message failed behind an account switch shows its reason and resend control", () => {
-  const reason = "account switch failed: target account requires authentication";
-  const mounted = mount({ receipts: [receipt({ operationId: "switch-held-send", reason, resend: "safe" })], onDismiss: () => {} });
-  expect(mounted.summary().querySelector("[data-delivery-notice-retry]")).not.toBeNull();
-  click(mounted.summary());
-  expect(mounted.host.textContent).toContain(reason);
-  expect(mounted.host.querySelector(".animate-spin")).toBeNull();
-  mounted.cleanup();
+test("a message failed behind an actual held account switch shows its reason and resend control", async () => {
+  const f = migrationDeliveryFixture();
+  try {
+    const { held, delivery, failed } = await failHeldSwitch(f);
+    expect(held.status).toBe("queued");
+    expect(failed.status).toBe("failed");
+    expect(failed.reason).toBe("account switch failed: target account requires authentication");
+    expect(f.host.ledger.writes).toHaveLength(0);
+    expect(f.registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "failed", error: failed.reason });
+    const mounted = mount({ receipts: [{ ...failed, revision: 1 }], onDismiss: () => {} });
+    try {
+      expect(mounted.summary().querySelector("[data-delivery-notice-retry]")).not.toBeNull();
+      click(mounted.summary());
+      expect(mounted.host.textContent).toContain(failed.reason!);
+      expect(mounted.host.querySelector(".animate-spin")).toBeNull();
+    } finally { mounted.cleanup(); }
+  } finally { await f.cleanup(); }
 });
 
 interface Mounted {
