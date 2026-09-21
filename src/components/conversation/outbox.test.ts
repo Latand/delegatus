@@ -2253,3 +2253,52 @@ test("an unknown outcome with no record of its own keeps its row", () => {
   expect(visibleOutbox(readOutbox(conversation), echoes("something else"), Date.now()).map((entry) => entry.id))
     .toEqual(["key-unknown"]);
 });
+
+/* ── #1950 round 3: text never decides for a submission with an identity ── */
+
+test("two admitted equal-text sends: the second's record hides only the second", () => {
+  const conversation = "conv-admitted-reversed";
+  const text = "Run it again";
+  enqueueOutbox(conversation, { id: "key-first", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-first", { state: "delivering", operationId: "operation-first" });
+  enqueueOutbox(conversation, { id: "key-second", text, images: 0, at: 2_000 });
+  updateOutbox(conversation, "key-second", { state: "delivering", operationId: "operation-second" });
+  const secondRecord: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, submissionId: "key-second" };
+  const bindings = transcriptEchoBindings(conversation, [secondRecord]);
+  expect([...bindings]).toEqual([[transcriptEchoObservationId(secondRecord), "key-second"]]);
+  publishTranscriptEchoes(conversation, [secondRecord]);
+  expect(visibleOutbox(readOutbox(conversation), echoes(text), Date.now(), undefined, undefined, new Set(bindings.values()))
+    .map((entry) => entry.id)).toEqual(["key-first"]);
+  expect(readOutbox(conversation).find((entry) => entry.id === "key-first")!.retiredEchoId).toBeUndefined();
+});
+
+test("an admitted submission is claimed by its own identity and never by equal text", () => {
+  const conversation = "conv-admitted-foreign";
+  const text = "Deploy the release";
+  enqueueOutbox(conversation, { id: "key-admitted", text, images: 0, at: 1_000 });
+  updateOutbox(conversation, "key-admitted", { state: "delivering", operationId: "operation-admitted" });
+  /* A record naming a delivery nobody here can resolve, and one naming none. */
+  const foreign: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, unresolvedSubmission: true };
+  const anonymous: TranscriptEchoObservation = { generation: "gen-1", id: "row:1:0", text };
+  expect([...transcriptEchoBindings(conversation, [foreign, anonymous])]).toEqual([]);
+  publishTranscriptEchoes(conversation, [foreign, anonymous]);
+  expect(readOutbox(conversation)[0]!.retiredEchoId).toBeUndefined();
+  expect(visibleOutbox(readOutbox(conversation), echoes([text, 2]), Date.now(), undefined, undefined, new Set())
+    .map((entry) => entry.id)).toEqual(["key-admitted"]);
+  /* Its own record does. */
+  const own: TranscriptEchoObservation = { generation: "gen-1", id: "row:2:0", text, submissionId: "key-admitted" };
+  const bindings = transcriptEchoBindings(conversation, [foreign, anonymous, own]);
+  expect([...bindings]).toEqual([[transcriptEchoObservationId(own), "key-admitted"]]);
+  publishTranscriptEchoes(conversation, [foreign, anonymous, own]);
+  expect(readOutbox(conversation)[0]!.retiredEchoId).toBe(transcriptEchoObservationId(own));
+});
+
+test("an unresolved identity is never claimed by text, even by a submission without one", () => {
+  const conversation = "conv-unadmitted-foreign";
+  const text = "Deploy the release";
+  enqueueOutbox(conversation, { id: "key-queued", text, images: 0, at: 1_000 });
+  const foreign: TranscriptEchoObservation = { generation: "gen-1", id: "row:0:0", text, unresolvedSubmission: true };
+  expect([...transcriptEchoBindings(conversation, [foreign])]).toEqual([]);
+  publishTranscriptEchoes(conversation, [foreign]);
+  expect(readOutbox(conversation)[0]!.retiredEchoId).toBeUndefined();
+});

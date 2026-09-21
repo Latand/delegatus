@@ -1000,3 +1000,135 @@ test("a delivered Claude record takes the operator's row and paints no second bu
   await act(async () => root.unmount());
   host.remove();
 });
+
+/* ── Text never decides for a submission that has an identity (#1950 round 3) ──
+   Both of these reproduce a final-review finding against the mounted window:
+   an admitted submission is a message whose own delivery this browser can
+   name, so only that name — its operation's record, its turn, its native
+   item — may take its row. Another record repeating its words may not, and a
+   COUNT of such records may not hide it either. */
+
+test("two admitted equal-text sends: the second's record leaves the first pending on its node", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const submittedAt = Date.now();
+  serveProvenance({});
+  enqueueOutbox(CARD, { id: "key-admitted-first", text: TEXT, images: 0, at: submittedAt });
+  updateOutbox(CARD, "key-admitted-first", { state: "delivering" });
+  enqueueOutbox(CARD, { id: "key-admitted-second", text: TEXT, images: 0, at: submittedAt + 1_000 });
+  updateOutbox(CARD, "key-admitted-second", { state: "delivering" });
+  await settle(() => root.render(feedOnly()));
+  /* Both admitted: the browser holds both operation ids, so both records can
+     be named the moment they land. */
+  await projectReceipt("key-admitted-first", "operation-admitted-first", "queued", submittedAt + 500);
+  await projectReceipt("key-admitted-second", "operation-admitted-second", "queued", submittedAt + 1_500);
+  const before = messageRows(host);
+  expect(before).toHaveLength(2);
+  expect(before.map((entry) => entry.phase)).toEqual(["pending", "pending"]);
+  const watch = watchMutations(host, () => before[0]!.row);
+
+  /* The SECOND send's own record lands first. */
+  const secondRecord = codexStructuredUserLine(
+    new Date(submittedAt + 3_000).toISOString(), TEXT, deliveryDedupToken("operation-admitted-second"),
+  );
+  await settle(() => { lines = [secondRecord]; });
+  await settle(() => root.render(feedOnly()));
+  await settle(() => root.render(feedOnly()));
+  watch.stop();
+
+  const half = messageRows(host);
+  expect(half).toHaveLength(2);
+  const halfFirst = half.find((entry) => entry.row === before[0]!.row);
+  const halfSecond = half.find((entry) => entry.row === before[1]!.row);
+  /* The first send is still delivering: same node, same place, still
+     pending, still showing its progress — and nothing retired it. */
+  expect(halfFirst).toBeDefined();
+  expect(halfFirst!.phase).toBe("pending");
+  expect(halfFirst!.bubble).toBe(before[0]!.bubble);
+  expect(halfFirst!.position).toBe(before[0]!.position);
+  expect(halfFirst!.progress).toBe(1);
+  /* The second took its own record and did not move. */
+  expect(halfSecond).toBeDefined();
+  expect(halfSecond!.phase).toBe("confirmed");
+  expect(halfSecond!.bubble).toBe(before[1]!.bubble);
+  expect(halfSecond!.position).toBe(before[1]!.position);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(2);
+  expect(readOutbox(CARD).find((entry) => entry.id === "key-admitted-first")!.retiredEchoId).toBeUndefined();
+  /* At no committed instant was the first row gone or a copy missing. */
+  for (const state of watch.seen) expect(state).toEqual({ bubbles: 2, attached: true });
+
+  /* Then the first send's own record, after the agent's answer to the second. */
+  await settle(() => {
+    lines = [
+      secondRecord,
+      codexAgentLine(new Date(submittedAt + 3_500).toISOString(), "Looking now."),
+      codexStructuredUserLine(new Date(submittedAt + 4_000).toISOString(), TEXT, deliveryDedupToken("operation-admitted-first")),
+    ];
+  });
+  await settle(() => root.render(feedOnly()));
+  const both = messageRows(host);
+  expect(both).toHaveLength(2);
+  const bothFirst = both.find((entry) => entry.row === before[0]!.row);
+  const bothSecond = both.find((entry) => entry.row === before[1]!.row);
+  expect(bothFirst!.phase).toBe("confirmed");
+  expect(bothSecond!.phase).toBe("confirmed");
+  expect(bothFirst!.bubble).toBe(before[0]!.bubble);
+  expect(bothSecond!.bubble).toBe(before[1]!.bubble);
+  /* Now each sits at its own record. */
+  expect(bothSecond!.position).toBeLessThan(bothFirst!.position);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(2);
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("an admitted row is not adopted by an equal-text record whose identity resolves to nobody", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const submittedAt = Date.now();
+  /* The registry has answered, and it has no mapping for the foreign token. */
+  serveProvenance({});
+  enqueueOutbox(CARD, { id: "key-admitted", text: TEXT, images: 0, at: submittedAt });
+  updateOutbox(CARD, "key-admitted", { state: "delivering" });
+  await settle(() => root.render(feedOnly()));
+  await projectReceipt("key-admitted", "operation-admitted", "queued", submittedAt + 500);
+  const before = reading(host);
+  expect(before.phase).toBe("pending");
+
+  /* Somebody else's delivery of the same words: it names an operation, and
+     that operation is not this row's. */
+  await settle(() => {
+    lines = [codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT, deliveryDedupToken("operation-somebody-else"))];
+  });
+  await settle(() => root.render(feedOnly()));
+  await settle(() => root.render(feedOnly()));
+
+  const rows = messageRows(host);
+  const own = rows.find((entry) => entry.row === before.row);
+  expect(own).toBeDefined();
+  expect(own!.phase).toBe("pending");
+  expect(own!.bubble).toBe(before.bubble);
+  expect(own!.progress).toBe(1);
+  /* The foreign record renders as its own message. */
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(2);
+  const entry = readOutbox(CARD).find((candidate) => candidate.id === "key-admitted")!;
+  expect(entry.retiredEchoId).toBeUndefined();
+  expect(entry.state).toBe("delivering");
+
+  /* Its own record — its own operation — is what takes the row. */
+  await settle(() => {
+    lines = [
+      codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT, deliveryDedupToken("operation-somebody-else")),
+      codexStructuredUserLine(new Date(submittedAt + 4_000).toISOString(), TEXT, deliveryDedupToken("operation-admitted")),
+    ];
+  });
+  await settle(() => root.render(feedOnly()));
+  const adopted = messageRows(host).find((candidate) => candidate.row === before.row);
+  expect(adopted).toBeDefined();
+  expect(adopted!.phase).toBe("confirmed");
+  expect(adopted!.bubble).toBe(before.bubble);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(2);
+  await act(async () => root.unmount());
+  host.remove();
+});
