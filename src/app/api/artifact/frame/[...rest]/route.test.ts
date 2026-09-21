@@ -164,3 +164,37 @@ test("a foreign Host header is refused before the scope is read", async () => {
   const res = await GET(frameRequest(`/api/artifact/frame/${scope}/index.html`, { host: "attacker.example" }));
   expect(res.status).toBe(403);
 });
+
+test("the frame refuses every file /api/artifact refuses for its content", async () => {
+  const dir = reportDir();
+  const meta = new URL("http://127.0.0.1:8898/api/artifact");
+  meta.searchParams.set("path", path.join(dir, "index.html"));
+  meta.searchParams.set("mode", "meta");
+  const { frame } = (await (await GET_ARTIFACT(new NextRequest(meta, { headers: { host: "127.0.0.1:8898" } }))).json()) as { frame: string };
+  fs.writeFileSync(path.join(dir, "binary.txt"), Buffer.from([65, 0, 66]));
+  fs.writeFileSync(path.join(dir, "fake.png"), "not a png at all");
+  fs.writeFileSync(path.join(dir, "fake.svg"), "plain words, no markup");
+  for (const name of ["binary.txt", "fake.png", "fake.svg"]) {
+    const direct = new URL("http://127.0.0.1:8898/api/artifact");
+    direct.searchParams.set("path", path.join(dir, name));
+    expect((await GET_ARTIFACT(new NextRequest(direct, { headers: { host: "127.0.0.1:8898" } }))).status).toBe(415);
+    const framed = await GET(frameRequest(frame.replace(/index\.html$/, name)));
+    expect(framed.status).toBe(415);
+    expect(Buffer.from(await framed.arrayBuffer()).includes(0)).toBe(false);
+  }
+});
+
+test("the report's opaque origin may read its own assets by CORS, without credentials", async () => {
+  const scope = mintFrameScope(reportDir());
+  const moduleRequest = { ...FRAME_REQUEST_HEADERS, origin: "null", "sec-fetch-dest": "script", "sec-fetch-mode": "cors" };
+  const js = await GET(frameRequest(`/api/artifact/frame/${scope}/assets/app.js`, moduleRequest));
+  expect(js.status).toBe(200);
+  expect(js.headers.get("access-control-allow-origin")).toBe("null");
+  expect(js.headers.get("access-control-allow-credentials")).toBeNull();
+  /* Only the opaque origin, and only on an authorized response. */
+  const foreign = await GET(frameRequest(`/api/artifact/frame/${scope}/assets/app.js`, { ...moduleRequest, origin: "https://attacker.example" }));
+  expect(foreign.headers.get("access-control-allow-origin")).toBeNull();
+  const forged = await GET(frameRequest(`/api/artifact/frame/forged/assets/app.js`, moduleRequest));
+  expect(forged.status).toBe(403);
+  expect(forged.headers.get("access-control-allow-origin")).toBeNull();
+});

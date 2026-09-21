@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { FRAME_CSP, frameMime, verifyFrameScope } from "@/lib/artifact/frameScope";
 import { homeRoot, streamWindow, underRoot } from "@/lib/artifact/localFile";
-import { artifactEtag, artifactLimits } from "@/lib/artifact/serve";
+import { artifactEtag, artifactLimits, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectForeignHost } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
@@ -29,7 +29,15 @@ export const dynamic = "force-dynamic";
  * a signed, expiring grant for ONE directory, minted only by the same-origin
  * meta read of /api/artifact. What it serves stays inside what /api/artifact
  * already serves — the home root and the previewable types — narrowed to the
- * report's directory tree, checked lexically and again after realpath.
+ * report's directory tree, checked lexically and again after realpath, and
+ * held to the same content check (`sniffAgrees`) on the pinned descriptor.
+ *
+ * A successful response admits the frame's opaque origin by CORS
+ * (`Access-Control-Allow-Origin: null`, never with credentials), because
+ * module scripts and `fetch()` from an origin-less document are CORS requests
+ * and would otherwise be blocked. That grants nothing the scope did not: the
+ * bytes are the ones this response already serves to a `<script src>`, and
+ * the viewer's own routes still refuse the frame.
  */
 
 const HEADERS_BASE = {
@@ -44,6 +52,11 @@ function refuse(status: number, message: string): NextResponse {
     status,
     headers: { ...HEADERS_BASE, "content-type": "text/plain; charset=utf-8" },
   });
+}
+
+/** CORS for the report's own opaque origin, on authorized responses only. */
+function corsFor(req: NextRequest): Record<string, string> {
+  return req.headers.get("origin") === "null" ? { "access-control-allow-origin": "null", vary: "origin" } : { vary: "origin" };
 }
 
 function segmentsOf(pathname: string): string[] | null {
@@ -110,8 +123,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       await handle.close();
       return refuse(413, "file exceeds the configured byte bound");
     }
+    /* The same content check /api/artifact applies: a renamed binary or a
+       file whose signature disagrees with its extension is refused here too. */
+    const head = Buffer.alloc(Math.min(SNIFF_BYTES, stat.size));
+    if (head.length > 0) await handle.read(head, 0, head.length, 0);
+    if (!sniffAgrees(classified.mime, head)) {
+      await handle.close();
+      return refuse(415, "file content does not match its extension");
+    }
     const headers = new Headers({
       ...HEADERS_BASE,
+      ...corsFor(req),
       "content-type": frameMime(path.extname(real).slice(1), classified.mime),
       "content-length": String(stat.size),
       etag: artifactEtag(stat),

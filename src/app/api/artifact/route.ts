@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
-import { artifactEtag, artifactLimits, dispositionFilename, parseByteRange, sniffAgrees } from "@/lib/artifact/serve";
+import { artifactEtag, artifactLimits, dispositionFilename, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { homeRoot, resolveLocal, streamWindow, underRoot } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -59,8 +59,6 @@ function fail(code: FailCode, error: string): NextResponse<FailBody> {
   return NextResponse.json({ error, code }, { status: FAIL_STATUS[code] });
 }
 
-/** How much of the head the extension agreement looks at. */
-const SNIFF_BYTES = 512;
 function baseHeaders(mime: string, etag: string, name: string, download: boolean): Headers {
   const headers = new Headers({
     "content-type": mime,
