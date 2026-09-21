@@ -960,8 +960,11 @@ test("startup failures back off into minutes and every attempt logs only safe fi
   const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
   const logged: unknown[][] = [];
   let attempts = 0;
+  let elapsedMs = 0;
+  const attemptTimes: number[] = [];
   await runStructuredHostStartup(async () => {
     attempts += 1;
+    attemptTimes.push(elapsedMs);
     if (attempts <= 9) throw new RuntimeHostUnavailableError("private response payload");
   }, (...args) => { logged.push(args); }, {
     random: () => 0.5,
@@ -971,6 +974,7 @@ test("startup failures back off into minutes and every attempt logs only safe fi
   while (scheduled.length) {
     const next = scheduled.shift()!;
     delays.push(next.delayMs);
+    elapsedMs += next.delayMs;
     next.callback();
     await Promise.resolve();
     await Promise.resolve();
@@ -981,6 +985,28 @@ test("startup failures back off into minutes and every attempt logs only safe fi
     { category: "runtime-host-unavailable", attempt: index + 1, retryInMs },
   ]));
   expect(JSON.stringify(logged)).not.toContain("private response payload");
+  expect(Math.max(...attemptTimes.map((start) => attemptTimes.filter((at) => at >= start && at < start + 60_000).length))).toBe(4);
+});
+
+test("startup ignores duplicate retry callbacks during adoption and after ready", async () => {
+  let retry!: () => void;
+  let finish!: () => void;
+  let attempts = 0;
+  const adopting = new Promise<void>((resolve) => { finish = resolve; });
+  await runStructuredHostStartup(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new RuntimeHostUnavailableError("runtime host is unavailable");
+    await adopting;
+  }, () => {}, { schedule: (callback) => { retry = callback; return {}; } });
+  retry();
+  retry();
+  expect(attempts).toBe(2);
+  finish();
+  await adopting;
+  await Promise.resolve();
+  retry();
+  expect(attempts).toBe(2);
+  expect(didStructuredHostStartupFail()).toBe(false);
 });
 
 test("structured-host startup applies bounded jitter to recoverable retries", async () => {
