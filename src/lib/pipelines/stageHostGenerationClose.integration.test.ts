@@ -951,6 +951,7 @@ test("successor partial stop merges an earlier generation's late survivor eviden
   const current = await lane("tree");
   const survivorA = current.descendant!;
   const pipeline = pipelineFor(current);
+  const beforeFirstClose = pipelineRecord(pipeline.id);
   const first = await closeWithTermination(pipeline.id, {
     signal: (pid, value) => {
       if (pid === survivorA.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
@@ -963,8 +964,9 @@ test("successor partial stop merges an earlier generation's late survivor eviden
   /* Model a successor admitted before the first close publishes its survivor
      evidence: persist that earlier snapshot for the actual startup pass, then
      publish A's result before closing B. Both generations are real writers. */
-  delete partial.runs[0]!.attempts[0]!.unresolvedTermination;
-  savePipelines(loadPipelines().map((record) => record.id === pipeline.id ? partial : record));
+  // Restore the real earlier snapshot: removing only the mutable attempt's
+  // evidence leaves the already-published frozen close custody in place.
+  savePipelines(loadPipelines().map((record) => record.id === pipeline.id ? beforeFirstClose : record));
   await current.incumbent.end();
   holdWork(current);
   const adopted = await successor(current);
