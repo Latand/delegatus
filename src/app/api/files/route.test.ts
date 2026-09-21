@@ -3594,3 +3594,39 @@ test("#1994: board bodies are gzip-encoded for a caller that accepts gzip", asyn
   expect(compressed.length).toBeLessThan(plain.length / 5);
   expect(Buffer.from(Bun.gunzipSync(compressed)).toString("utf8")).toBe(plain);
 });
+
+test("#1994: deltas are negotiated only within the exact summary scope that certified the base", async () => {
+  const pinnedPath = "/sessions/retained-3.jsonl";
+  scannedFiles = retainedHistory(200);
+  const global = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  const globalEtag = global.headers.get("etag")!;
+  expect(global.headers.get("vary")).toBe("accept-encoding, x-llv-files-delta");
+  const full = await GET(new Request("http://127.0.0.1/api/files"));
+  const fullEtag = full.headers.get("etag")!;
+  scannedFiles = retainedHistory(200, 9);
+  await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-revision": "2" } }));
+  let summary = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "if-none-match": globalEtag, "x-llv-files-delta": "1" } }));
+  for (let attempt = 0; attempt < 200 && summary.status === 304; attempt += 1) {
+    await Bun.sleep(10);
+    summary = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "if-none-match": globalEtag, "x-llv-files-delta": "1" } }));
+  }
+  expect(summary.headers.get("x-llv-files-delta-base")).toBe(globalEtag);
+
+  // The same base offered to another scope is a stranger there.
+  const pinned = await GET(new Request(`http://127.0.0.1/api/files?view=summary&path=${encodeURIComponent(pinnedPath)}`, {
+    headers: { "if-none-match": globalEtag, "x-llv-files-delta": "1" },
+  }));
+  expect(pinned.headers.has("x-llv-files-delta-base")).toBe(false);
+  // The unsummarised read never answers with a delta.
+  const unsummarised = await GET(new Request("http://127.0.0.1/api/files", { headers: { "if-none-match": fullEtag, "x-llv-files-delta": "1" } }));
+  expect(unsummarised.headers.has("x-llv-files-delta-base")).toBe(false);
+  // Without a certified base there is nothing to apply a delta to.
+  const unconditional = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-delta": "1" } }));
+  expect(unconditional.status).toBe(200);
+  expect(unconditional.headers.has("x-llv-files-delta-base")).toBe(false);
+  // The current ETag is still a bodyless 304, delta or not.
+  const current = unconditional.headers.get("etag")!;
+  const unchanged = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "if-none-match": current, "x-llv-files-delta": "1" } }));
+  expect(unchanged.status).toBe(304);
+  expect(await unchanged.text()).toBe("");
+});
