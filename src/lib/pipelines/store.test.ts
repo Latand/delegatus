@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -820,4 +820,19 @@ test("pending close custody retains publication ownership and stays out of the a
   expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
   expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
   expect(findPipelineRecord(owner.id)?.closeReport?.status).toBe("settled");
+}));
+
+test("startup admission warns with its phase when one hold exceeds 100 ms", async () => isolatedDelivery(async () => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await withPipelineStartupAdmission(async (available) => {
+      expect(available).toBe(true);
+      await Bun.sleep(125);
+    }, "fixture startup phase");
+    expect(warn).toHaveBeenCalledWith("[structured hosts] state lease exceeded budget", {
+      phase: "fixture startup phase", collection: "pipelines", budgetMs: 100, heldMs: expect.any(Number),
+    });
+    const fields = warn.mock.calls[0]![1] as { heldMs: number };
+    expect(fields.heldMs).toBeGreaterThanOrEqual(100);
+  } finally { warn.mockRestore(); }
 }));

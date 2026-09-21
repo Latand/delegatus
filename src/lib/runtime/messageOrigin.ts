@@ -46,6 +46,20 @@ export interface DeliveredMessageProvenance {
       identity is what sets this. Render-time only: nothing about the transcript
       or the delivery changes. */
   mandate?: MandateDelivery;
+  /**
+   * WHICH submission this row is the record of (#1950 round 2): the client
+   * message id the delivery was admitted under — the browser's own
+   * idempotency key, which is also the id of the outbox row the operator is
+   * looking at. The feed binds the transcript's record into that row by this
+   * and nothing else, so a document send (whose delivered text carries inbox
+   * paths the row never showed), an attachment-only send (which has no text
+   * at all) and two sends of the same words each bind to their own row.
+   *
+   * Client-safe: the key was minted in this browser and names one send of one
+   * conversation. Absent when the record's own delivery cannot be named, and
+   * absence binds nothing — never "probably this one".
+   */
+  submissionId?: string;
 }
 
 /**

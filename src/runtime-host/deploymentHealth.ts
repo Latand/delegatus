@@ -91,13 +91,16 @@ export interface ViewerStructuredHostStartupProgress {
   phase: string;
   completedHosts: number;
   totalHosts: number | null;
+  failureCategory?: string | null;
 }
 
 export function viewerDeploymentStructuredHostStartup(
   status: number,
   body: string,
 ): ViewerStructuredHostStartupProgress | null {
-  if (!hasViewerDeploymentCapability(status, body)) return null;
+  // Failed startup deliberately answers 503 without advertising readiness.
+  // Its diagnostic remains readable; capability/serving gates still need 200.
+  if (status !== 503 && !hasViewerDeploymentCapability(status, body)) return null;
   try {
     const progress = (JSON.parse(body) as { structuredHostStartup?: unknown }).structuredHostStartup;
     if (!progress || typeof progress !== "object" || Array.isArray(progress)) return null;
@@ -119,6 +122,8 @@ export function viewerDeploymentStructuredHostStartup(
       phase,
       completedHosts: completedHosts as number,
       totalHosts: totalHosts as number | null,
+      ...(typeof candidate.failureCategory === "string" && /^[a-z-]{1,40}$/.test(candidate.failureCategory)
+        ? { failureCategory: candidate.failureCategory } : {}),
     };
   } catch {
     return null;
@@ -133,7 +138,8 @@ export function promotedViewerReadinessPhase(
   }
   const total = progress.totalHosts === null ? "unknown" : String(progress.totalHosts);
   const prefix = `waiting for promoted Viewer serving readiness - adoption ${progress.completedHosts} of ${total} - `;
-  return `${prefix}${progress.phase.slice(0, Math.max(0, 160 - prefix.length)).trimEnd()}`;
+  const failure = progress.failureCategory ? ` - ${progress.failureCategory}` : "";
+  return `${prefix}${progress.phase.slice(0, Math.max(0, 160 - prefix.length - failure.length)).trimEnd()}${failure}`;
 }
 
 const BODY_EXCERPT_CHARS = 200;

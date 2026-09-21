@@ -26,7 +26,7 @@ interface WorkflowStep {
 }
 
 const workflow = Bun.YAML.parse(workflowSource) as {
-  jobs: Record<string, { steps: WorkflowStep[] }>;
+  jobs: Record<string, { if?: string; strategy?: { matrix: { repetition: number[] } }; steps: WorkflowStep[] }>;
 };
 const steps = workflow.jobs["bun-runtime"].steps;
 const scripts = steps.map((step) => step.run ?? "");
@@ -96,4 +96,16 @@ test("the job proves its own checks can go red, and does not only report that th
 test("the job runs at the pull request's own commit", () => {
   const checkout = steps.find((step) => step.uses?.startsWith("actions/checkout@"));
   expect(checkout?.with?.ref).toContain("github.event.pull_request.head.sha");
+});
+
+test("the native queue campaign is manual-only and exercises twenty real cases", () => {
+  const campaign = workflow.jobs["native-queue-campaign"];
+  expect(campaign.if).toBe("github.event_name == 'workflow_dispatch' && inputs.native_queue_campaign");
+  expect(campaign.strategy?.matrix.repetition).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+  const run = campaign.steps.find(step => step.name === "Exercise coalesced resume and native queue dispatch")!.run!;
+  expect(run).toContain("bun test src/lib/runtime/nativeQueueHost.integration.test.ts");
+  expect(run).toContain("NATIVE_CODEX_QUEUE_TEST_BINARY=");
+  expect(run).toContain("grep -q '1 pass'");
+  expect(run).toContain("set -euo pipefail");
+  expect(workflow.jobs["bun-runtime"].if).toBe("github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign");
 });

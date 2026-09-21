@@ -1,9 +1,10 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { Database } from "bun:sqlite";
 
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
@@ -1690,19 +1691,19 @@ test("auto-start creation admits the record with its base unresolved and the con
 /* The operator's report behind #1799: one `create_pipeline` answered after 27
    seconds, almost all of it spent waiting for the registry lease that the
    controller held across a base fetch and a worktree add. Both halves are
-   measured here against a fetch that really does block. */
+   measured here against a delayed asynchronous fetch. */
 const SLOW_FETCH_MS = 750;
 const FETCHED_SHA = "b3f19a7c1d0e4b6a8f2c5d9e0a1b3c4d5e6f7a8b";
 
-/** A blocking fetch, and a remote whose head is only readable once it has run:
+/** A delayed fetch, and a remote whose head is only readable once it has run:
     a lane that resolved its base without fetching reads the stale ref. */
 function slowRemote(h: ReturnType<typeof harness>): { fetched: () => boolean } {
   const baseExec = h.ports.exec;
   let fetched = false;
-  h.ports.exec = (command, args, cwd) => {
+  h.ports.provisionExec = async (command, args, cwd) => {
     const gitArgs = command === "timeout" ? args.slice(args.indexOf("git") + 1) : args;
     if (gitArgs[0] === "fetch") {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SLOW_FETCH_MS);
+      await Bun.sleep(SLOW_FETCH_MS);
       fetched = true;
       return { code: 0, stdout: "", stderr: "" };
     }
@@ -1767,6 +1768,237 @@ test("a create that arrives while the controller is provisioning is not held beh
   expect(second.pipeline).toMatchObject({ state: "provisioning", baseRef: "" });
   expect(answeredIn).toBeLessThan(SLOW_FETCH_MS);
   expect(loadPipelines().map((pipeline) => pipeline.state).sort()).toEqual(["provisioning", "running"]);
+});
+
+test("two delayed git children leave status and append RPCs within their deadlines", async () => {
+  const h = harness();
+  savePipelines([]);
+  for (const task of ["First delayed lane", "Second delayed lane"]) {
+    expect((await createPipelineFromRequest({ task, repoDir: `/repo-${task.startsWith("First") ? "first" : "second"}`, stages: RUN_STAGES as never }, h.ports)).pipeline).toBeDefined();
+  }
+  const { UnixRuntimeHostClient } = await import("@/lib/runtime/client");
+  const gitModule = await import("./git");
+  const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-host-"));
+  const socketPath = path.join(hostRoot, "host.sock");
+  const host = spawn(process.execPath, ["run", "src/runtime-host/main.ts"], {
+    cwd: path.resolve(import.meta.dir, "../../.."),
+    env: {
+      NODE_ENV: "test",
+      PATH: process.env.PATH,
+      HOME: path.join(hostRoot, "home"),
+      XDG_CONFIG_HOME: path.join(hostRoot, "config"),
+      TMPDIR: hostRoot,
+      LLV_STATE_DIR: path.join(hostRoot, "state"),
+      LLV_RUNTIME_HOST_SOCKET: socketPath,
+      LLV_RUNTIME_JOURNAL: path.join(hostRoot, "events.sqlite"),
+      LLV_VIEWER_DEPLOYMENTS: "0",
+      LLV_RUNTIME_LEGACY_SCHEDULER: "0",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let hostLog = "";
+  host.stdout.on("data", (chunk) => { hostLog += String(chunk); });
+  host.stderr.on("data", (chunk) => { hostLog += String(chunk); });
+  const hostExited = new Promise<void>((resolve) => host.once("exit", () => resolve()));
+  const baseExec = h.ports.exec;
+  const delayArgs = ["-c", "alias.provision-delay=!sleep 1.7", "provision-delay"];
+  const isFetch = (args: string[]) => args.includes("fetch");
+  // The synchronous port makes this a red test against the former pre-pass.
+  h.ports.exec = (command, args, cwd) => {
+    if (isFetch(args)) spawnSync("git", delayArgs);
+    return baseExec(command, args, cwd);
+  };
+  let active = 0;
+  let peak = 0;
+  h.ports.provisionExec = async (command, args, cwd, signal) => {
+    if (isFetch(args)) {
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        expect((await gitModule.realProvisionExec("git", delayArgs, process.cwd(), signal)).code).toBe(0);
+      } finally { active -= 1; }
+    }
+    return baseExec(command, args, cwd);
+  };
+  const delay = monitorEventLoopDelay({ resolution: 10 });
+  const client = new UnixRuntimeHostClient(socketPath);
+  const latencies: number[] = [];
+  const rpcErrors: unknown[] = [];
+  const probe = async () => {
+    const started = performance.now();
+    const results = await Promise.allSettled([
+      client.operationStatus("provision-status"),
+      client.append({ scope: "session:provision-test", kind: "delta", payload: { text: "hello" } }),
+    ]);
+    for (const result of results) if (result.status === "rejected") rpcErrors.push(result.reason);
+    latencies.push(performance.now() - started);
+  };
+  let tick: Promise<unknown> | undefined;
+  try {
+    let ready = false;
+    for (let retry = 0; retry < 100; retry += 1) {
+      if (host.exitCode !== null || host.signalCode !== null) break;
+      if (!fs.existsSync(socketPath)) { await Bun.sleep(50); continue; }
+      try { await client.operationStatus("readiness"); ready = true; break; }
+      catch { await Bun.sleep(50); }
+    }
+    if (!ready) throw new Error(`isolated host did not start: ${hostLog}`);
+    delay.enable();
+    await Bun.sleep(30);
+    const provisionStarted = performance.now();
+    const first = probe();
+    tick = tickPipelines([], h.ports);
+    await first;
+    for (let i = 0; i < 5; i += 1) { await Bun.sleep(100); await probe(); }
+    await tick;
+    await Bun.sleep(30);
+    const maxDelayMs = delay.max / 1e6;
+    console.log(JSON.stringify({ provisioningResponsiveness: { maxRpcMs: Math.max(...latencies), maxDelayMs, peakChildren: peak, rpcErrors: rpcErrors.length } }));
+    expect(rpcErrors).toEqual([]);
+    expect(Math.max(...latencies)).toBeLessThan(3000);
+    expect(maxDelayMs).toBeLessThan(100);
+    expect(peak).toBe(2);
+    expect(performance.now() - provisionStarted).toBeGreaterThanOrEqual(1700);
+    expect(loadPipelines().every((pipeline) => pipeline.state === "running")).toBe(true);
+  } finally {
+    await tick;
+    delay.disable();
+    if (host.exitCode === null && host.signalCode === null) host.kill("SIGTERM");
+    const force = setTimeout(() => { if (host.exitCode === null && host.signalCode === null) host.kill("SIGKILL"); }, 1000);
+    await hostExited;
+    clearTimeout(force);
+    fs.rmSync(hostRoot, { recursive: true, force: true });
+  }
+}, 15_000);
+
+test("lanes in linked checkouts serialize Git writes through their common directory", async () => {
+  const h = harness();
+  savePipelines([]);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-shared-provision-"));
+  const source = path.join(root, "source");
+  const linked = path.join(root, "linked");
+  const origin = path.join(root, "origin.git");
+  const { realExec } = await import("@/lib/workflows/provision");
+  const { realProvisionExec } = await import("./git");
+  const git = (cwd: string, ...args: string[]) => {
+    const result = realExec("git", args, cwd);
+    if (result.code !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  try {
+    git(root, "init", "--bare", "--initial-branch=main", origin);
+    git(root, "clone", origin, source);
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "base");
+    git(source, "push", "origin", "main");
+    git(source, "worktree", "add", "-b", "linked", linked);
+    // Advance the remote from an independent clone, leaving both local refs stale.
+    const publisher = path.join(root, "publisher");
+    git(root, "clone", origin, publisher);
+    git(publisher, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "advance");
+    git(publisher, "push", "origin", "main");
+    const expected = git(publisher, "rev-parse", "HEAD");
+    const hook = path.join(source, ".git", "hooks", "reference-transaction");
+    fs.writeFileSync(hook, '#!/bin/sh\nif [ "$1" = prepared ]; then sleep 0.1; fi\n', { mode: 0o755 });
+    for (const repoDir of [source, linked]) {
+      expect((await createPipelineFromRequest({ task: "Shared repository", repoDir, stages: RUN_STAGES as never }, h.ports)).pipeline).toBeDefined();
+    }
+    let writers = 0;
+    let peakWriters = 0;
+    h.ports.provisionExec = async (command, args, cwd, signal) => {
+      const writes = args.includes("fetch") || args[0] === "worktree";
+      if (writes) peakWriters = Math.max(peakWriters, ++writers);
+      try { return await realProvisionExec(command, args, cwd, signal); }
+      finally { if (writes) writers -= 1; }
+    };
+    await tickPipelines([], h.ports);
+    expect(peakWriters).toBe(1);
+    for (const pipeline of loadPipelines()) {
+      expect(pipeline).toMatchObject({ state: "running", baseRef: expected, lastPassedCommit: expected });
+      expect(git(pipeline.worktreeDir, "rev-parse", "HEAD")).toBe(expected);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 10_000);
+
+for (const disposition of ["close", "remove"] as const) {
+  test(`${disposition} cancels an active provisioning child without a worktree or duplicate tick`, async () => {
+    const h = harness();
+    savePipelines([]);
+    const created = await createPipelineFromRequest({ task: "Cancellable lane", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+    const id = created.pipeline!.id;
+    const { realProvisionExec } = await import("./git");
+    let started!: () => void;
+    const active = new Promise<void>((resolve) => { started = resolve; });
+    let fetches = 0;
+    let result: Awaited<ReturnType<typeof realProvisionExec>> | undefined;
+    h.ports.provisionExec = async (command, args, cwd, signal) => {
+      if (args.includes("fetch")) {
+        fetches += 1;
+        const child = realProvisionExec("git", ["-c", "alias.provision-delay=!sleep 5", "provision-delay"], process.cwd(), signal);
+        started();
+        result = await child;
+        return result;
+      }
+      return h.ports.exec(command, args, cwd);
+    };
+    const tick = tickPipelines([], h.ports);
+    try {
+      await active;
+      expect(await tickPipelines([], h.ports)).toEqual({ pipelines: [], changed: false });
+      const changedAt = performance.now();
+      if (disposition === "close") {
+        expect((await patchPipeline(id, { action: "close" }, h.ports)).pipeline?.state).toBe("closed");
+      } else {
+        // Cross-process removal is observed through the collection revision.
+        savePipelines([]);
+      }
+      await tick;
+      expect(performance.now() - changedAt).toBeLessThan(1000);
+      expect(result?.stderr).toBe("pipeline provisioning cancelled");
+      expect(result?.signal).toBe("SIGKILL");
+      expect(fetches).toBe(1);
+      expect(h.calls.some((call) => call.includes("worktree add"))).toBe(false);
+      if (disposition === "close") expect(loadPipelines()[0]).toMatchObject({ state: "closed", baseRef: "" });
+      else expect(loadPipelines()).toEqual([]);
+    } finally { await tick; }
+  }, 10_000);
+}
+
+test("a completed provision loses its fence when ownership changes before the apply lease", async () => {
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({ task: "Fenced outcome", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  const id = created.pipeline!.id;
+  const { withPipelineMutation } = await import("./store");
+  let entered!: () => void;
+  const holding = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  let checked!: () => void;
+  const completed = new Promise<void>((resolve) => { checked = resolve; });
+  h.ports.provisionExec = async (command, args, cwd) => {
+    const result = h.ports.exec(command, args, cwd);
+    if (args[0] === "rev-parse" && args[1] === "HEAD") checked();
+    return result;
+  };
+  const mutation = withPipelineMutation(async (pipelines, persist) => {
+    entered();
+    await released;
+    const current = pipelines.find((pipeline) => pipeline.id === id)!;
+    current.delivery!.epoch += 1;
+    current.delivery!.ownerId = "replacement-owner";
+    current.delivery!.active = false;
+    persist();
+  });
+  await holding;
+  const tick = tickPipelines([], h.ports);
+  try {
+    await completed;
+    // Let the pre-pass finish and queue for the lease held above.
+    await Bun.sleep(20);
+  } finally { release(); }
+  await mutation;
+  await tick;
+  expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", baseRef: "", lastPassedCommit: "", delivery: { ownerId: "replacement-owner" } });
 });
 
 test("an unavailable remote parks the admitted pipeline with the words the refusal used (#1799)", async () => {

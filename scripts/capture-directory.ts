@@ -4,9 +4,11 @@ import path from "node:path";
 
 export interface CaptureDirectoryOptions {
   envName: string;
-  prefix: `llv-issue-${number}`;
+  prefix: `llv-${string}`;
   raw: string | undefined;
   repoRoot: string;
+  /** The scratch root runs are allocated under; the process temp root by default. */
+  tempRoot?: string;
 }
 
 const isWithin = (candidate: string, parent: string): boolean =>
@@ -44,7 +46,7 @@ function updateLatestLink(parent: string, prefix: string, runDirectory: string, 
  * Explicit overrides select the parent; callers never clear or overwrite it.
  */
 export function createCaptureDirectory(options: CaptureDirectoryOptions): string {
-  const tempRoot = fs.realpathSync(os.tmpdir());
+  const tempRoot = fs.realpathSync(options.tempRoot ?? os.tmpdir());
   const home = fs.existsSync(os.homedir()) ? fs.realpathSync(os.homedir()) : path.resolve(os.homedir());
   const repo = fs.realpathSync(options.repoRoot);
   const protectedPaths = [home, repo];
