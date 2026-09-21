@@ -1256,7 +1256,7 @@ function addStructuredRestartConversation(
     engine?: "codex" | "claude";
     sessionId: string;
     status: "live" | "idle" | "dead" | "unhosted";
-    turn: "busy" | "terminal" | "unknown";
+    turn: "busy" | "idle" | "terminal" | "unknown";
     activeTurnRef?: string | null;
     endpoint?: string;
     transcriptRecords?: Record<string, unknown>[];
@@ -4867,7 +4867,7 @@ test.each(["dead", "live"] as const)("settled archived Codex handoff with a %s e
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   const sessionId = "aaaaaaaa-1111-0111-0111-aaaaaaaaaaaa";
-  const { conversation } = addStructuredRestartConversation(registry, directory, { sessionId, status, turn: "terminal" });
+  const { conversation } = addStructuredRestartConversation(registry, directory, { sessionId, status, turn: "idle" });
   const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
   // Read-only incident shape: settled archived attempt, structured entry and
   // a handoff. Selection allows owed work before checking stage settlement.
