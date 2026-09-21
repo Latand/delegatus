@@ -9,6 +9,7 @@ import type { FileEntry } from "@/lib/types";
 import type { LogChunk } from "@/lib/types";
 
 import { subscribeLog } from "./logBus";
+import { forgetTailSnapshot, persistTailSnapshot, restoreTailSnapshot, resumableSnapshot, type TailSnapshot } from "./logTailStore";
 
 /** Longest single jsonl line we are willing to chase across history chunks. */
 const OLDER_CHUNK_HOPS = 4;
@@ -17,20 +18,12 @@ const TAIL_CACHE_LINES = 6000;
 
 const utf8len = (text: string) => new TextEncoder().encode(text).length;
 
-interface TailSnapshot {
-  win: { lines: string[]; start: number };
-  size: number;
-  offset: number;
-  historyStart: number;
-  partial: string;
-  first: boolean;
-  hasMore: boolean;
-  tickTime: Date | null;
-}
-
 /* Browser-wide tail snapshots keep revisited projects useful on their first
    paint. Entries retain the transport offset and partial-line decoder state,
-   so the live subscription continues forward without duplicating cached rows. */
+   so the live subscription continues forward without duplicating cached rows.
+   A NEW document starts with this map empty — a reload, a phone tab the
+   browser evicted, the Viewer reopened after a respawn — and then the bounded
+   persistent store behind it answers instead (#1821). */
 const tailCache = new Map<string, TailSnapshot>();
 
 export function resetLogTailCacheForTests(): void {
@@ -53,10 +46,27 @@ function boundedSnapshot(snapshot: TailSnapshot, cap: number): TailSnapshot {
   };
 }
 
-function readTailCache(path: string, cap: number): TailSnapshot | null {
-  const cached = tailCache.get(path);
-  if (!cached) return null;
+/** The tail this document can paint for `path` right now: what this tab still
+    holds, or — on the first mount of a new document — what the previous one
+    persisted. Either one is validated the same way (#1821): refused when the
+    catalog reports a shorter file, and otherwise resumed at the window's
+    first byte, so the forward chunks replay every cached row and prove each
+    one is still this file's — a matching suffix alone proves nothing about
+    the rows above it.
+    A snapshot a reopen already armed is held to the same catalog checks on
+    every later read, and keeps the anchor it has.
+    A tab's memory is not proof — the transcript can be replaced while the
+    pane is away — it only saves the paint the wait. */
+function readTailCache(path: string, cap: number, fileSize: number | null = null): TailSnapshot | null {
+  const held = tailCache.get(path);
   tailCache.delete(path);
+  const cached = held
+    ? resumableSnapshot(held, fileSize, held.catalogSize ?? held.size)
+    : restoreTailSnapshot(path, fileSize);
+  if (!cached) {
+    if (held) forgetTailSnapshot(path);
+    return null;
+  }
   const bounded = boundedSnapshot(cached, cap);
   tailCache.set(path, bounded);
   return bounded;
@@ -64,7 +74,11 @@ function readTailCache(path: string, cap: number): TailSnapshot | null {
 
 function writeTailCache(path: string, snapshot: TailSnapshot): void {
   tailCache.delete(path);
-  tailCache.set(path, boundedSnapshot(snapshot, TAIL_CACHE_LINES));
+  const bounded = boundedSnapshot(snapshot, TAIL_CACHE_LINES);
+  tailCache.set(path, bounded);
+  /* Throttled inside the store: the tail moves on every poll tick, and the
+     moments that must not be lost — the page hidden or going away — flush. */
+  persistTailSnapshot(path, bounded);
   while (tailCache.size > TAIL_CACHE_PATHS) {
     const oldest = tailCache.keys().next().value as string | undefined;
     if (!oldest) break;
@@ -108,7 +122,7 @@ interface TailView {
 }
 
 function viewFor(file: FileEntry | null, cap: number): TailView {
-  const cached = file ? readTailCache(file.path, cap) : null;
+  const cached = file ? readTailCache(file.path, cap, file.size ?? null) : null;
   return {
     path: file?.path ?? null,
     win: cached?.win ?? { lines: [], start: 0 },
@@ -152,12 +166,25 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
   const startRef = useRef(0);
   const tailRef = useRef("");
   const firstRef = useRef(true);
+  /* Bytes a resumed window — from the store or from this tab's memory — must
+     see replayed before it is believed; empty once they were, and for a
+     window this mount read itself. */
+  const anchorRef = useRef("");
+  /* Where the window a failed anchor discarded ended, until its replacement
+     is read: see `discardRestored`. */
+  const rebaseRef = useRef<number | null>(null);
+  /* The size the catalog last reported, stored with the window. */
+  const catalogSizeRef = useRef<number | null>(file?.size ?? null);
   const genRef = useRef(0);
   const olderBusyRef = useRef(false);
 
   useEffect(() => {
     capRef.current = cap;
   }, [cap]);
+
+  useEffect(() => {
+    catalogSizeRef.current = file?.size ?? null;
+  }, [file?.size]);
 
   /* Every state write names the transcript it is for: a chunk or a history
      page that lands after the pane switched away is dropped, never merged
@@ -177,6 +204,10 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
   };
 
   const saveSnapshot = (target: string) => {
+    /* A restored window whose anchor has not been replayed yet is not known to
+       belong to this file: writing it back would persist an offset rewound a
+       second time and make the next document's check meaningless. */
+    if (anchorRef.current) return;
     writeTailCache(target, {
       win: winRef.current,
       size: sizeRef.current,
@@ -186,6 +217,7 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
       first: firstRef.current,
       hasMore: hasMoreRef.current,
       tickTime: tickTimeRef.current,
+      catalogSize: catalogSizeRef.current,
     });
   };
 
@@ -194,11 +226,39 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
     startRef.current = 0;
     tailRef.current = "";
     firstRef.current = true;
+    anchorRef.current = "";
+    rebaseRef.current = null;
+    updateHasMore(target, false);
+  };
+
+  /** The restored window did not hold: forget it everywhere and let the chunk
+      that disproved it be read as a first chunk, so the rows the operator ends
+      up with are this transcript's own.
+
+      The replacement is placed so it ENDS where the discarded window ended.
+      Everything downstream tells an appended row from a known one by its
+      index in the tail stream — the tool cues ring for an index at or past
+      the end they last heard — and rows that replaced others are not news:
+      only what the file grows by after them is. */
+  const discardRestored = (target: string) => {
+    const end = winRef.current.start + winRef.current.lines.length;
+    anchorRef.current = "";
+    tailCache.delete(target);
+    forgetTailSnapshot(target);
+    rebaseRef.current = end;
+    updateWin(target, { lines: [], start: end });
+    offsetRef.current = 0;
+    startRef.current = 0;
+    tailRef.current = "";
+    firstRef.current = true;
     updateHasMore(target, false);
   };
 
   const clear = useCallback(() => {
-    if (path) tailCache.delete(path);
+    if (path) {
+      tailCache.delete(path);
+      forgetTailSnapshot(path);
+    }
     updateWin(path, { lines: [], start: 0 });
     resetWindow(path);
   }, [path]);
@@ -209,12 +269,14 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
        transport state — offset, history start, decoder partial — is re-seated
        here from the same snapshot, so the live subscription continues forward
        from where the cached window ends instead of re-reading it. */
-    const cached = path ? readTailCache(path, capRef.current) : null;
+    const cached = path ? readTailCache(path, capRef.current, file?.size ?? null) : null;
     winRef.current = cached?.win ?? { lines: [], start: 0 };
     offsetRef.current = cached?.offset ?? 0;
     startRef.current = cached?.historyStart ?? 0;
     tailRef.current = cached?.partial ?? "";
     firstRef.current = cached?.first ?? true;
+    anchorRef.current = cached?.resumeAnchor ?? "";
+    rebaseRef.current = null;
     hasMoreRef.current = cached?.hasMore ?? false;
     sizeRef.current = cached?.size ?? file?.size ?? 0;
     tickTimeRef.current = cached?.tickTime ?? null;
@@ -244,10 +306,42 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
         }
         const chunk = result as LogChunk;
         if (offsetRef.current > chunk.size) {
-          resetWindow(target);
-          updateWin(target, { lines: [], start: 0 });
+          if (anchorRef.current) discardRestored(target);
+          else {
+            resetWindow(target);
+            updateWin(target, { lines: [], start: 0 });
+          }
         }
-        if (chunk.data) {
+        /* A resumed window — from the store or from this tab's memory — is
+           re-read from its first byte, and this chunk replays it. Those bytes
+           are this file's own — the window is the tail it claims to be, and
+           the rest of the chunk appends to it — or the transcript at this path was
+           rewritten, compacted or replaced at the same length, and the cached
+           rows are dropped for a fresh read rather than painted over (#1821).
+           A chunk that carries only PART of the anchor (a batch that ran out
+           of byte budget) settles nothing: it is matched as far as it goes and
+           the rest of the anchor waits for the next one. */
+        let data = chunk.data;
+        if (anchorRef.current) {
+          const anchor = anchorRef.current;
+          const short = chunk.size < offsetRef.current + utf8len(anchor);
+          if (short || (data && chunk.start !== offsetRef.current)) {
+            discardRestored(target);
+          } else if (!data) {
+            /* Nothing delivered yet: the anchor stays pending. */
+          } else if (data.startsWith(anchor)) {
+            offsetRef.current += utf8len(anchor);
+            anchorRef.current = "";
+            data = data.slice(anchor.length);
+          } else if (anchor.startsWith(data)) {
+            offsetRef.current += utf8len(data);
+            anchorRef.current = anchor.slice(data.length);
+            data = "";
+          } else {
+            discardRestored(target);
+          }
+        }
+        if (data) {
           /* A chunk that begins past where this window left off — the first
              read of a large file, or the bounded catch-up jumping a stale
              subscriber forward — starts inside a record whose head was never
@@ -255,7 +349,7 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
              partial the previous chunk left behind, so no half record ever
              reaches the parser as a line (#1498). */
           const resumed = firstRef.current || chunk.start > offsetRef.current;
-          let data = (resumed ? "" : tailRef.current) + chunk.data;
+          data = (resumed ? "" : tailRef.current) + data;
           tailRef.current = "";
           if (firstRef.current) startRef.current = chunk.start;
           if (resumed && chunk.start > 0) {
@@ -268,7 +362,11 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
           const parts = data.split("\n");
           tailRef.current = parts.pop() ?? "";
           const complete = parts.map((line) => line.trim()).filter(Boolean);
-          if (offsetRef.current === 0) updateWin(target, { lines: complete, start: 0 });
+          if (offsetRef.current === 0) {
+            const rebase = rebaseRef.current;
+            rebaseRef.current = null;
+            updateWin(target, { lines: complete, start: rebase === null ? 0 : rebase - complete.length });
+          }
           else if (complete.length) {
             const prev = winRef.current;
             const merged = prev.lines.concat(complete);
@@ -284,7 +382,7 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
         const next: Partial<Omit<TailView, "path">> = { size: chunk.size, error: null, loading: false };
         /* Idle polls must not re-render every pane every 1.2s: the tick time
            moves only when bytes actually arrived (status reads "last data"). */
-        if (chunk.data) {
+        if (data) {
           tickTimeRef.current = new Date();
           next.tickTime = tickTimeRef.current;
         }
