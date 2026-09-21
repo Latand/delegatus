@@ -64,6 +64,9 @@
  * frame and the new tab, lands a dotted element id, follows a relative
  * markdown link after a Source/Rendered round trip, and follows a link to the
  * Viewer's own non-loopback host (`viewer.example`, mapped to loopback).
+ * Relative links with a percent-encoded fragment (Unicode and ASCII) land on
+ * their markdown heading or HTML element id, and a sibling `retry.ts:180` /
+ * `retry.ts:180:5` link opens the file at that line.
  *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
@@ -3153,6 +3156,9 @@ const PREVIEW_GUIDE = path.join(REPO_DIR, "docs", "release-guide.md");
 const PREVIEW_SOURCE = path.join(REPO_DIR, "src", "delivery", "retry.ts");
 const PREVIEW_MISSING = path.join(REPO_DIR, "reports", "round-3", "index.html");
 const PREVIEW_LINKS = path.join(REPO_DIR, "docs", "links.md");
+/** Notes beside retry.ts whose relative links carry encoded fragments and `file:line` suffixes. */
+const PREVIEW_NOTES = path.join(path.dirname(PREVIEW_SOURCE), "NOTES.md");
+const PREVIEW_DEEP = path.join(REPO_DIR, "docs", "deep-guide.md");
 /** A non-loopback name the Viewer is served on, as over a tailnet. */
 const PREVIEW_HOST = "viewer.example";
 
@@ -3179,6 +3185,7 @@ ${section("replay", "Replay notes", 8)}
 ${section("next", "Next round", 5)}
 <section id="appendix.1"><h2>Appendix 1 (a dotted id)</h2><p>Reached by an anchor holding a dot.</p><p id="module-status">module: waiting</p></section>
 ${section("closing", "Closing notes", 6)}
+${section("підсумок", "Підсумок", 4)}
 <section id="sandbox"><h2>Sandbox probe</h2><p>This page runs in the viewer's report frame. The script below tries to reach the viewer:</p><pre id="probe">running…</pre></section>
 <script src="assets/probe.js"></script><script type="module" src="assets/module.js"></script></body></html>
 `, "utf8");
@@ -3255,6 +3262,22 @@ document.getElementById("module-status").textContent = "module: " + document.bod
   fs.writeFileSync(PREVIEW_GUIDE, guide, "utf8");
   fs.writeFileSync(PREVIEW_LINKS, `# Links\n\nThe [round 2 report](http://${PREVIEW_HOST}:PORT/#f=${encodeURIComponent(PREVIEW_REPORT + "#decision-graph")}) on this Viewer's own host.\n`, "utf8");
   fs.writeFileSync(path.join(path.dirname(PREVIEW_GUIDE), "verify.md"), "# Verification\n\n## Bun runtime\n\nRun both halves under the pinned runtime.\n", "utf8");
+
+  const filler = (title: string, count: number) => Array.from({ length: count }, (_, p) => [`${title}, paragraph ${p + 1}: enough text that the next heading sits far below the top of the preview.`, ""]).flat();
+  fs.writeFileSync(PREVIEW_DEEP, ["# Deep guide", "", ...filler("Вступ", 30), "## Розділ", "", ...filler("Розділ", 6), "## Fallback plan", "", ...filler("Fallback", 30)].join("\n"), "utf8");
+  const encoded = (value: string) => encodeURIComponent(value);
+  fs.mkdirSync(path.dirname(PREVIEW_NOTES), { recursive: true });
+  fs.writeFileSync(PREVIEW_NOTES, [
+    "# Delivery notes",
+    "",
+    "- [Line suffix](retry.ts:180)",
+    "- [Line and column](retry.ts:180:5)",
+    `- [Encoded Unicode heading](../../docs/deep-guide.md#${encoded("розділ")})`,
+    "- [Encoded ASCII heading](../../docs/deep-guide.md#Fallback%20plan)",
+    `- [Encoded Unicode id](../../reports/round-2/index.html#${encoded("підсумок")})`,
+    "- [Encoded ASCII id](../../reports/round-2/index.html#decision%2Dgraph)",
+    "",
+  ].join("\n"), "utf8");
 
   fs.mkdirSync(path.dirname(PREVIEW_SOURCE), { recursive: true });
   fs.writeFileSync(PREVIEW_SOURCE, Array.from({ length: 320 }, (_, i) => i === 179
@@ -3458,6 +3481,62 @@ async function filePreviewMain(): Promise<void> {
       must(followed.state === "ready" && followedHeading === "Verification", `${tag} markdown-relative-link: state ${followed.state}, heading «${followedHeading}», alert «${followed.failureText}»`);
       await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-markdown-relative-link.png`) });
       report[`${tag}-markdown-relative-link`] = { ...followed, heading: followedHeading };
+
+      /* Relative links with a percent-encoded fragment land on their heading or element id. */
+      for (const [label, anchor, name] of [
+        ["Encoded Unicode heading", "розділ", "markdown-encoded-unicode-fragment"],
+        ["Encoded ASCII heading", "fallback-plan", "markdown-encoded-ascii-fragment"],
+      ] as const) {
+        /* A fresh document each time: re-entering the same hash is no navigation. */
+        await page.goto("about:blank");
+        await visit(fHash(PREVIEW_NOTES), "[data-md-document]");
+        await page.click(`[data-md-document] a:has-text("${label}")`);
+        await page.waitForSelector(`[data-md-anchor="${anchor}"]`, { timeout: 15_000 }).catch(() => {});
+        await page.waitForTimeout(600);
+        const landed = await page.evaluate(readPreview);
+        const headingTop = await page.evaluate((wanted) => {
+          const heading = document.querySelector(`[data-md-anchor="${wanted}"]`);
+          const scroller = document.querySelector("[data-md-scroll]");
+          return heading && scroller ? Math.round(heading.getBoundingClientRect().top - scroller.getBoundingClientRect().top) : null;
+        }, anchor);
+        common(name, landed);
+        must(landed.state === "ready" && Boolean(landed.markdown && landed.markdown.scrollTop > 0) && headingTop !== null && Math.abs(headingTop) <= 40, `${tag} ${name}: state ${landed.state}, scrollTop ${landed.markdown?.scrollTop}, heading top ${headingTop}`);
+        await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-${name}.png`) });
+        report[`${tag}-${name}`] = { ...landed, headingTop };
+      }
+      for (const [label, id, name] of [
+        ["Encoded Unicode id", "підсумок", "html-encoded-unicode-fragment"],
+        ["Encoded ASCII id", "decision-graph", "html-encoded-ascii-fragment"],
+      ] as const) {
+        /* A fresh document each time: re-entering the same hash is no navigation. */
+        await page.goto("about:blank");
+        await visit(fHash(PREVIEW_NOTES), "[data-md-document]");
+        await page.click(`[data-md-document] a:has-text("${label}")`);
+        await page.waitForSelector("iframe[data-preview-frame]", { timeout: 15_000 }).catch(() => {});
+        await page.waitForTimeout(1_200);
+        const landed = await page.evaluate(readPreview);
+        const landedFrame = page.frames().find((candidate) => candidate.url().includes("/api/artifact/frame/")) ?? null;
+        const idTop = landedFrame ? await landedFrame.evaluate((wanted) => { const el = document.getElementById(wanted); return el ? { top: Math.round(el.getBoundingClientRect().top), scrollY: Math.round(window.scrollY) } : null; }, id) : null;
+        common(name, landed);
+        must(landed.state === "ready" && Boolean(landed.frame?.src?.endsWith(`#${encodeURIComponent(id)}`)) && idTop !== null && idTop.scrollY > 0 && Math.abs(idTop.top) <= 4, `${tag} ${name}: state ${landed.state}, frame «${landed.frame?.src}», element ${JSON.stringify(idTop)}`);
+        await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-${name}.png`) });
+        report[`${tag}-${name}`] = { ...landed, element: idTop };
+      }
+
+      /* A sibling file named with a :line or :line:col suffix opens at that line. */
+      for (const [label, name] of [["Line suffix", "code-sibling-line"], ["Line and column", "code-sibling-line-column"]] as const) {
+        /* A fresh document each time: re-entering the same hash is no navigation. */
+        await page.goto("about:blank");
+        await visit(fHash(PREVIEW_NOTES), "[data-md-document]");
+        await page.click(`[data-md-document] a:has-text("${label}")`);
+        await page.waitForSelector("[data-preview-target]", { timeout: 15_000 }).catch(() => {});
+        await page.waitForTimeout(600);
+        const sibling = await page.evaluate(readPreview);
+        common(name, sibling);
+        must(Boolean(sibling.line && sibling.line.index === "179" && sibling.line.visible && sibling.line.text.includes("the linked line")), `${tag} ${name}: state ${sibling.state}, line ${JSON.stringify(sibling.line)}`);
+        await page.screenshot({ path: path.join(OUT_DIR, `preview-${tag}-${name}.png`) });
+        report[`${tag}-${name}`] = sibling;
+      }
 
       /* A link to the Viewer's own non-loopback host opens the same anchored report as a loopback one. */
       await page.goto(`http://${PREVIEW_HOST}:${port}/${fHash(PREVIEW_LINKS)}`);
