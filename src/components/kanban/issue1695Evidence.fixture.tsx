@@ -53,7 +53,12 @@ const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "stru
 const LOOSE = SCENARIO === "loose";
 /* #1765: one task carrying five pipelines — two running, three completed — so
    a card's rows can be read for what each pipeline actually does. */
-const MANY = SCENARIO === "issue1765";
+/* Columns balanced on large screens: every column holds a card whose
+   pipelines name their stages in 5, 20 and 40 characters, on a one-stage
+   chain and on Build → Review with a fail loop that fired, beside the task
+   carrying five pipelines and a shelf of long-titled cards. */
+const BALANCE = SCENARIO === "balance";
+const MANY = SCENARIO === "issue1765" || BALANCE;
 /* #1743: one task whose pipelines exercise the whole identity/edge vocabulary —
    a fail edge fired twice of three, one whose budget is spent, mixed engines,
    all five effort levels, a long uncatalogued model, a stage edited after its
@@ -438,7 +443,43 @@ const labelPipelines: Pipeline[] = LABELS ? (() => {
   ], { stageId: "critique", state: "running", input: null, activatedBy: null })];
 })() : [];
 
+const BALANCE_COLUMNS: TaskStatus[] = ["inbox", "assigned", "blocked", "done"];
+const BALANCE_NAMES = { short: "build", mid: "design-and-prototype", long: "check-every-stage-pill-at-a-narrow-width" } as const;
+/* Each attempt ran on its stage's values, so the pill draws the model label beside the mark. */
+const FABLE = { effectiveRole: runRole("builder", "claude", "fable", "high") };
+const ASTRA = { effectiveRole: runRole("reviewer", "codex", "gpt-6-astra", "xhigh") };
+const balancePipelines: Pipeline[] = BALANCE ? BALANCE_COLUMNS.flatMap((column) => {
+  const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(`bal-${column}-${id}`, title, { model: "fable", ...over }));
+  /* A one-stage chain: the stage running, or on Blocked parked on the operator. */
+  const one = (key: keyof typeof BALANCE_NAMES) => {
+    const id = BALANCE_NAMES[key];
+    const parked = column === "blocked" && key === "long";
+    const file = conv(`one-${key}`, `One stage: ${id}`, parked ? { waitingInput: { since: now - 5 * MIN } } : working({ model: "fable" }));
+    return pipeline(`p-bal-${column}-one-${key}`, `Run the one ${key} stage in ${column}`, `t-bal-${column}`, parked ? "needs_decision" : "running",
+      [marksStage(id, "builder", null, "claude", "fable", "high")],
+      [{ stageId: id, attempts: [attempt(1, parked ? "needs_decision" : "running", file, { ...FABLE, startedAt: iso(30 * MIN) })] }],
+      { stageId: id, state: "running", input: null, activatedBy: null });
+  };
+  /* Build → Review with a fail loop that fired once: Review sent the work back. */
+  const loop = (key: "mid" | "long") => {
+    const id = BALANCE_NAMES[key];
+    const review = key === "mid" ? "review" : "review-the-pill-at-every-column-width-ok";
+    const first = conv(`loop-${key}-1`, `First pass: ${id}`, { mtime: now - 90 * MIN });
+    const critique = conv(`loop-${key}-rev`, `Sent back: ${review}`, { mtime: now - 60 * MIN, engine: "codex", model: "gpt-6-astra" });
+    const second = conv(`loop-${key}-2`, `Second pass: ${id}`, working({ model: "fable" }));
+    return pipeline(`p-bal-${column}-loop-${key}`, `Loop the ${key} stage names in ${column}`, `t-bal-${column}`, "running",
+      [marksStage(id, "builder", review, "claude", "fable", "high"), marksStage(review, "reviewer", null, "codex", "gpt-6-astra", "xhigh", { onFail: { to: id, maxRounds: 3 } })],
+      [
+        { stageId: id, attempts: [attempt(1, "passed", first, { ...FABLE, startedAt: iso(100 * MIN) }), attempt(2, "running", second, { ...FABLE, startedAt: iso(50 * MIN), activatedBy: { stageId: review, attempt: 1, edge: "fail" } })] },
+        { stageId: review, attempts: [attempt(1, "failed", critique, { ...ASTRA, startedAt: iso(70 * MIN), activatedBy: { stageId: id, attempt: 1, edge: "pass" } })] },
+      ],
+      { stageId: id, state: "running", input: null, activatedBy: null });
+  };
+  return [one("short"), one("long"), loop("mid"), loop("long")];
+}) : [];
+
 const pipelines: Pipeline[] = [
+  ...balancePipelines,
   ...arcPipelines,
   ...labelPipelines,
   ...marksPipelines,
@@ -667,6 +708,15 @@ if (SCENARIO === "stopped-launches") {
   files.splice(0, files.length, ...launches.map((entry) => entry.file));
   pipelines.splice(0, pipelines.length, ...launches.map((entry) => entry.pipeline));
   tasks.splice(0, tasks.length, task("t-stopped", "done", "Recover stopped launches", "", 0, files));
+}
+if (BALANCE) {
+  for (const column of BALANCE_COLUMNS) {
+    tasks.push(task(`t-bal-${column}`, column, `Stage pills in ${column}: 5, 20 and 40 character names`, "One-stage chains and Build → Review with a fail loop that fired.", 1 * MIN));
+  }
+  /* A shelf with many cards, each with a title long enough to wrap. */
+  for (let index = 0; index < 8; index += 1) {
+    tasks.push(task(`t-bal-long-${index}`, "inbox", `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`, "", (index + 2) * 60 * MIN));
+  }
 }
 if (OVERVIEW_SCOPE) {
   tasks.push(

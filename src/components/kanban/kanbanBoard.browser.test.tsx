@@ -49,7 +49,8 @@ describe("#1695 K1+K2 kanban board", () => {
    *
    * What only a browser settles, and is gated here:
    *   - the layout mode follows the board's width, and its column widths are the
-   *     prototype's (264 px shelves wide, 220 px narrow, a 280/480 px scroller,
+   *     prototype's (equal shelves of at least 264 px wide, balanced on large
+   *     screens, 220 px narrow, a 280/480 px scroller,
    *     one tabbed column below 768 px); 640–767 px is the desktop board;
    *   - every task is on the board or counted off it, per column;
    *   - a status move lands in the new column on the click, a refused one comes
@@ -148,7 +149,9 @@ describe("#1695 K1+K2 kanban board", () => {
     if (geometry.mode !== expectedMode) failures.push(`${label}: mode ${geometry.mode} at board width ${geometry.boardWidth}, expected ${expectedMode}`);
     const shelves = geometry.columns.filter((column) => column.status !== "assigned" && column.visible);
     const assigned = geometry.columns.find((column) => column.status === "assigned")!;
-    if (expectedMode === "wide" && shelves.some((column) => Math.abs(column.width - 264) > 1)) failures.push(`${label}: wide shelves ${shelves.map((c) => c.width)} != 264`);
+    /* Wide shelves are balanced on large screens: equal, never under the
+       prototype's 264 px, with Assigned kept at its 520 px floor or more. */
+    if (expectedMode === "wide" && (shelves.some((column) => column.width < 263.5) || Math.max(...shelves.map((c) => c.width)) - Math.min(...shelves.map((c) => c.width)) > 1 || assigned.width < 519.5)) failures.push(`${label}: wide shelves ${shelves.map((c) => c.width)}, Assigned ${assigned.width}`);
     if (expectedMode === "narrow" && shelves.some((column) => Math.abs(column.width - 220) > 1)) failures.push(`${label}: narrow shelves ${shelves.map((c) => c.width)} != 220`);
     if (expectedMode === "scroll") {
       if (shelves.some((column) => Math.abs(column.width - 280) > 1)) failures.push(`${label}: scroller shelves ${shelves.map((c) => c.width)} != 280`);
@@ -207,7 +210,8 @@ describe("#1695 K1+K2 kanban board", () => {
               const other = prototype!.columns.find((entry) => entry.status === column.status);
               return { status: column.status, production: column.width, prototype: other?.width ?? null, delta: other ? column.width - other.width : null };
             }) : null;
-            if (prototype && production.mode === prototype.mode && (production.mode === "wide" || production.mode === "narrow")) {
+            /* The wide grid no longer caps its shelves at the prototype's 264 px, so only narrow compares. */
+            if (prototype && production.mode === prototype.mode && production.mode === "narrow") {
               for (const delta of deltas!) if (delta.delta !== null && Math.abs(delta.delta) > 2) failures.push(`${label}: ${delta.status} is ${delta.production}px, prototype ${delta.prototype}px`);
             }
             frames.push({ key: label, viewport, production, prototype, deltas, pageErrors });
@@ -711,7 +715,9 @@ describe("#1695 K3 conversations inside cards", () => {
               if (readers.readers.filter((reader) => reader.folded).length !== 1) failures.push(`${label}: expected one folded reader`);
               const mode = kanbanLayoutMode(seat.boardWidth);
               const blocked = readers.columns.blocked ?? 0;
-              if ((mode === "wide" || mode === "narrow") && (blocked < 420 || blocked > 460 || !readers.reading)) failures.push(`${label}: Blocked holding a reader is ${blocked}px (reading=${readers.reading})`);
+              /* Reading width: 420–460 px, or a balanced shelf's width where that is wider. */
+              const ceiling = Math.max(460, readers.columns.done ?? 0);
+              if ((mode === "wide" || mode === "narrow") && (blocked < 420 || blocked > ceiling + 1 || !readers.reading)) failures.push(`${label}: Blocked holding a reader is ${blocked}px (reading=${readers.reading})`);
               if (mode === "scroll" && Math.abs(blocked - 460) > 1) failures.push(`${label}: scroller Blocked holding a reader is ${blocked}px`);
               await page.screenshot({ path: path.join(OUT, `readers-${label}.png`) });
               await prototypeShot("readers=c-export-1,c-links-1:c,c-auth-1&scrollto=t-export", { width: seat.boardWidth, height: viewport.height }, scheme, `prototype-readers-${label}.png`);
@@ -6828,4 +6834,226 @@ describe("#1972 stopped launches in the production task reader", () => {
       server.stop();
     }
   }, 60_000);
+});
+
+describe("columns balanced on large screens, stage pills and heads on one line", () => {
+  /*
+   * The board's four columns on a large screen, and the one-line rows inside
+   * them, over `?scenario=balance`: every column holds a card whose pipelines
+   * name their stages in 5, 20 and 40 characters, on a one-stage chain and on
+   * Build → Review with a fail loop that fired; one task carries five
+   * pipelines; Inbox holds a stack of long-titled cards.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "columns balanced"
+   *
+   * What it gates, per viewport, in en and uk:
+   *   - wide mode at 1920 and 2560: Assigned is 60–70 % of the width it had
+   *     with shelves capped at 264 px (content − 3·264 − 3·16), the three
+   *     shelves are equal and wider than 264 px;
+   *   - every wide or narrow frame: Assigned ≥ 520 (wide) / 440 (narrow),
+   *     shelves ≥ 232 (wide) / 220 (narrow), nothing overflows sideways;
+   *   - a card fills its column;
+   *   - a stage pill's ink stays inside the pill, its name is one line and
+   *     ends in an ellipsis with the full name in the pill's title, and the
+   *     dot, the engine mark, the model and the effort bars keep their size;
+   *   - a column head is one line: its title, count and counters inside the
+   *     head, the counters truncating before anything wraps.
+   * BALANCE_CAPTURE_LABEL names the record. With `main` (the stylesheet and
+   * components of the base, this fixture and driver on top) the same checks
+   * are recorded and must fail: the negative control.
+   */
+  const label = process.env.BALANCE_CAPTURE_LABEL?.trim() || "branch";
+  const EVIDENCE = path.resolve("evidence/kanban-column-balance");
+  const measure = `(() => {
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+    const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const empty = r => r.right - r.left < 0.5 || r.bottom - r.top < 0.5;
+    /* Ink, clipped: a Range's rects ignore overflow, so each text rect is cut
+       by every clipping ancestor up to the measured element. */
+    const clipOf = (node, top) => {
+      let clip = null;
+      for (let el = node.parentElement; el; el = el.parentElement) {
+        const style = getComputedStyle(el);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = clip ? intersect(clip, box(el)) : box(el);
+        if (el === top) break;
+      }
+      return clip;
+    };
+    const textRects = top => {
+      const out = [];
+      const walker = document.createTreeWalker(top, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        /* A closed <details> paints only its summary, yet its rows still report rects. */
+        const shut = node.parentElement.closest("details:not([open])");
+        if (shut && !node.parentElement.closest("summary")) continue;
+        const clip = clipOf(node, top);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) {
+          if (raw.width === 0 || raw.height === 0) continue;
+          const rect = clip ? intersect(clip, raw) : { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom };
+          if (!empty(rect)) out.push({ text: node.nodeValue.trim().slice(0, 50), rect, parent: node.parentElement });
+        }
+      }
+      return out;
+    };
+    const escapes = (el, slack) => {
+      const r = box(el);
+      return textRects(el).filter(({ rect }) => rect.top < r.top - slack || rect.bottom > r.bottom + slack || rect.left < r.left - slack || rect.right > r.right + slack).map(({ text }) => text);
+    };
+    /* The number of visual lines a text node spans. */
+    const lines = el => {
+      const tops = new Set();
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) if (raw.width > 0) tops.add(Math.round(raw.top));
+      }
+      return tops.size;
+    };
+    const board = document.querySelector("[data-board]");
+    const style = getComputedStyle(board);
+    const content = board.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const columns = [...board.querySelectorAll(".column")].map(column => {
+      const head = column.querySelector(".col-head");
+      const body = column.querySelector(".col-body");
+      const bodyStyle = getComputedStyle(body);
+      const inner = body.clientWidth - parseFloat(bodyStyle.paddingLeft) - parseFloat(bodyStyle.paddingRight);
+      const cards = [...column.querySelectorAll(".card")].filter(card => card.getBoundingClientRect().width > 0);
+      const counters = [...head.querySelectorAll(".live, .needs")].map(counter => ({
+        text: counter.textContent, title: counter.getAttribute("title"), lines: lines(counter),
+        /* What the counter shows: its text, or under 300 px its number alone. */
+        shown: counter.querySelector(".ct") && getComputedStyle(counter.querySelector(".ct")).display === "none" ? getComputedStyle(counter, "::after").content.replace(/"/g, "") : counter.textContent,
+        width: Math.round(counter.getBoundingClientRect().width),
+        truncated: counter.querySelector(".ct") ? counter.querySelector(".ct").scrollWidth > counter.querySelector(".ct").clientWidth + 1 : false,
+      }));
+      return {
+        status: column.dataset.status, width: Math.round(column.getBoundingClientRect().width * 10) / 10,
+        head: { lines: [...head.children].filter(child => (child.textContent || "").trim()).map(child => lines(child)), escapes: escapes(head, 1), counters, height: Math.round(head.getBoundingClientRect().height) },
+        narrowCards: cards.filter(card => card.getBoundingClientRect().width < inner - 1).map(card => ({ id: card.dataset.id, width: Math.round(card.getBoundingClientRect().width), inner: Math.round(inner) })),
+      };
+    });
+    const pills = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .psummary .pchip')].filter(pill => pill.getBoundingClientRect().width > 0).map(pill => {
+      const name = pill.querySelector(".pname");
+      const model = pill.querySelector(".imodel");
+      const parts = [pill.querySelector(".pdot"), pill.querySelector(".pident > span:first-child"), model, pill.querySelector(".reasoning-slot")].filter(Boolean);
+      const r = box(pill);
+      return {
+        column: pill.closest(".column").dataset.status,
+        stage: pill.dataset.stage,
+        name: name ? name.textContent : null,
+        nameLines: name ? lines(name) : 0,
+        nameClipped: name ? name.scrollWidth > name.clientWidth + 1 : false,
+        ellipsis: name ? getComputedStyle(name).textOverflow : null,
+        titleHasName: (pill.getAttribute("title") || "").includes(name ? name.textContent : ""),
+        escapes: escapes(pill, 0.5),
+        partsInside: parts.every(part => { const p = box(part); return p.left >= r.left - 0.5 && p.right <= r.right + 0.5 && p.top >= r.top - 0.5 && p.bottom <= r.bottom + 0.5; }),
+        partWidths: parts.map(part => Math.round(part.getBoundingClientRect().width * 10) / 10),
+        model: model ? { text: model.textContent, clipped: model.scrollWidth > model.clientWidth + 1 } : null,
+        height: Math.round(r.height),
+      };
+    });
+    const heads = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .stage-section .sec-head')].filter(row => row.getBoundingClientRect().width > 0).map(row => {
+      const title = row.querySelector(".ptitle");
+      return { column: row.closest(".column").dataset.status, ellipsis: getComputedStyle(title).textOverflow, clipped: title.scrollWidth > title.clientWidth + 1, escapes: escapes(row.closest(".card"), 1) };
+    });
+    return {
+      viewport: window.innerWidth, boardWidth: Math.round(board.getBoundingClientRect().width), content: Math.round(content * 10) / 10,
+      mode: board.dataset.mode, overflow: Math.max(0, board.scrollWidth - board.clientWidth), pageOverflow: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+      columns, pills, heads,
+    };
+  })()`;
+
+  browserTest("Assigned gives a third of its width to the shelves; pills and heads hold one line", async () => {
+    const out = path.resolve(".artifacts/kanban-column-balance", label);
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const width of [1440, 1500, 1648, 1680, 1920, 2560]) {
+        for (const lang of ["en", "uk"] as const) {
+          const tag = `${width}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=balance`, { width, height: 1000 }, "light", lang);
+          try {
+            await page.waitForSelector(card("t-bal-done"));
+            await page.waitForTimeout(600);
+            const frame = await page.evaluate(measure) as {
+              boardWidth: number; content: number; mode: string; overflow: number; pageOverflow: number;
+              columns: Array<{ status: string; width: number; head: { lines: number[]; escapes: string[]; counters: Array<{ text: string; title: string | null; lines: number; truncated: boolean; shown: string; width: number }>; height: number }; narrowCards: unknown[] }>;
+              pills: Array<{ column: string; stage: string; name: string | null; nameLines: number; nameClipped: boolean; ellipsis: string | null; titleHasName: boolean; escapes: string[]; partsInside: boolean; partWidths: number[]; model: { text: string; clipped: boolean } | null; height: number }>;
+              heads: Array<{ column: string; ellipsis: string; clipped: boolean; escapes: string[] }>;
+            };
+            frames[tag] = frame;
+            await page.screenshot({ path: path.join(out, `${tag}.png`) });
+            const col = (status: string) => frame.columns.find((entry) => entry.status === status)!.width;
+            const shelves = ["inbox", "blocked", "done"].map(col);
+            if (frame.pageOverflow > 0) failures.push(`${tag}: the page scrolls sideways by ${frame.pageOverflow}px`);
+            {
+              if (frame.mode === "wide" || frame.mode === "narrow") {
+                if (frame.overflow > 0) failures.push(`${tag}: the ${frame.mode} board overflows by ${frame.overflow}px`);
+                const floor = frame.mode === "wide" ? { work: 520, shelf: 232 } : { work: 440, shelf: 220 };
+                if (col("assigned") < floor.work - 0.5) failures.push(`${tag}: Assigned ${col("assigned")} under ${floor.work}`);
+                if (shelves.some((w) => w < floor.shelf - 0.5)) failures.push(`${tag}: a shelf under ${floor.shelf}: ${shelves.join(", ")}`);
+                if (Math.max(...shelves) - Math.min(...shelves) > 1) failures.push(`${tag}: shelves differ: ${shelves.join(", ")}`);
+                if (frame.mode === "narrow" && shelves.some((w) => Math.abs(w - 220) > 1)) failures.push(`${tag}: narrow shelves ${shelves.join(", ")} != 220`);
+              }
+              if (width === 1920 || width === 2560) {
+                if (frame.mode !== "wide") failures.push(`${tag}: mode ${frame.mode}, expected wide`);
+                /* On main the shelves were capped at 264: Assigned held the content less three shelves and three gaps. */
+                const before = frame.content - 3 * 264 - 3 * 16;
+                const ratio = col("assigned") / before;
+                if (ratio < 0.6 || ratio > 0.7) failures.push(`${tag}: Assigned ${col("assigned")} is ${(ratio * 100).toFixed(1)}% of main's ${before}`);
+                if (shelves.some((w) => w <= 264.5)) failures.push(`${tag}: a shelf is not wider than 264: ${shelves.join(", ")}`);
+              }
+              for (const column of frame.columns) {
+                if (column.width < 1) continue;
+                if (column.head.lines.some((n) => n > 1)) failures.push(`${tag} ${column.status}: the head wraps (${column.head.lines.join(",")})`);
+                if (column.head.escapes.length) failures.push(`${tag} ${column.status}: head text outside the head: ${column.head.escapes.join(" | ")}`);
+                if (column.head.counters.some((counter) => counter.title !== counter.text)) failures.push(`${tag} ${column.status}: a counter without its full text as title`);
+                /* A counter never loses its number, whatever it gives up. */
+                if (column.head.counters.some((counter) => !/\d/.test(counter.shown) || counter.width < 8)) failures.push(`${tag} ${column.status}: a counter shows «${column.head.counters.map((counter) => counter.shown).join(" | ")}»`);
+                if (column.narrowCards.length) failures.push(`${tag} ${column.status}: cards narrower than the column: ${JSON.stringify(column.narrowCards)}`);
+              }
+              for (const pill of frame.pills) {
+                const where = `${tag} ${pill.column} ${pill.stage}`;
+                if (pill.escapes.length) failures.push(`${where}: text outside the pill: ${pill.escapes.join(" | ")}`);
+                if (pill.nameLines > 1) failures.push(`${where}: the name wraps onto ${pill.nameLines} lines`);
+                if (pill.ellipsis !== "ellipsis") failures.push(`${where}: the name ends in ${pill.ellipsis}`);
+                if (!pill.titleHasName) failures.push(`${where}: the title does not carry the name`);
+                if (!pill.partsInside) failures.push(`${where}: the dot, mark, model or bars leave the pill`);
+                if (pill.model?.clipped) failures.push(`${where}: the model «${pill.model.text}» is cut`);
+              }
+              /* The mark, the model and the bars keep one size in every column. */
+              const sizes = new Set(frame.pills.map((pill) => pill.partWidths.join("/")));
+              if (sizes.size > 2) failures.push(`${tag}: pill parts change size across columns: ${[...sizes].join(" ; ")}`);
+              for (const head of frame.heads) {
+                if (head.ellipsis !== "ellipsis") failures.push(`${tag} ${head.column}: a pipeline title ends in ${head.ellipsis}`);
+                if (head.escapes.length) failures.push(`${tag} ${head.column}: text leaves a pipeline card: ${head.escapes.slice(0, 4).join(" | ")}`);
+              }
+            }
+            if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const summary = Object.fromEntries(Object.entries(frames).map(([tag, frame]) => {
+      const f = frame as { boardWidth: number; content: number; mode: string; columns: Array<{ status: string; width: number }> };
+      return [tag, { boardWidth: f.boardWidth, content: f.content, mode: f.mode, columns: Object.fromEntries(f.columns.map((column) => [column.status, column.width])) }];
+    }));
+    fs.writeFileSync(path.join(EVIDENCE, `${label}.json`), JSON.stringify({ label, summary, frames, failures }, null, 2) + "\n");
+    /* The base run is the negative control: it records what fails there and does not gate. */
+    if (label !== "main") expect(failures).toEqual([]);
+    else expect(failures.length).toBeGreaterThan(0);
+  }, 240_000);
 });

@@ -62,6 +62,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
 const { KanbanBoard } = await import("./KanbanBoard");
+const { setLocale } = await import("@/lib/i18n");
 
 const roots: Root[] = [];
 afterEach(() => {
@@ -650,3 +651,59 @@ test("a row that wraps drops the arcs and puts the same count on the failing pil
     restore();
   }
 });
+
+/* A pipeline header states its state once: the badge is the state, and the
+   note beside it names the stage the work stands on and nothing else, or is
+   absent when the badge already says everything. On f5626046 the three rows the
+   operator read said it twice: «етапи виконуються» then «Green виконується»,
+   «потребує рішення» then «Banter trigger round2 чекає на вас», «чернетка» then
+   «чернетка». */
+function headPipeline(state: string, stageId: string, attemptState: string | null, over: Record<string, unknown> = {}): Pipeline {
+  return {
+    id: "p-search", task: "Keep the header to one statement of state", taskIds: ["t-search"], project: "fixture", state,
+    stages: [stage(stageId, "builder", "review"), stage("review", "reviewer", null, { onFail: { to: stageId, maxRounds: 2 } })],
+    runs: attemptState ? [{ stageId, attempts: [attempt(1, attemptState, implement1, 1200)] }] : [],
+    cursor: attemptState ? { stageId, state: attemptState === "needs_decision" ? "running" : attemptState, input: null, activatedBy: null } : null,
+    worktreeDir: "/fixture/worktree", createdAt: iso(9000), ...over,
+  } as unknown as Pipeline;
+}
+
+const head = (host: HTMLElement) => {
+  const row = card(host).querySelector<HTMLElement>(".stage-section .sec-head")!;
+  return {
+    badge: row.querySelector(".pstate-chip")?.textContent ?? null,
+    note: row.querySelector(".progress")?.textContent ?? null,
+    title: row.querySelector(".ptitle")?.textContent ?? null,
+  };
+};
+
+const HEAD_CASES: Array<{ name: string; pipeline: () => Pipeline; en: [string, string | null]; uk: [string, string | null] }> = [
+  { name: "running", pipeline: () => headPipeline("running", "green", "running"), en: ["stages running", "Green"], uk: ["етапи виконуються", "Green"] },
+  { name: "needs_decision", pipeline: () => headPipeline("needs_decision", "banter-trigger-round2", "needs_decision"), en: ["needs a decision", "Banter trigger round2"], uk: ["потребує рішення", "Banter trigger round2"] },
+  { name: "draft", pipeline: () => headPipeline("draft", "build", null), en: ["draft", null], uk: ["чернетка", null] },
+  { name: "paused", pipeline: () => headPipeline("paused", "green", "running", { pausedState: "running" }), en: ["paused", "Green"], uk: ["пауза", "Green"] },
+  { name: "completed", pipeline: () => headPipeline("completed", "build", "passed", { cursor: null, closedAt: iso(300) }), en: ["completed", null], uk: ["завершено", null] },
+  { name: "closed", pipeline: () => headPipeline("closed", "build", "failed", { cursor: null, closedAt: iso(300), restored: true }), en: ["closed", null], uk: ["закрито", null] },
+  { name: "failed-stage", pipeline: () => headPipeline("paused", "build", "failed", { cursor: null, pausedState: null }), en: ["paused", "Build failed"], uk: ["пауза", "Build не пройдено"] },
+];
+
+for (const locale of ["en", "uk"] as const) {
+  for (const entry of HEAD_CASES) {
+    test(`a ${entry.name} pipeline's header states its state once, in ${locale}`, async () => {
+      setLocale(locale);
+      try {
+        const { host } = mount([entry.pipeline()]);
+        await tick();
+        const [badge, note] = entry[locale];
+        const read = head(host);
+        expect(read.badge).toBe(badge);
+        expect(read.note).toBe(note);
+        /* The badge's words are never said again beside it. */
+        if (read.note) expect(read.note.toLowerCase()).not.toContain(badge.toLowerCase());
+        expect(read.title).toBe("Keep the header to one statement of state");
+      } finally {
+        setLocale("en");
+      }
+    });
+  }
+}

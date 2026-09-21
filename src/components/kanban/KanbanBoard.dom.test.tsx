@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 
-import { KanbanBoard, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanBoardProps } from "./KanbanBoard";
+import { KanbanBoard, kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanBoardProps } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
 
 /* The board rendered by React against invented tasks and scripted task ports.
@@ -265,15 +265,16 @@ const wideColumns = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement
 
 /* happy-dom lays nothing out; the board is given a 1440 px desktop so it
    takes its four-column grid instead of tabs. */
-function atDesktopWidth<T>(run: () => T): T {
+function atBoardWidth<T>(width: number, run: () => T): T {
   const prototype = dom.HTMLElement.prototype as unknown as { getBoundingClientRect: () => DOMRect };
   const original = prototype.getBoundingClientRect;
   prototype.getBoundingClientRect = function (this: HTMLElement) {
-    const wide = this.classList?.contains("kb");
-    return { x: 0, y: 0, top: 0, left: 0, bottom: 900, right: wide ? 1440 : 0, width: wide ? 1440 : 0, height: 900, toJSON() {} } as DOMRect;
+    const board = this.classList?.contains("kb");
+    return { x: 0, y: 0, top: 0, left: 0, bottom: 900, right: board ? width : 0, width: board ? width : 0, height: 900, toJSON() {} } as DOMRect;
   };
   try { return run(); } finally { prototype.getBoundingClientRect = original; }
 }
+const atDesktopWidth = <T,>(run: () => T): T => atBoardWidth(1440, run);
 
 test("a shelf takes the wide share, one at a time, and gives it back when work resumes in Assigned unless pinned", () => atDesktopWidth(() => {
   localStorage.clear();
@@ -330,12 +331,90 @@ test("the Overview keeps its fixed shares: no width control and no read of a pro
   expect(host.querySelector("[data-board]")?.getAttribute("data-mode")).toBe("wide");
   expect(host.querySelector("[data-col-width], [data-col-pin]")).toBeNull();
   expect(host.querySelector('.column[data-wide]')).toBeNull();
-  expect(host.querySelector<HTMLElement>("[data-board]")!.style.getPropertyValue("--c-blocked")).toBe("");
+  /* Its shelves keep the 264 px cap a project board gave up on large screens. */
+  expect(host.querySelector<HTMLElement>("[data-board]")!.style.getPropertyValue("--c-blocked")).toBe("minmax(232px, var(--shelf-w))");
   /* The project board still reads the pin. */
   const project = mount(tasks, NO_PORTS);
   expect(wideColumns(project.host)).toEqual(["blocked"]);
   localStorage.clear();
 }));
+
+/* The board's own column template, as the board writes it in each mode. The
+   balanced shelf track is `--shelf-balanced`, a third of 35 % of Assigned's
+   old width on top of 264 px; the browser driver measures what it resolves to. */
+const tracks = (host: HTMLElement) => {
+  const style = host.querySelector<HTMLElement>("[data-board]")!.style;
+  return Object.fromEntries(STATUSES.map((status) => [status, style.getPropertyValue(`--c-${status}`)]));
+};
+const STATUSES: TaskStatus[] = ["inbox", "assigned", "blocked", "done"];
+const BALANCED = "minmax(232px, var(--shelf-balanced))";
+const CAPPED = "minmax(232px, var(--shelf-w))";
+const WORK = "minmax(var(--work-min), 1fr)";
+
+test("on a large screen a project board balances its columns; narrow, scroll, tabs and the Overview keep theirs", () => {
+  localStorage.clear();
+  const tasks = [task("a", "assigned", "Repair old links"), task("b", "blocked", "Waiting on a review")];
+  const overview = { project: "__overview__", overview: { names: { fixture: "fixture" }, onOpenProject: () => {}, keep: () => true } };
+  const at = (width: number, extra: Partial<KanbanBoardProps> = {}) => atBoardWidth(width, () => {
+    const { host } = mount(tasks, NO_PORTS, extra);
+    return { mode: host.querySelector("[data-board]")?.getAttribute("data-mode"), tracks: tracks(host), host };
+  });
+
+  for (const width of [1440, 1920, 2560]) {
+    const wide = at(width);
+    expect(wide.mode).toBe("wide");
+    expect(wide.tracks).toEqual({ inbox: BALANCED, assigned: WORK, blocked: BALANCED, done: BALANCED });
+    /* The Overview keeps the capped shelves it had. */
+    const cross = at(width, overview);
+    expect(cross.mode).toBe("wide");
+    expect(cross.tracks).toEqual({ inbox: CAPPED, assigned: WORK, blocked: CAPPED, done: CAPPED });
+  }
+  /* 1200–1399: 220 px shelves and a 440 px floor, on a project board and the Overview alike. */
+  for (const extra of [{}, overview]) {
+    const narrow = at(1300, extra);
+    expect(narrow.mode).toBe("narrow");
+    expect(narrow.tracks).toEqual({ inbox: "220px", assigned: "minmax(440px, 1fr)", blocked: "220px", done: "220px" });
+  }
+  /* The scroller and the tabs are flex rows: no grid tracks at all. */
+  for (const [width, mode] of [[1000, "scroll"], [700, "tabs"]] as const) {
+    const flex = at(width);
+    expect(flex.mode).toBe(mode);
+    expect(flex.tracks).toEqual({ inbox: "", assigned: "", blocked: "", done: "" });
+  }
+
+  /* The wide share (#1841) swaps onto the widened shelf, and Assigned takes a balanced shelf's track. */
+  atBoardWidth(1920, () => {
+    const { host } = mount(tasks, NO_PORTS);
+    click(widthButton(host, "done"));
+    expect(tracks(host)).toEqual({ inbox: BALANCED, assigned: BALANCED, blocked: BALANCED, done: WORK });
+  });
+  localStorage.clear();
+});
+
+test("the column template function holds the reading width and the wide share in every grid mode", () => {
+  const none = new Set<TaskStatus>();
+  const reading = new Set<TaskStatus>(["blocked"]);
+  expect(kanbanColumnTracks("scroll", { overview: false, wide: null, reading })).toBeNull();
+  expect(kanbanColumnTracks("tabs", { overview: false, wide: "done", reading: none })).toBeNull();
+  /* Reading: at least 420–460 px, never narrower than a balanced shelf beside it. */
+  expect(kanbanColumnTracks("wide", { overview: false, wide: null, reading })).toEqual({
+    "--c-inbox": BALANCED, "--c-assigned": "minmax(440px, 1fr)", "--c-blocked": "minmax(420px, max(460px, var(--shelf-balanced)))", "--c-done": BALANCED,
+  });
+  /* Narrow and the Overview read exactly as before. */
+  expect(kanbanColumnTracks("narrow", { overview: false, wide: null, reading })).toEqual({
+    "--c-inbox": "220px", "--c-assigned": "minmax(440px, 1fr)", "--c-blocked": "minmax(420px, 460px)", "--c-done": "220px",
+  });
+  expect(kanbanColumnTracks("wide", { overview: true, wide: null, reading })).toEqual({
+    "--c-inbox": CAPPED, "--c-assigned": "minmax(440px, 1fr)", "--c-blocked": "minmax(420px, 460px)", "--c-done": CAPPED,
+  });
+  expect(kanbanColumnTracks("narrow", { overview: false, wide: "inbox", reading: none })).toEqual({
+    "--c-inbox": "minmax(440px, 1fr)", "--c-assigned": "220px", "--c-blocked": "220px", "--c-done": "220px",
+  });
+  /* A widened shelf that also holds reading keeps the wide share. */
+  expect(kanbanColumnTracks("wide", { overview: false, wide: "blocked", reading })).toEqual({
+    "--c-inbox": BALANCED, "--c-assigned": BALANCED, "--c-blocked": WORK, "--c-done": BALANCED,
+  });
+});
 
 test("in tabs every column is already full width, so no column draws the control", () => {
   const { host } = mount([task("d", "done", "Merge the approved queue adapter")], NO_PORTS);
