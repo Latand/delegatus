@@ -18,6 +18,11 @@ import path from "node:path";
 
 import { directoryProjectId } from "@/lib/projects/identity";
 
+/** Conversations the board shows as working. The scanner calls an open turn
+    live only while its transcript changed in the last three minutes, so the
+    capture refreshes their modification time before every shot. */
+export const WORKING_CONVERSATIONS = ["product-grid", "offline-drafts", "refunds-review", "key-rotation"] as const;
+
 export const DEMO_PROJECTS = ["harbor-api", "lumen-web", "fieldnotes", "quarry"] as const;
 export type DemoProject = (typeof DEMO_PROJECTS)[number];
 
@@ -62,7 +67,6 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
   const harbor = dirs["harbor-api"];
   const lumen = dirs["lumen-web"];
   const field = dirs.fieldnotes;
-  const quarry = dirs.quarry;
   return [
     {
       key: "refunds-builder",
@@ -107,6 +111,39 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
           result: "src/refunds/handler.test.ts:\n✓ creates a refund [12.40ms]\n✓ answers a repeated key with the stored response [4.10ms]\n✓ rejects a reused key with a different body (409) [3.20ms]\n✓ refunds normally without a key [2.90ms]\n\n 4 pass\n 0 fail\n 11 expect() calls\nRan 4 tests across 1 file. [188.00ms]",
         },
         { say: "Done. `POST /refunds` now honours an `Idempotency-Key` header:\n\n- a repeated key with the same body returns the first response and never calls the provider again;\n- the same key with a different body answers **409**;\n- requests without a key behave exactly as before.\n\nThe key and the response are written in the refund's transaction (migration `0042`), so a crash between the charge and the insert cannot leave a key without its row. Four tests cover it." },
+      ],
+    },
+    {
+      key: "key-rotation",
+      project: "harbor-api",
+      model: "claude-opus-5",
+      startedMinutesAgo: 9,
+      pace: 28,
+      steps: [
+        { user: "Rotate the webhook signing keys without downtime: sign with the new key, accept both for a day, then drop the old one." },
+        { say: "I'll add a key ring with an activation time so verification accepts the previous key during the overlap." },
+        {
+          tool: "Grep",
+          input: { pattern: "WEBHOOK_SECRET", path: "src" },
+          result: "src/webhooks/sign.ts:4:const secret = env.WEBHOOK_SECRET;\nsrc/webhooks/verify.ts:7:  const expected = hmac(env.WEBHOOK_SECRET, payload);",
+        },
+      ],
+      midTurn: { tool: "Edit", input: { file_path: `${harbor}/src/webhooks/verify.ts`, old_string: "  const expected = hmac(env.WEBHOOK_SECRET, payload);", new_string: "  const accepted = keyRing.verifying(now).map((key) => hmac(key, payload));" } },
+    },
+    {
+      key: "charges-pagination",
+      project: "harbor-api",
+      model: "claude-sonnet-5",
+      startedMinutesAgo: 210,
+      pace: 22,
+      steps: [
+        { user: "GET /charges returns every row. Add cursor pagination with a default page of 50 and a hard cap of 200." },
+        {
+          tool: "Bash",
+          input: { command: "bun test src/charges", description: "Run the charges tests" },
+          result: " 7 pass\n 0 fail\nRan 7 tests across 2 files. [203.00ms]",
+        },
+        { say: "`GET /charges` now takes `limit` (default 50, capped at 200) and an opaque `cursor`; the response carries `next_cursor` until the last page." },
       ],
     },
     {
@@ -194,7 +231,12 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
 
 function claudeTranscript(conversation: Conversation, cwd: string, sessionId: string, now: number): { lines: string[]; lastAt: number } {
   const lines: string[] = [];
-  let at = now - conversation.startedMinutesAgo * 60_000;
+  /* A conversation mid-turn ends half a minute before capture, inside the
+     window in which the scanner still calls an open turn live. */
+  const records = conversation.steps.reduce((count, step) => count + ("tool" in step ? 2 : 1), conversation.midTurn ? 1 : 0);
+  let at = conversation.midTurn
+    ? now - 30_000 - records * conversation.pace * 1000
+    : now - conversation.startedMinutesAgo * 60_000;
   let n = 0;
   const base = { cwd, sessionId, version: "2.1.0", gitBranch: "main" };
   const next = () => {
@@ -202,20 +244,22 @@ function claudeTranscript(conversation: Conversation, cwd: string, sessionId: st
     n += 1;
     return { uuid: demoSessionId(`${conversation.key}:${n}`), timestamp: iso(at) };
   };
-  for (const step of conversation.steps) {
+  conversation.steps.forEach((step, index) => {
     if ("user" in step) {
       lines.push(JSON.stringify({ type: "user", ...next(), ...base, message: { role: "user", content: step.user } }));
     } else if ("say" in step) {
-      lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [{ type: "text", text: step.say }] } }));
+      /* The last answer of a finished conversation closes its turn. */
+      const closes = !conversation.midTurn && index === conversation.steps.length - 1;
+      lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [{ type: "text", text: step.say }], stop_reason: closes ? "end_turn" : null } }));
     } else {
       const id = `toolu_${createHash("sha256").update(`${conversation.key}:${n}`).digest("hex").slice(0, 20)}`;
-      lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [{ type: "tool_use", id, name: step.tool, input: step.input }] } }));
+      lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [{ type: "tool_use", id, name: step.tool, input: step.input }], stop_reason: "tool_use" } }));
       lines.push(JSON.stringify({ type: "user", ...next(), ...base, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: step.result, ...(step.error ? { is_error: true } : {}) }] } }));
     }
-  }
+  });
   if (conversation.midTurn) {
     const id = `toolu_${createHash("sha256").update(`${conversation.key}:pending`).digest("hex").slice(0, 20)}`;
-    lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [{ type: "tool_use", id, name: conversation.midTurn.tool, input: conversation.midTurn.input }] } }));
+    lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [{ type: "tool_use", id, name: conversation.midTurn.tool, input: conversation.midTurn.input }], stop_reason: "tool_use" } }));
   }
   return { lines, lastAt: at };
 }
@@ -223,7 +267,7 @@ function claudeTranscript(conversation: Conversation, cwd: string, sessionId: st
 /** The reviewer the running pipeline's review stage has open: a Codex
     rollout, mid-turn. */
 function codexReviewRollout(cwd: string, sessionId: string, now: number): { lines: string[]; lastAt: number; stamp: string } {
-  let at = now - 4 * 60_000;
+  let at = now - 30_000 - 44_000;
   const start = at;
   const step = (seconds: number) => {
     at += seconds * 1000;
@@ -253,13 +297,17 @@ function assignment(file: Written, engine: "claude" | "codex") {
 function buildTasks(layout: DemoLayout, files: Record<string, Written>) {
   const { ids, now } = layout;
   const ago = (minutes: number) => iso(now - minutes * 60_000);
-  const task = (id: string, project: DemoProject, status: string, text: string, assignments: unknown[], createdMinutesAgo: number) => ({
-    id, project: ids[project], status, text, placement: "unplaced", assignments, createdAt: ago(createdMinutesAgo), updatedAt: ago(Math.max(1, createdMinutesAgo - 5)),
+  const task = (id: string, project: DemoProject, status: string, text: string, assignments: unknown[], createdMinutesAgo: number, color?: string) => ({
+    id, project: ids[project], status, text, placement: "unplaced", board: "shown", ...(color ? { color } : {}), assignments, createdAt: ago(createdMinutesAgo), updatedAt: ago(Math.max(1, createdMinutesAgo - 5)),
   });
   return {
     tasks: [
-      task("task-refunds", "harbor-api", "assigned", "Idempotent refunds\nA retried POST /refunds must never refund twice.", [assignment(files["refunds-builder"]!, "claude")], 36),
+      task("task-refunds", "harbor-api", "assigned", "Idempotent refunds\nA retried POST /refunds must never refund twice.", [assignment(files["refunds-builder"]!, "claude")], 36, "sky"),
+      task("task-key-rotation", "harbor-api", "assigned", "Rotate webhook signing keys\nSign with the new key, accept both for a day, then drop the old one.", [assignment(files["key-rotation"]!, "claude")], 10),
       task("task-webhook-retries", "harbor-api", "inbox", "Back off webhook retries\nExponential backoff with jitter; stop after 24 hours and surface the failure.", [], 50),
+      task("task-refund-errors", "harbor-api", "inbox", "Document refund error codes\nOne table in the API reference: code, meaning, whether a retry is safe.", [], 55),
+      task("task-ledger", "harbor-api", "blocked", "Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", [], 300, "amber"),
+      task("task-charges-pagination", "harbor-api", "done", "Paginate GET /charges\nCursor pagination, 50 per page, capped at 200.", [assignment(files["charges-pagination"]!, "claude")], 215),
       task("task-cart-rounding", "lumen-web", "done", "Fix cart rounding\nKeep money in integer cents and format once.", [assignment(files["cart-rounding"]!, "claude")], 100),
       task("task-product-grid", "lumen-web", "assigned", "Lazy-load the product grid\nImages below the fold load on scroll; measure LCP before and after.", [assignment(files["product-grid"]!, "claude")], 8),
       task("task-offline-drafts", "fieldnotes", "assigned", "Offline drafts\nQueue edits without signal and sync them in order.", [assignment(files["offline-drafts"]!, "claude")], 14),

@@ -31,7 +31,7 @@ import path from "node:path";
 
 import type { Page } from "playwright-core";
 
-import { seedDemoAccounts, seedDemoHome, type DemoProject } from "./readme-demo-state";
+import { seedDemoAccounts, seedDemoHome, WORKING_CONVERSATIONS, type DemoProject } from "./readme-demo-state";
 
 export const README_MEDIA_DIR = "docs/media/readme";
 export const CAPTURE_ROOT = process.env.LLV_README_CAPTURE_ROOT ?? "/var/tmp/llv-readme-capture";
@@ -296,6 +296,8 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout): 
       if (only && !only.includes(shot.id)) continue;
       const context = await browser.newContext({ viewport: shot.viewport, deviceScaleFactor: 2, colorScheme: "dark", isMobile: shot.viewport.width < 600, hasTouch: shot.viewport.width < 600 });
       const page = await context.newPage();
+      const recent = new Date(Date.now() - 20_000);
+      for (const key of WORKING_CONVERSATIONS) fs.utimesSync(layout.files[key]!.path, recent, recent);
       await page.addInitScript(() => {
         localStorage.setItem("llv_lang", "en");
         localStorage.setItem("llvSound", "0");
