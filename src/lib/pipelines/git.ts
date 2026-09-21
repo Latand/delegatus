@@ -139,7 +139,7 @@ export const realProvisionExec: ProvisionExecPort = (command, args, cwd, signal)
   child.on("close", (code, childSignal) => {
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);
-    resolve({ code, stdout, stderr: stopped ?? stderr, signal: childSignal });
+    resolve({ code: stopped ? null : code, stdout, stderr: stopped ?? stderr, signal: childSignal });
   });
   if (signal?.aborted) abort();
 });
@@ -174,12 +174,29 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   const add = await exec("git", ["worktree", "add", "-b", pipeline.branch, pipeline.worktreeDir, pipeline.baseRef], pipeline.repoDir, signal);
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  if (killedAtBound(add)) return { ok: false, error: "git worktree add: checkout interrupted or timed out after 60s" };
+  if (add.signal || add.code === null) return failure("git worktree add interrupted", add);
   if (add.code !== 0) {
     const probe = await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], pipeline.worktreeDir, signal);
     if (probe.code !== 0 || probe.stdout.trim() !== pipeline.branch) return failure("git worktree add", add);
+    // Git writes the branch and HEAD before checkout finishes. A killed
+    // checkout leaves its initialization lock, even when no files were written.
+    const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.worktreeDir, signal);
+    if (listing.code !== 0) return failure("checking pipeline worktree initialization", listing);
+    const entry = listing.stdout.split("\0\0").map((record) => record.split("\0"))
+      .find((fields) => fields.includes(`branch refs/heads/${pipeline.branch}`));
+    if (!entry || entry.includes("locked initializing") || entry.some((field) => field.startsWith("prunable"))) {
+      return { ok: false, error: "the pipeline worktree has not finished initializing" };
+    }
+    // Preserve existing files; a retry may adopt only a complete tracked tree.
+    // Untracked files do not affect completeness and remain untouched.
+    const tracked = await exec("git", ["diff", "--quiet", "HEAD", "--"], pipeline.worktreeDir, signal);
+    if (tracked.code === 1) return { ok: false, error: "the pipeline worktree has incomplete or modified tracked files" };
+    if (tracked.code !== 0) return failure("checking pipeline worktree tracked files", tracked);
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   const base = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
