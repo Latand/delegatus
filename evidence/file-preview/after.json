@@ -1,0 +1,820 @@
+{
+  "commit": "f13b31d2b4722420ce2a647960df83f61e5ea125",
+  "desktop-html": {
+    "viewport": {
+      "w": 1280,
+      "h": 800
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 720,
+      "y": 0,
+      "w": 560,
+      "h": 800
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 1168,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 1204,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 1240,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 734,
+          "y": 60,
+          "w": 72,
+          "h": 28
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 807,
+          "y": 60,
+          "w": 57,
+          "h": 28
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": {
+      "sandbox": "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals",
+      "src": "/api/artifact/frame/L3Zhci90bXAvbGx2LWlzc3VlLTE2NDEtVmdqYzA1L2hvbWUvUHJvamVjdHMvaGFyYm9yL3JlcG9ydHMvcm91bmQtMg.mubvonqt.zz7SWE_XVlRrbLY93tQBRJ7SZW9qhLAXaAFJwuzqp08/index.html#decision-graph",
+      "r": {
+        "x": 721,
+        "y": 96,
+        "w": 559,
+        "h": 704
+      }
+    },
+    "openExternal": "/api/artifact/frame/L3Zhci90bXAvbGx2LWlzc3VlLTE2NDEtVmdqYzA1L2hvbWUvUHJvamVjdHMvaGFyYm9yL3JlcG9ydHMvcm91bmQtMg.mubvonqt.zz7SWE_XVlRrbLY93tQBRJ7SZW9qhLAXaAFJwuzqp08/index.html#decision-graph",
+    "markdown": null,
+    "failurePath": null,
+    "failureText": null,
+    "line": null,
+    "inFrame": {
+      "probe": {
+        "origin": "null",
+        "scriptRan": true,
+        "parentDocument": "blocked",
+        "cookie": "blocked",
+        "localStorage": "blocked",
+        "viewerApi": "blocked",
+        "artifactApi": "blocked"
+      },
+      "scrollY": 2009,
+      "anchorTop": 0,
+      "stylesheetApplied": "rgb(15, 76, 129)",
+      "relativeImageLoaded": true,
+      "overflowX": 0
+    }
+  },
+  "desktop-html-new-tab": {
+    "status": 200,
+    "probe": {
+      "origin": "null",
+      "scriptRan": true,
+      "parentDocument": "readable",
+      "cookie": "blocked",
+      "localStorage": "blocked",
+      "viewerApi": "blocked",
+      "artifactApi": "blocked"
+    }
+  },
+  "desktop-markdown-top": {
+    "viewport": {
+      "w": 1280,
+      "h": 800
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 720,
+      "y": 0,
+      "w": 560,
+      "h": 800
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 1168,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 1204,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 1240,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 734,
+          "y": 60,
+          "w": 72,
+          "h": 28
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 807,
+          "y": 60,
+          "w": 57,
+          "h": 28
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": null,
+    "openExternal": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fdocs%2Frelease-guide.md",
+    "markdown": {
+      "overflowX": 0,
+      "scrollTop": 0,
+      "headings": 12,
+      "tableScrollsInside": true,
+      "tallestTableRow": 49,
+      "images": [
+        {
+          "loaded": true,
+          "src": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fdocs%2Fimg%2Fpipeline.svg"
+        }
+      ],
+      "wideTableHeadingTop": 2383,
+      "codeBlocks": 1,
+      "listItems": 30
+    },
+    "failurePath": null,
+    "failureText": null,
+    "line": null
+  },
+  "desktop-markdown-anchor": {
+    "viewport": {
+      "w": 1280,
+      "h": 800
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 720,
+      "y": 0,
+      "w": 560,
+      "h": 800
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 1168,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 1204,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 1240,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 734,
+          "y": 60,
+          "w": 72,
+          "h": 28
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 807,
+          "y": 60,
+          "w": 57,
+          "h": 28
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": null,
+    "openExternal": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fdocs%2Frelease-guide.md",
+    "markdown": {
+      "overflowX": 0,
+      "scrollTop": 2371,
+      "headings": 12,
+      "tableScrollsInside": true,
+      "tallestTableRow": 49,
+      "images": [
+        {
+          "loaded": true,
+          "src": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fdocs%2Fimg%2Fpipeline.svg"
+        }
+      ],
+      "wideTableHeadingTop": 12,
+      "codeBlocks": 1,
+      "listItems": 30
+    },
+    "failurePath": null,
+    "failureText": null,
+    "line": null
+  },
+  "desktop-code-line": {
+    "viewport": {
+      "w": 1280,
+      "h": 800
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 720,
+      "y": 0,
+      "w": 560,
+      "h": 800
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 1168,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 1204,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 1240,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Search loaded text",
+        "r": {
+          "x": 733,
+          "y": 59,
+          "w": 501,
+          "h": 28
+        }
+      },
+      {
+        "label": "Wrap lines",
+        "r": {
+          "x": 1240,
+          "y": 59,
+          "w": 28,
+          "h": 28
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": null,
+    "openExternal": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fsrc%2Fdelivery%2Fretry.ts",
+    "markdown": null,
+    "failurePath": null,
+    "failureText": null,
+    "line": {
+      "index": "179",
+      "visible": true,
+      "text": "180  if (attempt > policy.maxAttempts) return { settled: false, reason: \"retry budget spent\" }; // the linked line"
+    }
+  },
+  "desktop-missing": {
+    "viewport": {
+      "w": 1280,
+      "h": 800
+    },
+    "state": "missing",
+    "kind": "text",
+    "sheet": {
+      "x": 720,
+      "y": 0,
+      "w": 560,
+      "h": 800
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 1168,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 1204,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 1240,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": null,
+    "openExternal": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Freports%2Fround-3%2Findex.html",
+    "markdown": null,
+    "failurePath": "$HOME/Projects/harbor/reports/round-3/index.html",
+    "failureText": "There is no file at this path.$HOME/Projects/harbor/reports/round-3/index.html",
+    "line": null
+  },
+  "phone-html": {
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 230,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 282,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 334,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 13,
+          "y": 68,
+          "w": 84,
+          "h": 44
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 98,
+          "y": 68,
+          "w": 69,
+          "h": 44
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": {
+      "sandbox": "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals",
+      "src": "/api/artifact/frame/L3Zhci90bXAvbGx2LWlzc3VlLTE2NDEtVmdqYzA1L2hvbWUvUHJvamVjdHMvaGFyYm9yL3JlcG9ydHMvcm91bmQtMg.mubvotj7.xdX4rSm094W7ASU52w59freGKtRug4Cuk54gzL5tD50/index.html#decision-graph",
+      "r": {
+        "x": 0,
+        "y": 120,
+        "w": 390,
+        "h": 724
+      }
+    },
+    "openExternal": "/api/artifact/frame/L3Zhci90bXAvbGx2LWlzc3VlLTE2NDEtVmdqYzA1L2hvbWUvUHJvamVjdHMvaGFyYm9yL3JlcG9ydHMvcm91bmQtMg.mubvotj7.xdX4rSm094W7ASU52w59freGKtRug4Cuk54gzL5tD50/index.html#decision-graph",
+    "markdown": null,
+    "failurePath": null,
+    "failureText": null,
+    "line": null,
+    "inFrame": {
+      "probe": {
+        "origin": "null",
+        "scriptRan": true,
+        "parentDocument": "blocked",
+        "cookie": "blocked",
+        "localStorage": "blocked",
+        "viewerApi": "blocked",
+        "artifactApi": "blocked"
+      },
+      "scrollY": 2714,
+      "anchorTop": 0,
+      "stylesheetApplied": "rgb(15, 76, 129)",
+      "relativeImageLoaded": true,
+      "overflowX": 0
+    }
+  },
+  "phone-html-new-tab": {
+    "status": 200,
+    "probe": {
+      "origin": "null",
+      "scriptRan": true,
+      "parentDocument": "readable",
+      "cookie": "blocked",
+      "localStorage": "blocked",
+      "viewerApi": "blocked",
+      "artifactApi": "blocked"
+    }
+  },
+  "phone-markdown-top": {
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 230,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 282,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 334,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 13,
+          "y": 68,
+          "w": 84,
+          "h": 44
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 98,
+          "y": 68,
+          "w": 69,
+          "h": 44
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": null,
+    "openExternal": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fdocs%2Frelease-guide.md",
+    "markdown": {
+      "overflowX": 0,
+      "scrollTop": 0,
+      "headings": 12,
+      "tableScrollsInside": true,
+      "tallestTableRow": 49,
+      "images": [
+        {
+          "loaded": true,
+          "src": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fdocs%2Fimg%2Fpipeline.svg"
+        }
+      ],
+      "wideTableHeadingTop": 2348,
+      "codeBlocks": 1,
+      "listItems": 30
+    },
+    "failurePath": null,
+    "failureText": null,
+    "line": null
+  },
+  "phone-markdown-anchor": {
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 230,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 282,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 334,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 13,
+          "y": 68,
+          "w": 84,
+          "h": 44
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 98,
+          "y": 68,
+          "w": 69,
+          "h": 44
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": null,
+    "openExternal": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fdocs%2Frelease-guide.md",
+    "markdown": {
+      "overflowX": 0,
+      "scrollTop": 2336,
+      "headings": 12,
+      "tableScrollsInside": true,
+      "tallestTableRow": 49,
+      "images": [
+        {
+          "loaded": true,
+          "src": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fdocs%2Fimg%2Fpipeline.svg"
+        }
+      ],
+      "wideTableHeadingTop": 12,
+      "codeBlocks": 1,
+      "listItems": 30
+    },
+    "failurePath": null,
+    "failureText": null,
+    "line": null
+  },
+  "phone-code-line": {
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 230,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 282,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 334,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Search loaded text",
+        "r": {
+          "x": 12,
+          "y": 67,
+          "w": 316,
+          "h": 44
+        }
+      },
+      {
+        "label": "Wrap lines",
+        "r": {
+          "x": 334,
+          "y": 67,
+          "w": 44,
+          "h": 44
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": null,
+    "openExternal": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fsrc%2Fdelivery%2Fretry.ts",
+    "markdown": null,
+    "failurePath": null,
+    "failureText": null,
+    "line": {
+      "index": "179",
+      "visible": true,
+      "text": "180  if (attempt > policy.maxAttempts) return { settled: false, reason: \"retry budget spent\" }; // the linked line"
+    }
+  },
+  "phone-missing": {
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "state": "missing",
+    "kind": "text",
+    "sheet": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 230,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 282,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 334,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": null,
+    "openExternal": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Freports%2Fround-3%2Findex.html",
+    "markdown": null,
+    "failurePath": "$HOME/Projects/harbor/reports/round-3/index.html",
+    "failureText": "There is no file at this path.$HOME/Projects/harbor/reports/round-3/index.html",
+    "line": null
+  },
+  "failures": []
+}
