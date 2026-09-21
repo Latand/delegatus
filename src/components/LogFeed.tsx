@@ -121,6 +121,9 @@ function onPhoneLayout(): boolean {
 /** Quiet time after the last scroll event before a released phone feed moves
     to the nearest line boundary (#1978): momentum has ended by then. */
 const REST_ALIGN_MS = 160;
+/** Settles in a row, without the operator's input between them, before the
+    feed stops trying; one is the norm, the band clearance makes a second rare. */
+const MAX_AUTO_ALIGNS = 3;
 
 type ScrollCause =
   | { kind: "programmatic" }
@@ -445,6 +448,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      observer would otherwise re-glue. */
   const tailSpacer = useRef<HTMLDivElement | null>(null);
   const restTimer = useRef<number | null>(null);
+  const autoAlignRef = useRef<{ delta: number; count: number } | null>(null);
   const alignFollowedTop = (el: HTMLElement) => {
     const spacer = tailSpacer.current;
     if (!spacer) return;
@@ -476,6 +480,11 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       if (!el || magnetRef.current || feedTouchRef.current) return;
       const delta = restingDelta(el);
       if (!delta) return;
+      /* A settle never undoes the one before it, and gives up after a few
+         in a row: the operator's next touch, wheel or key starts afresh. */
+      const previous = autoAlignRef.current;
+      if (previous && (Math.sign(previous.delta) !== Math.sign(delta) || previous.count >= MAX_AUTO_ALIGNS)) return;
+      autoAlignRef.current = { delta, count: (previous?.count ?? 0) + 1 };
       markProgrammaticScroll();
       const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
       el.scrollBy({ top: delta, behavior: reduce ? "auto" : "smooth" });
@@ -754,7 +763,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       else {
         restorePendingPosition();
         /* Rows that grew or shrank above a released feed move it without a
-           scroll event; it settles on a row edge again (#1978). */
+           scroll event; it settles on a row edge again (#1978), as a fresh
+           layout, since a settle's own scroll never resizes anything. */
+        autoAlignRef.current = null;
         scheduleRestAlign();
       }
     });
@@ -1282,6 +1293,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const markUserScroll = (direction: number | null): void => {
     const el = scroller.current;
     if (!el) return;
+    autoAlignRef.current = null;
     scrollCauseRef.current = {
       kind: "user",
       fromBottom: distanceFromBottom(el),
@@ -1382,6 +1394,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         onPointerDownCapture={(event) => {
           if (event.button === 0 && pointerHitsVerticalScrollbar(event.currentTarget, event.clientX)) {
             scrollbarPointerRef.current = { fromBottom: distanceFromBottom(event.currentTarget) };
+            autoAlignRef.current = null;
             scrollCauseRef.current = null;
           }
         }}

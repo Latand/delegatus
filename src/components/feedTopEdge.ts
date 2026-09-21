@@ -26,9 +26,6 @@ export interface EdgeCut {
    mid-width (a short status line, an indented output) is still crossed by one
    of them; seven keeps the probe a handful of hit tests. */
 const PROBE_COLUMNS = [0.04, 0.18, 0.32, 0.5, 0.68, 0.82, 0.96];
-/* A hit element can be a large block (a whole card, when the probe lands in
-   its padding); its text is walked, but never without bound. */
-const MAX_TEXT_NODES = 400;
 /* The coarse-pointer tap target, with room for a label: the tallest control
    that is still a row. */
 const MAX_CONTROL_PX = 64;
@@ -90,48 +87,122 @@ export function rowEdgeCut(scroller: HTMLElement): EdgeCut | null {
   return null;
 }
 
-/** The ink crossing the top edge, or null. */
+/* How far from the edge the ink fallback looks, and so the longest move it
+   makes. Every move it chooses lands inside this band, so whatever could
+   cross the edge after the move was already counted before it. */
+const BAND_PX = 96;
+/* A band walk skips any subtree whose box misses the band, and still stops
+   here: a long output with highlighting is thousands of spans. */
+const MAX_BAND_NODES = 2_000;
+
+type Span = { top: number; bottom: number };
+
+/* Text lines and row-sized controls that intersect the band, from the
+   subtrees of `roots` whose boxes reach it. A line is trimmed to the boxes of
+   the overflow containers it sits in below the feed itself (a long output
+   scrolls inside its own capped box), so text clipped out of sight is never
+   counted as crossing the edge. */
+function bandInk(roots: readonly Element[], scroller: Element, low: number, high: number): Span[] {
+  const spans: Span[] = [];
+  const range = document.createRange();
+  let visited = 0;
+  const keep = (top: number, bottom: number, clip: Span) => {
+    const t = Math.max(top, clip.top);
+    const b = Math.min(bottom, clip.bottom);
+    if (b > t && b > low && t < high) spans.push({ top: t, bottom: b });
+  };
+  const visit = (element: Element, clip: Span) => {
+    if (visited >= MAX_BAND_NODES) return;
+    visited += 1;
+    const rect = element.getBoundingClientRect();
+    /* `display: contents` has no box of its own; its children still do. */
+    const boxed = rect.width > 0 || rect.height > 0;
+    if (boxed && !(rect.bottom > low && rect.top < high)) return;
+    if (element.tagName === "BUTTON") {
+      if (rect.height <= MAX_CONTROL_PX) keep(rect.top, rect.bottom, clip);
+      return;
+    }
+    let inner = clip;
+    if (boxed && element !== scroller) {
+      const style = getComputedStyle(element);
+      if (style.overflowY !== "visible") inner = { top: Math.max(clip.top, rect.top), bottom: Math.min(clip.bottom, rect.bottom) };
+    }
+    if (inner.bottom <= inner.top) return;
+    for (const child of element.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        if (!child.textContent?.trim()) continue;
+        range.selectNodeContents(child);
+        for (const line of range.getClientRects()) {
+          if (line.height > 0 && line.width > 0) keep(line.top, line.bottom, inner);
+        }
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        visit(child as Element, inner);
+      }
+    }
+  };
+  /* A root's own overflow ancestors below the feed clip it as well. */
+  for (const root of roots) {
+    let clip: Span = { top: -Infinity, bottom: Infinity };
+    for (let parent = root.parentElement; parent && parent !== scroller; parent = parent.parentElement) {
+      if (getComputedStyle(parent).overflowY !== "visible") {
+        const box = parent.getBoundingClientRect();
+        clip = { top: Math.max(clip.top, box.top), bottom: Math.min(clip.bottom, box.bottom) };
+      }
+    }
+    visit(root, clip);
+  }
+  return spans;
+}
+
+/** The ink crossing the top edge, as the shortest move back (`hidden`) and
+    forward (`shown`) that leaves NO line and no control crossing it: moving
+    past a cut control can land on a line and aligning that line can cut the
+    control again, so both are cleared together. Null when nothing crosses;
+    an unreachable direction is Infinity. Moves stay inside the band and
+    inside the row being read, so the position they reach is clear by
+    construction and the next reading finds nothing to do. */
 export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
   if (scroller.scrollHeight <= scroller.clientHeight || typeof document.elementFromPoint !== "function") return null;
   const bounds = scroller.getBoundingClientRect();
   const edge = bounds.top + scroller.clientTop;
-  const left = bounds.left + scroller.clientLeft;
-  const width = scroller.clientWidth;
-  const seen = new Set<Element>();
-  let top = Infinity;
-  let bottom = -Infinity;
-  for (const column of PROBE_COLUMNS) {
-    const hit = document.elementFromPoint(left + width * column, edge + 0.5);
-    if (!hit || hit === scroller || !scroller.contains(hit) || seen.has(hit)) continue;
-    seen.add(hit);
-    /* A control is a row of its own: a copy button left sliced at the edge
-       reads as broken as a sliced line of text. A block-sized one (a picture's
-       frame) is left to scroll like a card; it could never fit either way. */
-    const control = hit.closest("button");
-    if (control && scroller.contains(control)) {
-      const rect = control.getBoundingClientRect();
-      if (rect.height <= MAX_CONTROL_PX && rect.top < edge - 0.5 && rect.bottom > edge + 0.5) {
-        top = Math.min(top, rect.top);
-        bottom = Math.max(bottom, rect.bottom);
-      }
+  /* Read the outermost row crossing the edge, the one too tall to align; with
+     none, whatever the edge probes hit. */
+  let span: Span = { top: -Infinity, bottom: Infinity };
+  let roots: Element[] = [];
+  for (const row of scroller.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
+    const rect = row.getBoundingClientRect();
+    if (rect.top < edge && rect.bottom > edge) {
+      roots = [row];
+      span = { top: rect.top, bottom: rect.bottom };
+      break;
     }
-    const walker = document.createTreeWalker(hit, NodeFilter.SHOW_TEXT);
-    const range = document.createRange();
-    let visited = 0;
-    for (let node = walker.nextNode(); node && visited < MAX_TEXT_NODES; node = walker.nextNode(), visited += 1) {
-      if (!node.textContent?.trim()) continue;
-      range.selectNodeContents(node);
-      for (const rect of range.getClientRects()) {
-        if (rect.height <= 0 || rect.width <= 0) continue;
-        if (rect.top < edge - 0.5 && rect.bottom > edge + 0.5) {
-          top = Math.min(top, rect.top);
-          bottom = Math.max(bottom, rect.bottom);
-        }
-      }
+    if (rect.top >= edge) break;
+  }
+  if (!roots.length) {
+    const left = bounds.left + scroller.clientLeft;
+    for (const column of PROBE_COLUMNS) {
+      const hit = document.elementFromPoint(left + scroller.clientWidth * column, edge + 0.5);
+      if (hit && hit !== scroller && scroller.contains(hit) && !roots.includes(hit)) roots.push(hit);
     }
   }
-  if (top === Infinity) return null;
-  return { hidden: backPx(edge - top), shown: forwardPx(bottom - edge) };
+  const ink = bandInk(roots, scroller, edge - BAND_PX, edge + BAND_PX);
+  /* After a move of `delta` the edge sits at `edge + delta` in today's
+     coordinates; half a pixel of overlap is rounding, not a cut. */
+  const crosses = (delta: number) => ink.some((line) => line.top < edge + delta - 0.5 && line.bottom > edge + delta + 0.5);
+  if (!crosses(0)) return null;
+  let back = Infinity;
+  let forward = Infinity;
+  for (const line of ink) {
+    for (const delta of [Math.floor(line.top - edge + 0.5), Math.ceil(line.bottom - edge - 0.5)]) {
+      if (delta === 0 || Math.abs(delta) >= BAND_PX) continue;
+      if (edge + delta < span.top || edge + delta > span.bottom) continue;
+      if (crosses(delta)) continue;
+      if (delta < 0) back = Math.min(back, -delta);
+      else forward = Math.min(forward, delta);
+    }
+  }
+  if (back === Infinity && forward === Infinity) return null;
+  return { hidden: back, shown: forward };
 }
 
 /** The scroll delta that puts a boundary at the top edge: back by the hidden
@@ -142,8 +213,10 @@ export function restingDelta(scroller: HTMLElement): number {
   const cut = rowEdgeCut(scroller) ?? inkEdgeCut(scroller);
   if (!cut) return 0;
   const room = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
-  if (cut.shown <= cut.hidden && cut.shown <= room) return cut.shown;
-  return -cut.hidden;
+  const forward = cut.shown <= room ? cut.shown : Infinity;
+  const back = cut.hidden <= scroller.scrollTop ? cut.hidden : Infinity;
+  if (forward === Infinity && back === Infinity) return 0;
+  return forward <= back ? forward : -back;
 }
 
 /* Following the tail, the bottom is pinned, so the edge moves one of two ways:
@@ -163,5 +236,5 @@ export function tailPlan(scroller: HTMLElement, slack: number): TailPlan {
   if (!cut) return null;
   if (cut === ON_BOUNDARY) return null;
   if (cut.hidden <= Math.min(slack, TAIL_BACK_MAX_PX)) return { back: cut.hidden };
-  return cut.shown > 0 ? { spacer: cut.shown } : null;
+  return cut.shown > 0 && cut.shown !== Infinity ? { spacer: cut.shown } : null;
 }

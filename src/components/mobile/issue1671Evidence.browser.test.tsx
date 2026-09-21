@@ -1259,8 +1259,10 @@ browserTest("#1865: the phone names a stage and its attempt in the queue row and
  *   - with the task strip right above the feed, the first visible feed row
  *     starts at or below the strip's bottom edge, and no glyph line and no
  *     control straddles the feed's top edge: following the tail, after the card opens, and at rest
- *     after a drag released it from the tail, and once the conversation is
- *     closed to the board and opened again.
+ *     after a drag released it from the tail, with the first lines of a
+ *     result taller than the screen under the strip at a sweep of offsets
+ *     (every stop comes to rest), and once the conversation is closed to the
+ *     board and opened again.
  *
  * Readings go to `evidence/issue-1978/phone.json`; frames to `.artifacts/issue-1978/`.
  */
@@ -1291,9 +1293,11 @@ const readInk = (page: Page) => page.evaluate((): InkReading => {
     return { l: r.left, t: r.top, r: r.right, b: r.bottom };
   };
   const area = (a: Box, b: Box) => Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l)) * Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
-  const clip = (element: Element): Box => {
+  /* From the element holding the text itself: a capped output clips its own
+     overflowing lines. */
+  const clip = (element: Element, stop: Element | null = null): Box => {
     let out: Box = { l: -Infinity, t: -Infinity, r: Infinity, b: Infinity };
-    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    for (let parent: Element | null = element; parent && parent !== stop; parent = parent.parentElement) {
       const style = getComputedStyle(parent);
       if (/(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
         const p = box(parent);
@@ -1302,8 +1306,11 @@ const readInk = (page: Page) => page.evaluate((): InkReading => {
     }
     return out;
   };
-  /* Unclipped rects too: a line the feed cuts is found by its full rect. */
+  /* `full` is a line clipped only by the containers inside the feed (a long
+     output scrolls in its own capped box): a line the feed's edge cuts is
+     found by it, and text clipped out of sight never is. */
   const ink = (root: Element) => {
+    const feedElement = document.querySelector("[data-log-feed-scroller]");
     const out: Array<{ text: string; full: Box; seen: Box | null }> = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const range = document.createRange();
@@ -1311,10 +1318,12 @@ const readInk = (page: Page) => page.evaluate((): InkReading => {
       if (!node.textContent?.trim() || !node.parentElement) continue;
       if (getComputedStyle(node.parentElement).visibility === "hidden") continue;
       const c = clip(node.parentElement);
+      const inside = clip(node.parentElement, feedElement);
       range.selectNodeContents(node);
       for (const q of range.getClientRects()) {
         if (q.width <= 0 || q.height <= 0) continue;
-        const full = { l: q.left, t: q.top, r: q.right, b: q.bottom };
+        const full = { l: Math.max(q.left, inside.l), t: Math.max(q.top, inside.t), r: Math.min(q.right, inside.r), b: Math.min(q.bottom, inside.b) };
+        if (full.r <= full.l || full.b <= full.t) continue;
         const seen = { l: Math.max(full.l, c.l), t: Math.max(full.t, c.t), r: Math.min(full.r, c.r), b: Math.min(full.b, c.b) };
         out.push({ text: node.textContent.trim().slice(0, 48), full, seen: seen.r > seen.l && seen.b > seen.t ? seen : null });
       }
@@ -1442,6 +1451,27 @@ browserTest("#1978: a command card's copy controls stay apart and off the text, 
         await page.screenshot({ path: path.join(EDGE_OUT, `${key}-opened.png`) });
 
         if (phone) {
+          /* A call taller than the screen: open the long result in full, then
+             wheel its first lines under the strip at a sweep of offsets. Its
+             lines and its copy control meet the edge together there, where
+             clearing one used to cut the other and the feed stepped between
+             two positions forever. Every stop must come to rest clean. */
+          await page.locator("[data-log-feed-scroller] li", { hasText: "bands.ts" }).getByText("show all output").first().tap();
+          await feedAtRest(page);
+          await page.mouse.move(viewport.width / 2, viewport.height / 2);
+          for (const offset of [2, 7, 13, 19, 26, 34, 43, 55]) {
+            const delta = await page.evaluate((into) => {
+              const feed = document.querySelector("[data-log-feed-scroller]")!;
+              const long = [...feed.querySelectorAll("li pre")].find((pre) => pre.textContent?.includes("band(0)"));
+              if (!long) throw new Error("the long result is not open");
+              return long.getBoundingClientRect().top - (feed.getBoundingClientRect().top + feed.clientTop) + into;
+            }, offset);
+            await page.mouse.wheel(0, delta);
+            await feedAtRest(page);
+            readings[`long-${offset}`] = await readInk(page);
+          }
+          await page.screenshot({ path: path.join(EDGE_OUT, `${key}-long.png`) });
+
           /* Bring the card to the top edge, then leave the tail by drags of
              uneven lengths; each rest is read once the feed has settled. */
           for (const distance of [137, 211, 173]) {

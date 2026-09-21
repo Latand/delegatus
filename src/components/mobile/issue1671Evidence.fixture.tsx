@@ -219,14 +219,20 @@ const record = (i: number, role: "user" | "assistant", content: unknown) => JSON
   type: role, uuid: `evidence-tool-${i}`, timestamp: iso(900 - i * 30), sessionId: "conversation_running",
   message: role === "assistant" ? { role, model: "claude-fable-5-1", content } : { role, content },
 });
+/* A long result: its preview ends in «show all output», and opened it is a
+   call far taller than the screen, whose lines and copy control meet the edge
+   together. */
+const LONG_READ = Array.from({ length: 60 }, (_, i) => `${i + 1}\t  band(${i}): replay the snapshot row and keep the projection in order;`).join("\n");
 const TOOL_RUN = [
-  record(0, "assistant", [{ type: "tool_use", id: "toolu_evidence_read", name: "Read", input: { file_path: "src/board/projection.ts", offset: 1, limit: 12 } }]),
-  record(1, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_read", content: "1\texport { replay } from \"./replay\";" }]),
-  record(2, "assistant", [{ type: "tool_use", id: "toolu_evidence_grep", name: "Grep", input: { pattern: "applyBand", path: "src/board", output_mode: "content" } }]),
-  record(3, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_grep", content: "src/board/projection.ts:2:  return snapshot.bands.reduce(applyBand, emptyBoard());\nsrc/board/bands.ts:14:export function applyBand(board: Board, band: Band): Board {" }]),
-  record(4, "assistant", [{ type: "tool_use", id: "toolu_evidence_run", name: "Bash", input: { command: "bun test src/board", description: "Run the board tests" } }]),
-  record(5, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_run", content: "src/board/projection.test.ts:\n✓ replays a band from the snapshot [11.20ms]\n✓ keeps the band order after a reload [3.90ms]\n✓ answers a stale revision with the current board [2.40ms]\n\n 3 pass\n 0 fail\nRan 3 tests across 1 file. [141.00ms]" }]),
-  record(6, "assistant", [{ type: "text", text: "The projection replays every band from the snapshot, and the three board tests pass." }]),
+  record(0, "assistant", [{ type: "tool_use", id: "toolu_evidence_long", name: "Read", input: { file_path: "src/board/bands.ts", offset: 1, limit: 60 } }]),
+  record(1, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_long", content: LONG_READ }]),
+  record(2, "assistant", [{ type: "tool_use", id: "toolu_evidence_read", name: "Read", input: { file_path: "src/board/projection.ts", offset: 1, limit: 12 } }]),
+  record(3, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_read", content: "1\texport { replay } from \"./replay\";" }]),
+  record(4, "assistant", [{ type: "tool_use", id: "toolu_evidence_grep", name: "Grep", input: { pattern: "applyBand", path: "src/board", output_mode: "content" } }]),
+  record(5, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_grep", content: "src/board/projection.ts:2:  return snapshot.bands.reduce(applyBand, emptyBoard());\nsrc/board/bands.ts:14:export function applyBand(board: Board, band: Band): Board {" }]),
+  record(6, "assistant", [{ type: "tool_use", id: "toolu_evidence_run", name: "Bash", input: { command: "bun test src/board", description: "Run the board tests" } }]),
+  record(7, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_run", content: "src/board/projection.test.ts:\n✓ replays a band from the snapshot [11.20ms]\n✓ keeps the band order after a reload [3.90ms]\n✓ answers a stale revision with the current board [2.40ms]\n\n 3 pass\n 0 fail\nRan 3 tests across 1 file. [141.00ms]" }]),
+  record(8, "assistant", [{ type: "text", text: "The projection replays every band from the snapshot, and the three board tests pass." }]),
 ].join("\n");
 const FEED = TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
 const tasks = TOOLCARD ? [{
