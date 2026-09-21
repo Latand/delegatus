@@ -63,12 +63,14 @@ const LINE_SUFFIX_RE = /:(\d+)(?::(\d+)|-\d+)?$/;
 /**
  * Splits `path[:line[:col]][#anchor]` into its parts. `#L12` and `#L12-L20`
  * are line anchors (the GitHub spelling), every other anchor is kept verbatim.
+ * An anchor is what follows the LAST `#`, and only when it holds no `/` or
+ * `.`: heading slugs and element ids do not, so `notes #2.md` stays a name.
  */
 export function parseFileSpelling(spelled: string): FileLinkTarget {
   let rest = spelled;
   let anchor: string | null = null;
-  const hashAt = rest.indexOf("#");
-  if (hashAt >= 0) {
+  const hashAt = rest.lastIndexOf("#");
+  if (hashAt >= 0 && !/[/.]/.test(rest.slice(hashAt + 1))) {
     anchor = rest.slice(hashAt + 1) || null;
     rest = rest.slice(0, hashAt);
   }
@@ -100,8 +102,9 @@ function resolveHash(hash: string): LinkTarget | null {
   /* The anchor can arrive encoded inside the payload (`…index.html%23x`) or
      literally after it (`…index.html#x`); decoding the whole payload turns
      both into the same `path#anchor` spelling. */
-  const target = parseFileSpelling(decode(match[2]!));
-  if (key === "f" && isTranscriptPayload(target.path)) return { kind: "viewer", hash };
+  const spelled = decode(match[2]!);
+  const target = parseFileSpelling(spelled);
+  if (key === "f" && (isTranscriptPayload(spelled.replace(/#question$/, "")) || isTranscriptPayload(target.path))) return { kind: "viewer", hash };
   return isLocalPath(target.path) ? target : null;
 }
 

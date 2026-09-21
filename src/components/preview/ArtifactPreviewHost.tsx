@@ -232,7 +232,7 @@ function PreviewSheet({
   const target = useMemo(() => previewTarget(open.path), [open.path]);
   const doc = documentKind(target.path);
   const name = meta?.name ?? artifactBasename(target.path);
-  const kind = meta?.kind ?? classifyArtifact(open.path)?.kind ?? null;
+  const kind = meta?.kind ?? classifyArtifact(target.path)?.kind ?? null;
   const state = failure ?? (meta ? "ready" : "loading");
   const reload = useCallback(
     () => onReload({ ...open, nonce: open.nonce + 1 }),

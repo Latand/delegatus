@@ -40,6 +40,9 @@ const SHAPES: [string, string, ReturnType<typeof file> | { kind: "viewer"; hash:
   ["#f= launch placeholder", "#f=spawn%3Alaunch-1", { kind: "viewer", hash: "#f=spawn%3Alaunch-1" }],
   ["plain transcript path with :line", "/p/s.jsonl:12", { kind: "viewer", hash: `#f=${enc("/p/s.jsonl")}` }],
   ["claude task output", "/tmp/claude-1000/-p/sess/tasks/abc.output", { kind: "viewer", hash: `#f=${enc("/tmp/claude-1000/-p/sess/tasks/abc.output")}` }],
+  ["#f= transcript whose name holds a #", `#f=${enc("/p/session #2.jsonl")}`, { kind: "viewer", hash: `#f=${enc("/p/session #2.jsonl")}` }],
+  ["file whose name holds a #", "/workspace/notes #2.md", file("/workspace/notes #2.md")],
+  ["file whose name holds a #, with an anchor", `#f=${enc("/workspace/notes #2.md#setup")}`, file("/workspace/notes #2.md", { anchor: "setup" })],
   ["#c= conversation", "#c=conv-1", { kind: "viewer", hash: "#c=conv-1" }],
   ["viewer url, #p= project", "http://127.0.0.1:8898/#p=repo-1", { kind: "viewer", hash: "#p=repo-1" }],
   /* Not the viewer's. */
