@@ -427,6 +427,44 @@ test("a numeric credential inside fenced, prefixed or trailing JSON output never
   expect(storedText()).not.toContain(String(NUMERIC));
 });
 
+test("attachment bytes inside fenced, prefixed, trailing, nested or escaped JSON output never reach the store", () => {
+  /* The printed-JSON forms again, now around an attachment: a string that is
+     not a document by itself is never decoded, so the key that names the bytes
+     has to be read in the text. The sentinel is a PNG signature. */
+  const BYTE_RUN = [137, 80, 78, 71, 13, 10, 26, 10];
+  const printed = JSON.stringify({ attachment: { bytes: BYTE_RUN } });
+  const toolResult = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01", content }] } });
+  const fenced = toolResult("```json\n" + printed + "\n```");
+  const prefixed = toolResult("tool output: " + printed);
+  const trailing = toolResult(printed + "\nfinished");
+  const pretty = toolResult("```\n" + JSON.stringify({ attachment: { bytes: BYTE_RUN } }, null, 2) + "\n```");
+  const nested = toolResult("result: " + JSON.stringify({ message: { content: [{ file: { data: { b64: BYTE_RUN } } }] } }));
+  /* One more level of escaping: the printed JSON is itself a string in the JSON a tool relayed. */
+  const escaped = toolResult("relay: " + JSON.stringify({ body: printed }));
+  const pythonBytes = toolResult(`{'name': 'scan.png', 'bytes': b'\\x89PNG\\r\\n'}`);
+  const blocked = [fenced, prefixed, trailing, pretty, nested, escaped, pythonBytes];
+  for (const line of blocked) expect(persistableLine(line)).toBe(false);
+
+  /* A size under `bytes` is a counter, and an absent or empty attachment carries nothing. */
+  const sizes = toolResult("```json\n" + JSON.stringify({ scanned: { bytes: 20_480 }, input_tokens: 512, total_tokens: 600 }, null, 2) + "\n```");
+  const empty = toolResult("upload: " + JSON.stringify({ attachment: { bytes: [], b64: null, image_data: "" } }) + "\ndone");
+  for (const line of [sizes, empty]) expect(persistableLine(line)).toBe(true);
+
+  const window_ = [...blocked, sizes, empty, record(9, "and then ordinary prose")];
+  write("/sessions/printed-attachment.jsonl", snapshot(window_));
+  expect(restoreTailSnapshot("/sessions/printed-attachment.jsonl", bytesOf(window_))?.win.lines).toEqual([sizes, empty, record(9, "and then ordinary prose")]);
+  const stored = storedText();
+  expect(stored).not.toContain(BYTE_RUN.join(","));
+  expect(stored).not.toContain("x89PNG");
+  /* Each wrapper alone, round-tripped: a tail ending on it keeps nothing. */
+  for (const line of blocked) {
+    resetTailStoreForTests();
+    write("/sessions/one.jsonl", snapshot([line]));
+    expect(restoreTailSnapshot("/sessions/one.jsonl", bytesOf([line]))).toBeNull();
+    expect(storedText()).not.toContain(BYTE_RUN.slice(0, 4).join(","));
+  }
+});
+
 test("a structure this cannot finish reading is refused rather than assumed safe", () => {
   /* Wider and deeper than the inspection budget: "not inspected" is not
      "safe", so the line stays out. */

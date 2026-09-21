@@ -208,10 +208,21 @@ const MAX_INSPECTED_DEPTH = 12;
  */
 const QUOTED_CREDENTIAL_VALUE_RE = /(?:(?:api.?key|authorization|bearer|secret|password|passwd|pwd|cookie)[\w.-]*|token)\\*["']\s*:\s*(?!(?:null|true|false)\b|\{\s*\}|\[\s*\])(?:\\*["'])?[^\s"'\\,}\]]/i;
 
+/**
+ * The same reading for an attachment: a QUOTED key of `ATTACHMENT_VALUE_KEY_RE`
+ * whose value is a non-empty string (a Python `b'…'` literal included), array
+ * or object — bytes written as numbers are the attachment, and the text around
+ * printed JSON keeps it from ever being decoded. A number under the key is a
+ * size and passes, as do `null`, a flag and an empty value, exactly as
+ * `safeValue` rules for a decoded document.
+ */
+const QUOTED_ATTACHMENT_VALUE_RE = /\\*["'](?:b64|b64_json|base64|base64_?data|blob|bytes|content_bytes|file_?data|image_?data|image_url|audio_?data|thumbnail)\\*["']\s*:\s*(?:b?\\*["'](?!\\*["'])|\[(?!\s*\])|\{(?!\s*\}))/i;
+
 /** Whether a piece of TEXT may be written, judged as text alone. */
 function safeText(text: string): boolean {
   if (DATA_URI_RE.test(text)) return false;
   if (QUOTED_CREDENTIAL_VALUE_RE.test(text)) return false;
+  if (QUOTED_ATTACHMENT_VALUE_RE.test(text)) return false;
   return redactTranscriptText(text) === text;
 }
 
