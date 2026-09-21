@@ -65,6 +65,7 @@ Object.assign(globalThis, {
   Event: dom.Event,
   CustomEvent: dom.CustomEvent,
   MouseEvent: dom.MouseEvent,
+  MutationObserver: dom.MutationObserver,
   File: dom.File,
   FileReader: ImmediateFileReader,
   requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
@@ -104,6 +105,8 @@ import {
 import { resetRenderedMessageRowsForTests } from "./conversation/renderedRows";
 import { resetMessageRowRecoveryForTests } from "./conversation/rowRecovery";
 import type { RuntimeReceipt } from "./runtime/runtimeModel";
+import { resetMessageProvenanceCacheForTests } from "./feed/messageProvenance";
+import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 
 const file = {
   path: PATH,
@@ -204,6 +207,7 @@ afterEach(() => {
   resetOutboxForTests();
   resetRenderedMessageRowsForTests();
   resetMessageRowRecoveryForTests();
+  resetMessageProvenanceCacheForTests();
 });
 
 const settle = async (fn: () => void) => {
@@ -674,6 +678,325 @@ test("an unrelated arrival of the same words never settles an unacknowledged row
      must never do is make one of them answer for the other. */
   expect(after.bubbles).toBe(2);
   expect(readOutbox(CARD)[0]).toMatchObject({ deliveryUncertain: true });
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+/* ── The join is in hand before the record is (#1950 round 2, second round) ──
+   An independent review held ONLY `/api/log/provenance` open and published the
+   production-shaped record: the document and the lost acknowledgement each
+   painted two bubbles, and the image-only row was pushed down by its own
+   picture. Releasing the response repaired the view — so the invariant rested
+   on a response winning a race. These cases hold the response open and
+   require the invariant anyway. */
+
+/** The provenance endpoint, held open until the test answers it. Every request
+    waits; `answer` resolves the waiting ones and every later one. */
+const holdProvenance = () => {
+  const waiting: ((response: Response) => void)[] = [];
+  let answer: { messages: Record<string, unknown>; submissions: Record<string, string> } | null = null;
+  let asked = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith("/api/log/provenance")) {
+      asked += 1;
+      if (answer) return Response.json({ ...answer, occurrences: [] });
+      return new Promise<Response>((resolve) => waiting.push(resolve));
+    }
+    if (url === "/api/tmux/targets") return Response.json({ targets: {} });
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+  return {
+    asked: () => asked,
+    answer(next: { messages?: Record<string, unknown>; submissions?: Record<string, string> }) {
+      answer = { messages: next.messages ?? {}, submissions: next.submissions ?? {} };
+      for (const resolve of waiting.splice(0)) resolve(Response.json({ ...answer, occurrences: [] }));
+    },
+  };
+};
+
+/** Every committed state of the host between two readings: how many copies
+    of the message it showed, and whether the original row was ever gone. */
+const watchMutations = (host: HTMLElement, original: () => Element | null) => {
+  const seen: { bubbles: number; attached: boolean }[] = [];
+  const observer = new MutationObserver(() => {
+    const row = original();
+    seen.push({ bubbles: host.querySelectorAll("[data-user-bubble]").length, attached: Boolean(row && host.contains(row)) });
+  });
+  observer.observe(host, { childList: true, subtree: true, attributes: true, characterData: true });
+  return { seen, stop: () => observer.disconnect() };
+};
+
+/** The feed alone. These cases pre-arrange the queue as the delivery path
+    left it; a mounted composer would start dispatching it. */
+const feedOnly = (target: FileEntry = file) => (
+  <LogFeed file={target} showSvc={false} lineFilter="" onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} />
+);
+
+/** A receipt the delivery path projects onto the row, as the production rule
+    projects it — the moment the browser learns the operation's id. */
+const projectReceipt = async (id: string, operationId: string, status: "queued" | "delivered", at: number) => {
+  const entry = readOutbox(CARD).find((candidate) => candidate.id === id)!;
+  const patch = outboxReceiptPatch(entry, status, {
+    operationId, idempotencyKey: id, conversationId: CARD, kind: "send", status,
+    at: new Date(at).toISOString(), admittedAt: new Date(at - 1_000).toISOString(), revision: status === "queued" ? 1 : 2,
+  } as RuntimeReceipt, at);
+  if (patch) await settle(() => updateOutbox(CARD, id, patch));
+};
+
+test("a document's record lands in its row while the provenance read is still open", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const provenance = holdProvenance();
+  const submittedAt = Date.now();
+  const words = "Summarise the release notes and flag anything that blocks the rollout.";
+  enqueueOutbox(CARD, { id: "key-document", text: words, images: 0, files: 1, at: submittedAt });
+  updateOutbox(CARD, "key-document", { state: "delivering" });
+  await settle(() => root.render(feedOnly()));
+  /* Admitted: the browser now holds the operation id, and so the token the
+     record will carry. The registry's answer never comes. */
+  await projectReceipt("key-document", "operation-document", "queued", submittedAt + 500);
+  await projectReceipt("key-document", "operation-document", "delivered", submittedAt + 1_000);
+  const before = reading(host);
+  expect(before.rows).toBe(1);
+  expect(before.bubbles).toBe(1);
+
+  const watch = watchMutations(host, () => before.row);
+  /* The production payload: the operator's words and the inbox path the
+     route folded in — a text the row does not share. */
+  await settle(() => {
+    lines = [codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(),
+      `${words}\n/var/tmp/llv-evidence-home/.claude/viewer-inbox/files/4d2a1f7c9b03/release-notes.pdf`,
+      deliveryDedupToken("operation-document"))];
+  });
+  await settle(() => root.render(feedOnly()));
+  watch.stop();
+
+  const after = reading(host);
+  expect(provenance.asked()).toBeGreaterThan(0);
+  expect(after.rows).toBe(1);
+  expect(after.bubbles).toBe(1);
+  expect(after.row).toBe(before.row);
+  expect(after.bubble).toBe(before.bubble);
+  expect(after.bubbleClass).toBe(before.bubbleClass);
+  expect(after.position).toBe(before.position);
+  expect(after.phase).toBe("confirmed");
+  /* The row keeps the operator's own words; the paths stay in the record. */
+  expect(after.bubble!.textContent).toContain(words);
+  expect(after.bubble!.textContent).not.toContain("release-notes.pdf");
+  /* Every committed state in between: one copy, and the original row. */
+  for (const state of watch.seen) expect(state).toEqual({ bubbles: 1, attached: true });
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("an image-only record lands in its row and keeps its place while the read is open", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  holdProvenance();
+  const submittedAt = Date.now();
+  lines = [codexAgentLine(new Date(submittedAt - 5_000).toISOString(), "The release branch is green again.")];
+  enqueueOutbox(CARD, { id: "key-image-only", text: "", images: 1, at: submittedAt });
+  updateOutbox(CARD, "key-image-only", { state: "delivering" });
+  await settle(() => root.render(feedOnly()));
+  await projectReceipt("key-image-only", "operation-image-only", "delivered", submittedAt + 1_000);
+  const before = messageRows(host);
+  expect(before).toHaveLength(1);
+  const watch = watchMutations(host, () => before[0]!.row);
+
+  /* A native Codex user item: the picture, and a text part that is only the
+     marker. No words for anything to be recognised by. */
+  await settle(() => {
+    lines = [
+      codexAgentLine(new Date(submittedAt - 5_000).toISOString(), "The release branch is green again."),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: new Date(submittedAt + 3_000).toISOString(),
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+            { type: "input_text", text: `<!-- llv:structured-user dedup=${deliveryDedupToken("operation-image-only")} -->` },
+          ],
+        },
+      }),
+    ];
+  });
+  await settle(() => root.render(feedOnly()));
+  watch.stop();
+
+  const after = messageRows(host);
+  expect(after).toHaveLength(1);
+  expect(after[0]!.row).toBe(before[0]!.row);
+  expect(after[0]!.bubble).toBe(before[0]!.bubble);
+  expect(after[0]!.bubbleClass).toBe(before[0]!.bubbleClass);
+  /* The row did not move down the conversation: the picture follows it. */
+  expect(after[0]!.position).toBe(before[0]!.position);
+  expect(after[0]!.phase).toBe("confirmed");
+  const kinds = [...host.querySelectorAll("[data-feed-kind]")].map((row) => row.getAttribute("data-feed-kind"));
+  const messageAt = after[0]!.position;
+  /* Exactly one copy of the picture, and it sits below the message. */
+  const attachments = kinds.filter((kind) => kind === "image");
+  expect(attachments).toHaveLength(1);
+  expect(kinds.indexOf("image")).toBeGreaterThan(messageAt);
+  for (const state of watch.seen) expect(state.attached).toBe(true);
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("a lost acknowledgement's record never paints a second copy while its join is being read", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const provenance = holdProvenance();
+  const submittedAt = Date.now();
+  /* Admitted, and nobody told the browser: no operation id, no receipt. */
+  enqueueOutbox(CARD, { id: "key-lost-ack-held", text: TEXT, images: 0, at: submittedAt });
+  updateOutbox(CARD, "key-lost-ack-held", {
+    state: "failed", deliveryUncertain: true, dispatchedAt: submittedAt + 10, error: "lost response",
+  });
+  await settle(() => root.render(surface()));
+  const before = reading(host);
+  expect(before.phase).toBe("pending");
+  const watch = watchMutations(host, () => before.row);
+
+  const token = deliveryDedupToken("operation-lost-ack-held");
+  await settle(() => { lines = [codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT, token)]; });
+  await settle(() => root.render(surface()));
+
+  /* The read is open. The record belongs to SOME submission and only the
+     registry can say which — so it waits, and the operator's own row is the
+     one copy of the message on screen. It is not settled by the words. */
+  const waiting = reading(host);
+  expect(waiting.rows).toBe(1);
+  expect(waiting.bubbles).toBe(1);
+  expect(waiting.row).toBe(before.row);
+  expect(waiting.phase).toBe("pending");
+  expect(waiting.progress).toBe(1);
+
+  /* The registry answers: the record is this submission's. */
+  await settle(() => provenance.answer({ submissions: { [token]: "key-lost-ack-held" } }));
+  await settle(() => root.render(surface()));
+  watch.stop();
+  const adopted = reading(host);
+  expect(adopted.rows).toBe(1);
+  expect(adopted.bubbles).toBe(1);
+  expect(adopted.row).toBe(before.row);
+  expect(adopted.bubble).toBe(before.bubble);
+  expect(adopted.position).toBe(before.position);
+  expect(adopted.phase).toBe("confirmed");
+  for (const state of watch.seen) expect(state).toEqual({ bubbles: 1, attached: true });
+  /* Still the queue's record under its original key, payload intact. */
+  expect(readOutbox(CARD).find((entry) => entry.id === "key-lost-ack-held"))
+    .toMatchObject({ text: TEXT, deliveryUncertain: true });
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("a record the registry does not name renders on its own once the read has answered", async () => {
+  /* The wait is for an answer, never for a particular one. Somebody else's
+     send of the same words is somebody else's message: once the registry has
+     answered without naming this row, it is painted, and the operator's own
+     row keeps waiting with its one control. */
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const provenance = holdProvenance();
+  const submittedAt = Date.now();
+  enqueueOutbox(CARD, { id: "key-lost-ack-other", text: TEXT, images: 0, at: submittedAt });
+  updateOutbox(CARD, "key-lost-ack-other", { state: "failed", deliveryUncertain: true, error: "lost response" });
+  await settle(() => root.render(surface()));
+  const before = reading(host);
+
+  const foreign = deliveryDedupToken("operation-somebody-else");
+  await settle(() => { lines = [codexStructuredUserLine(new Date(submittedAt + 3_000).toISOString(), TEXT, foreign)]; });
+  await settle(() => root.render(surface()));
+  expect(reading(host).bubbles).toBe(1);
+
+  await settle(() => provenance.answer({ submissions: { [foreign]: "key-of-another-browser" } }));
+  await settle(() => root.render(surface()));
+  const after = reading(host);
+  expect(after.bubbles).toBe(2);
+  expect(after.row).toBe(before.row);
+  expect(after.phase).toBe("pending");
+  expect(after.progress).toBe(1);
+  expect(readOutbox(CARD)[0]).toMatchObject({ deliveryUncertain: true });
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+/* ── A Claude record is the message, not a row beside it (round-5 P1) ─────── */
+
+const CLAUDE_PATH = "/claude-one-message-one-row.jsonl";
+const claudeFile = {
+  ...(file as unknown as Record<string, unknown>),
+  path: CLAUDE_PATH,
+  root: "claude-projects",
+  name: "claude-one-message-one-row.jsonl",
+  engine: "claude",
+  fmt: "claude",
+} as unknown as FileEntry;
+
+/** The shape a structured Claude delivery journals: an SDK-sourced user
+    record, which the parser renders as a system row until the ledger joins
+    its uuid to the delivery that wrote it. */
+const claudeSdkUserLine = (timestamp: string, uuid: string, text: string) => JSON.stringify({
+  type: "user", uuid, timestamp, promptSource: "sdk", sessionId: "claude-one-message-one-row",
+  message: { role: "user", content: text },
+});
+
+test("a delivered Claude record takes the operator's row and paints no second bubble", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const uuid = ["5b1c7a0e", "3d2f", "4c8a", "9e61", "0a4b2c6d8e1f"].join("-");
+  const selected = {
+    version: 1, state: "selected", capturedAt: new Date().toISOString(),
+    conversationId: "conversation_selected_card", label: "Release lane", project: "viewer",
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("/api/log/provenance")) {
+      return Response.json({
+        messages: { [uuid]: { origin: "operator", submissionId: "key-claude", selectedContext: selected } },
+        occurrences: [],
+        submissions: {},
+      });
+    }
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+  const submittedAt = Date.now();
+  enqueueOutbox(CARD, { id: "key-claude", text: TEXT, images: 1, at: submittedAt });
+  updateOutbox(CARD, "key-claude", { state: "delivering", operationId: "operation-claude" });
+  const feed = () => feedOnly(claudeFile);
+  await settle(() => root.render(feed()));
+  const before = reading(host);
+  expect(before.rows).toBe(1);
+  expect(before.bubbles).toBe(1);
+  const watch = watchMutations(host, () => before.row);
+
+  await settle(() => { lines = [claudeSdkUserLine(new Date(submittedAt + 3_000).toISOString(), uuid, TEXT)]; });
+  await settle(() => root.render(feed()));
+  /* And once more after everything has settled — the reviewer's second copy
+     survived settlement, so settlement is part of the claim. */
+  await settle(() => root.render(feed()));
+  watch.stop();
+
+  const after = reading(host);
+  expect(after.rows).toBe(1);
+  expect(after.bubbles).toBe(1);
+  expect(after.row).toBe(before.row);
+  expect(after.bubble).toBe(before.bubble);
+  expect(after.bubbleClass).toBe(before.bubbleClass);
+  expect(after.position).toBe(before.position);
+  expect(after.phase).toBe("confirmed");
+  /* The reference the operator attached rides the record into the row. */
+  expect(after.row!.textContent).toContain("Release lane");
+  /* No system card beside it either: the record has no row of its own. */
+  expect(host.querySelectorAll("[data-feed-kind='sysmsg']")).toHaveLength(0);
+  for (const state of watch.seen) expect(state).toEqual({ bubbles: 1, attached: true });
   await act(async () => root.unmount());
   host.remove();
 });

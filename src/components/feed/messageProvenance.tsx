@@ -381,11 +381,13 @@ export function useDeliveredMessageProvenance(
     wantedRef.current = wanted;
   }, [wanted]);
   const [data, setData] = useState<PathProvenance | null>(() => (path ? provenanceCache.get(path) ?? null : null));
-  /* Whether a read of this path's evidence is still outstanding. A record
-     whose delivery nothing here can name yet waits on THIS, and only on this:
-     the moment the chain below ends — answered, refused or given up on — the
-     waiting is over whatever the answer was. See
-     {@link ProvenanceLookup.submissionPending}. */
+  /* Whether this path's evidence has not answered yet since the window last
+     asked. A record whose delivery nothing here can name waits on THIS, and
+     only on this: the first answer — a name, no name, a refusal — ends the
+     wait whatever it said. One answer is enough because the registry writes a
+     delivery's owner row when it ADMITS the send, before any record of it can
+     exist; the retries below keep asking for the other evidence, and a record
+     is never held behind them. See {@link ProvenanceLookup.submissionPending}. */
   const [resolving, setResolving] = useState(false);
   useEffect(() => {
     if (!path) return;
@@ -403,7 +405,6 @@ export function useDeliveredMessageProvenance(
     // eslint-disable-next-line react-hooks/set-state-in-effect -- a read of this path starts here
     setResolving(true);
     const attempt = async (retry: number): Promise<void> => {
-      let again = false;
       try {
         const res = await fetch(`/api/log/provenance?path=${encodeURIComponent(path)}`);
         if (!res.ok) return;
@@ -421,16 +422,12 @@ export function useDeliveredMessageProvenance(
         if (!alive) return;
         setData(merged);
         if (retry < retryDelaysMs.length && unresolvedDrivers(wanted, merged, true, Date.now())) {
-          again = true;
           timer = setTimeout(() => void attempt(retry + 1), retryDelaysMs[retry]);
         }
       } catch {
         /* quiet: absence renders as today's row */
       } finally {
-        /* The chain is what "still reading" means, not one request in it. A
-           row waits while the schedule is still going to ask again, and stops
-           waiting the moment nothing further will. */
-        if (alive && !again) setResolving(false);
+        if (alive && retry === 0) setResolving(false);
       }
     };
     void attempt(0);
