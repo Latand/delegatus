@@ -1425,13 +1425,13 @@ describe("send latency slice 3: one message, one row", () => {
     const watches: Record<string, unknown> = {};
     try {
       browser = await chromium.launch(LAUNCH);
-      for (const viewport of VIEWPORTS) {
+      for (const viewport of VIEWPORTS) for (const lang of LANGS) {
         const { context, page, pageErrors } = await openFixture(
           browser,
-          `${served.base}?case=lifecycle&lang=en`,
+          `${served.base}?case=lifecycle&lang=${lang}`,
           { width: viewport.width, height: viewport.height },
           "dark",
-          "en",
+          lang,
           "no-preference",
           viewport.touch,
         );
@@ -1456,14 +1456,14 @@ describe("send latency slice 3: one message, one row", () => {
               }
               const reading = await page.evaluate(READ_ROWS, step.state) as Round3Reading;
               expect(pageErrors).toEqual([]);
-              const key = `${scenario.id}-${step.state}-${viewport.name}`;
+              const key = `${scenario.id}-${step.state}-${lang}-${viewport.name}`;
               readings[key] = reading;
-              const frame = `round-3-${scenario.id}-${step.state}-${viewport.name}.png`;
+              const frame = `round-3-${scenario.id}-${step.state}-${lang}-${viewport.name}.png`;
               await page.screenshot({ path: path.join(OUT, frame), fullPage: true });
               fs.copyFileSync(path.join(OUT, frame), path.join(LOOK, frame));
               if (step.state === "before") await page.evaluate(MARK_ROWS);
             }
-            watches[`${scenario.id}-${viewport.name}`] = await page.evaluate(ROUND3_WATCHED);
+            watches[`${scenario.id}-${lang}-${viewport.name}`] = await page.evaluate(ROUND3_WATCHED);
           }
         } finally {
           await context.close();
@@ -1475,10 +1475,10 @@ describe("send latency slice 3: one message, one row", () => {
     }
     fs.writeFileSync(path.join(EVIDENCE, "round-3.json"), `${JSON.stringify({ readings, watches }, null, 2)}\n`);
 
-    for (const viewport of VIEWPORTS) {
-      const at = (scenario: string, state: string) => readings[`${scenario}-${state}-${viewport.name}`]!;
+    for (const viewport of VIEWPORTS) for (const lang of LANGS) {
+      const suffix = `${lang}-${viewport.name}`;
+      const at = (scenario: string, state: string) => readings[`${scenario}-${state}-${suffix}`]!;
       const row = (reading: Round3Reading, id: string) => reading.rows.find((candidate) => candidate.id === id);
-      const suffix = viewport.name;
 
       /* Two admitted equal-text sends, the second's record first. */
       const before = at("twin-reversed", "before");
@@ -1518,5 +1518,5 @@ describe("send latency slice 3: one message, one row", () => {
       expect({ suffix, bubbles: own.bubbles }).toEqual({ suffix, bubbles: 2 });
       expect({ suffix, watch: watches[`foreign-equal-text-${suffix}`] }).toMatchObject({ suffix, watch: { detached: [] } });
     }
-  }, 600_000);
+  }, 1_200_000);
 });
