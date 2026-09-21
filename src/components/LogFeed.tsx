@@ -55,7 +55,7 @@ import { BoundedLru } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
 import { createSpeakableAnswerResolver } from "./feed/speakableAnswer";
 import { isSubagent } from "./projectModel";
-import { restingDelta, topEdgeCut } from "./feedTopEdge";
+import { restingDelta, tailPlan } from "./feedTopEdge";
 import { TaskHeader } from "./TaskHeader";
 import { TurnStatusBar } from "./TurnStatusBar";
 import { logFeedDependencies } from "./logFeedDependencies";
@@ -434,13 +434,15 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
   };
 
-  /* #1978: on the phone the feed never rests with a line sliced by its top
-     edge (the pane's task strip sits right on it). Following the tail, the
-     bottom is pinned, so the only lever is the space under the last row: the
-     spacer grows by the part of the cut line still showing, the tail scrolls
-     that far further, and the cut line leaves whole. Measured from a zero
-     spacer each time, so the height depends on the content alone. The spacer
-     sits outside `content`, whose resize observer would otherwise re-glue. */
+  /* #1978: on the phone the feed never rests with its first visible row
+     sliced by the top edge (the pane's task strip sits right on it).
+     Following the tail, the bottom is pinned, so there are two levers: step
+     back into the blank space under the last row, which reveals the cut row
+     whole and keeps the tail inside the follow band, or grow a spacer under
+     the last row by the part of the cut row still showing, so it leaves
+     whole. Measured from a zero spacer each time, so the result depends on
+     the content alone. The spacer sits outside `content`, whose resize
+     observer would otherwise re-glue. */
   const tailSpacer = useRef<HTMLDivElement | null>(null);
   const restTimer = useRef<number | null>(null);
   const alignFollowedTop = (el: HTMLElement) => {
@@ -450,9 +452,16 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     spacer.style.height = "0px";
     if (hadSpacer) el.scrollTop = el.scrollHeight;
     if (!onPhoneLayout()) return;
-    const cut = topEdgeCut(el);
-    if (!cut) return;
-    spacer.style.height = `${Math.ceil(cut.shown)}px`;
+    const last = content.current?.lastElementChild;
+    const viewportBottom = el.getBoundingClientRect().top + el.clientTop + el.clientHeight;
+    const slack = last ? Math.max(0, viewportBottom - last.getBoundingClientRect().bottom) : 0;
+    const plan = tailPlan(el, slack);
+    if (!plan) return;
+    if ("back" in plan) {
+      el.scrollTop -= plan.back;
+      return;
+    }
+    spacer.style.height = `${plan.spacer}px`;
     el.scrollTop = el.scrollHeight;
   };
   /* Released from the tail, a feed that came to rest mid-line moves by the
@@ -466,7 +475,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       const el = scroller.current;
       if (!el || magnetRef.current || feedTouchRef.current) return;
       const delta = restingDelta(el);
-      if (Math.abs(delta) < 0.5) return;
+      if (!delta) return;
       markProgrammaticScroll();
       const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
       el.scrollBy({ top: delta, behavior: reduce ? "auto" : "smooth" });
@@ -742,7 +751,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     if (!el || !inner) return;
     const observer = new ResizeObserver(() => {
       if (magnetRef.current) glue();
-      else restorePendingPosition();
+      else {
+        restorePendingPosition();
+        /* Rows that grew or shrank above a released feed move it without a
+           scroll event; it settles on a row edge again (#1978). */
+        scheduleRestAlign();
+      }
     });
     observer.observe(inner);
     observer.observe(el);

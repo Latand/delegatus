@@ -1253,11 +1253,14 @@ browserTest("#1865: the phone names a stage and its attempt in the queue row and
  * overlaps in this repository:
  *
  *   - the command's and the output's copy controls neither touch nor overlap,
- *     and no glyph of the card sits under either; the desktop keeps its small
+ *     no glyph of the card sits under either, and no call's copy control
+ *     hangs past its call into the next one; the desktop keeps its small
  *     22 px controls;
- *   - with the task strip right above the feed, no glyph line and no control
- *     straddles the feed's top edge: following the tail, after the card opens, and at rest
- *     after a drag released it from the tail.
+ *   - with the task strip right above the feed, the first visible feed row
+ *     starts at or below the strip's bottom edge, and no glyph line and no
+ *     control straddles the feed's top edge: following the tail, after the card opens, and at rest
+ *     after a drag released it from the tail, and once the conversation is
+ *     closed to the board and opened again.
  *
  * Readings go to `evidence/issue-1978/phone.json`; frames to `.artifacts/issue-1978/`.
  */
@@ -1273,6 +1276,10 @@ interface InkReading {
   stripBottom: number | null;
   feedTop: number;
   cutLines: Array<{ text: string; top: number; bottom: number }>;
+  firstRow: { key: string; top: number; bottom: number } | null;
+  slivers: Array<{ key: string; top: number; bottom: number }>;
+  overhangs: Array<{ label: string; by: number }>;
+  tail: { spacer: number | null; fromBottom: number };
 }
 
 /* Runs in the page. The ink walk is the test's own: every text node under the
@@ -1344,8 +1351,48 @@ const readInk = (page: Page) => page.evaluate((): InkReading => {
       ...[...feed.querySelectorAll("button")].map((control) => ({ text: `<${control.tagName.toLowerCase()} ${control.getAttribute("aria-label") ?? ""}>`, full: box(control) })),
     ].filter((line) => line.full.t < edge - 0.5 && line.full.b > edge + 0.5 && line.full.r > feedBox.l && line.full.l < feedBox.r)
       .map((line) => ({ text: line.text, top: line.full.t, bottom: line.full.b })),
+    tail: (() => {
+      const spacer = feed.querySelector<HTMLElement>("[data-feed-tail-spacer]");
+      return { spacer: spacer?.getBoundingClientRect().height ?? null, fromBottom: feed.scrollHeight - feed.clientHeight - feed.scrollTop };
+    })(),
+    /* Every copy control of a run's calls stays inside its own call: one that
+       hangs past the call's box lands on the next call's header. */
+    overhangs: [...feed.querySelectorAll<HTMLElement>("li button[aria-label^='Copy']")]
+      .map((control) => ({ label: control.getAttribute("aria-label") ?? "", by: box(control).b - box(control.closest("li")!).b }))
+      .filter((control) => control.by > 0.5),
+    /* A row of any size left showing only its frame (a card's bottom border
+       and padding) under the edge reads as a cut row too. */
+    slivers: [...feed.querySelectorAll<HTMLElement>("[data-feed-key], li, [data-tool-row]")]
+      .filter((row) => box(row).t < edge && box(row).b > edge + 1 && box(row).b - edge <= 16)
+      .map((row) => ({ key: row.dataset.feedKey ?? row.tagName.toLowerCase(), top: box(row).t, bottom: box(row).b })),
+    firstRow: (() => {
+      /* A row is a feed row or a row inside one (a run's numbered call, a
+         bullet, a tool line), outer before inner; the first visible one that
+         fits in three quarters of the feed is the one that must start whole.
+         Scroll offsets are whole CSS pixels and rows lay out on half ones, so
+         a predecessor can show a sliver of up to one pixel under the edge;
+         visible means showing more than that. */
+      const fit = feed.clientHeight * 0.75;
+      const row = [...feed.querySelectorAll<HTMLElement>("[data-feed-key], li, [data-tool-row]")]
+        .find((candidate) => box(candidate).b > edge + 1 && box(candidate).b - box(candidate).t <= fit);
+      return row ? { key: row.dataset.feedKey ?? `${row.tagName.toLowerCase()}: ${(row.textContent ?? "").slice(0, 40)}`, top: box(row).t, bottom: box(row).b } : null;
+    })(),
   };
 });
+
+/* The feed at rest: its scroll position unchanged across 400 ms, so momentum
+   and any settling move have run out before anything is read. */
+async function feedAtRest(page: Page): Promise<void> {
+  let last = Number.NaN;
+  let still = 0;
+  for (let i = 0; i < 60 && still < 4; i += 1) {
+    await pause(page, 100);
+    const top = await page.evaluate(() => document.querySelector("[data-log-feed-scroller]")?.scrollTop ?? 0);
+    still = top === last ? still + 1 : 0;
+    last = top;
+  }
+  if (still < 4) throw new Error("the feed never came to rest");
+}
 
 browserTest("#1978: a command card's copy controls stay apart and off the text, and the task strip never cuts a line", async () => {
   fs.mkdirSync(EDGE_OUT, { recursive: true });
@@ -1373,22 +1420,24 @@ browserTest("#1978: a command card's copy controls stay apart and off the text, 
         const cdp = await context.newCDPSession(page);
         await page.goto(`${fixtureBase}/?toolcard=1#f=${encodeURIComponent(RUNNING_PATH)}`);
         await page.waitForSelector("[data-log-feed-scroller]", { timeout: 20_000 });
-        await page.getByText("bun test src/board", { exact: false }).first().waitFor({ timeout: 20_000 });
+        await page.getByText("The projection replays every band", { exact: false }).first().waitFor({ timeout: 20_000 });
         await pause(page, 900);
         const readings: Record<string, InkReading> = {};
+        await feedAtRest(page);
         readings.following = await readInk(page);
 
-        /* Open the card from its line, as the operator does. */
-        const line = page.locator("summary", { hasText: "bun test src/board" }).first();
+        /* Open the run from its line, as the operator does: the phone folds
+           it to one line, the desktop shows it as a group. */
         if (phone) {
-          const r = await line.boundingBox();
-          if (!r) throw new Error("the shell call's line is not on screen");
+          const r = await page.locator("[data-mobile-run-fold]").last().boundingBox();
+          if (!r) throw new Error("the run's line is not on screen");
           await touch(cdp, [[r.x + r.width / 2, r.y + r.height / 2]]);
         } else if (!(await page.locator('[aria-label="Copy command"]').count())) {
-          await line.click();
+          await page.locator("[data-log-feed-scroller] summary").last().click();
         }
         await page.waitForSelector('[aria-label="Copy command"]', { timeout: 5_000 });
         await pause(page, 900);
+        await feedAtRest(page);
         readings.opened = await readInk(page);
         await page.screenshot({ path: path.join(EDGE_OUT, `${key}-opened.png`) });
 
@@ -1401,9 +1450,21 @@ browserTest("#1978: a command card's copy controls stay apart and off the text, 
             const y = feed!.y + feed!.height / 2;
             await touch(cdp, along([x, y - distance / 2], [x, y + distance / 2]), 24);
             await pause(page, 1_200);
+            await feedAtRest(page);
             readings[`rest-${distance}`] = await readInk(page);
           }
           await page.screenshot({ path: path.join(EDGE_OUT, `${key}-rest.png`) });
+          /* Close to the board and come back to the conversation through
+             history: the feed comes back where it was left and still rests
+             on a row. */
+          await page.evaluate(() => { location.hash = "#p=atlas"; });
+          await pause(page, 900);
+          await page.goBack();
+          await page.getByText("The projection replays every band", { exact: false }).first().waitFor({ timeout: 10_000 });
+          await pause(page, 1_200);
+          await feedAtRest(page);
+          readings.reopened = await readInk(page);
+          await page.screenshot({ path: path.join(EDGE_OUT, `${key}-reopened.png`) });
         }
 
         results.push({ key, viewport, scheme, readings, pageErrors });
@@ -1412,6 +1473,9 @@ browserTest("#1978: a command card's copy controls stay apart and off the text, 
         if (opened.controlsOverlap > 0) fail(`the copy controls overlap by ${opened.controlsOverlap} px²`);
         if (opened.controlsGap !== null && opened.controlsGap <= 0) fail(`the copy controls touch: the output's starts ${opened.controlsGap} px below the command's`);
         if (opened.inkUnderControls.length) fail(`text under a copy control: ${JSON.stringify(opened.inkUnderControls)}`);
+        /* Phone only: the desktop's 22 px control overhangs a one-line output
+           by ~2.6 px today, and the desktop keeps its present look. */
+        if (phone && opened.overhangs.length) fail(`copy controls hang past their call: ${JSON.stringify(opened.overhangs)}`);
         const size = phone ? 44 : 22;
         for (const control of [opened.command, opened.output]) {
           if (control && (Math.abs(control.width - size) > 0.5 || Math.abs(control.height - size) > 0.5)) fail(`a copy control is ${control.width}x${control.height}, expected ${size}`);
@@ -1421,6 +1485,9 @@ browserTest("#1978: a command card's copy controls stay apart and off the text, 
             if (reading.stripBottom === null) fail(`${moment}: no task strip above the feed`);
             else if (reading.feedTop < reading.stripBottom - 0.5) fail(`${moment}: the feed starts above the strip's bottom edge`);
             if (reading.cutLines.length) fail(`${moment}: lines cut by the feed's top edge: ${JSON.stringify(reading.cutLines)}`);
+            if (reading.slivers.length) fail(`${moment}: rows showing only a sliver under the edge: ${JSON.stringify(reading.slivers)}`);
+            if (!reading.firstRow) fail(`${moment}: no feed row on screen`);
+            else if (reading.stripBottom !== null && reading.firstRow.top < reading.stripBottom) fail(`${moment}: the first visible row starts at ${reading.firstRow.top}, above the strip's bottom ${reading.stripBottom}: ${JSON.stringify(reading.firstRow)}`);
           }
         }
         if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);

@@ -140,6 +140,15 @@ function CommandBlock({ command }: { command: string }) {
   );
 }
 
+/* The same rule for an output's copy control (#1978): pinned 6px down, or 20px
+   under a stdout/stderr heading, a 44px coarse-pointer control overhung a
+   one-line output by 14px, past its call's box and into the next call's
+   header. The frame holds it; an empty output renders nothing and gets none. */
+function OutputFrame({ output, heading, children }: { output: string; heading?: string; children: ReactNode }) {
+  if (!output.trim()) return null;
+  return <div className={heading ? "[@media(pointer:coarse)]:min-h-[64px]" : "[@media(pointer:coarse)]:min-h-[50px]"}>{children}</div>;
+}
+
 /* The expanded readable body of a tool call (issue #475): chips, the auditable
    command header, structured diff/orchestration, and separate stdout/stderr
    disclosures. Mounted lazily by {@link ToolLine} on first expand, so a long
@@ -168,23 +177,27 @@ export function ToolBody({ event }: { event: ToolEvent }) {
             heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}
           />
         ) : (
-          <OutputPreview
-            output={event.outputPreview}
-            truncated={event.outputTruncated}
-            lang={event.lang}
-            heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}
-          />
+          <OutputFrame output={event.outputPreview} heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}>
+            <OutputPreview
+              output={event.outputPreview}
+              truncated={event.outputTruncated}
+              lang={event.lang}
+              heading={event.stderr !== undefined ? tr("tools.stdout") : undefined}
+            />
+          </OutputFrame>
         )
       ) : null}
       {event.stderr !== undefined ? (
-        <OutputPreview
-          output={event.stderr}
-          truncated={Boolean(event.stderrTruncated)}
-          heading={tr("tools.stderr")}
-          tone="err"
-          copyLabel={tr("tools.copyStderr")}
-          showAllLabel={tr("tools.showStderr")}
-        />
+        <OutputFrame output={event.stderr} heading={tr("tools.stderr")}>
+          <OutputPreview
+            output={event.stderr}
+            truncated={Boolean(event.stderrTruncated)}
+            heading={tr("tools.stderr")}
+            tone="err"
+            copyLabel={tr("tools.copyStderr")}
+            showAllLabel={tr("tools.showStderr")}
+          />
+        </OutputFrame>
       ) : null}
     </div>
   );
@@ -216,7 +229,11 @@ function ToolOutputBlocks({
           return <ImageCard key={index} media={block.media} data={block.data} w={block.w} h={block.h} bytes={block.bytes} initialView="chip" inset />;
         }
         const text = block.type === "text" ? block.text : `[${tr("render.imageOutput")}]`;
-        const node = <OutputPreview key={index} output={text} truncated={truncated && index === lastText} lang={lang} heading={firstText ? heading : undefined} />;
+        const node = (
+          <OutputFrame key={index} output={text} heading={firstText ? heading : undefined}>
+            <OutputPreview output={text} truncated={truncated && index === lastText} lang={lang} heading={firstText ? heading : undefined} />
+          </OutputFrame>
+        );
         firstText = false;
         return node;
       })}

@@ -127,7 +127,13 @@ export const SHOTS: ReadmeShot[] = [
     target: { kind: "conversation", key: "refunds-builder" },
     viewport: PHONE,
     requiredText: ["Idempotency-Key", "4 pass"],
-    prepare: (page) => clickText(page, "wrote 1 file"),
+    prepare: async (page) => {
+      await clickText(page, "wrote 1 file");
+      await page.waitForTimeout(800);
+      /* The shot is the test run: scroll its call to the top of the feed, as
+         a reader would; the phone then rests the call on the feed's edge. */
+      await page.getByText("bun test src/refunds", { exact: false }).first().evaluate((element) => element.closest("li")?.scrollIntoView({ block: "start" }));
+    },
     description: "The same conversation on a 390 px phone screen, its test run expanded.",
   },
 ];

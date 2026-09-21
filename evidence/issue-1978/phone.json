@@ -16,18 +16,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": []
+          "cutLines": [],
+          "tail": {
+            "spacer": 41,
+            "fromBottom": 0
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:19:0",
+            "top": 110.5,
+            "bottom": 198
+          }
         },
         "opened": {
           "command": {
-            "x": 317,
-            "y": 350.5,
+            "x": 308,
+            "y": 174.5,
             "width": 44,
             "height": 44
           },
           "output": {
-            "x": 317,
-            "y": 406.5,
+            "x": 308,
+            "y": 230.5,
             "width": 44,
             "height": 44
           },
@@ -36,18 +47,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": []
+          "cutLines": [],
+          "tail": {
+            "spacer": 167,
+            "fromBottom": 0
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 3.bun test src/board30sexit 015:07:39–15",
+            "top": 114,
+            "bottom": 430.5
+          }
         },
         "rest-137": {
           "command": {
-            "x": 317,
-            "y": 499.5,
+            "x": 308,
+            "y": 371.5,
             "width": 44,
             "height": 44
           },
           "output": {
-            "x": 317,
-            "y": 555.5,
+            "x": 308,
+            "y": 427.5,
             "width": 44,
             "height": 44
           },
@@ -56,18 +78,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": []
+          "cutLines": [],
+          "tail": {
+            "spacer": 167,
+            "fromBottom": 197
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.\"applyBand\" · src/board30sapplyBandsrc",
+            "top": 110,
+            "bottom": 307
+          }
         },
         "rest-211": {
           "command": {
-            "x": 317,
-            "y": 704.5,
+            "x": 308,
+            "y": 565.5,
             "width": 44,
             "height": 44
           },
           "output": {
-            "x": 317,
-            "y": 760.5,
+            "x": 308,
+            "y": 621.5,
             "width": 44,
             "height": 44
           },
@@ -76,18 +109,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": []
+          "cutLines": [],
+          "tail": {
+            "spacer": 167,
+            "fromBottom": 391
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "button: read 1 file · 1 search · ran 1 command15",
+            "top": 110,
+            "bottom": 154
+          }
         },
         "rest-173": {
           "command": {
-            "x": 317,
-            "y": 889.5,
+            "x": 308,
+            "y": 729.5,
             "width": 44,
             "height": 44
           },
           "output": {
-            "x": 317,
-            "y": 945.5,
+            "x": 308,
+            "y": 785.5,
             "width": 44,
             "height": 44
           },
@@ -96,7 +140,39 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": []
+          "cutLines": [],
+          "tail": {
+            "spacer": 167,
+            "fromBottom": 555
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:22:0",
+            "top": 110.5,
+            "bottom": 186.5
+          }
+        },
+        "reopened": {
+          "command": null,
+          "output": null,
+          "controlsOverlap": 0,
+          "controlsGap": null,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 35
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:18:0",
+            "top": 110.5,
+            "bottom": 186.5
+          }
         }
       },
       "pageErrors": []
@@ -117,18 +193,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": []
+          "cutLines": [],
+          "tail": {
+            "spacer": 41,
+            "fromBottom": 0
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:19:0",
+            "top": 110.5,
+            "bottom": 198
+          }
         },
         "opened": {
           "command": {
-            "x": 317,
-            "y": 350.5,
+            "x": 308,
+            "y": 174.5,
             "width": 44,
             "height": 44
           },
           "output": {
-            "x": 317,
-            "y": 406.5,
+            "x": 308,
+            "y": 230.5,
             "width": 44,
             "height": 44
           },
@@ -137,18 +224,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": []
+          "cutLines": [],
+          "tail": {
+            "spacer": 167,
+            "fromBottom": 0
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 3.bun test src/board30sexit 015:07:52–15",
+            "top": 114,
+            "bottom": 430.5
+          }
         },
         "rest-137": {
           "command": {
-            "x": 317,
-            "y": 499.5,
+            "x": 308,
+            "y": 371.5,
             "width": 44,
             "height": 44
           },
           "output": {
-            "x": 317,
-            "y": 555.5,
+            "x": 308,
+            "y": 427.5,
             "width": 44,
             "height": 44
           },
@@ -157,18 +255,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": []
+          "cutLines": [],
+          "tail": {
+            "spacer": 167,
+            "fromBottom": 197
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.\"applyBand\" · src/board30sapplyBandsrc",
+            "top": 110,
+            "bottom": 307
+          }
         },
         "rest-211": {
           "command": {
-            "x": 317,
-            "y": 704.5,
+            "x": 308,
+            "y": 565.5,
             "width": 44,
             "height": 44
           },
           "output": {
-            "x": 317,
-            "y": 760.5,
+            "x": 308,
+            "y": 621.5,
             "width": 44,
             "height": 44
           },
@@ -177,18 +286,29 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": []
+          "cutLines": [],
+          "tail": {
+            "spacer": 167,
+            "fromBottom": 391
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "button: read 1 file · 1 search · ran 1 command15",
+            "top": 110,
+            "bottom": 154
+          }
         },
         "rest-173": {
           "command": {
-            "x": 317,
-            "y": 889.5,
+            "x": 308,
+            "y": 729.5,
             "width": 44,
             "height": 44
           },
           "output": {
-            "x": 317,
-            "y": 945.5,
+            "x": 308,
+            "y": 785.5,
             "width": 44,
             "height": 44
           },
@@ -197,7 +317,39 @@
           "inkUnderControls": [],
           "stripBottom": 110,
           "feedTop": 110,
-          "cutLines": []
+          "cutLines": [],
+          "tail": {
+            "spacer": 167,
+            "fromBottom": 555
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:22:0",
+            "top": 110.5,
+            "bottom": 186.5
+          }
+        },
+        "reopened": {
+          "command": null,
+          "output": null,
+          "controlsOverlap": 0,
+          "controlsGap": null,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 35
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:18:0",
+            "top": 110.5,
+            "bottom": 186.5
+          }
         }
       },
       "pageErrors": []
@@ -229,18 +381,29 @@
               "top": 624.09375,
               "bottom": 641.09375
             }
-          ]
+          ],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 0
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:21:0",
+            "top": 586.09375,
+            "bottom": 673.78125
+          }
         },
         "opened": {
           "command": {
             "x": 931,
-            "y": 620.640625,
+            "y": 620.296875,
             "width": 22,
             "height": 22
           },
           "output": {
             "x": 931,
-            "y": 648.03125,
+            "y": 647.6875,
             "width": 22,
             "height": 22
           },
@@ -252,20 +415,36 @@
           "cutLines": [
             {
               "text": "$",
-              "top": 616.640625,
-              "bottom": 633.640625
+              "top": 616.296875,
+              "bottom": 633.296875
             },
             {
               "text": "bun test src/board",
-              "top": 616.640625,
-              "bottom": 633.640625
+              "top": 616.296875,
+              "bottom": 633.296875
             },
             {
               "text": "<button Copy command>",
-              "top": 620.640625,
-              "bottom": 642.640625
+              "top": 620.296875,
+              "bottom": 642.296875
             }
-          ]
+          ],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 0
+          },
+          "overhangs": [
+            {
+              "label": "Copy output",
+              "by": 2.609375
+            }
+          ],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:30:0",
+            "top": 844.984375,
+            "bottom": 932.671875
+          }
         }
       },
       "pageErrors": []
