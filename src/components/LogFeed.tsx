@@ -8,6 +8,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { useToolActivityCues } from "@/hooks/useToolActivityCues";
 import { accountIdFromPath } from "@/lib/accounts/badge";
+import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { conversationIdentity, isLaunchPlaceholder } from "@/lib/accounts/identity";
 import { activeCardMigration, cardMigrationState, migrationHoldsDelivery, migrationTargetName } from "@/lib/accounts/migration";
 import { getLocale, translate, useLocale } from "@/lib/i18n";
@@ -54,6 +55,7 @@ import { BoundedLru } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
 import { createSpeakableAnswerResolver } from "./feed/speakableAnswer";
 import { isSubagent } from "./projectModel";
+import { restingDelta, topEdgeCut } from "./feedTopEdge";
 import { TaskHeader } from "./TaskHeader";
 import { TurnStatusBar } from "./TurnStatusBar";
 import { logFeedDependencies } from "./logFeedDependencies";
@@ -109,6 +111,16 @@ const EMPTY_FEED: FeedSnapshot = { items: [], hiddenServiceCount: 0 };
     is treated as layout settling (content-visibility estimates, pane resizes)
     and glued again. Input-tagged releases bypass this window. */
 const GLUE_SETTLE_MS = 300;
+
+/* Read at call time: the glue runs from effects bound once at mount, and a
+   render-scope `useIsMobile()` value would be the one from that first render. */
+function onPhoneLayout(): boolean {
+  return typeof window !== "undefined" && window.matchMedia?.(MOBILE_LAYOUT_QUERY).matches === true;
+}
+
+/** Quiet time after the last scroll event before a released phone feed moves
+    to the nearest line boundary (#1978): momentum has ended by then. */
+const REST_ALIGN_MS = 160;
 
 type ScrollCause =
   | { kind: "programmatic" }
@@ -422,6 +434,48 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
   };
 
+  /* #1978: on the phone the feed never rests with a line sliced by its top
+     edge (the pane's task strip sits right on it). Following the tail, the
+     bottom is pinned, so the only lever is the space under the last row: the
+     spacer grows by the part of the cut line still showing, the tail scrolls
+     that far further, and the cut line leaves whole. Measured from a zero
+     spacer each time, so the height depends on the content alone. The spacer
+     sits outside `content`, whose resize observer would otherwise re-glue. */
+  const tailSpacer = useRef<HTMLDivElement | null>(null);
+  const restTimer = useRef<number | null>(null);
+  const alignFollowedTop = (el: HTMLElement) => {
+    const spacer = tailSpacer.current;
+    if (!spacer) return;
+    const hadSpacer = spacer.style.height !== "" && spacer.style.height !== "0px";
+    spacer.style.height = "0px";
+    if (hadSpacer) el.scrollTop = el.scrollHeight;
+    if (!onPhoneLayout()) return;
+    const cut = topEdgeCut(el);
+    if (!cut) return;
+    spacer.style.height = `${Math.ceil(cut.shown)}px`;
+    el.scrollTop = el.scrollHeight;
+  };
+  /* Released from the tail, a feed that came to rest mid-line moves by the
+     shorter way to a line boundary, once the finger is off the glass and the
+     momentum has run out. */
+  const scheduleRestAlign = () => {
+    if (!onPhoneLayout()) return;
+    if (restTimer.current !== null) window.clearTimeout(restTimer.current);
+    restTimer.current = window.setTimeout(() => {
+      restTimer.current = null;
+      const el = scroller.current;
+      if (!el || magnetRef.current || feedTouchRef.current) return;
+      const delta = restingDelta(el);
+      if (Math.abs(delta) < 0.5) return;
+      markProgrammaticScroll();
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      el.scrollBy({ top: delta, behavior: reduce ? "auto" : "smooth" });
+    }, REST_ALIGN_MS);
+  };
+  useEffect(() => () => {
+    if (restTimer.current !== null) window.clearTimeout(restTimer.current);
+  }, []);
+
   const markProgrammaticScroll = () => {
     if (scrollCauseRef.current?.kind !== "user") {
       scrollCauseRef.current = { kind: "programmatic" };
@@ -437,6 +491,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     if (!el || !magnetRef.current) return;
     markProgrammaticScroll();
     el.scrollTop = el.scrollHeight;
+    alignFollowedTop(el);
     const pendingUser = scrollCauseRef.current;
     if (pendingUser?.kind === "user") pendingUser.fromBottom = distanceFromBottom(el);
   };
@@ -1330,7 +1385,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           feedTouchRef.current = { x: touch.clientX, y: touch.clientY };
           if (Math.abs(deltaY) > Math.abs(deltaX)) markUserScroll(deltaY);
         }}
-        onTouchEndCapture={() => { feedTouchRef.current = null; }}
+        onTouchEndCapture={() => {
+          feedTouchRef.current = null;
+          scheduleRestAlign();
+        }}
         onTouchCancelCapture={() => { feedTouchRef.current = null; }}
         onKeyDownCapture={(event) => {
           if (["ArrowUp", "Home", "PageUp"].includes(event.key)) markUserScroll(-1);
@@ -1377,6 +1435,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
             });
           }
           if (el.scrollTop < 120 && canRevealOlder && !tail.loadingOlder && !tail.loading) revealOlder();
+          if (!magnetRef.current) scheduleRestAlign();
         }}
       >
       <PrependViewport scroller={scroller} identity={`${memoryKey}\0${tailPath}`}
@@ -1546,6 +1605,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         )}
         </div>
       </PrependViewport>
+      <div ref={tailSpacer} aria-hidden data-feed-tail-spacer className="h-0" />
       </div>
     </div>
     {/* Bottom working-status slot: live elapsed from the transcript receipt.

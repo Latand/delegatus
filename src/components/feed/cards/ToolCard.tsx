@@ -117,10 +117,16 @@ function ToolMeta({ event }: { event: ToolEvent }) {
 /* The full redacted command, the hero of the block: bare monospace on the
    shared sunken well (no nested card/border — those only stacked chrome the
    user did not open), wrapped instead of scrolled so a long line stays fully
-   visible and never forces document-level horizontal overflow on 390px. */
+   visible and never forces document-level horizontal overflow on 390px.
+
+   The block is at least as tall as its copy control (#1978). A one-line
+   command is ~20px, and on a coarse pointer the control is 44px pinned 6px
+   down, so it hung 30px into the output below — over the output's own copy
+   control, pinned 6px into that block. 50px is the inset plus the coarse
+   size; the fine pointer's 22px control already fits beside one line. */
 function CommandBlock({ command }: { command: string }) {
   return (
-    <div className="group/cmd relative">
+    <div className="group/cmd relative [@media(pointer:coarse)]:min-h-[50px]">
       <pre className={`max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] py-0.5 font-mono text-ui text-primary ${ACTION_GUTTER}`}>
         <span className="select-none text-muted">$ </span>
         {command}

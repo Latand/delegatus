@@ -196,7 +196,7 @@ let activeAccount = ACCOUNT;
 /* A transcript with something in it, so the feed behind the sheet is a real
    scrolled feed — its rows, and its own down button, are what floated over the
    sheet in the operator's screenshot. All invented. */
-const FEED = `${Array.from({ length: 24 }, (_, i) => (i % 2 === 0
+const BANDS = `${Array.from({ length: 24 }, (_, i) => (i % 2 === 0
   ? JSON.stringify({
     type: "user", uuid: `evidence-u-${i}`, timestamp: iso(2_400 - i * 60), sessionId: "conversation_running",
     message: { role: "user", content: `Replay band ${i + 1} and say what moved.` },
@@ -209,6 +209,28 @@ const FEED = `${Array.from({ length: 24 }, (_, i) => (i % 2 === 0
     },
   }))).join("\n")}\n`;
 
+/* #1978, only when the page asks for it (`?toolcard=1`): the bands end on a
+   shell call whose one-line command and multi-line output each carry a copy
+   control, then the answer, and a board task is assigned to the conversation,
+   so its pane shows the task strip right above the feed's top edge. */
+const TOOLCARD = new URLSearchParams(location.search).has("toolcard");
+const record = (i: number, role: "user" | "assistant", content: unknown) => JSON.stringify({
+  type: role, uuid: `evidence-tool-${i}`, timestamp: iso(900 - i * 30), sessionId: "conversation_running",
+  message: role === "assistant" ? { role, model: "claude-fable-5-1", content } : { role, content },
+});
+const TOOL_RUN = [
+  record(0, "assistant", [{ type: "tool_use", id: "toolu_evidence_run", name: "Bash", input: { command: "bun test src/board", description: "Run the board tests" } }]),
+  record(1, "user", [{ type: "tool_result", tool_use_id: "toolu_evidence_run", content: "src/board/projection.test.ts:\n✓ replays a band from the snapshot [11.20ms]\n✓ keeps the band order after a reload [3.90ms]\n✓ answers a stale revision with the current board [2.40ms]\n\n 3 pass\n 0 fail\nRan 3 tests across 1 file. [141.00ms]" }]),
+  record(2, "assistant", [{ type: "text", text: "The projection replays every band from the snapshot, and the three board tests pass." }]),
+].join("\n");
+const FEED = TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
+const tasks = TOOLCARD ? [{
+  id: "task-projection", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
+  text: "Rebuild the board status projection\nReplay every band from the snapshot.",
+  assignments: [{ path: RUNNING_PATH, conversationId: "conversation_running", panePid: null, state: "delivered", error: null, at: iso(1_800), engine: "claude" }],
+  createdAt: iso(3_600), updatedAt: iso(1_800),
+}] : [];
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -217,7 +239,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/files") {
     return json({
       files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows, pipelines,
-      workflows: [], tasks: [], systemHealth: { tmux: { status: "healthy" } },
+      workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } },
     });
   }
   /* The fixture has no runtime plane, and says so the way a Viewer without one
