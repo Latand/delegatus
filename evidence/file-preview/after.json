@@ -1,5 +1,5 @@
 {
-  "commit": "f13b31d2b4722420ce2a647960df83f61e5ea125",
+  "commit": "f0ce6e299054da7f94e691a8d4b32a4e2b0115a6",
   "desktop-html": {
     "viewport": {
       "w": 1280,
@@ -66,7 +66,7 @@
     "clippedControls": [],
     "frame": {
       "sandbox": "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals",
-      "src": "/api/artifact/frame/L3Zhci90bXAvbGx2LWlzc3VlLTE2NDEtVmdqYzA1L2hvbWUvUHJvamVjdHMvaGFyYm9yL3JlcG9ydHMvcm91bmQtMg.mubvonqt.zz7SWE_XVlRrbLY93tQBRJ7SZW9qhLAXaAFJwuzqp08/index.html#decision-graph",
+      "src": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwuc4k.m25e6FY18HjilMoVqqRzwBhrMTgRltcLid2XBCp9HiI/index.html#decision-graph",
       "r": {
         "x": 721,
         "y": 96,
@@ -74,7 +74,7 @@
         "h": 704
       }
     },
-    "openExternal": "/api/artifact/frame/L3Zhci90bXAvbGx2LWlzc3VlLTE2NDEtVmdqYzA1L2hvbWUvUHJvamVjdHMvaGFyYm9yL3JlcG9ydHMvcm91bmQtMg.mubvonqt.zz7SWE_XVlRrbLY93tQBRJ7SZW9qhLAXaAFJwuzqp08/index.html#decision-graph",
+    "openExternal": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwuc4k.m25e6FY18HjilMoVqqRzwBhrMTgRltcLid2XBCp9HiI/index.html#decision-graph",
     "markdown": null,
     "failurePath": null,
     "failureText": null,
@@ -89,6 +89,7 @@
         "viewerApi": "blocked",
         "artifactApi": "blocked"
       },
+      "module": "module-ran:12",
       "scrollY": 2009,
       "anchorTop": 0,
       "stylesheetApplied": "rgb(15, 76, 129)",
@@ -106,7 +107,89 @@
       "localStorage": "blocked",
       "viewerApi": "blocked",
       "artifactApi": "blocked"
-    }
+    },
+    "module": "module-ran:12"
+  },
+  "desktop-html-dotted-anchor": {
+    "viewport": {
+      "w": 1280,
+      "h": 800
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 720,
+      "y": 0,
+      "w": 560,
+      "h": 800
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 1168,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 1204,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 1240,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 734,
+          "y": 60,
+          "w": 72,
+          "h": 28
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 807,
+          "y": 60,
+          "w": 57,
+          "h": 28
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": {
+      "sandbox": "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals",
+      "src": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwudjj.b5LV4B7bVEsNiqYklZYudpxVG_FTC2dCpVg6nYHOhiE/index.html#appendix.1",
+      "r": {
+        "x": 721,
+        "y": 96,
+        "w": 559,
+        "h": 704
+      }
+    },
+    "openExternal": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwudjj.b5LV4B7bVEsNiqYklZYudpxVG_FTC2dCpVg6nYHOhiE/index.html#appendix.1",
+    "markdown": null,
+    "failurePath": null,
+    "failureText": null,
+    "line": null,
+    "anchorTop": 0
   },
   "desktop-markdown-top": {
     "viewport": {
@@ -276,6 +359,168 @@
       "codeBlocks": 1,
       "listItems": 30
     },
+    "failurePath": null,
+    "failureText": null,
+    "line": null
+  },
+  "desktop-markdown-relative-link": {
+    "viewport": {
+      "w": 1280,
+      "h": 800
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 720,
+      "y": 0,
+      "w": 560,
+      "h": 800
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 1168,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 1204,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 1240,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 734,
+          "y": 60,
+          "w": 72,
+          "h": 28
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 807,
+          "y": 60,
+          "w": 57,
+          "h": 28
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": null,
+    "openExternal": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fdocs%2Fverify.md",
+    "markdown": {
+      "overflowX": 0,
+      "scrollTop": 0,
+      "headings": 2,
+      "tableScrollsInside": null,
+      "tallestTableRow": 0,
+      "images": [],
+      "wideTableHeadingTop": null,
+      "codeBlocks": 0,
+      "listItems": 0
+    },
+    "failurePath": null,
+    "failureText": null,
+    "line": null,
+    "heading": "Verification"
+  },
+  "desktop-html-own-host": {
+    "viewport": {
+      "w": 1280,
+      "h": 800
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 720,
+      "y": 0,
+      "w": 560,
+      "h": 800
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 1168,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 1204,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 1240,
+          "y": 12,
+          "w": 28,
+          "h": 28
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 734,
+          "y": 60,
+          "w": 72,
+          "h": 28
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 807,
+          "y": 60,
+          "w": 57,
+          "h": 28
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": {
+      "sandbox": "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals",
+      "src": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwuiic.Zdnlm0MEY1kxZ8PSJVWr-ZhG2y3UDTpU3QhKajxJyl0/index.html#decision-graph",
+      "r": {
+        "x": 721,
+        "y": 96,
+        "w": 559,
+        "h": 704
+      }
+    },
+    "openExternal": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwuiic.Zdnlm0MEY1kxZ8PSJVWr-ZhG2y3UDTpU3QhKajxJyl0/index.html#decision-graph",
+    "markdown": null,
     "failurePath": null,
     "failureText": null,
     "line": null
@@ -474,7 +719,7 @@
     "clippedControls": [],
     "frame": {
       "sandbox": "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals",
-      "src": "/api/artifact/frame/L3Zhci90bXAvbGx2LWlzc3VlLTE2NDEtVmdqYzA1L2hvbWUvUHJvamVjdHMvaGFyYm9yL3JlcG9ydHMvcm91bmQtMg.mubvotj7.xdX4rSm094W7ASU52w59freGKtRug4Cuk54gzL5tD50/index.html#decision-graph",
+      "src": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwum53.bPOlROsXAZ4J-nJdOuowDaSkU2tNdNpyGRUEh6GhOM8/index.html#decision-graph",
       "r": {
         "x": 0,
         "y": 120,
@@ -482,7 +727,7 @@
         "h": 724
       }
     },
-    "openExternal": "/api/artifact/frame/L3Zhci90bXAvbGx2LWlzc3VlLTE2NDEtVmdqYzA1L2hvbWUvUHJvamVjdHMvaGFyYm9yL3JlcG9ydHMvcm91bmQtMg.mubvotj7.xdX4rSm094W7ASU52w59freGKtRug4Cuk54gzL5tD50/index.html#decision-graph",
+    "openExternal": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwum53.bPOlROsXAZ4J-nJdOuowDaSkU2tNdNpyGRUEh6GhOM8/index.html#decision-graph",
     "markdown": null,
     "failurePath": null,
     "failureText": null,
@@ -497,6 +742,7 @@
         "viewerApi": "blocked",
         "artifactApi": "blocked"
       },
+      "module": "module-ran:12",
       "scrollY": 2714,
       "anchorTop": 0,
       "stylesheetApplied": "rgb(15, 76, 129)",
@@ -514,7 +760,89 @@
       "localStorage": "blocked",
       "viewerApi": "blocked",
       "artifactApi": "blocked"
-    }
+    },
+    "module": "module-ran:12"
+  },
+  "phone-html-dotted-anchor": {
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 230,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 282,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 334,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 13,
+          "y": 68,
+          "w": 84,
+          "h": 44
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 98,
+          "y": 68,
+          "w": 69,
+          "h": 44
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": {
+      "sandbox": "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals",
+      "src": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwuni6.oKZNNCQCkXxXk9hoNzYYqoUj33cBHz_I7OAAGHT69XM/index.html#appendix.1",
+      "r": {
+        "x": 0,
+        "y": 120,
+        "w": 390,
+        "h": 724
+      }
+    },
+    "openExternal": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwuni6.oKZNNCQCkXxXk9hoNzYYqoUj33cBHz_I7OAAGHT69XM/index.html#appendix.1",
+    "markdown": null,
+    "failurePath": null,
+    "failureText": null,
+    "line": null,
+    "anchorTop": 0
   },
   "phone-markdown-top": {
     "viewport": {
@@ -684,6 +1012,168 @@
       "codeBlocks": 1,
       "listItems": 30
     },
+    "failurePath": null,
+    "failureText": null,
+    "line": null
+  },
+  "phone-markdown-relative-link": {
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 230,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 282,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 334,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 13,
+          "y": 68,
+          "w": 84,
+          "h": 44
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 98,
+          "y": 68,
+          "w": 69,
+          "h": 44
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": null,
+    "openExternal": "/api/artifact?path=%24HOME%2FProjects%2Fharbor%2Fdocs%2Fverify.md",
+    "markdown": {
+      "overflowX": 0,
+      "scrollTop": 0,
+      "headings": 2,
+      "tableScrollsInside": null,
+      "tallestTableRow": 0,
+      "images": [],
+      "wideTableHeadingTop": null,
+      "codeBlocks": 0,
+      "listItems": 0
+    },
+    "failurePath": null,
+    "failureText": null,
+    "line": null,
+    "heading": "Verification"
+  },
+  "phone-html-own-host": {
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "state": "ready",
+    "kind": "text",
+    "sheet": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "staleNotice": null,
+    "pageOverflowX": 0,
+    "sheetOverflowX": 0,
+    "controls": [
+      {
+        "label": "Download file",
+        "r": {
+          "x": 230,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Open in a new tab",
+        "r": {
+          "x": 282,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Close preview",
+        "r": {
+          "x": 334,
+          "y": 8,
+          "w": 44,
+          "h": 44
+        }
+      },
+      {
+        "label": "Rendered",
+        "r": {
+          "x": 13,
+          "y": 68,
+          "w": 84,
+          "h": 44
+        }
+      },
+      {
+        "label": "Source",
+        "r": {
+          "x": 98,
+          "y": 68,
+          "w": 69,
+          "h": 44
+        }
+      }
+    ],
+    "clippedControls": [],
+    "frame": {
+      "sandbox": "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals",
+      "src": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwusia.1JRAJs24USKrb_tE7-cvyrCmWDkcsDCxIZryZHqTG3U/index.html#decision-graph",
+      "r": {
+        "x": 0,
+        "y": 120,
+        "w": 390,
+        "h": 724
+      }
+    },
+    "openExternal": "/api/artifact/frame/L3Zhci90bXAvbGx2LWZpbGUtcHJldmlldy1ldmlkZW5jZS9sbHYtaXNzdWUtMTY0MS1yMi9sbHYtaXNzdWUtMTY0MS11N3o4dncvaG9tZS9Qcm9qZWN0cy9oYXJib3IvcmVwb3J0cy9yb3VuZC0y.mubwusia.1JRAJs24USKrb_tE7-cvyrCmWDkcsDCxIZryZHqTG3U/index.html#decision-graph",
+    "markdown": null,
     "failurePath": null,
     "failureText": null,
     "line": null
