@@ -11,6 +11,7 @@ import {
   type MigrationScope,
   type RegistryConversation,
   type RegistryFile,
+  resolveConversationAlias,
 } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { headCwd, headSessionStartedAt } from "@/lib/agent/transcript";
@@ -230,12 +231,53 @@ function projectedInventoryTurn(
   return parsed;
 }
 
+/** Latest `deliveredAt` per canonical conversation. The reaper reads a
+    delivery settled at or after `turn.observedAt` as a turn nobody has looked
+    at since (see `deliveryFencesTurn`), so a re-read after that delivery is
+    new evidence even when the transcript did not move. */
+function latestDeliveredAt(snapshot: RegistryFile): Map<ViewerConversationId, number> {
+  const latest = new Map<ViewerConversationId, number>();
+  for (const delivery of Object.values(snapshot.heldDeliveries)) {
+    if (delivery.state !== "delivered" || !delivery.deliveredAt) continue;
+    const deliveredAt = Date.parse(delivery.deliveredAt);
+    if (!Number.isFinite(deliveredAt)) continue;
+    const conversationId = resolveConversationAlias(snapshot, delivery.conversationId);
+    latest.set(conversationId, Math.max(latest.get(conversationId) ?? deliveredAt, deliveredAt));
+  }
+  return latest;
+}
+
+/**
+ * Whether a complete re-read says nothing the row does not already hold
+ * (#1990). The stored observation must already cover the transcript's current
+ * content (taken at or after its mtime), project the same turn, and postdate
+ * every delivery to the conversation. Restamping such a row every cycle
+ * rewrote every scanned conversation and advanced the registry revision, which
+ * made every reader reload the full snapshot.
+ */
+function observationUnchanged(
+  existing: RegistryConversation | null,
+  turn: ConversationObservation["turn"],
+  mtimeMs: number,
+  deliveredAt: Map<ViewerConversationId, number>,
+): existing is RegistryConversation & { turn: { observedAt: string } } {
+  if (!existing?.turn.observedAt) return false;
+  const observedAt = Date.parse(existing.turn.observedAt);
+  if (!Number.isFinite(observedAt) || observedAt < mtimeMs) return false;
+  if (existing.turn.state !== turn.state
+    || existing.turn.source !== turn.source
+    || existing.turn.terminalAt !== turn.terminalAt) return false;
+  const delivered = deliveredAt.get(existing.id);
+  return delivered === undefined || delivered < observedAt;
+}
+
 async function inventory(files: FileEntry[], registry: AgentRegistry): Promise<ConversationObservation[]> {
   const inventoryStartedAt = Date.now();
   const snapshot = registry.readOnlySnapshot();
   const conversationByPath = new Map<string, RegistryConversation>();
   const launchProfileByPath = new Map<string, RegistryConversation["generations"][number]["launchProfile"]>();
   const hostedPaths = activeRegisteredHostPaths(snapshot);
+  const deliveredAt = latestDeliveredAt(snapshot);
   await forEachCooperatively(Object.values(snapshot.conversations), (conversation) => {
     for (const generation of conversation.generations) {
       if (!conversationByPath.has(generation.path)) conversationByPath.set(generation.path, conversation);
@@ -329,7 +371,9 @@ async function inventory(files: FileEntry[], registry: AgentRegistry): Promise<C
       startedAt: entry.sessionStartedAt ?? headSessionStartedAt(entry.path, transcriptIdentity),
       observedAt: !observedTurn.complete && existing?.turn.observedAt
         ? existing.turn.observedAt
-        : new Date(Math.max(entry.mtime * 1000, inventoryStartedAt)).toISOString(),
+        : observationUnchanged(existing, turn, mtimeMs, deliveredAt)
+          ? existing.turn.observedAt
+          : new Date(Math.max(mtimeMs, inventoryStartedAt)).toISOString(),
     });
   });
   return observations;
