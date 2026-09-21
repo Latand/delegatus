@@ -232,9 +232,8 @@ test("historical failed launches do not retain startup admission across one full
     const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
     const held = db.query("SELECT owner_pid, owner_start_identity FROM state_leases WHERE collection = 'pipelines'").get() as { owner_pid: number; owner_start_identity: string };
     db.close();
-    expect(held.owner_pid).toBe(process.pid);
-    expect(held.owner_start_identity).toBeTruthy();
-    timeline.push("lease-owned-during-recovery");
+    expect(held).toBeNull();
+    timeline.push("lease-free-during-recovery");
     const contender = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/startupPipelineContender.ts"), f.directory], {
       env: { ...process.env }, stdout: "pipe", stderr: "pipe",
     });
@@ -279,7 +278,7 @@ test("a failed historical snapshot remains unknown and a later pass retries it",
   } finally { f.journal.close(); }
 });
 
-test("startup exposes the retaining fallback await without releasing admission before it settles", async () => {
+test("startup exposes fallback publication while pipeline admission stays available", async () => {
   const f = fixture(1, true);
   let entered!: () => void;
   const publicationEntered = new Promise<void>((resolve) => { entered = resolve; });
@@ -313,9 +312,9 @@ test("startup exposes the retaining fallback await without releasing admission b
       state: "pending", phase: "publishing historical host fallbacks",
       pid: process.pid, phaseStartedAt: expect.any(String),
     });
-    expect(leases()).toEqual([{ owner_pid: process.pid }]);
+    expect(leases()).toEqual([]);
     await Bun.sleep(25);
-    expect(leases()).toEqual([{ owner_pid: process.pid }]);
+    expect(leases()).toEqual([]);
     settle();
     await startup;
     expect(structuredStartupStatus()?.state).toBe("ready");
@@ -329,7 +328,7 @@ test("startup exposes the retaining fallback await without releasing admission b
   }
 }, 60_000);
 
-test("rollback checkpoint yields to the full startup admission owner", async () => {
+test("rollback checkpoint does not wait on startup network publication", async () => {
   const f = fixture(1, true);
   let entered!: () => void;
   const publishing = new Promise<void>((resolve) => { entered = resolve; });
@@ -346,7 +345,8 @@ test("rollback checkpoint yields to the full startup admission owner", async () 
   const timer = setTimeout(() => { replySettled = true; released(); }, 50);
   try {
     await checkpointHotStateRollbackMirrorsForDemotion();
-    expect(replySettled).toBe(true);
+    expect(replySettled).toBe(false);
+    released();
     await startup;
   } finally {
     clearTimeout(timer);
@@ -545,7 +545,8 @@ test("the full retained history completes within the promoted serving budget", a
     console.log(JSON.stringify({ history: { receipts: 6623, conversations: 8078, entries: 5188 }, counts, elapsedMs }));
     // Keep the optimization below the old deadline despite the new headroom.
     expect(elapsedMs).toBeLessThan(120_000);
-    expect(counts.snapshot).toBe(4);
+    expect(counts.snapshot ?? 0).toBe(0);
+    expect(counts["session-read"]).toBeGreaterThan(0);
     expect(counts.append).toBeGreaterThan(4300);
     expect(counts["operation-status"]).toBe(1518);
     expect(structuredStartupStatus()?.state).toBe("ready");
@@ -628,7 +629,10 @@ test("production startup yields between historical publication batches and skips
   let published = 0;
   let publishedAtFirstYield: number | null = null;
   let yieldProbe: ReturnType<typeof setTimeout> | undefined;
-  const client = { ...f.client, append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => {
+  const client = { ...f.client,
+    readSession: async (identity: Parameters<NonNullable<RuntimeHostClient["readSession"]>>[0]) => f.journal.readSession(identity),
+    snapshot: async () => { throw new Error("startup must use keyed session reads"); },
+    append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => {
     if (event.kind === "session-status") {
       published++;
       if (published === 1) yieldProbe = setTimeout(() => { publishedAtFirstYield = published; }, 0);
@@ -653,3 +657,34 @@ test("production startup yields between historical publication batches and skips
     f.registry.close();
   }
 }, 30_000);
+
+
+test("only a changed runtime generation starts incremental recovery after ready", async () => {
+  const f = fixture(0);
+  let generation = "generation-a";
+  let adoptions = 0;
+  let refreshes = 0;
+  let generations = 0;
+  const client = { ...f.client, startupGeneration: async () => { generations++; return generation; } };
+  const dependencies = { registry: f.registry, client, orchestratorSeats: () => [],
+    refreshTranscriptState: async () => { refreshes++; },
+    adopt: async () => { adoptions++; return []; }, adoptClaude: async () => { adoptions++; return []; },
+  };
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    adoptions = 0;
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(adoptions).toBe(0);
+    expect(refreshes).toBe(1);
+    generation = "generation-b";
+    await Promise.all([adoptStructuredHostsAtStartup(dependencies), adoptStructuredHostsAtStartup(dependencies)]);
+    expect(adoptions).toBe(0); // No unaccepted hosts in the replacement generation.
+    expect(refreshes).toBe(1);
+    expect(generations).toBe(3);
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(adoptions).toBe(0);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    f.journal.close(); f.registry.close();
+  }
+});

@@ -3478,3 +3478,19 @@ function sessionReader(read: () => Promise<RuntimeSnapshot>): NonNullable<Runtim
       ?? state.sessions.find(row => row.artifactPath === identity.artifactPath) ?? null;
   };
 }
+
+
+test("one recovered session cannot mark an unfinished startup pass ready", async () => {
+  const status = await import("./startupStatus");
+  status.markStructuredHostStartupProgress({ phase: "publishing historical host fallbacks", completedHosts: 0, totalHosts: null });
+  status.markStructuredHostStartupFailed();
+  const { registry } = registryWithConversation();
+  try {
+    await enqueueStructuredMessage({ path: artifactPath, text: "observe one session", hasImages: true }, {
+      enabled: () => true, registry: () => registry,
+      client: () => ({ readSession: sessionReader(async () => snapshot()) }) as unknown as RuntimeHostClient,
+    });
+    expect(status.structuredStartupStatus({ LLV_STRUCTURED_HOSTS: "1" })?.state).toBe("failed");
+    expect(status.didStructuredHostStartupFail()).toBe(true);
+  } finally { registry.close(); }
+});

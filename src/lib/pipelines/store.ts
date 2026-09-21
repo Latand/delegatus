@@ -1003,6 +1003,7 @@ export async function withPipelineControllerMutation<T>(
  */
 export async function withPipelineStartupAdmission<T>(
   admit: (available: boolean) => Promise<T>,
+  phase = "startup evidence",
 ): Promise<T> {
   let entered = false;
   try {
@@ -1011,7 +1012,13 @@ export async function withPipelineStartupAdmission<T>(
     loadPipelinesForStartup();
     return await withPipelineMutation(() => {
       entered = true;
-      return admit(true);
+      const started = performance.now();
+      return admit(true).finally(() => {
+        const heldMs = performance.now() - started;
+        if (heldMs > 100) console.warn("[structured hosts] state lease exceeded budget", {
+          phase, collection: "pipelines", heldMs: Math.round(heldMs), budgetMs: 100,
+        });
+      });
     });
   } catch (error) {
     if (entered) throw error;

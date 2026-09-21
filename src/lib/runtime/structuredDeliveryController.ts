@@ -1297,6 +1297,7 @@ export async function bindStructuredDeliveryQueue(
       setStructuredDeliveryKick(null);
     }
   };
+  const publishedFallbacks = new Set<string>();
   let completion = Promise.resolve();
   const complete = (items: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive: () => void = () => {}) => {
     completion = completion.catch(() => {}).then(async () => {
@@ -1334,7 +1335,7 @@ export async function bindStructuredDeliveryQueue(
          that failed costs one redundant publish and authorises nothing
          (#1131). */
       progress?.("reading fallback runtime snapshot");
-      const runtimeSnapshot = typeof client.snapshot === "function"
+      const runtimeSnapshot = typeof client.snapshot === "function" && !client.readSession
         ? await client.snapshot().catch(() => null)
         : null;
       const runtimeSessions = new Map(
@@ -1350,7 +1351,13 @@ export async function bindStructuredDeliveryQueue(
         if (registrations.has(id)) return;
         const entry = startupSnapshot.entries[id];
         if (!entry?.structuredHost && entry?.host?.kind !== "tmux") return;
-        await publishCurrentFallback(conversation.id, runtimeSessions.get(conversation.id));
+        const publicationKey = `${id}:${entry.updatedAt}:${conversation.turn.observedAt}`;
+        if (publishedFallbacks.has(publicationKey)) return;
+        const current = client.readSession
+          ? await client.readSession({ conversationId: conversation.id })
+          : runtimeSessions.get(conversation.id);
+        await publishCurrentFallback(conversation.id, current ?? undefined);
+        publishedFallbacks.add(publicationKey);
       }, assertActive);
       if (superseded()) {
         const successor = state.completeActive;
