@@ -69,6 +69,12 @@ interrupt on the same conversation still progresses.
 
 ## Behavioral regression evidence
 
+A further read-only sample before the journal-retry correction measured the
+busy worker at 100.5% CPU, 1.86 GB RSS and 157.2 MB/s logical reads over two
+seconds. SQLite `mode=ro` counted 9,762 conversations, 13 failed-recoverable
+migrations and two applying reconfigures without migrations. The original
+registry-amplification diagnosis still applies; no live state was changed.
+
 The same acceptance files and shared fixture were copied into an export of
 merge base `e2dd7970a`; production code in that export was unchanged. All
 failures below are assertions reached through the production controllers.
@@ -95,3 +101,45 @@ mixed-target case. This identifies the execution bypass left after the first
 background-only backoff fix. Bounds are asserted over 60 seconds of simulated
 time with admission wakes every 100 ms. The controller-level tests supersede
 the earlier helper-only scheduler and supplied-receipt regression claims.
+
+## Journal-transition retry correction
+
+The next review identified another bypass: `applying` was written outside the
+switch's failure budget. With a parked peer, the overall drain pass succeeded,
+so its backoff reset on every admission wake. Both the reviewed revision and
+the unchanged merge base reproduced **600 unanswered applying transitions per
+simulated minute**, including when the journal committed the transition but
+its answer was lost. The original receipt and held delivery stayed pending.
+
+All switch journal transitions now charge the pending operation's retry
+deadline, including cancellation, deadline settlement and supersedence. A
+replacement choice gets its own budget; failure to settle the previous choice
+charges that replacement's budget. Controls run before supersedence cleanup
+and remain eligible during the switch's cooldown. The executor's error handler
+only handles executor failures: an unanswered `queued` or `applied` transition
+preserves the actual switch outcome for reconciliation.
+
+Seven additional production-controller cases fail behaviorally on the same
+merge base and pass on the corrected branch:
+
+| Unanswered transition | Merge-base behavior | Corrected behavior |
+| --- | --- | --- |
+| `applying`, receipt still queued | 600 requests/minute | At most 7; payload and receipt preserved |
+| `applying`, committed but reply lost | 600 requests/minute | At most 7; applying receipt preserved |
+| `queued` after pending migration | Switch wrongly failed | At most 7; queued after transport recovery |
+| `applied` after successful migration | Switch wrongly failed | At most 7; applied after recovery, one successor |
+| `failed` after executor refusal | 600 requests/minute | At most 7; original failure settles after recovery |
+| Cancellation settlement | 600 requests/minute | At most 7; cancellation settles after recovery |
+| Supersedence settlement | All six same-target interrupts blocked | Six interrupts complete; at most 7 failed transitions |
+
+Each case includes a parked peer and six successful sends on another target.
+The applying cases also prove that a replacement account choice progresses
+immediately without inheriting the previous choice's deadline. Repeated
+controls in the settlement cases cannot bypass the deadline.
+
+The eight focused suites pass 166 tests. Additional reconfigure, injection and
+recovery-contention suites pass 41 tests, with one existing assertion failure:
+the reservation-refusal fixture expects the synchronous lock's exact sentence
+but receives the asynchronous holder diagnostic. The identical assertion also
+fails against unchanged merge-base production code. It does not exercise the
+modified switch path.

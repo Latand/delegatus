@@ -169,6 +169,149 @@ test("production controller bounds effect reads when the runtime socket never an
   } finally { await f.cleanup(); await silent.close(); errors.mockRestore(); }
 }, 20_000);
 
+test.each(["queued", "applying"] as const)("production switch bounds unanswered applying transitions with a parked peer (durable: %s)", async durable => {
+  const f = fixture();
+  const parked = addTarget(f, "parked");
+  const healthy = addTarget(f, "healthy");
+  const silent = await silentRuntime(f.root);
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  let validations = 0;
+  let controlTurn: string | null = null;
+  let interrupts = 0;
+  const health = f.host.health.bind(f.host);
+  f.host.health = async () => ({ ...await health(), ...(controlTurn ? { status: "active" as const, activeTurnRef: controlTurn } : {}) });
+  f.host.interrupt = async () => { interrupts++; controlTurn = null; };
+  const transition = f.client.transitionOperation.bind(f.client);
+  f.client.transitionOperation = async (id, status, details, options) => {
+    if (id === "switch" && status === "applying") {
+      if (durable === "applying") await transition(id, status, details, options);
+      return silent.client.transitionOperation(id, status, details, options);
+    }
+    return transition(id, status, details, options);
+  };
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }, parked, healthy], { registry: f.registry, client: f.client,
+      reconfigure: { validateAccount: async () => { validations++; throw new Error("replacement account requires authentication"); } },
+    });
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "switch", idempotencyKey: "switch",
+      conversationId: f.conversation.id, model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "account-b" });
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "parked-pick", idempotencyKey: "parked-pick",
+      conversationId: parked.conversation.id, model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "account-b" });
+    const delivery = f.registry.holdDelivery(f.conversation.id, "preserve original payload", "held-send", "text", [], null,
+      { operationId: "held-send", kind: "send", policy: "queue", turnId: null });
+    f.journal.executeOperation({ kind: "send", operationId: "held-send", idempotencyKey: "held-send",
+      conversationId: f.conversation.id, text: "preserve original payload", policy: "queue" });
+    const original = f.registry.readOnlySnapshot().heldDeliveries[delivery.id];
+    const start = Date.now();
+    for (let elapsed = 0; elapsed < 60_000; elapsed += 100) {
+      setSystemTime(start + elapsed);
+      if (elapsed % 10_000 === 0) f.journal.executeOperation({ kind: "send", operationId: `healthy-${elapsed}`, idempotencyKey: `healthy-${elapsed}`,
+        conversationId: healthy.conversation.id, text: "continue", policy: "queue" });
+      if (elapsed === 50_000) {
+        controlTurn = "control-turn";
+        f.journal.append({ scope: { type: "session", id: f.conversation.id }, kind: "session-status",
+          payload: { conversationId: f.conversation.id, host: "hosted", turn: "running", activeTurnId: controlTurn } });
+        f.journal.executeOperation({ kind: "interrupt", operationId: "switch-interrupt", idempotencyKey: "switch-interrupt",
+          conversationId: f.conversation.id });
+      }
+      await kickStructuredDeliveryQueue();
+    }
+    expect(f.journal.operationResult("switch-interrupt")?.receipt.status).toBe("interrupted");
+    expect(interrupts).toBe(1);
+    expect(healthy.host.ledger.writes).toHaveLength(6);
+    expect(f.journal.operationResult("switch")?.receipt.status).toBe(durable);
+    expect(f.journal.operationResult("parked-pick")?.receipt.status).toBe("queued");
+    expect(f.journal.operationResult("held-send")?.receipt.status).toBe("queued");
+    expect(f.registry.readOnlySnapshot().heldDeliveries[delivery.id]).toEqual(original);
+    expect(f.host.ledger.writes).toHaveLength(0);
+    expect(validations).toBe(0);
+    expect(silent.requests()).toBeGreaterThan(1);
+    expect(silent.requests()).toBeLessThanOrEqual(7);
+    // A fresh choice must not inherit the unanswered operation's deadline.
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "replacement", idempotencyKey: "replacement",
+      conversationId: f.conversation.id, model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "account-c" });
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("switch")?.receipt.reason).toBe("superseded");
+    expect(f.journal.operationResult("replacement")?.receipt.reason).toBe("replacement account requires authentication");
+    expect(validations).toBe(1);
+  } finally { await f.cleanup(); await silent.close(); errors.mockRestore(); }
+}, 20_000);
+
+test.each(["queued", "applied", "failed", "cancelled", "superseded"] as const)("production switch bounds unanswered %s settlement with a parked peer", async fault => {
+  const f = fixture();
+  const parked = addTarget(f, "parked");
+  const healthy = addTarget(f, "healthy");
+  const silent = await silentRuntime(f.root);
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  let creates = 0;
+  let controlTurn: string | null = null;
+  let interrupts = 0;
+  const health = f.host.health.bind(f.host);
+  f.host.health = async () => ({ ...await health(), ...(controlTurn ? { status: "active" as const, activeTurnRef: controlTurn } : {}) });
+  f.host.interrupt = async () => { interrupts++; controlTurn = null; };
+  const transition = f.client.transitionOperation.bind(f.client);
+  const faultStatus = fault === "cancelled" || fault === "superseded" ? "failed" : fault;
+  f.client.transitionOperation = (id, status, details, options) => id === "switch" && status === faultStatus
+    ? silent.client.transitionOperation(id, status, details, options) : transition(id, status, details, options);
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }, parked, healthy], { registry: f.registry, client: f.client,
+      reconfigure: {
+        validateAccount: async () => { if (fault === "failed") throw new Error("target account requires authentication"); },
+        resolveAccount: () => ({}) as never, releaseHost: async () => true,
+        migrate: (id, _target, registry, ownsOperation, reconfigureOperationId) => fault === "queued"
+          ? Promise.resolve(registry.conversation(id)!)
+          : advanceConversationMigration(id, registry, {
+            create: async input => { creates++; return { operationId: input.operationId, nativeId: "successor", path: path.join(f.root, "successor.jsonl"),
+              continuityPaths: [], historyHash: "fixture", host: { kind: "codex-app-server", identity: "fixture-successor", epoch: 1, verifiedAt: new Date().toISOString() } }; },
+            verify: async () => {},
+          }, { ownsOperation, reconfigureOperationId }),
+      },
+    });
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "switch", idempotencyKey: "switch",
+      conversationId: f.conversation.id, model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "account-b" });
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "parked-pick", idempotencyKey: "parked-pick",
+      conversationId: parked.conversation.id, model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "account-b" });
+    if (fault === "cancelled") f.registry.withdrawConversationReconfigure(f.conversation.id, "switch");
+    if (fault === "queued" || fault === "applied" || fault === "failed") f.journal.transitionOperation("switch", "applying");
+    if (fault === "superseded") f.journal.executeOperation({ kind: "reconfigure", operationId: "replacement", idempotencyKey: "replacement",
+      conversationId: f.conversation.id, model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "account-c" });
+    const start = Date.now();
+    for (let elapsed = 0; elapsed < 60_000; elapsed += 100) {
+      setSystemTime(start + elapsed);
+      if (elapsed % 10_000 === 0) f.journal.executeOperation({ kind: "send", operationId: `healthy-${elapsed}`, idempotencyKey: `healthy-${elapsed}`,
+        conversationId: healthy.conversation.id, text: "continue", policy: "queue" });
+      // Repeated controls cannot bypass the switch's deadline, even during
+      // cancellation or cleanup of the previous choice.
+      if (fault !== "applied" && elapsed % 10_000 === 0) {
+        controlTurn = `control-${elapsed}`;
+        f.journal.append({ scope: { type: "session", id: f.conversation.id }, kind: "session-status",
+          payload: { conversationId: f.conversation.id, host: "hosted", turn: "running", activeTurnId: controlTurn } });
+        f.journal.executeOperation({ kind: "interrupt", operationId: `interrupt-${elapsed}`, idempotencyKey: `interrupt-${elapsed}`,
+          conversationId: f.conversation.id });
+      }
+      await kickStructuredDeliveryQueue();
+    }
+    expect(healthy.host.ledger.writes).toHaveLength(6);
+    expect(interrupts).toBe(fault === "applied" ? 0 : 6);
+    if (fault !== "applied") for (let elapsed = 0; elapsed < 60_000; elapsed += 10_000) {
+      expect(f.journal.operationResult(`interrupt-${elapsed}`)?.receipt).toMatchObject({ status: "interrupted" });
+    }
+    expect(f.journal.operationResult("parked-pick")?.receipt.status).toBe("queued");
+    expect(f.journal.operationResult("switch")?.receipt.status).toBe(fault === "cancelled" || fault === "superseded" ? "queued" : "applying");
+    expect(f.registry.switchHold(f.conversation.id)).toBeNull();
+    expect(creates).toBe(fault === "applied" ? 1 : 0);
+    expect(silent.requests()).toBeGreaterThan(1);
+    expect(silent.requests()).toBeLessThanOrEqual(7);
+    // Restore the transport and let the same receipt reconcile to its outcome.
+    f.client.transitionOperation = transition;
+    setSystemTime(start + 90_000);
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("switch")?.receipt.status).toBe(fault === "queued" ? "queued" : fault === "applied" ? "applied" : "failed");
+    expect(creates).toBe(fault === "applied" || fault === "superseded" ? 1 : 0);
+    if (fault === "failed") expect(f.registry.switchHold(f.conversation.id)?.reason).toBe("target account requires authentication");
+  } finally { await f.cleanup(); await silent.close(); errors.mockRestore(); }
+}, 20_000);
+
 test("production applying switch bounds unreadable host checks while other sends and a replacement pick progress", async () => {
   const f = fixture();
   const other = addTarget(f, "other");

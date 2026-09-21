@@ -886,11 +886,12 @@ export class StructuredDeliveryQueue {
     }
     const latestSwitch = effects.filter(isReconfigureEffect).reduce<StructuredReconfigureEffect | null>(
       (latest, effect) => !latest || effect.eventSeq > latest.eventSeq ? effect : latest, null);
-    if (!effects.some(isControlEffect) && latestSwitch
-      && !this.port.reconfigureCancelled?.(latestSwitch)
-      && this.reconfigureRetries.get(latestSwitch.operationId)?.ready() === false) {
+    const switchDeferred = latestSwitch
+      && this.reconfigureRetries.get(latestSwitch.operationId)?.ready() === false;
+    if (switchDeferred) {
       this.retrySoon();
-      return true;
+      effects = effects.filter(isControlEffect);
+      if (effects.length === 0) return true;
     }
     const openEffects: DeliveryEffect[] = [];
     const durableStatuses = new Map<string, StructuredOperationStatus | null>();
@@ -927,7 +928,11 @@ export class StructuredDeliveryQueue {
         ? expiredControlSettlement(effect, durable.value)
         : null;
       if (expired) {
-        await this.transitionUnlessSettled(effect.operationId, expired.status, { reason: expired.reason });
+        if (isReconfigureEffect(effect)) {
+          await this.transitionReconfigure(effect, expired.status, { reason: expired.reason }, latestSwitch ?? effect);
+        } else {
+          await this.transitionUnlessSettled(effect.operationId, expired.status, { reason: expired.reason });
+        }
         continue;
       }
       durableStatuses.set(effect.operationId, durable.value);
@@ -943,11 +948,6 @@ export class StructuredDeliveryQueue {
       (current, effect) => !current || effect.eventSeq > current.eventSeq ? effect : current,
       null,
     );
-    for (const effect of reconfigures) {
-      if (effect !== currentReconfigure) {
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "superseded" });
-      }
-    }
     /* A pick after a terminal provider turn applies now (#1983). Other idle
        picks retain the next-engagement behavior from #1846. */
     const engaged = effects.some(isEngagement)
@@ -965,10 +965,17 @@ export class StructuredDeliveryQueue {
       if (!isControlEffect(effect) && this.compactingConversations.has(effect.conversationId)) return true;
       if (isReconfigureEffect(effect)) {
         if (effect !== currentReconfigure) continue;
+        // Controls above have independent receipts and must remain usable even
+        // when clearing an older choice cannot reach the journal.
+        for (const previous of reconfigures) {
+          if (previous !== effect) {
+            await this.transitionReconfigure(previous, "failed", { reason: "superseded" }, effect);
+          }
+        }
         if (effect.sessionKey
           ? killedGenerations.has(`${effect.sessionKey.engine}:${effect.sessionKey.sessionId}`)
           : killedGenerations.size > 0) {
-          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "conversation-killed" });
+          await this.transitionReconfigure(effect, "failed", { reason: "conversation-killed" });
           continue;
         }
         if (effect.accountId && !engaged && !this.port.reconfigureCancelled?.(effect)
@@ -1275,7 +1282,7 @@ export class StructuredDeliveryQueue {
       }
       await this.transitionUnlessSettled(effect.operationId, "delivered", { turnId: receipt.turnId });
     }
-    return nativeReceiptUnavailable;
+    return Boolean(switchDeferred) || nativeReceiptUnavailable;
   }
 
   /**
@@ -1758,16 +1765,36 @@ export class StructuredDeliveryQueue {
     }
   }
 
-  private async drainReconfigure(effect: StructuredReconfigureEffect): Promise<boolean> {
-    /* #1705: a cancelled operation ends now, whatever the turn is doing, with its one terminal transition.
-       The claim checks the same record again in its own transaction. */
-    if (this.port.reconfigureCancelled?.(effect)) {
-      await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "cancelled" });
-      return false;
+  /** Journal failure leaves the switch's outcome unknown. Every transition,
+   * including cleanup of an older choice, consumes the pending choice's budget.
+   * Healthy/parked peers cannot reset that operation's deadline. */
+  private async transitionReconfigure(
+    effect: StructuredReconfigureEffect,
+    status: StructuredDeliveryTransition,
+    details?: { turnId?: string | null; reason?: string | null },
+    retryOwner = effect,
+  ): Promise<boolean> {
+    try {
+      return await this.transitionUnlessSettled(effect.operationId, status, details);
+    } catch (error) {
+      const retry = this.reconfigureRetries.get(retryOwner.operationId) ?? new RetryBackoff();
+      retry.fail();
+      this.reconfigureRetries.set(retryOwner.operationId, retry);
+      this.retrySoon();
+      throw error;
     }
+  }
+
+  private async drainReconfigure(effect: StructuredReconfigureEffect): Promise<boolean> {
     const retry = this.reconfigureRetries.get(effect.operationId) ?? new RetryBackoff();
     this.reconfigureRetries.set(effect.operationId, retry);
     if (!retry.ready()) { this.retrySoon(); return true; }
+    /* #1705: cancellation settles without waiting for a turn boundary. The
+       claim checks the same record again in its own transaction. */
+    if (this.port.reconfigureCancelled?.(effect)) {
+      await this.transitionReconfigure(effect, "failed", { reason: "cancelled" });
+      return false;
+    }
     const host = this.resolveHost(effect.conversationId);
     if (host) {
       /* A switch is applied at a turn boundary, and an unreadable state is not
@@ -1778,29 +1805,32 @@ export class StructuredDeliveryQueue {
       const health = state.value;
       if (health.status === "active" || health.status === "attention" || health.activeTurnRef) return true;
     }
-    if (!await this.transitionUnlessSettled(effect.operationId, "applying")) return false;
+    if (!await this.transitionReconfigure(effect, "applying")) return false;
+    let outcome: Awaited<ReturnType<typeof this.reconfigure>>;
     try {
-      const outcome = await this.reconfigure(effect, {
+      outcome = await this.reconfigure(effect, {
         isCurrent: () => this.isCurrentReconfigure(effect),
       });
-      if (outcome === "pending") {
-        retry.fail();
-        await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "turn-boundary" });
-        this.retrySoon();
-        return true;
-      }
-      await this.transitionUnlessSettled(effect.operationId, "applied");
-      this.reconfigureRetries.delete(effect.operationId);
     } catch (error) {
-      await this.transitionUnlessSettled(effect.operationId, "failed", { reason: failureReason(error) });
+      await this.transitionReconfigure(effect, "failed", { reason: failureReason(error) });
       /* Keep the failed account hold; the unactuated messages below settle
          with its reason. Supersedence and cancellation create no failure hold. */
       if (effect.accountId && !this.port.reconfigureCancelled?.(effect)
         && error instanceof Error && error.name !== "StructuredReconfigureSupersededError" && error.name !== "StructuredReconfigureCancelledError") {
         this.port.holdForFailedSwitch?.(effect, failureReason(error));
-        return false;
       }
+      return false;
     }
+    // Journal timeouts after the executor returns cannot turn its outcome into
+    // a failed switch. Read/reconcile the original receipt on a bounded retry.
+    if (outcome === "pending") {
+      await this.transitionReconfigure(effect, "queued", { reason: "turn-boundary" });
+      retry.fail();
+      this.retrySoon();
+      return true;
+    }
+    await this.transitionReconfigure(effect, "applied");
+    this.reconfigureRetries.delete(effect.operationId);
     return false;
   }
 
