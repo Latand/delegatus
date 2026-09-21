@@ -124,3 +124,58 @@ test("with no override the run lands directly beneath the temp root", () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("the README driver's override keeps what it holds and each run gets its own directory", () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-capture-readme-"));
+  const parent = path.join(scratchRoot, "llv-readme-parent");
+  const sentinel = path.join(parent, "unrelated.txt");
+  fs.mkdirSync(parent);
+  fs.writeFileSync(sentinel, "keep", "utf8");
+
+  try {
+    const options = {
+      envName: "LLV_README_CAPTURE_ROOT",
+      prefix: "llv-readme" as const,
+      raw: parent,
+      repoRoot: REPO_ROOT,
+      tempRoot: scratchRoot,
+    };
+    const first = createCaptureDirectory(options);
+    const second = createCaptureDirectory(options);
+
+    expect(fs.readFileSync(sentinel, "utf8")).toBe("keep");
+    expect(first).not.toBe(second);
+    for (const run of [first, second]) {
+      expect(path.dirname(run)).toBe(fs.realpathSync(parent));
+      expect(path.basename(run)).toStartWith("llv-readme-");
+    }
+
+    const defaults = { ...options, raw: undefined };
+    const a = createCaptureDirectory(defaults);
+    const b = createCaptureDirectory(defaults);
+    expect(a).not.toBe(b);
+    expect(path.dirname(a)).toBe(fs.realpathSync(scratchRoot));
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test("the README driver refuses roots outside its scratch root or without its prefix", () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-capture-readme-refusal-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "llv-readme-outside-"));
+  const unprefixed = path.join(scratchRoot, "projects");
+  fs.mkdirSync(unprefixed);
+  const options = { envName: "LLV_README_CAPTURE_ROOT", prefix: "llv-readme" as const, repoRoot: REPO_ROOT, tempRoot: scratchRoot };
+
+  try {
+    expect(() => createCaptureDirectory({ ...options, raw: outside })).toThrow("LLV_README_CAPTURE_ROOT refused");
+    expect(() => createCaptureDirectory({ ...options, raw: unprefixed })).toThrow("LLV_README_CAPTURE_ROOT refused");
+    expect(() => createCaptureDirectory({ ...options, raw: REPO_ROOT })).toThrow("LLV_README_CAPTURE_ROOT refused");
+    expect(() => createCaptureDirectory({ ...options, raw: undefined, tempRoot: REPO_ROOT })).toThrow("capture temp root overlaps");
+    expect(fs.readdirSync(unprefixed)).toEqual([]);
+    expect(fs.readdirSync(outside)).toEqual([]);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});

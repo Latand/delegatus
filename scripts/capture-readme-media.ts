@@ -4,7 +4,9 @@
  *   bun run build && bun scripts/capture-readme-media.ts
  *
  * The driver seeds an invented home (scripts/readme-demo-state.ts) under a
- * capture root outside the checkout, serves the production build against it
+ * fresh capture directory under /var/tmp that the run allocates and never
+ * clears (LLV_README_CAPTURE_ROOT may name an existing `llv-readme-*` parent
+ * there), serves the production build against it
  * on a port the OS assigns, and captures each shot twice: a PNG for human
  * review, copied to the evidence directory and never committed, and a vector
  * SVG, which is what the README uses.
@@ -34,11 +36,14 @@ import path from "node:path";
 
 import type { Page } from "playwright-core";
 
+import { createCaptureDirectory } from "./capture-directory";
 import { inspectPaths, sensitiveClasses } from "./privacy-publication-gate";
 import { seedDemoAccounts, seedDemoHome, WORKING_CONVERSATIONS, type DemoProject } from "./readme-demo-state";
 
 export const README_MEDIA_DIR = "docs/media/readme";
-export const CAPTURE_ROOT = process.env.LLV_README_CAPTURE_ROOT ?? "/var/tmp/llv-readme-capture";
+/** Runs are allocated under this root; LLV_README_CAPTURE_ROOT may name an
+    existing `llv-readme-*` directory beneath it to hold them instead. */
+export const SCRATCH_ROOT = "/var/tmp";
 export const EVIDENCE_DIR = process.env.LLV_README_EVIDENCE_DIR ?? "/var/tmp/llv-readme-evidence";
 
 type Target =
@@ -165,7 +170,6 @@ export function buildCaptureEnvironment(root: string, source = process.env): Nod
 }
 
 async function materialize(env: NodeJS.ProcessEnv, now: number) {
-  fs.rmSync(CAPTURE_ROOT, { recursive: true, force: true });
   const uid = process.getuid?.() ?? 1000;
   for (const directory of [env.HOME!, env.TMPDIR!, path.join(env.TMPDIR!, `claude-${uid}`), env.TMUX_TMPDIR!, env.XDG_CACHE_HOME!, env.XDG_RUNTIME_DIR!, env.LLV_STATE_DIR!, path.dirname(env.LLV_CODEX_BINARY!)]) {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -228,8 +232,8 @@ function collectOutput(child: ChildProcess): () => string {
     gradients (the board's dot grid, column washes) as image patterns; they
     carry no text, and the full-frame PNG they are rendered into is what the
     gate's OCR reads before the SVG is kept. */
-export function pdfToSvg(pdf: Buffer, target: string): number {
-  const scratch = fs.mkdtempSync(path.join(CAPTURE_ROOT, "svg-"));
+export function pdfToSvg(pdf: Buffer, target: string, scratchParent: string): number {
+  const scratch = fs.mkdtempSync(path.join(scratchParent, "svg-"));
   try {
     const pdfPath = path.join(scratch, "frame.pdf");
     fs.writeFileSync(pdfPath, pdf);
@@ -263,7 +267,16 @@ function forbiddenHostText(): string[] {
 
 async function main(): Promise<void> {
   const repoRoot = path.resolve(import.meta.dir, "..");
-  const env = buildCaptureEnvironment(CAPTURE_ROOT);
+  /* A fresh directory this run owns; nothing that existed before is cleared. */
+  const captureRoot = createCaptureDirectory({
+    envName: "LLV_README_CAPTURE_ROOT",
+    prefix: "llv-readme",
+    raw: process.env.LLV_README_CAPTURE_ROOT,
+    repoRoot,
+    tempRoot: SCRATCH_ROOT,
+  });
+  process.stdout.write(`capture root ${captureRoot}\n`);
+  const env = buildCaptureEnvironment(captureRoot);
   const now = Date.now();
   const layout = await materialize(env, now);
 
@@ -274,7 +287,7 @@ async function main(): Promise<void> {
     { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"] },
   );
   const serverPid = server.pid;
-  fs.writeFileSync(path.join(CAPTURE_ROOT, "server.pid"), `${serverPid}\n`);
+  fs.writeFileSync(path.join(captureRoot, "server.pid"), `${serverPid}\n`);
   const stop = () => {
     if (serverPid !== undefined && server.exitCode === null) process.kill(serverPid, "SIGTERM");
   };
@@ -293,7 +306,7 @@ async function main(): Promise<void> {
       await new Promise(() => {});
       return;
     }
-    await captureShots(repoRoot, baseUrl, layout);
+    await captureShots(repoRoot, baseUrl, layout, captureRoot);
   } finally {
     stop();
     await new Promise((resolve) => setTimeout(resolve, 800));
@@ -315,7 +328,7 @@ async function openTarget(page: Page, baseUrl: string, target: Target, layout: L
   await page.goto(`${baseUrl}/#f=${encodeURIComponent(file.path)}`, { waitUntil: "networkidle" });
 }
 
-async function captureShots(repoRoot: string, baseUrl: string, layout: Layout): Promise<void> {
+async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, captureRoot: string): Promise<void> {
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({
     executablePath: process.env.CHROME_BIN ?? "/usr/bin/google-chrome-stable",
@@ -367,7 +380,7 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout): 
         margin: { top: "0", bottom: "0", left: "0", right: "0" },
       });
       const svgPath = path.join(repoRoot, README_MEDIA_DIR, `${shot.id}.svg`);
-      const rasterTiles = pdfToSvg(Buffer.from(pdf), svgPath);
+      const rasterTiles = pdfToSvg(Buffer.from(pdf), svgPath, captureRoot);
       manifest.push({
         path: `${shot.id}.svg`,
         description: shot.description,
