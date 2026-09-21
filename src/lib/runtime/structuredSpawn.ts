@@ -456,9 +456,11 @@ export async function reconcileStructuredSpawnReplay(
   const [initialOperation, spawnOperation, runtime] = await Promise.all([
     client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true }).catch(() => null),
     client.operationStatus(launchId, { currentRetryLeaf: true }).catch(() => null),
-    (current.state === "failed" && options.failedReceiptSnapshot
-      ? options.failedReceiptSnapshot()
-      : client.snapshot()).catch(() => null),
+    (client.readSession
+      ? client.readSession({ conversationId: current.conversationId }).then((session) => ({ sessions: session ? [session] : [] }))
+      : current.state === "failed" && options.failedReceiptSnapshot
+        ? options.failedReceiptSnapshot()
+        : client.snapshot()).catch(() => null),
   ]);
   options.assertActive?.();
   let operation = initialOperation;
@@ -1202,7 +1204,10 @@ export async function recoverPendingStructuredSpawns(
        survive as queued when the terminal transition itself timed out. The
        placeholder session then sits registering/unknown until someone closes
        the operation; the journal retires the placeholder on that transition. */
-    if (!(await registeringSessions()).has(receipt.conversationId)) return;
+    const registering = client.readSession
+      ? (await client.readSession({ conversationId: receipt.conversationId }).catch(() => null))?.host === "registering"
+      : (await registeringSessions()).has(receipt.conversationId);
+    if (!registering) return;
     const operation = await client.operationStatus(receipt.launchId);
     const status = operation?.receipt.status;
     if (operation

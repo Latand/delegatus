@@ -53,8 +53,16 @@ export async function openFixture(
      rendering under `prefers-reduced-motion`, and a case that gates the one
      the motion leaves behind has to ask for it (#1798). */
   motion: "no-preference" | "reduce" = "no-preference",
+  /* A phone has a coarse pointer, and several controls in this product are
+     sized off `(pointer: coarse)` rather than off width (#1439). A 390px
+     context with a mouse is therefore NOT a phone, and a case that measures
+     phone geometry has to say so (send-latency slice 3). */
+  touch = false,
 ) {
-  const context = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: motion });
+  const context = await browser.newContext({
+    viewport, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: motion,
+    ...(touch ? { hasTouch: true, isMobile: true } : {}),
+  });
   if (lang) await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
   const page = await context.newPage();
   const pageErrors: string[] = [];

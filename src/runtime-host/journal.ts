@@ -37,6 +37,7 @@ import {
   type RuntimeReplay,
   type RuntimeRetryOptions,
   type RuntimeSession,
+  type RuntimeSessionRead,
   type RuntimeSnapshot,
   type RuntimeTransitionOptions,
   type ViewerDeploymentOwner,
@@ -386,6 +387,9 @@ export class RuntimeJournal {
         winner TEXT NOT NULL CHECK(winner IN ('discard', 'retry')),
         claimed_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS consumer_cursors (
+        consumer TEXT PRIMARY KEY, completed_seq INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS consumer_checkpoints (
         event_id TEXT NOT NULL, consumer TEXT NOT NULL, completed_at INTEGER NOT NULL,
         PRIMARY KEY(event_id, consumer)
@@ -420,7 +424,10 @@ export class RuntimeJournal {
     this.metaSetDefault("files_revision", "0");
     this.verify();
     this.sessionHostMetadata = new SessionHostMetadata(this.db);
-    if (!this.fault) this.sessionHostMetadata.start();
+    if (!this.fault) {
+      this.db.exec(`CREATE INDEX IF NOT EXISTS session_artifact_path ON entities(json_extract(state_json, '$.artifactPath'), id) WHERE kind = 'session'`);
+      this.sessionHostMetadata.start();
+    }
   }
 
   append(rawInput: RuntimeEventInput): RuntimeEvent {
@@ -1025,6 +1032,24 @@ export class RuntimeJournal {
     }
   }
 
+  /** Primary-key lookup, with an indexed artifact fallback for path-only sends.
+      Reads inactive sessions too: global snapshot retention is a display bound. */
+  readSession(identity: RuntimeSessionRead): RuntimeSession | null {
+    const { conversationId, artifactPath } = identity;
+    if ((!conversationId && !artifactPath)
+      || (conversationId !== undefined && (typeof conversationId !== "string" || !conversationId.trim()))
+      || (artifactPath !== undefined && (typeof artifactPath !== "string" || !artifactPath.trim()))) {
+      throw new Error("runtime session identity is invalid");
+    }
+    const session = conversationId ? this.entity<RuntimeSession>("session", conversationId) : null;
+    if (session) return presentSession(session);
+    if (!artifactPath) return null;
+    const row = this.db.query<{ state_json: string }, [string]>(
+      "SELECT state_json FROM entities WHERE kind = 'session' AND json_extract(state_json, '$.artifactPath') = ? ORDER BY id LIMIT 1",
+    ).get(artifactPath);
+    return row ? presentSession(JSON.parse(row.state_json) as RuntimeSession) : null;
+  }
+
   snapshot(): RuntimeSnapshot {
     return this.snapshotAt(this.now());
   }
@@ -1039,16 +1064,7 @@ export class RuntimeJournal {
         serverTime: new Date(now).toISOString(),
         runtime: { hostEpoch: Number(this.meta("host_epoch")), health: this.meta("health") },
         filesRevision: Number(this.meta("files_revision")),
-        sessions: this.snapshotSessionValues(voiceBodiesFor).map((session) => ({
-          ...session,
-          // Only a running turn has live text to resume. Re-normalizing here
-          // also caps legacy rows to the 64 KiB UTF-8 tail; omittedChars is the
-          // explicit marker that lets consumers disclose the clipped prefix.
-          liveTurn: session.turn === "running"
-            ? normalizeRuntimeLiveTurn(session.liveTurn)
-            : null,
-          recentReceipts: visibleReceipts(session.recentReceipts).map(runtimePresentationReceipt),
-        })),
+        sessions: this.snapshotSessionValues(voiceBodiesFor).map(presentSession),
         attentions: this.entityValues<RuntimeAttention>("attention"),
         recentOperations: visibleReceipts(
           this.recentEntityValues<RuntimeOperationReceipt>("operation", 100),
@@ -1289,31 +1305,71 @@ export class RuntimeJournal {
     return this.fault === null;
   }
 
-  consumerCompleted(eventId: string, consumer: string): boolean {
+  /** Register before accepting publications. This durable prefix hold also
+   * protects appends made during restart before the consumer is reconstructed.
+   * A new consumer starts at the retained anchor; registration never resets it. */
+  registerConsumer(consumer: string): void {
     this.assertHealthy();
+    if (!consumer.trim()) throw new Error("runtime consumer name is required");
+    this.db.query(`INSERT INTO consumer_cursors(consumer, completed_seq)
+      VALUES (?, CAST((SELECT value FROM journal_meta WHERE key = 'anchor_seq') AS INTEGER))
+      ON CONFLICT(consumer) DO NOTHING`).run(consumer);
+  }
+
+  consumerCompleted(eventId: string, consumer: string, eventSeq?: number): boolean {
+    this.assertHealthy();
+    // A retried producer receipt can outlive its event and individual checkpoint.
+    if (eventSeq !== undefined && eventSeq <= this.consumerCursor(consumer)) return true;
     return Boolean(this.db.query<{ present: number }, [string, string]>("SELECT 1 AS present FROM consumer_checkpoints WHERE event_id = ? AND consumer = ?").get(eventId, consumer));
+  }
+
+  private consumerCursor(consumer: string): number {
+    return this.db.query<{ completed_seq: number }, [string]>(
+      "SELECT completed_seq FROM consumer_cursors WHERE consumer = ?",
+    ).get(consumer)?.completed_seq ?? 0;
   }
 
   markConsumerCompleted(eventId: string, consumer: string): void {
     this.assertHealthy();
-    this.db.query("INSERT INTO consumer_checkpoints(event_id, consumer, completed_at) VALUES (?, ?, ?) ON CONFLICT(event_id, consumer) DO NOTHING").run(eventId, consumer, this.now());
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.registerConsumer(consumer);
+      this.db.query("INSERT INTO consumer_checkpoints(event_id, consumer, completed_at) VALUES (?, ?, ?) ON CONFLICT(event_id, consumer) DO NOTHING").run(eventId, consumer, this.now());
+      // Recursive projections may finish before their parent. Only advance over
+      // a contiguous completed prefix, preserving every hole for ordered replay.
+      const pending = this.db.query<{ seq: number }, [number, string]>(`
+        SELECT seq FROM events WHERE seq > ? AND NOT EXISTS (
+          SELECT 1 FROM consumer_checkpoints WHERE event_id = events.event_id AND consumer = ?
+        ) ORDER BY seq LIMIT 1
+      `).get(this.consumerCursor(consumer), consumer);
+      this.db.query("UPDATE consumer_cursors SET completed_seq = ? WHERE consumer = ?")
+        .run(pending ? pending.seq - 1 : Number(this.meta("published_seq")), consumer);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
   }
 
   unconsumedEvents(consumer: string, limit = 128): RuntimeEvent[] {
     this.assertHealthy();
-    return this.db.query<EventRow, [string, number]>(`
+    return this.db.query<EventRow, [number, string, number]>(`
       SELECT events.* FROM events
-      WHERE NOT EXISTS (
+      WHERE events.seq > ? AND NOT EXISTS (
         SELECT 1 FROM consumer_checkpoints
         WHERE consumer_checkpoints.event_id = events.event_id
           AND consumer_checkpoints.consumer = ?
       )
       ORDER BY events.seq
       LIMIT ?
-    `).all(consumer, Math.min(Math.max(limit, 1), 128)).map(toEvent);
+    `).all(this.consumerCursor(consumer), consumer, Math.min(Math.max(limit, 1), 128)).map(toEvent);
   }
 
   claimHostEpoch(): number {
+    // Main claims the epoch before constructing RuntimeHost. A legacy journal
+    // has no orchestration cursor yet: establish its durable hold before epoch
+    // reconciliation can append and compact. Existing checkpoints stay intact.
+    this.registerConsumer("orchestration");
     const epoch = this.claimHostEpochInTransaction();
     /* Outside the epoch transaction on purpose: the sweep opens transactions of
        its own, and a claimed epoch must never be undone by a failure to settle
@@ -1581,8 +1637,15 @@ export class RuntimeJournal {
     const remove = count - maxEvents;
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const anchor = this.db.query<{ seq: number; hash: string }, [number]>("SELECT seq, hash FROM events ORDER BY seq LIMIT 1 OFFSET ?").get(remove - 1);
-      if (!anchor) throw new RuntimeJournalFault("journal compaction anchor is missing");
+      const target = this.db.query<{ seq: number }, [number]>("SELECT seq FROM events ORDER BY seq LIMIT 1 OFFSET ?").get(remove - 1);
+      if (!target) throw new RuntimeJournalFault("journal compaction anchor is missing");
+      // Keep a contiguous hash-verified tail through the slowest registered
+      // consumer. No retention cap may discard an outstanding replay obligation.
+      const consumed = this.db.query<{ seq: number | null }, []>("SELECT MIN(completed_seq) AS seq FROM consumer_cursors").get()?.seq;
+      const anchor = this.db.query<{ seq: number; hash: string }, [number]>(
+        "SELECT seq, hash FROM events WHERE seq <= ? ORDER BY seq DESC LIMIT 1",
+      ).get(Math.min(target.seq, consumed ?? target.seq));
+      if (!anchor) { this.db.exec("COMMIT"); return; }
       this.db.query("DELETE FROM events WHERE seq <= ?").run(anchor.seq);
       this.db.exec("DELETE FROM consumer_checkpoints WHERE NOT EXISTS (SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)");
       this.db.query("DELETE FROM outbox WHERE state = 'completed' AND event_seq <= ?").run(anchor.seq);
@@ -2700,7 +2763,7 @@ export class RuntimeJournal {
 
   private verify(): void {
     try {
-      for (const table of ["journal_meta", "events", "scope_revisions", "projections", "entities", "outbox", "operations", "delivery_operation_actions", "native_queue_entries", "native_queue_operation_holds", "consumer_checkpoints", "viewer_deployments"]) {
+      for (const table of ["journal_meta", "events", "scope_revisions", "projections", "entities", "outbox", "operations", "delivery_operation_actions", "native_queue_entries", "native_queue_operation_holds", "consumer_checkpoints", "consumer_cursors", "viewer_deployments"]) {
         const check = this.db.query<{ quick_check: string }, []>(`PRAGMA quick_check(${table})`).get();
         if (check?.quick_check !== "ok") throw new RuntimeJournalFault(`runtime journal SQLite check failed: ${table}`);
       }
@@ -2833,4 +2896,12 @@ export class RuntimeJournal {
 
   private metaSetDefault(key: string, value: string): void { this.db.query("INSERT INTO journal_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING").run(key, value); }
   private metaSet(key: string, value: string): void { this.db.query("INSERT INTO journal_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, value); }
+}
+
+function presentSession(session: RuntimeSession): RuntimeSession {
+  return {
+    ...session,
+    liveTurn: session.turn === "running" ? normalizeRuntimeLiveTurn(session.liveTurn) : null,
+    recentReceipts: visibleReceipts(session.recentReceipts).map(runtimePresentationReceipt),
+  };
 }

@@ -58,7 +58,7 @@ import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed } from "./failEdgeBudget";
-import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -73,16 +73,17 @@ import {
   MIN_STARTED_PIPELINE_STAGES,
 } from "./limits";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
-import { pipelineDeliveryGuidance, renderStagePrompt } from "./prompts";
+import { pipelineDeliveryGuidance, renderDecisionInput, renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { collectStageProvenance } from "./stageProvenance";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
-import { assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
+import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import type {
   CreatePipelineRequest,
   EffectivePipelineRole,
@@ -102,6 +103,7 @@ import type {
   PipelineStage,
   PipelineStageInput,
   PipelineStageAttempt,
+  PipelineDecisionAnswer,
   PipelineStageReport,
   PipelineStageReportEntry,
   PipelineTerminalReap,
@@ -198,6 +200,8 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
 
 export interface PipelinePorts {
   exec: ExecPort;
+  /** Asynchronous Git used only by the provisioning pre-pass. */
+  provisionExec?: ProvisionExecPort;
   preflightRepo(repoDir: string): PipelineRepoPreflight;
   roleLookup?: PipelineRoleLookup | null;
   spawnAgent(input: {
@@ -3253,7 +3257,7 @@ async function tickRunStage(
           parentConversationId: null,
         },
       };
-      if (process.env.LLV_PIPELINE_ACTIVATION_DRAIN === "1") {
+      if (process.env.LLV_PIPELINE_ACTIVATION_DRAIN === "1" || attempt.decisionAnswerId) {
         attempt.activation = {
           id: crypto.randomUUID(), phase: "reserved", input: spawnInput,
           clientAttemptId: spawnInput.clientAttemptId, startedAt: activationNow,
@@ -3900,7 +3904,7 @@ export const PIPELINE_BASE_UNRESOLVED_DETAIL = "resolving the pipeline base and 
 interface PipelineProvisionOutcome {
   id: string;
   /** The identity the work was performed against. */
-  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string };
+  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; createdAt: string; lastPassedCommit: string; owner: string };
   /** The commit the fetch resolved, recorded even when the worktree then
       failed: a retry of a parked provisioning provisions the SAME commit the
       lane was parked on rather than whatever the base has moved to since. */
@@ -3911,6 +3915,9 @@ interface PipelineProvisionOutcome {
 
 function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
   return {
+    createdAt: pipeline.createdAt,
+    lastPassedCommit: pipeline.lastPassedCommit,
+    owner: JSON.stringify(pipeline.delivery ? [pipeline.delivery.ownerId, pipeline.delivery.epoch, pipeline.delivery.active, pipeline.delivery.target] : null),
     repoDir: pipeline.repoDir,
     worktreeDir: pipeline.worktreeDir,
     branch: pipeline.branch,
@@ -3919,18 +3926,18 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
   };
 }
 
-function provisionPipelineOutsideLease(pipeline: Pipeline, ports: PipelinePorts): PipelineProvisionOutcome {
+async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal): Promise<PipelineProvisionOutcome> {
   const fence = provisionFence(pipeline);
   let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef };
   if (!base.baseBranch || !base.baseRef || !pipeline.lastPassedCommit) {
     /* The lane's OWN base branch, never a hardcoded default: the create path
        records what the caller asked for and resolves nothing, so this is the
        only place that reads it (#1799). */
-    const resolved = resolvePipelineBase(pipeline.repoDir, { baseBranch: pipeline.baseBranch }, ports.exec);
+    const resolved = await resolvePipelineBaseAsync(pipeline.repoDir, { baseBranch: pipeline.baseBranch }, exec, signal);
     if (!resolved.ok) return { id: pipeline.id, fence, base: null, error: resolved.error };
     base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef };
   }
-  const provisioned = provisionPipelineWorktree({ ...pipeline, ...base }, ports.exec);
+  const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal);
   return { id: pipeline.id, fence, base, error: provisioned.ok ? null : provisioned.error };
 }
 
@@ -3942,7 +3949,7 @@ function provisionPipelineOutsideLease(pipeline: Pipeline, ports: PipelinePorts)
  * nothing to provision — every pass but the one after a create — costs one
  * cached read and no subprocess at all.
  */
-function provisionPendingPipelines(ports: PipelinePorts): Map<string, PipelineProvisionOutcome> {
+async function provisionPendingPipelines(ports: PipelinePorts): Promise<Map<string, PipelineProvisionOutcome>> {
   const outcomes = new Map<string, PipelineProvisionOutcome>();
   let pending: Pipeline[];
   try {
@@ -3955,7 +3962,65 @@ function provisionPendingPipelines(ports: PipelinePorts): Map<string, PipelinePr
     if (!(error instanceof PipelineStoreError)) throw error;
     return outcomes;
   }
-  for (const pipeline of pending) outcomes.set(pipeline.id, provisionPipelineOutsideLease(pipeline, ports));
+  if (!pending.length) return outcomes;
+  // Existing injected synchronous ports remain usable by state-machine tests.
+  // Production's realExec always selects the native asynchronous implementation.
+  const exec = ports.provisionExec ?? (ports.exec === realExec ? realProvisionExec
+    : async (command, args, cwd) => ports.exec(command, args, cwd));
+  const jobs = pending.map((pipeline) => ({ pipeline, fence: JSON.stringify(provisionFence(pipeline)), abort: new AbortController() }));
+  const revalidate = () => {
+    try {
+      const current = new Map(loadPipelinesForProjection().map((pipeline) => [pipeline.id, pipeline]));
+      for (const job of jobs) {
+        const record = current.get(job.pipeline.id);
+        if (!record || record.state !== "provisioning" || record.hiddenAt || record.closedAt
+          || JSON.stringify(provisionFence(record)) !== job.fence) job.abort.abort();
+      }
+    } catch {
+      // An unreadable registry cannot authorize more provisioning work.
+      for (const job of jobs) job.abort.abort();
+    }
+  };
+  // Close/delete may originate in another process. Projection reads are cached
+  // by collection revision; polling needs no lease and no close-path hook.
+  const watch = setInterval(revalidate, 50);
+  const repositoryTails = new Map<string, Promise<void>>();
+  try {
+    await Promise.all(jobs.map(async (job) => {
+      const guardedExec: ProvisionExecPort = async (command, args, cwd, signal) => {
+        revalidate();
+        if (signal?.aborted) return { code: null, stdout: "", stderr: "pipeline provisioning cancelled" };
+        try { return await exec(command, args, cwd, signal); }
+        catch (error) { return { code: null, stdout: "", stderr: String(error) }; }
+      };
+      let releaseRepository: (() => void) | undefined;
+      try {
+        // Linked worktrees share refs and Git locks even when repoDir differs.
+        // Resolve through Git asynchronously, then serialize each common dir.
+        const common = await guardedExec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], job.pipeline.repoDir, job.abort.signal);
+        if (common.code !== 0 || !common.stdout.trim()) {
+          if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, {
+            id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null,
+            error: `resolving the pipeline Git directory: ${common.stderr || "no common directory"}`,
+          });
+          return;
+        }
+        const repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
+        const previous = repositoryTails.get(repository);
+        repositoryTails.set(repository, new Promise<void>((resolve) => { releaseRepository = resolve; }));
+        await previous;
+        const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal);
+        revalidate();
+        if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
+      } catch (error) {
+        revalidate();
+        if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, {
+          id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null,
+          error: `pipeline provisioning failed: ${String(error)}`,
+        });
+      } finally { releaseRepository?.(); }
+    }));
+  } finally { clearInterval(watch); }
   return outcomes;
 }
 
@@ -3963,7 +4028,7 @@ function provisionPendingPipelines(ports: PipelinePorts): Map<string, PipelinePr
     record is re-read here, so everything the decision rested on is checked
     against the record as it stands now. */
 function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOutcome | undefined): boolean {
-  if (!outcome || pipeline.state !== "provisioning") return false;
+  if (!outcome || pipeline.state !== "provisioning" || pipeline.hiddenAt || pipeline.closedAt) return false;
   const fence = provisionFence(pipeline);
   if ((Object.keys(fence) as Array<keyof typeof fence>).some((key) => fence[key] !== outcome.fence[key])) return false;
   if (outcome.base) {
@@ -4822,7 +4887,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     for (const pipeline of legacy) await admitExistingPipelineDelivery(pipeline, ports);
     if (legacy.length === 16) followUp = true;
     /* Before the lease, never under it (#1799). */
-    const provisioned = provisionPendingPipelines(ports);
+    const provisioned = await provisionPendingPipelines(ports);
     // Reconcile only this owner's reservation, with the existing kernel fence.
     // Remote reads must finish before entering the pipeline mutation lease.
     for (const pipeline of loadPipelinesForProjection()) {
@@ -5406,13 +5471,16 @@ function replaceStartedStages(
  */
 function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
   const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt") => Object.hasOwn(req, field) && req[field] !== undefined;
-  const stageBound = req.action === "retry-stage" || req.action === "skip-stage";
+  if (req.expectedRevision !== undefined && req.action !== "resolve-decision") {
+    return { error: "expectedRevision applies only to resolve-decision", status: 400, field: "expectedRevision" };
+  }
+  const stageBound = req.action === "retry-stage" || req.action === "skip-stage" || req.action === "resolve-decision";
   if (stated("expectedStageDigest")) {
     if (!GRAPH_EDIT_ACTIONS.has(req.action)) return { error: `expectedStageDigest applies only to graph edits (${[...GRAPH_EDIT_ACTIONS].join(", ")})`, status: 400, field: "expectedStageDigest" };
     if (!isStageDigest(req.expectedStageDigest)) return { error: "expectedStageDigest must be a 64-character lowercase hex SHA-256 digest", status: 400, field: "expectedStageDigest" };
   }
   if (stated("expectedStageId")) {
-    if (!stageBound) return { error: "expectedStageId applies only to retry-stage and skip-stage", status: 400, field: "expectedStageId" };
+    if (!stageBound) return { error: "expectedStageId applies only to retry-stage, skip-stage and resolve-decision", status: 400, field: "expectedStageId" };
     if (typeof req.expectedStageId !== "string" || !req.expectedStageId.trim()) return { error: "expectedStageId must be a non-empty stage id", status: 400, field: "expectedStageId" };
   }
   if (stated("expectedAttempt")) {
@@ -6049,7 +6117,85 @@ export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field">
   field?: PipelineMutationResult["field"] | PipelineGuardField;
   /** The journal entry an accepted graph edit wrote (graph slice 1). */
   graphEdit?: PipelineGraphEdit;
+  decisionAnswer?: PipelineDecisionAnswer;
+  replayed?: boolean;
 };
+
+/** Also checked before MCP receipt access; authorization refusals must never spend an answer's key. */
+export function decisionAnswerActorRefusal(
+  pipeline: Pipeline, actor: PauseResumeActor | null, clientRequestId: unknown,
+): PipelinePatchResult | null {
+  if (!actor || (actor.kind === "agent" && (!actor.conversationId || actor.conversationId !== pipeline.srcConversationId))) {
+    return { error: "only the pipeline creator conversation or a direct user action can answer this decision", status: 403 };
+  }
+  const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === clientRequestId);
+  if (prior && (prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent"
+    && prior.actor.conversationId !== actor.conversationId))) {
+    return { error: "clientRequestId already belongs to a different decision answer", status: 409 };
+  }
+  return null;
+}
+
+/** No host or Git operations here: accepting an answer only reserves work. */
+function resolveDecision(
+  pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
+): PipelinePatchResult {
+  const refusal = decisionAnswerActorRefusal(pipeline, actor, req.clientRequestId);
+  if (refusal) return refusal;
+  if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
+    || typeof req.answer !== "string" || !req.answer.trim() || req.answer.length > MAX_DECISION_ANSWER_CHARS
+    || typeof req.expectedStageId !== "string" || !req.expectedStageId.trim()
+    || !Number.isSafeInteger(req.expectedAttempt) || req.expectedAttempt! < 1
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
+    return { error: `resolve-decision requires clientRequestId (up to 200 characters), answer (up to ${MAX_DECISION_ANSWER_CHARS} characters), expectedStageId, positive expectedAttempt and expectedRevision from get_pipeline`, status: 400 };
+  }
+  const guardShape = stageGuardShapeError(req);
+  if (guardShape) return guardShape;
+  const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === req.clientRequestId);
+  if (prior) {
+    if (prior.answer !== req.answer || prior.stageId !== req.expectedStageId
+      || prior.attempt !== req.expectedAttempt || prior.expectedRevision !== req.expectedRevision) {
+      return { error: "clientRequestId already belongs to a different decision answer", status: 409 };
+    }
+    return { pipeline, decisionAnswer: prior, replayed: true };
+  }
+  // Rollback disables admission; durable answers and pending attempts remain readable/drainable.
+  if (process.env.LLV_PIPELINE_RESOLVE_DECISION === "0") return { error: "resolve-decision is disabled", status: 409 };
+  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+    return { error: "the pipeline changed since it was read; read it again before answering", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
+  }
+  const expectation = expectedStageRefusal(pipeline, req);
+  if (expectation) return expectation;
+  const stage = currentStage(pipeline);
+  const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
+  if (stage?.kind !== "run" || !attempt || attempt.state !== "needs_decision"
+    || attempt.verdict?.status !== "needs_decision" || !attempt.completedAt) {
+    return { error: "resolve-decision requires a run attempt settled with a needs_decision verdict", status: 409 };
+  }
+  if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
+    return { error: "the original stage activation is still reconciling", status: 409 };
+  }
+  const survivor = pipelineSurvivorRefusal(pipeline);
+  if (survivor) return survivor;
+  const termination = unresolvedTerminationRefusal(attempt);
+  if (termination) return { error: termination, status: 409 };
+  const decision: PipelineDecisionAnswer = {
+    clientRequestId: req.clientRequestId, expectedRevision: req.expectedRevision,
+    stageId: stage.id, attempt: attempt.n, nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1,
+    question: attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
+    actor: structuredClone(actor!), at: ports.now(),
+  };
+  // Keep the settled attempt, its report and worktree untouched. A fresh identity owns the continuation.
+  setCursorState(pipeline, stage.id, "pending");
+  pipeline.cursor!.input = renderDecisionInput(attempt.input, decision);
+  const next = newAttempt(pipeline, stage)!;
+  next.decisionAnswerId = decision.clientRequestId;
+  pipeline.decisionAnswers = [...(pipeline.decisionAnswers ?? []), decision];
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = null;
+  return { pipeline, decisionAnswer: decision, replayed: false };
+}
 
 export async function patchPipeline(
   id: string,
@@ -6084,6 +6230,11 @@ export async function patchPipeline(
   const patched = await withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
+    if (req.action === "resolve-decision") {
+      const result = resolveDecision(pipeline, req, actor, ports);
+      if (result.pipeline && !result.replayed) persist();
+      return result;
+    }
     if (req.action === "retry-stage" && pipeline.delivery?.operation?.state === "settled") {
       delete pipeline.delivery.operation;
       pipeline.publishedCommit = null;
@@ -6885,7 +7036,7 @@ export async function patchPipeline(
     persist();
     return graphEdit ? { pipeline, graphEdit } : { pipeline };
   });
-  if (patched.pipeline?.delivery?.operation?.state === "pending") {
+  if (req.action !== "resolve-decision" && patched.pipeline?.delivery?.operation?.state === "pending") {
     const published = await publishPipelineBranch(patched.pipeline, ports.exec, { acceptedSha: patched.pipeline.delivery.operation.sha });
     if (!published.ok) return { error: published.error, status: 409 };
     return { ...patched, pipeline: findPipelineRecord(id)! };

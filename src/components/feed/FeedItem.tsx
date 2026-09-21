@@ -15,6 +15,7 @@ import { SelectedContextBadge } from "../SelectedContextBadge";
 import { CopyButton } from "./CopyButton";
 import { InboxImageCard } from "./InboxImage";
 import { md, mdBlocks } from "./markdown";
+import { UserMessageRow } from "./UserMessageRow";
 import { useMessageProvenance, type ProvenanceLookup } from "./messageProvenance";
 import { tr, type Item } from "./parse";
 import { BlobCard } from "./cards/BlobCard";
@@ -217,41 +218,11 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
     );
   }
   if (item.kind === "user") {
-    const long = item.text.length > 500;
-    return (
-      <div className="group/msg my-3 flex items-start justify-end gap-1.5" data-mobile-message={isMobile ? "user" : undefined}>
-        <CopyButton
-          text={item.text}
-          label={tr("feed.copyMd")}
-          className={`mt-2 ${MESSAGE_ACTION}`}
-        />
-        {/* Mobile v2 (#1439, lane 4): the user keeps the bubble, at 86% and
-            15 px on the phone (README §2.6). */}
-        <div className={isMobile ? "max-w-[86%] whitespace-pre-wrap break-words rounded-surface bg-user px-3 py-[9px] text-title leading-[1.45]" : "max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5"}>
-          {/* #844: what this turn pointed at, from the reference persisted on
-              the record itself — the same badge the composer showed before the
-              operator sent it, so the two can be compared at a glance. */}
-          {item.selectedContext ? (
-            <SelectedContextBadge reference={item.selectedContext} className="mb-1.5" />
-          ) : null}
-          {long ? (
-            <details className="group/usr">
-              <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-                <span className="group-open/usr:hidden">
-                  {item.text.slice(0, 180)}… <span className="font-semibold text-accent">({tr("common.chars", { n: item.text.length })})</span>
-                </span>
-                <span className="hidden items-center gap-1 text-[11px] font-semibold text-muted group-open/usr:inline-flex">
-                  {tr("common.collapse")} <ChevronUp className="h-3 w-3" aria-hidden />
-                </span>
-              </summary>
-              {mdBlocks(item.text)}
-            </details>
-          ) : (
-            mdBlocks(item.text)
-          )}
-        </div>
-      </div>
-    );
+    /* One renderer for the operator's own message, shared with the outbox row
+       it replaces (send-latency slice 3): the message keeps one width, one
+       opacity, one type size and one set of controls from the moment it is
+       submitted to the moment the transcript carries it. */
+    return <UserMessageRow text={item.text} selectedContext={item.selectedContext ?? null} />;
   }
   if (item.kind === "tool" && item.mcp) return <McpCallCard event={item} />;
   if (item.kind === "tool" && item.wakeup) return <WakeupCard event={item} wakeup={item.wakeup} />;

@@ -72,6 +72,12 @@ export type McpToolVerdict =
 
 const ALLOWED: McpToolVerdict = { allowed: true };
 
+/** Agent availability checks that actually consume caller authority. Health
+ * probes have a separate credential-scoped allowlist for every call. */
+export function mcpToolNeedsCallerIdentity(toolName: McpToolName, args: McpToolArgs): boolean {
+  return toolName === "conversation_action" && (args.action === "archive" || args.action === "unarchive");
+}
+
 /**
  * Who is calling, from evidence the caller cannot restate.
  *
@@ -112,7 +118,7 @@ export function permitMcpTool(
         error: `${toolName} is outside the managed MCP health-probe surface.`,
       };
   }
-  if (toolName === "conversation_action" && (args.action === "archive" || args.action === "unarchive")) {
+  if (mcpToolNeedsCallerIdentity(toolName, args)) {
     const authorized = identity.kind === "unrestricted" && identity.reason === "manager"
       || identity.kind === "restricted" && identity.reason === "gateway";
     if (!authorized) {

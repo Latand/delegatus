@@ -538,10 +538,11 @@ async function probeRoutes(
     && releaseReady
     && expectedAssetsMatch;
   if (expectedAssetsEndpoint !== undefined) {
-    const detail = viewerHealthFailureDetail({ observations, assets, deploymentCapable,
-      registryBackendMatches, expectedRegistryBackendMode, observedRegistryBackendMode,
-      releaseReady, expectedAssetsMatch });
-    reportPhase?.(`${promotedViewerReadinessPhase(viewerDeploymentStructuredHostStartup(capability.status, capability.text))}${detail ? `; ${detail}` : ""}`);
+    const startup = viewerDeploymentStructuredHostStartup(capability.status, capability.text);
+    // Keep the last readable startup phase through transient probe failures.
+    // The host's bounded phase reader accepts this fixed diagnostic vocabulary;
+    // appending HTTP detail made it reject the entire timeout diagnostic.
+    if (startup) reportPhase?.(promotedViewerReadinessPhase(startup));
   }
   return {
     checkedAt: new Date().toISOString(), endpoint, processReady, rootStatus: root.status,
@@ -573,8 +574,9 @@ async function verifyViewer(
     inspect: () => containerState(candidate.container),
     probe: () => probeRoutes(candidate, endpoint, expectedAssetsEndpoint, reportPhase),
     ...(expectedAssetsEndpoint ? {
+      // The host bounds the entire verify-promoted action, including MCP
+      // retries. Individual probes can keep retrying while startup progresses.
       timeoutMs: null,
-      reportPending: reportPhase,
     } : {}),
   });
   if (evidence.ok) return evidence;
@@ -1309,7 +1311,7 @@ async function main(): Promise<unknown> {
         ...(admissions ? { healthProbeCapability: admissions.issue(), healthProbeAdmissions: admissions } : {}),
       });
       if (health.ok || !health.processReady) return health;
-      reportAdapterPhase(action, health.detail ?? "waiting for promoted MCP readiness");
+      reportAdapterPhase(action, "waiting for promoted MCP readiness");
       await Bun.sleep(1_000);
     }
   }

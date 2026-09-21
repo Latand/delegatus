@@ -119,3 +119,42 @@ test("undelivered entries, unproven entries and a missing ledger resolve to noth
   expect(claudeMessageProvenance("/tmp/does-not-exist/nope.jsonl", { ledger: newLedger(), registrySnapshot: () => emptySnapshot() })).toEqual({});
   expect(claudeMessageProvenance("/tmp/not-a-transcript.log", { ledger, registrySnapshot: () => emptySnapshot() })).toEqual({});
 });
+
+test("a delivered entry names the submission that admitted its operation", () => {
+  /* The ledger files an entry under the delivery OPERATION's id; the registry
+     keeps which client message id admitted that operation, and that key is
+     the id of the outbox row the operator is looking at. Resolving it here is
+     what lets the feed bind the record into that row without comparing text
+     (#1950 round 2). A retry writes a second operation under the same key, so
+     both entries name one submission. */
+  const ledger = newLedger();
+  for (const operationId of ["op-first", "op-retry"]) {
+    ledger.recordQueued(SESSION_ID, {
+      id: operationId,
+      text: "read the release notes",
+      origin: { kind: "operator" },
+    }, "turn-started");
+    ledger.confirmDelivered(SESSION_ID, operationId, `engine-uuid-${operationId}`);
+  }
+  const owner = (clientMessageId: string) => ({ clientMessageId, conversationId: "conversation_atlas_a" });
+  const snapshot = {
+    receipts: {},
+    conversations: {},
+    deliveryOperationOwners: { "op-first": owner("op_submission_a"), "op-retry": owner("op_submission_a") },
+  } as unknown as RegistryFile;
+
+  const map = claudeMessageProvenance(TRANSCRIPT, { ledger, registrySnapshot: () => snapshot });
+  expect(map["engine-uuid-op-first"]).toEqual({ origin: "operator", submissionId: "op_submission_a" });
+  expect(map["engine-uuid-op-retry"]).toEqual({ origin: "operator", submissionId: "op_submission_a" });
+});
+
+test("an operation the registry cannot name carries no submission", () => {
+  /* Absence is honest and binds nothing: a row whose delivery this browser
+     cannot name must never be handed to whichever submission shares its
+     words. */
+  const ledger = newLedger();
+  ledger.recordQueued(SESSION_ID, { id: "op-unknown", text: "anything", origin: { kind: "operator" } }, "turn-started");
+  ledger.confirmDelivered(SESSION_ID, "op-unknown", "engine-uuid-unknown");
+  const map = claudeMessageProvenance(TRANSCRIPT, { ledger, registrySnapshot: () => emptySnapshot() });
+  expect(map["engine-uuid-unknown"]).toEqual({ origin: "operator" });
+});

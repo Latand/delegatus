@@ -53,6 +53,45 @@ test("snapshot forwards its abort signal and settles exactly once on external ab
   expect((settled as Error).message).toBe("runtime host request cancelled");
 });
 
+test("startup snapshot deadline is caller-local and never sent to the runtime host", async () => {
+  const requests: unknown[] = [];
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    requests.push(request.params);
+    setTimeout(() => {
+      if (!socket.destroyed) socket.end(JSON.stringify({ id: request.id, ok: true, result: { revision: 9 } }) + "\n");
+    }, 80);
+  });
+  const client = new UnixRuntimeHostClient(socketPath, 20, 20, 20);
+  expect(await client.snapshot(undefined, { timeoutMs: 500 })).toEqual({ revision: 9 } as never);
+  await expect(client.snapshot()).rejects.toThrow("runtime host request timed out");
+  expect(requests).toEqual([undefined, undefined]);
+});
+
+test("startup keyed read deadline is bounded and leaves interactive reads and wire parameters unchanged", async () => {
+  const requests: unknown[] = [];
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    requests.push(request.params);
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (!socket.destroyed) socket.end(JSON.stringify({ id: request.id, ok: true, result: null }) + "\n");
+    }, 80);
+    timers.add(timer);
+  });
+  const client = new UnixRuntimeHostClient(socketPath, 20);
+  const identity = { conversationId: "conversation_slow" };
+  try {
+    expect(await client.readSession(identity, { timeoutMs: 500 })).toBeNull();
+    await expect(client.readSession(identity)).rejects.toThrow("runtime host request timed out");
+    await expect(client.readSession(identity, { timeoutMs: 30 })).rejects.toThrow("runtime host request timed out");
+    expect(requests).toEqual([identity, identity, identity]);
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+  }
+});
+
 test("a timeout, a late response, and a socket teardown settle the call exactly once", async () => {
   let respond: ((frame: string, socket: net.Socket) => void) | null = null;
   const socketPath = serve((frame, socket) => { respond?.(frame, socket); });
@@ -233,3 +272,19 @@ for (const failure of ["deployment list cursor is invalid", "viewer deployments 
     expect(methods).toEqual(["viewer-deployment-list"]);
   });
 }
+
+
+test("a keyed session frame preserves UTF-8 characters split across socket chunks", async () => {
+  const text = "before\u{1f642}after";
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    expect(request.method).toBe("session-read");
+    expect(request.params).toEqual({ conversationId: "conversation_utf8" });
+    const reply = Buffer.from(JSON.stringify({ id: request.id, ok: true, result: { conversationId: "conversation_utf8", liveTurn: { text } } }) + "\n");
+    const split = reply.indexOf(Buffer.from("\u{1f642}")) + 2;
+    socket.write(reply.subarray(0, split));
+    setTimeout(() => socket.end(reply.subarray(split)), 10);
+  });
+  const client = new UnixRuntimeHostClient(socketPath);
+  expect(await client.readSession({ conversationId: "conversation_utf8" })).toMatchObject({ liveTurn: { text } });
+});

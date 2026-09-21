@@ -11,6 +11,14 @@ import type { RuntimeHostReadyEvidence } from "./runtimeHostStartup";
 
 export { RuntimeHostFence } from "./runtimeHostFence";
 
+// These engine publications have no orchestration effect in consumeRuntimeEvent.
+// Keep this allowlist explicit: new kinds and terminal events retain the barrier.
+const DURABLE_ENGINE_PUBLICATIONS = new Set([
+  "turn-started", "delta", "item", "attention", "attention-resolved", "limits",
+  "voice-transcript", "voice-chunk", "native-queue-changed",
+  "voice-delivery-progress", "voice-delivery-acknowledged",
+]);
+
 export class RuntimeHost {
   private consumerQueue: Promise<void> = Promise.resolve();
   private readonly consumerFailures = new Map<string, number>();
@@ -23,7 +31,9 @@ export class RuntimeHost {
     private readonly signalFlowPipelineProgress?: () => void,
     private readonly mcpHealthProbeAdmissions?: McpHealthProbeAdmissions,
     private readonly runtimeHostHealth?: () => RuntimeHostReadyEvidence,
-  ) {}
+  ) {
+    if (consumers && journal.isWritable()) journal.registerConsumer("orchestration");
+  }
 
   async recoverConsumers(): Promise<number> {
     if (!this.consumers) return 0;
@@ -52,7 +62,7 @@ export class RuntimeHost {
   }
 
   private async consume(event: RuntimeEvent): Promise<void> {
-    if (!this.consumers || this.journal.consumerCompleted(event.eventId, "orchestration")) return;
+    if (!this.consumers || this.journal.consumerCompleted(event.eventId, "orchestration", event.seq)) return;
     const session = event.scope.type === "session" ? this.journal.sessionState(event.scope.id) : null;
     const consumerEvent = session?.flowId && event.kind === "turn-ended" && typeof event.payload.flowId !== "string"
       ? { ...event, payload: { ...event.payload, flowId: session.flowId } }
@@ -89,6 +99,10 @@ export class RuntimeHost {
       } else if (request.method === "snapshot") result = new PreserializedJson(this.journal.snapshotJson(Array.isArray(request.params?.voiceBodiesFor)
         ? request.params.voiceBodiesFor.filter((id): id is string => typeof id === "string").slice(0, 1)
         : undefined));
+      else if (request.method === "session-read") result = this.journal.readSession({
+        conversationId: request.params?.conversationId as string | undefined,
+        artifactPath: request.params?.artifactPath as string | undefined,
+      });
       else if (request.method === "events") result = this.journal.replay(Number(request.params?.after ?? 0));
       else if (request.method === "wait") result = await this.journal.waitForEvents(
         Number(request.params?.after ?? 0),
@@ -104,8 +118,18 @@ export class RuntimeHost {
           try { this.signalFlowPipelineProgress?.(); }
           catch { console.error("[flow pipeline controller] committed terminal wake failed"); }
         }
-        try { await this.consumeExclusive(appended); }
-        catch { console.error("[runtime consumer] committed event will retry asynchronously"); }
+        // Enqueue before answering, on the same FIFO as terminal/operation work.
+        // The journal's durable checkpoints still own completion and replay.
+        const consumption = this.consumeExclusive(appended).catch(() => {
+          console.error("[runtime consumer] committed event will retry asynchronously");
+        });
+        const durableEnginePublication = request.method === "append"
+          && event.effect === undefined && event.operationId === undefined
+          && appended.scope.type === "session"
+          && (appended.producer.kind === "codex-app-server" || appended.producer.kind === "claude-broker")
+          && appended.producer.eventKey?.startsWith("engine-host:") === true
+          && DURABLE_ENGINE_PUBLICATIONS.has(appended.kind);
+        if (!durableEnginePublication) await consumption;
         result = request.method === "operation" && event.operationId
           ? { operationId: event.operationId, state: "accepted", seq: appended.seq, revision: appended.revision }
           : appended;

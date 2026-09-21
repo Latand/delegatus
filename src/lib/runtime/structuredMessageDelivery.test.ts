@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
-import { reconcileMigrations } from "@/lib/accounts/migration/coordinator";
+import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import type { RuntimeHostClient } from "./client";
@@ -139,7 +139,7 @@ test("Claude image-only admission stores refs and journals their content digest"
   const imageRef: StructuredImageRef = { sha256: "a".repeat(64), mime: "image/png", bytes: 67 };
   let command: Record<string, unknown> | null = null;
   const client = {
-    snapshot: async () => snapshot(conversation.id, "claude", true),
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude", true)),
     command: async (value: Record<string, unknown>) => {
       command = value;
       return {
@@ -189,7 +189,7 @@ test("a changed-image replay of one client message id maps to a 409 reservation 
   const changedRef: StructuredImageRef = { sha256: "b".repeat(64), mime: "image/png", bytes: 91 };
   let commands = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id, "claude", true),
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude", true)),
     command: async (value: { operationId: string; idempotencyKey: string }) => {
       commands += 1;
       return {
@@ -264,10 +264,10 @@ test("an image send to a dead session recovers ownership first and enqueues exac
   let stores = 0;
   const commands: unknown[] = [];
   const client = {
-    snapshot: async () => {
+    readSession: sessionReader(async () => {
       snapshots += 1;
       return snapshots === 1 ? deadSnapshot : snapshot(conversation.id, "claude", true);
-    },
+    }),
     command: async (command: { operationId: string; idempotencyKey: string }) => {
       commands.push(command);
       return {
@@ -325,10 +325,10 @@ test("a recovered Codex host with unknown image capability reaches the command q
   const client = {
     /* The recovered projection is hosted while image capability remains
        unconfirmed. The host performs the authoritative retry. */
-    snapshot: async () => {
+    readSession: sessionReader(async () => {
       snapshots += 1;
       return snapshots === 1 ? deadSnapshot : snapshot(conversation.id, "codex", false);
-    },
+    }),
     command: async (command: { operationId: string; idempotencyKey: string }) => {
       commands += 1;
       return {
@@ -378,7 +378,7 @@ test("a changed payload rejects before any blob publication even at full quota",
   const changedRef: StructuredImageRef = { sha256: "b".repeat(64), mime: "image/png", bytes: 91 };
   let commands = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id, "claude", true),
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude", true)),
     command: async (command: { operationId: string; idempotencyKey: string }) => {
       commands += 1;
       return {
@@ -445,7 +445,7 @@ test("a reservation race leaves publication cleanup to grace-period GC", async (
   const loserRef: StructuredImageRef = { sha256: "b".repeat(64), mime: "image/png", bytes: 91 };
   let commands = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id, "claude", true),
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude", true)),
     command: async () => { commands += 1; throw new Error("unexpected command"); },
   } as unknown as RuntimeHostClient;
 
@@ -496,7 +496,7 @@ test("a spawn publication survives a later deduplicated admission conflict", asy
   const [spawnRef] = store.putMany([upload]);
   const winnerRef: StructuredImageRef = { sha256: "a".repeat(64), mime: "image/png", bytes: 67 };
   const client = {
-    snapshot: async () => snapshot(conversation.id, "claude", true),
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude", true)),
     command: async () => { throw new Error("unexpected command"); },
   } as unknown as RuntimeHostClient;
 
@@ -651,7 +651,7 @@ test("one UTF-8 envelope bound rejects an oversized multibyte caption before sto
   let stores = 0;
   let commands = 0;
   const client = {
-    snapshot: async () => deadSnapshot,
+    readSession: sessionReader(async () => deadSnapshot),
     command: async () => { commands += 1; throw new Error("unexpected command"); },
   } as unknown as RuntimeHostClient;
   const dependencies = {
@@ -689,7 +689,7 @@ test("a caption at exactly the 32000-byte envelope boundary is admitted with ima
   const imageRef: StructuredImageRef = { sha256: "d".repeat(64), mime: "image/png", bytes: 67 };
   let commands = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id, "claude", true),
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude", true)),
     command: async (command: { operationId: string; idempotencyKey: string }) => {
       commands += 1;
       return {
@@ -743,7 +743,7 @@ test("a client message id longer than the runtime journal admits is refused befo
   const { registry, conversation } = registryWithConversation("default", "claude");
   let commands = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id, "claude", true),
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude", true)),
     command: async (command: { operationId: string; idempotencyKey: string }) => {
       commands += 1;
       return {
@@ -793,7 +793,7 @@ test("stale structured image capability rejects before blob storage or command a
   let stores = 0;
   let commands = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id, "claude", false),
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude", false)),
     command: async () => { commands += 1; throw new Error("unexpected command"); },
   } as unknown as RuntimeHostClient;
 
@@ -820,7 +820,7 @@ test("an over-limit encoded aggregate fails before blob storage or command admis
   let stores = 0;
   let commands = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id, "claude", true),
+    readSession: sessionReader(async () => snapshot(conversation.id, "claude", true)),
     command: async () => { commands += 1; throw new Error("unexpected command"); },
   } as unknown as RuntimeHostClient;
 
@@ -958,7 +958,7 @@ test("a reopened synchronization hold replays the exact steer command", async ()
     revision: 2,
   };
   const client = {
-    snapshot: async () => snapshot(conversation.id),
+    readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async (command: unknown) => {
       acceptedCommand = command;
       return { operationId: request.operationId, replayed: false, receipt };
@@ -1107,7 +1107,7 @@ test("a delivered tombstone rejects changed client-id reuse and preserves the ca
     revision: 2,
   };
   const client = {
-    snapshot: async () => snapshot(conversation.id),
+    readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async () => ({ operationId: original.operationId, replayed: false, receipt }),
   } as unknown as RuntimeHostClient;
 
@@ -1186,7 +1186,7 @@ test("legacy synchronization rejects structured command semantics before fallbac
   legacySnapshot.sessions[0] = { ...legacySnapshot.sessions[0]!, hostKind: "tmux-legacy" };
   const snapshotResult = await enqueueStructuredMessage(request, {
     enabled: () => true,
-    client: () => ({ snapshot: async () => legacySnapshot }) as unknown as RuntimeHostClient,
+    client: () => ({ readSession: sessionReader(async () => legacySnapshot) }) as unknown as RuntimeHostClient,
     registry: () => registry,
   });
 
@@ -1263,7 +1263,7 @@ test("a live legacy record outranks a stale structured projection for the send i
     hasImages: false,
   }, {
     enabled: () => true,
-    client: () => ({ snapshot: async () => staleRuntime }) as unknown as RuntimeHostClient,
+    client: () => ({ readSession: sessionReader(async () => staleRuntime) }) as unknown as RuntimeHostClient,
     registry: () => registry,
     republish: async () => false,
     recover: async () => {
@@ -1335,7 +1335,7 @@ test("legacy runtime synchronization leaves request-local payloads for the legac
 test("structured message routing fences when the snapshot and registry have no current owner", async () => {
   const registry = new AgentRegistry(path.join(sandbox, `registry-${registryNumber += 1}.json`));
   const client = {
-    snapshot: async () => ({ ...snapshot(), sessions: [] }),
+    readSession: sessionReader(async () => ({ ...snapshot(), sessions: [] })),
   } as unknown as RuntimeHostClient;
 
   const result = await enqueueStructuredMessage(
@@ -1349,7 +1349,7 @@ test("structured message routing fences when the snapshot and registry have no c
 test("structured message routing fences a failed startup snapshot without persisted ownership", async () => {
   const registry = new AgentRegistry(path.join(sandbox, `registry-${registryNumber += 1}.json`));
   const client = {
-    snapshot: async () => { throw new Error("startup adoption failed"); },
+    readSession: sessionReader(async () => { throw new Error("startup adoption failed"); }),
   } as unknown as RuntimeHostClient;
 
   const result = await enqueueStructuredMessage(
@@ -1362,7 +1362,7 @@ test("structured message routing fences a failed startup snapshot without persis
 
 test("structured message routing fences a transient snapshot failure", async () => {
   const client = {
-    snapshot: async () => { throw new Error("runtime socket timed out"); },
+    readSession: sessionReader(async () => { throw new Error("runtime socket timed out"); }),
   } as unknown as RuntimeHostClient;
 
   const result = await enqueueStructuredMessage(
@@ -1383,7 +1383,7 @@ test("a persisted structured current generation holds the send after a runtime s
   recordStructuredOwner(registry, conversation);
   let migrationTicks = 0;
   const client = {
-    snapshot: async () => { throw new Error("runtime host is unavailable"); },
+    readSession: sessionReader(async () => { throw new Error("runtime host is unavailable"); }),
   } as unknown as RuntimeHostClient;
 
   const result = await enqueueStructuredMessage({
@@ -1436,7 +1436,7 @@ test("a persisted tmux current generation falls through after a runtime snapshot
   const { registry, conversation } = registryWithConversation();
   recordLegacyOwner(registry, conversation);
   const client = {
-    snapshot: async () => { throw new Error("runtime host is unavailable"); },
+    readSession: sessionReader(async () => { throw new Error("runtime host is unavailable"); }),
   } as unknown as RuntimeHostClient;
 
   const result = await enqueueStructuredMessage({
@@ -1460,11 +1460,11 @@ test("structured ownership recovery revokes startup-failure fallback authorizati
   let startupFailed = true;
   let snapshots = 0;
   const client = {
-    snapshot: async () => {
+    readSession: sessionReader(async () => {
       snapshots += 1;
       if (snapshots === 1) return snapshot();
       throw new Error("runtime socket timed out after recovery");
-    },
+    }),
   } as unknown as RuntimeHostClient;
   const dependencies = {
     enabled: () => true,
@@ -1488,7 +1488,7 @@ test("structured message routing only falls through for an explicit legacy owner
   const legacySnapshot = snapshot();
   legacySnapshot.sessions[0] = { ...legacySnapshot.sessions[0]!, hostKind: "tmux-legacy" };
   const client = {
-    snapshot: async () => legacySnapshot,
+    readSession: sessionReader(async () => legacySnapshot),
     command: async () => { throw new Error("legacy delivery reached the structured host"); },
   } as unknown as RuntimeHostClient;
 
@@ -1508,7 +1508,7 @@ test("dead structured composer send is durable before recovery and delivers afte
   let durableBeforeRecovery = false;
   const commands: unknown[] = [];
   const client = {
-    snapshot: async () => deadSnapshot,
+    readSession: sessionReader(async () => deadSnapshot),
     command: async (command: {
       kind: "send";
       operationId?: string;
@@ -1603,9 +1603,9 @@ test("a send resumes a reclaimed conversation after reserving the instruction an
   let drainRequests = 0;
   const commands: Array<{ operationId: string; idempotencyKey: string; text: string }> = [];
   const client = {
-    snapshot: async () => recovered
+    readSession: sessionReader(async () => recovered
       ? snapshot(conversation.id)
-      : { ...snapshot(conversation.id), sessions: [] },
+      : { ...snapshot(conversation.id), sessions: [] }),
     command: async (command: { operationId: string; idempotencyKey: string; text: string }) => {
       commands.push(command);
       return {
@@ -1707,9 +1707,9 @@ test("a reclaimed admission survives the migration orphan sweep until recovery p
   } = { state: null, intent: null };
   const commands: string[] = [];
   const client = {
-    snapshot: async () => recovered
+    readSession: sessionReader(async () => recovered
       ? snapshot(conversation.id)
-      : { ...snapshot(conversation.id), sessions: [] },
+      : { ...snapshot(conversation.id), sessions: [] }),
     command: async (command: { operationId: string; idempotencyKey: string }) => {
       commands.push(command.idempotencyKey);
       return {
@@ -1875,7 +1875,7 @@ test("a durable dead host resumes even while the runtime still projects it as un
     text: "resume from the durable conversation",
   }, {
     enabled: () => true,
-    client: () => ({ snapshot: async () => projected } as unknown as RuntimeHostClient),
+    client: () => ({ readSession: sessionReader(async () => projected) } as unknown as RuntimeHostClient),
     registry: () => registry,
     recover: async () => {
       recoveryCalls += 1;
@@ -1918,7 +1918,7 @@ test("a reclaimed send stays durably held while its accepted resume has no proce
   let commands = 0;
   let drainRequests = 0;
   const client = {
-    snapshot: async () => ({ ...snapshot(conversation.id), sessions: [] }),
+    readSession: sessionReader(async () => ({ ...snapshot(conversation.id), sessions: [] })),
     command: async () => {
       commands += 1;
       throw new Error("delivery reached a host with no recorded process");
@@ -2008,7 +2008,7 @@ test("a reclaimed send stays durably held while its accepted resume has no proce
 
 test("delivery failures name reclaimed recovery separately from host synchronization", async () => {
   const missingSessions = {
-    snapshot: async () => ({ ...snapshot(), sessions: [] }),
+    readSession: sessionReader(async () => ({ ...snapshot(), sessions: [] })),
   } as unknown as RuntimeHostClient;
 
   const reclaimedFixture = registryWithConversation();
@@ -2091,7 +2091,7 @@ test("a dead structured host names reclamation when its recovery fails", async (
     text: "continue after recovery",
   }, {
     enabled: () => true,
-    client: () => ({ snapshot: async () => projected } as unknown as RuntimeHostClient),
+    client: () => ({ readSession: sessionReader(async () => projected) } as unknown as RuntimeHostClient),
     registry: () => registry,
     recover: async () => { throw new Error("recovery process failed to publish"); },
   });
@@ -2151,7 +2151,7 @@ test("reclaimed-host recovery never repeats an instruction whose delivery fate i
   }, {
     enabled: () => true,
     client: () => ({
-      snapshot: async () => ({ ...snapshot(conversation.id), sessions: [] }),
+      readSession: sessionReader(async () => ({ ...snapshot(conversation.id), sessions: [] })),
       command: async () => { throw new Error("an uncertain instruction was repeated"); },
     } as unknown as RuntimeHostClient),
     registry: () => registry,
@@ -2197,7 +2197,7 @@ test("dead structured recovery stays behind an instruction whose delivery fate i
   }, {
     enabled: () => true,
     client: () => ({
-      snapshot: async () => projected,
+      readSession: sessionReader(async () => projected),
       command: async () => {
         commands += 1;
         throw new Error("an uncertain instruction was repeated");
@@ -2270,7 +2270,7 @@ test("a completed pipeline-stage send replaces dead host ownership and reaches a
   let recoveryCalls = 0;
   const commands: unknown[] = [];
   const client = {
-    snapshot: async () => currentSnapshot,
+    readSession: sessionReader(async () => currentSnapshot),
     command: async (command: {
       kind: "send";
       operationId?: string;
@@ -2407,7 +2407,7 @@ test("structured recovery failures remain admitted, avoid delivery, and allow a 
   let recoveryAttempts = 0;
   const commands: unknown[] = [];
   const client = {
-    snapshot: async () => deadSnapshot,
+    readSession: sessionReader(async () => deadSnapshot),
     command: async (command: unknown) => {
       commands.push(command);
       return {
@@ -2480,7 +2480,7 @@ test("structured message republishes an in-process host after runtime restart be
   let recoveryCalls = 0;
   const commands: unknown[] = [];
   const client = {
-    snapshot: async () => currentSnapshot,
+    readSession: sessionReader(async () => currentSnapshot),
     command: async (command: unknown) => {
       commands.push(command);
       return {
@@ -2537,7 +2537,7 @@ test("structured message republishes an in-process host after runtime restart be
 
 test("structured ownership stays fenced while its registry projection is missing", async () => {
   const client = {
-    snapshot: async () => snapshot(),
+    readSession: sessionReader(async () => snapshot()),
   } as unknown as RuntimeHostClient;
   const { registry } = registryWithConversation("missing-projection");
 
@@ -2556,7 +2556,7 @@ test("structured ownership stays fenced while its registry projection is missing
 test("structured message routing fences an unhosted runtime projection", async () => {
   const unhostedSnapshot = snapshot();
   unhostedSnapshot.sessions[0] = { ...unhostedSnapshot.sessions[0]!, hostKind: "unhosted" };
-  const client = { snapshot: async () => unhostedSnapshot } as unknown as RuntimeHostClient;
+  const client = { readSession: sessionReader(async () => unhostedSnapshot) } as unknown as RuntimeHostClient;
 
   const result = await enqueueStructuredMessage(
     { path: artifactPath, text: "hello", hasImages: false },
@@ -2571,7 +2571,7 @@ test("structured message routing returns the durable queued receipt immediately"
   let command: unknown;
   let kicked = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id),
+    readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async (value: unknown) => {
       command = value;
       return {
@@ -2625,7 +2625,7 @@ test("migration-held delivery settles through the runtime journal after EngineHo
     revision: status === "queued" ? 1 : 2,
   });
   const client = {
-    snapshot: async () => snapshot(conversation.id),
+    readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async (value: unknown) => {
       command = value;
       return { operationId: "held-delivery-one", replayed: false, receipt: receipt() };
@@ -2669,7 +2669,7 @@ test("held delivery stays fenced when persisted ownership is unavailable", async
     text: "continue through tmux",
   };
   const missingSessionClient = {
-    snapshot: async () => ({ ...snapshot(), sessions: [] }),
+    readSession: sessionReader(async () => ({ ...snapshot(), sessions: [] })),
   } as unknown as RuntimeHostClient;
 
   expect(await deliverHeldStructuredMessage(request, {
@@ -2699,7 +2699,7 @@ test("held delivery fences a missing runtime client without startup failure evid
   })).toBe("delivery-uncertain");
 });
 
-test("held delivery keeps a persisted structured owner fenced when startup failed", async () => {
+test("held delivery keeps a persisted structured owner queued when no dispatch was possible", async () => {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);
 
@@ -2714,7 +2714,64 @@ test("held delivery keeps a persisted structured owner fenced when startup faile
     client: () => null,
     registry: () => registry,
     startupFailed: () => true,
-  })).toBe("delivery-uncertain");
+  })).toBe("held");
+});
+
+test("an unsupported session read before dispatch retains the original held message and image for one later delivery", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const imageStore = new RuntimeImageStore(path.join(sandbox, "pre-dispatch-images"));
+  const images = imageStore.putMany([{ base64: PNG_BASE64, mime: "image/png" }]);
+  const held = registry.holdDelivery(conversation.id, "original message with image", "pre-dispatch-key", "runtime-images", images, null);
+  let ready = false;
+  const commands: unknown[] = [];
+  const client = {
+    readSession: sessionReader(async () => {
+      if (!ready) throw new Error("runtime request method is unsupported");
+      return snapshot(conversation.id, "codex", true);
+    }),
+    command: async (command: unknown) => { commands.push(command); return { operationId: held.command.operationId, receipt: { status: "delivered" } }; },
+    operationStatus: async () => ({ operationId: held.command.operationId, receipt: { status: "delivered" } }),
+  } as unknown as RuntimeHostClient;
+  const drain = () => drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId,
+      text: delivery.text, imageRefs: delivery.runtimeImages, command: delivery.command,
+    }, { enabled: () => true, client: () => client, registry: () => registry, kick: async () => {} }) ?? "delivery-uncertain",
+  }, registry);
+  await drain();
+  expect(commands).toHaveLength(0);
+  expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({
+    state: "assigned", clientMessageId: held.clientMessageId, command: held.command,
+    text: held.text, runtimeImages: images,
+  });
+  ready = true;
+  await drain();
+  await drain();
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toMatchObject({ operationId: held.command.operationId, idempotencyKey: held.clientMessageId, text: held.text, images });
+  expect(registry.snapshot().heldDeliveries[held.id]!.state).toBe("delivered");
+  registry.close();
+});
+
+test("a failed session read while reconciling an uncertain send does not authorize another attempt", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const held = registry.holdDelivery(conversation.id, "possibly already sent", "uncertain-read-key");
+  registry.beginDeliveryAttempt(held.id, conversation.generations.at(-1)!.id);
+  const before = registry.snapshot().heldDeliveries[held.id];
+  await drainHeldDeliveries(conversation.id, {
+    deliver: async () => { throw new Error("uncertain sends must only be reconciled"); },
+    reconcileUncertain: async ({ delivery, path, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path, deliveryId: delivery.id, clientMessageId, text: delivery.text,
+    }, {
+      enabled: () => true, registry: () => registry,
+      client: () => ({ readSession: async () => { throw new Error("runtime request method is unsupported"); },
+        command: async () => { throw new Error("no command may be dispatched"); } }) as unknown as RuntimeHostClient,
+    }) ?? "delivery-uncertain",
+  }, registry);
+  expect(registry.snapshot().heldDeliveries[held.id]).toEqual(before);
+  registry.close();
 });
 
 test("held delivery authorizes legacy fallback from persisted tmux ownership", async () => {
@@ -2760,14 +2817,14 @@ test("held delivery rejects structured command semantics before legacy fallback"
   legacySnapshot.sessions[0] = { ...legacySnapshot.sessions[0]!, hostKind: "tmux-legacy" };
   expect(await deliverHeldStructuredMessage(request, {
     enabled: () => true,
-    client: () => ({ snapshot: async () => legacySnapshot }) as unknown as RuntimeHostClient,
+    client: () => ({ readSession: sessionReader(async () => legacySnapshot) }) as unknown as RuntimeHostClient,
     registry: () => registry,
   })).toBe("failed");
 });
 
 test("held delivery stays uncertain during a transient structured snapshot failure", async () => {
   const client = {
-    snapshot: async () => { throw new Error("runtime socket timed out"); },
+    readSession: sessionReader(async () => { throw new Error("runtime socket timed out"); }),
   } as unknown as RuntimeHostClient;
 
   expect(await deliverHeldStructuredMessage({
@@ -2797,7 +2854,7 @@ test("structured message routing holds composer delivery when migration owns the
   let commands = 0;
   let migrationTicks = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id),
+    readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async () => {
       commands += 1;
       throw new Error("the predecessor host received a fenced message");
@@ -2835,7 +2892,7 @@ test("a dead conversation's terminal failed reservation cannot refuse the operat
 
   const deliveredTexts: string[] = [];
   const client = {
-    snapshot: async () => snapshot(conversation.id),
+    readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async (value: { operationId: string; idempotencyKey: string; text: string }) => {
       deliveredTexts.push(value.text);
       return {
@@ -2900,7 +2957,7 @@ test("a post-admission settlement failure preserves the accepted receipt as deli
   }) as AgentRegistry["recordDeliveryOutcome"];
   let commands = 0;
   const client = {
-    snapshot: async () => snapshot(conversation.id),
+    readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
       commands += 1;
       return {
@@ -3005,7 +3062,7 @@ for (const engine of ["claude", "codex"] as const) {
       revision: 2,
     });
     const client = {
-      snapshot: async () => snapshot(conversation.id, engine),
+      readSession: sessionReader(async () => snapshot(conversation.id, engine)),
       command: async (value: unknown) => {
         command = value;
         return { operationId: "held-origin-replay", replayed: false, receipt: receipt() };
@@ -3078,7 +3135,7 @@ test("a dead-host send of text AND an image is durable before a failing resume, 
   let hosted = false;
   const commands: { idempotencyKey: string; images?: readonly StructuredImageRef[] }[] = [];
   const client = {
-    snapshot: async () => (hosted ? snapshot(conversation.id) : deadSnapshot),
+    readSession: sessionReader(async () => (hosted ? snapshot(conversation.id) : deadSnapshot)),
     command: async (command: { operationId: string; idempotencyKey: string; conversationId: string; kind: string; images?: StructuredImageRef[] }) => {
       commands.push({ idempotencyKey: command.idempotencyKey, images: command.images });
       return {
@@ -3253,7 +3310,7 @@ for (const projection of ["missing-session", "unhosted-projection"] as const) {
     const reservedBeforeRecovery: HeldDelivery[] = [];
     const commands: Array<{ idempotencyKey: string; images?: readonly StructuredImageRef[] }> = [];
     const client = {
-      snapshot: async () => (hosted ? snapshot(conversation.id, "codex", true) : reclaimedSnapshot()),
+      readSession: sessionReader(async () => (hosted ? snapshot(conversation.id, "codex", true) : reclaimedSnapshot())),
       command: async (command: { operationId: string; idempotencyKey: string; conversationId: string; kind: string; images?: StructuredImageRef[] }) => {
         commands.push({ idempotencyKey: command.idempotencyKey, images: command.images });
         return {
@@ -3388,7 +3445,7 @@ for (const withImage of [false, true]) {
     const imageRef: StructuredImageRef = { sha256: "b".repeat(64), mime: "image/png", bytes: 67 };
     let commands = 0;
     const client = {
-      snapshot: async () => snapshot(conversation.id, "claude", true),
+      readSession: sessionReader(async () => snapshot(conversation.id, "claude", true)),
       command: async () => {
         commands += 1;
         return { operationId: "wait-send", replayed: false, receipt: { operationId: "wait-send", idempotencyKey: "wait-send-key", conversationId: conversation.id,
@@ -3413,3 +3470,27 @@ for (const withImage of [false, true]) {
     } finally { release(); await holder; await send.catch(() => {}); }
   });
 }
+
+function sessionReader(read: () => Promise<RuntimeSnapshot>): NonNullable<RuntimeHostClient["readSession"]> {
+  return async identity => {
+    const state = await read();
+    return state.sessions.find(row => row.conversationId === identity.conversationId)
+      ?? state.sessions.find(row => row.artifactPath === identity.artifactPath) ?? null;
+  };
+}
+
+
+test("one recovered session cannot mark an unfinished startup pass ready", async () => {
+  const status = await import("./startupStatus");
+  status.markStructuredHostStartupProgress({ phase: "publishing historical host fallbacks", completedHosts: 0, totalHosts: null });
+  status.markStructuredHostStartupFailed();
+  const { registry } = registryWithConversation();
+  try {
+    await enqueueStructuredMessage({ path: artifactPath, text: "observe one session", hasImages: true }, {
+      enabled: () => true, registry: () => registry,
+      client: () => ({ readSession: sessionReader(async () => snapshot()) }) as unknown as RuntimeHostClient,
+    });
+    expect(status.structuredStartupStatus({ LLV_STRUCTURED_HOSTS: "1" })?.state).toBe("failed");
+    expect(status.didStructuredHostStartupFail()).toBe(true);
+  } finally { registry.close(); }
+});

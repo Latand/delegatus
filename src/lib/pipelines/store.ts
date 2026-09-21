@@ -13,8 +13,14 @@ import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
 import { normalizeStageOutputPath } from "./stageAccess";
+import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
+
+/** Same opaque content revision used by MCP record acknowledgements. */
+export function pipelineRevision(pipeline: Pipeline): string {
+  return crypto.createHash("sha256").update(JSON.stringify(pipeline)).digest("hex");
+}
 
 export const PIPELINES_SCHEMA_VERSION = 5;
 /** Older registries are migrated in memory on load; the file is rewritten in
@@ -139,6 +145,7 @@ function isAttempt(value: unknown, index: number): boolean {
   const attempt = value as Record<string, unknown>;
   return (
     attempt.n === index + 1 &&
+    (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
     ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"].includes(String(attempt.state)) &&
     isEffectiveRole(attempt.effectiveRole) &&
@@ -485,6 +492,19 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
     && ["pending", "running", "settled"].includes(operation.state));
 }
 
+function isDecisionAnswer(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const answer = value as Record<string, unknown>;
+  return typeof answer.clientRequestId === "string" && answer.clientRequestId.length > 0 && answer.clientRequestId.length <= 200
+    && typeof answer.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(answer.expectedRevision)
+    && typeof answer.stageId === "string" && answer.stageId.length > 0
+    && Number.isSafeInteger(answer.attempt) && (answer.attempt as number) > 0
+    && Number.isSafeInteger(answer.nextAttempt) && (answer.nextAttempt as number) > (answer.attempt as number)
+    && typeof answer.question === "string"
+    && typeof answer.answer === "string" && answer.answer.trim().length > 0 && answer.answer.length <= MAX_DECISION_ANSWER_CHARS
+    && isActor(answer.actor) && typeof answer.at === "string";
+}
+
 function isPipeline(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
@@ -527,6 +547,7 @@ function isPipeline(value: unknown): value is Pipeline {
       || (Array.isArray(pipeline.unconfirmedHosts) && pipeline.unconfirmedHosts.every(isUnconfirmedHost))) &&
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
     (pipeline.restored === undefined || typeof pipeline.restored === "boolean") &&
+    (pipeline.decisionAnswers === undefined || (Array.isArray(pipeline.decisionAnswers) && pipeline.decisionAnswers.every(isDecisionAnswer))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
     (pipeline.stageReports === undefined || (Array.isArray(pipeline.stageReports) && pipeline.stageReports.length <= MAX_PIPELINE_STAGE_REPORTS && pipeline.stageReports.every(isStageReportEntry))) &&
     (pipeline.pos === undefined || (
@@ -960,11 +981,12 @@ export async function withPipelineMutation<T>(
     (): void;
     (records: readonly Pipeline[]): void;
   }) => Promise<T> | T,
+  observeHold?: (heldMs: number) => void,
 ): Promise<T> {
   return refuseBusyBeforeAdmission((admitted) => pipelineStore().mutate((pipelines, persist) => {
     admitted();
     return mutate(pipelines, persist);
-  }, undefined, false, pipelineLockWaitMs()));
+  }, undefined, false, pipelineLockWaitMs(), observeHold));
 }
 
 export async function withPipelineControllerMutation<T>(
@@ -976,12 +998,15 @@ export async function withPipelineControllerMutation<T>(
   return pipelineStore().mutate(mutate, undefined, true);
 }
 
-/** Hold the existing cross-process mutation lease through startup admission.
+/** Short startup state admission under the existing cross-process lease.
+ * Callers finish host and transcript I/O before entering this callback.
  * Unavailable state or authority permits only the caller's deferred path.
  * Never reinterpret a failure inside admission as permission to run it again.
  */
 export async function withPipelineStartupAdmission<T>(
   admit: (available: boolean) => Promise<T>,
+  phase = "startup evidence",
+  observeHold?: (heldMs: number) => void,
 ): Promise<T> {
   let entered = false;
   try {
@@ -991,6 +1016,11 @@ export async function withPipelineStartupAdmission<T>(
     return await withPipelineMutation(() => {
       entered = true;
       return admit(true);
+    }, (heldMs) => {
+      if (heldMs > 100) console.warn("[structured hosts] state lease exceeded budget", {
+        phase, collection: "pipelines", heldMs: Math.round(heldMs), budgetMs: 100,
+      });
+      observeHold?.(heldMs);
     });
   } catch (error) {
     if (entered) throw error;

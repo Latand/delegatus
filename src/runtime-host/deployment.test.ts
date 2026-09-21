@@ -455,6 +455,26 @@ test("a post-promotion failure restores the previous healthy release", async () 
   store.close();
 });
 
+test("a promoted verification deadline enters rollback and frees the deployment lane", async () => {
+  const store = journal("startup-deadline");
+  const adapter = new FakeDeploymentAdapter();
+  const previous = adapter.current;
+  adapter.verifyPromoted = async () => {
+    throw new Error("deployment adapter verify-promoted timed out while adopting Codex hosts - runtime-host-unavailable");
+  };
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+  try {
+    const receipt = await coordinator.requestViewerDeployment({ idempotencyKey: "startup-deadline" });
+    if (receipt.state !== "accepted") throw new Error("deployment was not accepted");
+    const status = await coordinator.waitForDeployment(receipt.deploymentId);
+    expect(status).toMatchObject({ phase: "rolled-back", terminal: true, previous });
+    expect(status?.error).toContain("adopting Codex hosts - runtime-host-unavailable");
+    const next = await coordinator.requestViewerDeployment({ idempotencyKey: "after-startup-deadline" });
+    expect(next.state).toBe("accepted");
+    if (next.state === "accepted") await coordinator.waitForDeployment(next.deploymentId);
+  } finally { store.close(); }
+});
+
 /* Production #518: the runtime-host container runs a baked image and its Bun
    process loads modules once at boot. PID 3970 kept executing a stale image
    (no #389 broker guard), so promptless Claude resume adoption kept failing

@@ -165,7 +165,14 @@ export function McpCallCard({
           <span className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted">
             MCP · {mcp?.serverName ?? "viewer"}
           </span>
-          <span className="min-w-0 flex-1 truncate font-semibold text-secondary" title={description.title}>
+          {/* #1955: on one wrapping line the badge, the chips, the outcome
+              mark, the duration and the timestamp are all intrinsically sized,
+              so `flex-1` (basis 0) left the title as the only item able to
+              give way — with two entity chips it held 1.27 px of a 330 px row
+              at phone width. A flex basis makes it claim the line instead, and
+              what no longer fits wraps whole, the way the live overlay row it
+              takes over from already does. */}
+          <span data-mcp-title className="min-w-0 grow basis-[10rem] truncate font-semibold text-secondary" title={description.title}>
             {description.title}
           </span>
           {replayed ? <span data-testid="mcp-replay" className="shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent">Replay</span> : null}

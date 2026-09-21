@@ -1,17 +1,23 @@
 /**
- * Issue #1213 — the bubble the operator was actually looking at.
+ * Issue #1213 — the delivery evidence the operator can reach.
  *
- * The report's screenshot is this surface: an optimistic user bubble reading
- * «Delivering» with a spinner, for a message that was parked behind a turn that
- * never ended. It said the same word for a delivery that landed in twelve
- * seconds, one that landed in twenty-one minutes, and one that never landed —
- * and it had no test at all.
+ * The report's screenshot was this surface: an optimistic user bubble reading
+ * «Delivering» with a spinner, for a message parked behind a turn that never
+ * ended. It said the same word for a delivery that landed in twelve seconds,
+ * one that landed in twenty-one minutes, and one that never landed.
  *
- * What must NOT appear here: a control. The bubble is the composer's local
- * mirror and owns no journal operation. `retryOutbox` refuses anything but a
- * failed entry, and `cancelOutbox` deletes the local row while the server keeps
- * holding the message — so a Retry or an X on an admitted bubble is a button
- * that lies. The exit lives on the receipt row, which owns the operation.
+ * Send-latency slice 3 kept every distinction this issue won and moved it off
+ * the resting row: the message itself reads one stable sentence while it is
+ * unconfirmed, and the wait's own words — which turn, which host, how long —
+ * are the evidence under its progress affordance, reachable by hover or by
+ * opening it. So the assertions below read `transport()`, and `status()` is
+ * the one sentence the operator reads without asking.
+ *
+ * What must NOT appear on a resting admitted row: a control. The row is the
+ * composer's local mirror and owns no journal operation. `retryOutbox` refuses
+ * anything but a failed entry, and `cancelOutbox` deletes the local row while
+ * the server keeps holding the message — so a Retry or an X on an admitted row
+ * is a button that lies.
  */
 import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -65,8 +71,24 @@ async function render(node: React.ReactElement): Promise<HTMLElement> {
   return host;
 }
 
-const chip = (host: HTMLElement) => host.querySelector("[data-outbox-status]")?.textContent ?? "";
+/** The one sentence on the resting row: three states, never the transport's. */
+const status = (host: HTMLElement) => host.querySelector("[data-outbox-status]")?.textContent ?? "";
+/** The transport evidence, as the affordance publishes it for hover and as its
+    disclosure renders it. */
+const transport = (host: HTMLElement) =>
+  host.querySelector("[data-outbox-progress]")?.getAttribute("title") ?? "";
+/** The same evidence after the operator opens the affordance — the assertion
+    that hover and disclosure can never drift apart. */
+async function disclosed(host: HTMLElement): Promise<string> {
+  const toggle = host.querySelector<HTMLButtonElement>("[data-outbox-progress]");
+  if (!toggle) return "";
+  await act(async () => toggle.click());
+  return host.querySelector("[data-outbox-transport]")?.textContent ?? "";
+}
 const phase = (host: HTMLElement) => host.querySelector("[data-outbox-entry]")?.getAttribute("data-outbox-wait");
+const rowPhase = (host: HTMLElement) => host.querySelector("[data-outbox-entry]")?.getAttribute("data-message-row");
+
+let checked = 0;
 
 async function bubble(
   overrides: Partial<Entry>,
@@ -75,6 +97,7 @@ async function bubble(
   session: Session | null = BUSY,
 ) {
   document.body.replaceChildren();
+  checked = 0;
   return render(
     <OutboxBubblesView
       entries={[entry(overrides)]}
@@ -82,15 +105,24 @@ async function bubble(
       nowMs={nowMs}
       onCancel={() => {}}
       onRetry={() => {}}
+      /* Production wires this to a re-read of the runtime under the message's
+         own operation; here it only has to be reachable. */
+      onCheck={() => { checked += 1; }}
       session={session}
     />,
   );
 }
 
-test("#1213 an attempt on the wire keeps the wording it always had", async () => {
+test("#1213 an attempt on the wire keeps the wording it always had, as evidence", async () => {
   const host = await bubble({}, SUBMITTED_AT + 4_000);
   expect(phase(host)).toBe("handing-over");
-  expect(chip(host)).toBe(translate("en", "outbox.delivering"));
+  expect(rowPhase(host)).toBe("pending");
+  expect(transport(host)).toBe(translate("en", "outbox.delivering"));
+  /* Hover and disclosure are the same sentence, never two versions of it. */
+  expect(await disclosed(host)).toBe(translate("en", "outbox.delivering"));
+  /* And the row itself says the one thing that is true of every unconfirmed
+     delivery, so it does not change as the transport does. */
+  expect(status(host)).toBe(translate("en", "outbox.awaitingConfirmation"));
   expect(host.querySelector(".animate-spin")).not.toBeNull();
 });
 
@@ -98,23 +130,37 @@ test("#1213 a message parked at a turn boundary says which wait it is in, and it
   for (const locale of ["en", "uk"] as const) {
     const host = await bubble({ awaitingTurn: true }, SUBMITTED_AT + 4 * 60_000, locale);
     expect(phase(host)).toBe("awaiting-turn");
-    expect(chip(host)).toBe(translate(locale, "runtime.receipt.awaitingTurnFor", {
+    expect(transport(host)).toBe(translate(locale, "runtime.receipt.awaitingTurnFor", {
       waited: translate(locale, "runtime.receipt.waitedMin", { n: 4 }),
     }));
-    /* The lie the operator reported: nothing is being transmitted. */
+    /* The lie the operator reported: nothing is being transmitted. The word is
+       not in the evidence, and the row does not claim it either. */
     expect(host.textContent).not.toContain(translate(locale, "outbox.delivering"));
-    expect(host.querySelector(".animate-spin")).toBeNull();
+    expect(status(host)).toBe(translate(locale, "outbox.awaitingConfirmation"));
   }
 });
 
-test("#1213 past the bound the bubble says it was not delivered, and how long it waited", async () => {
+test("past the bound the message stays unconfirmed — never 'not sent' — and offers Check status", async () => {
   for (const locale of ["en", "uk"] as const) {
     const host = await bubble({ awaitingTurn: true }, SUBMITTED_AT + PAST_BOUND_MS, locale);
     expect(phase(host)).toBe("uncertain");
-    expect(chip(host)).toBe(translate(locale, "runtime.receipt.unconfirmed", {
+    /* The evidence keeps the whole sentence, with the age that earned it. */
+    expect(transport(host)).toBe(translate(locale, "runtime.receipt.unconfirmed", {
       waited: translate(locale, "runtime.receipt.waitedMin", { n: PAST_BOUND_MIN }),
     }));
-    expect(host.querySelector(".animate-spin")).toBeNull();
+    /* A transport timeout is not proof the message was not sent, so the row
+       stays pending confirmation and never becomes a failure. */
+    expect(rowPhase(host)).toBe("pending");
+    expect(status(host)).toBe(translate(locale, "outbox.awaitingConfirmation"));
+    expect(host.querySelector("[data-outbox-failure]")).toBeNull();
+    /* And the one thing that can settle it is offered under the disclosure,
+       against the original identity — never a second send. */
+    await disclosed(host);
+    const check = host.querySelector<HTMLButtonElement>("[data-outbox-check]");
+    expect(check).not.toBeNull();
+    expect(host.querySelector("[data-outbox-retry]")).toBeNull();
+    await act(async () => check!.click());
+    expect(checked).toBe(1);
   }
 });
 
@@ -128,12 +174,12 @@ test("#1213 past the bound the bubble says it was not delivered, and how long it
  */
 async function drive(statuses: readonly ReceiptStatus[], nowMs: number) {
   let projected: Partial<Entry> = {};
-  const seen: { chip: string; phase: string | null | undefined }[] = [];
-  for (const status of statuses) {
-    const patch = outboxReceiptPatch(entry(projected), status);
+  const seen: { transport: string; status: string; phase: string | null | undefined }[] = [];
+  for (const receiptStatus of statuses) {
+    const patch = outboxReceiptPatch(entry(projected), receiptStatus);
     if (patch) projected = { ...projected, ...patch };
     const host = await bubble(projected, nowMs);
-    seen.push({ chip: chip(host), phase: phase(host) });
+    seen.push({ transport: transport(host), status: status(host), phase: phase(host) });
   }
   return seen;
 }
@@ -147,9 +193,9 @@ test("#1213 a send parked at a turn boundary stops reading as an attempt on the 
   const nowMs = SUBMITTED_AT + 4 * 60_000;
   const [onWire, parked] = await drive(["delivering", "queued"], nowMs);
   expect(onWire!.phase).toBe("handing-over");
-  expect(onWire!.chip).toBe(translate("en", "outbox.delivering"));
+  expect(onWire!.transport).toBe(translate("en", "outbox.delivering"));
   expect(parked!.phase).toBe("awaiting-turn");
-  expect(parked!.chip).toBe(translate("en", "runtime.receipt.awaitingTurnFor", {
+  expect(parked!.transport).toBe(translate("en", "runtime.receipt.awaitingTurnFor", {
     waited: translate("en", "runtime.receipt.waitedMin", { n: 4 }),
   }));
 });
@@ -161,7 +207,7 @@ test("#1213 a send taken off the park and put on the wire stops claiming a turn 
   const nowMs = SUBMITTED_AT + 4 * 60_000;
   const [, handingOver] = await drive(["queued", "delivering"], nowMs);
   expect(handingOver!.phase).toBe("handing-over");
-  expect(handingOver!.chip).toBe(translate("en", "outbox.delivering"));
+  expect(handingOver!.transport).toBe(translate("en", "outbox.delivering"));
 });
 
 test("#1213 an admission the request path never confirmed leaves the bubble alone", async () => {
@@ -185,15 +231,27 @@ test("#1213 no admitted bubble offers a control that cannot act on the message",
   }
 });
 
-test("#1213 a queued or failed bubble keeps the controls it has always had", async () => {
+test("a queued message can still be taken back, and a failure gets exactly one action", async () => {
   const queued = await bubble({ state: "queued" }, SUBMITTED_AT + DELIVERY_UNCERTAIN_MS);
-  /* Never handed to the server at all — taking it back is honest. */
+  /* Never handed to the server at all — taking it back is honest. It is one
+     tap behind the affordance so the resting row stays the message itself. */
+  expect(queued.querySelector("[data-outbox-cancel='key-1213']")).toBeNull();
+  await disclosed(queued);
   expect(queued.querySelector("[data-outbox-cancel='key-1213']")).not.toBeNull();
 
+  /* A proven failure is the one state that adds anything to the row: a reason
+     in the interface language and ONE action, never a retry beside a cancel
+     beside a status word. */
   const failed = await bubble({ state: "failed", error: "pane is gone" }, SUBMITTED_AT + 60_000);
-  expect(chip(failed)).toBe("pane is gone");
+  expect(rowPhase(failed)).toBe("failed");
+  expect(status(failed)).toBe(translate("en", "outbox.failure.generic"));
+  expect(failed.querySelectorAll("[data-outbox-retry], [data-outbox-cancel], [data-outbox-check], [data-outbox-clear]")).toHaveLength(1);
   expect(failed.querySelector("[data-outbox-retry='key-1213']")).not.toBeNull();
-  expect(failed.querySelector("[data-outbox-cancel='key-1213']")).not.toBeNull();
+  /* The raw sentence is not thrown away: it is one tap behind the reason. */
+  const reason = failed.querySelector<HTMLButtonElement>("[data-outbox-reason]")!;
+  expect(reason.getAttribute("title")).toBe("pane is gone");
+  await act(async () => reason.click());
+  expect(failed.querySelector("[data-outbox-raw]")?.textContent).toBe("pane is gone");
 });
 
 test("#1213 a delivery stranded by a host that went away is not called a turn boundary", async () => {
@@ -208,10 +266,10 @@ test("#1213 a delivery stranded by a host that went away is not called a turn bo
     { host: "dead", turn: "running" },
   );
   expect(phase(host)).toBe("awaiting-host");
-  expect(chip(host)).toBe(translate("en", "runtime.receipt.awaitingHostFor", {
+  expect(transport(host)).toBe(translate("en", "runtime.receipt.awaitingHostFor", {
     waited: translate("en", "runtime.receipt.waitedMin", { n: 3 }),
   }));
-  expect(chip(host)).not.toContain(translate("en", "runtime.receipt.awaitingTurnFor", {
+  expect(transport(host)).not.toContain(translate("en", "runtime.receipt.awaitingTurnFor", {
     waited: translate("en", "runtime.receipt.waitedMin", { n: 3 }),
   }));
 });
@@ -222,7 +280,7 @@ test("#1213 with no host behind the feed the bubble says it is waiting without n
      invention would become the explanation on the terminal row. */
   const host = await bubble({ awaitingTurn: true }, SUBMITTED_AT + 3 * 60_000, "en", null);
   expect(phase(host)).toBe("awaiting-handover");
-  expect(chip(host)).toBe(translate("en", "runtime.receipt.awaitingHandoverFor", {
+  expect(transport(host)).toBe(translate("en", "runtime.receipt.awaitingHandoverFor", {
     waited: translate("en", "runtime.receipt.waitedMin", { n: 3 }),
   }));
 });
@@ -258,40 +316,50 @@ test("a send into a gone host walks queued → resuming host → delivering → 
     /* Queued: the operator's press landed in the local queue, nothing has been
        handed over yet. */
     let host = await bubble({ state: "queued" }, SUBMITTED_AT + 2_000, locale, GONE);
-    expect(chip(host)).toBe(translate(locale, "outbox.queued"));
+    expect(transport(host)).toBe(translate(locale, "outbox.queued"));
+    const resting = status(host);
 
     /* Admitted while the conversation still has no host. A server-held
        admission with no receipt yet used to flatten this into a bare "held";
        the host axis knows more than that and the bubble now says it. */
     host = await bubble({ state: "delivering", acceptedHeld: true }, SUBMITTED_AT + 60_000, locale, GONE);
     expect(phase(host)).toBe("awaiting-host");
-    expect(chip(host)).toBe(translate(locale, "runtime.receipt.awaitingHostFor", {
+    expect(transport(host)).toBe(translate(locale, "runtime.receipt.awaitingHostFor", {
       waited: translate(locale, "runtime.receipt.waitedMin", { n: 1 }),
     }));
+    expect(status(host)).toBe(resting);
 
     /* The send's own recovery is under way: progress, and it reads and spins
        like progress rather than sitting in the red "nothing is hosting" state. */
     host = await bubble({ state: "delivering", acceptedHeld: true }, SUBMITTED_AT + 60_000, locale, RESUMING);
     expect(phase(host)).toBe("resuming-host");
-    expect(chip(host)).toBe(translate(locale, "runtime.receipt.resumingHostFor", {
+    expect(transport(host)).toBe(translate(locale, "runtime.receipt.resumingHostFor", {
       waited: translate(locale, "runtime.receipt.waitedMin", { n: 1 }),
     }));
+    expect(status(host)).toBe(resting);
     expect(host.querySelector(".animate-spin")).not.toBeNull();
 
     /* The host came back and the message is being put in front of the agent. */
     host = await bubble({ state: "delivering" }, SUBMITTED_AT + 4_000, locale, { host: "hosted", turn: "idle" });
-    expect(chip(host)).toBe(translate(locale, "outbox.delivering"));
+    expect(transport(host)).toBe(translate(locale, "outbox.delivering"));
+    expect(status(host)).toBe(resting);
 
+    /* Arrival is the only visible change in the whole walk: the affordance
+       goes, and the row is already the message's final form. */
     host = await bubble({ state: "delivered" }, SUBMITTED_AT + 8_000, locale, { host: "hosted", turn: "idle" });
-    expect(chip(host)).toBe(translate(locale, "outbox.delivered"));
+    expect(rowPhase(host)).toBe("confirmed");
+    expect(host.querySelector("[data-outbox-progress]")).toBeNull();
+    expect(host.querySelector("[data-outbox-failure]")).toBeNull();
   }
 });
 
-test("a resume that failed keeps the real reason and one retry", async () => {
+test("a resume that failed reads in the interface language, keeps the raw reason and offers one retry", async () => {
   /* The server retries a contended resume on its own doubling backoff and only
-     then settles the operation failed, carrying the reason it failed for. The
-     bubble prints that reason verbatim — never a generic "failed" — and offers
-     the single same-key retry. */
+     then settles the operation failed, carrying the reason it failed for. That
+     sentence is English prose written by the runtime, and the operator
+     photographed it inside a Ukrainian interface. The row reads a sentence in
+     the interface language; the raw one stays one tap away, because it names
+     the attempt count a report needs. One same-key retry, as before. */
   const reason = "structured host recovery failed after 12 contended attempts: account is busy";
   let retried = 0;
   document.body.replaceChildren();
@@ -305,10 +373,33 @@ test("a resume that failed keeps the real reason and one retry", async () => {
       session={GONE}
     />,
   );
-  expect(chip(host)).toBe(reason);
-  expect(chip(host)).not.toBe(translate("en", "outbox.failed"));
-  const retry = host.querySelector(`button[aria-label="${translate("en", "outbox.retry")}"]`) as HTMLButtonElement;
+  expect(status(host)).toBe(translate("en", "outbox.failure.hostBusy"));
+  expect(status(host)).not.toBe(translate("en", "outbox.failed"));
+  expect(host.querySelector("[data-outbox-reason]")?.getAttribute("title")).toBe(reason);
+  const retry = host.querySelector("[data-outbox-retry='key-1213']") as HTMLButtonElement;
   expect(retry).toBeTruthy();
   await act(async () => retry.click());
   expect(retried).toBe(1);
+});
+
+test("the same failure reads in Ukrainian, with the runtime's English sentence behind it", async () => {
+  /* The exact defect the operator reported: raw English internal text inside
+     the Ukrainian interface. */
+  const reason = "structured host recovery failed after 12 contended attempts: account is busy";
+  document.body.replaceChildren();
+  const host = await render(
+    <OutboxBubblesView
+      entries={[entry({ state: "failed", error: reason })]}
+      t={translator("uk")}
+      nowMs={SUBMITTED_AT + 120_000}
+      onCancel={() => {}}
+      onRetry={() => {}}
+      session={GONE}
+    />,
+  );
+  expect(status(host)).toBe(translate("uk", "outbox.failure.hostBusy"));
+  const reasonButton = host.querySelector<HTMLButtonElement>("[data-outbox-reason]")!;
+  expect(reasonButton.textContent).not.toContain("account is busy");
+  await act(async () => reasonButton.click());
+  expect(host.querySelector("[data-outbox-raw]")?.textContent).toBe(reason);
 });

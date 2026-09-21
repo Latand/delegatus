@@ -629,8 +629,9 @@ test("post-promotion deadline reports serving readiness and host adoption progre
     revision: "a".repeat(40),
   };
   const phase = promotedViewerReadinessPhase({
-    state: "pending",
+    state: "failed",
     phase: "adopting Claude hosts",
+    failureCategory: "runtime-host-unavailable",
     completedHosts: 7,
     totalHosts: 19,
   });
@@ -641,15 +642,15 @@ test("post-promotion deadline reports serving readiness and host adoption progre
   });
 
   await expect(adapter.verifyPromoted(candidate)).rejects.toThrow(
-    "deployment adapter verify-promoted timed out while waiting for promoted Viewer serving readiness - adoption 7 of 19 - adopting Claude hosts",
+    "deployment adapter verify-promoted timed out while waiting for promoted Viewer serving readiness - adoption 7 of 19 - adopting Claude hosts - runtime-host-unavailable",
   );
 });
 
 
-test("serving action has no default total deadline and cancellation joins its process", async () => {
+test("serving action has a five minute default deadline and cancellation joins its process", async () => {
   const fixture = sleepingAdapter("waiting for serving readiness");
   const source = fs.readFileSync(fixture.executable, "utf8");
-  fs.writeFileSync(fixture.executable, source.replace("#!/bin/sh", '#!/bin/sh\n[ "$LLV_DEPLOYMENT_ADAPTER_ACTION_DEADLINE_MS" = unbounded ] || exit 91'));
+  fs.writeFileSync(fixture.executable, source.replace("#!/bin/sh", '#!/bin/sh\n[ "$LLV_DEPLOYMENT_ADAPTER_ACTION_DEADLINE_MS" = 300000 ] || exit 91'));
   const abort = new AbortController();
   const adapter = HostCommandViewerDeploymentAdapter.fromExecutable(fixture.executable, { stateFile: fixture.stateFile });
   const pending = adapter.verifyPromoted({ image: "viewer:test", container: "candidate", endpoint: "http://127.0.0.1:18001", revision: "a".repeat(40) }, abort.signal);

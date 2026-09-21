@@ -7,6 +7,14 @@
  *
  * Self-contained: the receipt stack is rendered directly, so nothing here mocks
  * a module, touches the runtime bus, or reads any state directory.
+ *
+ * Send-latency slice 3 changed WHEN this surface exists, not what it says. A
+ * delivery that is merely moving no longer paints anything beside the
+ * composer — the message's own row carries that, and
+ * `conversation/OutboxBubbles.delivery.dom.test.tsx` pins each wait's wording
+ * there. The stack is what the operator turns to once something needs a
+ * decision, so the cases below that describe a still-moving delivery mount it
+ * the way the operator meets it: with a settled failure already in the list.
  */
 import { expect, test } from "bun:test";
 import { act } from "react";
@@ -96,6 +104,23 @@ function open(host: HTMLElement): HTMLElement {
 
 const noop = () => {};
 
+/**
+ * An earlier message of this conversation that failed for good.
+ *
+ * Its only job is to be the decision that brings the stack onto the screen,
+ * so the still-moving rows beside it can be read. Older than the subject and
+ * carrying different text, so it groups separately and sorts below it.
+ */
+const DECIDED = receipt({
+  operationId: "op-decided",
+  idempotencyKey: "msg-decided",
+  text: "an earlier message of this conversation",
+  status: "failed",
+  reason: "dead-host",
+  at: new Date(at(-60_000)).toISOString(),
+  admittedAt: new Date(at(-60_000)).toISOString(),
+});
+
 /** Every button on the row, by its label — the row carries no control of its
     own past the ones the failure rendering always had. */
 const buttonLabels = (scope: HTMLElement): string[] =>
@@ -104,7 +129,7 @@ const buttonLabels = (scope: HTMLElement): string[] =>
 test("#1213 an attempt on the wire reads as transmitting and keeps its live pulse", () => {
   const view = mount(
     <RuntimeComposerReceipts
-      receipts={[receipt({ status: "delivering" })]}
+      receipts={[receipt({ status: "delivering" }), DECIDED]}
       nowMs={at(4_000)}
       onRetry={noop}
       onEdit={noop}
@@ -126,7 +151,7 @@ test("#1213 a hand-over still running past the bound names itself", () => {
      twenty minutes and more is what the operator complained about. */
   const view = mount(
     <RuntimeComposerReceipts
-      receipts={[receipt({ status: "delivering" })]}
+      receipts={[receipt({ status: "delivering" }), DECIDED]}
       nowMs={at(PAST_BOUND_MS)}
       onRetry={noop}
       onEdit={noop}
@@ -173,7 +198,7 @@ test("#1213 the composer's own unconfirmed row says so, and never claims a turn 
 test("#1213 an admitted message waiting for a turn boundary says so, with the elapsed wait", () => {
   const view = mount(
     <RuntimeComposerReceipts
-      receipts={[receipt({ status: "queued" })]}
+      receipts={[receipt({ status: "queued" }), DECIDED]}
       nowMs={at(4 * 60_000)}
       session={BUSY}
       onRetry={noop}
@@ -274,7 +299,10 @@ test("#1213 the collapsed summary already reads differently for a delivery that 
   expect(summary.textContent).toContain(t("runtime.receipt.problemCount", { count: 1 }));
   expect(view.host.querySelector(".animate-spin")).toBeNull();
 
-  /* Inside the bound the same receipt is ordinary latency and reads as it did. */
+  /* Inside the bound the same receipt is ordinary latency — and since
+     send-latency slice 3 ordinary latency paints nothing here at all. The
+     message's own row carries its one progress affordance; a second count
+     beside the composer was the duplicate status surface this removes. */
   const healthy = mount(
     <RuntimeComposerReceipts
       receipts={[receipt({ status: "queued" })]}
@@ -284,9 +312,8 @@ test("#1213 the collapsed summary already reads differently for a delivery that 
       onEdit={noop}
     />,
   );
-  const healthySummary = healthy.host.querySelector("summary")!;
-  expect(healthySummary.querySelector("[data-receipt-pending-count]")).not.toBeNull();
-  expect(healthySummary.querySelector("[data-receipt-problem-count]")).toBeNull();
+  expect(healthy.host.querySelector("[data-runtime-receipt-stack]")).toBeNull();
+  expect(healthy.host.querySelector("[data-receipt-pending-count]")).toBeNull();
   healthy.cleanup();
   view.cleanup();
 });
@@ -352,7 +379,7 @@ test("#1213 a delivery stranded by a dead host says the window is gone", () => {
      row still carries must not win. */
   const view = mount(
     <RuntimeComposerReceipts
-      receipts={[receipt({ status: "queued" })]}
+      receipts={[receipt({ status: "queued" }), DECIDED]}
       nowMs={at(3 * 60_000)}
       session={{ host: "dead", turn: "running" }}
       onRetry={noop}
@@ -411,7 +438,7 @@ test("#1213 a parked message with no host behind it says it is waiting, without 
      to look at the wrong thing. */
   const view = mount(
     <RuntimeComposerReceipts
-      receipts={[receipt({ status: "queued" })]}
+      receipts={[receipt({ status: "queued" }), DECIDED]}
       nowMs={at(3 * 60_000)}
       onRetry={noop}
       onEdit={noop}
