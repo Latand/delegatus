@@ -1326,4 +1326,197 @@ describe("send latency slice 3: one message, one row", () => {
       }
     }
   }, 1_800_000);
+
+  /*
+   * #1950 round 3: equal text never decides for a submission with an identity.
+   *
+   * Two cases the final review reproduced, walked in the same mounted window:
+   *
+   *  - `twin-reversed`: two admitted sends of the same words, and only the
+   *    second one's record lands. The first is still delivering. It used to
+   *    vanish — a count of matching records retired it — and the second
+   *    jumped up into its place.
+   *  - `foreign-equal-text`: one admitted send beside an equal-text record
+   *    naming a delivery the registry cannot resolve. It used to be claimed by
+   *    its words: the admitted row went confirmed and kept the foreign
+   *    record's anchor as its own.
+   *
+   * Every message row is read by its submission, with its place in the
+   * conversation's scrolled content, and every DOM mutation between frames is
+   * watched, so a row that was gone for one batch is caught. Frames go to the
+   * look directory with a `round-3-` prefix, beside the earlier rounds'.
+   */
+  const ROUND3 = [
+    { id: "twin-reversed", arrange: ["key-twin-first", "key-twin-second"], steps: [
+      { state: "before", records: [] as string[] },
+      { state: "after-second-echo", records: ["key-twin-second"] },
+      { state: "after-first-echo", records: ["key-twin-second", "key-twin-first"] },
+    ] },
+    { id: "foreign-equal-text", arrange: ["key-admitted"], steps: [
+      { state: "before", records: [] as string[] },
+      { state: "foreign-arrived", records: ["key-somebody-else"] },
+      { state: "own-arrived", records: ["key-somebody-else", "key-admitted"] },
+    ] },
+  ] as const;
+
+  interface Round3Row { id: string | null; phase: string | null; top: number; height: number; sameNode: boolean; progress: number }
+  interface Round3Reading { state: string; bubbles: number; rows: Round3Row[] }
+
+  const READ_ROWS = (state: string): Round3Reading => {
+    const scroller = document.querySelector("[data-log-feed-scroller]") as HTMLElement | null;
+    const origin = scroller?.getBoundingClientRect().top ?? 0;
+    const offset = scroller?.scrollTop ?? window.scrollY;
+    const rows = ([...document.querySelectorAll("[data-message-row]")] as HTMLElement[]).map((row) => {
+      const box = row.getBoundingClientRect();
+      return {
+        /* The mark set on the first frame names the submission and proves
+           the node is that frame's; a confirmed row need not publish its
+           entry id, so a row without the mark is identified by what it does
+           publish, and reads as a new node. */
+        id: row.dataset.round3Mark ?? row.getAttribute("data-outbox-entry"),
+        phase: row.getAttribute("data-message-row"),
+        top: Math.round((box.top - origin + offset) * 2) / 2,
+        height: Math.round(box.height * 2) / 2,
+        sameNode: row.dataset.round3Mark !== undefined,
+        progress: row.querySelectorAll("[data-outbox-progress]").length,
+      };
+    });
+    return {
+      state,
+      bubbles: [...document.querySelectorAll("div")].filter((node) => node.className.includes("bg-user")).length,
+      rows,
+    };
+  };
+
+  /** Mark every row by its submission and count, per mutation batch, the
+      copies on screen and whether any marked row left the document. */
+  const MARK_ROWS = () => {
+    const marked = ([...document.querySelectorAll("[data-message-row]")] as HTMLElement[]);
+    for (const row of marked) row.dataset.round3Mark = row.getAttribute("data-outbox-entry") ?? "";
+    const watch = { batches: 0, minBubbles: Number.MAX_SAFE_INTEGER, maxBubbles: 0, detached: [] as string[] };
+    const sample = () => {
+      watch.batches += 1;
+      const copies = [...document.querySelectorAll("div")].filter((node) => node.className.includes("bg-user")).length;
+      watch.minBubbles = Math.min(watch.minBubbles, copies);
+      watch.maxBubbles = Math.max(watch.maxBubbles, copies);
+      for (const row of marked) {
+        const id = row.dataset.round3Mark ?? "";
+        if (!document.contains(row) && !watch.detached.includes(id)) watch.detached.push(id);
+      }
+    };
+    sample();
+    const observer = new MutationObserver(sample);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+    (window as unknown as { llvRound3: { watch: typeof watch; stop(): void } }).llvRound3 = { watch, stop: () => observer.disconnect() };
+  };
+  const ROUND3_WATCHED = () => {
+    const held = (window as unknown as { llvRound3?: { watch: unknown; stop(): void } }).llvRound3;
+    held?.stop();
+    return held?.watch ?? null;
+  };
+
+  browserTest("round 3: an equal-text record never takes or hides an admitted row", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.mkdirSync(LOOK, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const readings: Record<string, Round3Reading> = {};
+    const watches: Record<string, unknown> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const viewport of VIEWPORTS) {
+        const { context, page, pageErrors } = await openFixture(
+          browser,
+          `${served.base}?case=lifecycle&lang=en`,
+          { width: viewport.width, height: viewport.height },
+          "dark",
+          "en",
+          "no-preference",
+          viewport.touch,
+        );
+        try {
+          for (const scenario of ROUND3) {
+            await page.reload();
+            await page.waitForSelector('[data-evidence-case="lifecycle"]');
+            await page.waitForSelector("textarea");
+            await page.evaluate(([id, keys]) => {
+              const host = (window as unknown as { llvHost: { reset(): void; scenario(id: string): void; arrange(keys: string[]): void } }).llvHost;
+              host.reset();
+              host.scenario(id);
+              host.arrange(keys);
+            }, [scenario.id, [...scenario.arrange]] as const);
+            await page.waitForTimeout(260);
+            for (const step of scenario.steps) {
+              if (step.records.length) {
+                await page.evaluate((keys) => (window as unknown as {
+                  llvHost: { records(keys: string[]): void };
+                }).llvHost.records(keys), [...step.records]);
+                await page.waitForTimeout(400);
+              }
+              const reading = await page.evaluate(READ_ROWS, step.state) as Round3Reading;
+              expect(pageErrors).toEqual([]);
+              const key = `${scenario.id}-${step.state}-${viewport.name}`;
+              readings[key] = reading;
+              const frame = `round-3-${scenario.id}-${step.state}-${viewport.name}.png`;
+              await page.screenshot({ path: path.join(OUT, frame), fullPage: true });
+              fs.copyFileSync(path.join(OUT, frame), path.join(LOOK, frame));
+              if (step.state === "before") await page.evaluate(MARK_ROWS);
+            }
+            watches[`${scenario.id}-${viewport.name}`] = await page.evaluate(ROUND3_WATCHED);
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "round-3.json"), `${JSON.stringify({ readings, watches }, null, 2)}\n`);
+
+    for (const viewport of VIEWPORTS) {
+      const at = (scenario: string, state: string) => readings[`${scenario}-${state}-${viewport.name}`]!;
+      const row = (reading: Round3Reading, id: string) => reading.rows.find((candidate) => candidate.id === id);
+      const suffix = viewport.name;
+
+      /* Two admitted equal-text sends, the second's record first. */
+      const before = at("twin-reversed", "before");
+      const half = at("twin-reversed", "after-second-echo");
+      const both = at("twin-reversed", "after-first-echo");
+      expect({ suffix, rows: before.rows.map((entry) => [entry.id, entry.phase]) })
+        .toEqual({ suffix, rows: [["key-twin-first", "pending"], ["key-twin-second", "pending"]] });
+      expect({ suffix, rows: half.rows.map((entry) => [entry.id, entry.phase, entry.sameNode]) })
+        .toEqual({ suffix, rows: [["key-twin-first", "pending", true], ["key-twin-second", "confirmed", true]] });
+      /* Nothing moved: the first keeps its place while it waits, and the
+         second takes its own record where it already was. */
+      expect({ suffix, first: row(half, "key-twin-first")!.top }).toEqual({ suffix, first: row(before, "key-twin-first")!.top });
+      expect({ suffix, second: row(half, "key-twin-second")!.top }).toEqual({ suffix, second: row(before, "key-twin-second")!.top });
+      expect({ suffix, progress: row(half, "key-twin-first")!.progress }).toEqual({ suffix, progress: 1 });
+      expect({ suffix, bubbles: half.bubbles }).toEqual({ suffix, bubbles: 2 });
+      /* Then the first's own record: both confirmed, each at its own record. */
+      expect({ suffix, phases: both.rows.map((entry) => entry.phase) }).toEqual({ suffix, phases: ["confirmed", "confirmed"] });
+      expect({ suffix, same: both.rows.every((entry) => entry.sameNode) }).toEqual({ suffix, same: true });
+      expect({ suffix, bubbles: both.bubbles }).toEqual({ suffix, bubbles: 2 });
+      expect({ suffix, order: both.rows.map((entry) => entry.id) }).toEqual({ suffix, order: ["key-twin-second", "key-twin-first"] });
+      expect({ suffix, watch: watches[`twin-reversed-${suffix}`] })
+        .toMatchObject({ suffix, watch: { minBubbles: 2, maxBubbles: 2, detached: [] } });
+
+      /* An admitted row beside a foreign equal-text record. */
+      const alone = at("foreign-equal-text", "before");
+      const foreign = at("foreign-equal-text", "foreign-arrived");
+      const own = at("foreign-equal-text", "own-arrived");
+      expect({ suffix, rows: alone.rows.map((entry) => [entry.id, entry.phase]) })
+        .toEqual({ suffix, rows: [["key-admitted", "pending"]] });
+      const waiting = row(foreign, "key-admitted")!;
+      expect({ suffix, phase: waiting.phase, same: waiting.sameNode, progress: waiting.progress })
+        .toEqual({ suffix, phase: "pending", same: true, progress: 1 });
+      /* The foreign record is a message of its own. */
+      expect({ suffix, bubbles: foreign.bubbles }).toEqual({ suffix, bubbles: 2 });
+      const adopted = row(own, "key-admitted")!;
+      expect({ suffix, phase: adopted.phase, same: adopted.sameNode }).toEqual({ suffix, phase: "confirmed", same: true });
+      expect({ suffix, bubbles: own.bubbles }).toEqual({ suffix, bubbles: 2 });
+      expect({ suffix, watch: watches[`foreign-equal-text-${suffix}`] }).toMatchObject({ suffix, watch: { detached: [] } });
+    }
+  }, 600_000);
 });

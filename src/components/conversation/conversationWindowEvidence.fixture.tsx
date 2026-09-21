@@ -36,10 +36,13 @@ import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
+  enqueueOutbox,
+  outboxReceiptPatch,
   readOutbox,
   resetOutboxForTests,
   retireLaunchOutboxOnTranscriptTurn,
   seedLaunchOutbox,
+  updateOutbox,
   visibleOutbox,
   type OutboxEntry,
   type OutboxOwner,
@@ -406,7 +409,15 @@ export type LifecycleScenario =
   /* A Claude conversation: the delivered record parses as a system row, and
      the renderer turns it back into the operator's bubble from the ledger's
      join. It must take the row the operator already has. */
-  | "claude-canonical";
+  | "claude-canonical"
+  /* Two admitted sends of the SAME words, and the second one's record lands
+     first (#1950 round 3). The first is still delivering and must keep its
+     row, its node and its place until its own record arrives. */
+  | "twin-reversed"
+  /* One admitted send, and an equal-text record that names somebody else's
+     delivery, which the registry cannot resolve (#1950 round 3). It is
+     another message: its own row, and the admitted one keeps waiting. */
+  | "foreign-equal-text";
 
 /** The scenarios whose admission the server never acknowledged. */
 const LOST_ACK_SCENARIOS: ReadonlySet<LifecycleScenario> = new Set(["lost-acknowledgement", "lost-ack-held-join"]);
@@ -629,6 +640,9 @@ function installFakeTransport(): void {
          so this join is answerable from that moment — including for the send
          whose acknowledgement never reached the browser. */
       const live = readOutbox(LIFE_CARD)[0]?.id;
+      /* Every send on the queue was admitted under its own key; a record
+         whose key is not among them is nobody's this registry can name. */
+      const admitted = readOutbox(LIFE_CARD).map((entry) => entry.id);
       if (fakeHost.engine === "claude") {
         return Response.json({
           messages: live ? {
@@ -645,7 +659,7 @@ function installFakeTransport(): void {
       return Response.json({
         messages: {},
         occurrences: [],
-        submissions: live ? { [deliveryDedupToken(lifeOperationId(live))]: live } : {},
+        submissions: Object.fromEntries(admitted.map((id) => [deliveryDedupToken(lifeOperationId(id)), id])),
       });
     }
     if (url.startsWith("/api/runtime/send?")) {
@@ -697,6 +711,18 @@ interface LifecycleControls {
   settle(status: "delivered" | "queued" | "uncertain"): void;
   /** The transcript's own record of the message arrives. */
   echo(): void;
+  /** Put already-admitted sends of the message on the queue, oldest first:
+      each carries the operation the fake server admitted it under and a
+      `queued` receipt, exactly as the delivery path leaves an admitted send
+      parked at a turn boundary. The composer's serial wire fence never lets a
+      TYPED second send reach admission while the first is still on it, so
+      this is the one way two admitted rows of one text can be on screen. */
+  arrange(keys: string[]): void;
+  /** The transcript's records, in the order given: each key's own marked
+      record, the agent answering between consecutive ones. A key that is not
+      on the queue is somebody else's delivery, which the registry does not
+      resolve for this conversation. */
+  records(keys: string[]): void;
   /** Hold `/api/log/provenance` open, and answer every held read. */
   holdProvenance(): void;
   releaseProvenance(): void;
@@ -715,6 +741,43 @@ function lifecycleControls(): LifecycleControls {
       fakeHost.scenario = next;
       fakeHost.engine = next === "claude-canonical" ? "claude" : "codex";
       fakeHost.lines = [lifeOpening()];
+      announceHost();
+    },
+    arrange: (keys) => {
+      const base = Date.now() - 5_000;
+      const receipts: RuntimeReceipt[] = [];
+      keys.forEach((key, index) => {
+        enqueueOutbox(LIFE_CARD, { id: key, text: LIFE_TEXT, images: 0, at: base + index * 1_000 });
+        const receipt = lifecycleReceipt(key, "queued");
+        receipts.push(receipt);
+        const entry = readOutbox(LIFE_CARD).find((candidate) => candidate.id === key)!;
+        updateOutbox(LIFE_CARD, key, {
+          state: "delivering",
+          operationId: receipt.operationId,
+          ...(outboxReceiptPatch(entry, "queued", receipt, Date.now()) ?? {}),
+        });
+      });
+      fakeHost.receipts = receipts;
+      announceHost();
+    },
+    records: (keys) => {
+      const start = Date.now();
+      const lines = [lifeOpening()];
+      keys.forEach((key, index) => {
+        if (index > 0) {
+          lines.push(JSON.stringify({
+            type: "event_msg",
+            timestamp: new Date(start + index * 1_000 - 500).toISOString(),
+            payload: { type: "agent_message", message: "Looking now." },
+          }));
+        }
+        lines.push(JSON.stringify({
+          type: "event_msg",
+          timestamp: new Date(start + index * 1_000).toISOString(),
+          payload: { type: "user_message", message: structuredUserText(key, LIFE_TEXT) },
+        }));
+      });
+      fakeHost.lines = lines;
       announceHost();
     },
     holdProvenance: () => { fakeHost.provenanceHeld = true; },
