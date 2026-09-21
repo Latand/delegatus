@@ -200,3 +200,114 @@ for (const surface of ["desktop", "phone"] as const) {
     expect((JSON.parse(scrolled.slice("resolved:".length)) as { rafConfirmed: boolean }).rafConfirmed).toBe(true);
   }, 30_000);
 }
+
+/* ── the appended-row milestone (revalidation after a reopen) ─────────────── */
+
+const MARKER = "Fresh tail record probe.";
+
+/** The target's pane, shown or not, focused on the phone or not, with one
+    existing row; the neighbour's pane beside it. */
+const APPEND_PAGE = (options: { surface: Surface; hidden?: boolean; focus?: "target" | "other" }) => `(() => {
+  document.body.innerHTML = '';
+  const make = (path, text) => {
+    const el = document.createElement('div');
+    el.setAttribute('data-link-path', path);
+    el.innerHTML = '<div data-feed-kind="prose" data-feed-key="k0" style="height:40px">' + text + '</div>';
+    return el;
+  };
+  const target = make(${js(TARGET)}, 'target row');
+  target.id = 'target';
+  if (${js(!!options.hidden)}) target.style.display = 'none';
+  const other = make(${js(OTHER)}, 'other row');
+  other.id = 'other';
+  if (${js(options.surface)} === 'phone') {
+    const focused = document.createElement('div');
+    focused.setAttribute('data-testid', 'mobile-focused-pane');
+    const inFocus = ${js(options.focus ?? "target")} === 'target' ? target : other;
+    focused.appendChild(inFocus);
+    document.body.appendChild(focused);
+    document.body.appendChild(inFocus === target ? other : target);
+  } else {
+    document.body.appendChild(target);
+    document.body.appendChild(other);
+  }
+  return 1;
+})()`;
+
+/** Append a row carrying the marker to `pane` after `delayMs`. */
+const appendLater = (pane: "target" | "other", delayMs: number) => `setTimeout(() => {
+  const row = document.createElement('div');
+  row.setAttribute('data-feed-kind', 'prose');
+  row.setAttribute('data-feed-key', 'k1');
+  row.style.height = '40px';
+  row.textContent = ${js(MARKER)};
+  document.getElementById(${js(pane)}).appendChild(row);
+}, ${delayMs})`;
+
+for (const surface of ["desktop", "phone"] as const) {
+  browserTest(`an appended row under a hidden target pane is never the revalidation milestone, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await page.evaluate(APPEND_PAGE({ surface, hidden: true }));
+    const result = await page.evaluate<string>(outcome(`(() => {
+      p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      ${appendLater("target", 50)};
+      return p.appendedAt(700);
+    })()`));
+    expect(result).toStartWith("rejected:milestone not reached");
+    /* The same row count condition the profiler used to time resolves here. */
+    expect(await page.evaluate<number>(`window.__profile.rows(${js(TARGET)})`)).toBe(2);
+  }, 30_000);
+
+  browserTest(`an appended row no animation frame confirms is rejected, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await page.evaluate(APPEND_PAGE({ surface }));
+    const result = await page.evaluate<string>(outcome(`(() => {
+      p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      window.requestAnimationFrame = () => 0;
+      ${appendLater("target", 50)};
+      return p.appendedAt(5000);
+    })()`));
+    expect(result).toStartWith("rejected:milestone not confirmed");
+  }, 30_000);
+
+  browserTest(`the appended text landing in another conversation's pane is never the target's row, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await page.evaluate(APPEND_PAGE({ surface }));
+    const result = await page.evaluate<string>(outcome(`(() => {
+      p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      ${appendLater("other", 50)};
+      return p.appendedAt(700);
+    })()`));
+    expect(result).toStartWith("rejected:milestone not reached");
+  }, 30_000);
+
+  browserTest(`the appended row is timed through confirmed frames, keeping the first row node, at the ${surface} viewport`, async () => {
+    await setViewport(cdp!, surface);
+    const page = await fresh();
+    await assertViewport(page, surface);
+    await page.evaluate(APPEND_PAGE({ surface }));
+    const result = await page.evaluate<string>(outcome(`(() => {
+      const armed = p.armAppend(${js(TARGET)}, ${js(surface)}, ${js(MARKER)});
+      ${appendLater("target", 200)};
+      return p.appendedAt(5000).then((m) => ({ ...m, armed }));
+    })()`));
+    expect(result).toStartWith("resolved:");
+    const milestone = JSON.parse(result.slice("resolved:".length)) as { rafConfirmed: boolean; detectedMs: number; paintedMs: number; rows: number; visibleRows: number; appendedRows: number; firstRowPreserved: boolean; armed: { rows: number } };
+    expect(milestone.rafConfirmed).toBe(true);
+    expect(milestone.detectedMs).toBeGreaterThanOrEqual(195);
+    expect(milestone.paintedMs).toBeGreaterThan(milestone.detectedMs);
+    expect(milestone.armed.rows).toBe(1);
+    expect(milestone).toMatchObject({ rows: 2, visibleRows: 2, appendedRows: 1, firstRowPreserved: true });
+  }, 30_000);
+}
+
+browserTest("on the phone, a target that is not the focused conversation cannot be armed at all", async () => {
+  await setViewport(cdp!, "phone");
+  const page = await fresh();
+  await page.evaluate(APPEND_PAGE({ surface: "phone", focus: "other" }));
+  const result = await page.evaluate<string>(outcome(`p.armAppend(${js(TARGET)}, "phone", ${js(MARKER)})`));
+  expect(result).toStartWith("rejected:append armed with no active pane");
+}, 30_000);

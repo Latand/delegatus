@@ -383,8 +383,8 @@ function paintedCheck(surface: Surface, target: Seeded): string {
   return `p.targetPainted(${js(target.diskPath)}, ${js(surface)})`;
 }
 
-/** The target's rows in the DOM, seen or not: what "the pane is gone" and
-    "a row was appended" are asked of. */
+/** The target's rows in the DOM, seen or not: what "the pane is gone" is
+    asked of. */
 function rowsExpression(surface: Surface, target: Seeded): string {
   return surface === "phone" ? "p.focusedRows()" : `p.rows(${js(target.diskPath)})`;
 }
@@ -524,22 +524,40 @@ async function runSurface(cdp: Cdp, origin: string, surface: Surface, targets: T
   }
 
   /* Revalidation: a fresh record on disk must still reach the pane after a
-     reopen painted from cache, and it must land as one appended row. */
+     reopen painted from cache, and it must land as one appended row. What is
+     timed is that ROW: the one carrying the appended record's text, new since
+     the append was armed, visible in the pane that is active for the target
+     (on the phone, only while the focused conversation is the target), and
+     confirmed by the same two animation frames as every reopen row. The clock
+     starts at the arming stamp, taken before the record is written, so the
+     number includes the whole trip from disk to the painted frame. */
   const target = targets[0]!.entry;
+  const marker = `Fresh tail record ${surface}.`;
   await openFresh(cdp, origin, surface, target);
-  const before = await cdp.evaluate<number>(`window.__profile.${surface === "phone" ? "focusedRows()" : `rows(${js(target.diskPath)})`}`);
-  await cdp.evaluate(`(window.__firstRow = window.__profile.firstRow(${js(target.diskPath)})) !== undefined`);
-  const appendedAt = Date.now();
+  const armed = await cdp.evaluate<{ rows: number; visibleRows: number }>(
+    `window.__profile.armAppend(${js(target.diskPath)}, ${js(surface)}, ${js(marker)})`,
+  );
   fs.appendFileSync(target.diskPath, appendedLine("gamma", 9_100, surface, cwdFor) + "\n");
-  const fresh = await cdp.evaluate<{ rows: number }>(`(async () => {
-    const p = window.__profile;
-    await p.until(() => (${surface === "phone" ? "p.focusedRows()" : `p.rows(${js(target.diskPath)})`}) > ${before}, 40000);
-    return { rows: ${surface === "phone" ? "p.focusedRows()" : `p.rows(${js(target.diskPath)})`} };
-  })()`);
-  const preserved = await cdp.evaluate<boolean>(`window.__profile.firstRow(${js(target.diskPath)}) === window.__firstRow`);
+  const appended = await cdp.evaluate<AppendedMilestone>("window.__profile.appendedAt(40000)");
+  if (!appended.rafConfirmed) throw new Error("the appended row's milestone was not confirmed by a frame");
+  if (appended.appendedRows !== 1) throw new Error(`the appended record landed as ${appended.appendedRows} rows, expected exactly one`);
+  if (!appended.firstRowPreserved) throw new Error("the first row node was replaced while the record was appended");
   table.record(surface, "revalidate after a reopen: fresh record on disk → appended row",
-    { ms: Date.now() - appendedAt, frames: "" as unknown as number, seen: {} } as Milestone,
-    `rows ${before} → ${fresh.rows}; first row node preserved ${preserved ? "yes" : "no"}`);
+    { ms: appended.paintedMs, frames: "" as unknown as number, seen: {} } as Milestone,
+    `appended row painted ${appended.paintedMs}ms (in the DOM ${appended.detectedMs}ms, frame +${round(appended.paintedMs - appended.detectedMs)}ms); `
+    + `rows ${armed.rows} → ${appended.rows}, visible ${armed.visibleRows} → ${appended.visibleRows}; first row node preserved yes`);
+  collected.push({ surface, step: "revalidate after a reopen: fresh record on disk → appended row", samples: [appended as unknown as Sample], notes: "one appended record, timed from the arming stamp" });
+}
+
+/** What the probe reports for the appended row; see `appendedAt` in profileBrowser.ts. */
+interface AppendedMilestone {
+  detectedMs: number;
+  paintedMs: number;
+  rafConfirmed: boolean;
+  rows: number;
+  visibleRows: number;
+  appendedRows: number;
+  firstRowPreserved: boolean;
 }
 
 /* ── captures ───────────────────────────────────────────────────────────── */

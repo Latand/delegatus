@@ -328,8 +328,9 @@ export const PROBE = String.raw`
     /* The target's rows a reader can see, in the pane that is ACTIVE for it:
        on the phone the focused pane, and only while it shows this path; on the
        desktop the board pane that carries the path. */
+    activePane: (path, surface) => surface === 'phone' ? (probe.focusedPath() === path ? probe.focusedPane() : null) : pane(path),
     visibleRows: (path, surface) => {
-      const el = surface === 'phone' ? (probe.focusedPath() === path ? probe.focusedPane() : null) : pane(path);
+      const el = probe.activePane(path, surface);
       if (!el || !probe.visible(el)) return 0;
       let count = 0;
       for (const row of el.querySelectorAll('[data-feed-kind]')) if (probe.visible(row)) count += 1;
@@ -337,6 +338,52 @@ export const PROBE = String.raw`
     },
     /* The milestone every reopen row times: the target's rows are on screen. */
     targetPainted: (path, surface) => probe.visibleRows(path, surface) > 0,
+    /* An append is timed on ONE row: the row carrying the appended record's
+       text that was not in the target's active pane when the append was armed.
+       Arming records every row there, the first row node and the clock's zero;
+       a row count going up says nothing about which row, where, or whether a
+       reader could see it. */
+    armAppend: (path, surface, marker) => {
+      const el = probe.activePane(path, surface);
+      if (!el) throw new Error('append armed with no active pane for the target');
+      const rows = Array.from(el.querySelectorAll('[data-feed-kind]'));
+      if (rows.some((row) => row.textContent.includes(marker))) throw new Error('the appended record is already in the pane before it was appended');
+      probe.armed = { path, surface, marker, before: new Set(rows), first: el.querySelector('[data-feed-key]'), at: performance.now() };
+      return { rows: rows.length, visibleRows: probe.visibleRows(path, surface) };
+    },
+    /* The new rows carrying the appended text, in the target's active pane. */
+    appendedRows: () => {
+      const armed = probe.armed;
+      const el = armed ? probe.activePane(armed.path, armed.surface) : null;
+      if (!el) return [];
+      return Array.from(el.querySelectorAll('[data-feed-kind]')).filter((row) => !armed.before.has(row) && row.textContent.includes(armed.marker));
+    },
+    appendedPainted: () => {
+      const armed = probe.armed;
+      const el = armed ? probe.activePane(armed.path, armed.surface) : null;
+      if (!el || !probe.visible(el)) return false;
+      return probe.appendedRows().some((row) => probe.visible(row));
+    },
+    /* The appended row's milestone through the same confirmed frames as every
+       reopen row, measured from the arming stamp, with what the pane holds
+       then: its row count, whether the first row is still the same node, and
+       how many rows carry the appended text (one, or it was duplicated). */
+    appendedAt: async (timeoutMs) => {
+      const armed = probe.armed;
+      if (!armed) throw new Error('no append armed');
+      const milestone = await probe.paintedAt(() => probe.appendedPainted(), timeoutMs);
+      const el = probe.activePane(armed.path, armed.surface);
+      const round = (value) => Math.round(value * 10) / 10;
+      return {
+        detectedMs: round(milestone.detected - armed.at),
+        paintedMs: round(milestone.painted - armed.at),
+        rafConfirmed: !!milestone.rafConfirmed,
+        rows: el ? el.querySelectorAll('[data-feed-kind]').length : 0,
+        visibleRows: probe.visibleRows(armed.path, armed.surface),
+        appendedRows: probe.appendedRows().length,
+        firstRowPreserved: !!armed.first && !!el && el.querySelector('[data-feed-key]') === armed.first,
+      };
+    },
     /* When transcript bytes for THIS conversation first reached the page at or
        after origin, and on which transport. A stream chunk is tied to the
        target by the subscriber id it carries; a POST /api/logs poll by the
