@@ -42,6 +42,7 @@ import {
   type OutboxEntry,
   type OutboxOwner,
 } from "./conversation/outbox";
+import { localSubmissionJoin, submissionNamesItsDelivery } from "./conversation/submissionJoin";
 import { createFeedSession, type FeedSession, type FeedSnapshot } from "./feed/parse";
 import { claimFeedSession, releaseFeedSession, takeFeedSession } from "./feed/sessionPool";
 import { FeedItem } from "./feed/FeedItem";
@@ -752,6 +753,15 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
     return keys;
   }, [outbox]);
+  /* The join this browser can do by itself (#1950 round 2, second round).
+     Every delivery it has heard an answer about handed it the operation id
+     beside the key the row is filed under, and the record names that same
+     operation in its own marker — so the record is bound in the render it
+     first appears in, with nothing in flight. The registry's map still
+     answers for the deliveries this browser was never told about; it no
+     longer has to win a race with the transcript to keep one message on one
+     row. */
+  const localJoin = useMemo(() => localSubmissionJoin(outbox), [outbox]);
   const transcriptEchoes = useMemo(() => {
     if (!transcriptGeneration) return [];
     return feed.items.flatMap(({ anchorKey, key, item, submissionDedup }) => {
@@ -763,7 +773,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
          never could: a document, whose delivered words carry the inbox paths
          the row never showed, and a send that is nothing but a picture, which
          has no words to be recognised by at all. */
-      const submissionId = provenanceLookup.submissionFor(submissionDedup)
+      const submissionId = (submissionDedup ? localJoin.get(submissionDedup) : undefined)
+        ?? provenanceLookup.submissionFor(submissionDedup)
         ?? provenanceLookup.forItem(item)?.submissionId
         ?? undefined;
       if (!text.trim() && !submissionId) return [];
@@ -783,7 +794,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         ...(submissionId ? { submissionId } : {}),
       }];
     });
-  }, [feed.items, transcriptGeneration, launchEchoKeys, provenanceLookup]);
+  }, [feed.items, transcriptGeneration, launchEchoKeys, provenanceLookup, localJoin]);
   const transcriptEchoCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const echo of transcriptEchoes) {
@@ -952,6 +963,27 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      the streaming assistant delta. The ORDER is unchanged — what changed is
      that the operator's rows are members of the same list as the transcript's,
      which is what keeps one message on one node. */
+  /* The records this window is not painting YET (#1950 round 2, second round).
+     A record that names its delivery and whose submission nothing here can
+     resolve, while the operator's queue holds a row whose own delivery this
+     browser was never told the name of, is the one shape that can put a
+     message on screen twice: the row is the operator's message and the record
+     may be the same message, and only the registry can say. It is held back
+     until that read answers — briefly, and never on a guess about whose it
+     is. Everything else renders exactly when it arrives, because the local
+     join above has already named it. */
+  const withheldRecords = useMemo(() => {
+    const withheld = new Set<string>();
+    if (!pendingOutbox.some((entry) => !submissionNamesItsDelivery(entry))) return withheld;
+    for (const { submissionDedup } of visibleItems) {
+      if (!submissionDedup || withheld.has(submissionDedup)) continue;
+      if (localJoin.get(submissionDedup)) continue;
+      if (provenanceLookup.submissionFor(submissionDedup)) continue;
+      if (!provenanceLookup.submissionPending(submissionDedup)) continue;
+      withheld.add(submissionDedup);
+    }
+    return withheld;
+  }, [visibleItems, pendingOutbox, localJoin, provenanceLookup]);
   const conversationRows = useMemo<ConversationRow[]>(() => {
     /* Which submissions the transcript is already answering for in THIS
        render. The tail below skips them, so one message can never have two
@@ -961,7 +993,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
        screen (round-4 P1). The rule is the invariant, not a retirement
        timing. */
     const adopted = new Set<string>();
-    const rows: ConversationRow[] = visibleItems.flatMap(({ anchorKey, key, item, responseDurationMs }, visibleIndex) => {
+    const rows: ConversationRow[] = visibleItems.flatMap(({ anchorKey, key, item, responseDurationMs, submissionDedup }, visibleIndex) => {
+      if (submissionDedup && withheldRecords.has(submissionDedup)) return [];
       const answer = answerFor(visibleStartIndex + visibleIndex);
       const speakText = answer?.firstIndex === visibleStartIndex + visibleIndex ? answer.text : undefined;
       const echoSourceId = anchorKey ?? `key:${key}`;
@@ -981,6 +1014,35 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         : null;
       if (boundEntry) {
         adopted.add(boundId);
+        /* What the record is, now that it is known to be this submission's:
+           the message itself, or something the message CARRIED.
+
+           An attachment card is the conversation's own copy of what was sent —
+           a picture, a file — and it keeps a row of its own below the message,
+           where it has always been. Anything else IS the message. A delivered
+           Claude record parses as a system row and the renderer resolves it
+           back into the operator's own bubble (`FeedItem`), so leaving it
+           beside the submission's row painted the message twice, both of them
+           confirmed, at both widths (round-5 P1). The submission's row takes
+           the record — its anchor, its arrival and its canonical text — and
+           the record has no second row. */
+        const carried = item.kind === "inbox-image" || item.kind === "image" || item.kind === "blob";
+        const canonicalText = "text" in item ? item.text : "";
+        if (!carried) {
+          return [{
+            kind: "message",
+            key: boundSubmission,
+            anchorKey,
+            entry: boundEntry,
+            canonical: {
+              text: canonicalText,
+              selectedContext: provenanceLookup.forItem(item)?.selectedContext
+                ?? boundEntry.selectedContext
+                ?? null,
+            },
+            ...(responseDurationMs !== undefined ? { responseDurationMs } : {}),
+          } as ConversationRow];
+        }
         /* The record's anchor stays on the record's own row: two rows sharing
            one anchor would give the viewport two answers to where it was. */
         return [
@@ -994,7 +1056,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
             key: boundSubmission,
             anchorKey: null,
             entry: boundEntry,
-            canonical: { text: "text" in item ? item.text : "" },
+            canonical: { text: canonicalText },
           } as ConversationRow,
           { kind: "item", key: rowKey, anchorKey, item, speakText,
             ...(responseDurationMs !== undefined ? { responseDurationMs } : {}) } as ConversationRow,
@@ -1053,7 +1115,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
        functions of the memos already named here. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems, visibleStartIndex, echoBindings, outbox, pendingOutbox, launch, memoryKey,
-    visibleLiveTurnItems.length, answerFor, provenanceLookup]);
+    visibleLiveTurnItems.length, answerFor, provenanceLookup, withheldRecords]);
   /* What this feed is painting, so the composer's receipt stack knows which
      deliveries already have a row explaining them and stops repeating them.
      Read off the ROWS rather than off the queue, and including the rows the

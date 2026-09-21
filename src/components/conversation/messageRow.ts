@@ -131,6 +131,17 @@ const FAILURE_PATTERNS: ReadonlyArray<readonly [RegExp, MessageKey]> = [
 ];
 
 /**
+ * A receipt the COMPOSER minted for itself when a reconciliation window closed
+ * with nothing durable in it. Its "operation id" is the local key with this
+ * prefix in front of it, so it names no server-side operation at all — and
+ * anything that resolves an operation into a delivery's own identity has to
+ * know the difference (#1950 round 2). Lives here, with the rest of the row's
+ * vocabulary, because both the composer that writes it and the join that must
+ * skip it read it from one place.
+ */
+export const UNCONFIRMED_RECEIPT_PREFIX = "composer-unconfirmed:";
+
+/**
  * The server-side operation this row is about, from either place it can be
  * recorded: the entry's own admission id, or the identity on the receipt the
  * stream projected onto it. An entry can carry only the second — a receipt can

@@ -24,7 +24,7 @@ import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText";
-import { deliveryDedupToken } from "./submissionIdentity";
+import { deliveryDedupToken } from "./deliveryDedup";
 import { CodexReplayFrameReducer, ReplayFrameOverflowError, sanitizeCodexImageFrame, shrinkReducedReplayFrame, type ImageSink, type ReplayFrameBudgets } from "./codexImageFrames";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";

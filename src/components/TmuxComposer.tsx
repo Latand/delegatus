@@ -72,7 +72,7 @@ import {
   type OutboxEntry,
   type OutboxState,
 } from "./conversation/outbox";
-import { failureReasonKey } from "./conversation/messageRow";
+import { failureReasonKey, UNCONFIRMED_RECEIPT_PREFIX } from "./conversation/messageRow";
 import { publishMessageRowRecovery } from "./conversation/rowRecovery";
 import { useRenderedMessageRows } from "./conversation/renderedRows";
 import {
@@ -1253,7 +1253,6 @@ export function settlePendingDeliveries(
     supersedes it through mergeRuntimeReceipts tier two, keeping one visible row
     per message. The row records an unconfirmed state and leaves draft settlement
     to an authoritative receipt. */
-const UNCONFIRMED_RECEIPT_PREFIX = "composer-unconfirmed:";
 function unconfirmedReceiptOperationId(clientMessageId: string): string {
   return UNCONFIRMED_RECEIPT_PREFIX + clientMessageId;
 }

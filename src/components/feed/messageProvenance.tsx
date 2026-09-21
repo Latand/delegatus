@@ -42,9 +42,29 @@ export interface ProvenanceLookup {
    * reason to hand the record to whichever row happens to share its words.
    */
   submissionFor(dedup: string | undefined): string | null;
+  /**
+   * Whether the evidence that could name this delivery is still being read.
+   *
+   * There is exactly one delivery this browser cannot name by itself: the one
+   * whose acknowledgement never came back, so no operation id was ever put in
+   * its hands. Only the registry can join that record to the row it belongs
+   * to, and until it answers the feed knows the record belongs to SOME
+   * submission and cannot say which. Painting it then is what put the message
+   * on screen twice for as long as a round trip took.
+   *
+   * So this is the difference between "not yet" and "never": while it is
+   * true, the record waits; once the lookup has answered — with a name or
+   * without one — it renders on whatever the answer was. It is never a
+   * guess about whose the record is.
+   */
+  submissionPending(dedup: string | undefined): boolean;
 }
 
-export const NO_PROVENANCE: ProvenanceLookup = { forItem: () => null, submissionFor: () => null };
+export const NO_PROVENANCE: ProvenanceLookup = {
+  forItem: () => null,
+  submissionFor: () => null,
+  submissionPending: () => false,
+};
 const ProvenanceContext = createContext<ProvenanceLookup>(NO_PROVENANCE);
 export const MessageProvenanceProvider = ProvenanceContext.Provider;
 
@@ -281,8 +301,14 @@ function itemSerial(item: Item): number {
   return serial;
 }
 
-function lookupFor(data: PathProvenance | null, assignment: Map<Item, DeliveredMessageProvenance>): ProvenanceLookup {
-  if (!data) return NO_PROVENANCE;
+function lookupFor(
+  data: PathProvenance | null,
+  assignment: Map<Item, DeliveredMessageProvenance>,
+  resolving: boolean,
+): ProvenanceLookup {
+  const pending = (dedup: string | undefined) =>
+    Boolean(dedup) && resolving && !(data && dedup! in data.submissions);
+  if (!data) return { ...NO_PROVENANCE, submissionPending: pending };
   return {
     forItem: (item) => {
       if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId) {
@@ -292,6 +318,7 @@ function lookupFor(data: PathProvenance | null, assignment: Map<Item, DeliveredM
       return assignment.get(item) ?? null;
     },
     submissionFor: (dedup) => (dedup ? data.submissions[dedup] ?? null : null),
+    submissionPending: pending,
   };
 }
 
@@ -305,6 +332,9 @@ export function provenanceLookupFor(
     messages?: ProvenanceMap;
     occurrences?: readonly DeliveredMessageOccurrence[];
     submissions?: Record<string, string>;
+    /** The path's evidence is still being read; see
+        {@link ProvenanceLookup.submissionPending}. */
+    resolving?: boolean;
   },
   items: Iterable<Item>,
 ): ProvenanceLookup {
@@ -312,6 +342,7 @@ export function provenanceLookupFor(
   return lookupFor(
     { messages: data.messages ?? {}, occurrences, submissions: data.submissions ?? {} },
     assignDeliveredOccurrences(items, occurrences),
+    Boolean(data.resolving),
   );
 }
 
@@ -350,17 +381,29 @@ export function useDeliveredMessageProvenance(
     wantedRef.current = wanted;
   }, [wanted]);
   const [data, setData] = useState<PathProvenance | null>(() => (path ? provenanceCache.get(path) ?? null : null));
+  /* Whether a read of this path's evidence is still outstanding. A record
+     whose delivery nothing here can name yet waits on THIS, and only on this:
+     the moment the chain below ends — answered, refused or given up on — the
+     waiting is over whatever the answer was. See
+     {@link ProvenanceLookup.submissionPending}. */
+  const [resolving, setResolving] = useState(false);
   useEffect(() => {
     if (!path) return;
     const cached = provenanceCache.get(path) ?? null;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync to the path's cache entry on path change
     setData(cached);
-    if (!wantedKey) return;
     const wanted = wantedRef.current;
-    if (!unresolvedDrivers(wanted, cached, false, Date.now())) return;
+    if (!wantedKey || !unresolvedDrivers(wanted, cached, false, Date.now())) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- nothing is outstanding for this path
+      setResolving(false);
+      return;
+    }
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a read of this path starts here
+    setResolving(true);
     const attempt = async (retry: number): Promise<void> => {
+      let again = false;
       try {
         const res = await fetch(`/api/log/provenance?path=${encodeURIComponent(path)}`);
         if (!res.ok) return;
@@ -378,10 +421,16 @@ export function useDeliveredMessageProvenance(
         if (!alive) return;
         setData(merged);
         if (retry < retryDelaysMs.length && unresolvedDrivers(wanted, merged, true, Date.now())) {
+          again = true;
           timer = setTimeout(() => void attempt(retry + 1), retryDelaysMs[retry]);
         }
       } catch {
         /* quiet: absence renders as today's row */
+      } finally {
+        /* The chain is what "still reading" means, not one request in it. A
+           row waits while the schedule is still going to ask again, and stops
+           waiting the moment nothing further will. */
+        if (alive && !again) setResolving(false);
       }
     };
     void attempt(0);
@@ -412,8 +461,8 @@ export function useDeliveredMessageProvenance(
     return parts.join("\n");
   }, [assignment]);
   return useMemo(
-    () => lookupFor(data, assignment),
+    () => lookupFor(data, assignment, resolving),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the assignment's CONTENT (assignmentKey) and the submissions it can resolve; a same-content map keeps the lookup
-    [data, assignmentKey, submissionsKey],
+    [data, assignmentKey, submissionsKey, resolving],
   );
 }

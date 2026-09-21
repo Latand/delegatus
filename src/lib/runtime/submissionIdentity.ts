@@ -1,11 +1,11 @@
-import { createHash } from "node:crypto";
-
 import {
   agentRegistry,
   readOnlyConversationLookupFromSnapshot,
   type RegistryFile,
 } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+
+import { deliveryDedupToken } from "./deliveryDedup";
 
 /*
  * WHICH SUBMISSION a transcript row is the record OF (#1950 round 2).
@@ -32,12 +32,13 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
  * map: a row with no identity binds exactly as it did before.
  */
 
-/** The token `codexAppServerHost` stamps onto a delivered structured-user
-    record. Hashing is the host's decision — the marker names the operation
-    without publishing it — and this module only has to agree with it. */
-export function deliveryDedupToken(operationId: string): string {
-  return createHash("sha256").update(operationId).digest("hex");
-}
+/* The token `codexAppServerHost` stamps onto a delivered structured-user
+   record, re-exported here because this module's whole job is to resolve it.
+   Its ONE definition is isomorphic (`deliveryDedup.ts`): the feed computes the
+   same token in the browser, from the operation ids the delivery path already
+   handed it, so a record can be bound to its row without asking this route
+   anything at all. */
+export { deliveryDedupToken };
 
 export interface SubmissionIdentityDependencies {
   registrySnapshot?: () => RegistryFile;
