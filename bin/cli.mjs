@@ -8,7 +8,18 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { detectTailscale, getToken, readStatus, serve as serveTailscale, TailscaleError } from "./tailscale.mjs";
+import {
+  detectTailscale,
+  getToken,
+  OPERATOR_HINT,
+  OPERATOR_PATTERN,
+  phoneAccessFlagPath,
+  readPhoneAccessFlag,
+  readStatus,
+  serve as serveTailscale,
+  serveBackground,
+  TailscaleError,
+} from "./tailscale.mjs";
 import {
   browserOpenCommand,
   cliRuntimeHostConfig,
@@ -66,6 +77,8 @@ Options:
   -p, --port <n>       Port for the local server (default ${DEFAULT_PORT})
   -H, --hostname <h>   Bind address (default ${DEFAULT_HOSTNAME})
       --tailscale      Access over Tailscale
+                       (also on while ${phoneAccessFlagPath()} exists; the
+                       setup guide's phone step writes it)
       --no-open        Don't open the browser
       --new-token      Create a new access key
       --new-operator-token  Rotate the operator spawn capability
@@ -99,6 +112,8 @@ Options:
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `the runtime host socket is owned by pid ${ownerPid}, while this CLI spawned pid ${childPid}; stop the other agent-log-viewer instance for this installation and try again`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; restarting in ${delay}ms`,
     runtimeHostRestartFail: (detail) => `[runtime host] restart failed: ${detail}`,
+    phoneAccessSkipped: (detail) => `Phone access is turned on in the setup guide, and Tailscale is not ready, so this start is local only:\n${detail}`,
+    phoneServeFailed: (detail) => `Phone access is turned on in the setup guide, and publishing in the tailnet failed: ${detail}`,
   },
   uk: {
     usage: () => `Використання: agent-log-viewer [опції]
@@ -107,6 +122,8 @@ Options:
   -p, --port <n>       Порт для локального сервера (типово ${DEFAULT_PORT})
   -H, --hostname <h>   Адреса прив'язки (типово ${DEFAULT_HOSTNAME})
       --tailscale      Доступ через Tailscale
+                       (також увімкнено, поки існує ${phoneAccessFlagPath()};
+                       його записує крок «Телефон» посібника з налаштування)
       --no-open        Не відкривати браузер
       --new-token      Створити новий ключ доступу
       --new-operator-token  Оновити операторський ключ запуску агентів
@@ -140,6 +157,8 @@ Options:
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `сокетом runtime host володіє процес ${ownerPid}, а цей CLI запустив процес ${childPid}; зупиніть інший agent-log-viewer для цієї інсталяції та повторіть спробу`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; повторний запуск за ${delay} мс`,
     runtimeHostRestartFail: (detail) => `[runtime host] помилка повторного запуску: ${detail}`,
+    phoneAccessSkipped: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але Tailscale не готовий, тому цей запуск лише локальний:\n${detail}`,
+    phoneServeFailed: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але опублікувати в tailnet не вдалося: ${detail}`,
   },
 };
 
@@ -718,8 +737,20 @@ async function prepareRuntime(options) {
   }
 
   if (options.tailscale) {
-    const tailscalePath = await detectTailscale();
-    const status = await readStatus(tailscalePath);
+    let tailscalePath;
+    let status;
+    try {
+      tailscalePath = await detectTailscale();
+      status = await readStatus(tailscalePath);
+    } catch (error) {
+      /* The remembered choice never stops the Viewer from starting: a
+         Tailscale that went away since starts locally, and says why. */
+      if (!(options.tailscaleFromFlag && error instanceof TailscaleError)) throw error;
+      console.error(m.phoneAccessSkipped(error.message));
+      options.tailscale = false;
+      options.tailscaleFromFlag = false;
+      return runtime;
+    }
     const { token } = await getToken({ rotate: options.newToken });
     runtime.llvToken = token;
     runtime.llvTsHost = status.dnsName;
@@ -801,6 +832,12 @@ function linkSkills(packageRoot) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  /* Phone access turned on from the setup guide is remembered as a file; its
+     presence stands for --tailscale. */
+  if (!options.tailscale && !options.help && !options.version && await readPhoneAccessFlag()) {
+    options.tailscale = true;
+    options.tailscaleFromFlag = true;
+  }
   const packageRoot = findPackageRoot(cliDir);
   try {
     linkSkills(packageRoot);
@@ -877,7 +914,10 @@ async function main() {
   );
   installSignalHandlers(serverProcess, tailscaleProcessRef, runtimeHostSupervisor);
 
-  if (options.tailscale && runtime.tailscalePath) {
+  /* The --tailscale switch keeps its foreground serve, which stops with the
+     Viewer. The remembered choice publishes in the background once the
+     server answers, and leaves the mapping to tailscaled at exit. */
+  if (options.tailscale && runtime.tailscalePath && !options.tailscaleFromFlag) {
     tailscaleProcessRef.current = serveTailscale(runtime.tailscalePath, options.port);
   }
 
@@ -918,6 +958,14 @@ async function main() {
     serverProcess.child.signalCode !== null
   ) {
     process.exit(serverProcess.state.sawAddressInUse ? 1 : (serverProcess.child.exitCode ?? 1));
+  }
+
+  if (options.tailscaleFromFlag && runtime.tailscalePath) {
+    const published = await serveBackground(runtime.tailscalePath, options.port);
+    if (published.timedOut || published.code !== 0) {
+      const detail = published.timedOut ? "timeout" : published.stderr.trim() || `exit ${published.code}`;
+      console.error(OPERATOR_PATTERN.test(published.stderr) ? OPERATOR_HINT : m.phoneServeFailed(detail));
+    }
   }
 
   printBanner(version, options);

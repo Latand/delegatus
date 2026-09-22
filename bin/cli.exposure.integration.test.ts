@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, test } from "bun:test";
+
+import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 const fixtures = new Set<string>();
 const children = new Set<ReturnType<typeof spawn>>();
@@ -169,7 +171,11 @@ const hostname = ${options.ignoreHostname ? JSON.stringify("0.0.0.0") : "hostnam
 const server = Bun.serve({
   hostname,
   port: Number(process.env.PORT),
-  fetch() { return new Response("ok"); },
+  fetch(request) {
+    /* What the launcher handed the Viewer, for the phone-access case. */
+    if (new URL(request.url).pathname === "/api/access") return Response.json({ tailnetUrl: process.env.LLV_TS_URL ?? null, host: process.env.LLV_TS_HOST ?? null });
+    return new Response("ok");
+  },
 });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGINT", stop);
@@ -306,4 +312,55 @@ test("an address the platform will not evaluate neither stops startup nor claims
   // The probe could not answer for that address and the guard read nothing into
   // the silence: startup survived, and the listener is still loopback-only.
   expect(await probe(nonLoopbackAddress, port)).toBe(0);
+});
+
+test("phone access remembered by the setup guide starts the real CLI in tailnet mode with a background serve", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const stub = createTailscaleStub({ root: path.dirname(fixture.env.TMPDIR!) });
+  const configDir = path.join(fixture.env.XDG_CONFIG_HOME!, "agent-log-viewer");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(path.join(configDir, "phone-access"), "tailscale\n");
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("Tailnet:", 15_000);
+  const token = (await readFile(path.join(configDir, "token"), "utf8")).trim();
+  expect(token).toMatch(/^[0-9a-f]{32}$/);
+  const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null; host: string | null };
+  expect(answer).toEqual({ tailnetUrl: `https://${STUB_DNS_NAME}/?k=${token}`, host: STUB_DNS_NAME });
+  /* Published once, in the background, and never as a foreground child. */
+  expect(stub.calls()).toContain(`serve --bg ${port}`);
+  expect(stub.calls()).not.toContain(`serve ${port}`);
+  expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
+});
+
+test("a remembered choice whose Tailscale went away starts locally and says why", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const stub = createTailscaleStub({ root: path.dirname(fixture.env.TMPDIR!) });
+  stub.setStatus({ BackendState: "NeedsLogin" });
+  const configDir = path.join(fixture.env.XDG_CONFIG_HOME!, "agent-log-viewer");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(path.join(configDir, "phone-access"), "tailscale\n");
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("this start is local only", 10_000);
+  await waitForStatus("127.0.0.1", port, 200);
+  const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null };
+  expect(answer.tailnetUrl).toBeNull();
+  expect(stub.calls().some((call) => call.startsWith("serve"))).toBe(false);
 });
