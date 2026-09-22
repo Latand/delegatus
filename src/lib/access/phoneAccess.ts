@@ -82,9 +82,11 @@ function setEnv(name: string, value: string | undefined): void {
   else process.env[name] = value;
 }
 
+/** Tailscale's last stderr line, fitted to sit inside a sentence: its own
+    "error:" prefix and closing period dropped, since the sentence has both. */
 function lastLine(text: string): string {
   const lines = text.trim().split("\n").map((line) => line.trim()).filter(Boolean);
-  return lines.at(-1) ?? "";
+  return (lines.at(-1) ?? "").replace(/^error:\s*/i, "").replace(/\.+$/, "");
 }
 
 function errorText(error: unknown): string {

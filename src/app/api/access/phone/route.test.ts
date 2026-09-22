@@ -163,7 +163,8 @@ describe("POST /api/access/phone enable", () => {
       expect(response.status).toBe(status);
       const body = await response.json() as PhoneActionFailure;
       expect(body.code).toBe(code);
-      if (code === "SERVE_FAILED") expect(body.detail).toBe("error: listener already in use");
+      /* The sentence reads "…could not publish the Viewer: listener already in use.", not "…: error: …". */
+      if (code === "SERVE_FAILED") expect(body.detail).toBe("listener already in use");
       expect(gateUntouched()).toBe(true);
       expect(fs.existsSync(flagFile())).toBe(false);
       expect(body.tailnetUrl).toBeNull();
