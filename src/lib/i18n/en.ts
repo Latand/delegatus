@@ -1514,7 +1514,7 @@ export const en = {
   "groupOverride.legacyReview.limitRecorded": "recorded limit",
   "groupOverride.legacyReview.implementer": "Fix stage takes the role of",
   "groupOverride.legacyReview.preview": "Preview conversion",
-  "groupOverride.legacyReview.planReviewer": "{stage} reviews at most {count} times, the final review included",
+  "groupOverride.legacyReview.planReviewer": "Review limit for {stage}: {count}, the final review included",
   "groupOverride.legacyReview.planFixer": "New fix stage {fixer} takes the role of {implementer} and receives the findings",
   "groupOverride.legacyReview.planHistory": "{count} earlier review attempts stay as history",
   "groupOverride.legacyReview.convert": "Convert",

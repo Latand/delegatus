@@ -226,6 +226,11 @@ describe("apply and revert", () => {
     expect(pipeline.state).toBe("needs_decision");
     /* The cursor waits on the converted reviewer for an explicit retry. */
     expect(pipeline.cursor).toEqual({ stageId: "review", state: "pending", input: "built", activatedBy: { stageId: "build", attempt: 1, edge: "pass" } });
+    /* The card says what moves the lane now, and revert restores what it said before. */
+    expect(pipeline.stateDetail).toContain("retry it to run the new reviewer");
+    expect(revertLegacyReviewConversion(pipeline, "review", { clientRequestId: "revert-1", actor: { kind: "operator" }, at: "t" }).error).toBeUndefined();
+    expect(pipeline.stateDetail).toBe(original.stateDetail);
+    expect(pipeline.cursor).toEqual(original.cursor);
   });
 
   test("an unexecuted conversion reverts to the original definition, and the snapshot stays in history", () => {

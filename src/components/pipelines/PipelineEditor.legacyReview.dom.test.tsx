@@ -109,7 +109,7 @@ test("a legacy draft shows the conversion preview and converts only on the expli
   flushSync(() => button(host, "Preview conversion").click());
   await settle();
   expect(calls[0]!.body).toEqual({ action: "preview-legacy-review", stageId: "reviewer", reviewLimit: 3 });
-  expect(panel.textContent).toContain("reviewer reviews at most 3 times, the final review included");
+  expect(panel.textContent).toContain("Review limit for reviewer: 3, the final review included");
   expect(panel.textContent).toContain("New fix stage reviewer-fix takes the role of builder");
   /* Converting sends the revision the preview was read at, once. */
   flushSync(() => button(host, "Convert").click());
@@ -166,7 +166,7 @@ test("an unreverted conversion offers revert, read against the current revision"
   flushSync(() => root.unmount());
 });
 
-test("run-only, closed and reverted pipelines show no conversion controls", () => {
+test("run-only and closed pipelines show no conversion controls", () => {
   const runOnly = legacyDraft({ stages: [run("build", null)], runs: [{ stageId: "build", attempts: [] }], cursor: { stageId: "build", state: "pending", input: null, activatedBy: null } });
   const closed = legacyDraft({ state: "closed", closedAt: "t", cursor: null });
   for (const pipeline of [runOnly, closed]) {

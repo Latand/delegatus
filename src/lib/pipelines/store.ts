@@ -573,7 +573,8 @@ function isLegacyReviewConversion(value: unknown): boolean {
     && ["request", "flow", "default"].includes(String(conversion.reviewLimitSource))
     && Boolean(original && typeof original === "object" && Array.isArray(original.stages) && original.stages.every(isStage)
       && isRun(original.run) && (original.run as { stageId: string }).stageId === conversion.stageId
-      && (original.cursor === null || (typeof original.cursor === "object" && typeof (original.cursor as { stageId?: unknown }).stageId === "string")))
+      && (original.cursor === null || (typeof original.cursor === "object" && typeof (original.cursor as { stageId?: unknown }).stageId === "string"))
+      && (original.stateDetail === undefined || isNullableString(original.stateDetail)))
     && typeof conversion.convertedGraphDigest === "string"
     && isActor(conversion.actor) && typeof conversion.at === "string"
     && (reverted === undefined || (Boolean(reverted) && typeof reverted === "object" && typeof reverted.clientRequestId === "string"

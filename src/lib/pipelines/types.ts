@@ -552,6 +552,8 @@ export type PipelineLegacyReviewConversion = {
     stages: PipelineStage[];
     run: PipelineStageRun;
     cursor: Pipeline["cursor"];
+    /** Absent on conversions that did not rewrite it. */
+    stateDetail?: string | null;
   };
   /** `graphDigest` of the stages the conversion wrote; a revert requires it. */
   convertedGraphDigest: string;

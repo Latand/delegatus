@@ -1458,7 +1458,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "groupOverride.legacyReview.limitRecorded": "записаний ліміт",
   "groupOverride.legacyReview.implementer": "Етап виправлень бере роль",
   "groupOverride.legacyReview.preview": "Переглянути конвертацію",
-  "groupOverride.legacyReview.planReviewer": "{stage} рецензує щонайбільше {count} раз(и), разом з останнім ревʼю",
+  "groupOverride.legacyReview.planReviewer": "Ліміт рецензій для {stage}: {count}, разом з останнім ревʼю",
   "groupOverride.legacyReview.planFixer": "Новий етап виправлень {fixer} бере роль {implementer} і отримує зауваження",
   "groupOverride.legacyReview.planHistory": "Попередні спроби ревʼю ({count}) лишаються в історії",
   "groupOverride.legacyReview.convert": "Конвертувати",

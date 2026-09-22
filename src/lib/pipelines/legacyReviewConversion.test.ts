@@ -271,7 +271,7 @@ test("settled legacy attempts stay history; the converted stage runs fresh after
   const kept = attemptsOf("reviewer");
   expect(kept).toHaveLength(1);
   expect(kept[0]).toMatchObject({ ...lane.runs[2]!.attempts[0]!, historical: true, legacyReview: true });
-  expect(current()).toMatchObject({ state: "needs_decision", cursor: { stageId: "reviewer", state: "pending", input: "built" } });
+  expect(current()).toMatchObject({ state: "needs_decision", stateDetail: "review stage reviewer was converted to run stages; retry it to run the new reviewer", cursor: { stageId: "reviewer", state: "pending", input: "built" } });
   expect(JSON.stringify([...h.flows])).toBe(flowsBefore);
 
   expect((await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "reviewer", expectedAttempt: 0 }, h.ports)).error).toBeUndefined();

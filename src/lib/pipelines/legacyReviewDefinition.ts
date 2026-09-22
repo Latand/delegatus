@@ -320,6 +320,7 @@ export function applyLegacyReviewConversion(
       stages: structuredClone(pipeline.stages),
       run: structuredClone(run),
       cursor: structuredClone(pipeline.cursor),
+      stateDetail: pipeline.stateDetail,
     },
     convertedGraphDigest: graphDigest(preview.stages),
     actor: structuredClone(receipt.actor),
@@ -337,7 +338,13 @@ export function applyLegacyReviewConversion(
     attempt.historical = true;
     attempt.legacyReview = true;
   }
-  if (pipeline.cursor?.stageId === preview.stageId) pipeline.cursor = { ...pipeline.cursor, state: "pending" };
+  if (pipeline.cursor?.stageId === preview.stageId) {
+    pipeline.cursor = { ...pipeline.cursor, state: "pending" };
+    /* The parked legacy decision can no longer be answered; say what moves the lane now. */
+    if (pipeline.state === "needs_decision" || pipeline.pausedState === "needs_decision") {
+      pipeline.stateDetail = `review stage ${preview.stageId} was converted to run stages; retry it to run the new reviewer`;
+    }
+  }
   pipeline.legacyReviewConversions = [...(pipeline.legacyReviewConversions ?? []), conversion];
   return conversion;
 }
@@ -370,6 +377,7 @@ export function revertLegacyReviewConversion(
   if (pipeline.cursor && (pipeline.cursor.stageId === conversion.stageId || pipeline.cursor.stageId === conversion.fixerStageId)) {
     pipeline.cursor = structuredClone(conversion.original.cursor);
   }
+  if (conversion.original.stateDetail !== undefined) pipeline.stateDetail = conversion.original.stateDetail;
   const reverted: PipelineLegacyReviewConversion = { ...conversion, reverted: { clientRequestId: receipt.clientRequestId, actor: structuredClone(receipt.actor), at: receipt.at } };
   pipeline.legacyReviewConversions = conversions.map((item, position) => position === index ? reverted : item);
   return { conversion: reverted };
