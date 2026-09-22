@@ -3776,6 +3776,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "onboarding.phone.code.PERSIST_FAILED": "Не вдалося запам'ятати вибір: {detail}. Нічого не ввімкнено.",
   "onboarding.phone.code.STATUS_UNREADABLE": "Не вдалося прочитати стан Tailscale.",
   "onboarding.phone.code.NOT_READY": "Tailscale на цьому комп'ютері ще не готовий.",
+  "onboarding.phone.code.TRUSTED_ENTRY": "Ця Docker-інсталяція довіряє кожному запиту на своєму локальному порту й не має окремого входу для tailnet, тому Viewer не опубліковано. Додайте віддалений вхід у файл шлюзу (див. docs/docker.md) і натисніть знову.",
   "onboarding.phone.code.DISABLE_FAILED": "Не вдалося вимкнути доступ із телефона: {detail}. Посилання досі працює.",
   "qr.turnOn": "Увімкнути доступ із телефона",
   "onboarding.voice.heading": "Де розпізнається ваше диктування",

@@ -93,6 +93,9 @@ export const OPERATOR_HINT = t.operatorHint;
 
 const TOKEN_PATTERN = /^[0-9a-f]{32}$/;
 const MACOS_TAILSCALE = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+/* Inside the managed Docker image the host's own CLI is reached through the
+   nsenter shim the Dockerfile writes; the container has no tailscaled. */
+export const DOCKER_TAILSCALE_SHIM = "/usr/local/bin/tailscale";
 
 export class TailscaleError extends Error {}
 
@@ -146,7 +149,11 @@ async function isExecutable(path) {
   }
 }
 
-export async function detectTailscale() {
+export async function detectTailscale({ dockerShim = DOCKER_TAILSCALE_SHIM } = {}) {
+  if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1" && (await isExecutable(dockerShim))) {
+    return dockerShim;
+  }
+
   const pathEntries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
   for (const entry of pathEntries) {
     const candidate = join(entry, "tailscale");

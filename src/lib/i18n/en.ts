@@ -3872,6 +3872,7 @@ export const en = {
   "onboarding.phone.code.PERSIST_FAILED": "Could not remember the choice: {detail}. Nothing was turned on.",
   "onboarding.phone.code.STATUS_UNREADABLE": "Could not read Tailscale's state.",
   "onboarding.phone.code.NOT_READY": "Tailscale is not ready on this computer yet.",
+  "onboarding.phone.code.TRUSTED_ENTRY": "This Docker install trusts every request on its local port and has no separate entry for the tailnet, so the Viewer is not published. Add a remote entry to the gateway file (see docs/docker.md) and press again.",
   "onboarding.phone.code.DISABLE_FAILED": "Could not turn phone access off: {detail}. The link still works.",
   "qr.turnOn": "Turn on phone access",
   "onboarding.voice.heading": "Where your dictation is transcribed",

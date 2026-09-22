@@ -1,5 +1,8 @@
 import fs from "node:fs";
 
+import { statePath } from "@/lib/configDir";
+import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
+
 import {
   clearPhoneAccessFlag,
   detectTailscale,
@@ -24,6 +27,15 @@ import {
  * The choice is remembered in the `phone-access` flag file the launcher reads.
  *
  * Every Tailscale call goes through `bin/tailscale.mjs` with argv only.
+ *
+ * A managed Docker install (#2024) differs in three places. Its Viewer runs
+ * `next start` in a release container on a per-deploy candidate port behind
+ * the runtime host, so the tailnet is pointed at the runtime host's stable
+ * entry, which outlives every deploy. Its key may come from `service.env`,
+ * which the runtime host's trusted local entry and the MCP clients vouch
+ * with, so the press reuses a key the container already holds. And nothing
+ * like the launcher runs before it, so `restorePhoneAccessGate` puts the gate
+ * back at boot when the choice is remembered.
  */
 
 /* `exposed`: a background mapping points at this Viewer's port while this
@@ -51,6 +63,7 @@ export type PhoneFailureCode =
   | "PERSIST_FAILED"
   | "STATUS_UNREADABLE"
   | "NOT_READY"
+  | "TRUSTED_ENTRY"
   | "DISABLE_FAILED";
 
 export type PhoneRead = { phone: PhoneAccess | null; error: "STATUS_UNREADABLE" | null };
@@ -97,9 +110,39 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The port the serving Viewer answers on: the launcher's `PORT`, else the
-    port the request arrived on. */
+/** A managed Docker install: the compose file sets this for every Viewer
+    container, and the host CLIs (Tailscale's among them) are nsenter shims. */
+function dockerManaged(): boolean {
+  return process.env.LLV_DOCKER_NSENTER_SHIMS === "1";
+}
+
+const STABLE_VIEWER_PORT = 8898;
+
+/**
+ * Where the tailnet is pointed on a Docker install, read the way the runtime
+ * host reads it (`src/runtime-host/main.ts`): the gateway's remote entry when
+ * one is configured, else the stable port. The candidate port in `PORT`
+ * changes with every deploy and would leave the mapping behind on a retired
+ * release. `publishable` is false when the stable port is a TRUSTED local
+ * entry with no remote entry beside it: that listener vouches for
+ * loopback-addressed requests with the release's key, and the press never
+ * points the tailnet at it.
+ */
+function dockerTailnetEntry(): { port: number; publishable: boolean } {
+  const configured = Number(process.env.LLV_VIEWER_PORT);
+  const stable = Number.isInteger(configured) && configured > 0 ? configured : STABLE_VIEWER_PORT;
+  const gateway = readViewerGatewayConfig(statePath(VIEWER_GATEWAY_FILE), stable);
+  /* A file the runtime host cannot read leaves the stable port the plain pipe. */
+  if (gateway.problem) return { port: stable, publishable: true };
+  if (gateway.config.remoteEntryPort !== null) return { port: gateway.config.remoteEntryPort, publishable: true };
+  return { port: stable, publishable: gateway.config.localEntry !== "trusted" };
+}
+
+/** The port the tailnet reaches this Viewer on: on a Docker install the
+    runtime host's entry, otherwise the launcher's `PORT`, else the port the
+    request arrived on. */
 export function viewerPortFor(requestUrl: string): number {
+  if (dockerManaged()) return dockerTailnetEntry().port;
   const fromEnv = Number(process.env.PORT);
   if (Number.isInteger(fromEnv) && fromEnv > 0) return fromEnv;
   try {
@@ -117,6 +160,20 @@ function flagPresent(): boolean {
   } catch {
     return false;
   }
+}
+
+/** The boot's reading of the choice: a flag that exists and cannot be read
+    counts as set, because the mapping it stands for may be live. */
+function flagMayBeSet(): boolean {
+  try {
+    return fs.readFileSync(phoneAccessFlagPath(), "utf8").trim() === "tailscale";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
+function tailnetLink(dnsName: string, token: string): string {
+  return `https://${dnsName}/?k=${encodeURIComponent(token)}`;
 }
 
 /** The launcher hands the Viewer its bind as `HOSTNAME`; anything but a
@@ -193,6 +250,9 @@ export async function enablePhoneAccess(viewerPort: number): Promise<PhoneOutcom
   if (phone.state === "missing" || phone.state === "needs-login" || phone.state === "no-dns" || !phone.dnsName) {
     return { ok: false, code: "NOT_READY", detail: phone.state, keyKept: false, read: before };
   }
+  if (dockerManaged() && !dockerTailnetEntry().publishable) {
+    return { ok: false, code: "TRUSTED_ENTRY", detail: "", keyKept: false, read: before };
+  }
   const binary = await resolveBinary();
   if (!binary) return fail("NOT_READY", "missing");
 
@@ -206,9 +266,14 @@ export async function enablePhoneAccess(viewerPort: number): Promise<PhoneOutcom
     return fail("PERSIST_FAILED", errorText(error));
   }
 
+  /* A Docker container that already gates keeps its key: `service.env` set
+     it, and the runtime host's trusted local entry and the MCP clients vouch
+     with that same key, so swapping it would lock them out until the next
+     deploy put the old one back. */
+  const configuredToken = dockerManaged() ? process.env.LLV_TOKEN : undefined;
   let token: string;
   try {
-    token = (await getToken()).token;
+    token = configuredToken || (await getToken()).token;
   } catch (error) {
     await rollbackFlag();
     return fail("TOKEN_WRITE_FAILED", errorText(error));
@@ -266,7 +331,7 @@ export async function enablePhoneAccess(viewerPort: number): Promise<PhoneOutcom
 
 
   setEnv("LLV_TS_HOST", phone.dnsName);
-  setEnv("LLV_TS_URL", `https://${phone.dnsName}/?k=${token}`);
+  setEnv("LLV_TS_URL", tailnetLink(phone.dnsName, token));
   return { ok: true, token, read: await readPhoneAccess(viewerPort) };
 }
 
@@ -309,9 +374,62 @@ export async function disablePhoneAccess(viewerPort: number): Promise<PhoneOutco
     return { ok: false, code: "DISABLE_FAILED", detail: errorText(error), keyKept: true, read: await readPhoneAccess(viewerPort) };
   }
   /* A Viewer bound beyond loopback keeps its key: the launcher set it for
-     that bind, and lifting it would open the server to the network. */
-  if (loopbackBind()) setEnv("LLV_TOKEN", undefined);
+     that bind, and lifting it would open the server to the network. A Docker
+     container keeps its key too: `service.env` may have set it for every
+     connection, and one the press set is gone at the container's next start. */
+  if (loopbackBind() && !dockerManaged()) setEnv("LLV_TOKEN", undefined);
   setEnv("LLV_TS_HOST", undefined);
   setEnv("LLV_TS_URL", undefined);
   return { ok: true, token: null, read: await readPhoneAccess(viewerPort) };
+}
+
+/** The remembered choice is set and the key cannot be put in place: the
+    Viewer must not start, because the mapping may be live. */
+export class PhoneGateRefusal extends Error {}
+
+/** The port a booting Viewer is reached on from the tailnet, when it knows. */
+function bootTailnetPort(): number | null {
+  if (dockerManaged()) return dockerTailnetEntry().port;
+  const fromEnv = Number(process.env.PORT);
+  return Number.isInteger(fromEnv) && fromEnv > 0 ? fromEnv : null;
+}
+
+/**
+ * Viewer boot, before the first request (#2024): with the phone-access choice
+ * remembered, this process gates on the key, whoever started it. The launcher
+ * already hands the key over; a Docker release container, a container
+ * restart and every deploy start `next start` with no launcher at all, while
+ * the `serve --bg` mapping stays live in tailscaled the whole time.
+ *
+ * The gate comes first and does not depend on Tailscale answering: a key the
+ * environment set is kept, otherwise the key file is read (or minted). A key
+ * that cannot be put in place throws `PhoneGateRefusal`, and the caller stops
+ * the process rather than serve the tailnet ungated. The link comes second,
+ * best effort: it is set only when Tailscale runs and the mapping points at
+ * this Viewer, so nothing advertises an address this start does not serve.
+ */
+export async function restorePhoneAccessGate(): Promise<"off" | "gated" | "linked"> {
+  if (!flagMayBeSet()) return "off";
+  if (!processGates()) {
+    try {
+      setEnv("LLV_TOKEN", (await getToken()).token);
+    } catch (error) {
+      throw new PhoneGateRefusal(errorText(error));
+    }
+  }
+  if (currentTailnetUrl()) return "linked";
+  const port = bootTailnetPort();
+  const binary = port === null ? null : await resolveBinary();
+  if (!binary) return "gated";
+  try {
+    const status = await readTailscaleState(binary, { timeoutMs: STATUS_BOUND_MS });
+    if (status.backendState !== "Running" || !status.dnsName) return "gated";
+    const served = await serveStatus(binary, { timeoutMs: STATUS_BOUND_MS });
+    if (!served.published || served.port !== port) return "gated";
+    setEnv("LLV_TS_HOST", status.dnsName);
+    setEnv("LLV_TS_URL", tailnetLink(status.dnsName, process.env.LLV_TOKEN ?? ""));
+    return "linked";
+  } catch {
+    return "gated";
+  }
 }

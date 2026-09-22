@@ -20,6 +20,7 @@ const FAILURE_STATUS: Record<PhoneFailureCode, number> = {
   PERSIST_FAILED: 500,
   STATUS_UNREADABLE: 502,
   NOT_READY: 409,
+  TRUSTED_ENTRY: 409,
   DISABLE_FAILED: 502,
 };
 
