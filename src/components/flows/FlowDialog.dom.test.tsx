@@ -10,7 +10,7 @@ Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; document.body.replaceChildren(); });
 
-test.each(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna"])("manual flow role offers %s supported tiers", async (model) => {
+test.each(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna"])("manual flow role offers %s supported tiers", async (model) => {
   const role = { engine: "codex", model, effort: "max" };
   globalThis.fetch = (async () => ({ json: async () => ({ presets: [{ name: "saved", implementer: role, reviewer: role }] }) })) as unknown as typeof fetch;
   const host = document.createElement("div");
@@ -25,14 +25,19 @@ test.each(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna"])("manual flow role offe
     expect(selects.length).toBe(2);
     for (const select of selects) {
       expect((select as HTMLSelectElement).value).toBe("max");
-      expect(Boolean(select.querySelector('option[value="ultra"]'))).toBe(model !== "gpt-5.6-luna");
+      expect(Boolean(select.querySelector('option[value="ultra"]'))).toBe(!model.endsWith("-luna"));
     }
   } finally { flushSync(() => root.unmount()); }
 });
 
 
-test.each(["ultra", "max"])("manual role reconciles Astra/%s to Luna in the submitted payload", async (effort) => {
-  const role = { engine: "codex", model: "gpt-6-astra", effort };
+test.each([
+  ["gpt-6-astra", "ultra", "gpt-5.6-luna"],
+  ["gpt-6-astra", "max", "gpt-5.6-luna"],
+  ["gpt-6-sol", "ultra", "gpt-6-luna"],
+  ["gpt-6-sol", "max", "gpt-6-luna"],
+] as const)("manual role reconciles %s/%s to %s in the submitted payload", async (from, effort, to) => {
+  const role = { engine: "codex", model: from, effort };
   const posts: Record<string, unknown>[] = [];
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
     if (init?.method === "POST") posts.push(JSON.parse(String(init.body)));
@@ -49,12 +54,12 @@ test.each(["ultra", "max"])("manual role reconciles Astra/%s to Luna in the subm
     // happy-dom lacks React's text-input value tracker; use the input's handler.
     const propsKey = Object.keys(model).find((key) => key.startsWith("__reactProps$"))!;
     const props = (model as unknown as Record<string, { onChange: (event: unknown) => void }>)[propsKey]!;
-    flushSync(() => props.onChange({ target: { value: "gpt-5.6-luna" } }));
-    expect(model.value).toBe("gpt-5.6-luna");
+    flushSync(() => props.onChange({ target: { value: to } }));
+    expect(model.value).toBe(to);
     const expected = effort === "ultra" ? null : effort;
     expect((host.querySelector('select[aria-label^="Reasoning effort:"]') as HTMLSelectElement).value).toBe(expected ?? "");
     flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Start"))!.click());
     expect(posts).toHaveLength(1);
-    expect(posts[0]).toMatchObject({ roles: { implementer: { model: "gpt-5.6-luna", effort: expected } } });
+    expect(posts[0]).toMatchObject({ roles: { implementer: { model: to, effort: expected } } });
   } finally { flushSync(() => root.unmount()); }
 });

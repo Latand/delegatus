@@ -74,7 +74,7 @@ for (const effort of ["max", "ultra"]) {
   });
 }
 
-for (const [engine, model] of [["codex", "gpt-5.6-luna"], ["claude", "opus"]] as const) {
+for (const [engine, model] of [["codex", "gpt-5.6-luna"], ["codex", "gpt-6-luna"], ["claude", "opus"]] as const) {
   test(`orchestrator preset refuses ${model}/ultra on save and load with model options`, () => {
     const previous = process.env.LLV_STATE_DIR;
     const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-invalid-preset-"));
@@ -119,6 +119,26 @@ test("builder variants round-trip under schema 2, and a schema 1 file still read
     fs.writeFileSync(file, bytes);
     expect(() => loadRoleOverrides()).toThrow();
     expect(fs.readFileSync(file, "utf8")).toBe(bytes);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test("GPT-6-Sol and GPT-6-Luna persist as role overrides and builder variants and resolve", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-gpt6-presets-"));
+  process.env.LLV_STATE_DIR = state;
+  try {
+    const sol = { engine: "codex" as const, model: "gpt-6-sol", effort: "ultra" };
+    const luna = { engine: "codex" as const, model: "gpt-6-luna", effort: "max" };
+    saveRoleOverrides({ orchestrator: { config: sol }, builder: { config: luna, variants: { "apply-fixes": luna, frontend: sol } } });
+    expect(loadRoleOverrides().overrides).toEqual({ orchestrator: { config: sol }, builder: { config: luna, variants: { "apply-fixes": luna, frontend: sol } } });
+    expect(resolveRole("orchestrator")).toMatchObject({ ok: true, value: { config: sol } });
+    expect(resolveRole("builder")).toMatchObject({ ok: true, value: { config: luna } });
+    expect(resolveRole("builder", { mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: luna } });
+    expect(resolveRole("builder", { domain: "frontend" })).toMatchObject({ ok: true, value: { config: sol } });
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
