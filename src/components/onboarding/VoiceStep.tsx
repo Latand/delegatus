@@ -284,7 +284,7 @@ export function VoiceStep({ onSkip, onGoEngines }: {
             )
             : id === "chatgpt" && option && !option.available
               ? onGoEngines
-                ? <button type="button" onClick={onGoEngines} className="self-start text-left text-ui text-warning hover:underline">{t("onboarding.voice.chatgptNoCodex")}</button>
+                ? <button type="button" onClick={onGoEngines} className="self-start rounded-[6px] text-left text-ui text-warning hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">{t("onboarding.voice.chatgptNoCodex")}</button>
                 : <span className="text-ui text-warning">{t("onboarding.voice.chatgptNoCodex")}</span>
               : null;
           return (

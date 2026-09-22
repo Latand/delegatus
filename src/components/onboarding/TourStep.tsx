@@ -99,7 +99,7 @@ function StartBand({ projects, initialProject, claudeConnected, onCreated, phone
                         aria-checked={effort === value}
                         data-tour-effort={value}
                         onClick={() => setEffort(value)}
-                        className={`h-7 flex-1 whitespace-nowrap rounded-[6px] px-2.5 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-10 ${effort === value ? "bg-accent-soft text-primary" : "text-secondary hover:text-primary"}`}
+                        className={`h-7 flex-1 whitespace-nowrap rounded-[6px] px-2.5 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 ${effort === value ? "bg-accent-soft text-primary" : "text-secondary hover:text-primary"}`}
                       >
                         {t(value === "high" ? "onboarding.tour.effortHigh" : "onboarding.tour.effortMedium")}
                       </button>

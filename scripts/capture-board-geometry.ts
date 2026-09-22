@@ -88,6 +88,8 @@ import path from "node:path";
 
 import { chromium, type Browser, type Page } from "playwright-core";
 
+import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
+
 import { createCaptureDirectory } from "./capture-directory";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -674,7 +676,40 @@ function measureOnboarding(phone: boolean) {
     modelSelectWidths: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-row] select")).filter((_, index) => index % 2 === 0).map((el) => Math.round(el.getBoundingClientRect().width)),
     selectedSegmentRing: Array.from(dialog.querySelectorAll<HTMLElement>("[role=radio][aria-checked=true]")).slice(0, 1).map((el) => getComputedStyle(el).boxShadow)[0] ?? null,
     enginesStepMark: dialog.querySelector<HTMLElement>('[data-onboarding-step="engines"] [data-step-mark]')?.dataset.stepMark ?? null,
-    signInHint: dialog.querySelector("[data-onboarding-sign-in-hint]")?.textContent ?? null,
+    /* Slice 3: every control whose label no longer fits its box, by name. */
+    clippedControls: Array.from(dialog.querySelectorAll<HTMLElement>("button, a, label, select")).filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflowX !== "visible";
+    }).map((el) => (el.textContent ?? "").trim().slice(0, 50)),
+    accounts: Object.fromEntries(Array.from(dialog.querySelectorAll<HTMLElement>("[data-onboarding-engine]")).map((el) => [el.dataset.onboardingEngine!, {
+      header: el.querySelector("[data-onboarding-engine-header]")?.textContent ?? null,
+      rows: el.querySelectorAll("[data-mobile2-account]").length,
+      addRow: el.querySelector("[data-mobile2-account-add]") !== null,
+    }])),
+    stepCounter: dialog.querySelector("footer span")?.textContent ?? dialog.querySelector("[data-onboarding-step-list-toggle]")?.textContent ?? null,
+    phone: dialog.querySelector("[data-phone-state]") ? {
+      state: dialog.querySelector<HTMLElement>("[data-phone-state]")!.dataset.phoneState ?? null,
+      text: dialog.querySelector("[data-phone-state]")!.textContent ?? "",
+      links: Array.from(dialog.querySelectorAll("[data-phone-state] a")).map((el) => el.getAttribute("href")),
+      buttons: Array.from(dialog.querySelectorAll<HTMLElement>("[data-phone-state] button")).map((el) => (el.textContent ?? "").trim()),
+      failure: dialog.querySelector<HTMLElement>("[data-phone-failure]")?.dataset.phoneFailure ?? null,
+      link: dialog.querySelector<HTMLInputElement>("[data-phone-link]")?.value ?? null,
+      qr: dialog.querySelector("[data-phone-state] img") !== null,
+    } : null,
+    voice: dialog.querySelector("[data-onboarding-voice]") ? {
+      selected: dialog.querySelector<HTMLElement>("[data-voice-backend][data-selected]")?.dataset.voiceBackend ?? null,
+      result: dialog.querySelector("[data-voice-check-result]")?.textContent ?? null,
+      tone: dialog.querySelector<HTMLElement>("[data-voice-check-result]")?.dataset.tone ?? null,
+      keyField: dialog.querySelector("[data-voice-key-field] input") !== null,
+      html: dialog.querySelector("[data-onboarding-voice]")!.innerHTML,
+    } : null,
+    tour: dialog.querySelector("[data-onboarding-tour]") ? {
+      cardTops: Array.from(dialog.querySelectorAll<HTMLElement>("[data-tour-card]")).map((el) => Math.round(el.getBoundingClientRect().top)),
+      pictures: dialog.querySelectorAll("[data-tour-card] svg").length,
+      start: dialog.querySelector("[data-tour-start]") !== null,
+      create: dialog.querySelector("[data-tour-create]")?.textContent ?? null,
+      projects: Array.from(dialog.querySelectorAll<HTMLOptionElement>("[data-tour-project] option")).map((el) => el.textContent ?? ""),
+    } : null,
     /* The Check step (slice 2): row states, the open failure and its block. */
     health: dialog.querySelector("[data-health-check]") ? {
       state: dialog.querySelector<HTMLElement>("[data-health-check]")!.dataset.healthCheck ?? null,
@@ -805,6 +840,7 @@ async function captureOnboarding(): Promise<void> {
   const report: Record<string, unknown> = { commit: Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout.toString().trim(), case: "onboarding" };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
+  const tailscale = createTailscaleStub({ root: BASE });
   const resetInstall = async (codexInstalled: boolean) => {
     fs.rmSync(path.join(STATE_DIR, "onboarding.json"), { force: true });
     fs.rmSync(path.join(STATE_DIR, "role-presets.json"), { force: true });
@@ -823,7 +859,9 @@ async function captureOnboarding(): Promise<void> {
       cwd: repoRoot,
       /* PATH without the operator's own bin directories: which CLI is
          installed is decided by the stubs under the seeded home alone. */
-      env: { ...buildEnvironment(port), PATH: "/usr/bin:/bin" },
+      /* The stand-in tailscale comes first, so the phone step never reads or
+         changes the operator's own tailnet (#1876 slice 3). */
+      env: { ...buildEnvironment(port), PATH: `${tailscale.dir}:/usr/bin:/bin`, HOSTNAME: "127.0.0.1" },
       stdio: ["ignore", "inherit", "inherit"],
     });
     await waitForServer(baseUrl, server);
@@ -952,11 +990,11 @@ async function captureOnboarding(): Promise<void> {
           else await page.click('[data-onboarding-step="engines"]');
           await page.click('[data-onboarding-engine="codex"] button');
           await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="signed-out"]', { timeout: 30_000 });
-          await page.click('[data-onboarding-sign-in="codex"]');
-          await page.waitForSelector('[data-onboarding-sign-in-body="codex"]');
+          /* Slice 3: the card is the account list, with the add row always there. */
+          await page.waitForSelector('[data-onboarding-accounts="codex"] [data-mobile2-account-add="codex"]');
           await shot("engines-sign-in", (r) => {
             must(r.engines.codex === "signed-out", `${tag}: codex reads ${r.engines.codex} after the install`);
-            must(Boolean(r.signInHint), `${tag}: the open sign-in says nothing about which row continues`);
+            must(r.accounts.codex?.addRow === true, `${tag}: a signed-out Codex card offers no Add row`);
           });
 
           /* 5. Neither engine connected: both steps say so. A reload reopens
@@ -1159,6 +1197,238 @@ async function captureOnboarding(): Promise<void> {
           await page.unroute("**/api/onboarding/health*");
           const finished = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: { completedAt: string | null } | null };
           must(Boolean(finished.marker?.completedAt), `${tag}: Open the board did not record a completed guide`);
+
+          /* 10. Slice 3 (#1876, #2004): the guide from the menu again, walked
+             through its three new steps and the account list. Phone access
+             runs against the stand-in tailscale; live dictation answers are
+             served here so no key reaches a provider. */
+          const uk = locale === "uk";
+          const openGuide = async (row: "setup-guide" | "dictation") => {
+            if (viewport.phone) {
+              await page.click('[data-mobile2-open="menu"]');
+              await page.waitForSelector(`[data-testid="menu-${row}"]`);
+              if (row === "dictation") await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu-slice3.png`) });
+              await page.click(`[data-testid="menu-${row}"]`);
+            } else {
+              await page.click("[data-rail-menu]");
+              await page.waitForSelector(`[data-rail-menu-${row}]`);
+              if (row === "dictation") await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu-slice3.png`) });
+              await page.click(`[data-rail-menu-${row}]`);
+            }
+          };
+          const revisit = async (id: string) => {
+            await openStep(id === "agents" ? "engines" : "agents");
+            await openStep(id);
+          };
+          const common = (name: string, r: NonNullable<ReturnType<typeof measureOnboarding>>) => {
+            must(r.clippedControls.length === 0, `${tag} ${name}: clipped controls ${r.clippedControls.join(" | ")}`);
+          };
+          await page.route("**/api/accounts", async (route) => {
+            const response = await route.fetch();
+            const body = await response.json() as Record<string, { accounts?: Record<string, unknown>[]; active?: string }>;
+            const claude = body.claude;
+            const first = claude?.accounts?.[0];
+            if (claude && first) {
+              claude.accounts = [
+                { ...first, limits: SEEDED_LIMITS },
+                { ...first, id: `${String(first.id)}-lab`, label: "Lab", limits: SEEDED_LIMITS },
+                { ...first, id: `${String(first.id)}-spare`, label: "Spare", authPresent: false, authHealth: "signed_out", limits: undefined },
+              ];
+            }
+            await route.fulfill({ response, json: body });
+          });
+          await openGuide("setup-guide");
+          await page.waitForSelector('[data-onboarding-dialog="guide"]');
+          await openStep("engines");
+          await page.waitForFunction(() => document.querySelectorAll('[data-onboarding-engine="claude"] [data-mobile2-account]').length === 3, undefined, { timeout: 30_000 });
+          await shot("engines-three-accounts", (r) => {
+            common("engines-three-accounts", r);
+            must(r.accounts.claude?.rows === 3 && r.accounts.claude.addRow, `${tag}: the Claude card lists ${r.accounts.claude?.rows} accounts, add row ${r.accounts.claude?.addRow}`);
+            must(/^(3 accounts|Акаунтів: 3)/.test(r.accounts.claude?.header ?? ""), `${tag}: the Claude header reads "${r.accounts.claude?.header}"`);
+            must(/(6|з 6)/.test(r.stepCounter ?? ""), `${tag}: the step counter reads "${r.stepCounter}"`);
+          });
+          await page.unroute("**/api/accounts");
+
+          /* Phone: every state Tailscale can be in. Not installed is served
+             here, since the stand-in is always on the server's PATH. */
+          const phoneFrame = async (name: string, expectState: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void, selector?: string) => {
+            await revisit("phone");
+            await page.waitForSelector(selector ?? `[data-phone-state="${expectState}"]`, { timeout: 30_000 });
+            await shot(name, (r) => {
+              common(name, r);
+              must(r.phone?.state === expectState, `${tag} ${name}: the step shows ${r.phone?.state}`);
+              must(!/sudo|--tailscale|bunx/.test(r.phone?.text ?? "") || r.phone?.failure === "OPERATOR_RIGHTS", `${tag} ${name}: a terminal command on the step: ${r.phone?.text}`);
+              check(r);
+            });
+          };
+          const sentenceOnly = (name: string) => (r: NonNullable<ReturnType<typeof measureOnboarding>>) => {
+            must(r.phone?.links.length === 1 && r.phone.buttons.length === 0, `${tag} ${name}: ${r.phone?.links.length} links and buttons ${JSON.stringify(r.phone?.buttons)}; one sentence and one link expected`);
+          };
+          await page.route("**/api/access", (route) => route.fulfill({ json: { tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: port, servingPort: null, persisted: false }, phoneError: null } }));
+          await phoneFrame("phone-missing", "missing", sentenceOnly("phone-missing"));
+          await page.unroute("**/api/access");
+          tailscale.setStatus({ BackendState: "NeedsLogin" });
+          await phoneFrame("phone-needs-login", "needs-login", sentenceOnly("phone-needs-login"));
+          tailscale.setStatus({ BackendState: "Running", Self: { DNSName: "" } });
+          await phoneFrame("phone-no-dns", "no-dns", sentenceOnly("phone-no-dns"));
+          tailscale.setStatus({ BackendState: "Running", Self: { DNSName: `${STUB_DNS_NAME}.` } });
+          tailscale.setServing(null);
+          tailscale.setServeMode("ok");
+          await phoneFrame("phone-ready", "ready", (r) => {
+            must(r.phone?.buttons[0] === (uk ? "Увімкнути доступ із телефона" : "Turn on phone access"), `${tag}: the ready step's button reads ${JSON.stringify(r.phone?.buttons)}`);
+          });
+          tailscale.setServing(3000);
+          await phoneFrame("phone-serving-other", "serving-other", (r) => {
+            must((r.phone?.text ?? "").includes("3000"), `${tag}: the serving-other title does not name the port`);
+            must(r.phone?.buttons[0] === (uk ? "Перенаправити на Viewer" : "Point it at the Viewer"), `${tag}: serving-other button ${JSON.stringify(r.phone?.buttons)}`);
+          });
+          tailscale.setServing(null);
+          await revisit("phone");
+          await page.waitForSelector('[data-phone-state="ready"]');
+          /* The press in flight, held at the network until its frame is taken,
+             then answered by the server with the operator right missing. */
+          tailscale.setServeMode("operator");
+          let releasePress: () => void = () => {};
+          const held = new Promise<void>((resolve) => { releasePress = resolve; });
+          await page.route("**/api/access/phone", async (route) => { await held; await route.continue(); });
+          await page.click("[data-phone-enable]");
+          await page.waitForSelector("[data-phone-enable][disabled]");
+          await shot("phone-busy", (r) => {
+            common("phone-busy", r);
+            must(/Turning on|Вмикаю/.test(r.phone?.buttons[0] ?? ""), `${tag}: the pressed button reads ${r.phone?.buttons[0]}`);
+          });
+          releasePress();
+          await page.waitForSelector('[data-phone-failure="OPERATOR_RIGHTS"]', { timeout: 30_000 });
+          await page.unroute("**/api/access/phone");
+          const failureFrame = async (code: string, prepare: () => void, undo: () => void, open = false) => {
+            prepare();
+            await page.click("[data-phone-enable]");
+            await page.waitForSelector(`[data-phone-failure="${code}"]`, { timeout: 30_000 });
+            if (open) await page.click("[data-phone-failure] summary");
+            await page.locator("[data-phone-failure]").scrollIntoViewIfNeeded();
+            await shot(`phone-failure-${code.toLowerCase().replace(/_/g, "-")}${open ? "-details" : ""}`, (r) => {
+              common(code, r);
+              must(r.phone?.failure === code, `${tag}: expected ${code}, the step shows ${r.phone?.failure}`);
+              must(!(r.phone?.text ?? "").includes("{"), `${tag} ${code}: unfilled sentence ${r.phone?.text}`);
+            });
+            undo();
+            must(!fs.existsSync(path.join(HOME, ".config", "agent-log-viewer", "phone-access")) || fs.statSync(path.join(HOME, ".config", "agent-log-viewer", "phone-access")).isDirectory(), `${tag} ${code}: a failed press left the choice remembered`);
+          };
+          await page.locator("[data-phone-failure]").scrollIntoViewIfNeeded();
+          await shot("phone-failure-operator-rights", (r) => {
+            common("operator", r);
+            must(r.phone?.failure === "OPERATOR_RIGHTS" && (r.phone.text).includes("sudo tailscale set --operator=$USER"), `${tag}: the operator failure reads ${r.phone?.text}`);
+          });
+          await failureFrame("SERVE_FAILED", () => tailscale.setServeMode("fail"), () => {}, true);
+          await failureFrame("VERIFY_FAILED", () => tailscale.setServeMode("noverify"), () => {});
+          await failureFrame("TIMEOUT", () => tailscale.setServeMode("hang"), () => {});
+          const configDir = path.join(HOME, ".config", "agent-log-viewer");
+          const flagPath = path.join(configDir, "phone-access");
+          const tokenPath = path.join(configDir, "token");
+          await failureFrame("PERSIST_FAILED", () => { tailscale.setServeMode("ok"); fs.mkdirSync(flagPath, { recursive: true }); }, () => fs.rmSync(flagPath, { recursive: true, force: true }));
+          await failureFrame("TOKEN_WRITE_FAILED", () => { fs.rmSync(tokenPath, { force: true }); fs.mkdirSync(tokenPath, { recursive: true }); }, () => fs.rmSync(tokenPath, { recursive: true, force: true }));
+          /* The one press, for real: remembered, published with --bg, verified,
+             re-bound — the running production server now asks every
+             connection for the key, and this tab kept its cookie. */
+          tailscale.setServeMode("ok");
+          await page.click("[data-phone-enable]");
+          await page.waitForSelector('[data-phone-state="serving"] img', { timeout: 30_000 });
+          await shot("phone-serving", (r) => {
+            common("phone-serving", r);
+            must(Boolean(r.phone?.qr) && (r.phone?.link ?? "").startsWith(`https://${STUB_DNS_NAME}/?k=`), `${tag}: serving shows qr=${r.phone?.qr} link=${r.phone?.link?.slice(0, 40)}`);
+          });
+          must(fs.readFileSync(flagPath, "utf8") === "tailscale\n", `${tag}: the choice was not remembered`);
+          must(tailscale.calls().includes(`serve --bg ${port}`), `${tag}: the stand-in never saw serve --bg ${port}`);
+          const gated = await fetch(`${baseUrl}/api/onboarding`);
+          must(gated.status === 403, `${tag}: after the press a request without the key answered ${gated.status}; the running server did not re-bind its gate`);
+          const keyed = await fetch(`${baseUrl}/api/onboarding`, { headers: { authorization: `Bearer ${fs.readFileSync(tokenPath, "utf8").trim()}` } });
+          must(keyed.status === 200, `${tag}: with the key the server answered ${keyed.status}`);
+          report[`${tag}-gate`] = { withoutKey: gated.status, withKey: keyed.status };
+          await page.click("[data-phone-disable]");
+          await page.waitForSelector('[data-phone-state="ready"]', { timeout: 30_000 });
+          const lifted = await fetch(`${baseUrl}/api/onboarding`);
+          must(lifted.status === 200 && !fs.existsSync(flagPath), `${tag}: after Turn off the server answered ${lifted.status} and the flag ${fs.existsSync(flagPath) ? "stayed" : "went"}`);
+
+          /* Voice: each backend, a saved key, and each check sentence. */
+          const voiceFrame = async (name: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void) => {
+            await shot(name, (r) => { common(name, r); check(r); });
+          };
+          const choose = async (id: string) => {
+            await page.click(`[data-voice-backend="${id}"] input[type=radio]`);
+            await page.waitForSelector(`[data-voice-backend="${id}"][data-selected]`);
+          };
+          const check = async (answer?: { status: number; json: unknown }) => {
+            if (answer) await page.route("**/api/transcribe/token", (route) => route.fulfill(answer));
+            await page.click("[data-voice-check]");
+            await page.waitForSelector("[data-voice-check-result]", { timeout: 30_000 });
+            if (answer) await page.unroute("**/api/transcribe/token");
+          };
+          await revisit("voice");
+          await page.waitForSelector("[data-onboarding-voice]", { timeout: 30_000 });
+          await voiceFrame("voice-local", (r) => must(r.voice?.selected === "local", `${tag}: the voice step opens on ${r.voice?.selected}`));
+          await check();
+          await voiceFrame("voice-check-local", (r) => must(r.voice?.tone === "danger" && Boolean(r.voice.result), `${tag}: local check says ${r.voice?.result}`));
+          await choose("chatgpt");
+          await check();
+          await voiceFrame("voice-chatgpt", (r) => must(Boolean(r.voice?.result), `${tag}: chatgpt check says nothing`));
+          await choose("elevenlabs");
+          await check();
+          await voiceFrame("voice-elevenlabs-no-key", (r) => must(r.voice?.keyField === true && /ElevenLabs/.test(r.voice.result ?? ""), `${tag}: elevenlabs without a key reads ${r.voice?.result}`));
+          await choose("soniox");
+          const fakeKey = ["capture", "placeholder", "not", "a", "real", "value"].join("-");
+          await page.fill("[data-voice-key-field] input", fakeKey);
+          await voiceFrame("voice-soniox-key-field", (r) => must(r.voice?.keyField === true, `${tag}: soniox shows no key field`));
+          await page.click("[data-voice-key-save]");
+          await page.waitForSelector('[data-voice-key-note="saved"]', { timeout: 30_000 });
+          await voiceFrame("voice-key-saved", (r) => {
+            must(!(r.voice?.html ?? "").includes(fakeKey), `${tag}: the saved key is still in the page`);
+          });
+          const keyFile = path.join(configDir, "soniox-api-key");
+          must(fs.readFileSync(keyFile, "utf8") === `${fakeKey}\n` && (fs.statSync(keyFile).mode & 0o777) === 0o600, `${tag}: the key file is not the key at mode 600`);
+          await check({ status: 200, json: { token: "served-by-the-capture", provider: "soniox" } });
+          await voiceFrame("voice-check-live-ok", (r) => must(r.voice?.tone === "success", `${tag}: live ok reads ${r.voice?.result}`));
+          await check({ status: 502, json: { error: "Soniox token: HTTP 401" } });
+          await voiceFrame("voice-check-live-refused", (r) => must(r.voice?.tone === "danger" && /401/.test(r.voice.result ?? ""), `${tag}: refused reads ${r.voice?.result}`));
+          fs.rmSync(keyFile, { force: true });
+          await choose("local");
+
+          /* Tour: four cards in one row on the desktop, the pager on the phone,
+             and Create handing over to the orchestrator draft. */
+          await revisit("tour");
+          await page.waitForSelector("[data-onboarding-tour]", { timeout: 30_000 });
+          await shot("tour", (r) => {
+            common("tour", r);
+            must(r.tour?.pictures === 4 && r.tour.start, `${tag}: the tour draws ${r.tour?.pictures} pictures, start band ${r.tour?.start}`);
+            if (!viewport.phone) must(new Set(r.tour?.cardTops).size === 1, `${tag}: the four cards are not in one row (${r.tour?.cardTops.join(", ")})`);
+            must((r.tour?.projects ?? []).includes(PROJECT_NAME), `${tag}: the project select lists ${JSON.stringify(r.tour?.projects)}`);
+          });
+          if (viewport.phone) {
+            for (let page_ = 0; page_ < 4; page_ += 1) await page.click("[data-onboarding-primary]");
+            await page.waitForTimeout(600);
+            await shot("tour-start", (r) => common("tour-start", r));
+          } else {
+            await page.locator("[data-tour-start]").scrollIntoViewIfNeeded();
+            await shot("tour-start", (r) => common("tour-start", r));
+          }
+          await page.click('[data-tour-effort="medium"]');
+          await page.click("[data-tour-create]");
+          await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
+          await page.waitForTimeout(1_500);
+          await page.screenshot({ path: path.join(OUT_DIR, `${tag}-tour-created.png`) });
+          const prefill = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([key]) => key.startsWith("llvOrchestratorDraft:"))));
+          const values = Object.entries(prefill).map(([key, value]) => `${key.split(":").at(-1)}=${value}`).sort();
+          must(values.includes("effort=medium") && values.includes("model=opus") && values.includes("engine=claude"), `${tag}: the tour left the draft at ${values.join(", ")}`);
+          report[`${tag}-tour-prefill`] = values;
+
+          /* The Dictation menu row opens the Voice step alone. */
+          await openGuide("dictation");
+          await page.waitForSelector('[data-onboarding-dialog="voice"] [data-onboarding-voice]', { timeout: 30_000 });
+          await shot("voice-alone", (r) => {
+            common("voice-alone", r);
+            must(r.footerButtons.length === 0 && r.voice !== null, `${tag}: the Dictation row shows footer ${r.footerButtons.length}, voice ${r.voice !== null}`);
+          });
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
 
           report[tag] = frames;
           await context.close();
