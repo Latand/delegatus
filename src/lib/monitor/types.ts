@@ -476,7 +476,7 @@ export interface SeatTickOwnLaneInput {
    * the worktree failed and the lane parked without ever running a stage,
    * carrying the reason in {@link detail}.
    */
-  settled: "completed" | "failed" | "needs_decision" | "provisioned" | "provisioning-failed";
+  settled: "completed" | "failed" | "needs_decision" | "needs_review" | "provisioned" | "provisioning-failed";
   /** Newest movement instant, or null. The backlog bound is measured from it,
       so a lane the seat settled and left alone for days stops being a reason
       it can never discharge — the same rule an unstarted card lives under. */
@@ -484,6 +484,9 @@ export interface SeatTickOwnLaneInput {
   /** Why a lane that never ran a stage parked (#1799), bounded and redacted by
       the source. Only `provisioning-failed` carries one. */
   detail?: string | null;
+  /** Only on `needs_review` (#1938): the last review's verdict, the head it
+      judged and the head nobody has reviewed. */
+  review?: import("@/lib/pipelines/failEdgeBudget").PipelineReviewSummary;
 }
 
 export interface SeatTickTaskInput {

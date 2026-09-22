@@ -618,6 +618,14 @@ function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
   if (lane.settled === "provisioning-failed") {
     return `${lane.title} — lane you launched: provisioning failed, it never ran a stage: ${lane.detail || "no reason recorded"}`;
   }
+  if (lane.settled === "needs_review") {
+    /* #1938: never "finished". The wake says the last review failed and the
+       head is unreviewed, with both heads, so nobody merges on it. */
+    const review = lane.review;
+    const short = (sha: string | null | undefined) => sha ? sha.slice(0, 12) : "unknown";
+    const verdict = review ? `${review.stageId} said ${review.lastVerdict} with ${review.findings} finding${review.findings === 1 ? "" : "s"} on ${short(review.reviewedHead)}; ` : "";
+    return `${lane.title} — lane you launched: last review failed, head unreviewed: ${verdict}current head ${short(review?.currentHead)} was never reviewed. pipeline_action continue-review with addRounds resumes it`;
+  }
   const settled = lane.settled === "completed"
     ? "completed, and nobody has closed it out"
     : lane.settled === "failed"
