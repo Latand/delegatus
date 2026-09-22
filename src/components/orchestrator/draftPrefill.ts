@@ -27,7 +27,11 @@ export type OrchestratorDraftRequest = {
 
 /* The one request a surface that mounts after the event still owes an
    opening to (the phone's seat card mounts with the project's board). */
-let pendingOpen: string | null = null;
+let pendingOpen: { project: string; opens: SeatOpening } | null = null;
+
+/** What a surface opens for a request: the create draft for a prefill, the
+    seat itself for a project that already has one. */
+export type SeatOpening = "draft" | "seat";
 
 export function requestOrchestratorDraft(request: OrchestratorDraftRequest): void {
   if (typeof window === "undefined") return;
@@ -36,15 +40,16 @@ export function requestOrchestratorDraft(request: OrchestratorDraftRequest): voi
     writeSeatDraftField(request.project, "model", request.launch.model);
     writeSeatDraftField(request.project, "effort", request.launch.effort);
   }
-  pendingOpen = request.project;
+  pendingOpen = { project: request.project, opens: request.launch ? "draft" : "seat" };
   window.dispatchEvent(new CustomEvent<OrchestratorDraftRequest>(ORCHESTRATOR_DRAFT_EVENT, { detail: request }));
 }
 
-/** Whether a request asked for this project's seat to open, consumed once. */
-export function takePendingSeatOpen(project: string): boolean {
-  if (pendingOpen !== project) return false;
+/** What a request asked this project's seat surface to open, consumed once. */
+export function takePendingSeatOpen(project: string): SeatOpening | null {
+  if (pendingOpen?.project !== project) return null;
+  const { opens } = pendingOpen;
   pendingOpen = null;
-  return true;
+  return opens;
 }
 
 export function onOrchestratorDraftRequest(listener: (request: OrchestratorDraftRequest) => void): () => void {

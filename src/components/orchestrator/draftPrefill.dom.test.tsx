@@ -63,8 +63,11 @@ test("a draft that mounts after the request starts on it, and the seat opening i
   requestOrchestratorDraft({ project: "repo-beta", launch: { engine: "claude", model: "opus", effort: "medium" } });
   const seen = await mount("repo-beta");
   expect(seen[0]).toBe("claude/opus/medium");
-  expect(takePendingSeatOpen("repo-beta")).toBe(true);
-  expect(takePendingSeatOpen("repo-beta")).toBe(false);
+  expect(takePendingSeatOpen("repo-beta")).toBe("draft");
+  expect(takePendingSeatOpen("repo-beta")).toBeNull();
+  requestOrchestratorDraft({ project: "repo-beta", launch: null });
+  expect(takePendingSeatOpen("repo-other")).toBeNull();
+  expect(takePendingSeatOpen("repo-beta")).toBe("seat");
 });
 
 test("an untouched draft still opens at the shipped default effort", async () => {

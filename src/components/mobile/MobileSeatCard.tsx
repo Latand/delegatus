@@ -183,9 +183,15 @@ export function MobileSeatCard({
   /* The setup guide's tour asks for this project's seat (#1876 slice 3): the
      request may land before this card mounts with the project's board. */
   useEffect(() => {
-    if (takePendingSeatOpen(project)) openSheet("seat", { handoff: false, from: null });
+    /* A prefill opens the create draft, as the board's invitation does; a
+       project that already has a seat opens the seat. */
+    const open = (opens: ReturnType<typeof takePendingSeatOpen>) => {
+      if (opens === "draft") openSheet("rotate", { handoff: true, from: null });
+      else if (opens === "seat") openSheet("seat", { handoff: false, from: null });
+    };
+    open(takePendingSeatOpen(project));
     return onOrchestratorDraftRequest((request) => {
-      if (request.project === project && takePendingSeatOpen(project)) openSheet("seat", { handoff: false, from: null });
+      if (request.project === project) open(takePendingSeatOpen(project));
     });
   }, [project, openSheet]);
   useEffect(() => {
