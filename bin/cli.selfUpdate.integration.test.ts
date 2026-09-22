@@ -17,13 +17,17 @@ import { afterAll, afterEach, expect, test } from "bun:test";
 const roots: string[] = [];
 const children = new Set<ReturnType<typeof spawn>>();
 
+/* A child the test already stopped has fired its exit: waiting for it again
+   would only run out the hook's own time. */
 afterEach(async () => {
   for (const child of children) {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-    await Promise.race([new Promise<void>((resolve) => child.once("exit", () => resolve())), Bun.sleep(5_000)]);
+    if (child.exitCode !== null || child.signalCode !== null) continue;
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    child.kill("SIGTERM");
+    await Promise.race([exited, Bun.sleep(4_000)]);
   }
   children.clear();
-});
+}, 10_000);
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
 
 const identity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false"];
