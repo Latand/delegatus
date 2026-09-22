@@ -388,7 +388,7 @@ function ChangesSection({ s, t }: { s: Snapshot; t: TFunction }) {
           {summary.groups.map((group) => (
             <div key={group.type}>
               <h3 className="m-0 mt-1 text-label font-semibold text-secondary">{group.type}</h3>
-              <ul className="m-0 flex flex-col gap-1 pl-4 text-ui text-primary">
+              <ul className="m-0 flex list-disc flex-col gap-1 pl-4 text-ui text-primary marker:text-muted">
                 {group.items.map((item, index) => <li key={index} className="[overflow-wrap:anywhere]"><Prose text={item} /></li>)}
               </ul>
               {group.more > 0 ? <p className="m-0 text-label text-muted">{t("selfUpdate.changes.more", { count: group.more })}</p> : null}
