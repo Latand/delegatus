@@ -1316,6 +1316,13 @@ async function captureOnboarding(): Promise<void> {
               must((r.phone?.text ?? "").includes("3000"), `${tag}: the serving-other title does not name the port`);
               must(r.phone?.buttons[0] === (uk ? "Перенаправити на Viewer" : "Point it at the Viewer"), `${tag}: serving-other button ${JSON.stringify(r.phone?.buttons)}`);
             });
+            /* A mapping an earlier run left on this Viewer's port while this
+               process gates on nothing: the tailnet reaches it open. */
+            tailscale.setServing(port);
+            await phoneFrame("phone-exposed", "exposed", (r) => {
+              must(r.phone?.buttons[0] === (uk ? "Увімкнути доступ із телефона" : "Turn on phone access"), `${tag}: the exposed step's button reads ${JSON.stringify(r.phone?.buttons)}`);
+              must(r.filledButtons.length === 1, `${tag}: ${r.filledButtons.length} filled buttons on the exposed step (${r.filledButtons.join(", ")})`);
+            });
             tailscale.setServing(null);
             await revisit("phone");
             await page.waitForSelector('[data-phone-state="ready"]');

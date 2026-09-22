@@ -173,7 +173,8 @@ const server = Bun.serve({
   port: Number(process.env.PORT),
   fetch(request) {
     /* What the launcher handed the Viewer, for the phone-access case. */
-    if (new URL(request.url).pathname === "/api/access") return Response.json({ tailnetUrl: process.env.LLV_TS_URL ?? null, host: process.env.LLV_TS_HOST ?? null });
+    /* Whether the gate is on, never the key itself. */
+    if (new URL(request.url).pathname === "/api/access") return Response.json({ tailnetUrl: process.env.LLV_TS_URL ?? null, host: process.env.LLV_TS_HOST ?? null, gated: Boolean(process.env.LLV_TOKEN) });
     return new Response("ok");
   },
 });
@@ -338,8 +339,8 @@ test("phone access remembered by the setup guide starts the real CLI in tailnet 
   await output.waitFor("Tailnet:", 15_000);
   const token = (await readFile(path.join(configDir, "token"), "utf8")).trim();
   expect(token).toMatch(/^[0-9a-f]{32}$/);
-  const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null; host: string | null };
-  expect(answer).toEqual({ tailnetUrl: `https://${STUB_DNS_NAME}/?k=${token}`, host: STUB_DNS_NAME });
+  const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null; host: string | null; gated: boolean };
+  expect(answer).toEqual({ tailnetUrl: `https://${STUB_DNS_NAME}/?k=${token}`, host: STUB_DNS_NAME, gated: true });
   /* Published once, in the background, and never as a foreground child. */
   expect(stub.calls()).toContain(`serve --bg ${port}`);
   expect(stub.calls()).not.toContain(`serve ${port}`);
@@ -366,7 +367,12 @@ test("a remembered choice whose Tailscale went away starts locally and says why"
 
   await output.waitFor("this start is local only", 10_000);
   await waitForStatus("127.0.0.1", port, 200);
-  const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null };
+  const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null; gated: boolean };
   expect(answer.tailnetUrl).toBeNull();
+  /* The gate stays on. A background mapping an earlier tailnet start left
+     behind resumes when tailscaled comes back, and it would otherwise proxy
+     the tailnet into a Viewer that asks nothing. */
+  expect(answer.gated).toBe(true);
+  expect((await readFile(path.join(configDir, "token"), "utf8")).trim()).toMatch(/^[0-9a-f]{32}$/);
   expect(stub.calls().some((call) => call.startsWith("serve"))).toBe(false);
-});
+}, 30_000);

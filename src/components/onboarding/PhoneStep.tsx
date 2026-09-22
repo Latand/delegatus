@@ -31,7 +31,7 @@ const SENTENCE: Record<"missing" | "needs-login" | "no-dns", { text: Parameters<
   "no-dns": { text: "onboarding.phone.noDns", link: "onboarding.phone.noDnsLink", href: "https://login.tailscale.com/admin/dns" },
 };
 
-type Failure = { code: PhoneFailureCode; detail: string };
+type Failure = { code: PhoneFailureCode; detail: string; keyKept: boolean };
 type Load = { kind: "loading" } | { kind: "error" } | { kind: "ready"; access: AccessResponse };
 
 function isAccess(value: unknown): value is AccessResponse {
@@ -106,12 +106,12 @@ export function PhoneStep({ onSkip, onState, pollMs = 5_000 }: {
       const body: unknown = await response.json().catch(() => null);
       if (isAccess(body)) setLoad({ kind: "ready", access: body });
       if (!response.ok) {
-        const record = (body ?? {}) as { code?: unknown; detail?: unknown };
+        const record = (body ?? {}) as { code?: unknown; detail?: unknown; keyKept?: unknown };
         const code = typeof record.code === "string" ? record.code as PhoneFailureCode : "STATUS_UNREADABLE";
-        setFailure({ code, detail: typeof record.detail === "string" ? record.detail : "" });
+        setFailure({ code, detail: typeof record.detail === "string" ? record.detail : "", keyKept: record.keyKept === true });
       }
     } catch {
-      setFailure({ code: action === "enable" ? "STATUS_UNREADABLE" : "DISABLE_FAILED", detail: "" });
+      setFailure({ code: action === "enable" ? "STATUS_UNREADABLE" : "DISABLE_FAILED", detail: "", keyKept: false });
     } finally {
       setBusy(null);
     }
@@ -164,6 +164,9 @@ export function PhoneStep({ onSkip, onState, pollMs = 5_000 }: {
       {failure.code === "OPERATOR_RIGHTS" ? (
         <code className="self-start break-all rounded-[6px] bg-sunken px-2 py-1 font-mono text-ui text-primary">{OPERATOR_COMMAND}</code>
       ) : null}
+      {/* A press that may have published before it failed leaves the gate on,
+          and the operator hears it from here rather than from a 403. */}
+      {failure.keyKept ? <p data-phone-key-kept="" className="leading-[1.45]">{t("onboarding.phone.keyKept")}</p> : null}
       <details className="text-ui text-secondary">
         <summary className="cursor-pointer select-none font-semibold">{t("onboarding.phone.details")}</summary>
         <pre className="mt-1.5 whitespace-pre-wrap break-all rounded-[6px] bg-sunken px-2 py-1.5 font-mono text-[11px] text-primary">{failure.code}{failure.detail ? `\n${failure.detail}` : ""}</pre>
@@ -202,17 +205,20 @@ export function PhoneStep({ onSkip, onState, pollMs = 5_000 }: {
   }
 
   const other = phone.state === "serving-other";
+  /* A background mapping points here while this start asks for no key: the
+     warning is about this Viewer, and the same press re-binds it. */
+  const exposed = phone.state === "exposed";
   return (
     <div data-phone-state={phone.state} className="flex max-w-[480px] flex-col gap-3" aria-busy={busy === "enable" || undefined}>
       <p className="text-title font-bold text-primary">
         {other
           ? phone.servingPort ? t("onboarding.phone.otherTitle", { port: phone.servingPort }) : t("onboarding.phone.otherTitleNoPort")
-          : t("onboarding.phone.readyTitle")}
+          : exposed ? t("onboarding.phone.exposedTitle") : t("onboarding.phone.readyTitle")}
       </p>
-      {other ? (
+      {other || exposed ? (
         <p className="flex items-start gap-2 text-ui leading-[1.45] text-warning">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-          {t("onboarding.phone.otherWarning")}
+          {t(exposed ? "onboarding.phone.exposedWarning" : "onboarding.phone.otherWarning")}
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-2 max-sm:flex-col max-sm:items-stretch">

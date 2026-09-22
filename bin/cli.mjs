@@ -113,6 +113,7 @@ Options:
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; restarting in ${delay}ms`,
     runtimeHostRestartFail: (detail) => `[runtime host] restart failed: ${detail}`,
     phoneAccessSkipped: (detail) => `Phone access is turned on in the setup guide, and Tailscale is not ready, so this start is local only:\n${detail}`,
+    phoneAccessUngated: (detail) => `Warning: the access key could not be read, so this start asks no key: ${detail}`,
     phoneServeFailed: (detail) => `Phone access is turned on in the setup guide, and publishing in the tailnet failed: ${detail}`,
   },
   uk: {
@@ -158,6 +159,7 @@ Options:
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; повторний запуск за ${delay} мс`,
     runtimeHostRestartFail: (detail) => `[runtime host] помилка повторного запуску: ${detail}`,
     phoneAccessSkipped: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але Tailscale не готовий, тому цей запуск лише локальний:\n${detail}`,
+    phoneAccessUngated: (detail) => `Увага: не вдалося прочитати ключ доступу, тому цей запуск не питає ключа: ${detail}`,
     phoneServeFailed: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але опублікувати в tailnet не вдалося: ${detail}`,
   },
 };
@@ -637,14 +639,18 @@ async function waitForReadiness(port) {
   throw new Error(m.serverTimeout(READINESS_TIMEOUT_MS / 1000));
 }
 
-function localUrl(options) {
+/* The key rides in the local link too when this start gates on one: the
+   Viewer asks every connection for it, loopback included, and the terminal
+   that started it is the one place the operator can read it. */
+function localUrl(options, runtime) {
   const host = options.hostname === "::1" ? "[::1]" : options.hostname;
-  return `http://${host}:${options.port}/`;
+  const key = runtime?.llvToken ? `?k=${runtime.llvToken}` : "";
+  return `http://${host}:${options.port}/${key}`;
 }
 
-function printBanner(version, options) {
+function printBanner(version, options, runtime) {
   console.log(`  ✳ Agent Log Viewer v${version}`);
-  console.log(m.bannerOpened(localUrl(options)));
+  console.log(m.bannerOpened(localUrl(options, runtime)));
   console.log(m.bannerReads());
   console.log(m.bannerStop());
 }
@@ -760,6 +766,17 @@ async function prepareRuntime(options) {
       options.tailscale = false;
       options.tailscaleFromFlag = false;
       runtime.tailnetSkipped = true;
+      /* The gate still goes on. A background mapping a previous tailnet start
+         published belongs to tailscaled, not to this process: it resumes when
+         tailscaled comes back, and it would otherwise proxy the whole tailnet
+         into a Viewer that asks for nothing. The link itself stays unset, so
+         nothing advertises an address this start does not serve. */
+      try {
+        const { token } = await getToken({ rotate: options.newToken });
+        runtime.llvToken = token;
+      } catch (tokenError) {
+        console.error(m.phoneAccessUngated(tokenError instanceof Error ? tokenError.message : String(tokenError)));
+      }
       return runtime;
     }
     const { token } = await getToken({ rotate: options.newToken });
@@ -979,13 +996,13 @@ async function main() {
     }
   }
 
-  printBanner(version, options);
+  printBanner(version, options, runtime);
   if (options.tailscale) {
     await printTailscaleBanner(runtime);
   }
 
   if (!options.noOpen && process.stdout.isTTY) {
-    openBrowser(localUrl(options));
+    openBrowser(localUrl(options, runtime));
   }
 }
 

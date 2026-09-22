@@ -526,7 +526,7 @@ for it, and never shows a command on the happy path.
 
 ```
 { tailnetUrl: string | null,
-  phone: { state: "missing" | "needs-login" | "no-dns" | "ready" | "serving-other" | "serving",
+  phone: { state: "missing" | "needs-login" | "no-dns" | "ready" | "serving-other" | "serving" | "exposed",
            dnsName: string | null, viewerPort: number, servingPort: number | null,
            persisted: boolean } }
 ```
@@ -539,7 +539,8 @@ from `bin/tailscale.mjs`, each bounded to 3 s, and maps:
 | `missing` | `detectTailscale` throws | one sentence, one link |
 | `needs-login` | `tailscale status --json` has any `BackendState` other than `Running` (`NeedsLogin`, `Stopped`, `NoState`, `NeedsMachineAuth`, `Starting`); `readStatus` already raises for the first two (`tailscale.mjs:207`) | one sentence, one link |
 | `no-dns` | `Running` and `Self.DNSName` empty (`readStatus`'s MagicDNS error) | one sentence, one link |
-| `ready` | `Running` with a DNS name; `serve status` has no `/` handler on 443, or has one that proxies to the Viewer's own port while this process holds no `LLV_TOKEN` (a `--bg` mapping left by an earlier run) | the button |
+| `ready` | `Running` with a DNS name and `serve status` has no `/` handler on 443 | the button |
+| `exposed` | the 443 `/` handler proxies to the Viewer's own port while this process holds no `LLV_TOKEN`/`LLV_TS_URL` — a `--bg` mapping left by an earlier run, which belongs to tailscaled and outlives this process. The tailnet reaches an **ungated** Viewer until the press re-binds it, so the step says that and does not read as plain `ready` | the button, with one warning line |
 | `serving-other` | the 443 `/` handler proxies to a local port that is not `viewerPort` | the button, with one warning line |
 | `serving` | the 443 `/` handler proxies to `127.0.0.1:<viewerPort>` **and** this process holds `LLV_TOKEN` and `LLV_TS_URL` | the QR, the link, Copy |
 
@@ -563,9 +564,14 @@ it was:
    `configFilePath`). `bin/cli.mjs` reads this file before `parseArgs`
    decides and treats its presence as `--tailscale`; §7 has the launcher
    side. Failure code `PERSIST_FAILED`.
-2. **Read or mint the token.** `getToken()` from `bin/tailscale.mjs`: the
-   existing 32-hex file, mode 600, reused when present, never rotated from
-   here. Failure code `TOKEN_WRITE_FAILED` (its own message names the path).
+2. **Read or mint the token, and gate on it.** `getToken()` from
+   `bin/tailscale.mjs`: the existing 32-hex file, mode 600, reused when
+   present, never rotated from here. Failure code `TOKEN_WRITE_FAILED` (its
+   own message names the path). `process.env.LLV_TOKEN` is set **here**,
+   before anything is published: `serve --bg` hands the mapping to
+   tailscaled, which can apply it before the command answers and does not
+   unapply it when the command times out, so a gate written only after a
+   verified publish leaves that whole window open to the tailnet.
 3. **Publish in the tailnet.** Spawn `tailscale serve --bg <viewerPort>`
    through `viewerChildProcessOptions` (the credential isolation
    `tailscale-credential-isolation.test.ts` pins) and wait for it to exit,
@@ -579,8 +585,12 @@ it was:
    proxying to `127.0.0.1:<viewerPort>`; otherwise `VERIFY_FAILED`. A
    `serving-other` mapping is replaced by step 3, which the step's warning
    line said before the press.
-5. **Re-bind the running process.** Set `process.env.LLV_TOKEN`,
-   `LLV_TS_HOST = <dnsName>` and `LLV_TS_URL = https://<dnsName>/?k=<token>`
+   Any failure from step 3 on runs `serve --https=443 <viewerPort> off` and
+   re-reads `serve status`: the gate is lifted back to what it was only once
+   nothing answers on this port, and an unreadable status keeps it. The reply
+   carries `keyKept`, and the step says the key stayed on.
+5. **Re-bind the running process.** Set `LLV_TS_HOST = <dnsName>` and
+   `LLV_TS_URL = https://<dnsName>/?k=<token>` beside the `LLV_TOKEN` of step 2
    in the serving Viewer. From the next request `proxy.ts:50` gates every
    connection, `sameOrigin.ts:34` admits the tailnet host, and
    `/api/access` answers the URL. No restart: nothing in the gate is read at
@@ -1096,7 +1106,7 @@ footer buttons.
 
 Slice 3 adds its states to the `onboarding` case of
 `scripts/capture-board-geometry.ts` (§1.1) and writes no new driver: the
-phone step in each of its six states (a stub `tailscale` on the seeded
+phone step in each of its seven states (a stub `tailscale` on the seeded
 home's `PATH` answering canned `status` and `serve status` JSON, and
 recording the `serve --bg` argv), the press in flight and each failure
 code, the voice step with each row selected, a saved key and each check
@@ -1515,14 +1525,22 @@ green:
    `parseArgs` and set `options.tailscale` from it; when the flag (not the
    argv switch) turned it on, publish with `serveBackground` once after
    readiness instead of the foreground child and leave the mapping in place
-   at exit; `--help` names the file. `src/app/api/access/route.ts` answers
+   at exit; `--help` names the file. A remembered choice whose Tailscale is
+   not ready still starts, locally, and still gates on the key: the mapping
+   the earlier start published is tailscaled's and resumes with it, so the
+   fallback mints or reuses the token and sets `LLV_TOKEN` while leaving
+   `LLV_TS_HOST`/`LLV_TS_URL` unset (inherited ones are dropped, so nothing
+   advertises an address this start does not serve). The banner and the
+   browser it opens carry `?k=` whenever the start gates, which is the one
+   place the operator can read the key. `src/app/api/access/route.ts` answers
    the `phone` block; new `src/app/api/access/phone/route.ts` runs the enable
    and disable sequences of §2.3 and sets the cookie. `AccessQrBody`
    extracted; `PhoneStep`; the popover button. Tests, all against a stub
-   `tailscale` binary on an isolated `PATH` and config home: the six states
+   `tailscale` binary on an isolated `PATH` and config home: the seven states
    from canned JSON; enable writes the flag, reuses an existing token file
-   at mode 600, spawns `serve --bg <port>` with argv only, sets the three
-   variables only after a verifying `serve status`, and answers with the
+   at mode 600, spawns `serve --bg <port>` with argv only, gates on the key
+   before publishing and sets the link variables after a verifying
+   `serve status`, and answers with the
    cookie; each failure code from the matching stub behaviour (operator
    stderr, non-zero exit, a stub that never exits, a status that does not
    verify), with `process.env` untouched afterwards; disable clears the

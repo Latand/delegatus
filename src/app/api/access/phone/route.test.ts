@@ -67,7 +67,7 @@ function press(action: "enable" | "disable") {
 
 const gateUntouched = () => GATE.every((name) => process.env[name] === undefined);
 
-describe("GET /api/access reads the six phone states from Tailscale", () => {
+describe("GET /api/access reads the seven phone states from Tailscale", () => {
   test("not installed", async () => {
     setEnv("PATH", stub.emptyDir);
     expect((await read()).phone).toMatchObject({ state: "missing", dnsName: null, viewerPort: PORT });
@@ -89,10 +89,11 @@ describe("GET /api/access reads the six phone states from Tailscale", () => {
     expect((await read()).phone).toMatchObject({ state: "ready", dnsName: STUB_DNS_NAME, servingPort: null, persisted: false });
     stub.setServing(3000);
     expect((await read()).phone).toMatchObject({ state: "serving-other", servingPort: 3000 });
-    /* A background mapping an earlier run left behind points here, but this
-       process holds no key yet: still one press away. */
+    /* A background mapping an earlier run left behind points here while this
+       process holds no key: the tailnet reaches an ungated Viewer, which is
+       its own state, and one press re-binds it. */
     stub.setServing(PORT);
-    expect((await read()).phone).toMatchObject({ state: "ready", servingPort: PORT });
+    expect((await read()).phone).toMatchObject({ state: "exposed", servingPort: PORT });
     setEnv("LLV_TOKEN", "0".repeat(32));
     setEnv("LLV_TS_URL", `https://${STUB_DNS_NAME}/?k=${"0".repeat(32)}`);
     expect((await read()).phone?.state).toBe("serving");
@@ -165,9 +166,16 @@ describe("POST /api/access/phone enable", () => {
       expect(body.code).toBe(code);
       /* The sentence reads "…could not publish the Viewer: listener already in use.", not "…: error: …". */
       if (code === "SERVE_FAILED") expect(body.detail).toBe("listener already in use");
-      expect(gateUntouched()).toBe(true);
+      /* A press that may have left a mapping behind takes it down again, so
+         the tailnet never reaches a Viewer this press stopped gating. */
+      if (mode === "hang" || mode === "noverify") {
+        expect(stub.calls()).toContain(`serve --https=443 ${PORT} off`);
+        expect(body.keyKept === true || process.env.LLV_TOKEN !== undefined || gateUntouched()).toBe(true);
+      }
       expect(fs.existsSync(flagFile())).toBe(false);
       expect(body.tailnetUrl).toBeNull();
+      /* The gate is only lifted again once nothing is published to this port. */
+      if (!body.keyKept) expect(gateUntouched()).toBe(true);
     }, 20_000);
   }
 

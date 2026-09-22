@@ -311,7 +311,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
      Continue steps back to a border. On the phone Continue turns the tour's
      pages, so it keeps its fill until the last page, where the band is. */
   const stepOwnsPrimary = (current === "check" && checkOwnsPrimary)
-    || (current === "phone" && (phoneState === "ready" || phoneState === "serving-other"))
+    || (current === "phone" && (phoneState === "ready" || phoneState === "serving-other" || phoneState === "exposed"))
     || (current === "tour" && (!isMobile || tourAtEnd));
   const counter = t("onboarding.stepCounter", { n: step + 1, total: STEPS.length });
   const footerButtons = view !== "guide" ? null : (

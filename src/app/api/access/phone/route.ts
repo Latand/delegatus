@@ -48,7 +48,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AccessRespons
   const outcome = body.action === "enable" ? await enablePhoneAccess(port) : await disablePhoneAccess(port);
   const state: AccessResponse = { tailnetUrl: currentTailnetUrl(), phone: outcome.read.phone, phoneError: outcome.read.error };
   if (!outcome.ok) {
-    return NextResponse.json({ ...state, error: outcome.code, code: outcome.code, detail: outcome.detail }, { status: FAILURE_STATUS[outcome.code] });
+    return NextResponse.json({ ...state, error: outcome.code, code: outcome.code, detail: outcome.detail, keyKept: outcome.keyKept }, { status: FAILURE_STATUS[outcome.code] });
   }
   const response = NextResponse.json(state);
   if (outcome.token) {

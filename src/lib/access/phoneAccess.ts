@@ -26,7 +26,11 @@ import {
  * Every Tailscale call goes through `bin/tailscale.mjs` with argv only.
  */
 
-export type PhoneState = "missing" | "needs-login" | "no-dns" | "ready" | "serving-other" | "serving";
+/* `exposed`: a background mapping points at this Viewer's port while this
+   process does not gate on the key. The mapping belongs to tailscaled and
+   survives this process, so the tailnet can reach an ungated Viewer until one
+   press re-binds it (or Turn off takes the mapping down). */
+export type PhoneState = "missing" | "needs-login" | "no-dns" | "ready" | "serving-other" | "serving" | "exposed";
 
 export type PhoneAccess = {
   state: PhoneState;
@@ -53,7 +57,7 @@ export type PhoneRead = { phone: PhoneAccess | null; error: "STATUS_UNREADABLE" 
 
 export type PhoneOutcome =
   | { ok: true; token: string | null; read: PhoneRead }
-  | { ok: false; code: PhoneFailureCode; detail: string; read: PhoneRead };
+  | { ok: false; code: PhoneFailureCode; detail: string; keyKept: boolean; read: PhoneRead };
 
 /** `GET /api/access`, and the body of every phone-action reply. */
 export interface AccessResponse {
@@ -64,7 +68,7 @@ export interface AccessResponse {
   phoneError: "STATUS_UNREADABLE" | null;
 }
 
-export type PhoneActionFailure = AccessResponse & { error: string; code: PhoneFailureCode; detail: string };
+export type PhoneActionFailure = AccessResponse & { error: string; code: PhoneFailureCode; detail: string; /** The failed press left the access key on, because something may still be published. */ keyKept: boolean };
 
 export function currentTailnetUrl(): string | null {
   const tailnetUrl = process.env.LLV_TS_URL;
@@ -158,9 +162,10 @@ export async function readPhoneAccess(viewerPort: number): Promise<PhoneRead> {
   const withDns = { ...base, dnsName: status.dnsName, servingPort: served.port };
   if (!served.published) return { phone: { ...withDns, state: "ready" }, error: null };
   if (served.port !== viewerPort) return { phone: { ...withDns, state: "serving-other" }, error: null };
-  /* A background mapping an earlier run left points here, and this process
-     does not gate on the key yet: one press re-binds it. */
-  return { phone: { ...withDns, state: processServesTailnet() ? "serving" : "ready" }, error: null };
+  /* A background mapping an earlier run left points here. Whether the tailnet
+     reaches a gated Viewer or an open one is the difference between the two
+     states, and it is what the step has to say out loud. */
+  return { phone: { ...withDns, state: processServesTailnet() ? "serving" : "exposed" }, error: null };
 }
 
 /**
@@ -173,11 +178,11 @@ export async function enablePhoneAccess(viewerPort: number): Promise<PhoneOutcom
   const deadline = Date.now() + PRESS_BOUND_MS;
   const remaining = (bound: number) => Math.max(1, Math.min(bound, deadline - Date.now()));
   const before = await readPhoneAccess(viewerPort);
-  const fail = async (code: PhoneFailureCode, detail: string): Promise<PhoneOutcome> => ({ ok: false, code, detail, read: await readPhoneAccess(viewerPort) });
-  if (before.error || !before.phone) return { ok: false, code: "STATUS_UNREADABLE", detail: "", read: before };
+  const fail = async (code: PhoneFailureCode, detail: string, keyKept = false): Promise<PhoneOutcome> => ({ ok: false, code, detail, keyKept, read: await readPhoneAccess(viewerPort) });
+  if (before.error || !before.phone) return { ok: false, code: "STATUS_UNREADABLE", detail: "", keyKept: false, read: before };
   const { phone } = before;
   if (phone.state === "missing" || phone.state === "needs-login" || phone.state === "no-dns" || !phone.dnsName) {
-    return { ok: false, code: "NOT_READY", detail: phone.state, read: before };
+    return { ok: false, code: "NOT_READY", detail: phone.state, keyKept: false, read: before };
   }
   const binary = await resolveBinary();
   if (!binary) return fail("NOT_READY", "missing");
@@ -200,15 +205,39 @@ export async function enablePhoneAccess(viewerPort: number): Promise<PhoneOutcom
     return fail("TOKEN_WRITE_FAILED", errorText(error));
   }
 
+  /* The gate goes on BEFORE the publish, never after it. `serve --bg` hands
+     the mapping to tailscaled, which can have applied it before the command
+     answers — and after a timeout it answers nothing at all. A gate written
+     only on the happy path leaves exactly that window, and the whole failure
+     of it, open to the tailnet. */
+  const priorToken = process.env.LLV_TOKEN;
+  setEnv("LLV_TOKEN", token);
+  /* After a publish that may have taken: take the mapping down again, and lift
+     the gate only once nothing answers on this port. A status that cannot be
+     read keeps the gate, because an unknown mapping is a published one. */
+  const settle = async (): Promise<boolean> => {
+    await serveOff(binary, viewerPort, { timeoutMs: remaining(SERVE_BOUND_MS) }).catch(() => {});
+    let after: { published: boolean; port: number | null };
+    try {
+      after = await serveStatus(binary, { timeoutMs: remaining(STATUS_BOUND_MS) });
+    } catch {
+      return true;
+    }
+    const stillPublished = after.published && after.port === viewerPort;
+    if (!stillPublished) setEnv("LLV_TOKEN", priorToken);
+    return stillPublished;
+  };
+
   const published = await serveBackground(binary, viewerPort, { timeoutMs: remaining(SERVE_BOUND_MS) });
   if (published.timedOut) {
     await rollbackFlag();
-    return fail("TIMEOUT", "");
+    return fail("TIMEOUT", "", await settle());
   }
   if (published.code !== 0) {
     await rollbackFlag();
-    if (OPERATOR_PATTERN.test(published.stderr)) return fail("OPERATOR_RIGHTS", lastLine(published.stderr));
-    return fail("SERVE_FAILED", lastLine(published.stderr) || `exit ${published.code ?? "?"}`);
+    const kept = await settle();
+    if (OPERATOR_PATTERN.test(published.stderr)) return fail("OPERATOR_RIGHTS", lastLine(published.stderr), kept);
+    return fail("SERVE_FAILED", lastLine(published.stderr) || `exit ${published.code ?? "?"}`, kept);
   }
 
   let verified: { published: boolean; port: number | null };
@@ -216,14 +245,14 @@ export async function enablePhoneAccess(viewerPort: number): Promise<PhoneOutcom
     verified = await serveStatus(binary, { timeoutMs: remaining(STATUS_BOUND_MS) });
   } catch (error) {
     await rollbackFlag();
-    return fail("VERIFY_FAILED", errorText(error));
+    return fail("VERIFY_FAILED", errorText(error), await settle());
   }
   if (!verified.published || verified.port !== viewerPort) {
     await rollbackFlag();
-    return fail("VERIFY_FAILED", verified.published ? `published port ${verified.port ?? "?"}` : "nothing published");
+    return fail("VERIFY_FAILED", verified.published ? `published port ${verified.port ?? "?"}` : "nothing published", await settle());
   }
 
-  setEnv("LLV_TOKEN", token);
+
   setEnv("LLV_TS_HOST", phone.dnsName);
   setEnv("LLV_TS_URL", `https://${phone.dnsName}/?k=${token}`);
   return { ok: true, token, read: await readPhoneAccess(viewerPort) };
@@ -246,14 +275,14 @@ export async function disablePhoneAccess(viewerPort: number): Promise<PhoneOutco
     if (served === null || (served.published && served.port === viewerPort)) {
       const off = await serveOff(binary, viewerPort, { timeoutMs: SERVE_BOUND_MS });
       if (off.timedOut || off.code !== 0) {
-        return { ok: false, code: "DISABLE_FAILED", detail: off.timedOut ? "timeout" : lastLine(off.stderr) || `exit ${off.code ?? "?"}`, read: await readPhoneAccess(viewerPort) };
+        return { ok: false, code: "DISABLE_FAILED", detail: off.timedOut ? "timeout" : lastLine(off.stderr) || `exit ${off.code ?? "?"}`, keyKept: true, read: await readPhoneAccess(viewerPort) };
       }
     }
   }
   try {
     await clearPhoneAccessFlag();
   } catch (error) {
-    return { ok: false, code: "DISABLE_FAILED", detail: errorText(error), read: await readPhoneAccess(viewerPort) };
+    return { ok: false, code: "DISABLE_FAILED", detail: errorText(error), keyKept: true, read: await readPhoneAccess(viewerPort) };
   }
   /* A Viewer bound beyond loopback keeps its key: the launcher set it for
      that bind, and lifting it would open the server to the network. */

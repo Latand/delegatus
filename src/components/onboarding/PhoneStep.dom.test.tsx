@@ -24,7 +24,7 @@ const LINK = `https://${DNS}/?k=${KEY}`;
 
 function phone(state: PhoneState, over: Partial<PhoneAccess> = {}): PhoneAccess {
   const withDns = state !== "missing" && state !== "needs-login" && state !== "no-dns";
-  return { state, dnsName: withDns ? DNS : null, viewerPort: 8898, servingPort: state === "serving" ? 8898 : state === "serving-other" ? 3000 : null, persisted: state === "serving", ...over };
+  return { state, dnsName: withDns ? DNS : null, viewerPort: 8898, servingPort: state === "serving" || state === "exposed" ? 8898 : state === "serving-other" ? 3000 : null, persisted: state === "serving", ...over };
 }
 const access = (state: PhoneState, over: Partial<PhoneAccess> = {}): AccessResponse => ({ tailnetUrl: state === "serving" ? LINK : null, phone: phone(state, over), phoneError: null });
 
@@ -182,4 +182,25 @@ test("the step reports what it ended on, so Continue can mark it done or skipped
   harness.setRoute((url) => url.endsWith("/api/access") ? jsonResponse(access("serving")) : undefined);
   await mount({ onState: (state) => seen.push(state) });
   expect(seen.at(-1)).toBe("serving");
+});
+
+test("exposed: a mapping this start does not gate says so, and the button re-binds it", async () => {
+  harness.setRoute((url) => url.endsWith("/api/access") ? jsonResponse(access("exposed")) : undefined);
+  const host = await mount();
+  expect(stateOf(host)).toBe("exposed");
+  expect(host.textContent).toContain("Tailscale already publishes this Viewer at this computer's address, and this start does not ask for the access key.");
+  expect(host.querySelector("[data-phone-enable]")?.textContent).toBe("Turn on phone access");
+  /* One sentence and one press: no terminal command here either. */
+  expect(host.querySelector("code")).toBeNull();
+});
+
+test("a failed press that left the key on says the key stays on", async () => {
+  harness.setRoute((url, init) => {
+    if (url.endsWith("/api/access/phone") && init?.method === "POST") return jsonResponse({ ...access("ready"), error: "TIMEOUT", code: "TIMEOUT", detail: "", keyKept: true }, 504);
+    if (url.endsWith("/api/access")) return jsonResponse(access("ready"));
+    return undefined;
+  });
+  const host = await mount();
+  await click(host.querySelector("[data-phone-enable]"));
+  expect(host.querySelector("[data-phone-failure]")?.textContent).toContain("The access key stays on for this run, in case Tailscale published the Viewer anyway: other browsers on this computer need the link from the terminal.");
 });
