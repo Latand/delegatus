@@ -19,7 +19,8 @@ const { createRoot } = await import("react-dom/client");
 const { useAgentLaunchDraft } = await import("@/components/draft/AgentLaunchControls");
 const { readSeatDraftField, writeSeatDraftField } = await import("@/components/mobile/orchestratorDraftStorage");
 const { ORCHESTRATOR_SPAWN_CONFIG } = await import("@/lib/orchestrator/prompt");
-const { requestOrchestratorDraft, takePendingSeatOpen, useOrchestratorDraftPrefill } = await import("./draftPrefill");
+const { requestOrchestratorDraft, takePendingSeatOpen, useOrchestratorDraftPrefill, useOrchestratorDraftReveal } = await import("./draftPrefill");
+const { useRef } = await import("react");
 
 function Draft({ project, seen }: { project: string; seen: (value: string) => void }) {
   const launch = useAgentLaunchDraft({
@@ -73,4 +74,43 @@ test("a draft that mounts after the request starts on it, and the seat opening i
 test("an untouched draft still opens at the shipped default effort", async () => {
   const seen = await mount("repo-gamma");
   expect(seen[0]).toBe(`claude/opus/${ORCHESTRATOR_SPAWN_CONFIG.effort}`);
+});
+
+function Revealed({ project, scrolled }: { project: string; scrolled: (block: string) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useOrchestratorDraftReveal(project, ref);
+  return (
+    <div
+      ref={(node) => {
+        ref.current = node;
+        if (node) node.scrollIntoView = ((options?: ScrollIntoViewOptions) => scrolled(String(options?.block))) as typeof node.scrollIntoView;
+      }}
+    />
+  );
+}
+
+async function mountRevealed(project: string): Promise<string[]> {
+  const scrolled: string[] = [];
+  mounted = createRoot(document.createElement("div"));
+  await act(async () => mounted!.render(<Revealed project={project} scrolled={(block) => scrolled.push(block)} />));
+  return scrolled;
+}
+
+test("the tour's hand-off scrolls the draft's launch choices into view, once and only for its project", async () => {
+  requestOrchestratorDraft({ project: "repo-delta", launch: { engine: "claude", model: "opus", effort: "high" } });
+  const scrolled = await mountRevealed("repo-delta");
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  expect(scrolled).toEqual(["nearest"]);
+  await act(async () => requestOrchestratorDraft({ project: "repo-other", launch: { engine: "claude", model: "opus", effort: "high" } }));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  expect(scrolled).toEqual(["nearest"]);
+  await act(async () => requestOrchestratorDraft({ project: "repo-delta", launch: { engine: "claude", model: "opus", effort: "medium" } }));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  expect(scrolled).toEqual(["nearest", "nearest"]);
+});
+
+test("a draft opened without a hand-off does not scroll", async () => {
+  const scrolled = await mountRevealed("repo-epsilon");
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  expect(scrolled).toEqual([]);
 });

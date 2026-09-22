@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 
 import type { AgentLaunchDraft } from "@/components/draft/AgentLaunchControls";
 import { writeSeatDraftField } from "@/components/mobile/orchestratorDraftStorage";
@@ -29,6 +29,10 @@ export type OrchestratorDraftRequest = {
    opening to (the phone's seat card mounts with the project's board). */
 let pendingOpen: { project: string; opens: SeatOpening } | null = null;
 
+/* The project whose desktop draft still owes the operator a look at the launch
+   choices the request set: the dock mounts the draft after the event. */
+let pendingReveal: string | null = null;
+
 /** What a surface opens for a request: the create draft for a prefill, the
     seat itself for a project that already has one. */
 export type SeatOpening = "draft" | "seat";
@@ -41,6 +45,7 @@ export function requestOrchestratorDraft(request: OrchestratorDraftRequest): voi
     writeSeatDraftField(request.project, "effort", request.launch.effort);
   }
   pendingOpen = { project: request.project, opens: request.launch ? "draft" : "seat" };
+  pendingReveal = request.launch ? request.project : null;
   window.dispatchEvent(new CustomEvent<OrchestratorDraftRequest>(ORCHESTRATOR_DRAFT_EVENT, { detail: request }));
 }
 
@@ -74,4 +79,35 @@ export function useOrchestratorDraftPrefill(project: string, launch: Pick<AgentL
     draft.setModel(request.launch.model);
     draft.setEffort(request.launch.effort);
   }), [project]);
+}
+
+/** The dock opens the draft at its short default height, where the intro and
+    the Create button fill the view and the engine, account and reasoning the
+    tour chose sit below the fold. A hand-off scrolls them into view, whether
+    the draft was on screen already or mounts after the request. */
+export function useOrchestratorDraftReveal(project: string, target: RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    let frame: ReturnType<typeof setTimeout> | null = null;
+    /* After the prefill's state has rendered, so the rows are the ones shown. */
+    const reveal = () => {
+      if (frame !== null) clearTimeout(frame);
+      frame = setTimeout(() => {
+        frame = null;
+        target.current?.scrollIntoView({ block: "nearest" });
+      }, 0);
+    };
+    if (pendingReveal === project) {
+      pendingReveal = null;
+      reveal();
+    }
+    const off = onOrchestratorDraftRequest((request) => {
+      if (request.project !== project || !request.launch) return;
+      pendingReveal = null;
+      reveal();
+    });
+    return () => {
+      off();
+      if (frame !== null) clearTimeout(frame);
+    };
+  }, [project, target]);
 }
