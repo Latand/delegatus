@@ -188,10 +188,13 @@ function seatTickWakeUnresolvedCardText(project: string, detail: string, ref: st
     [
       "Seat tick wake unresolved under its original key",
       "",
-      `${detail}.`,
-      "Nothing the wake carried is acknowledged: every outcome and lane event it named stays owed until a wake that lands names it.",
+      /* Above the detail, so the bound on the body can never cut the line the
+         next write reads its count back from. */
       `${ATTEMPTS_LINE} ${attempts}; newest key: ${key}`,
       `Project ${project}.`,
+      "",
+      `${detail}.`,
+      "Nothing the wake carried is acknowledged: every outcome and lane event it named stays owed until a wake that lands names it.",
       "",
       `${MONITOR_REF_PREFIX} ${ref}`,
     ].join("\n"),
@@ -1229,11 +1232,16 @@ async function check(
   /* Every attempt this check finds unresolved, for the one card the project
      carries for them; written once, after the send, from the final row. */
   const unresolved: UnresolvedAttempt[] = [];
-  const opened = seatTickStateForEpoch(readState(canonical), openingSeat?.seatEpoch ?? null);
+  const openingRow = readState(canonical);
+  const opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
   /* Whether the project came into this check with anything its card could be
      describing — so a check that finds it all gone closes the card, and a
-     project that never had one asks nothing of the board. */
-  const openedStanding = !!(opened.outstandingWake || opened.retiredWakes?.length || opened.refusals);
+     project that never had one asks nothing of the board. The refusal run is
+     read off the row BEFORE the epoch scoping, which drops it: a rotation is
+     one of the things that ends the run, and the check that sees the rotation
+     is the one that has to close the card the run left open. */
+  const openedRun = !!openingRow.refusals;
+  const openedStanding = !!(opened.outstandingWake || opened.retiredWakes?.length || openedRun);
   /* Retired attempts first (#1594), so an attempt this check is about to retire
      is asked of its holder by the NEXT check rather than twice by this one. */
   const drained = await reconcileRetiredWakes({
@@ -1502,7 +1510,7 @@ async function check(
   writeState(input.project, state);
   const standing = standingWakeCard(state,
     seatTickActiveRefusalRun(state, input.seat ? refusalBasis(input.seat.seatEpoch, state, input.settings.updatedAt) : null),
-    unresolved, openedStanding);
+    unresolved, openedStanding, openedRun);
   if (standing) {
     try {
       ensureCard(input.project, standing, at);
@@ -1600,13 +1608,18 @@ function refusalBasis(seatEpoch: number, state: SeatTickProjectState, settingsUp
  * something standing has its card closed: a wake landed, or every attempt was
  * released.
  */
-function standingWakeCard(state: SeatTickProjectState, run: SeatTickRefusalRun | null, unresolved: readonly UnresolvedAttempt[], openedStanding: boolean): SeatTickCard | null {
+function standingWakeCard(state: SeatTickProjectState, run: SeatTickRefusalRun | null, unresolved: readonly UnresolvedAttempt[], openedStanding: boolean, openedRun: boolean): SeatTickCard | null {
   const ref = SEAT_TICK_WAKE_UNRESOLVED_REF;
   if (run) return { ref, kind: "wake-unresolved", state: "open", attempt: run.clientMessageId, instance: run.clientMessageId, detail: seatTickRefusalCardDetail(run) };
   const newest = [...unresolved].sort((left, right) => Number(right.fencing) - Number(left.fencing)
     || Date.parse(right.preparedAt) - Date.parse(left.preparedAt))[0];
   if (newest) return { ref, kind: "wake-unresolved", state: "open", attempt: newest.key, instance: newest.key, detail: newest.detail };
   if (openedStanding && !state.outstandingWake && !state.retiredWakes?.length) return { ref, kind: "wake-unresolved", state: "resolved", detail: "" };
+  /* A run that ended this check — a landing, a rotation, a settings write —
+     leaves a card telling the operator to act on a seat that no longer needs
+     it. It is closed even while a fresh attempt is in flight; that attempt
+     opens a card of its own if it is still unresolved past its interval. */
+  if (openedRun) return { ref, kind: "wake-unresolved", state: "resolved", detail: "" };
   return null;
 }
 

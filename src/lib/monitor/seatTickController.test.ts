@@ -910,7 +910,7 @@ test("a wake a holder still retains past the wake interval is carded once and ke
   expect(rig.cards.map((entry) => entry.card)).toMatchObject([{ ref: SEAT_TICK_WAKE_UNRESOLVED_REF, kind: "wake-unresolved", instance: outstanding.clientMessageId }]);
   expect(rig.cards[0]!.card.detail).toContain('last answered "retained"');
   /* The same attempt on the next check is the same occurrence: the board's own
-     create receipt collapses it, and a second attempt would be a second card. */
+     create receipt collapses it. A second attempt rewrites the same card. */
   const again = harness({ pipelines: OPEN_LANE, state: { ...OVERDUE, outstandingWake: outstanding }, wakeState: "retained" });
   await runSeatTickCheck(PROJECT, again.deps);
   expect(again.cards.map((entry) => entry.card.instance)).toEqual([outstanding.clientMessageId]);
@@ -5419,12 +5419,34 @@ test("three consecutive permanent refusals open the circuit: the fourth check pr
 });
 
 test("a seat rotation resets the refusal circuit", async () => {
-  const { check } = standingProject("refusal-rotation");
+  const { project, check } = standingProject("refusal-rotation");
   const refusing = { wakeState: "absent" as const, delivery: MIGRATION_REFUSAL };
   for (let index = 0; index < 4; index++) await check(NOW + index * 5 * MINUTE, refusing);
   expect((await check(NOW + 20 * MINUTE, refusing)).rig.sent).toHaveLength(0);
-  const rotated = await check(NOW + 25 * MINUTE, { ...refusing, seat: { conversationId: SUCCESSOR, seatEpoch: 8, path: null } });
+  expect(await unresolvedCardsOn(project)).toHaveLength(1);
+  /* The successor takes wakes: the run ends, and so does the card that told
+     the operator to rotate the seat. */
+  const rotated = await check(NOW + 25 * MINUTE, { seat: { conversationId: SUCCESSOR, seatEpoch: 8, path: null } });
   expect(rotated.rig.sent.map((message) => message.conversationId)).toContain(SUCCESSOR);
+  expect(await unresolvedCardsOn(project)).toEqual([]);
+});
+
+test("a rotation onto a seat that is still refusing closes the stale circuit card too", async () => {
+  const { project, check } = standingProject("refusal-rotation-refusing");
+  const refusing = { wakeState: "absent" as const, delivery: MIGRATION_REFUSAL };
+  for (let index = 0; index < 4; index++) await check(NOW + index * 5 * MINUTE, refusing);
+  expect(await unresolvedCardsOn(project)).toHaveLength(1);
+  const rotated = await check(NOW + 20 * MINUTE, { ...refusing, seat: { conversationId: SUCCESSOR, seatEpoch: 8, path: null } });
+  expect(rotated.rig.sent).toHaveLength(1);
+  expect(await unresolvedCardsOn(project)).toEqual([]);
+});
+
+test("a project that never had an unresolved wake asks nothing of the board", async () => {
+  const project = `no-card-${crypto.randomUUID().slice(0, 8)}`;
+  const rig = harness({ pipelines: [{ ...OPEN_LANE[0]!, project }], settings: defaultSeatTickSettings(project), state: OVERDUE });
+  await runSeatTickCheck(project, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.cards.filter(({ card }) => card.kind === "wake-unresolved")).toEqual([]);
 });
 
 test("the standing card closes the per-attempt cards the earlier scheme left on the board", async () => {
