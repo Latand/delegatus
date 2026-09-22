@@ -49,9 +49,6 @@ function icon(kind: IconKind, extraClass = ""): SVGElement {
     warning: '<path d="M7 1.4l6 10.8H1z" fill="currentColor"/><path d="M7 5.4v3.2" stroke="var(--surface-card)" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="10.3" r=".85" fill="var(--surface-card)"/>',
   };
   svg.innerHTML = shapes[kind];
-  /* A re-render replaces the icon; phasing the spin to the wall clock keeps it
-     turning smoothly across replacements. */
-  if (kind === "running") svg.setAttribute("style", `animation-delay:-${Date.now() % 1000}ms`);
   return svg;
 }
 
@@ -69,24 +66,42 @@ function badge(state: ProcessView["state"]): HTMLElement {
   return h("span", { class: `badge ${tone}` }, glyph, state);
 }
 
-/* Replaces a section's content only when it changed, and puts focus back on
-   the control that had it, so live updates never steal the keyboard. */
+/* Morphs a section into its new rendering in place: nodes that match by tag
+   and data-key are kept and only their attributes and text change, so a
+   button under the pointer or an open log survives the four renders a second
+   a running build produces. */
+function sameNode(a: Node, b: Node): boolean {
+  if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) return false;
+  if (a instanceof Element && b instanceof Element) return a.getAttribute("data-key") === b.getAttribute("data-key");
+  return true;
+}
+
+function morphChildren(current: Element, next: Element): void {
+  const wanted = Array.from(next.childNodes);
+  wanted.forEach((want, index) => {
+    const have = current.childNodes[index];
+    if (!have) current.appendChild(want);
+    else if (!sameNode(have, want)) current.replaceChild(want, have);
+    else if (have instanceof Element && want instanceof Element) {
+      for (const { name } of Array.from(have.attributes)) if (!want.hasAttribute(name)) have.removeAttribute(name);
+      for (const { name, value } of Array.from(want.attributes)) if (have.getAttribute(name) !== value) have.setAttribute(name, value);
+      morphChildren(have, want);
+    } else if (have.nodeValue !== want.nodeValue) have.nodeValue = want.nodeValue;
+  });
+  while (current.childNodes.length > wanted.length) current.lastChild!.remove();
+}
+
+/* A log that was scrolled to its end (or is new) follows the output. */
 function patch(section: HTMLElement, children: Child[], className?: string): void {
-  const next = h("div", {}, ...children);
   if (className !== undefined && section.className !== className) section.className = className;
-  if (section.innerHTML === next.innerHTML) return;
-  const focusedKey = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  const scrolls = new Map<string, number>();
+  const following = new Map<Element, boolean>();
   section.querySelectorAll<HTMLElement>("[data-scroll]").forEach((element) => {
-    const atBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
-    scrolls.set(element.dataset.scroll!, atBottom ? -1 : element.scrollTop);
+    following.set(element, element.scrollTop + element.clientHeight >= element.scrollHeight - 4);
   });
-  section.replaceChildren(...Array.from(next.childNodes));
+  morphChildren(section, h("div", {}, ...children));
   section.querySelectorAll<HTMLElement>("[data-scroll]").forEach((element) => {
-    const previous = scrolls.get(element.dataset.scroll!);
-    element.scrollTop = previous === undefined || previous === -1 ? element.scrollHeight : previous;
+    if (following.get(element) ?? true) element.scrollTop = element.scrollHeight;
   });
-  if (focusedKey) section.querySelector<HTMLElement>(`[data-key="${focusedKey}"]`)?.focus();
 }
 
 /* ---------- formatting ---------- */
@@ -304,7 +319,7 @@ function renderUpdate(s: Snapshot): { children: Child[]; edge: string } {
     return {
       children: [
         h("h2", { class: "section-title" }, heading),
-        h("p", { class: "outcome success" }, `Built ${short} in ${duration(elapsed)}. Running processes still serve the previous version. Restart web, then the runtime host, to apply.`),
+        h("p", { class: "outcome success" }, `Built ${short} in ${duration(elapsed)}. ${appliedCopy(s, short)}`),
         steps,
       ],
       edge: "card update edge-success",
@@ -324,12 +339,23 @@ function renderUpdate(s: Snapshot): { children: Child[]; edge: string } {
   };
 }
 
+/* What the done state asks for depends on which processes already run the build. */
+function appliedCopy(s: Snapshot, short: string): string {
+  const serves = (view: ProcessView) => view.pid !== null && view.revision === short;
+  const web = serves(s.processes.web);
+  const host = serves(s.processes.runtimeHost);
+  if (web && host) return "Web and the runtime host now run it.";
+  if (web) return "Web runs it; restart the runtime host to apply it there too.";
+  if (host) return "The runtime host runs it; restart web to apply it there too.";
+  return "Running processes still serve the previous version. Restart web, then the runtime host, to apply.";
+}
+
 function renderChanges(s: Snapshot): Child[] | null {
   const delta = s.check.delta;
   if (!delta || s.check.state !== "update-available") return null;
   const groups = delta.summary.groups.map((group) => h("div", {},
     h("h3", { class: "subhead" }, group.type),
-    h("ul", { class: "items" }, ...group.items.map((item) => h("li", {}, item))),
+    h("ul", { class: "items" }, ...group.items.map((item) => h("li", {}, prose(item)))),
     group.more > 0 ? h("p", { class: "more" }, `+${group.more} more`) : null,
   ));
   const shown = delta.commits.slice(0, 20);
@@ -347,13 +373,29 @@ function renderChanges(s: Snapshot): Child[] | null {
   ];
 }
 
-function facts(parts: (string | HTMLElement)[]): HTMLElement {
-  const children: Child[] = [];
-  parts.forEach((part, index) => {
-    if (index > 0) children.push(h("span", { class: "sep", "aria-hidden": "true" }, "·"));
-    children.push(typeof part === "string" ? h("span", { class: "nowrap" }, part) : part);
-  });
-  return h("p", { class: "facts" }, ...children);
+/* One line of facts, dot-separated; a line that does not fit ends in an
+   ellipsis instead of wrapping a lone separator onto the next line. */
+function facts(...lines: (string | HTMLElement | null)[][]): HTMLElement {
+  const rows: HTMLElement[] = [];
+  for (const line of lines) {
+    const parts = line.filter((part): part is string | HTMLElement => part !== null);
+    if (parts.length === 0) continue;
+    const children: Child[] = [];
+    parts.forEach((part, index) => {
+      if (index > 0) children.push(h("span", { class: "sep", "aria-hidden": "true" }, "·"));
+      children.push(typeof part === "string" ? h("span", {}, part) : part);
+    });
+    rows.push(h("p", { class: "line" }, ...children));
+  }
+  return h("div", { class: "facts" }, ...rows);
+}
+
+/* Changelog prose marks code with backticks; render those spans as code. */
+function prose(text: string): HTMLElement {
+  const parts = text.split("`");
+  /* A cut summary can end inside a code span: its opening mark is dropped. */
+  if (parts.length % 2 === 0) parts.splice(-2, 2, `${parts.at(-2)}${parts.at(-1)}`);
+  return h("span", {}, ...parts.map((part, index) => index % 2 === 1 ? h("code", {}, part) : part));
 }
 
 function renderProcess(s: Snapshot, role: "web" | "runtimeHost"): { children: Child[]; className: string } {
@@ -379,7 +421,7 @@ function renderProcess(s: Snapshot, role: "web" | "runtimeHost"): { children: Ch
   const checked = status.lastHealthAt ? `checked ${clock(status.lastHealthAt, true)}` : null;
 
   if (status.state === "healthy") {
-    children.push(facts([pid!, where, up!, ...(checked ? [checked] : [])].filter(Boolean) as (string | HTMLElement)[]));
+    children.push(facts([pid, where], [up, checked]));
   } else if (status.state === "stopping") {
     children.push(h("p", { class: "value" }, `Stopping PID ${status.pid ?? "…"}…${isHost ? " agents are being dropped" : ""}`));
   } else if (status.state === "starting") {
@@ -389,7 +431,7 @@ function renderProcess(s: Snapshot, role: "web" | "runtimeHost"): { children: Ch
     if (pid) children.push(facts([pid, where]));
   } else if (status.state === "failed") {
     children.push(h("p", { class: "error-line" }, status.error ?? "Failed"));
-    if (pid) children.push(facts([pid, where, ...(checked ? [checked] : [])]));
+    if (pid) children.push(facts([pid, where], [checked]));
   } else {
     children.push(h("p", { class: "value" }, "Not running"));
   }

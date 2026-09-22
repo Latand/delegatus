@@ -79,7 +79,7 @@ body {
   flex-direction: column;
   gap: 16px;
 }
-.columns { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.columns { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; min-width: 0; }
 .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
 .card {
@@ -258,8 +258,10 @@ p { margin: 0; }
 .commit .subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Process blocks */
-.process .facts { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: var(--text-ui); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.process .facts .sep { color: var(--text-muted); }
+.process .facts { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-ui); color: var(--text-secondary); font-variant-numeric: tabular-nums; min-width: 0; }
+.process .facts .line { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.process .facts .sep { color: var(--text-muted); margin: 0 6px; }
+code { font-family: var(--font-mono); font-size: 0.92em; background: var(--surface-sunken); border: 1px solid var(--border-default); border-radius: 4px; padding: 0 3px; }
 .warning-line { display: flex; gap: 8px; font-size: var(--text-ui); color: var(--warning); align-items: flex-start; }
 .warning-line .icon { margin-top: 2px; }
 .stale { font-size: var(--text-ui); color: var(--warning); background: var(--warning-soft); border-radius: var(--radius-control); padding: 6px 8px; }
@@ -282,7 +284,7 @@ p { margin: 0; }
 .footer .path { overflow-wrap: anywhere; }
 
 @media (max-width: 899px) {
-  .columns { display: flex; flex-direction: column; }
+  .columns { display: flex; flex-direction: column; align-items: stretch; }
   .col { display: contents; }
   #web { order: 1; }
   #host { order: 2; }
@@ -294,9 +296,12 @@ p { margin: 0; }
   .page { padding: 16px 16px 24px; gap: 12px; }
   .columns { gap: 12px; }
   .card { padding: 14px; }
-  .header-top { flex-direction: column; align-items: stretch; }
+  /* The header's Check now moves below the status, full width. */
+  .header-top { display: contents; }
+  .header-top .btn { order: 10; width: 100%; }
+  .row.wrap > .actions { flex: 1 1 100%; }
   .actions { flex-direction: column; align-items: stretch; }
-  .actions .btn, .header-top .btn { width: 100%; }
+  .actions .btn { width: 100%; }
   .versions { flex-direction: column; gap: 4px; }
 }
 
