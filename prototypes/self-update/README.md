@@ -56,6 +56,7 @@ return to *healthy*; the Viewer link then serves the new version.
 
 ```sh
 ~/.cache/llv-bun-1.4.0/bin/bun prototypes/self-update/bench.ts status   # PIDs and URLs
+~/.cache/llv-bun-1.4.0/bin/bun prototypes/self-update/bench.ts restart-prototype   # after editing the prototype; web and host keep running
 ~/.cache/llv-bun-1.4.0/bin/bun prototypes/self-update/bench.ts stop     # stops every recorded PID
 ~/.cache/llv-bun-1.4.0/bin/bun prototypes/self-update/bench.ts stop --purge   # …and removes the bench directory
 ```
