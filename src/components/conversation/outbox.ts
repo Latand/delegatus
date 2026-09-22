@@ -448,10 +448,13 @@ export function readOperationShared(
   options: { force?: boolean; fetchImpl?: typeof fetch } = {},
 ): { result: Promise<RuntimeReceipt | null>; release(): void } | null {
   const existing = operationReads.get(operationId);
-  if (!existing?.inFlight && !options.force && !operationReadDue(operationId, nowMs)) return null;
+  /* A read its last holder cancelled is already aborting; a new caller starts
+     a fresh one rather than joining a request that can only answer null. */
+  const joinable = existing?.inFlight && !existing.inFlight.cancelled ? existing.inFlight : null;
+  if (!joinable && !existing?.inFlight?.cancelled && !options.force && !operationReadDue(operationId, nowMs)) return null;
   const read: SharedOperationRead = existing ?? { startedAt: nowMs, failures: 0, inFlight: null };
   operationReads.set(operationId, read);
-  if (!read.inFlight) {
+  if (!joinable) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), OPERATION_READ_TIMEOUT_MS);
     read.startedAt = nowMs;
@@ -464,15 +467,17 @@ export function readOperationShared(
     })().catch(() => null).then((receipt) => {
       clearTimeout(timeout);
       const current = read.inFlight?.controller === controller ? read.inFlight : null;
+      // A cancelled read a fresh one replaced says nothing about the operation.
+      if (!current) return receipt;
       /* Cancelled by its holders (unmount, hidden tab, inactive composer): not
          a failed read, and due again as soon as someone asks. */
-      if (current?.cancelled) read.startedAt = Number.NEGATIVE_INFINITY;
+      if (current.cancelled) read.startedAt = Number.NEGATIVE_INFINITY;
       /* Only an arrival or a discard ends the row. An unknown-fate answer
          (uncertain, or failed with verify-first) is absorbing on the server
          until the operator retries or discards, so asking again at the
          interval learns nothing: it backs off to the ceiling like a failure. */
       else read.failures = receipt && receiptHasAbsorbingOutcome(receipt) ? 0 : read.failures + 1;
-      if (current) read.inFlight = null;
+      read.inFlight = null;
       return receipt;
     });
     read.inFlight = { result, controller, holders: 0, cancelled: false };

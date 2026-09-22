@@ -2470,4 +2470,26 @@ describe("readOperationShared", () => {
     expect(operationReadDue("op-held", now + 1)).toBe(true);
     expect(OPERATION_READ_TIMEOUT_MS).toBeGreaterThan(0);
   });
+
+  test("a caller after the last release starts a fresh read instead of joining the cancelled one", async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const fetchImpl = ((_input: string, init?: RequestInit) => {
+      signals.push(init?.signal);
+      if (signals.length === 1) {
+        return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+      }
+      return Promise.resolve(Response.json({ receipt: delivered("op-rejoin") }));
+    }) as unknown as typeof fetch;
+    const first = readOperationShared("op-rejoin", now, { fetchImpl })!;
+    first.release();
+    // Same tick: the abort has not settled yet.
+    const second = readOperationShared("op-rejoin", now, { fetchImpl })!;
+    expect(signals).toHaveLength(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(await second.result).toMatchObject({ operationId: "op-rejoin", status: "delivered" });
+    expect(await first.result).toBeNull();
+    second.release();
+    // The cancelled read counted as no failure; the arrival reset the spacing.
+    expect(operationReadDue("op-rejoin", now + OPERATION_RECONCILE_INTERVAL_MS)).toBe(true);
+  });
 });

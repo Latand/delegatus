@@ -1991,6 +1991,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      and the request aborted, on unmount, on hide and when the composer goes
      inactive. */
   const applyOperationRead = (item: OperationReconciliation, answer: RuntimeReceipt) => {
+    /* The operation id is the identity here: `readOperationShared` only answers
+       for the id it read. A record projected from a compacted operation may
+       carry an empty key or conversation, which is absence, not a mismatch. */
     if ((answer.conversationId && answer.conversationId !== cardId)
       || (answer.idempotencyKey && answer.idempotencyKey !== item.idempotencyKey)) return;
     rememberRuntimeReceipt({ ...answer, conversationId: cardId, idempotencyKey: item.idempotencyKey },
