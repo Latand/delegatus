@@ -1,8 +1,8 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { freePort, isAlive, ManagedProcess, ProcessRegistry, readStartIdentity, type ProcessSpec } from "./processes";
+import { freePort, isAlive, ManagedProcess, ProcessRegistry, readStartIdentity, webProbe, type ProcessSpec } from "./processes";
 
 const STUB = join(import.meta.dir, "fixtures", "stub-child.ts");
 const root = mkdtempSync("/var/tmp/self-update-processes-");
@@ -177,6 +177,55 @@ describe("ManagedProcess with a stub child", () => {
     expect(managed.status.pid).not.toBe(firstPid);
     expect(managed.status.port).toBe(spec.port!);
     expect(isAlive(firstPid)).toBe(false);
+  });
+});
+
+describe("a restart starts from wherever the spec points at that moment", () => {
+  test("cwd and revision are read at each start, so a restart runs the newest built release", async () => {
+    const releaseA = join(root, "release-a");
+    const releaseB = join(root, "release-b");
+    for (const dir of [releaseA, releaseB]) mkdirSync(dir, { recursive: true });
+    let current = { dir: releaseA, revision: "aaaaaaa" };
+    const spec = await stubSpec("serve");
+    spec.cwd = () => current.dir;
+    spec.revision = () => current.revision;
+    const reg = registry();
+    const managed = new ManagedProcess(spec, reg, () => {});
+    started.push(managed);
+    await managed.start();
+    expect(managed.lines()).toContain(`stub cwd ${releaseA}`);
+    expect(managed.status.revision).toBe("aaaaaaa");
+    current = { dir: releaseB, revision: "bbbbbbb" };
+    await managed.restart();
+    expect(managed.lines()).toContain(`stub cwd ${releaseB}`);
+    expect(managed.status.revision).toBe("bbbbbbb");
+    expect(JSON.parse(readFileSync(reg.file, "utf8")).web.revision).toBe("bbbbbbb");
+  });
+});
+
+describe("webProbe", () => {
+  let chunkStatus = 200;
+  const page = `<!DOCTYPE html><html><head><script src="/_next/static/chunks/webpack-0a1b2c.js" async=""></script></head><body>ok</body></html>`;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const { pathname } = new URL(request.url);
+      if (pathname === "/") return new Response(page, { headers: { "content-type": "text/html" } });
+      if (pathname === "/_next/static/chunks/webpack-0a1b2c.js") return new Response("//js", { status: chunkStatus });
+      return new Response("missing", { status: 404 });
+    },
+  });
+  afterAll(() => server.stop(true));
+
+  test("passes when / and the first script it references both answer 200", async () => {
+    chunkStatus = 200;
+    await webProbe(server.port!)(1);
+  });
+
+  test("fails when / answers 200 but its own script chunk does not", async () => {
+    chunkStatus = 500;
+    await expect(webProbe(server.port!)(1)).rejects.toThrow("/_next/static/chunks/webpack-0a1b2c.js answered 500");
   });
 });
 

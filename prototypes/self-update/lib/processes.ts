@@ -100,7 +100,8 @@ export class ProcessRegistry {
 export interface ProcessSpec {
   role: Role;
   command: string[];
-  cwd: string;
+  /* Read at each start, so a restart runs the release installed by then. */
+  cwd: string | (() => string);
   env: Record<string, string>;
   port: number | null;
   socket: string | null;
@@ -112,7 +113,7 @@ export interface ProcessSpec {
   stopGraceMs?: number;
   killGraceMs?: number;
   logFile?: string;
-  /* Short SHA the checkout is at, recorded with the PID. */
+  /* Short SHA of the release the start runs, recorded with the PID. */
   revision?: () => string | null;
 }
 
@@ -208,10 +209,12 @@ export class ManagedProcess {
     }
     mkdirSync(dirname(this.logFile), { recursive: true });
     const fd = openSync(this.logFile, "w");
+    const cwd = typeof spec.cwd === "function" ? spec.cwd() : spec.cwd;
+    const revision = spec.revision?.() ?? null;
     let child: ChildProcess;
     try {
       child = spawn(spec.command[0]!, spec.command.slice(1), {
-        cwd: spec.cwd,
+        cwd,
         env: spec.env as NodeJS.ProcessEnv,
         detached: true,
         stdio: ["ignore", fd, fd],
@@ -240,7 +243,7 @@ export class ManagedProcess {
       startedAt: new Date(startedAt).toISOString(),
       port: spec.port,
       socket: spec.socket,
-      revision: spec.revision?.() ?? null,
+      revision,
     };
     this.registry.write(spec.role, record);
     child.once("exit", (code, signal) => {
@@ -357,12 +360,20 @@ export function signalGroup(record: Pick<ProcessRecord, "pid" | "startIdentity">
   }
 }
 
-/* Web readiness and health: GET / answers 200. */
+/* Web readiness and health: GET / answers 200, and so does the first script
+   chunk that page references. `/` alone can answer 200 from a server whose
+   .next was replaced underneath it while every chunk it names is gone. */
 export function webProbe(port: number, timeoutMs = 5_000): (pid: number) => Promise<void> {
   return async () => {
-    const response = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(timeoutMs), redirect: "manual" });
-    await response.body?.cancel();
+    const signal = AbortSignal.timeout(timeoutMs);
+    const response = await fetch(`http://127.0.0.1:${port}/`, { signal, redirect: "manual" });
+    const html = response.status === 200 ? await response.text() : (await response.body?.cancel(), "");
     if (response.status !== 200) throw new Error(`GET / answered ${response.status}`);
+    const chunk = /["'](\/_next\/static\/[^"'?#]+\.js)["']/.exec(html)?.[1];
+    if (!chunk) return;
+    const asset = await fetch(`http://127.0.0.1:${port}${chunk}`, { signal, redirect: "manual" });
+    await asset.body?.cancel();
+    if (asset.status !== 200) throw new Error(`GET ${chunk} answered ${asset.status}`);
   };
 }
 

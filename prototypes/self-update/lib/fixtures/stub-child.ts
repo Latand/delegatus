@@ -13,6 +13,7 @@ const server = Bun.serve({
   fetch: () => new Response("ok"),
 });
 console.log(`stub listening on ${server.port}`);
+console.log(`stub cwd ${process.cwd()}`);
 process.on("SIGTERM", () => {
   if (mode === "ignore-term") {
     console.log("stub: ignoring SIGTERM");
