@@ -1,0 +1,146 @@
+/* Pure derivations for the Update surface (#2007): which copy each state
+   takes, in the operator's language. The component renders what these
+   answer; the DOM tests read the same answers through the rendered page. */
+import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
+import type { ProcessError, ProcessView, Revision, Snapshot, Step, StepName } from "@/lib/selfUpdate/types";
+
+export type IconKind = "pending" | "running" | "done" | "failed" | "warning";
+
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+export function clock(iso: string | null, seconds = false): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}${seconds ? `:${pad(date.getSeconds())}` : ""}`;
+}
+
+export function day(iso: string, locale: Locale): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", year: "numeric" }).format(date);
+}
+
+export function duration(ms: number, t: TFunction): string {
+  if (ms < 60_000) return t("selfUpdate.unit.seconds", { value: (Math.max(0, ms) / 1000).toFixed(1) });
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 3600) return t("selfUpdate.unit.minutesSeconds", { m: Math.floor(totalSeconds / 60), s: pad(totalSeconds % 60) });
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60 * 48) return t("selfUpdate.unit.hoursMinutes", { h: Math.floor(minutes / 60), m: minutes % 60 });
+  return t("selfUpdate.unit.daysHours", { d: Math.floor(minutes / 1440), h: Math.floor((minutes % 1440) / 60) });
+}
+
+export function revisionText(revision: Revision, locale: Locale): string {
+  return [revision.version, revision.short, day(revision.date, locale)].filter(Boolean).join(" · ");
+}
+
+export function targetText(short: string, version: string | null): string {
+  return version ? `${short} (${version})` : short;
+}
+
+/** Which live processes serve something other than the installed release. */
+export function staleProcesses(s: Snapshot): { web: boolean; host: boolean } {
+  const installed = s.installed.short;
+  return {
+    web: Boolean(installed && s.serving.web && s.serving.web.short !== installed),
+    host: Boolean(installed && s.serving.runtimeHost && s.serving.runtimeHost.short !== installed),
+  };
+}
+
+export interface HeaderStatus { icon: IconKind; text: string; next: string | null; edge: "warning" | "danger" | null }
+
+export function headerStatus(s: Snapshot, t: TFunction): HeaderStatus {
+  const branch = `origin/${s.meta.branch}`;
+  const check = s.check;
+  const time = clock(check.at);
+  const stale = staleProcesses(s);
+  if (check.state === "checking") return { icon: "running", text: t("selfUpdate.status.checking", { branch }), next: null, edge: null };
+  if (check.state === "up-to-date" && (stale.web || stale.host)) {
+    /* Built is not running: green waits until every live process runs it. */
+    const sha = s.installed.short;
+    let text: string;
+    if (s.mode === "managed") text = t("selfUpdate.stale.managedHost", { sha, host: s.serving.runtimeHost?.short ?? "", time });
+    else if (stale.web && stale.host) text = t("selfUpdate.stale.both", { sha, time });
+    else if (stale.web) text = s.serving.runtimeHost ? t("selfUpdate.stale.webBehind", { sha, time }) : t("selfUpdate.stale.web", { sha, time });
+    else text = s.serving.web ? t("selfUpdate.stale.hostBehind", { sha, time }) : t("selfUpdate.stale.host", { sha, time });
+    return { icon: "warning", text, next: null, edge: "warning" };
+  }
+  if (check.state === "up-to-date") {
+    const note = check.relation === "ahead" ? t("selfUpdate.status.ahead", { branch, count: check.ahead })
+      : check.relation === "diverged" ? t("selfUpdate.status.diverged", { branch }) : null;
+    const text = [t("selfUpdate.status.upToDate", { time }), note].filter(Boolean).join(" · ");
+    return { icon: "done", text, next: t("selfUpdate.status.nextCheck", { time: clock(check.nextPollAt) }), edge: null };
+  }
+  if (check.state === "update-available") {
+    const behind = check.relation === "diverged" ? t("selfUpdate.status.diverged", { branch }) : t("selfUpdate.status.behind", { branch, count: check.behind });
+    return { icon: "warning", text: t("selfUpdate.status.available", { behind, time }), next: null, edge: "warning" };
+  }
+  if (check.state === "failed") {
+    return { icon: "failed", text: t("selfUpdate.status.failed", { time }), next: t("selfUpdate.status.nextCheck", { time: clock(check.nextPollAt) }), edge: "danger" };
+  }
+  return { icon: "pending", text: t("selfUpdate.status.idle"), next: null, edge: null };
+}
+
+export function stepLabel(name: StepName, short: string, t: TFunction): string {
+  return t(`selfUpdate.step.${name}` as MessageKey, { sha: short });
+}
+
+export function stepName(name: StepName, t: TFunction): string {
+  return t(`selfUpdate.stepName.${name}` as MessageKey);
+}
+
+/** The line of a failed step's output that says why: the last fatal or
+    error line, else its last line. */
+export function lastError(tail: string[]): string | null {
+  const lines = tail.filter((line) => line.trim() !== "");
+  return [...lines].reverse().find((line) => /^(fatal|error)\b|\berror:|ERR!/i.test(line.trim())) ?? lines.at(-1) ?? null;
+}
+
+/** What the done state asks for depends on which processes already run the
+    build: a process counts once it is healthy on it, never while it starts. */
+export function appliedCopy(s: Snapshot, short: string, t: TFunction): string {
+  const runs = (view: ProcessView) => view.pid !== null && view.state === "healthy" && view.revision === short;
+  const web = runs(s.processes.web);
+  const host = runs(s.processes.runtimeHost);
+  if (s.mode === "managed") {
+    return host || !s.processes.runtimeHost.revision
+      ? t("selfUpdate.applied.both")
+      : t("selfUpdate.applied.managedHostBehind", { host: s.processes.runtimeHost.revision });
+  }
+  if (s.busy === "restart-web") return t("selfUpdate.applied.restartingWeb");
+  if (s.busy === "restart-runtime-host") return t("selfUpdate.applied.restartingHost");
+  if (web && host) return t("selfUpdate.applied.both");
+  if (web) return t("selfUpdate.applied.web");
+  if (host) return t("selfUpdate.applied.host");
+  return t("selfUpdate.applied.none");
+}
+
+function seconds(ms: number): string {
+  return ms < 10_000 ? (ms / 1000).toFixed(1) : String(Math.round(ms / 1000));
+}
+
+export function processErrorText(error: ProcessError | null, role: "web" | "runtimeHost", t: TFunction): string | null {
+  if (!error) return null;
+  switch (error.kind) {
+    case "exit":
+      return error.signal
+        ? t("selfUpdate.error.signal", { signal: error.signal, seconds: seconds(error.afterMs) })
+        : t("selfUpdate.error.exit", { code: error.code ?? "?", seconds: seconds(error.afterMs) });
+    case "timeout":
+      return role === "web"
+        ? t("selfUpdate.error.timeoutWeb", { seconds: seconds(error.budgetMs) })
+        : t("selfUpdate.error.timeoutHost", { seconds: seconds(error.budgetMs) });
+    case "port-in-use": return t("selfUpdate.error.port", { port: error.port });
+    case "gone": return t("selfUpdate.error.gone", { pid: error.pid });
+    case "fell-back": return t("selfUpdate.error.fellBack", { sha: error.revision ?? "?", detail: error.detail });
+    case "message": return error.text;
+  }
+}
+
+/** The step the running update is in, counted from one. */
+export function runningStepNumber(steps: Step[]): number {
+  return Math.max(1, steps.findIndex((step) => step.state === "running") + 1);
+}

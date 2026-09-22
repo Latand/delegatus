@@ -18,6 +18,7 @@ import { FlipRow } from "./FlipRow";
 import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, Loader2, MoreHorizontal } from "./icons";
 import { LanguageToggle } from "./LanguageToggle";
 import { openOnboarding } from "./onboarding/useOnboarding";
+import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
 import { PushBell } from "./PushBell";
@@ -439,6 +440,15 @@ function RailHeaderMenu() {
             onClick={() => { setOpen(false); openOnboarding("mapping"); }}
           >
             {t("onboarding.menu.mapping")}
+          </button>
+          {/* #2007: how this install updates itself. */}
+          <button
+            type="button"
+            data-rail-menu-update=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { setOpen(false); openSelfUpdate(); }}
+          >
+            {t("selfUpdate.menu")}
           </button>
         </div>
       ) : null}
