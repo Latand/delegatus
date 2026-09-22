@@ -49,15 +49,22 @@ async function body(request: NextRequest): Promise<Record<string, unknown>> {
   }
 }
 
-export async function getSnapshot(): Promise<NextResponse> {
+/* Reading the snapshot is open like the Viewer's other reads, but opening
+   the surface also starts a check (network: ls-remote, fetch), and that
+   stays behind the same gate as POST /check. */
+function mayStartCheck(request: Request): boolean {
+  return rejectCrossOrigin(request as NextRequest) === null && requireOperatorAuthority(request).ok;
+}
+
+export async function getSnapshot(request: Request): Promise<NextResponse> {
   const service = selfUpdateService();
-  service.ensureChecked();
+  if (mayStartCheck(request)) service.ensureChecked();
   return NextResponse.json(await service.snapshot(), { headers: noStore });
 }
 
 export function getEvents(request: Request): Response {
   const service = selfUpdateService();
-  service.ensureChecked();
+  if (mayStartCheck(request)) service.ensureChecked();
   return new Response(snapshotStream(service, request.signal), {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",

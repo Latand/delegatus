@@ -78,8 +78,8 @@ const browser = { host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000", "sec-
 const post = (path: string, body?: unknown, headers: Record<string, string> = browser) =>
   new NextRequest(`${BASE}${path}`, { method: "POST", headers, body: body === undefined ? undefined : JSON.stringify(body) });
 
-async function snapshot(): Promise<Snapshot> {
-  return (await getSnapshot()).json() as Promise<Snapshot>;
+async function snapshot(headers: Record<string, string> = browser): Promise<Snapshot> {
+  return (await getSnapshot(new Request(BASE, { headers }))).json() as Promise<Snapshot>;
 }
 
 async function until(predicate: (s: Snapshot) => boolean, timeoutMs = 10_000): Promise<Snapshot> {
@@ -134,6 +134,27 @@ describe("the operator gate", () => {
       expect(response.status).toBe(403);
     }
     expect(requests).toEqual([]);
+  });
+
+  test("only the operator's opening of the surface starts a check", async () => {
+    const dir = mkdtempSync(join(root, "gate-open-"));
+    const checks: string[] = [];
+    setSelfUpdateServiceForTests(new SelfUpdateService(baseDeps(dir, {
+      mode: async () => ({ mode: "managed", reason: null, record: null }),
+      check: async (input) => { checks.push(input.repo); return { ok: false, error: "fixture", installed: null }; },
+      releaseTarget: () => ({ revision: firstSha }),
+      prepareCheckRepo: async () => join(dir, "check.git"),
+    })));
+    setCallerConversationResolverForTests(() => "conversation_some_worker");
+    const agent = { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) };
+    expect((await snapshot(agent)).check.state).toBe("idle");
+    expect((await snapshot({ ...browser, origin: "https://elsewhere.example", "sec-fetch-site": "cross-site" })).check.state).toBe("idle");
+    await Bun.sleep(50);
+    expect(checks).toEqual([]);
+    setCallerConversationResolverForTests(null);
+    await snapshot();
+    await until((next) => next.check.state === "failed");
+    expect(checks).toHaveLength(1);
   });
 
   test("a cross-origin page is refused before anything is read", async () => {
