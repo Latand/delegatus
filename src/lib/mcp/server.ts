@@ -39,6 +39,7 @@ import {
   MIN_SNAPSHOT_STRING_LENGTH, VIEW_RESOLUTIONS, VIEW_SCOPE_KINDS,
 } from "@/lib/view/types";
 
+import { runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
 import type { McpToolPolicy } from "./toolAllowlist";
 
 export const MCP_SERVER_NAME = "viewer";
@@ -3683,13 +3684,24 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result, isError: true };
         }
       }
+      /* A call over the shared HTTP endpoint names its caller by the
+         capability the route authenticated; it runs as that caller so every
+         resolver reads the request's identity rather than this process's. */
+      const httpCaller = mcpHttpCallerFromAuthInfo((extra as { authInfo?: unknown }).authInfo);
       const timeoutMs = 30_000;
       const deadline = deadlineSignal(timeoutMs, {
-        signal: extra.signal,
+        /* Over stdio a client's cancel reaches `extra.signal`. Over the
+           stateless HTTP endpoint it arrives on a later POST, to another
+           server, so the route hands over a signal of its own for this call:
+           aborted by that cancel, or by the client walking away. */
+        signal: (() => {
+          const cancelled = httpCaller?.cancelSignal(extra.requestId) ?? null;
+          return cancelled ? AbortSignal.any([extra.signal, cancelled]) : extra.signal;
+        })(),
         reason: "MCP tool deadline exceeded",
       });
       try {
-        const result = await service.callTool(toolName, args as McpToolArgs, {
+        const call = () => service.callTool(toolName, args as McpToolArgs, {
           signal: deadline.signal,
           deadlineAt: Date.now() + timeoutMs,
           /* #1629: the SDK hands the request's own `_meta` through on `extra`,
@@ -3700,6 +3712,7 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
              conversation last pointed at. */
           nativeWork: nativeWorkFromRequestMeta((extra as { _meta?: unknown })._meta),
         });
+        const result = await (httpCaller ? runAsMcpHttpCaller({ capability: httpCaller.capability }, call) : call());
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
           structuredContent: result,
@@ -3713,19 +3726,39 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
   return server;
 }
 
-export async function startViewerMcpServer(): Promise<void> {
-  const { admittedMcpHealthProbe, MCP_HEALTH_PROBE_CAPABILITY_ENV } = await import("./healthProbeAdmission");
+/** The `authInfo.clientId` the HTTP route stamps on an authenticated request. */
+export const MCP_HTTP_CLIENT_ID = "llv-spawn-capability";
+
+/** The authenticated HTTP caller the route attached to this request, or null
+    for a request that did not come through it (every stdio call). */
+function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancelSignal: (requestId: unknown) => AbortSignal | null }) | null {
+  if (!authInfo || typeof authInfo !== "object") return null;
+  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown } };
+  if (clientId !== MCP_HTTP_CLIENT_ID || typeof token !== "string" || !token) return null;
+  const lookup = typeof extra?.cancelSignal === "function" ? extra.cancelSignal as (requestId: unknown) => unknown : null;
+  return {
+    capability: token,
+    cancelSignal: (requestId) => {
+      const signal = lookup?.(requestId);
+      return signal instanceof AbortSignal ? signal : null;
+    },
+  };
+}
+
+/**
+ * The production tool service: bindings, the shared SQLite receipt store every
+ * Viewer MCP server writes (so a clientRequestId replays the same way whichever
+ * process or transport it arrives on), the per-call policy, and recovery.
+ */
+export async function createProductionViewerMcpService(hostHealthProbe = false): Promise<McpToolService> {
   const {
     productionViewerControlDependencies,
     viewerMcpBindings,
     viewerMcpRecoverableTools,
     viewerMcpToolPolicy,
   } = await import("./bindings");
-  const healthProbeCapability = process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
-  delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
-  const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
-  const service = createMcpToolService(
+  return createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     new SqliteMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
@@ -3733,6 +3766,14 @@ export async function startViewerMcpServer(): Promise<void> {
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
   );
+}
+
+export async function startViewerMcpServer(): Promise<void> {
+  const { admittedMcpHealthProbe, MCP_HEALTH_PROBE_CAPABILITY_ENV } = await import("./healthProbeAdmission");
+  const healthProbeCapability = process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
+  delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
+  const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
+  const service = await createProductionViewerMcpService(hostHealthProbe);
   const server = createViewerMcpServer(service);
   const transport = new StdioServerTransport();
   await server.connect(transport);
