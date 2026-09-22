@@ -1,0 +1,236 @@
+/* Role frames on agent conversations (prototype).
+
+   Which variant draws is one attribute on <html>, `data-role-frame`, that the
+   boot script in src/app/layout.tsx sets before the first paint
+   (src/lib/roleFrames.ts): `ribbon` unless the device chose another with
+   `?roleFrame=`. Under `?roleFrame=off` the attribute is absent, nothing here
+   applies and every header reads as it did before role frames.
+
+   A framed surface carries `data-role-host="seat|dock|reader|phone"` and
+   `data-role="<role>"`; its header carries one `.role-mark` (emblem + name,
+   src/components/RoleFrameMark.tsx). Each variant draws the same markup its
+   own way:
+
+     rail     a solid role rail down the left edge, an emblem tile and the
+              role's name in its ink before the title;
+     ribbon   a two-tone gradient border and a ribbon label that wraps out of
+              the frame's left edge;
+     halo     a role-tinted border with a soft outer glow, a tinted header wash
+              and a soft chip;
+     bracket  a neutral frame with role-coloured corner brackets, a dog-ear
+              emblem in the top-left corner and the role's name in small caps.
+
+   Nothing a variant adds takes layout: rails, rings, brackets and dog-ears
+   are overlays or replace a border of the same width, so the content box of a
+   framed surface is the same under every variant, and on the phone none of
+   them costs the transcript a pixel of width. */
+
+/* ── Role palette ─────────────────────────────────────────────────────────
+   --rf-X      the role's colour for lines, rails and glows;
+   --rf-X-2    its gradient partner (the next hue round the wheel);
+   --rf-X-ink  text in the role's colour on a card (≥ 4.5:1 in its scheme);
+   --rf-X-fill a fill dark enough to carry white text in both schemes. */
+:root {
+  --rf-orchestrator: #4f46e5; --rf-orchestrator-2: #8b5cf6; --rf-orchestrator-ink: #4338ca; --rf-orchestrator-fill: #4338ca;
+  --rf-reviewer: #0284c7;     --rf-reviewer-2: #6366f1;     --rf-reviewer-ink: #0369a1;     --rf-reviewer-fill: #0369a1;
+  --rf-architect: #0d9488;    --rf-architect-2: #0ea5e9;    --rf-architect-ink: #0f766e;    --rf-architect-fill: #0f766e;
+  --rf-verifier: #16a34a;     --rf-verifier-2: #14b8a6;     --rf-verifier-ink: #15803d;     --rf-verifier-fill: #15803d;
+  --rf-cleaner: #65a30d;      --rf-cleaner-2: #22c55e;      --rf-cleaner-ink: #4d7c0f;      --rf-cleaner-fill: #4d7c0f;
+  --rf-builder: #d97706;      --rf-builder-2: #f97316;      --rf-builder-ink: #b45309;      --rf-builder-fill: #b45309;
+  --rf-prod-auditor: #e11d48; --rf-prod-auditor-2: #f97316; --rf-prod-auditor-ink: #be123c; --rf-prod-auditor-fill: #be123c;
+  --rf-deployer: #c026d3;     --rf-deployer-2: #8b5cf6;     --rf-deployer-ink: #a21caf;     --rf-deployer-fill: #a21caf;
+  --rf-neutral: #94a3b8;      --rf-neutral-2: #cbd5e1;      --rf-neutral-ink: #475569;      --rf-neutral-fill: #475569;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --rf-orchestrator: #818cf8; --rf-orchestrator-2: #a78bfa; --rf-orchestrator-ink: #a5b4fc;
+    --rf-reviewer: #38bdf8;     --rf-reviewer-2: #818cf8;     --rf-reviewer-ink: #7dd3fc;
+    --rf-architect: #2dd4bf;    --rf-architect-2: #38bdf8;    --rf-architect-ink: #5eead4;
+    --rf-verifier: #4ade80;     --rf-verifier-2: #2dd4bf;     --rf-verifier-ink: #86efac;
+    --rf-cleaner: #a3e635;      --rf-cleaner-2: #4ade80;      --rf-cleaner-ink: #bef264;
+    --rf-builder: #fbbf24;      --rf-builder-2: #fb923c;      --rf-builder-ink: #fcd34d;
+    --rf-prod-auditor: #fb7185; --rf-prod-auditor-2: #fb923c; --rf-prod-auditor-ink: #fda4af;
+    --rf-deployer: #e879f9;     --rf-deployer-2: #a78bfa;     --rf-deployer-ink: #f0abfc;
+    --rf-neutral: #64748b;      --rf-neutral-2: #94a3b8;      --rf-neutral-ink: #cbd5e1;
+  }
+}
+[data-theme="dark"] {
+  --rf-orchestrator: #818cf8; --rf-orchestrator-2: #a78bfa; --rf-orchestrator-ink: #a5b4fc;
+  --rf-reviewer: #38bdf8;     --rf-reviewer-2: #818cf8;     --rf-reviewer-ink: #7dd3fc;
+  --rf-architect: #2dd4bf;    --rf-architect-2: #38bdf8;    --rf-architect-ink: #5eead4;
+  --rf-verifier: #4ade80;     --rf-verifier-2: #2dd4bf;     --rf-verifier-ink: #86efac;
+  --rf-cleaner: #a3e635;      --rf-cleaner-2: #4ade80;      --rf-cleaner-ink: #bef264;
+  --rf-builder: #fbbf24;      --rf-builder-2: #fb923c;      --rf-builder-ink: #fcd34d;
+  --rf-prod-auditor: #fb7185; --rf-prod-auditor-2: #fb923c; --rf-prod-auditor-ink: #fda4af;
+  --rf-deployer: #e879f9;     --rf-deployer-2: #a78bfa;     --rf-deployer-ink: #f0abfc;
+  --rf-neutral: #64748b;      --rf-neutral-2: #94a3b8;      --rf-neutral-ink: #cbd5e1;
+}
+
+[data-role="orchestrator"] { --role: var(--rf-orchestrator); --role-2: var(--rf-orchestrator-2); --role-ink: var(--rf-orchestrator-ink); --role-fill: var(--rf-orchestrator-fill); }
+[data-role="reviewer"] { --role: var(--rf-reviewer); --role-2: var(--rf-reviewer-2); --role-ink: var(--rf-reviewer-ink); --role-fill: var(--rf-reviewer-fill); }
+[data-role="architect"] { --role: var(--rf-architect); --role-2: var(--rf-architect-2); --role-ink: var(--rf-architect-ink); --role-fill: var(--rf-architect-fill); }
+[data-role="verifier"] { --role: var(--rf-verifier); --role-2: var(--rf-verifier-2); --role-ink: var(--rf-verifier-ink); --role-fill: var(--rf-verifier-fill); }
+[data-role="cleaner"] { --role: var(--rf-cleaner); --role-2: var(--rf-cleaner-2); --role-ink: var(--rf-cleaner-ink); --role-fill: var(--rf-cleaner-fill); }
+[data-role="builder"] { --role: var(--rf-builder); --role-2: var(--rf-builder-2); --role-ink: var(--rf-builder-ink); --role-fill: var(--rf-builder-fill); }
+[data-role="prod-auditor"] { --role: var(--rf-prod-auditor); --role-2: var(--rf-prod-auditor-2); --role-ink: var(--rf-prod-auditor-ink); --role-fill: var(--rf-prod-auditor-fill); }
+[data-role="deployer"] { --role: var(--rf-deployer); --role-2: var(--rf-deployer-2); --role-ink: var(--rf-deployer-ink); --role-fill: var(--rf-deployer-fill); }
+[data-role="neutral"] { --role: var(--rf-neutral); --role-2: var(--rf-neutral-2); --role-ink: var(--rf-neutral-ink); --role-fill: var(--rf-neutral-fill); }
+
+/* ── The mark, and the overlay every variant draws on ───────────────────── */
+.role-mark { display: none; }
+:root[data-role-frame] .role-mark {
+  display: inline-flex; align-items: center; flex-shrink: 0; gap: 5px; min-width: 0;
+  font-size: var(--text-caption); font-weight: 700; line-height: 1; white-space: nowrap;
+}
+.role-mark-emblem { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.role-mark-emblem svg { width: 12px; height: 12px; }
+.role-mark-word { overflow: hidden; text-overflow: ellipsis; }
+
+:root[data-role-frame] [data-role-host] { position: relative; }
+:root[data-role-frame] [data-role-host]::after {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; z-index: 6;
+}
+/* The phone's conversation screen is the whole window: its overlay sits on
+   the window's edges, never outside them. */
+:root[data-role-frame] [data-role-host="phone"]::after { inset: 0; border-radius: 0; z-index: 40; }
+
+/* ═══ rail ══════════════════════════════════════════════════════════════ */
+/* A 4 px rail that follows the frame's rounded left edge: a box with only a
+   left border and the host's radius draws the curve at both corners. */
+:root[data-role-frame="rail"] [data-role-host]::after { border-left: 4px solid var(--role); }
+:root[data-role-frame="rail"] .kb .reader.conv[data-role-host] { border-color: var(--border-default); border-left-color: var(--role); }
+:root[data-role-frame="rail"] [data-role-host="phone"]::after { border-left-width: 3px; }
+:root[data-role-frame="rail"] .role-mark { gap: 7px; color: var(--role-ink); letter-spacing: 0.06em; text-transform: uppercase; }
+:root[data-role-frame="rail"] .role-mark-emblem {
+  width: 22px; height: 22px; border-radius: 6px; color: #fff; background: var(--role-fill);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 18%, transparent);
+}
+/* The seat's head already leads with the engine avatar: the tile stands in
+   the title, the rail says the rest. */
+:root[data-role-frame="rail"] [data-role-host="phone"] .role-mark-emblem { width: 26px; height: 26px; border-radius: 7px; }
+:root[data-role-frame="rail"] [data-role-host="phone"] .role-mark-emblem svg { width: 14px; height: 14px; }
+
+/* ═══ ribbon ════════════════════════════════════════════════════════════ */
+/* A 2 px two-tone ring on the overlay, cut to a ring by a mask, so it follows
+   the radius exactly and takes no room. */
+:root[data-role-frame="ribbon"] [data-role-host]::after {
+  padding: 2px;
+  background: linear-gradient(120deg, var(--role) 0%, var(--role-2) 55%, color-mix(in srgb, var(--role) 55%, var(--border-default)) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+:root[data-role-frame="ribbon"] [data-role-host="phone"]::after { display: none; }
+/* The reader clips its overlay to its padding box, so it wears the ring as
+   its own border instead (a gradient border-box under a card-coloured
+   padding-box); the border grows by one pixel, which its padding gives back. */
+:root[data-role-frame="ribbon"] .kb .reader.conv[data-role-host] {
+  border: 2px solid transparent;
+  background:
+    linear-gradient(var(--surface-card), var(--surface-card)) padding-box,
+    linear-gradient(120deg, var(--role) 0%, var(--role-2) 55%, color-mix(in srgb, var(--role) 55%, var(--border-default)) 100%) border-box;
+}
+:root[data-role-frame="ribbon"] .kb .reader.conv[data-role-host] { padding: 7px 11px 9px; }
+:root[data-role-frame="ribbon"] .kb .reader.conv.folded[data-role-host] { padding-bottom: 5px; }
+/* The label: a gradient band with a notched tail that comes out of the
+   frame's left edge, as a ribbon wrapped round the card. */
+:root[data-role-frame="ribbon"] .role-mark {
+  height: 20px; gap: 5px; padding: 0 14px 0 8px; color: #fff; letter-spacing: 0.07em; text-transform: uppercase;
+  background: linear-gradient(90deg, var(--role-fill), color-mix(in srgb, var(--role-fill) 62%, var(--role-2)));
+  clip-path: polygon(0 0, 100% 0, calc(100% - 7px) 50%, 100% 100%, 0 100%);
+  border-radius: 0;
+}
+:root[data-role-frame="ribbon"] .kb .reader .role-mark { margin-left: -11px; }
+:root[data-role-frame="ribbon"] .kb .seat-head .role-mark { margin-left: -12px; }
+:root[data-role-frame="ribbon"] [data-role-host="dock"] .role-mark { margin-left: -12px; }
+/* The phone: a gradient hairline under the bar, the ribbon in the title cell. */
+:root[data-role-frame="ribbon"] [data-role-host="phone"] [data-mobile2-bar] {
+  border-bottom-color: transparent;
+  background: linear-gradient(90deg, var(--role), var(--role-2)) bottom / 100% 2px no-repeat, var(--surface-canvas);
+}
+:root[data-role-frame="ribbon"] [data-role-host="phone"] .role-mark { height: 24px; padding: 0 13px 0 7px; }
+
+/* ═══ halo ══════════════════════════════════════════════════════════════ */
+:root[data-role-frame="halo"] :is(.kb .seat, .kb .reader.conv, [data-role-host="dock"])[data-role-host] {
+  border-color: color-mix(in srgb, var(--role) 58%, var(--border-default));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--role) 13%, transparent),
+    0 12px 30px -10px color-mix(in srgb, var(--role) 38%, transparent);
+}
+/* The header wash: the role's tint fades out under the header. */
+:root[data-role-frame="halo"] .kb .reader.conv[data-role-host] {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--role) 11%, var(--surface-card)) 0, var(--surface-card) 76px);
+}
+:root[data-role-frame="halo"] .kb .reader.conv.folded[data-role-host] {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--role) 11%, var(--surface-card)) 0, var(--surface-card) 100%);
+}
+:root[data-role-frame="halo"] :is(.kb .seat[data-role-host] .seat-head, [data-role-host="dock"] > header) {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--role) 14%, var(--surface-card)) 0, color-mix(in srgb, var(--role) 5%, var(--surface-card)) 100%);
+}
+:root[data-role-frame="halo"] .kb .seat[data-role-host]:not(.folded) .seat-head { border-bottom-color: color-mix(in srgb, var(--role) 28%, var(--border-default)); }
+:root[data-role-frame="halo"] .role-mark {
+  height: 20px; padding: 0 8px 0 6px; border-radius: 999px; color: var(--role-ink);
+  background: color-mix(in srgb, var(--role) 15%, var(--surface-card));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--role) 30%, transparent);
+}
+:root[data-role-frame="halo"] [data-role-host="phone"] [data-mobile2-bar] {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--role) 16%, var(--surface-canvas)), color-mix(in srgb, var(--role) 6%, var(--surface-canvas)));
+  border-bottom-color: color-mix(in srgb, var(--role) 35%, var(--border-default));
+}
+/* On the phone the glow is inward: a soft rim on the window's edges. */
+:root[data-role-frame="halo"] [data-role-host="phone"]::after {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--role) 22%, transparent), inset 0 0 22px -6px color-mix(in srgb, var(--role) 40%, transparent);
+}
+:root[data-role-frame="halo"] [data-role-host="phone"] .role-mark { width: 26px; height: 26px; padding: 0; justify-content: center; }
+
+/* ═══ bracket ═══════════════════════════════════════════════════════════ */
+/* Four curved corner brackets: a 2 px role border on the overlay, masked to
+   the corners, so each bracket follows the frame's own radius. */
+:root[data-role-frame="bracket"] [data-role-host]::after {
+  border: 2px solid var(--role);
+  --rf-arm: 18px;
+  mask:
+    linear-gradient(#000 0 0) top left / var(--rf-arm) var(--rf-arm) no-repeat,
+    linear-gradient(#000 0 0) top right / var(--rf-arm) var(--rf-arm) no-repeat,
+    linear-gradient(#000 0 0) bottom left / var(--rf-arm) var(--rf-arm) no-repeat,
+    linear-gradient(#000 0 0) bottom right / var(--rf-arm) var(--rf-arm) no-repeat;
+}
+/* The reader clips its overlay to its padding box, so there the brackets sit
+   on the reader's own border, which the variant keeps neutral. */
+:root[data-role-frame="bracket"] .kb .reader.conv[data-role-host] { border-color: var(--border-strong); }
+:root[data-role-frame="bracket"] .kb .reader.conv[data-role-host]::after { inset: -1px; }
+:root[data-role-frame="bracket"] [data-role-host="phone"]::after { --rf-arm: 22px; border-width: 3px; }
+/* The name, in small caps in the role's ink. */
+:root[data-role-frame="bracket"] .role-mark {
+  color: var(--role-ink); letter-spacing: 0.12em; text-transform: uppercase; font-weight: 750;
+  padding: 2px 6px; border-radius: 4px; border: 1px dashed color-mix(in srgb, var(--role) 55%, transparent);
+}
+/* The emblem folds down over the frame's top-left corner as a dog-ear. Its
+   containing block is the host, so it sits on the corner whatever row the
+   mark stands in. */
+:root[data-role-frame="bracket"] .role-mark-emblem {
+  position: absolute; left: -1px; top: -1px; z-index: 7; width: 26px; height: 26px;
+  align-items: flex-start; justify-content: flex-start; padding: 3px 0 0 3px;
+  color: #fff; background: linear-gradient(135deg, var(--role-fill) 0 50%, transparent 50%);
+  border-top-left-radius: inherit;
+}
+:root[data-role-frame="bracket"] .role-mark-emblem svg { width: 10px; height: 10px; }
+:root[data-role-frame="bracket"] .kb .seat[data-role-host] .role-mark-emblem { border-top-left-radius: var(--radius-surface); }
+:root[data-role-frame="bracket"] .kb .reader.conv[data-role-host] .role-mark-emblem { left: 0; top: 0; border-top-left-radius: calc(var(--radius-control) - 1px); }
+:root[data-role-frame="bracket"] [data-role-host="phone"] .role-mark-emblem { left: 0; top: 0; width: 24px; height: 24px; }
+
+/* ── The orchestrator's own headers ───────────────────────────────────────
+   The seat and the dock already say «Orchestrator» in their titles, so their
+   mark is the emblem alone. */
+:root[data-role-frame] :is(.kb .seat-head, [data-role-host="dock"] > header) .role-mark-word { display: none; }
+:root[data-role-frame="ribbon"] :is(.kb .seat-head, [data-role-host="dock"] > header) .role-mark { padding-right: 13px; }
+:root[data-role-frame="halo"] :is(.kb .seat-head, [data-role-host="dock"] > header) .role-mark { width: 24px; height: 24px; padding: 0; justify-content: center; }
+:root[data-role-frame="bracket"] :is(.kb .seat-head, [data-role-host="dock"] > header) .role-mark { padding: 0; border: 0; }
+
+/* ── The phone's bar ──────────────────────────────────────────────────────
+   The conversation's title keeps the cell: on the phone the mark is the
+   emblem alone, and the frame's colour says the rest. */
+:root[data-role-frame] [data-role-host="phone"] .role-mark-word { display: none; }
+:root[data-role-frame="bracket"] [data-role-host="phone"] .role-mark { padding: 0; border: 0; }

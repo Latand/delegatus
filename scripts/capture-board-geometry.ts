@@ -3955,9 +3955,375 @@ async function filePreviewMain(): Promise<void> {
   }
 }
 
+/* ------------------------------------------------------------------------- */
+/* Role frames on agent conversations (prototype)                            */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * BOARD_CAPTURE_CASE=role-frames renders every role frame variant
+ * (src/lib/roleFrames.ts) against today's unframed board, on the surfaces a
+ * frame is for: the orchestrator seat above the columns, a task card with its
+ * builder and reviewer conversations open, a roster card with one folded
+ * conversation per role the Viewer knows (the eight registry roles and the
+ * neutral fallback), and the phone's conversation screen for the seat, the
+ * builder and the reviewer — at 1440 × 900 and 390 × 844, light and dark.
+ *
+ * The variant is chosen the way the operator chooses it, with `?roleFrame=`.
+ * Every frame is measured against the unframed one: a framed reader, seat or
+ * phone feed keeps its content width to the pixel, the phone's title cell
+ * keeps its 190 px, and the role mark overlaps no header control.
+ *
+ * ROLE_FRAMES_GALLERY=<dir> also copies the frames there with a gallery page.
+ */
+const ROLE_FRAME_CHOICES = ["off", "rail", "ribbon", "halo", "bracket"] as const;
+const ROLE_FRAME_NAMES: Record<(typeof ROLE_FRAME_CHOICES)[number], string> = {
+  off: "Today (no frame)",
+  rail: "Rail — role rail and emblem tile",
+  ribbon: "Ribbon — gradient ring and wrapped ribbon label",
+  halo: "Halo — soft glow and tinted header",
+  bracket: "Bracket — corner brackets and dog-ear emblem",
+};
+const roleFrameSession = (serial: number) => [String(serial).padStart(8, "0"), "2040", "4000", "8000", "0".repeat(12)].join("-");
+
+type RoleFrameTurn = { user?: string; text?: string; tool?: { name: string; input: Record<string, unknown>; result: string; error?: boolean } };
+
+/** A transcript with the rows a real one has: prose, commands, a failed command and its long output. */
+function writeRoleFrameTranscript(folder: string, id: string, turns: RoleFrameTurn[], startMs: number): string {
+  const lines: unknown[] = [];
+  let at = startMs;
+  const stamp = () => { at += 23_000; return new Date(at).toISOString(); };
+  for (const [index, turn] of turns.entries()) {
+    if (turn.user) lines.push({ type: "user", uuid: `${id}-u${index}`, timestamp: stamp(), cwd: REPO_DIR, sessionId: id, message: { role: "user", content: turn.user } });
+    if (turn.text) lines.push({ type: "assistant", uuid: `${id}-a${index}`, timestamp: stamp(), cwd: REPO_DIR, sessionId: id, message: { role: "assistant", model: "claude-opus-4-5", content: [{ type: "text", text: turn.text }] } });
+    if (turn.tool) {
+      const toolId = `toolu_2040_${id.slice(0, 8)}_${index}`;
+      lines.push({ type: "assistant", uuid: `${id}-t${index}`, timestamp: stamp(), cwd: REPO_DIR, sessionId: id, message: { role: "assistant", model: "claude-opus-4-5", content: [{ type: "tool_use", id: toolId, name: turn.tool.name, input: turn.tool.input }] } });
+      lines.push({ type: "user", uuid: `${id}-r${index}`, timestamp: stamp(), cwd: REPO_DIR, sessionId: id, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: turn.tool.result, is_error: turn.tool.error === true }] } });
+    }
+  }
+  const last = turns.findLast((turn) => turn.text)?.text ?? "";
+  lines.push({ type: "result", subtype: "success", uuid: `${id}-done`, timestamp: stamp(), cwd: REPO_DIR, sessionId: id, is_error: false, duration_ms: 64_000, num_turns: turns.length, result: last });
+  const file = path.join(folder, `${id}.jsonl`);
+  fs.writeFileSync(file, lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+  const quiet = new Date(at);
+  fs.utimesSync(file, quiet, quiet);
+  return file;
+}
+
+const RF_MAIN_TASK = "task-2040-statements";
+const RF_ROSTER_TASK = "task-2040-roster";
+const RF_ROSTER_ROLES = ["orchestrator", "architect", "builder", "reviewer", "verifier", "cleaner", "prod-auditor", "deployer"] as const;
+
+interface RoleFrameSeed { architect: string; builder: string; reviewer: string; roster: { role: string; path: string }[]; neutral: string }
+
+function seedRoleFrameConversations(): RoleFrameSeed {
+  const folder = path.join(HOME, ".claude/projects", projectSlug(REPO_DIR));
+  const start = Date.now() - 3 * 3_600_000;
+  const architect = writeRoleFrameTranscript(folder, roleFrameSession(1), [
+    { user: "Design streaming for large statement exports." },
+    { text: "The export builds the whole statement in memory. I propose a cursor over `ledger_entries` and a chunked writer; the plan is in `docs/statements-streaming.md`." },
+  ], start);
+  const builder = writeRoleFrameTranscript(folder, roleFrameSession(2), [
+    { user: "Implement the streaming statement export from the design and cover it with tests." },
+    { text: "Reading the design and the current exporter first." },
+    { tool: { name: "Bash", input: { command: "rg -n \"buildStatement|renderRows\" src/statements | head -40", description: "Find the exporter" }, result: "src/statements/export.ts:41:export async function buildStatement(account: Account, range: Range) {\nsrc/statements/export.ts:88:function renderRows(rows: LedgerRow[]): string[] {\nsrc/statements/export.test.ts:12:  const statement = await buildStatement(fixtureAccount, lastQuarter);" } },
+    { tool: { name: "Bash", input: { command: "cat > /tmp/statements-probe.sql <<'SQL'\nEXPLAIN ANALYZE SELECT id, posted_at, amount_cents, memo FROM ledger_entries WHERE account_id = $1 AND posted_at >= $2 AND posted_at < $3 ORDER BY posted_at, id;\nSQL\nbun run db:query --file /tmp/statements-probe.sql --account fixture-large --from 2100-01-01 --to 2100-04-01", description: "Probe the query plan on the large fixture" }, result: "error: relation \"ledger_entries_posted_idx\" does not exist\n  at Query.run (node_modules/db-client/lib/query.js:212:15)\n  at async main (scripts/db-query.ts:48:3)\nhint: run `bun run db:migrate` before probing a fresh fixture database", error: true } },
+    { text: "The fixture database was not migrated. Migrating it, then re-running the probe." },
+    { tool: { name: "Bash", input: { command: "bun run db:migrate && bun test src/statements/export.test.ts src/statements/stream.test.ts", description: "Migrate and run the statement tests" }, result: "migrated 3 files\nbun test v1.4.0\n\nsrc/statements/export.test.ts:\n✓ streams a 250 000-row statement in bounded memory [1840.12ms]\n✓ keeps the row order of the old exporter [12.40ms]\n✓ writes the closing balance once [3.02ms]\n\nsrc/statements/stream.test.ts:\n✓ flushes every 500 rows [4.11ms]\n✓ stops reading when the client disconnects [22.87ms]\n\n 5 pass\n 0 fail" } },
+    { text: "Streaming export is in.\n\n- `buildStatement` now reads through a cursor and writes 500-row chunks, so a 250 000-row statement stays under 40 MB.\n- The closing balance is written once, after the last chunk.\n- A client that disconnects stops the cursor.\n\nTests: `bun test src/statements/` → 5 pass. Typecheck exit 0." },
+  ], start + 20 * 60_000);
+  const reviewer = writeRoleFrameTranscript(folder, roleFrameSession(3), [
+    { user: "Review the streaming statement export against the acceptance criteria." },
+    { tool: { name: "Bash", input: { command: "git diff --stat main...HEAD && git diff main...HEAD -- src/statements/stream.ts | head -120", description: "Read the diff" }, result: " src/statements/export.ts      | 64 +++++++-----\n src/statements/stream.ts      | 91 ++++++++++++++++\n src/statements/stream.test.ts | 58 ++++++++++\n 3 files changed, 181 insertions(+), 32 deletions(-)" } },
+    { tool: { name: "Bash", input: { command: "bun test src/statements/stream.test.ts --timeout 20000", description: "Run the new tests" }, result: "✓ flushes every 500 rows\n✗ stops reading when the client disconnects\n  expected cursor.closed to be true, received false\n  at src/statements/stream.test.ts:51:30\n\n 1 pass\n 1 fail", error: true } },
+    { text: "**REQUEST_CHANGES** — two findings.\n\n1. **The disconnect test is flaky.** It passes alone and fails under `--timeout 20000`: the cursor is closed on the next chunk rather than on `close`, so a slow chunk leaves it open.\n2. **The closing balance ignores pending entries.** `posted_at < $3` drops entries posted in the last second of the range; the old exporter used `<=`." },
+  ], start + 50 * 60_000);
+  const roster = RF_ROSTER_ROLES.map((role, index) => ({
+    role,
+    path: writeRoleFrameTranscript(folder, roleFrameSession(10 + index), [
+      { user: `Release train: the ${role} step.` },
+      { text: `The ${role} step for the September train is done; notes are in the release checklist.` },
+    /* Minutes ago: a quiet conversation ages off the board, and the roster's
+       one hand-started conversation is what keeps its card there. */
+    ], Date.now() - (16 - index) * 60_000),
+  }));
+  const neutral = writeRoleFrameTranscript(folder, roleFrameSession(30), [
+    { user: "Which of the release notes still mention the old export?" },
+    { text: "Two: the admin guide and the API changelog." },
+  ], Date.now() - 6 * 60_000);
+  return { architect, builder, reviewer, roster, neutral };
+}
+
+/** The two tasks and their pipelines, written into the synthetic state beside the geometry corpus. */
+async function seedRoleFrameState(project: string, seed: RoleFrameSeed): Promise<void> {
+  /* After seedSeats pointed this process at the synthetic state dir. */
+  const { pipelineIdentity } = await import("@/lib/pipelines/store");
+  const tasksFile = path.join(STATE_DIR, "tasks.json");
+  const store = JSON.parse(fs.readFileSync(tasksFile, "utf8")) as { tasks: Record<string, unknown>[] };
+  const at = new Date(Date.now() - 4 * 3_600_000).toISOString();
+  store.tasks.unshift(
+    { id: RF_MAIN_TASK, project, status: "assigned", text: "Stream large statement exports\nStatements over 100 000 rows run out of memory; export them in chunks without changing the file.", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at },
+    { id: RF_ROSTER_TASK, project, status: "assigned", text: "Release train: September\nEvery role's step for the train, one conversation each.", placement: "unplaced",
+      assignments: [{ path: seed.neutral, conversationId: null, panePid: null, state: "delivered", error: null, at }], createdAt: at, updatedAt: at },
+  );
+  fs.writeFileSync(tasksFile, JSON.stringify(store, null, 2) + "\n", "utf8");
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const effectiveRole = (roleId: string) => ({ roleId, engine: "claude", model: "opus", effort: "high", access: "read-write", promptScaffold: `You are the ${roleId}.` });
+  const attempt = (roleId: string, agentPath: string | null, state: string, verdict: unknown, started: number) => ({
+    n: 1, state, effectiveRole: effectiveRole(roleId), launchId: null, conversationId: null, sessionId: null, agentPath, paneId: null, flowId: null,
+    startedAt: ago(started), completedAt: ago(started - 12), input: null, activatedBy: null, output: null, verdict, error: null,
+  });
+  const stage = (id: string, roleId: string, next: string | null) => ({
+    id, kind: "run", role: { roleId }, engine: "claude", model: "opus", effort: "high", access: "read-write", prompt: `${id}: do the ${roleId} work.`, next, onFail: null, effectiveRole: effectiveRole(roleId),
+  });
+  const common = (id: string, task: string, taskId: string) => ({
+    id, task, taskIds: [taskId], project, repoDir: REPO_DIR, ...pipelineIdentity(id, task, REPO_DIR),
+    baseBranch: "main", baseRef: "0".repeat(40), lastPassedCommit: "0".repeat(40), publishedCommit: null, pausedState: null, srcPath: null, srcConversationId: null, hiddenAt: null,
+  });
+  const main = {
+    ...common("rf2040a1", "Stream large statement exports", RF_MAIN_TASK),
+    spec: "A 250 000-row statement exports in bounded memory with the same bytes as before.",
+    stages: [stage("design", "architect", "build"), stage("build", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", null)],
+    runs: [
+      { stageId: "design", attempts: [attempt("architect", seed.architect, "passed", { status: "pass" }, 170)] },
+      { stageId: "build", attempts: [attempt("builder", seed.builder, "passed", { status: "pass" }, 150)] },
+      { stageId: "review", attempts: [attempt("reviewer", seed.reviewer, "failed", { status: "fail", findings: ["The disconnect test is flaky under a long timeout.", "The closing balance drops entries posted in the range's last second."] }, 120)] },
+      { stageId: "verify", attempts: [] },
+    ],
+    cursor: { stageId: "review", state: "pending", input: null, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } },
+    state: "needs_decision", stateDetail: "review failed with 2 findings", createdAt: ago(175), closedAt: null,
+  };
+  const roster = {
+    ...common("rf2040b2", "Release train: September", RF_ROSTER_TASK),
+    spec: "Every role's step for the September train.",
+    stages: RF_ROSTER_ROLES.map((role, index) => stage(role === "prod-auditor" ? "audit" : role, role, RF_ROSTER_ROLES[index + 1] ?? null)).map((entry, index, all) => ({ ...entry, next: all[index + 1]?.id ?? null })),
+    runs: seed.roster.map((entry, index) => ({ stageId: entry.role === "prod-auditor" ? "audit" : entry.role, attempts: [attempt(entry.role, entry.path, "passed", { status: "pass" }, 100 - index * 4)] })),
+    cursor: null, state: "completed", stateDetail: null, createdAt: ago(110), closedAt: null,
+  };
+  fs.writeFileSync(path.join(STATE_DIR, "pipelines.json"), JSON.stringify({ schemaVersion: 5, pipelines: [main, roster] }, null, 2) + "\n", "utf8");
+}
+
+/** Inside the page: every framed surface's content width, its mark and the controls beside it. */
+function readRoleFrames() {
+  const box = (node: Element | null) => {
+    if (!node) return null;
+    const r = node.getBoundingClientRect();
+    return { x: Math.round(r.x * 10) / 10, y: Math.round(r.y * 10) / 10, w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10 };
+  };
+  const hosts = [...document.querySelectorAll<HTMLElement>("[data-role-host]")].filter((host) => host.getBoundingClientRect().width > 0).map((host) => {
+    const mark = host.querySelector(".role-mark");
+    const markBox = mark && getComputedStyle(mark).display !== "none" ? box(mark) : null;
+    const row = mark?.parentElement ?? null;
+    const controls = row ? [...row.querySelectorAll("button, a")].filter((node) => !mark!.contains(node) && node.getBoundingClientRect().width > 0).map((node) => ({ name: node.getAttribute("aria-label") ?? node.textContent?.trim() ?? "", rect: box(node)! })) : [];
+    const feed = host.querySelector("[data-log-feed-scroller]");
+    const composer = host.querySelector("textarea");
+    return {
+      host: host.dataset.roleHost ?? "", role: host.dataset.role ?? "", key: host.dataset.kanbanReader ?? host.dataset.kanbanSeat ?? host.dataset.mobile2Conversation ?? "",
+      folded: host.dataset.folded === "1", rect: box(host), feed: box(feed), composer: box(composer), mark: markBox, controls,
+    };
+  });
+  return {
+    variant: document.documentElement.getAttribute("data-role-frame") ?? "off",
+    hosts,
+    /* The conversation's own title beside the mark, not the whole cell. */
+    title: box(document.querySelector("[data-mobile2-chat-title]")),
+    phoneFeed: box(document.querySelector('[data-testid="mobile-focused-pane"] [data-log-feed-scroller]')),
+    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  };
+}
+
+async function roleFramesMain(): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  const seed = seedRoleFrameConversations();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "role-frames" };
+  const frames: { variant: string; scheme: string; shot: string; file: string }[] = [];
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    const { project } = await waitForBoard(baseUrl, false);
+    await stop(server);
+    server = null;
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    seedState(project, tasks, reviewers);
+    const seats = await seedSeats(project);
+    await seedRoleFrameState(project, seed);
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, true);
+    await Bun.sleep(4_000);
+    const files = ((await (await fetch(`${baseUrl}/api/files`)).json()) as { files?: { path: string; conversationId?: string | null }[] }).files ?? [];
+    const identity = (file: string) => { const entry = files.find((candidate) => candidate.path === file); return entry?.conversationId ?? file; };
+    const openReaders = [
+      { key: identity(seed.builder), path: seed.builder, folded: false },
+      { key: identity(seed.reviewer), path: seed.reviewer, folded: false },
+      ...[...seed.roster.map((entry) => entry.path), seed.neutral].map((file) => ({ key: identity(file), path: file, folded: true })),
+    ];
+    report.seeded = { project: "harbor", seat: seats.live.title, readers: openReaders.length };
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const readings: Record<string, ReturnType<typeof readRoleFrames>> = {};
+    const shoot = async (page: Page, variant: string, scheme: string, shot: string, clip?: { x: number; y: number; width: number; height: number }) => {
+      const file = path.join(OUT_DIR, `role-frames-${variant}-${scheme}-${shot}.png`);
+      await page.screenshot({ path: file, ...(clip ? { clip } : {}) });
+      frames.push({ variant, scheme, shot, file });
+      readings[`${variant}-${scheme}-${shot}`] = await page.evaluate(readRoleFrames);
+    };
+    /* ROLE_FRAMES_ONLY=off,rail and ROLE_FRAMES_SCHEMES=light narrow a run while iterating. */
+    const onlyVariants = process.env.ROLE_FRAMES_ONLY?.split(",").map((value) => value.trim()).filter(Boolean);
+    const onlySchemes = process.env.ROLE_FRAMES_SCHEMES?.split(",").map((value) => value.trim()).filter(Boolean);
+    const variants = ROLE_FRAME_CHOICES.filter((choice) => !onlyVariants?.length || onlyVariants.includes(choice));
+    const schemes = (["light", "dark"] as const).filter((scheme) => !onlySchemes?.length || onlySchemes.includes(scheme));
+    for (const colorScheme of schemes) {
+      for (const variant of variants) {
+        /* Desktop: the seat above the columns, then the two cards. */
+        const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme, reducedMotion: "reduce" });
+        await context.addInitScript(seedInit);
+        await context.addInitScript(({ key, value }: { key: string; value: string }) => localStorage.setItem(key, value), { key: `llv:kanban-readers:v1:${project}`, value: JSON.stringify(openReaders) });
+        const page = await context.newPage();
+        await page.goto(`${baseUrl}/?roleFrame=${variant}#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 120_000 });
+        await page.waitForSelector('[data-kanban-seat] [data-orchestrator-state="live"]', { timeout: 60_000 }).catch(() => {});
+        await page.waitForSelector("[data-kanban-reader]", { timeout: 60_000 }).catch(() => {});
+        await page.waitForTimeout(3_000);
+        await shoot(page, variant, colorScheme, "seat-1440");
+        if (!report.cards) report.cards = await page.evaluate(() => [...document.querySelectorAll("[data-kanban-card]")].map((node) => node.getAttribute("data-kanban-card")));
+        /* A card with two open readers is taller than a laptop screen: the
+           cards are shot in a tall window so both readers are in frame. */
+        await page.setViewportSize({ width: 1440, height: 2200 });
+        await page.waitForTimeout(800);
+        for (const [shot, taskId] of [["card-1440", RF_MAIN_TASK], ["roster-1440", RF_ROSTER_TASK]] as const) {
+          const card = page.locator(`[data-kanban-card="task:${taskId}"], [data-kanban-card="${taskId}"]`).first();
+          if (await card.count() === 0) { must(false, `${variant}-${colorScheme}: no card for ${taskId}`); continue; }
+          await card.evaluate((node) => node.scrollIntoView({ block: "start" }));
+          await page.waitForTimeout(600);
+          const rect = await card.boundingBox();
+          if (!rect) { must(false, `${variant}-${colorScheme}: ${taskId} has no box`); continue; }
+          const pad = 16;
+          const x = Math.max(0, rect.x - pad);
+          const y = Math.max(0, rect.y - pad);
+          await shoot(page, variant, colorScheme, shot, { x, y, width: Math.min(1440 - x, rect.width + pad * 2), height: Math.min(2200 - y, rect.height + pad * 2) });
+        }
+        await context.close();
+
+        /* The phone: the seat's conversation, the builder's and the reviewer's. */
+        const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme, reducedMotion: "reduce" });
+        await phone.addInitScript(seedInit);
+        const phonePage = await phone.newPage();
+        for (const [shot, file] of [["seat-390", seats.live.path], ["builder-390", seed.builder], ["reviewer-390", seed.reviewer]] as const) {
+          await phonePage.goto(`${baseUrl}/?roleFrame=${variant}#f=${encodeURIComponent(file)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+          await phonePage.waitForSelector('[data-testid="mobile-focused-pane"] [data-log-feed-scroller]', { timeout: 30_000 }).catch(() => must(false, `${variant}-${colorScheme} ${shot}: the conversation screen never opened`));
+          await phonePage.waitForTimeout(2_500);
+          await shoot(phonePage, variant, colorScheme, shot);
+        }
+        await phone.close();
+      }
+    }
+
+    /* Every variant against the unframed board: the same content widths, the
+       phone's title cell and no mark over a control. */
+    const roleOf = (reading: ReturnType<typeof readRoleFrames>, host: string, key?: string) => reading.hosts.find((entry) => entry.host === host && (key === undefined || entry.key === key));
+    for (const colorScheme of schemes) {
+      for (const variant of variants.filter((choice) => choice !== "off")) {
+        const tag = `${variant}-${colorScheme}`;
+        for (const shot of ["seat-1440", "card-1440", "roster-1440", "seat-390", "builder-390", "reviewer-390"]) {
+          const base = readings[`off-${colorScheme}-${shot}`];
+          const framed = readings[`${variant}-${colorScheme}-${shot}`];
+          if (!base || !framed) { must(false, `${tag} ${shot}: no reading`); continue; }
+          must(framed.variant === variant, `${tag} ${shot}: the page drew ${framed.variant}`);
+          must(framed.overflow <= 0, `${tag} ${shot}: the page scrolls sideways by ${framed.overflow}px`);
+          for (const host of framed.hosts) {
+            const before = roleOf(base, host.host, host.key);
+            if (before?.feed && host.feed) must(Math.abs(before.feed.w - host.feed.w) < 0.6, `${tag} ${shot}: ${host.host} ${host.role} feed is ${host.feed.w}px, unframed ${before.feed.w}px`);
+            if (before?.composer && host.composer) must(Math.abs(before.composer.w - host.composer.w) < 0.6, `${tag} ${shot}: ${host.host} ${host.role} composer is ${host.composer.w}px, unframed ${before.composer.w}px`);
+            must(host.mark !== null, `${tag} ${shot}: ${host.host} ${host.role} draws no mark`);
+            for (const control of host.controls) {
+              if (host.mark) must(!overlaps(host.mark, control.rect, 0.5), `${tag} ${shot}: the ${host.role} mark overlaps «${control.name}»`);
+            }
+          }
+          if (shot.endsWith("-390")) {
+            must(framed.title !== null && framed.title.w >= 190, `${tag} ${shot}: the title beside the mark is ${framed.title?.w}px`);
+            if (base.phoneFeed && framed.phoneFeed) must(Math.abs(base.phoneFeed.w - framed.phoneFeed.w) < 0.6, `${tag} ${shot}: the phone feed is ${framed.phoneFeed.w}px, unframed ${base.phoneFeed.w}px`);
+          }
+        }
+        const roster = readings[`${variant}-${colorScheme}-roster-1440`];
+        const drawn = new Set(roster?.hosts.filter((host) => host.host === "reader").map((host) => host.role));
+        for (const role of [...RF_ROSTER_ROLES, "neutral"]) must(drawn.has(role), `${tag}: the roster card has no ${role} frame (${[...drawn].join(", ")})`);
+        const seatHost = roleOf(readings[`${variant}-${colorScheme}-seat-1440`]!, "seat");
+        must(seatHost?.role === "orchestrator", `${tag}: the seat frame is ${seatHost?.role}`);
+        for (const [shot, role] of [["seat-390", "orchestrator"], ["builder-390", "builder"], ["reviewer-390", "reviewer"]] as const) {
+          const phoneHost = roleOf(readings[`${variant}-${colorScheme}-${shot}`]!, "phone");
+          must(phoneHost?.role === role, `${tag} ${shot}: the phone frame is ${phoneHost?.role}`);
+        }
+      }
+    }
+    report.readings = readings;
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "role-frames.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+  const gallery = process.env.ROLE_FRAMES_GALLERY?.trim();
+  if (gallery) writeRoleFrameGallery(gallery, frames, failures);
+  console.log(`role frame measurements: ${path.join(OUT_DIR, "role-frames.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`role frames acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("role frames acceptance passed at 1440 × 900 and 390 × 844 (light, dark) for every variant.");
+  }
+}
+
+/** One page, every variant side by side per surface, light and dark. */
+function writeRoleFrameGallery(dir: string, frames: { variant: string; scheme: string; shot: string; file: string }[], failures: string[]): void {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const frame of frames) fs.copyFileSync(frame.file, path.join(dir, path.basename(frame.file)));
+  const surfaces: [string, string][] = [
+    ["seat-1440", "Orchestrator panel · desktop 1440"],
+    ["card-1440", "Task card with builder and reviewer open · desktop 1440"],
+    ["roster-1440", "Every role (roster card, folded readers) · desktop 1440"],
+    ["seat-390", "Orchestrator conversation · phone 390"],
+    ["builder-390", "Builder conversation · phone 390"],
+    ["reviewer-390", "Reviewer conversation · phone 390"],
+  ];
+  const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const cell = (variant: string, scheme: string, shot: string) => {
+    const name = `role-frames-${variant}-${scheme}-${shot}.png`;
+    return `<figure><a href="${name}"><img src="${name}" loading="lazy" alt="${escape(`${variant} ${scheme} ${shot}`)}"></a><figcaption>${escape(ROLE_FRAME_NAMES[variant as keyof typeof ROLE_FRAME_NAMES] ?? variant)}</figcaption></figure>`;
+  };
+  const sections = ["light", "dark"].flatMap((scheme) => surfaces.map(([shot, title]) => `
+<section class="${shot.endsWith("-390") ? "phone" : "desk"}"><h2>${escape(title)} <small>${scheme}</small></h2>
+<div class="row">${ROLE_FRAME_CHOICES.map((variant) => cell(variant, scheme, shot)).join("")}</div></section>`)).join("\n");
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Role frames · prototype gallery</title>
+<style>
+body{margin:0;padding:24px 28px 60px;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;background:#0f1115;color:#e6e6ea}
+h1{font-size:22px;margin:0 0 4px}p.lead{margin:0 0 20px;color:#a3a3ad;max-width:1100px}
+h2{font-size:15px;margin:28px 0 10px;font-weight:650}h2 small{font-weight:500;color:#8b8b96;margin-left:6px;text-transform:uppercase;letter-spacing:.06em;font-size:11px}
+.row{display:grid;gap:14px;grid-template-columns:repeat(${ROLE_FRAME_CHOICES.length},minmax(0,1fr))}
+.phone .row{grid-template-columns:repeat(${ROLE_FRAME_CHOICES.length},minmax(0,300px))}
+figure{margin:0;background:#171a21;border:1px solid #262a33;border-radius:10px;padding:8px}
+img{display:block;width:100%;height:auto;border-radius:6px}figcaption{margin-top:6px;font-size:12px;color:#c9c9d1}
+.status{margin:0 0 16px;font-size:13px;color:${failures.length ? "#fca5a5" : "#86efac"}}
+nav a{color:#a5b4fc;margin-right:14px}
+</style></head><body>
+<h1>Role frames on agent conversations — prototype</h1>
+<p class="lead">Four frame variants beside today's unframed board, in the real components against a seeded synthetic home. Switch at runtime with <code>?roleFrame=rail|ribbon|halo|bracket|off</code>; the choice is remembered on the device. Click a frame for full size.</p>
+<p class="status">${failures.length ? `${failures.length} measured check(s) failed — see role-frames.json` : "Every measured check passed: same content widths as the unframed board, phone title cell ≥ 190 px, no mark over a header control, a frame for every role."}</p>
+${sections}
+</body></html>`;
+  fs.writeFileSync(path.join(dir, "index.html"), html, "utf8");
+}
+
 /* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
+else if (process.env.BOARD_CAPTURE_CASE === "role-frames") await roleFramesMain();
 else if ((SEAT_CASES as readonly string[]).includes(process.env.BOARD_CAPTURE_CASE ?? "")) await seatsMain(process.env.BOARD_CAPTURE_CASE as SeatCase);
 else await main();

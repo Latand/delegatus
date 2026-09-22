@@ -17,6 +17,7 @@ import { projectDisplayName } from "@/lib/displayNames";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { useLocale } from "@/lib/i18n";
+import { conversationFrameRole } from "@/lib/roleFrames";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -48,6 +49,7 @@ import type { SubagentTrayApi } from "@/components/scheme/SubagentTrayView";
 import { WakeupChip, wakeupChipKey } from "@/components/WakeupChip";
 
 import { MobileBarTitle, MobileShell, useMobileShellChrome, type MobileShellHost, type SheetRenderer } from "./MobileShell";
+import { RoleFrameMark } from "../RoleFrameMark";
 import { MobileConversationMenu } from "./MobileConversationMenu";
 import { MobileOrchestratorSheet } from "./MobileOrchestratorSheet";
 import { MobileSwitchSheet, switchList, swipeTarget, type SwitchCandidate, type SwitchEntry } from "./MobileSwitchSheet";
@@ -514,19 +516,31 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 
   /* ── The bar's title cell ──────────────────────────────────────────────── */
   const displayName = projectDisplayName(project, projectName);
+  /* The role frame (prototype): the seat's conversation is the orchestrator,
+     a stage attempt wears its stage's role, a review deck is a review. */
+  const frameRole = activeFile
+    ? conversationFrameRole({ seat: holdsSeat, stage: stage?.stage ?? null, file: activeFile })
+    : activeDeck ? "reviewer" as const : null;
+  const frameMark = frameRole ? <RoleFrameMark role={frameRole} /> : null;
   const title = activeFile ? (
-    <ChatBarTitle
-      file={activeFile}
-      offline={offline}
-      stage={stage}
-      bump={bumpPulse?.side ?? null}
-      renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
-    />
+    <>
+      {frameMark}
+      <ChatBarTitle
+        file={activeFile}
+        offline={offline}
+        stage={stage}
+        bump={bumpPulse?.side ?? null}
+        renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
+      />
+    </>
   ) : activeEntry ? (
     /* A deck or a draft names itself exactly as its switcher row does, so the
        cell the operator taps to leave says the same thing as the row that
        brought them here. */
-    <EntryBarTitle entry={activeEntry} offline={offline} bump={bumpPulse?.side ?? null} />
+    <>
+      {frameMark}
+      <EntryBarTitle entry={activeEntry} offline={offline} bump={bumpPulse?.side ?? null} />
+    </>
   ) : (
     <MobileBarTitle>{displayName}</MobileBarTitle>
   );
@@ -661,6 +675,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     <div
       data-testid="mobile-chat-shell"
       data-chat-min-share={MIN_TRANSCRIPT_SHARE}
+      {...(frameRole ? { "data-role-host": "phone", "data-role": frameRole } : {})}
       className="relative flex h-full max-h-[100dvh] min-h-0 min-w-0 max-w-[100dvw] flex-1 flex-col overflow-hidden overflow-x-clip"
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
