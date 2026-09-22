@@ -3,7 +3,7 @@
    and shows how it updates itself and restarts each process on request.
    Imports nothing from src/, bin/ or scripts/: the checkout it manages may be
    older than this file. Run: bun prototypes/self-update/server.ts --help */
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseConfig, type Config } from "./lib/config";
@@ -141,10 +141,15 @@ function refusal(status: number, error: string, app: App): Response {
   return json({ error, snapshot: app.snapshot() }, status);
 }
 
-let transpiledApp: string | null = null;
+/* Transpiled once per change of app.ts, so an edited page is served without a restart. */
+let transpiledApp: { mtimeMs: number; code: string } | null = null;
 function appJs(): string {
-  transpiledApp ??= new Bun.Transpiler({ loader: "ts" }).transformSync(readFileSync(join(UI_DIR, "app.ts"), "utf8"));
-  return transpiledApp;
+  const path = join(UI_DIR, "app.ts");
+  const { mtimeMs } = statSync(path);
+  if (transpiledApp?.mtimeMs !== mtimeMs) {
+    transpiledApp = { mtimeMs, code: new Bun.Transpiler({ loader: "ts" }).transformSync(readFileSync(path, "utf8")) };
+  }
+  return transpiledApp.code;
 }
 
 export interface RunningServer { port: number; app: App; stop(): void }
@@ -163,6 +168,16 @@ export function createServer(deps: ServerDeps, options: { port: number; hostname
     const payload = `event: state\ndata: ${JSON.stringify(app.snapshot())}\n\n`;
     for (const send of clients) send(payload);
   };
+  /* The checkout step moves HEAD mid-update; the header and the process
+     blocks compare against it, so it is re-read once per run of that step. */
+  let headReadFor = "";
+  const offHead = deps.changes.on(() => {
+    const { startedAt, steps } = deps.runner.state;
+    const key = `${startedAt}`;
+    if (steps.find((step) => step.name === "checkout")?.state !== "done" || key === headReadFor) return;
+    headReadFor = key;
+    void app.refreshRunning();
+  });
   const offChanges = deps.changes.on(() => {
     if (pending || clients.size === 0) return;
     pending = setTimeout(broadcast, Math.max(0, lastSent + SSE_MIN_GAP_MS - Date.now()));
@@ -269,6 +284,7 @@ export function createServer(deps: ServerDeps, options: { port: number; hostname
     app,
     stop() {
       offChanges();
+      offHead();
       if (pending) clearTimeout(pending);
       if (healthTimer) clearInterval(healthTimer);
       app.stopTimers();

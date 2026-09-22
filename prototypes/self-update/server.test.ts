@@ -66,13 +66,14 @@ afterEach(() => { for (const server of servers.splice(0)) server.stop(); });
 
 function boot(outcome: () => CheckOutcome = behind) {
   const changes = new Changes();
+  const reads = { count: 0 };
   const runner = new FakeRunner(changes);
   const web = new FakeProcess();
   const host = new FakeProcess();
   const deps: ServerDeps = {
     changes,
     checker: async () => outcome(),
-    readRunning: async () => RUNNING,
+    readRunning: async () => { reads.count += 1; return RUNNING; },
     runner,
     web,
     host,
@@ -82,7 +83,7 @@ function boot(outcome: () => CheckOutcome = behind) {
   const server = createServer(deps, { port: 0 });
   servers.push(server);
   const base = `http://127.0.0.1:${server.port}`;
-  return { base, runner, web, host, changes, server };
+  return { base, runner, web, host, changes, server, reads };
 }
 
 async function state(base: string): Promise<Snapshot> {
@@ -160,6 +161,18 @@ describe("routes", () => {
     runner.pending?.();
     await Bun.sleep(20);
     expect((await state(base)).busy).toBeNull();
+  });
+
+  test("the running revision is re-read once the checkout step has moved HEAD", async () => {
+    const { runner, changes, reads } = boot();
+    await Bun.sleep(10);
+    const before = reads.count;
+    runner.state = { ...runner.state, state: "running", startedAt: "2026-09-22T12:00:00.000Z" };
+    runner.state.steps[1] = { ...runner.state.steps[1]!, state: "done" };
+    changes.emit();
+    changes.emit();
+    await Bun.sleep(10);
+    expect(reads.count).toBe(before + 1);
   });
 
   test("retry is 409 unless the update failed", async () => {
