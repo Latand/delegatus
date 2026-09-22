@@ -325,7 +325,8 @@ test("the paused unsafe-relay lane, unresolved delivery and live ownership refus
     delivery: { target: { repository: "owner/repo", remote: "origin", branch: "refs/heads/lane" }, disposition: "owner", publish: "enabled", ownerId: draft.id, epoch: 1, active: true, journal: [], operation: { id: "op-1", epoch: 1, sha: BASE, state: "running" } },
   } as Partial<Pipeline>);
   const deliveringRow = rawRow(delivering.id);
-  expect(JSON.stringify(await convert(delivering, {}, h.ports))).toContain("unresolved-delivery");
+  const unresolved = await convert(delivering, {}, h.ports);
+  expect(JSON.stringify(unresolved)).toContain("unresolved-delivery");
   expect(rawRow(delivering.id)).toBe(deliveringRow);
 
   const live = parkedLegacyLane(draft, {}, { state: "running", unconfirmedHosts: [{ stageId: "builder", attempt: 1, conversationId: "c", agentPath: null, paneId: null, operationId: null, detail: "kill unconfirmed", at: "t" }] });
