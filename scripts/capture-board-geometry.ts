@@ -969,7 +969,16 @@ async function captureOnboarding(): Promise<void> {
             must(moved.overrides.reviewer?.config?.engine === "claude" && moved.overrides.builder?.variants?.["apply-fixes"]?.engine === "claude", `${tag}: the stored mapping after the move is ${JSON.stringify(moved.overrides)}`);
             await page.click("[data-mapping-receipt] button");
             await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
-            const undone = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "role-presets.json"), "utf8")) as { overrides: Record<string, unknown> };
+            /* The banner is back as soon as the answer lands; the file behind
+               it is written by the server, so the read waits for it rather
+               than racing it. */
+            let undone = { overrides: {} as Record<string, unknown> };
+            const undoneBy = Date.now() + 10_000;
+            do {
+              undone = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "role-presets.json"), "utf8")) as { overrides: Record<string, unknown> };
+              if (Object.keys(undone.overrides).length === 0) break;
+              await page.waitForTimeout(100);
+            } while (Date.now() < undoneBy);
             must(Object.keys(undone.overrides).length === 0, `${tag}: undo left ${JSON.stringify(undone.overrides)}`);
 
             /* 3b. Both engines connected, with quota readings: the headroom sits
