@@ -532,7 +532,12 @@ for it, and never shows a command on the happy path.
 ```
 
 The route calls `detectTailscale`, `readStatus` and a new `serveStatus`
-from `bin/tailscale.mjs`, each bounded to 3 s, and maps:
+from `bin/tailscale.mjs`, each bounded to 3 s, and maps. `serveStatus` reads
+**both** maps `serve status --json` can carry: the top-level `Web` a `--bg`
+mapping writes, and each `Foreground[<session>].Web` a foreground
+`tailscale serve <port>` keeps — the form the explicit `--tailscale` start
+still uses, and one whose top-level `Web` is empty, so a Viewer that is
+serving would otherwise read as "not serving".
 
 | State | Read as | The step shows |
 |---|---|---|
@@ -540,7 +545,7 @@ from `bin/tailscale.mjs`, each bounded to 3 s, and maps:
 | `needs-login` | `tailscale status --json` has any `BackendState` other than `Running` (`NeedsLogin`, `Stopped`, `NoState`, `NeedsMachineAuth`, `Starting`); `readStatus` already raises for the first two (`tailscale.mjs:207`) | one sentence, one link |
 | `no-dns` | `Running` and `Self.DNSName` empty (`readStatus`'s MagicDNS error) | one sentence, one link |
 | `ready` | `Running` with a DNS name and `serve status` has no `/` handler on 443 | the button |
-| `exposed` | the 443 `/` handler proxies to the Viewer's own port while this process holds no `LLV_TOKEN`/`LLV_TS_URL` — a `--bg` mapping left by an earlier run, which belongs to tailscaled and outlives this process. The tailnet reaches an **ungated** Viewer until the press re-binds it, so the step says that and does not read as plain `ready` | the button, with one warning line |
+| `exposed` | the 443 `/` handler proxies to the Viewer's own port while this process holds **no `LLV_TOKEN` at all** — a `--bg` mapping left by an earlier run, which belongs to tailscaled and outlives this process. The tailnet reaches an **ungated** Viewer until the press re-binds it, so the step says that and does not read as plain `ready`. A process that gates without a link of its own (the launcher's local fallback, a non-loopback bind) is `ready`: it asks every connection for the key, and saying otherwise would be false | the button, with one warning line |
 | `serving-other` | the 443 `/` handler proxies to a local port that is not `viewerPort` | the button, with one warning line |
 | `serving` | the 443 `/` handler proxies to `127.0.0.1:<viewerPort>` **and** this process holds `LLV_TOKEN` and `LLV_TS_URL` | the QR, the link, Copy |
 
@@ -587,8 +592,11 @@ it was:
    line said before the press.
    Any failure from step 3 on runs `serve --https=443 <viewerPort> off` and
    re-reads `serve status`: the gate is lifted back to what it was only once
-   nothing answers on this port, and an unreadable status keeps it. The reply
-   carries `keyKept`, and the step says the key stayed on.
+   nothing answers on this port, and an unreadable status keeps it. The
+   `phone-access` flag follows the same rule — it is the gate for the NEXT
+   start, and a mapping that outlived the press would otherwise meet a
+   launcher starting on loopback with no key. The reply carries `keyKept`,
+   and the step says the key stayed on.
 5. **Re-bind the running process.** Set `LLV_TS_HOST = <dnsName>` and
    `LLV_TS_URL = https://<dnsName>/?k=<token>` beside the `LLV_TOKEN` of step 2
    in the serving Viewer. From the next request `proxy.ts:50` gates every
@@ -606,6 +614,11 @@ it was:
 7. **Answer** the new `GET /api/access` body; the client renders the QR from
    `tailnetUrl` with the same client-side `qrcode` path `AccessQrButton`
    uses today (the token never reaches a server log or an image service).
+
+Disable follows the same rule from the other side: after `off` exits 0 it
+re-reads `serve status`, and a mapping still answering on this port (or a
+status that cannot be read) is `DISABLE_FAILED` with the gate left on, rather
+than an exit code taken as proof.
 
 `{ action: "disable" }` is the secondary affordance in the serving state:
 it removes the flag file, runs `tailscale serve --https=443 <viewerPort>
@@ -1532,7 +1545,9 @@ green:
    `LLV_TS_HOST`/`LLV_TS_URL` unset (inherited ones are dropped, so nothing
    advertises an address this start does not serve). The banner and the
    browser it opens carry `?k=` whenever the start gates, which is the one
-   place the operator can read the key. `src/app/api/access/route.ts` answers
+   place the operator can read the key. A flag start whose background publish
+   fails prints the reason and no tailnet banner: that address answers
+   nothing, and a QR for it would invite a dead link. `src/app/api/access/route.ts` answers
    the `phone` block; new `src/app/api/access/phone/route.ts` runs the enable
    and disable sequences of §2.3 and sets the cookie. `AccessQrBody`
    extracted; `PhoneStep`; the popover button. Tests, all against a stub

@@ -119,6 +119,7 @@ function captureOutput(child: ReturnType<typeof spawn>) {
       }
       throw new Error(`CLI output did not include ${JSON.stringify(text)}:\n${output}`);
     },
+    text: () => output,
   };
 }
 
@@ -346,6 +347,33 @@ test("phone access remembered by the setup guide starts the real CLI in tailnet 
   expect(stub.calls()).not.toContain(`serve ${port}`);
   expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
 });
+
+test("a remembered choice whose publish fails says so and advertises no tailnet link", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const stub = createTailscaleStub({ root: path.dirname(fixture.env.TMPDIR!) });
+  stub.setServeMode("fail");
+  const configDir = path.join(fixture.env.XDG_CONFIG_HOME!, "agent-log-viewer");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(path.join(configDir, "phone-access"), "tailscale\n");
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("Agent Log Viewer v", 15_000);
+  await waitForStatus("127.0.0.1", port, 200);
+  /* The publish failed, so the tailnet address answers nothing: the banner
+     that would carry it, and its QR, are not printed. */
+  expect(output.text()).toContain("listener already in use");
+  expect(output.text()).not.toContain("Tailnet:");
+  /* The key was minted for this start, and the local link carries it. */
+  expect(output.text()).toContain(`http://127.0.0.1:${port}/?k=`);
+}, 30_000);
 
 test("a remembered choice whose Tailscale went away starts locally and says why", async () => {
   const fixture = await checkoutFixture();

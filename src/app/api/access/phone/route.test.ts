@@ -94,9 +94,26 @@ describe("GET /api/access reads the seven phone states from Tailscale", () => {
        its own state, and one press re-binds it. */
     stub.setServing(PORT);
     expect((await read()).phone).toMatchObject({ state: "exposed", servingPort: PORT });
+    /* A start that gates without a link of its own — the launcher's local
+       fallback, or a non-loopback bind — asks every connection for the key,
+       so the mapping does not reach an ungated Viewer and the step must not
+       say it does. */
     setEnv("LLV_TOKEN", "0".repeat(32));
+    expect((await read()).phone?.state).toBe("ready");
     setEnv("LLV_TS_URL", `https://${STUB_DNS_NAME}/?k=${"0".repeat(32)}`);
     expect((await read()).phone?.state).toBe("serving");
+  });
+
+  test("a foreground serve session is read as published, so a --tailscale start shows its link", async () => {
+    /* `tailscale serve <port>` (no --bg) keeps its map under Foreground[<session>]
+       and leaves the top-level Web empty; the explicit --tailscale start uses it. */
+    stub.setServingForeground(PORT);
+    expect((await read()).phone).toMatchObject({ state: "exposed", servingPort: PORT });
+    setEnv("LLV_TOKEN", "0".repeat(32));
+    setEnv("LLV_TS_URL", `https://${STUB_DNS_NAME}/?k=${"0".repeat(32)}`);
+    expect((await read()).phone).toMatchObject({ state: "serving", servingPort: PORT });
+    stub.setServingForeground(3000);
+    expect((await read()).phone).toMatchObject({ state: "serving-other", servingPort: 3000 });
   });
 
   test("a status Tailscale cannot answer is reported, not guessed", async () => {
@@ -170,14 +187,29 @@ describe("POST /api/access/phone enable", () => {
          the tailnet never reaches a Viewer this press stopped gating. */
       if (mode === "hang" || mode === "noverify") {
         expect(stub.calls()).toContain(`serve --https=443 ${PORT} off`);
-        expect(body.keyKept === true || process.env.LLV_TOKEN !== undefined || gateUntouched()).toBe(true);
       }
+      /* Nothing is published here: the stub's `off` clears the mapping, so
+         the gate and the remembered choice both go back to what they were. */
+      expect(body.keyKept).toBe(false);
+      expect(gateUntouched()).toBe(true);
       expect(fs.existsSync(flagFile())).toBe(false);
       expect(body.tailnetUrl).toBeNull();
-      /* The gate is only lifted again once nothing is published to this port. */
-      if (!body.keyKept) expect(gateUntouched()).toBe(true);
     }, 20_000);
   }
+
+  test("a mapping the press cannot take down keeps the key and the remembered choice", async () => {
+    /* `serve --bg` published this port, every `serve … off` is refused and the
+       status can no longer be read: the press cannot tell that the mapping is
+       gone, so lifting the gate or forgetting the choice would risk leaving
+       the next start open to the tailnet. */
+    stub.setServeMode("blind");
+    const response = await press("enable");
+    const body = await response.json() as PhoneActionFailure;
+    expect(body.code).toBe("VERIFY_FAILED");
+    expect(body.keyKept).toBe(true);
+    expect(process.env.LLV_TOKEN).toMatch(/^[0-9a-f]{32}$/);
+    expect(fs.existsSync(flagFile())).toBe(true);
+  }, 20_000);
 
   test("a key file that cannot be written is TOKEN_WRITE_FAILED", async () => {
     fs.mkdirSync(tokenFile(), { recursive: true });
@@ -215,6 +247,27 @@ describe("POST /api/access/phone disable", () => {
     expect(fs.readFileSync(tokenFile(), "utf8")).toBe(key);
     expect((await response.json() as AccessResponse).phone?.state).toBe("ready");
   });
+
+  test("a mapping that will not go down keeps the gate on, and says the press failed", async () => {
+    expect((await press("enable")).status).toBe(200);
+    stub.setServeMode("offfails");
+    const response = await press("disable");
+    expect(response.status).toBe(502);
+    expect((await response.json() as PhoneActionFailure).code).toBe("DISABLE_FAILED");
+    expect(process.env.LLV_TOKEN).toMatch(/^[0-9a-f]{32}$/);
+  }, 20_000);
+
+  test("an off that exits 0 while the mapping stays does not lift the gate", async () => {
+    expect((await press("enable")).status).toBe(200);
+    stub.setServeMode("offlies");
+    const response = await press("disable");
+    expect(response.status).toBe(502);
+    expect((await response.json() as PhoneActionFailure).code).toBe("DISABLE_FAILED");
+    /* The gate is lifted only once nothing answers on this port, the rule the
+       enable press follows on its own failure paths. */
+    expect(process.env.LLV_TOKEN).toMatch(/^[0-9a-f]{32}$/);
+    expect(fs.existsSync(flagFile())).toBe(true);
+  }, 20_000);
 
   test("a Viewer bound beyond loopback keeps its key when phone access goes off", async () => {
     expect((await press("enable")).status).toBe(200);

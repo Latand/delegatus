@@ -282,9 +282,34 @@ export async function readTailscaleState(tailscalePath, { timeoutMs = 3_000 } = 
  * What the tailnet's HTTPS 443 root is published as, from `tailscale serve
  * status --json`: `{ published: false }` when nothing is, otherwise the local
  * port it proxies to (null when the handler is not a loopback proxy).
+ *
+ * Two maps carry a mapping, and both count. A background serve (`--bg`) writes
+ * the top-level `Web`; a FOREGROUND `tailscale serve <port>` — the form an
+ * explicit `--tailscale` start still uses — keeps its own map under
+ * `Foreground[<session>]` and leaves the top-level one empty. Reading only the
+ * top level makes a Viewer that is serving read as "not serving".
  */
+function webMaps(json) {
+  if (!json || typeof json !== "object") return [];
+  const maps = [];
+  if (json.Web && typeof json.Web === "object") maps.push(json.Web);
+  if (json.Foreground && typeof json.Foreground === "object") {
+    for (const session of Object.values(json.Foreground)) {
+      if (session && typeof session === "object" && session.Web && typeof session.Web === "object") maps.push(session.Web);
+    }
+  }
+  return maps;
+}
+
 export function parseServeStatus(json) {
-  const web = json && typeof json === "object" && json.Web && typeof json.Web === "object" ? json.Web : {};
+  for (const web of webMaps(json)) {
+    const found = rootOf(web);
+    if (found) return found;
+  }
+  return { published: false, port: null };
+}
+
+function rootOf(web) {
   for (const [hostPort, entry] of Object.entries(web)) {
     if (!hostPort.endsWith(":443")) continue;
     const root = entry?.Handlers?.["/"];
@@ -300,7 +325,7 @@ export function parseServeStatus(json) {
     }
     return { published: true, port };
   }
-  return { published: false, port: null };
+  return null;
 }
 
 export async function serveStatus(tailscalePath, { timeoutMs = 3_000 } = {}) {

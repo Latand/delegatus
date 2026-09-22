@@ -14,7 +14,13 @@ import path from "node:path";
  *   successful `serve --bg <port>` rewrites to point at that port;
  * - `serve-mode` is how `serve --bg` behaves: `ok` (default), `operator`
  *   (the operator-right refusal), `fail`, `hang` or `noverify` (exits 0 and
- *   leaves the status as it was);
+ *   leaves the status as it was), or `offfails` (publishes, then refuses
+ *   every `serve … off`, so the mapping outlives the press), or `offlies`
+ *   (`off` exits 0 and the mapping stays, so only a re-read finds it), or
+ *   `stuck` (publishes a mapping to another port and refuses every `off`, the
+ *   shape of a publish that took and cannot be undone), or `blind` (publishes
+ *   this port, then every `serve status` is unreadable and every `off` is
+ *   refused: the press cannot tell whether the mapping is still there);
  * - `calls.log` records every argv, one line per call.
  *
  * The script names its tools by absolute path, so a `PATH` holding only its
@@ -28,7 +34,9 @@ export type TailscaleStub = {
   setStatus(status: { BackendState: string; Self?: { DNSName?: string } } | null): void;
   /** Publish `/` on 443 to a loopback port, or clear it with null. */
   setServing(port: number | null): void;
-  setServeMode(mode: "ok" | "operator" | "fail" | "hang" | "noverify"): void;
+  setServeMode(mode: "ok" | "operator" | "fail" | "hang" | "noverify" | "offfails" | "offlies" | "stuck" | "blind"): void;
+  /** Publish `/` on 443 the way a foreground `tailscale serve <port>` does. */
+  setServingForeground(port: number): void;
   calls(): string[];
   cleanup(): void;
 };
@@ -43,6 +51,22 @@ export function serveStatusJson(port: number | null, dnsName = STUB_DNS_NAME): s
   });
 }
 
+/**
+ * What `serve status --json` prints for a FOREGROUND session — the shape an
+ * explicit `--tailscale` start leaves, where the top-level `Web` is empty and
+ * the session holds its own map under `Foreground[<session>]`.
+ */
+export function foregroundServeStatusJson(port: number, dnsName = STUB_DNS_NAME): string {
+  return JSON.stringify({
+    Foreground: {
+      "sess-fixture": {
+        TCP: { "443": { HTTPS: true } },
+        Web: { [`${dnsName}:443`]: { Handlers: { "/": { Proxy: `http://127.0.0.1:${port}` } } } },
+      },
+    },
+  });
+}
+
 const SCRIPT = (dnsName: string) => `#!/bin/sh
 here=\${0%/*}
 echo "$*" >> "$here/calls.log"
@@ -52,6 +76,7 @@ if [ "$1" = "status" ]; then
   exit 0
 fi
 if [ "$1" = "serve" ] && [ "$2" = "status" ]; then
+  if [ -f "$here/serve-blind" ]; then echo "not json at all"; exit 0; fi
   /bin/cat "$here/serve-status.json"
   exit 0
 fi
@@ -63,12 +88,23 @@ if [ "$1" = "serve" ] && [ "$2" = "--bg" ]; then
     fail) echo "error: listener already in use" >&2; exit 1 ;;
     hang) exec /bin/sleep 60 ;;
     noverify) exit 0 ;;
+    stuck)
+      printf '{"TCP":{"443":{"HTTPS":true}},"Web":{"${dnsName}:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}}}' > "$here/serve-status.json"
+      exit 0 ;;
+    blind)
+      printf '{"TCP":{"443":{"HTTPS":true}},"Web":{"${dnsName}:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:%s"}}}}}' "$3" > "$here/serve-status.json"
+      : > "$here/serve-blind"
+      exit 0 ;;
   esac
   printf '{"TCP":{"443":{"HTTPS":true}},"Web":{"${dnsName}:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:%s"}}}}}' "$3" > "$here/serve-status.json"
   echo "Available within your tailnet: https://${dnsName}/"
   exit 0
 fi
 if [ "$1" = "serve" ] && [ "$4" = "off" ]; then
+  mode=ok
+  if [ -f "$here/serve-mode" ]; then mode=$(/bin/cat "$here/serve-mode"); fi
+  if [ "$mode" = "offfails" ] || [ "$mode" = "stuck" ] || [ "$mode" = "blind" ]; then echo "error: cannot remove the mapping" >&2; exit 1; fi
+  if [ "$mode" = "offlies" ]; then exit 0; fi
   printf '{}' > "$here/serve-status.json"
   exit 0
 fi
@@ -96,7 +132,11 @@ export function createTailscaleStub(options: { root?: string; dnsName?: string }
     setServing(port) {
       fs.writeFileSync(path.join(dir, "serve-status.json"), serveStatusJson(port, dnsName));
     },
+    setServingForeground(port) {
+      fs.writeFileSync(path.join(dir, "serve-status.json"), foregroundServeStatusJson(port, dnsName));
+    },
     setServeMode(mode) {
+      fs.rmSync(path.join(dir, "serve-blind"), { force: true });
       fs.writeFileSync(path.join(dir, "serve-mode"), mode);
     },
     calls() {

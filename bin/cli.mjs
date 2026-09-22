@@ -993,6 +993,10 @@ async function main() {
     if (published.timedOut || published.code !== 0) {
       const detail = published.timedOut ? "timeout" : published.stderr.trim() || `exit ${published.code}`;
       console.error(OPERATOR_PATTERN.test(published.stderr) ? OPERATOR_HINT : m.phoneServeFailed(detail));
+      /* Nothing is published, so the tailnet address answers nothing: the
+         banner and its QR would be an invitation to a link that is not
+         there. The gate stays on — the key was minted for this start. */
+      runtime.tailnetUrl = undefined;
     }
   }
 

@@ -126,7 +126,14 @@ function loopbackBind(): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1";
 }
 
-/** Whether this process currently gates on the tailnet link. */
+/** Whether this process asks every connection for the key. The link is a
+    separate fact: a local fallback start and a non-loopback bind gate without
+    one, and a gated Viewer is not an exposed one. */
+function processGates(): boolean {
+  return Boolean(process.env.LLV_TOKEN);
+}
+
+/** Whether this process gates AND holds the tailnet link to hand out. */
 function processServesTailnet(): boolean {
   return Boolean(process.env.LLV_TOKEN && process.env.LLV_TS_URL);
 }
@@ -162,10 +169,12 @@ export async function readPhoneAccess(viewerPort: number): Promise<PhoneRead> {
   const withDns = { ...base, dnsName: status.dnsName, servingPort: served.port };
   if (!served.published) return { phone: { ...withDns, state: "ready" }, error: null };
   if (served.port !== viewerPort) return { phone: { ...withDns, state: "serving-other" }, error: null };
-  /* A background mapping an earlier run left points here. Whether the tailnet
-     reaches a gated Viewer or an open one is the difference between the two
-     states, and it is what the step has to say out loud. */
-  return { phone: { ...withDns, state: processServesTailnet() ? "serving" : "exposed" }, error: null };
+  /* A mapping points here. With the link, this is the serving state. Gating
+     without the link (the launcher's local fallback, a non-loopback bind) is
+     `ready`: the press has a re-bind to do, and nothing about it is open.
+     Only an ungated process is `exposed`. */
+  if (processServesTailnet()) return { phone: { ...withDns, state: "serving" }, error: null };
+  return { phone: { ...withDns, state: processGates() ? "ready" : "exposed" }, error: null };
 }
 
 /**
@@ -228,28 +237,31 @@ export async function enablePhoneAccess(viewerPort: number): Promise<PhoneOutcom
     return stillPublished;
   };
 
-  const published = await serveBackground(binary, viewerPort, { timeoutMs: remaining(SERVE_BOUND_MS) });
-  if (published.timedOut) {
-    await rollbackFlag();
-    return fail("TIMEOUT", "", await settle());
-  }
-  if (published.code !== 0) {
-    await rollbackFlag();
+  /* The flag is the gate for the NEXT start, so it follows the same rule as
+     this process's own: it is taken back only once nothing is published to
+     this port. A mapping that outlived a failed press would otherwise meet a
+     launcher that starts on loopback with no key at all. */
+  const giveUp = async (code: PhoneFailureCode, detail: string): Promise<PhoneOutcome> => {
     const kept = await settle();
-    if (OPERATOR_PATTERN.test(published.stderr)) return fail("OPERATOR_RIGHTS", lastLine(published.stderr), kept);
-    return fail("SERVE_FAILED", lastLine(published.stderr) || `exit ${published.code ?? "?"}`, kept);
+    if (!kept) await rollbackFlag();
+    return fail(code, detail, kept);
+  };
+
+  const published = await serveBackground(binary, viewerPort, { timeoutMs: remaining(SERVE_BOUND_MS) });
+  if (published.timedOut) return giveUp("TIMEOUT", "");
+  if (published.code !== 0) {
+    if (OPERATOR_PATTERN.test(published.stderr)) return giveUp("OPERATOR_RIGHTS", lastLine(published.stderr));
+    return giveUp("SERVE_FAILED", lastLine(published.stderr) || `exit ${published.code ?? "?"}`);
   }
 
   let verified: { published: boolean; port: number | null };
   try {
     verified = await serveStatus(binary, { timeoutMs: remaining(STATUS_BOUND_MS) });
   } catch (error) {
-    await rollbackFlag();
-    return fail("VERIFY_FAILED", errorText(error), await settle());
+    return giveUp("VERIFY_FAILED", errorText(error));
   }
   if (!verified.published || verified.port !== viewerPort) {
-    await rollbackFlag();
-    return fail("VERIFY_FAILED", verified.published ? `published port ${verified.port ?? "?"}` : "nothing published", await settle());
+    return giveUp("VERIFY_FAILED", verified.published ? `published port ${verified.port ?? "?"}` : "nothing published");
   }
 
 
@@ -276,6 +288,18 @@ export async function disablePhoneAccess(viewerPort: number): Promise<PhoneOutco
       const off = await serveOff(binary, viewerPort, { timeoutMs: SERVE_BOUND_MS });
       if (off.timedOut || off.code !== 0) {
         return { ok: false, code: "DISABLE_FAILED", detail: off.timedOut ? "timeout" : lastLine(off.stderr) || `exit ${off.code ?? "?"}`, keyKept: true, read: await readPhoneAccess(viewerPort) };
+      }
+      /* The exit code is what `off` says; the status is what tailscaled has.
+         The gate below is lifted only once nothing answers on this port —
+         the same rule a failed enable follows. */
+      let after: { published: boolean; port: number | null };
+      try {
+        after = await serveStatus(binary, { timeoutMs: STATUS_BOUND_MS });
+      } catch (error) {
+        return { ok: false, code: "DISABLE_FAILED", detail: errorText(error), keyKept: true, read: await readPhoneAccess(viewerPort) };
+      }
+      if (after.published && after.port === viewerPort) {
+        return { ok: false, code: "DISABLE_FAILED", detail: `still published on ${viewerPort}`, keyKept: true, read: await readPhoneAccess(viewerPort) };
       }
     }
   }
