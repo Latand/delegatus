@@ -245,6 +245,23 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect(requests[1]!.revision).toBe(tipSha);
   });
 
+  test("a deployment is followed while nobody has the surface open", async () => {
+    const service = managedService();
+    setSelfUpdateServiceForTests(service);
+    await postCheck(post("/check"));
+    await until((next) => next.check.state === "update-available");
+    await postUpdate(post("/update", { key: "press-1" }));
+    /* No snapshot is read from here until the end: only the service's own watch. */
+    phase = "candidate-health";
+    await Bun.sleep(1_500);
+    phase = "rolled-back";
+    error = "candidate health gate failed";
+    await Bun.sleep(1_500);
+    const s = await snapshot();
+    expect(s.update).toMatchObject({ state: "failed", rolledBack: true });
+    expect(s.update.steps.find((step) => step.state === "failed")?.name).toBe("health");
+  });
+
   test("the check repository survives being prepared by several requests at once", async () => {
     const dir = mkdtempSync(join(root, "managed-race-"));
     const results = await Promise.all(Array.from({ length: 6 }, () => prepareManagedCheckRepo(join(dir, "check.git"), join(dir, "no-mirror", "objects"))));

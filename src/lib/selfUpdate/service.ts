@@ -83,6 +83,7 @@ export type ActionResult = { ok: true } | { ok: false; status: number; error: st
 const MODE_TTL_MS = 30_000;
 const PENDING_RESTART_MS = 60_000;
 const SAVE_DELAY_MS = 1_000;
+const DEPLOYMENT_WATCH_MS = 1_000;
 
 interface Persisted { slice: CheckSlice; update: UpdateState | null }
 
@@ -110,6 +111,7 @@ export class SelfUpdateService {
   private pendingRestart: { role: LauncherRole; requestId: string; at: number } | null = null;
   private readonly described = new Map<string, Revision>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private deploymentWatch: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly deps: ServiceDeps) {
     const persisted = this.readPersisted();
@@ -120,6 +122,22 @@ export class SelfUpdateService {
       if (this.slice.check.state === "checking") this.slice = { ...this.slice, check: { ...this.slice.check, state: "idle" } };
     }
     this.managed = readManagedRecord(this.managedFile);
+    if (managedActive(this.managed)) this.watchDeployment();
+  }
+
+  /* A deployment is followed whether or not anyone has the surface open, so
+     a failure is placed at the step that was running when it happened. */
+  private watchDeployment(): void {
+    if (this.deploymentWatch) return;
+    this.deploymentWatch = setInterval(() => {
+      if (!managedActive(this.managed)) {
+        if (this.deploymentWatch) clearInterval(this.deploymentWatch);
+        this.deploymentWatch = null;
+        return;
+      }
+      void this.refreshManaged();
+    }, DEPLOYMENT_WATCH_MS);
+    this.deploymentWatch.unref?.();
   }
 
   private get stateFile(): string { return join(this.deps.dir, "state.json"); }
@@ -304,6 +322,7 @@ export class SelfUpdateService {
     try {
       this.managed = await requestManagedUpdate(target, clientKey, this.deps.requestDeployment, this.deps.now);
       writeManagedRecord(this.managedFile, this.managed);
+      this.watchDeployment();
       this.changes.emit();
       return { ok: true };
     } catch (error) {
@@ -363,6 +382,7 @@ export class SelfUpdateService {
       if (JSON.stringify(next) !== JSON.stringify(this.managed)) {
         this.managed = next;
         writeManagedRecord(this.managedFile, next);
+        this.changes.emit();
         if (!managedActive(next) && next.phase === "succeeded") void this.check();
       }
     } catch {
@@ -507,6 +527,8 @@ export class SelfUpdateService {
   }
 
   stop(): void {
+    if (this.deploymentWatch) clearInterval(this.deploymentWatch);
+    this.deploymentWatch = null;
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.pollTimer = null;

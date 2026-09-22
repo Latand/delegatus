@@ -10,6 +10,7 @@ import {
   observeDeployment,
   requestManagedUpdate,
   stepForPhase,
+  stepReachedBy,
   type ManagedRecord,
 } from "./managed";
 
@@ -127,6 +128,25 @@ describe("phases → steps", () => {
     expect(update.state).toBe("failed");
     expect(update.rolledBack).toBe(false);
     expect(update.steps.find((step) => step.state === "failed")!.name).toBe("handoff");
+  });
+
+  test("a failure nobody watched is placed from what the host recorded before it", async () => {
+    const { record } = await requested();
+    const candidate = { image: "i", container: "c", endpoint: "http://127.0.0.1:1", revision: SHA };
+    const unhealthy = { candidate, health: [{ ok: false }] } as unknown as Partial<ViewerDeploymentStatus>;
+    const failedAtHealth = observeDeployment(record, status("rolled-back", T0 + 40_000, { ...unhealthy, error: "health gate failed" }));
+    expect(managedUpdateState(failedAtHealth, T0 + 50_000).steps.find((step) => step.state === "failed")?.name).toBe("health");
+    expect(stepReachedBy(status("failed", T0))).toBe("image");
+    expect(stepReachedBy(status("failed", T0, { candidate } as unknown as Partial<ViewerDeploymentStatus>))).toBe("candidate");
+    expect(stepReachedBy(status("failed", T0, { mcpRuntime: { candidate: null, previous: null, health: [], publications: [{ action: "activate" }] } } as unknown as Partial<ViewerDeploymentStatus>))).toBe("promote");
+    expect(stepReachedBy(status("failed", T0, { runtimeHostHandoff: {} } as unknown as Partial<ViewerDeploymentStatus>))).toBe("handoff");
+  });
+
+  test("evidence never places a failure before a step that was seen running", async () => {
+    let { record } = await requested();
+    record = observeDeployment(record, status("candidate-health", T0 + 5_000));
+    record = observeDeployment(record, status("rolled-back", T0 + 9_000));
+    expect(managedUpdateState(record, T0 + 10_000).steps.find((step) => step.state === "failed")?.name).toBe("health");
   });
 
   test("no read yet: the deployment is admitted and running", async () => {

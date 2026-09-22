@@ -90,16 +90,33 @@ export function stepForPhase(phase: ViewerDeploymentPhase): ManagedStepName | nu
   }
 }
 
+/** Where a failure happened, read from what the host recorded before it:
+    a handoff record, a promotion publication, health evidence, a candidate.
+    Used when the failure was not watched as it happened (the surface was
+    closed, or the web process that asked was being replaced). */
+export function stepReachedBy(status: ViewerDeploymentStatus): ManagedStepName {
+  if (status.runtimeHostHandoff) return "handoff";
+  if (status.mcpRuntime?.publications?.some((publication) => publication.action === "activate")) return "promote";
+  if (status.health?.length) return "health";
+  if (status.candidate) return "candidate";
+  return "image";
+}
+
+function later(a: ManagedStepName | null, b: ManagedStepName): ManagedStepName {
+  return a && MANAGED_STEPS.indexOf(a) > MANAGED_STEPS.indexOf(b) ? a : b;
+}
+
 /** Folds one read of the deployment into the record. */
 export function observeDeployment(record: ManagedRecord, status: ViewerDeploymentStatus | null): ManagedRecord {
   if (!status) return record;
   const step = stepForPhase(status.phase);
   const observed = { ...record.observed };
   if (step && !observed[step]) observed[step] = status.updatedAt;
+  const failing = status.phase === "rolling-back" || status.phase === "rolled-back" || status.phase === "failed";
   return {
     ...record,
     observed,
-    lastStep: step ?? record.lastStep,
+    lastStep: step ?? (failing ? later(record.lastStep, stepReachedBy(status)) : record.lastStep),
     phase: status.phase,
     error: status.error,
     servingProgress: status.servingProgress ?? null,
