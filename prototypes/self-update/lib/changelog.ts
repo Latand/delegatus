@@ -90,10 +90,19 @@ export function changelogDelta(oldText: string | null, newText: string | null): 
   return { headings, entries };
 }
 
+/* The first sentence, kept whole when it fits. A longer one loses its
+   parenthetical asides first, then ends at the last clause boundary (or word)
+   that fits, so the summary never stops mid-word or mid-name. */
 function firstSentence(text: string): string {
   const match = /^(.+?[.!?])(?=\s+[A-Z(`"]|$)/.exec(text);
-  const sentence = (match ? match[1]! : text).trim();
-  return sentence.length <= ITEM_CHARS ? sentence : `${sentence.slice(0, ITEM_CHARS - 1)}…`;
+  let sentence = (match ? match[1]! : text).trim();
+  if (sentence.length <= ITEM_CHARS) return sentence;
+  sentence = sentence.replace(/\s*\([^()]*\)/g, "").replace(/\s+([,.;:])/g, "$1");
+  if (sentence.length <= ITEM_CHARS) return sentence;
+  const room = sentence.slice(0, ITEM_CHARS);
+  const clause = Math.max(...[", ", "; ", ": ", " — "].map((mark) => room.lastIndexOf(mark)));
+  const end = clause >= ITEM_CHARS / 2 ? clause : room.lastIndexOf(" ");
+  return `${sentence.slice(0, end > 0 ? end : ITEM_CHARS - 1).replace(/[\s,;:—]+$/, "")}…`;
 }
 
 export function summarizeDelta(delta: ChangelogDelta, commitCount: number): DeltaSummary {

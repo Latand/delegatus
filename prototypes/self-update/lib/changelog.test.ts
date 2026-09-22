@@ -129,12 +129,26 @@ describe("summarizeDelta", () => {
     expect(summary.groups[0]!.items[0]).toBe("A self-update prototype checks for a newer revision.");
   });
 
-  test("cuts a long first sentence to 160 characters", () => {
+  test("cuts a long first sentence to at most 160 characters on a word boundary", () => {
     const long = `- ${"word ".repeat(60).trim()} (#1)`;
     const text = `## [Unreleased]\n\n### Added\n\n${long}\n`;
     const item = summarizeDelta(changelogDelta("", text), 1).groups[0]!.items[0]!;
-    expect(item.length).toBe(160);
-    expect(item.endsWith("…")).toBe(true);
+    expect(item.length).toBeLessThanOrEqual(160);
+    expect(item.endsWith(" word…")).toBe(true);
+  });
+
+  test("a long sentence drops its parenthetical asides, then ends on a clause boundary", () => {
+    const item = [
+      "- Attention requests, reply suggestions and per-project seat tick settings are",
+      "  stored in SQLite (`state.sqlite`, collections `attention`,",
+      "  `reply_suggestions` and `seat_tick_settings`) instead of `attention.json`,",
+      "  `reply-suggestions.json` and `seat-tick-settings.json`. A write commits only",
+      "  the rows it changed (#1905).",
+    ].join("\n");
+    const text = `## [Unreleased]\n\n### Changed\n\n${item}\n`;
+    const cut = summarizeDelta(changelogDelta("", text), 1).groups[0]!.items[0]!;
+    expect(cut).toBe("Attention requests, reply suggestions and per-project seat tick settings are stored in SQLite instead of `attention.json`…");
+    expect(cut.length).toBeLessThanOrEqual(160);
   });
 
   test("shows eight items per type and counts the rest", () => {
