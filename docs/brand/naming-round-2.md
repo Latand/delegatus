@@ -227,7 +227,7 @@ Legend: ✅ free · ❌ taken · ⚠️ taken but empty or unrelated.
 | **Rota** | ❌ | ⚠️ account exists, 0 repos | tens of thousands of substring hits ("rotation") | No agent tool. The staff-scheduling category is full of Rota names (RotaCloud, Rotageek, Rotaready; rota.com is a scheduling app) | ❌ | in use | ❌ | ❌ | **Top**, on another domain: `getrota.dev` and `rotahq.dev` are free |
 | Sotnya | ✅ | ⚠️ account exists, 0 repos | 3 hits, 0★ | None | ✅ | for sale via a broker | ✅ | ✅ | Drop: the memorial association (§2) makes it wrong for a product |
 | Tabun | ✅ | ⚠️ account exists, 0 repos | substring noise | None in software | ✅ | registered, blank | ✅ | ✅ | Drop: shares its name with a nerve agent |
-| Dozor | ✅ | ⚠️ account exists, 0 repos | 203 hits, top 13★ | DozoR transport-tracking apps (Ukraine); Dozor, an open-source network monitor forked from Zabbix | ❌ | registered, no answer | ✅ | ❌ | Weak |
+| Dozor | ✅ | ⚠️ account exists, 0 repos | 203 hits, top 13★ | DozoR transport-tracking apps (Ukraine); Dozor, a community network monitor forked from Zabbix | ❌ | registered, no answer | ✅ | ❌ | Weak |
 | Shtab | ✅ | ⚠️ account exists, 0 repos | `tqdm/shtab` 469★ (shell tab completion) | Shtab.app: a Russian task tracker with kanban boards, listed in the Russian software registry. Same field | ❌ | redirects elsewhere | ✅ | ❌ | Reject |
 | Kanbo | ✅ | ⚠️ user, 3 repos | Kanboard 9.9k★ sounds the same | KanBo: a work-coordination platform built on task cards. Same field | ❌ | registered | ✅ | ✅ | Reject |
 | Baton | ❌ | ❌ user, 11 repos | `cmj0121/baton`: a terminal multiplexer for AI coding agents | Baton (getbaton.dev): a desktop app for running AI coding agents in parallel, with its own MCP server. Direct competitor | ❌ | in use | ❌ | ❌ | Reject |
