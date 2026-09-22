@@ -48,7 +48,13 @@ afterAll(() => {
   }
 });
 
-const settingsFile = () => path.join(SANDBOX, "settings", `${crypto.randomUUID()}.json`);
+/* One directory per case: the settings live in the `state.sqlite` beside the
+   legacy path (#1870 slice 5), so two cases never share a database. */
+const settingsFile = () => {
+  const directory = path.join(SANDBOX, "settings", crypto.randomUUID());
+  fs.mkdirSync(directory, { recursive: true });
+  return path.join(directory, "seat-tick-settings.json");
+};
 
 function change(current: SeatTickSettings, input: Parameters<typeof applySeatTickSettingsChange>[1]) {
   return applySeatTickSettingsChange(current, input, { at: AT, actor: SEAT });

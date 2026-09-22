@@ -50,7 +50,7 @@ const { createTask } = await import("@/lib/tasks/commands");
 const { mutateTasksFile, saveTasks } = await import("@/lib/tasks/store");
 const { resetPresenceForTest } = await import("@/lib/view/presenceStore");
 const { attentionForDevice, attentionRecordsForSurface, raiseAttentionRequest } = await import("./service");
-const { attentionFile } = await import("./store");
+const { mutateAttention, readAttentionFile } = await import("./store");
 
 type Pipeline = import("@/lib/pipelines/types").Pipeline;
 type BoardTask = import("@/lib/tasks/types").BoardTask;
@@ -101,7 +101,8 @@ async function admitLane(text: string): Promise<{ pipeline: Pipeline; task: Boar
 function clearState(): void {
   savePipelines([]);
   saveTasks([]);
-  fs.rmSync(attentionFile(), { force: true });
+  /* The record lives in SQLite (#1870 slice 5); clearing it is a store write. */
+  mutateAttention(() => ({ requests: [], result: undefined }));
   resetPresenceForTest();
 }
 
@@ -309,7 +310,7 @@ test("the phone's rows-only read carries a freshly admitted lane and touches no 
   clearState();
   const { pipeline, task } = await admitLane("A lane just created\nWhat the lane is for");
   requestFor({ kind: "pipeline", pipelineId: pipeline.id }, new Date());
-  const recordBefore = fs.readFileSync(attentionFile(), "utf8");
+  const recordBefore = readAttentionFile();
 
   /* The phone names no device, so it gets the rows and nothing else. */
   const surface = attentionRecordsForSurface();
@@ -318,8 +319,8 @@ test("the phone's rows-only read carries a freshly admitted lane and touches no 
   expect(surface.records?.tasks.map((row) => row.id)).toEqual([task.id]);
 
   /* Reading it offered, swept and answered nothing: the attention record is
-     byte for byte what it was, and the request still waits for a desktop. */
-  expect(fs.readFileSync(attentionFile(), "utf8")).toBe(recordBefore);
+     exactly what it was, revision included, and the request still waits for a desktop. */
+  expect(readAttentionFile()).toEqual(recordBefore);
 
   savePipelines([]);
   expect(attentionRecordsForSurface({ echoedPipelineIds: [pipeline.id] }).records?.withdrawn)

@@ -2,8 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
-import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
+import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 import {
@@ -26,9 +26,9 @@ import {
 /**
  * The durable home of reply-draft sets (#1202) — one per conversation.
  *
- * Written the way every other viewer-side record is: revisioned, atomic
- * temp-and-rename, serialized by the shared file transaction, so a set
- * survives a page reload, a viewer restart and two callers racing.
+ * Written the way every other viewer-side record is: revisioned, and since
+ * #1870 slice 5 a collection in `state.sqlite` written under its lease, so a
+ * set survives a page reload, a viewer restart and two callers racing.
  *
  * Two deliberate differences from the attention record it is modelled on:
  *
@@ -101,22 +101,11 @@ function parseAdmission(value: unknown): ReplySuggestionAdmissionV1 | null {
   return { conversationId: admission.conversationId, key: admission.key, at: admission.at };
 }
 
-/** The persisted file, oldest set first. Anything unreadable — a missing file,
-    a truncated write, an entry from a schema this build does not know — yields
-    an empty record, which the next write replaces wholesale. */
-export function readReplySuggestionsFile(filePath = replySuggestionsFile(), now = new Date()): ReplySuggestionsFileV1 {
-  let contents: string;
-  try {
-    contents = fs.readFileSync(filePath, "utf8");
-  } catch {
-    return emptyFile(now);
-  }
-  let parsed: Partial<ReplySuggestionsFileV1>;
-  try {
-    parsed = JSON.parse(contents) as Partial<ReplySuggestionsFileV1>;
-  } catch {
-    return emptyFile(now);
-  }
+/** Validate a parsed record. Anything unreadable — an entry from a schema this
+    build does not know, a set or an admission that fails its shape — reads as
+    empty, which the next write replaces wholesale. */
+function parseSuggestionsBody(raw: unknown, now: Date): ReplySuggestionsFileV1 {
+  const parsed = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Partial<ReplySuggestionsFileV1>;
   if (parsed.schemaVersion !== REPLY_SUGGESTIONS_SCHEMA_VERSION || !Array.isArray(parsed.sets)) return emptyFile(now);
   return {
     schemaVersion: REPLY_SUGGESTIONS_SCHEMA_VERSION,
@@ -130,6 +119,94 @@ export function readReplySuggestionsFile(filePath = replySuggestionsFile(), now 
       ? parsed.admissions.map(parseAdmission).filter((entry): entry is ReplySuggestionAdmissionV1 => entry !== null)
       : [],
   };
+}
+
+/** `reply-suggestions.json` as the store read it before #1870, for a release
+    that may not import yet. A missing or truncated file is an empty record. */
+function readLegacySuggestionsFile(filePath: string, now: Date): ReplySuggestionsFileV1 {
+  let contents: string;
+  try {
+    contents = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return emptyFile(now);
+  }
+  try {
+    return parseSuggestionsBody(JSON.parse(contents) as unknown, now);
+  } catch {
+    return emptyFile(now);
+  }
+}
+
+const META_KEY = "meta";
+type SuggestionsMeta = Pick<ReplySuggestionsFileV1, "schemaVersion" | "revision" | "updatedAt">;
+const setKey = (conversationId: string) => `s:${conversationId}`;
+const admissionKey = (admission: ReplySuggestionAdmissionV1) => `a:${admission.conversationId}\0${admission.key}`;
+
+/**
+ * The record in `state.sqlite` (#1870 slice 5): a `meta` row with the record's
+ * revision, one `s:<conversation>` row per set and one `a:<conversation>\0<key>`
+ * row per admission receipt, each kind oldest first. A set replaced for its
+ * conversation moves to the end, so the capacity trim still drops the
+ * conversation offered nothing for longest.
+ */
+const suggestionsStore = new LegacyDocumentStore<ReplySuggestionsFileV1>({
+  collection: "reply_suggestions",
+  migrationId: "reply-suggestions-json-v1",
+  busyMessage: BUSY,
+  parse: (raw) => parseSuggestionsBody(raw, new Date()),
+  toRows: (file) => {
+    /* One row per key: a file older code wrote with two sets for one
+       conversation keeps the newer, and duplicate receipts collapse. */
+    const unique = <T>(entries: T[], key: (entry: T) => string) =>
+      entries.filter((entry, index) => entries.findLastIndex((other) => key(other) === key(entry)) === index);
+    return [
+      { key: META_KEY, value: { schemaVersion: file.schemaVersion, revision: file.revision, updatedAt: file.updatedAt } satisfies SuggestionsMeta },
+      ...unique(file.sets, (set) => setKey(set.conversationId)).map((set) => ({ key: setKey(set.conversationId), value: set })),
+      ...unique(file.admissions, admissionKey).map((admission) => ({ key: admissionKey(admission), value: admission })),
+    ];
+  },
+  fromRows: (rows) => {
+    const meta = rows.find((row) => row.key === META_KEY)?.value as SuggestionsMeta | undefined;
+    return {
+      schemaVersion: REPLY_SUGGESTIONS_SCHEMA_VERSION,
+      revision: meta?.revision ?? 0,
+      updatedAt: meta?.updatedAt ?? "",
+      sets: rows.filter((row) => row.key.startsWith("s:")).map((row) => row.value as ReplySuggestionSetV1),
+      admissions: rows.filter((row) => row.key.startsWith("a:")).map((row) => row.value as ReplySuggestionAdmissionV1),
+    };
+  },
+  toFile: (file) => file,
+  mergeRow: (key, held, incoming) => {
+    if (key !== META_KEY) return undefined;
+    const [ours, theirs] = [held as SuggestionsMeta, incoming as SuggestionsMeta];
+    return theirs.revision > ours.revision ? theirs : ours;
+  },
+  readLegacy: (filePath) => readLegacySuggestionsFile(filePath, new Date()),
+  error: (message, cause) => new Error(message, { cause }),
+});
+
+/** The store's legacy import spec, for the import driver and its tests. */
+export function replySuggestionsLegacyCollection(filePath = replySuggestionsFile()) {
+  return suggestionsStore.legacyCollection(filePath);
+}
+
+/** Import `reply-suggestions.json` into SQLite now (the Viewer's activation). */
+export function importLegacyReplySuggestions(
+  filePath = replySuggestionsFile(),
+  options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true },
+): LegacyImportOutcome {
+  return suggestionsStore.importLegacy(filePath, options);
+}
+
+/** Write `reply-suggestions.json` from SQLite for a rollback release that predates #1870. */
+export function checkpointReplySuggestionsRollbackMirrorForDemotion(filePath = replySuggestionsFile()): void {
+  suggestionsStore.checkpointRollbackMirror(filePath);
+}
+
+/** The persisted record, oldest set first. */
+export function readReplySuggestionsFile(filePath = replySuggestionsFile(), now = new Date()): ReplySuggestionsFileV1 {
+  const file = suggestionsStore.read(filePath);
+  return file.updatedAt ? file : { ...file, updatedAt: now.toISOString() };
 }
 
 /**
@@ -206,20 +283,20 @@ interface ReplySuggestionsMutation<R> {
 /** One serialized read-modify-write over the record. A mutation that names
     neither half changed nothing, and writes nothing. */
 function mutate<R>(mutation: (file: ReplySuggestionsFileV1, now: Date) => ReplySuggestionsMutation<R>, now: Date): R {
-  const filePath = replySuggestionsFile();
-  return withFileTransactionSync(filePath, BUSY, () => {
-    const current = readReplySuggestionsFile(filePath, now);
+  return suggestionsStore.mutate(replySuggestionsFile(), (current) => {
     const outcome = mutation(current, now);
-    if (outcome.sets || outcome.admissions) {
-      writeJsonDurably(filePath, {
-        schemaVersion: REPLY_SUGGESTIONS_SCHEMA_VERSION,
-        revision: current.revision + 1,
-        updatedAt: now.toISOString(),
-        sets: (outcome.sets ?? current.sets).slice(-REPLY_SUGGESTION_CONVERSATION_CAPACITY),
-        admissions: (outcome.admissions ?? current.admissions).slice(-REPLY_SUGGESTION_ADMISSION_CAPACITY),
-      } satisfies ReplySuggestionsFileV1);
-    }
-    return outcome.result;
+    return {
+      next: outcome.sets || outcome.admissions
+        ? {
+          schemaVersion: REPLY_SUGGESTIONS_SCHEMA_VERSION,
+          revision: current.revision + 1,
+          updatedAt: now.toISOString(),
+          sets: (outcome.sets ?? current.sets).slice(-REPLY_SUGGESTION_CONVERSATION_CAPACITY),
+          admissions: (outcome.admissions ?? current.admissions).slice(-REPLY_SUGGESTION_ADMISSION_CAPACITY),
+        } satisfies ReplySuggestionsFileV1
+        : undefined,
+      result: outcome.result,
+    };
   });
 }
 
