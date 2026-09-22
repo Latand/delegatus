@@ -175,7 +175,7 @@ function grams(text: string, only?: number) {
   for (let n = only ?? 1; n <= (only ?? 3); n++) for (let i = 0; i + n <= text.length; i++) result.add(text.slice(i, i + n));
   return result;
 }
-function expandStates(states: string[]) { return [...new Set(states.flatMap(state => state === "open" ? ["draft", "provisioning", "running", "paused", "needs_decision"] : [state]))]; }
+function expandStates(states: string[]) { return [...new Set(states.flatMap(state => state === "open" ? ["draft", "provisioning", "running", "paused", "needs_decision", "needs_review"] : [state]))]; }
 function matches(row: Record<string, any>, scope: BoardScope, collection: string, canonical: (project: string) => string) {
   const task = collection === "tasks", states = scope.statuses ?? expandStates(scope.states ?? []);
   return (!scope.project || canonical(row.project) === scope.project)

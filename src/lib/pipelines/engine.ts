@@ -57,7 +57,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
-import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed } from "./failEdgeBudget";
+import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
 import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
@@ -104,6 +104,7 @@ import type {
   PipelineStageInput,
   PipelineStageAttempt,
   PipelineDecisionAnswer,
+  PipelineReviewGrant,
   PipelineStageReport,
   PipelineStageReportEntry,
   PipelineTerminalReap,
@@ -2158,6 +2159,14 @@ function publishesRemoteBranch(pipeline: Pick<Pipeline, "publication">): boolean
 function advancePipeline(pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts, attempt?: PipelineStageAttempt | null): void {
   const successor = passSuccessor(pipeline, stage, attempt);
   const detail = successor.handoff ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
+  /* #1938: a fix that took a spent budget's last findings and wrote a new head
+     leaves a head nobody reviewed. The lane stops in needs_review instead of
+     completing or taking the reviewer's pass edge; a fix that wrote nothing
+     new keeps the #1868 advance. */
+  if (successor.handoff && attempt && successor.handoff.attempt?.reviewedHead !== pipeline.lastPassedCommit) {
+    parkForReview(pipeline, stage, attempt, successor.handoff, ports);
+    return;
+  }
   if (successor.next === null) {
     pipeline.cursor = null;
     pipeline.state = "completed";
@@ -2192,6 +2201,41 @@ function passSuccessor(
   if (!source || !activation) return { next: stage.next, handoff: null };
   const sourceAttempt = pipeline.runs.find((run) => run.stageId === source.id)?.attempts[activation.attempt - 1] ?? null;
   return { next: source.next, handoff: { source, attempt: sourceAttempt } };
+}
+
+/** Stop a lane whose spent review budget left an unreviewed head (#1938). The
+    fix attempt stays passed; no reviewer pass and no completion is recorded,
+    and `continue-review` is the way on. */
+function parkForReview(
+  pipeline: Pipeline,
+  fixStage: PipelineStage,
+  fixAttempt: PipelineStageAttempt,
+  handoff: { source: PipelineStage; attempt: PipelineStageAttempt | null },
+  ports: PipelinePorts,
+): void {
+  const review = handoff.attempt;
+  const reviewedHead = review?.reviewedHead ?? null;
+  const verdict = review?.verdict?.status ?? "fail";
+  pipeline.reviewPending = {
+    stageId: handoff.source.id,
+    attempt: review?.n ?? 0,
+    fixStageId: fixStage.id,
+    fixAttempt: fixAttempt.n,
+    reviewedHead,
+    currentHead: pipeline.lastPassedCommit,
+    verdict,
+    findings: review?.verdict?.findings?.length ?? 0,
+    at: ports.now(),
+  };
+  pipeline.cursor = null;
+  pipeline.state = "needs_review";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = reviewPendingDetail(pipeline.reviewPending);
+}
+
+function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
+  const short = (sha: string | null) => sha ? sha.slice(0, 12) : "unknown";
+  return `review budget spent: last review failed (${pending.verdict}, ${pending.findings} finding${pending.findings === 1 ? "" : "s"}), head ${short(pending.currentHead)} unreviewed; reviewed ${short(pending.reviewedHead)}. continue-review adds rounds`;
 }
 
 /** The next stage reads the fix's output and, beside it, the findings nobody
@@ -2265,6 +2309,8 @@ function retryTerminalStagePublication(
   if (published.remote === "unreachable") {
     if (pipeline.delivery?.operation?.state === "settled" && passSuccessor(pipeline, stage, attempt).next !== null) {
       advancePipeline(pipeline, stage, ports, attempt);
+      /* #1938: an unreviewed head parks; it is not a running lane to keep. */
+      if (pipeline.state === "needs_review") return;
     }
     keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
@@ -2312,7 +2358,8 @@ function routeFailedAttempt(
      reviewer runs N times and the fix stage N+1. `park` keeps today's count,
      which reviews once more and then stops. */
   const advancesWhenSpent = reviewed && failEdgeExhaustion(stage.onFail) === "advance";
-  const loopRounds = advancesWhenSpent ? stage.onFail.maxRounds - 1 : stage.onFail.maxRounds;
+  const maxRounds = failEdgeMaxRounds(pipeline, stage);
+  const loopRounds = advancesWhenSpent ? maxRounds - 1 : maxRounds;
   if (targetStage && used < loopRounds) {
     pipeline.cursor = {
       stageId: targetStage.id,
@@ -2331,6 +2378,9 @@ function routeFailedAttempt(
      stage, so a later fail of the same stage parks. */
   if (targetStage && advancesWhenSpent && !failEdgeBudgetSpent(pipeline, stage)) {
     attempt.budgetSpent = true;
+    /* #1938: the head this review judged, so the fix's pass can tell whether
+       it wrote one nobody reviewed. */
+    attempt.reviewedHead = attempt.reviewHeadSha ?? pipeline.lastPassedCommit ?? null;
     pipeline.cursor = {
       stageId: targetStage.id,
       state: "pending",
@@ -2370,6 +2420,11 @@ function commitPassedStage(
     );
     return;
   }
+  /* #1938: a handoff recorded before reviewed heads were captured names none.
+     Its review committed nothing, so the head this fix started from is the
+     one that review judged. */
+  const handoff = passSuccessor(pipeline, stage, attempt).handoff;
+  if (handoff?.attempt && handoff.attempt.reviewedHead === undefined) handoff.attempt.reviewedHead = pipeline.lastPassedCommit;
   pipeline.lastPassedCommit = result.sha;
   if (!publishesRemoteBranch(pipeline)) {
     attempt.state = "passed";
@@ -4823,7 +4878,7 @@ const TERMINAL_REAP_MAX_ROUNDS = 5;
  * ceiling turns a survivor into a visible unconfirmed host.
  */
 async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
-  if (!["running", "needs_decision", "paused", "completed"].includes(pipeline.state)) return false;
+  if (!["running", "needs_decision", "needs_review", "paused", "completed"].includes(pipeline.state)) return false;
   const settledAttempts = new Set(pipeline.terminalReap?.settledAttempts ?? []);
   const unconfirmedAttempts = new Set((pipeline.unconfirmedHosts ?? [])
     .map((host) => `${host.stageId}:${host.attempt}`));
@@ -5050,7 +5105,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           pipelineChanged = await reconcileTerminalStageHosts(pipeline, ports) || pipelineChanged;
         }
         if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused" && pipeline.state !== "needs_decision"
-          && !pipelineSurvivorRefusal(pipeline)) {
+          && pipeline.state !== "needs_review" && !pipelineSurvivorRefusal(pipeline)) {
           pipelineChanged = await tickPipeline(
             pipeline,
             entries,
@@ -5558,8 +5613,11 @@ function replaceStartedStages(
  */
 function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
   const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt") => Object.hasOwn(req, field) && req[field] !== undefined;
-  if (req.expectedRevision !== undefined && req.action !== "resolve-decision") {
-    return { error: "expectedRevision applies only to resolve-decision", status: 400, field: "expectedRevision" };
+  if (req.expectedRevision !== undefined && req.action !== "resolve-decision" && req.action !== "continue-review") {
+    return { error: "expectedRevision applies only to resolve-decision and continue-review", status: 400, field: "expectedRevision" };
+  }
+  if (req.addRounds !== undefined && req.action !== "continue-review") {
+    return { error: "addRounds applies only to continue-review", status: 400, field: "addRounds" };
   }
   const stageBound = req.action === "retry-stage" || req.action === "skip-stage" || req.action === "resolve-decision";
   if (stated("expectedStageDigest")) {
@@ -6470,6 +6528,8 @@ export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field">
   /** The journal entry an accepted graph edit wrote (graph slice 1). */
   graphEdit?: PipelineGraphEdit;
   decisionAnswer?: PipelineDecisionAnswer;
+  /** The grant an accepted or replayed continue-review holds (#1938). */
+  reviewContinuation?: PipelineReviewGrant;
   replayed?: boolean;
 };
 
@@ -6549,6 +6609,80 @@ function resolveDecision(
   return { pipeline, decisionAnswer: decision, replayed: false };
 }
 
+/** Who may continue a needs_review lane (#1938): the creator conversation or
+    the operator. Also checked before MCP receipt access, as for resolve-decision. */
+export function continueReviewActorRefusal(pipeline: Pipeline, actor: PauseResumeActor | null): PipelinePatchResult | null {
+  if (!actor || (actor.kind === "agent" && (!actor.conversationId || actor.conversationId !== pipeline.srcConversationId))) {
+    return { error: "only the pipeline creator conversation or a direct user action can continue this review", status: 403 };
+  }
+  return null;
+}
+
+/** Continue a lane parked in needs_review (#1938): append a grant of explicit
+    extra rounds to the review stage's fail edge and activate that review on
+    the current head, as the fix's pass would have. No host or Git work here. */
+function continueReview(
+  pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
+): PipelinePatchResult {
+  const refusal = continueReviewActorRefusal(pipeline, actor);
+  if (refusal) return refusal;
+  if (!actor) return { error: "continue-review needs an actor", status: 403 };
+  if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
+    || !Number.isSafeInteger(req.addRounds) || req.addRounds! < 1 || req.addRounds! > MAX_FAIL_EDGE_ROUNDS
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
+    return { error: `continue-review requires clientRequestId (up to 200 characters), addRounds (1 to ${MAX_FAIL_EDGE_ROUNDS}) and expectedRevision from get_pipeline`, status: 400 };
+  }
+  const guardShape = stageGuardShapeError(req);
+  if (guardShape) return guardShape;
+  const prior = pipeline.reviewGrants?.find((grant) => grant.clientRequestId === req.clientRequestId);
+  if (prior) {
+    if (prior.rounds !== req.addRounds || prior.expectedRevision !== req.expectedRevision
+      || prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent" && prior.actor.conversationId !== actor.conversationId)) {
+      return { error: "clientRequestId already belongs to a different continue-review", status: 409 };
+    }
+    return { pipeline, reviewContinuation: prior, replayed: true };
+  }
+  // Rollback disables admission; needs_review records and accepted grants stay readable.
+  if (process.env.LLV_PIPELINE_CONTINUE_REVIEW === "0") return { error: "continue-review is disabled", status: 409 };
+  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+    return { error: "the pipeline changed since it was read; read it again before continuing review", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
+  }
+  const pending = pipeline.reviewPending;
+  if (pipeline.state !== "needs_review" || !pending) {
+    return { error: `continue-review requires a pipeline in needs_review; this one is ${pipeline.state}`, status: 409 };
+  }
+  const review = pipeline.stages.find((stage) => stage.id === pending.stageId);
+  const fix = runFor(pipeline, pending.fixStageId)?.attempts.find((attempt) => attempt.n === pending.fixAttempt);
+  if (!review?.onFail || !fix || fix.state !== "passed") {
+    return { error: "the review stage or the fix it handed off to is no longer in this pipeline", status: 409 };
+  }
+  if (pipeline.lastPassedCommit !== pending.currentHead) {
+    return { error: `the pipeline head moved from ${pending.currentHead} to ${pipeline.lastPassedCommit}; read it again`, status: 409, code: "STAGE_CHANGED" };
+  }
+  const grant: PipelineReviewGrant = {
+    clientRequestId: req.clientRequestId,
+    expectedRevision: req.expectedRevision,
+    stageId: review.id,
+    rounds: req.addRounds!,
+    reviewedHead: pending.reviewedHead,
+    currentHead: pending.currentHead,
+    actor: structuredClone(actor),
+    at: ports.now(),
+  };
+  pipeline.reviewGrants = [...(pipeline.reviewGrants ?? []), grant];
+  delete pipeline.reviewPending;
+  pipeline.cursor = {
+    stageId: review.id,
+    state: "pending",
+    input: fix.output ?? null,
+    activatedBy: { stageId: pending.fixStageId, attempt: fix.n, edge: "pass" },
+  };
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = null;
+  return { pipeline, reviewContinuation: grant, replayed: false };
+}
+
 export async function patchPipeline(
   id: string,
   req: PatchPipelineRequest,
@@ -6584,6 +6718,11 @@ export async function patchPipeline(
     if (!pipeline) return { error: "pipeline not found", status: 404 };
     if (req.action === "resolve-decision") {
       const result = resolveDecision(pipeline, req, actor, ports);
+      if (result.pipeline && !result.replayed) persist();
+      return result;
+    }
+    if (req.action === "continue-review") {
+      const result = continueReview(pipeline, req, actor, ports);
       if (result.pipeline && !result.replayed) persist();
       return result;
     }
@@ -6890,7 +7029,10 @@ export async function patchPipeline(
       pipeline.state = pipeline.pausedState ?? "running";
       pipeline.pausedState = null;
       pipeline.resumedAt = ports.now();
-      pipeline.stateDetail = pauseResumeDetail("resumed", actor);
+      /* #1938: a resumed needs_review lane still names its unreviewed head. */
+      pipeline.stateDetail = pipeline.state === "needs_review" && pipeline.reviewPending
+        ? reviewPendingDetail(pipeline.reviewPending)
+        : pauseResumeDetail("resumed", actor);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);
     } else if (req.action === "retry-stage") {
       if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
@@ -7270,7 +7412,8 @@ export async function patchPipeline(
     persist();
     return graphEdit ? { pipeline, graphEdit } : { pipeline };
   });
-  if (req.action !== "close" && req.action !== "delete" && req.action !== "resolve-decision" && patched.pipeline?.delivery?.operation?.state === "pending") {
+  if (req.action !== "close" && req.action !== "delete" && req.action !== "resolve-decision" && req.action !== "continue-review"
+    && patched.pipeline?.delivery?.operation?.state === "pending") {
     const published = await publishPipelineBranch(patched.pipeline, ports.exec, { acceptedSha: patched.pipeline.delivery.operation.sha });
     if (!published.ok) return { error: published.error, status: 409 };
     return { ...patched, pipeline: findPipelineRecord(id)! };

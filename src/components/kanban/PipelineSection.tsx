@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { roleNameById } from "@/components/builderCopy";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineGraphEdit, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
-import { attemptStateLabel, latestAttempt, pipelineStateLabel, stageChipLabel, stageNames, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLabel, stageChipLabel, stageNames, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 /* The stage-name rule lives beside `stageChipLabel` so the phone reads it
    without pulling a kanban component (#1865). */
@@ -129,6 +129,9 @@ function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
 export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: (stage: PipelineStage) => string): string {
   const { pipeline, chips } = summary;
   if (pipeline.state === "provisioning") return t("kanban.progress.provisioning");
+  /* #1938: the spent review budget, with its verdict and both heads. */
+  const review = pipelineReviewHeads(t, pipeline);
+  if (review) return `${pipelineStateLabel(t, pipeline.state)} · ${review}`;
   const needs = chips.find((chip) => chip.state === "needs_decision");
   if (needs) return t("kanban.progress.needs", { stage: nameOf(needs.stage) });
   const live = chips.find((chip) => LIVE_CHIP_STATES.has(chip.state));
@@ -189,6 +192,9 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
   const showGraph = open ?? false;
   const progress = pipelineProgress(t, summary, nameOf);
   const note = pipelineHeadNote(summary, nameOf);
+  /* #1938: the verdict and both heads, on a line of their own that wraps, so
+     the unreviewed head is never truncated away beside the title. */
+  const reviewHeads = pipelineReviewHeads(t, pipeline);
   /* What this pipeline is, in its own words (#1765): several pipelines on one
      card used to draw the same generic chip, so nothing told them apart. */
   const title = pipelineTitle(t, pipeline);
@@ -257,6 +263,7 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
           <PipelineChips summary={summary} nameOf={nameOf} selected={selected} onOpenStage={onOpenStage} />
         )}
       </div>
+      {reviewHeads ? <p className="review-heads" data-review-heads={pipeline.id}>{reviewHeads}</p> : null}
       {pipeline.stageReports?.length ? <StageReportLine pipeline={pipeline} entry={pipeline.stageReports.at(-1)!} names={names} /> : null}
       {pipeline.graphEdits?.length ? <GraphEditLine edit={pipeline.graphEdits.at(-1)!} /> : null}
     </div>

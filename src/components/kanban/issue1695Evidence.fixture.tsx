@@ -87,6 +87,9 @@ const MESH = "river-mesh";
    the spent budget already stopped the lane, and a lane with two fail edges
    into the same stage. */
 const ARCS = SCENARIO === "issue1798";
+/* #1938: a lane whose review budget ran out and whose last fix wrote a head
+   nobody reviewed — parked in needs_review, never completed. */
+const REVIEW_SPENT = SCENARIO === "issue1938";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -304,6 +307,30 @@ const marksPipelines: Pipeline[] = MARKS ? (() => {
    is the length a real lane usually has, four stages, and wraps everywhere the
    board is not a 1920 px screen: that is the row the suffix is drawn on, and
    it is the common case rather than the narrow one. */
+const REVIEWED_HEAD = "4f1c2a9d3b7e6f5a8c0d1e2f3a4b5c6d7e8f9a0b";
+const UNREVIEWED_HEAD = "9b2e7d4c1a0f3e6d5c8b7a6f9e0d1c2b3a4f5e6d";
+const reviewSpentPipelines: Pipeline[] = REVIEW_SPENT ? (() => {
+  const build1 = add(conversation("review-build-1", "First pass at the retry count", { mtime: now - 90 * MIN }));
+  const critique = add(conversation("review-crit-1", "Sent it back: the count hides behind the close button", { mtime: now - 60 * MIN, engine: "codex", model: "gpt-5.6" }));
+  const build2 = add(conversation("review-build-2", "Moved the count out from under the close button", { mtime: now - 20 * MIN }));
+  const findings = ["P1 — the count hides behind the close button", "P2 — the banner never says which attempt failed"];
+  return [pipeline("p-review-spent", "Show the retry count in the banner", "t-review-spent", "needs_review",
+    [stage("build", "builder", "critique"), stage("critique", "reviewer", null, { kind: "run", onFail: { to: "build", maxRounds: 1 } })],
+    [
+      { stageId: "build", attempts: [
+        attempt(1, "passed", build1, { startedAt: iso(100 * MIN), completedAt: iso(90 * MIN) }),
+        attempt(2, "passed", build2, { startedAt: iso(55 * MIN), completedAt: iso(20 * MIN), activatedBy: { stageId: "critique", attempt: 1, edge: "fail", budgetSpent: true } }),
+      ] },
+      { stageId: "critique", attempts: [
+        attempt(1, "failed", critique, { startedAt: iso(85 * MIN), completedAt: iso(60 * MIN), activatedBy: { stageId: "build", attempt: 1, edge: "pass" }, verdict: { status: "fail", findings }, budgetSpent: true, reviewedHead: REVIEWED_HEAD }),
+      ] },
+    ], null, {
+      lastPassedCommit: UNREVIEWED_HEAD,
+      stateDetail: "review budget spent: last review failed (fail, 2 findings), head 9b2e7d4c1a0f unreviewed; reviewed 4f1c2a9d3b7e. continue-review adds rounds",
+      reviewPending: { stageId: "critique", attempt: 1, fixStageId: "build", fixAttempt: 2, reviewedHead: REVIEWED_HEAD, currentHead: UNREVIEWED_HEAD, verdict: "fail", findings: findings.length, at: iso(20 * MIN) },
+    })];
+})() : [];
+
 const arcPipelines: Pipeline[] = ARCS ? (() => {
   const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
   const restFix = conv("arc-rest-fix", "Draft the empty-state copy", { mtime: now - 70 * MIN });
@@ -479,6 +506,7 @@ const balancePipelines: Pipeline[] = BALANCE ? BALANCE_COLUMNS.flatMap((column) 
 }) : [];
 
 const pipelines: Pipeline[] = [
+  ...reviewSpentPipelines,
   ...balancePipelines,
   ...arcPipelines,
   ...labelPipelines,
@@ -686,6 +714,7 @@ const tasks: BoardTask[] = [
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
   ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
+  ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 // Stopped launch receipts on a completed task, including a still-retryable parked lane.

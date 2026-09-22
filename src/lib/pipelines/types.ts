@@ -8,7 +8,7 @@ export type PipelineSandbox = "full" | "restricted";
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
 export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedRevision";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedRevision" | "addRounds";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
@@ -464,6 +464,9 @@ export type PipelineStageAttempt = {
       edge (#1868): they went to the fix stage and the source was not asked
       again. The verdict and its findings stay on this attempt. */
   budgetSpent?: boolean;
+  /** On a `budgetSpent` attempt: the head that review judged (#1938), compared
+      with the head the fix writes to decide whether the lane may move on. */
+  reviewedHead?: string | null;
   /** Bounded, append-only reconciliation receipt for terminal parser misses. */
   verdictRecovery?: PipelineVerdictRecovery;
   /** What a close could prove it did not finish (#1501): the authorized host
@@ -487,7 +490,43 @@ export type PipelineStageRun = {
 
 export type PipelineCursorState = "pending" | "spawning" | "running" | "reviewing" | "committing";
 
-export type PipelineState = "draft" | "provisioning" | "running" | "needs_decision" | "paused" | "completed" | "closed";
+/** `needs_review` (#1938): a review stage's fail-edge budget was spent and the
+    fix that received its last findings wrote a new head, so the current head
+    was never reviewed. Not terminal: `continue-review` grants more rounds. */
+export type PipelineState = "draft" | "provisioning" | "running" | "needs_decision" | "needs_review" | "paused" | "completed" | "closed";
+
+/** Why a pipeline stopped in `needs_review` (#1938): the review whose budget
+    ran out, the fix that followed it, and the two heads they left behind. */
+export type PipelineReviewPending = {
+  /** The review stage whose fail-edge budget is spent, and its last attempt. */
+  stageId: string;
+  attempt: number;
+  /** The fix stage that received the last findings, and its passed attempt. */
+  fixStageId: string;
+  fixAttempt: number;
+  /** The head the last review judged; null on a handoff recorded before
+      reviewed heads were captured. */
+  reviewedHead: string | null;
+  /** The head the fix wrote, which nobody has reviewed. */
+  currentHead: string;
+  /** The last review's verdict and how many findings it carried. */
+  verdict: StageVerdictStatus;
+  findings: number;
+  at: string;
+};
+
+/** One accepted `continue-review` (#1938), append-only. `rounds` adds to the
+    review stage's fail-edge `maxRounds`, which itself stays frozen evidence. */
+export type PipelineReviewGrant = {
+  clientRequestId: string;
+  expectedRevision: string;
+  stageId: string;
+  rounds: number;
+  reviewedHead: string | null;
+  currentHead: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor;
+  at: string;
+};
 
 /** A stage host a close asked the runtime to kill without confirming that it
     died (#670). Durable, so the possible survivor stays addressable: the board
@@ -690,6 +729,10 @@ export type Pipeline = {
   /** Accepted graph edits, oldest first, at most MAX_PIPELINE_GRAPH_EDITS. */
   graphEdits?: PipelineGraphEdit[];
   decisionAnswers?: PipelineDecisionAnswer[];
+  /** Present exactly while `state` (or `pausedState`) is `needs_review` (#1938). */
+  reviewPending?: PipelineReviewPending;
+  /** Accepted continue-review grants, oldest first (#1938). */
+  reviewGrants?: PipelineReviewGrant[];
   /** Accepted stage completion calls, oldest first, at most
       MAX_PIPELINE_STAGE_REPORTS (graph slice 2). */
   stageReports?: PipelineStageReportEntry[];
@@ -730,6 +773,7 @@ export const PIPELINE_ACTIONS = [
   "resume",
   "retry-stage",
   "resolve-decision",
+  "continue-review",
   "skip-stage",
   "override-stage",
   "link-task",
@@ -744,12 +788,14 @@ export const PIPELINE_ACTIONS = [
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
 
 export type PatchPipelineRequest = {
-  /** Required for resolve-decision, preserved as its durable receipt key. */
+  /** Required for resolve-decision and continue-review, preserved as its durable receipt key. */
   clientRequestId?: string;
   /** Opaque revision returned by get_pipeline or the pipeline detail route. */
   expectedRevision?: string;
   /** Answer to the settled question, up to MAX_DECISION_ANSWER_CHARS. */
   answer?: string;
+  /** for continue-review (#1938): review rounds to add, 1..MAX_FAIL_EDGE_ROUNDS. */
+  addRounds?: number;
   expectedOwner?: string;
   expectedEpoch?: number;
   acceptedSha?: string;

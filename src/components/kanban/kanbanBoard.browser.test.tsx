@@ -3666,6 +3666,119 @@ describe("#1765 pipelines named on the card", () => {
   }, 600_000);
 });
 
+describe("#1938 a spent review budget ends visibly on the card and the phone", () => {
+  /*
+   * Rendered evidence for #1938: the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=issue1938`, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=$(which google-chrome-stable) \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 1938
+   *
+   * One task holds one lane whose critique failed on its only round, whose
+   * findings went to one more build, and whose build wrote a new head. At
+   * 1280 px the kanban card's state chip says needs review and its note names
+   * the last verdict, the reviewed head and the unreviewed current head; the
+   * card never reads completed. At 390 px the phone queues the lane under
+   * Needs you with the same line and a «needs review» badge.
+   *
+   * Measurements go to `evidence/issue-1938/board.json`; frames to
+   * `.artifacts/issue-1938/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/issue-1938");
+  const EVIDENCE = path.resolve("evidence/issue-1938");
+  const CARD = '[data-kanban-board] .card[data-id="task:t-review-spent"]';
+  const HEADS = translate("en", "pipelineReview.heads", { verdict: "fail", reviewed: "4f1c2a9d", current: "9b2e7d4c" });
+  const STATE = en["pipelineState.needs_review"];
+
+  browserTest("#1938: the card and the phone name needs_review with the last verdict and both heads, never completed", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const base = `${server.base}?scenario=issue1938`;
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        const opened = await openFixture(browser, base, { width: 1280, height: 900 }, scheme);
+        try {
+          await opened.page.waitForSelector(CARD, { state: "attached", timeout: 20_000 });
+          await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await opened.page.waitForTimeout(500);
+          const measured = await opened.page.evaluate((selector) => {
+            const card = document.querySelector(selector);
+            const row = card?.querySelector<HTMLElement>('.stage-section[data-pipeline="p-review-spent"]');
+            const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
+            const chip = row?.querySelector<HTMLElement>(".pstate-chip");
+            const note = row?.querySelector<HTMLElement>("[data-review-heads]");
+            const title = row?.querySelector<HTMLElement>(".ptitle");
+            const box = (node: HTMLElement | null | undefined) => node ? (({ x, y, width, height }) => ({ x, y, width, height }))(node.getBoundingClientRect()) : null;
+            return {
+              drawn: Boolean(row),
+              state: chip?.dataset.pstate ?? null,
+              chip: text(chip),
+              note: text(note),
+              label: row?.getAttribute("aria-label") ?? "",
+              cardText: text(card),
+              chipBox: box(chip),
+              noteBox: box(note),
+              noteClipped: note ? note.scrollWidth > note.clientWidth : null,
+              titleClipped: title ? title.scrollWidth > title.clientWidth : null,
+            };
+          }, CARD);
+          await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `issue-1938-1280-${scheme}.png`) });
+          frames[`1280-${scheme}`] = measured;
+          if (!measured.drawn) failures.push(`1280 ${scheme}: the lane was not drawn on its card`);
+          if (measured.state !== "needs_review") failures.push(`1280 ${scheme}: the chip's state is ${measured.state}`);
+          if (measured.chip !== STATE) failures.push(`1280 ${scheme}: the chip reads ${JSON.stringify(measured.chip)}`);
+          if (measured.note !== HEADS) failures.push(`1280 ${scheme}: the note reads ${JSON.stringify(measured.note)}`);
+          if (!measured.label.includes(HEADS)) failures.push(`1280 ${scheme}: the row's label omits the heads: ${JSON.stringify(measured.label)}`);
+          if (!measured.noteBox?.width || measured.noteClipped) failures.push(`1280 ${scheme}: the heads line is not fully drawn: ${JSON.stringify(measured.noteBox)}`);
+          if (/completed/i.test(measured.cardText)) failures.push(`1280 ${scheme}: the card says completed`);
+          if (opened.pageErrors.length) failures.push(`1280 ${scheme}: page errors ${opened.pageErrors.join(" | ")}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+
+      const phone = await openFixture(browser, base, { width: 390, height: 844 }, "light");
+      try {
+        const ROW = '[data-mobile2-pipeline-row="p-review-spent"]';
+        await phone.page.waitForSelector(ROW, { state: "attached", timeout: 20_000 });
+        await phone.page.locator(ROW).first().evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await phone.page.waitForTimeout(500);
+        const measured = await phone.page.evaluate((selector) => {
+          const row = document.querySelector<HTMLElement>(selector);
+          const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
+          const meta = row?.querySelector<HTMLElement>("[data-mobile2-row-meta]");
+          return {
+            state: row?.dataset.mobile2State ?? null,
+            text: text(row),
+            meta: text(meta),
+            width: row?.getBoundingClientRect().width ?? null,
+            overflows: row ? row.scrollWidth > row.clientWidth : null,
+          };
+        }, ROW);
+        await phone.page.locator(ROW).first().screenshot({ path: path.join(OUT, "issue-1938-390.png") });
+        await phone.page.screenshot({ path: path.join(OUT, "issue-1938-390-board.png"), fullPage: true });
+        frames["390"] = measured;
+        if (measured.state !== "needs_review") failures.push(`390: the row's state is ${measured.state}`);
+        if (!measured.meta.includes(HEADS)) failures.push(`390: the row's meta omits the heads: ${JSON.stringify(measured.meta)}`);
+        if (!measured.text.includes(en["mobile2.pipelines.badgeReview"])) failures.push(`390: the row has no needs review badge: ${JSON.stringify(measured.text)}`);
+        if (measured.overflows) failures.push("390: the row overflows its width");
+        if (phone.pageErrors.length) failures.push(`390: page errors ${phone.pageErrors.join(" | ")}`);
+      } finally {
+        await phone.context.close();
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "board.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
 describe("#1865 stage conversations lead with the stage and its attempt", () => {
   /*
    * Rendered evidence for #1865: the real Viewer over

@@ -75,7 +75,7 @@ export function evidenceFromTasks(tasks: readonly TaskSummary[]): EvidenceItem[]
 
 function pipelineState(state: string): EvidenceState {
   if (state === "completed" || state === "closed") return "terminal";
-  if (state === "needs_decision" || state === "paused" || state === "draft") return "inert";
+  if (state === "needs_decision" || state === "needs_review" || state === "paused" || state === "draft") return "inert";
   return "active";
 }
 
