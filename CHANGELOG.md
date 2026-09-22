@@ -57,6 +57,19 @@ guarantees for the 1.x series.
   release target, was written by a process that did not own the release, so the
   legacy file still standing beside it is re-imported over those rows rather
   than merged into them (#1905).
+- Attention requests, reply suggestions and per-project seat tick settings are
+  stored in SQLite (`state.sqlite`, collections `attention`,
+  `reply_suggestions` and `seat_tick_settings`) instead of `attention.json`,
+  `reply-suggestions.json` and `seat-tick-settings.json`. A write commits only
+  the rows it changed, one per request, set, admission receipt or project. The
+  attention and suggestion revisions carry on from the numbers the files held,
+  so `request_attention` never sees its revision move backwards, and replays
+  keyed by `clientRequestId` or by a message key still find their first answer
+  after the move. On first start each file is imported and verified by row
+  count and digest, then kept as `<name>.imported-<release>`; a directory with
+  a README takes its place. A file that cannot be parsed at all is kept as
+  `<name>.unreadable-<time>` and that store starts empty with a logged
+  incident (#1870).
 
 ### Downgrading
 - A version older than this one cannot read the SQLite account state and fails
@@ -71,6 +84,16 @@ guarantees for the 1.x series.
   the directory with the `board.json.imported-*` copy also works, but loses
   board changes made since the upgrade. Deployed releases rolled back through
   the release fence get a fresh `board.json` written for them automatically.
+- A version older than this one cannot read the SQLite attention requests,
+  reply suggestions or seat tick settings, and fails on the directories left at
+  `attention.json`, `reply-suggestions.json` and `seat-tick-settings.json`,
+  naming the path. Upgrade again to recover. Replacing a directory with its
+  `<name>.imported-*` copy also works, but loses the changes made since the
+  upgrade. Deployed releases rolled back through the release fence get all
+  three files written back for them automatically, and the changes they make
+  are merged at roll-forward. The runtime host must run this release before
+  the Viewer is promoted to it, so that a rollback through the host's
+  deployment adapter writes those files back.
 
 ## [1.2.2] — 2026-09-19
 
