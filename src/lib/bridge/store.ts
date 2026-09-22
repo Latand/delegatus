@@ -5,7 +5,7 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
-import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
+import { hotStateWriterRevision, readHotStateReleaseTarget } from "@/lib/state/hotStateAuthority";
 import {
   importLegacyCollection,
   lazyReconcileAllowed,
@@ -22,7 +22,9 @@ import {
   importStateCollection,
   readStateImport,
   recordStateImportMirror,
+  reimportStateCollection,
   SqliteStateCollection,
+  type StateImportRecord,
   type StateImportRow,
 } from "@/lib/state/sqliteStateStore";
 import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
@@ -1172,15 +1174,23 @@ function readChannelSource(source: ChannelSource): ChannelRead {
   } catch {
     return { kind: "unreadable", bytes };
   }
-  /* Valid JSON the store cannot mean refuses the import, as it refused the read. */
-  const channel = normalizeChannel(parsed, source.file);
-  if (channel && source.rowKey !== MANAGER_CHANNEL_ROW && (
-    !channel.project || !channel.seatConversationId
-    || `channel:${bridgeChannelKey({ project: channel.project, seatConversationId: channel.seatConversationId })}` !== source.rowKey
-  )) {
-    throw new BridgeStateCorruptError(source.file, "its project or seat does not match the scoped channel path");
+  /* JSON that is not a channel, or a scoped file whose stored project or seat
+     does not hash to its own name, is that one channel's damage. Before the
+     move it failed only that scope's reads, so it is kept aside as unreadable
+     with a gap for that row, never a refusal that takes every channel down. */
+  try {
+    const channel = normalizeChannel(parsed, source.file);
+    if (channel && source.rowKey !== MANAGER_CHANNEL_ROW && (
+      !channel.project || !channel.seatConversationId
+      || `channel:${bridgeChannelKey({ project: channel.project, seatConversationId: channel.seatConversationId })}` !== source.rowKey
+    )) {
+      throw new BridgeStateCorruptError(source.file, "its project or seat does not match the scoped channel path");
+    }
+    return { kind: "channel", bytes, channel };
+  } catch (error) {
+    if (error instanceof BridgeStateCorruptError) return { kind: "unreadable", bytes };
+    throw error;
   }
-  return { kind: "channel", bytes, channel };
 }
 
 function fsyncDirectory(directory: string): void {
@@ -1210,14 +1220,19 @@ function channelTombstone(file: string): void {
   fsyncDirectory(path.dirname(file));
 }
 
-/** Rename a channel file to its kept copy (or aside as unreadable) and leave
+/** Rename a channel file to its kept copy (or aside as unreadable), or delete
+    it when it is only an untouched rollback mirror (`suffix` null), and leave
     the tombstone in its place. */
-function retireChannelFile(file: string, suffix: string): string | null {
+function retireChannelFile(file: string, suffix: string | null): string | null {
   let preservedAs: string | null = null;
   try {
     if (fs.lstatSync(file).isFile()) {
-      preservedAs = freeName(`${file}.${suffix}`);
-      fs.renameSync(file, preservedAs);
+      if (suffix === null) {
+        fs.rmSync(file, { force: true });
+      } else {
+        preservedAs = freeName(`${file}.${suffix}`);
+        fs.renameSync(file, preservedAs);
+      }
       fsyncDirectory(path.dirname(file));
     }
   } catch (error) {
@@ -1225,6 +1240,34 @@ function retireChannelFile(file: string, suffix: string): string | null {
   }
   channelTombstone(file);
   return preservedAs;
+}
+
+/** One digest over every channel file standing, by name and bytes, in source
+    order: the import evidence, and what a rollback mirror records so the
+    roll-forward can tell an untouched mirror from one a rollback release
+    changed. Null when no file stands. */
+function channelFilesDigest(entries: readonly { source: ChannelSource; bytes: Buffer }[]): { sha256: string | null; bytes: number } {
+  const digest = crypto.createHash("sha256");
+  let bytes = 0;
+  for (const { source, bytes: body } of entries) {
+    bytes += body.length;
+    digest.update(path.basename(source.file)).update("\0").update(body);
+  }
+  return { sha256: entries.length > 0 ? digest.digest("hex") : null, bytes };
+}
+
+/** The shared helper's stray-record test (legacyImport.ts), for this
+    collection: a record naming no release, with no rollback mirror, in a state
+    directory that has a release target, was written by something that was not
+    the release — #1905's build — and the files standing beside it are what
+    the serving release has been writing since. */
+function strayChannelRecord(directory: string, record: StateImportRecord): boolean {
+  if (record.release !== null || record.mirrorSha256 !== null || record.mirrorRevision !== null) return false;
+  try {
+    return readHotStateReleaseTarget(directory) !== null;
+  } catch {
+    return false;
+  }
 }
 
 function releaseTag(directory: string): string | null {
@@ -1242,15 +1285,19 @@ function releaseTag(directory: string): string | null {
  * by name and bytes, as the conversation-migration journal roots do (slice 7).
  *
  * Runs under `bridge.json`'s own write lock and the channel root's, so two
- * importers queue and import once. A file that is not JSON at all imports as
- * a recorded gap and is kept aside as `.unreadable-*`; valid JSON the store
- * cannot mean refuses the import and leaves every file alone.
+ * importers queue and import once. A file that is not JSON at all, or not a
+ * channel, or a scoped file whose stored scope does not match its name,
+ * imports as a recorded gap for that one row and is kept aside as
+ * `.unreadable-*`; every other channel imports.
  *
  * A record that already stands with channel files beside it is the rollback
- * window closing (or an older writer that raced it): each readable file folds
- * in where its cursor is ahead of the row — the cursor is monotonic, so ahead
- * is the only direction that can be news — or where no row exists, and then
- * the tombstones return. An unreadable file there changes nothing.
+ * window closing (or an older writer that raced it). An untouched mirror is
+ * deleted. A stray record (no release, no mirror, a release target present) is
+ * rebuilt from the files, as the shared helper rebuilds one. Otherwise each
+ * readable file folds in where its cursor is ahead of the row — the cursor is
+ * monotonic, so ahead is the only direction that can be news — or where no row
+ * exists, and then the tombstones return. An unreadable file there changes
+ * nothing.
  */
 export function importLegacyBridgeChannels(
   directory = path.dirname(bridgeChannelPath()),
@@ -1275,6 +1322,50 @@ export function importLegacyBridgeChannels(
         }
         if (!options.reconcile) return { state: "reconcile-deferred", record: held, incident: null };
         const collection = openCollection(database, CHANNELS_COLLECTION);
+        const standing = channelFilesDigest(files.map(({ source, read }) => ({
+          source,
+          bytes: (read as { bytes: Buffer }).bytes,
+        })));
+        if (standing.sha256 !== null && standing.sha256 === held.mirrorSha256) {
+          /* The rollback mirror exactly as written: nothing to fold, and the
+             collection already holds every byte of it, so no copy is kept. */
+          for (const { source } of files) retireChannelFile(source.file, null);
+          channelTombstone(managerFile);
+          return { state: "already-imported", record: held, incident: null };
+        }
+        if (strayChannelRecord(directory, held)) {
+          /* Rebuilt from the files, as the helper rebuilds a stray import: a
+             standing file replaces its row whatever its cursor, and a row
+             whose file was retired stays. */
+          const rows = new Map(collection.snapshot().map((row) => [row.k, row] as const));
+          for (const { source, read } of files) {
+            if (read.kind === "channel" && read.channel) rows.set(source.rowKey, { k: source.rowKey, v: read.channel });
+          }
+          const { record } = reimportStateCollection(database, {
+            collection: CHANNELS_COLLECTION,
+            schemaVersion: 1,
+            migrationId: "bridge-channels-json-v1",
+            rows: [...rows.values()].map((row) => ({ key: row.k, value: row, controllerActive: true })),
+            sourceName: "bridge.json+bridge-channels",
+            sourceSha256: standing.sha256,
+            sourceBytes: standing.bytes,
+            gap: null,
+            release: releaseTag(directory),
+          });
+          for (const { source, read } of files) {
+            retireChannelFile(source.file, read.kind === "unreadable" ? `unreadable-${stamp()}` : `imported-${tag}`);
+          }
+          channelTombstone(managerFile);
+          console.error(`[state import] stale-import-replaced ${CHANNELS_COLLECTION}: channel files stood beside an import recorded at `
+            + `${held.importedAt} with no release and no rollback mirror; rebuilt ${record.rowCount} row(s) from them`);
+          return { state: "reimported", record, incident: null };
+        }
+        /* The cursor is the only field that can carry news here. It is
+           monotonic, so a file whose cursor is not ahead holds nothing SQLite
+           lacks: `rootId` records the first opener and never changes after the
+           open, and an `outstanding` token SQLite rewrote at the same cursor is
+           the newer handout — a stale one could only fail to redeem, and the
+           gateway then drains the same batch again. */
         let folded = 0;
         collection.patchSync(() => {
           const records: BridgeRow[] = [];
@@ -1304,14 +1395,10 @@ export function importLegacyBridgeChannels(
 
       const rows: StateImportRow[] = [];
       const unreadable: string[] = [];
-      const digest = crypto.createHash("sha256");
-      let bytes = 0;
-      let files = 0;
+      const present: { source: ChannelSource; bytes: Buffer }[] = [];
       for (const { source, read } of sources) {
         if (read.kind === "missing" || read.kind === "tombstone") continue;
-        files += 1;
-        bytes += read.bytes.length;
-        digest.update(path.basename(source.file)).update("\0").update(read.bytes);
+        present.push({ source, bytes: read.bytes });
         if (read.kind === "unreadable") {
           unreadable.push(path.basename(source.file));
           continue;
@@ -1324,8 +1411,8 @@ export function importLegacyBridgeChannels(
         migrationId: "bridge-channels-json-v1",
         rows,
         sourceName: "bridge.json+bridge-channels",
-        sourceSha256: files > 0 ? digest.digest("hex") : null,
-        sourceBytes: bytes,
+        sourceSha256: channelFilesDigest(present).sha256,
+        sourceBytes: channelFilesDigest(present).bytes,
         gap: unreadable.length > 0 ? `legacy-unreadable: ${unreadable.join(", ")}` : null,
         release: releaseTag(directory),
       });
@@ -1374,7 +1461,14 @@ export function checkpointBridgeChannelsRollbackMirrorForDemotion(directory = pa
           writeJsonDurably(file, row.v);
         }
       });
-      recordStateImportMirror(database, CHANNELS_COLLECTION, null, revision);
+      /* The digest of what was written, so a roll-forward that finds the
+         mirror untouched deletes it instead of keeping another copy. */
+      const written = listChannelSources(directory).flatMap((source) => {
+        try {
+          return fs.lstatSync(source.file).isFile() ? [{ source, bytes: fs.readFileSync(source.file) }] : [];
+        } catch { return []; }
+      });
+      recordStateImportMirror(database, CHANNELS_COLLECTION, channelFilesDigest(written).sha256, revision);
     }));
 }
 

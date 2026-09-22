@@ -338,6 +338,29 @@ describe("corrupted sources", () => {
     expect(kept(directory, `${path.basename(bridgeChannelPath(SCOPE))}.unreadable-`)).toHaveLength(1);
   });
 
+  test("a scoped file whose stored seat does not match its name costs only that channel", () => {
+    const { db } = sandbox();
+    seedLegacy();
+    const other: BridgeChannelScope = { project: SCOPE.project, seatConversationId: "conversation_seat_b" };
+    writeJson(bridgeChannelPath(other), {
+      schemaVersion: 1,
+      rootId: "root_mismatched",
+      project: SCOPE.project,
+      seatConversationId: "conversation_seat_elsewhere",
+      managerRecordRef: "orchestrator",
+      managerReportCursor: 3,
+      updatedAt: NOW.toISOString(),
+    });
+
+    expect(readBridgeChannel(SCOPE)?.managerReportCursor).toBe(11);
+    expect(readBridgeChannel()?.managerReportCursor).toBe(4);
+    expect(readBridgeChannel(other)).toBeNull();
+    expect(readStateImport(db, "bridge_channels")?.gap).toContain(path.basename(bridgeChannelPath(other)));
+    const directory = path.dirname(bridgeChannelPath(other));
+    expect(kept(directory, `${path.basename(bridgeChannelPath(other))}.unreadable-`)).toHaveLength(1);
+    expect(openBridgeChannel("root_b", NOW, other).managerReportCursor).toBe(0);
+  });
+
   test("valid JSON holding a malformed report refuses the import and leaves the file untouched", () => {
     const { db } = sandbox();
     const text = writeJson(bridgeReportLogPath(), { schemaVersion: 1, lastSeq: 1, reports: [{ seq: "one" }], retired: [] });
@@ -377,6 +400,64 @@ describe("rollback mirror", () => {
     expect(fs.statSync(bridgeReportLogPath()).isDirectory()).toBe(true);
     expect(fs.statSync(bridgeChannelPath(SCOPE)).isDirectory()).toBe(true);
     expect(readStateImport(db, "bridge_reports")?.mirrorRevision).not.toBeNull();
+  });
+
+  test("an untouched channel mirror is deleted on roll-forward, never kept as a second copy", () => {
+    sandbox();
+    seedLegacy();
+    readBridgeChannel(SCOPE);
+    const directory = path.dirname(bridgeChannelPath(SCOPE));
+    const prefix = `${path.basename(bridgeChannelPath(SCOPE))}.imported-`;
+    expect(kept(directory, prefix)).toHaveLength(1);
+
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      checkpointBridgeRollbackMirrorsForDemotion();
+      expect(fs.statSync(bridgeChannelPath(SCOPE)).isFile()).toBe(true);
+      importLegacyBridgeChannels(path.dirname(bridgeReportLogPath()), { reconcile: true });
+      expect(fs.statSync(bridgeChannelPath(SCOPE)).isDirectory()).toBe(true);
+    }
+
+    expect(kept(directory, prefix)).toHaveLength(1);
+    expect(readBridgeChannel(SCOPE)?.managerReportCursor).toBe(11);
+  });
+
+  test("channel files standing beside a stray import record rebuild their rows (#1905)", () => {
+    const { state, db } = sandbox();
+    seedLegacy();
+    /* A process with no release imported (no release recorded), while the
+       machine's release target stood beside it; the release kept writing its
+       JSON channel, here re-opened under a new root at the same cursor. */
+    importLegacyBridgeChannels(state, { reconcile: true });
+    expect(readStateImport(db, "bridge_channels")?.release).toBeNull();
+    const revision = "b".repeat(40);
+    fs.writeFileSync(path.join(state, "viewer-release.json"), JSON.stringify({
+      endpoint: "http://127.0.0.1:8898", revision, hotStateBackend: "sqlite-v1",
+    }));
+    fs.writeFileSync(path.join(state, "hot-state-authority.json"), JSON.stringify({
+      schemaVersion: 1, epoch: 1, mode: "sqlite", releaseRevision: revision,
+      updatedAt: "2026-09-20T00:00:00.000Z", activationReadyAt: "2026-09-20T00:00:00.000Z",
+    }));
+    fs.rmSync(bridgeChannelPath(SCOPE), { recursive: true, force: true });
+    writeJson(bridgeChannelPath(SCOPE), {
+      schemaVersion: 1,
+      rootId: "root_release_wrote",
+      project: SCOPE.project,
+      seatConversationId: SCOPE.seatConversationId,
+      managerRecordRef: "orchestrator",
+      managerReportCursor: 11,
+      updatedAt: NOW.toISOString(),
+    });
+    resetBridgeCollectionsForTests();
+
+    expect(importLegacyBridgeChannels(state, { reconcile: true }).state).toBe("reimported");
+
+    resetBridgeCollectionsForTests();
+    expect(readBridgeChannel(SCOPE)?.rootId).toBe("root_release_wrote");
+    expect(readBridgeChannel()?.managerReportCursor).toBe(4);
+    expect(fs.statSync(bridgeChannelPath(SCOPE)).isDirectory()).toBe(true);
+    /* The files are retired now, so the next activation has nothing to rebuild from. */
+    expect(importLegacyBridgeChannels(state, { reconcile: true }).state).toBe("already-imported");
+    expect(readBridgeChannel(SCOPE)?.rootId).toBe("root_release_wrote");
   });
 
   test("an untouched mirror is retired on roll-forward without a merge", () => {
