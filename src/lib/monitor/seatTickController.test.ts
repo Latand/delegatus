@@ -5473,3 +5473,29 @@ test("the standing card closes the per-attempt cards the earlier scheme left on 
   expect(open[0]!.text).toContain(`monitor-ref: ${SEAT_TICK_WAKE_UNRESOLVED_REF}\n`.trimEnd());
   expect(open[0]!.text).not.toContain(`${SEAT_TICK_WAKE_UNRESOLVED_REF}-`);
 });
+
+test("an attempt fencing the project outranks a standing refusal run on the card (#1594)", async () => {
+  const { project, check } = standingProject("fence-over-run");
+  let firstKey: string | null = null;
+  /* The first attempt meets the permanent refusal; the next one is taken and
+     kept by a layer that never settles it. */
+  const deliverWith = async (message: ConversationMessage): Promise<DeliveryOutcome> => {
+    firstKey ??= message.clientMessageId!;
+    return message.clientMessageId === firstKey
+      ? MIGRATION_REFUSAL
+      : { ok: true, target: null, outcome: "queued", operationId: "op-fence", receipt: {} as never, structured: true };
+  };
+  await check(NOW, { wakeState: "absent", deliverWith });
+  const second = await check(NOW + 5 * MINUTE, { wakeState: "absent", deliverWith });
+  const fencingKey = second.row.outstandingWake!.clientMessageId;
+  expect(fencingKey).not.toBe(firstKey);
+  expect(second.row.refusals?.count).toBe(1);
+
+  await check(NOW + 70 * MINUTE, { wakeState: "absent", deliverWith });
+  const cards = await unresolvedCardsOn(project);
+  expect(cards).toHaveLength(1);
+  expect(cards[0]!.text).toContain(`newest key: ${fencingKey}`);
+  expect(cards[0]!.text).toContain("dispatches no replacement wake");
+  /* And the refusal still asks for the operator. */
+  expect(cards[0]!.text).toContain("rotate the seat");
+});

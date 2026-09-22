@@ -1001,7 +1001,11 @@ export interface SeatTickProjectState {
  * project. The run stands only while everything it was counted against still
  * holds — the seat epoch, the last landed wake and the project's tick settings
  * record — so a landing, a rotation or an operator settings write ends it
- * without anyone clearing it.
+ * without anyone clearing it. Nothing else does: an attempt between two
+ * permanent refusals that met a retryable refusal and retired on its age
+ * bound leaves the count where it was. That is deliberate and the safe
+ * direction — it only ever holds a seat that has refused this many times for
+ * a reason waiting cannot change.
  */
 export interface SeatTickRefusalRun {
   reason: string;

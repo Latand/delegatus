@@ -1600,19 +1600,23 @@ function refusalBasis(seatEpoch: number, state: SeatTickProjectState, settingsUp
  * The one card this check leaves for the project's unresolved wakes, or null
  * when it has nothing to say.
  *
- * A standing refusal run is what the card says first, because it is the one
- * thing only an operator can end. Otherwise the attempt that holds the
- * project's wakes back, and among equals the newest — so a retired attempt's
- * card never stands in front of the attempt fencing the project (#1594). With
+ * The attempt that holds the project's wakes back comes first, so nothing —
+ * a retired attempt, a released one — ever stands in front of it (#1594); a
+ * standing refusal run rides along, because it is the one thing only an
+ * operator can end. Then the run on its own, then the newest attempt. With
  * nothing unresolved and no run, a project that came into the check with
  * something standing has its card closed: a wake landed, or every attempt was
  * released.
  */
 function standingWakeCard(state: SeatTickProjectState, run: SeatTickRefusalRun | null, unresolved: readonly UnresolvedAttempt[], openedStanding: boolean, openedRun: boolean): SeatTickCard | null {
   const ref = SEAT_TICK_WAKE_UNRESOLVED_REF;
-  if (run) return { ref, kind: "wake-unresolved", state: "open", attempt: run.clientMessageId, instance: run.clientMessageId, detail: seatTickRefusalCardDetail(run) };
   const newest = [...unresolved].sort((left, right) => Number(right.fencing) - Number(left.fencing)
     || Date.parse(right.preparedAt) - Date.parse(left.preparedAt))[0];
+  if (newest?.fencing) {
+    const detail = run ? `${newest.detail}. ${seatTickRefusalCardDetail(run)}` : newest.detail;
+    return { ref, kind: "wake-unresolved", state: "open", attempt: newest.key, instance: newest.key, detail };
+  }
+  if (run) return { ref, kind: "wake-unresolved", state: "open", attempt: run.clientMessageId, instance: run.clientMessageId, detail: seatTickRefusalCardDetail(run) };
   if (newest) return { ref, kind: "wake-unresolved", state: "open", attempt: newest.key, instance: newest.key, detail: newest.detail };
   if (openedStanding && !state.outstandingWake && !state.retiredWakes?.length) return { ref, kind: "wake-unresolved", state: "resolved", detail: "" };
   /* A run that ended this check — a landing, a rotation, a settings write —
