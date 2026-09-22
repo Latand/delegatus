@@ -8,15 +8,19 @@
  * without ever resolving the poisoned `telegram-mcp` PyPI name.
  *
  * Ships in `bin/` with the published package (npm `files`), dependency-free,
- * so an installed `agent-log-viewer` can run it directly:
+ * so an installed `delegatus` can run it directly:
  *
  *   node bin/provision-telegram-connector.mjs      # or: bun run telegram:provision
  *
  * Environment (same contract as src/lib/telegram/packaging.ts):
  *   LLV_TELEGRAM_VENDOR_DIR  vendored tree (default: <package>/vendor/telegram-mcp)
- *   LLV_STATE_DIR            viewer state root (default: $XDG_CONFIG_HOME/agent-log-viewer/state)
+ *   LLV_STATE_DIR            viewer state root (default: <app dir>/state, see bin/appDir.mjs)
  *   LLV_TELEGRAM_PYTHON      expected venv python (default: <state>/telegram/venv/bin/python)
  */
+/* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
+   environment (docs/design/rename-delegatus.md §5). */
+import "./envAlias.mjs";
+
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -32,6 +36,8 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { appDirIn } from "./appDir.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -127,7 +133,7 @@ export async function installPinnedUv(toolsDir, options = {}) {
 export async function provisionTelegramConnector(env = process.env) {
   const vendorDir = env.LLV_TELEGRAM_VENDOR_DIR || join(packageRoot, "vendor", "telegram-mcp");
   const stateDir = env.LLV_STATE_DIR
-    || join(env.XDG_CONFIG_HOME || join(homedir(), ".config"), "agent-log-viewer", "state");
+    || join(appDirIn(env.XDG_CONFIG_HOME || join(homedir(), ".config")), "state");
   const venvDir = join(stateDir, "telegram", "venv");
   const venvPython = env.LLV_TELEGRAM_PYTHON || join(venvDir, "bin", "python");
   const telegramStateDir = dirname(venvDir);

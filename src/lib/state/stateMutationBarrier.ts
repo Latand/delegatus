@@ -1,6 +1,8 @@
 import os from "node:os";
 import path from "node:path";
 
+import { APP_DIR_NAMES } from "../../../bin/appDir.mjs";
+
 /**
  * Who may run a state-mutating startup step (issue #1905).
  *
@@ -83,9 +85,10 @@ function inside(root: string, candidate: string): boolean {
   return to === from || to.startsWith(`${from}${path.sep}`);
 }
 
-/** The app dirs `stateDir()` resolves into under the config root. Spelled out
-    here rather than imported from `@/lib/configDir`, which imports this module. */
-const CONFIG_APP_DIRS = ["agent-log-viewer", "live-log-viewer"];
+/** The app dirs `stateDir()` resolves into under the config root, every name
+    they have had. Read from `bin/appDir.mjs` rather than `@/lib/configDir`,
+    which imports this module. */
+const CONFIG_APP_DIRS: readonly string[] = APP_DIR_NAMES;
 
 /**
  * The roots a process resolves its state directory to when nobody named one.

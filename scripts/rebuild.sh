@@ -7,6 +7,12 @@
 # revision from its own canonical Git mirror of the same remote.
 set -euo pipefail
 
+# DELEGATUS_X is the documented spelling of LLV_X and wins when both are set
+# (docs/design/rename-delegatus.md §5).
+LLV_VIEWER_CANONICAL_REMOTE="${DELEGATUS_VIEWER_CANONICAL_REMOTE:-${LLV_VIEWER_CANONICAL_REMOTE:-}}"
+LLV_DEPLOY_REVISION="${DELEGATUS_DEPLOY_REVISION:-${LLV_DEPLOY_REVISION:-}}"
+LLV_DEPLOY_IDEMPOTENCY_KEY="${DELEGATUS_DEPLOY_IDEMPOTENCY_KEY:-${LLV_DEPLOY_IDEMPOTENCY_KEY:-}}"
+
 PORT="${PORT:-8898}"
 CANONICAL_REMOTE="${LLV_VIEWER_CANONICAL_REMOTE:-https://github.com/Latand/live-log-viewer-next.git}"
 

@@ -364,10 +364,10 @@ const TMSG_RE = /<(teammate-message|agent-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
 
 /* Inbox image paths the composer appends to a delivered message, one per line
    after the text (src/lib/tmux.ts buildImagePayload). The captured basename is
-   what /api/inbox accepts. Both inbox homes match: the current
-   agent-log-viewer/inbox and the legacy .claude/viewer-inbox that old
-   transcripts still reference. */
-const INBOX_PATH_RE = /\S*\/(?:agent-log-viewer\/inbox|\.claude\/viewer-inbox)\/([A-Za-z0-9._-]+\.(?:png|jpe?g|gif|webp))/gi;
+   what /api/inbox accepts. Every inbox home matches: delegatus/inbox (a new
+   install), agent-log-viewer/inbox (an install from before the rename) and the
+   legacy .claude/viewer-inbox that old transcripts still reference. */
+const INBOX_PATH_RE = /\S*\/(?:delegatus\/inbox|agent-log-viewer\/inbox|\.claude\/viewer-inbox)\/([A-Za-z0-9._-]+\.(?:png|jpe?g|gif|webp))/gi;
 
 interface InboxImageRef {
   name: string;
@@ -378,7 +378,7 @@ interface InboxImageRef {
    it; a path mentioned mid-sentence keeps its line verbatim and still gets a
    card, so prose around it never garbles. */
 function extractInboxImages(text: string): { cleaned: string; images: InboxImageRef[] } {
-  if (!text.includes("/.claude/viewer-inbox/") && !text.includes("/agent-log-viewer/inbox/")) return { cleaned: text, images: [] };
+  if (!text.includes("/.claude/viewer-inbox/") && !text.includes("/agent-log-viewer/inbox/") && !text.includes("/delegatus/inbox/")) return { cleaned: text, images: [] };
   const images: InboxImageRef[] = [];
   const seen = new Set<string>();
   const kept: string[] = [];

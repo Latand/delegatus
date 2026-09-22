@@ -165,6 +165,8 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
       ? copyFile(path.resolve("bin/server-runtime.mjs"), path.join(bin, "server-runtime.mjs"))
       : writeFile(path.join(bin, "server-runtime.mjs"), unevaluableProbeModule(options.unevaluableAddress)),
     copyFile(path.resolve("bin/tailscale.mjs"), path.join(bin, "tailscale.mjs")),
+    copyFile(path.resolve("bin/appDir.mjs"), path.join(bin, "appDir.mjs")),
+    copyFile(path.resolve("bin/envAlias.mjs"), path.join(bin, "envAlias.mjs")),
     copyFile(path.resolve("bin/self-update-supervisor.mjs"), path.join(bin, "self-update-supervisor.mjs")),
     writeFile(path.join(fixture, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" })),
     writeFile(path.join(nextBin, "next"), `
@@ -239,7 +241,7 @@ test("the checkout next start path keeps the default listener on loopback", asyn
   const output = captureOutput(child);
 
   await waitForStatus("127.0.0.1", port, 200);
-  await output.waitFor("Agent Log Viewer", 10_000);
+  await output.waitFor("Delegatus v", 10_000);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
@@ -269,7 +271,7 @@ test("a pre-existing non-loopback listener does not impersonate a widened Viewer
   const output = captureOutput(child);
 
   await waitForStatus("127.0.0.1", port, 200);
-  await output.waitFor("Agent Log Viewer", 10_000);
+  await output.waitFor("Delegatus v", 10_000);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   expect(await probe(nonLoopbackAddress, port)).toBe(204);
@@ -309,7 +311,7 @@ test("an address the platform will not evaluate neither stops startup nor claims
 
   // The banner comes first: it is the assertion that names the CLI's own stderr
   // when a probe the guard could not answer killed startup instead.
-  await output.waitFor("Agent Log Viewer", 10_000);
+  await output.waitFor("Delegatus v", 10_000);
   // What the guard could not cover is said out loud rather than only recorded.
   await output.waitFor(
     `the exposure check skipped addresses this machine would not answer for: ${nonLoopbackAddress}`,
@@ -367,7 +369,7 @@ test("a remembered choice whose publish fails says so and advertises no tailnet 
   children.add(child);
   const output = captureOutput(child);
 
-  await output.waitFor("Agent Log Viewer v", 15_000);
+  await output.waitFor("Delegatus v", 15_000);
   await waitForStatus("127.0.0.1", port, 200);
   /* The publish failed, so the tailnet address answers nothing: the banner
      that would carry it, and its QR, are not printed. */

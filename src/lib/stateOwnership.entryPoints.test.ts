@@ -23,7 +23,10 @@ import { STATE_OWNER_ENV } from "./stateOwnership";
  * mechanism leaves alone.
  */
 const OPERATOR_HOME = path.join(process.cwd(), "node_modules", ".llv-entry-point-test", "home");
-const STATE_DIRECTORY = path.join(OPERATOR_HOME, ".config", "agent-log-viewer", "state");
+/* Both shapes an operator's home takes after the rename (rename-delegatus.md
+   §4.2): a new install holds only `~/.config/delegatus`, an existing one only
+   `~/.config/agent-log-viewer`. */
+const APP_DIRS = ["delegatus", "agent-log-viewer"] as const;
 const MCP_BUNDLE = path.join(process.cwd(), "dist", "mcp-server.mjs");
 const temporaryRoots: string[] = [];
 
@@ -90,17 +93,20 @@ beforeAll(() => {
   if (built.exitCode !== 0) throw new Error(`scripts/build-mcp.ts failed: ${built.stderr.toString()}`);
 });
 
-beforeEach(() => {
-  fs.rmSync(path.dirname(OPERATOR_HOME), { recursive: true, force: true });
-  fs.mkdirSync(STATE_DIRECTORY, { recursive: true });
-});
-
 afterAll(() => {
   fs.rmSync(path.dirname(OPERATOR_HOME), { recursive: true, force: true });
   for (const root of temporaryRoots) fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("an entry point that owns the operator's state", () => {
+for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's state, under a home holding only ~/.config/${appDir}`, () => {
+  const STATE_DIRECTORY = path.join(OPERATOR_HOME, ".config", appDir, "state");
+  const OTHER_APP_DIR = path.join(OPERATOR_HOME, ".config", APP_DIRS.find((name) => name !== appDir)!);
+
+  beforeEach(() => {
+    fs.rmSync(path.dirname(OPERATOR_HOME), { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIRECTORY, { recursive: true });
+  });
+
   for (const [label, command] of [
     ["the source entry", ["src/lib/mcp/entry.ts"]],
     ["the published bundle", [MCP_BUNDLE]],
@@ -117,6 +123,9 @@ describe("an entry point that owns the operator's state", () => {
       /* And it resolved the operator's directory rather than a throw-away
          one: this is where its receipts live. */
       expect(fs.existsSync(path.join(STATE_DIRECTORY, "mcp-receipts.sqlite"))).toBeTrue();
+      /* An MCP server is no startup-mutation owner: it neither creates the
+         other name nor makes the link. */
+      expect(fs.existsSync(OTHER_APP_DIR)).toBeFalse();
     }, 60_000);
   }
 
@@ -146,7 +155,7 @@ describe("an entry point that owns the operator's state", () => {
 
     expectNoRefusal(result);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: agent-log-viewer");
+    expect(result.stdout).toContain("Usage: delegatus");
   }, 60_000);
 
   test("a process that declares no owner is still refused", () => {

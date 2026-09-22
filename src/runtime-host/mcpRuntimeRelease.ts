@@ -160,13 +160,16 @@ export class McpRuntimeReleaseStore {
   installStableLauncher(sourceRoot: string): McpRuntimeLauncherPublicationEvidence {
     const sourceBin = path.join(sourceRoot, "bin");
     const sourceLauncher = path.join(sourceBin, "mcp-server.mjs");
-    const sourceRuntime = path.join(sourceBin, "server-runtime.mjs");
-    if (!fs.statSync(sourceLauncher).isFile() || !fs.statSync(sourceRuntime).isFile()) {
+    /* Every module the launcher imports, published before the launcher itself
+       so a launcher never lands beside a missing import. */
+    const launcherImports = ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs"];
+    if (!fs.statSync(sourceLauncher).isFile()
+      || !launcherImports.every((name) => fs.statSync(path.join(sourceBin, name)).isFile())) {
       throw new Error("prepared MCP runtime launcher is incomplete");
     }
     const targetBin = path.join(this.options.stableRuntimeRoot, "bin");
     fs.mkdirSync(targetBin, { recursive: true, mode: 0o700 });
-    this.publishExecutable(sourceRuntime, path.join(targetBin, "server-runtime.mjs"));
+    for (const name of launcherImports) this.publishExecutable(path.join(sourceBin, name), path.join(targetBin, name));
 
     const targetLauncher = path.join(targetBin, "mcp-server.mjs");
     const temporary = `${targetLauncher}.${process.pid}.${randomUUID()}.tmp`;

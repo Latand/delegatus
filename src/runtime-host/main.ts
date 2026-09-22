@@ -1,5 +1,8 @@
 import { discardWakatimeEnvironmentCredential } from "@/lib/wakatime/credential";
 
+/* DELEGATUS_* folds into LLV_* ahead of every read of the environment below,
+   the owner claim included (docs/design/rename-delegatus.md §5). */
+await import("../../bin/envAlias.mjs");
 discardWakatimeEnvironmentCredential();
 
 /* This process owns the stable listener and the release fence, so it is one of

@@ -22,6 +22,8 @@ function preparedPackage(): { root: string; source: string; state: string; stabl
   fs.mkdirSync(path.join(source, "node_modules", "fixture"), { recursive: true });
   fs.writeFileSync(path.join(source, "bin", "mcp-server.mjs"), "process.stdout.write('launcher\\n');\n");
   fs.writeFileSync(path.join(source, "bin", "server-runtime.mjs"), "export const fixture = true;\n");
+  fs.writeFileSync(path.join(source, "bin", "appDir.mjs"), "export const fixture = true;\n");
+  fs.writeFileSync(path.join(source, "bin", "envAlias.mjs"), "export const fixture = true;\n");
   fs.writeFileSync(path.join(source, "dist", "mcp-server.mjs"), "process.stdout.write('candidate\\n');\n");
   fs.writeFileSync(path.join(source, "node_modules", "fixture", "index.js"), "export {};\n");
   fs.writeFileSync(path.join(source, "package.json"), "{\"name\":\"fixture\",\"type\":\"module\"}\n");

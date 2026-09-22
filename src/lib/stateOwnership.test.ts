@@ -219,7 +219,8 @@ describe("the operator's state directory", () => {
     });
     expect(probe.status).toBe(0);
     const resolved = JSON.parse(probe.stdout.trim()) as { stateDirectory: string; afterChdir: string };
-    expect(resolved.stateDirectory).toBe(path.resolve(temporary, ".config", "agent-log-viewer", "state"));
+    /* A fresh config root is a new install: its app dir is `delegatus`. */
+    expect(resolved.stateDirectory).toBe(path.resolve(temporary, ".config", "delegatus", "state"));
     expect(resolved.afterChdir).toBe("refused: UnownedStateAccessError");
   });
 

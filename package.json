@@ -1,9 +1,12 @@
 {
-  "name": "agent-log-viewer",
+  "name": "delegatus-cli",
   "version": "1.2.2",
   "bin": {
-    "agent-log-viewer": "bin/cli.mjs",
-    "agent-log-viewer-mcp": "bin/mcp-server.mjs"
+    "delegatus": "bin/cli.mjs",
+    "dlg": "bin/cli.mjs",
+    "delegatus-mcp": "bin/mcp-server.mjs",
+    "agent-log-viewer": "bin/legacy-cli.mjs",
+    "agent-log-viewer-mcp": "bin/legacy-mcp-server.mjs"
   },
   "exports": {
     "./mcp-server": "./bin/mcp-server.mjs",
