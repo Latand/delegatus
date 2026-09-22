@@ -63,6 +63,8 @@ process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 `;
 
+const BROKEN_HOST = "process.exit(3);\n";
+
 function install() {
   const root = mkdtempSync("/var/tmp/llv-cli-self-update-");
   roots.push(root);
@@ -101,10 +103,11 @@ function install() {
 }
 
 /** A built release of a new commit, as the Viewer's step runner leaves it. */
-function release(fixture: ReturnType<typeof install>, name: string, options: { broken?: boolean } = {}): { dir: string; sha: string } {
+function release(fixture: ReturnType<typeof install>, name: string, options: { broken?: boolean; brokenHost?: boolean } = {}): { dir: string; sha: string } {
   git(fixture.checkout, "checkout", "--quiet", "--detach", fixture.first);
   writeFileSync(path.join(fixture.checkout, "notes.txt"), `${name}\n`);
   if (options.broken) writeFileSync(path.join(fixture.checkout, "node_modules", ".bin", "next"), STUB_NEXT(true));
+  if (options.brokenHost) writeFileSync(path.join(fixture.checkout, "dist", "runtime-host.mjs"), BROKEN_HOST);
   git(fixture.checkout, "add", "-f", ".");
   git(fixture.checkout, "commit", "--quiet", "-m", name);
   const sha = git(fixture.checkout, "rev-parse", "HEAD");
@@ -233,5 +236,34 @@ test("a release whose web does not start gives way to the one it replaced, and s
   expect(after.web.error).toMatchObject({ kind: "fell-back", revision: broken.sha.slice(0, 7) });
   expect(after.web.revision).toBe(fixture.first.slice(0, 7));
   expect(await served(port)).toBe(fixture.checkout);
+  expect(child.exitCode).toBeNull();
+}, 60_000);
+
+test("a host restart whose new and previous releases both fail is retried by the backoff, never left down", async () => {
+  const fixture = install();
+  const { child } = await start(fixture);
+  const before = await until(() => { const record = readRecord(fixture.state); return record.runtimeHost.state === "healthy" ? record : null; });
+  const broken = release(fixture, "broken-host", { brokenHost: true });
+  writeFileSync(before.releasePointer, JSON.stringify({ sha: broken.sha, dir: broken.dir, checkoutHead: fixture.first }));
+  /* The package root's own host fails too, for as long as the restart takes. */
+  const rootHost = path.join(fixture.checkout, "dist", "runtime-host.mjs");
+  writeFileSync(rootHost, BROKEN_HOST);
+
+  request(before, "runtime-host", "restart-host-both-broken");
+  const failed = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.runtimeHost.requestId === "restart-host-both-broken" && record.runtimeHost.state === "failed" ? record : null;
+  });
+  expect(failed.runtimeHost.error?.kind).toBe("message");
+  expect(existsSync(`/proc/${before.runtimeHost.pid}`)).toBe(false);
+
+  /* The previous release can start again: the backoff finds it without anyone asking. */
+  writeFileSync(rootHost, STUB_HOST);
+  const back = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.runtimeHost.state === "healthy" && record.runtimeHost.pid !== before.runtimeHost.pid ? record : null;
+  }, 30_000);
+  expect(back.runtimeHost.revision).toBe(fixture.first.slice(0, 7));
+  expect(readlinkSync(`/proc/${back.runtimeHost.pid}/cwd`)).toBe(fixture.checkout);
   expect(child.exitCode).toBeNull();
 }, 60_000);

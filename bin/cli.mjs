@@ -518,7 +518,10 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
   let stopping = false;
   const releaseFor = () => hooks.release?.() ?? { dir: packageRoot, sha: null };
 
-  const scheduleRestart = (detail, uptimeMs = 0) => {
+  /* `release`, when given, is the release the retries start (a self-update
+     restart whose new and previous releases both failed retries the previous
+     one); otherwise each retry reads the installed release. */
+  const scheduleRestart = (detail, uptimeMs = 0, release = null) => {
     if (stopping || restartTimer) return;
     restartFailures = uptimeMs >= RUNTIME_HOST_STABLE_UPTIME_MS ? 1 : restartFailures + 1;
     const delay = Math.min(
@@ -528,11 +531,11 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     console.error(m.runtimeHostRestart(delay, detail));
     restartTimer = setTimeout(() => {
       restartTimer = null;
-      void launch(false).catch((error) => {
+      void launch(false, release ?? undefined).catch((error) => {
         if (stopping) return;
         const message = error instanceof Error ? error.message : String(error);
         console.error(m.runtimeHostRestartFail(message));
-        scheduleRestart(message);
+        scheduleRestart(message, 0, release);
       });
     }, delay);
   };
@@ -602,9 +605,11 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     },
     /* A restart the operator asked for from the Update surface (#2007): stop
        the host this supervisor started, start it from the installed release,
-       and when that one does not become ready, start the release it replaced
-       so the install is never left without a host. Resolves with the release
-       that failed and why when the fallback ran, else null. */
+       and when that one does not become ready, start the release it replaced.
+       When that fails too, the crash backoff takes over and keeps starting
+       the previous release, as it does for a host that dies on its own, and
+       the restart rejects so the record says it failed. Resolves with the
+       release that failed and why when the fallback ran, else null. */
     async restart() {
       if (stopping) return null;
       if (restartTimer) {
@@ -624,7 +629,13 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
         return null;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        await launch(false, previousRelease);
+        try {
+          await launch(false, previousRelease);
+        } catch (fallbackError) {
+          const fallbackDetail = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          scheduleRestart(`${detail}; the previous release did not start either: ${fallbackDetail}`, 0, previousRelease);
+          throw fallbackError;
+        }
         return { sha: attempted.sha, detail };
       }
     },
