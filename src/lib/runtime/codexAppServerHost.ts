@@ -23,7 +23,9 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { decodeCodexStructuredUserText as decodeStructuredUserWire } from "./codexStructuredUserText";
 import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
+import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
 import { deliveryDedupToken } from "./deliveryDedup";
 import { CodexReplayFrameReducer, ReplayFrameOverflowError, sanitizeCodexImageFrame, shrinkReducedReplayFrame, type ImageSink, type ReplayFrameBudgets } from "./codexImageFrames";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
@@ -586,6 +588,9 @@ const STRUCTURED_USER_MARKER_FRAGMENT = Buffer.from("llv:structured-user");
 const codexDeliveryDedup = deliveryDedupToken;
 type RolloutStructuredUserDelivery =
   | { payloadKind: "text" | "content"; payloadDigest: string }
+  /* A compact marker keeps its image digest in the metadata record, which is
+     read only when a queue entry is compared against it. */
+  | { payloadKind: "reference"; payloadDigest: string; metadataRef: string }
   | { payloadKind: "conflict"; payloadDigest: null };
 
 interface RolloutTurnsCacheEntry {
@@ -615,17 +620,21 @@ function rememberRolloutStructuredUser(
   deliveries: Map<string, RolloutStructuredUserDelivery>,
   wireText: string,
 ): void {
-  const decoded = decodeCodexStructuredUserText(wireText);
+  const decoded = decodeStructuredUserWire(wireText);
   if (!decoded.deliveryDedup) return;
   const current = deliveries.get(decoded.deliveryDedup);
-  const observed: RolloutStructuredUserDelivery = decoded.contentDigest
-    ? { payloadKind: "content", payloadDigest: decoded.contentDigest }
-    : { payloadKind: "text", payloadDigest: createHash("sha256").update(decoded.text).digest("hex") };
+  const textDigest = () => createHash("sha256").update(decoded.text).digest("hex");
+  const observed: RolloutStructuredUserDelivery = decoded.metadataRef
+    ? { payloadKind: "reference", payloadDigest: textDigest(), metadataRef: decoded.metadataRef }
+    : decoded.contentDigest
+      ? { payloadKind: "content", payloadDigest: decoded.contentDigest }
+      : { payloadKind: "text", payloadDigest: textDigest() };
   if (!current) {
     deliveries.set(decoded.deliveryDedup, observed);
     return;
   }
-  if (current.payloadKind !== observed.payloadKind || current.payloadDigest !== observed.payloadDigest) {
+  if (current.payloadKind !== observed.payloadKind || current.payloadDigest !== observed.payloadDigest
+    || (current.payloadKind === "reference" && observed.payloadKind === "reference" && current.metadataRef !== observed.metadataRef)) {
     deliveries.set(decoded.deliveryDedup, { payloadKind: "conflict", payloadDigest: null });
   }
 }
@@ -1002,11 +1011,28 @@ async function rolloutDeliveryIndexFromDisk(
   return run;
 }
 
+/* Metadata written under another state directory, pruned or failing its
+   fingerprint costs only this record: it resolves to a conflict, which refuses
+   a duplicate write of its own operation and leaves every other record intact. */
+function resolveRolloutReference(
+  delivery: Extract<RolloutStructuredUserDelivery, { payloadKind: "reference" }>,
+): RolloutStructuredUserDelivery {
+  try {
+    const { contentDigest } = readStructuredUserMetadata(delivery.metadataRef);
+    return contentDigest
+      ? { payloadKind: "content", payloadDigest: contentDigest }
+      : { payloadKind: "text", payloadDigest: delivery.payloadDigest };
+  } catch {
+    return { payloadKind: "conflict", payloadDigest: null };
+  }
+}
+
 function rolloutDeliveryReceipt(
   entry: QueueEntry,
   delivery: RolloutStructuredUserDelivery | undefined,
 ): DeliveryReceipt | null {
   if (!delivery) return null;
+  if (delivery.payloadKind === "reference") delivery = resolveRolloutReference(delivery);
   let payloadMatches = false;
   if (delivery.payloadKind === "content") {
     payloadMatches = delivery.payloadDigest === entry.contentDigest;
@@ -1099,7 +1125,7 @@ function realtimeMessage(value: unknown): RealtimeInitialItem | null {
     ?? (message ? stringField(message, "text") ?? userMessageText(message) : null);
   if (!wireText) return null;
   return user
-    ? { role: "user", text: decodeCodexStructuredUserText(wireText).text }
+    ? { role: "user", text: decodeStructuredUserWire(wireText).text }
     : { role: "assistant", text: wireText };
 }
 

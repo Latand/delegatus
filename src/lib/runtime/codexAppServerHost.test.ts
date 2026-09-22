@@ -2202,6 +2202,62 @@ describe("CodexAppServerHost", () => {
     }
   });
 
+  test("a compact record whose metadata is gone costs only that record, never the rollout", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-recipient-dedup-lost-metadata-"));
+    const transcriptPath = path.join(directory, "delivery-thread.jsonl");
+    const metadataDirectory = path.join(metadataState, "structured-user-metadata");
+    const userRecord = (message: string) => JSON.stringify({ timestamp: "t1", type: "event_msg", payload: { type: "user_message", message } });
+    const lost = { id: "operation-lost-metadata", text: "delivered under another state directory" };
+    const kept = { id: "operation-kept-metadata", text: "delivered under this state directory" };
+    const lostWire = encodeCodexStructuredUserText(lost.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(lost.id));
+    for (const file of fs.readdirSync(metadataDirectory)) fs.unlinkSync(path.join(metadataDirectory, file));
+    const keptWire = encodeCodexStructuredUserText(kept.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(kept.id));
+    fs.writeFileSync(transcriptPath, `${userRecord(lostWire)}\n${userRecord(keptWire)}\n`);
+    const server = new FakeAppServer("delivery-thread", "delivery-thread");
+    server.threadPath = transcriptPath;
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+    const writes = () => server.requests.filter((request) => request.method === "turn/start" || request.method === "turn/steer");
+    try {
+      expect(() => rolloutTurnsFromDisk(transcriptPath)).not.toThrow();
+      expect(await host.send(kept)).toEqual({ outcome: "turn-started", turnId: kept.id });
+      expect(writes()).toHaveLength(0);
+      /* Its payload cannot be proven, so it cannot authorize a second write. */
+      await expect(host.send(lost)).rejects.toThrow("belongs to a different payload");
+      expect(writes()).toHaveLength(0);
+      expect(await host.send({ id: "operation-after-lost-metadata", text: "a new message" }))
+        .toMatchObject({ outcome: "turn-started" });
+      expect(writes()).toHaveLength(1);
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a rollout written under state directory A still reads from state directory B", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rollout-state-ab-"));
+    const transcriptPath = path.join(directory, "rollout.jsonl");
+    const wire = encodeCodexStructuredUserText("hello from A", undefined, COMPACT_SELECTED, { kind: "agent", role: "orchestrator" }, deliveryDedup("operation-state-a"));
+    const item = { type: "userMessage", id: "user-a", content: [{ type: "text", text: wire }] };
+    fs.writeFileSync(transcriptPath, [
+      { payload: { type: "user_message", message: wire } },
+      { payload: { type: "item_completed", turn_id: "turn-a", item } },
+      { payload: { type: "task_complete", turn_id: "turn-a" } },
+    ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+    const stateB = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-metadata-b-"));
+    process.env.LLV_STATE_DIR = stateB;
+    try {
+      expect(rolloutTurnsFromDisk(transcriptPath)).toMatchObject([{ id: "turn-a", items: [{ id: "user-a" }] }]);
+    } finally {
+      process.env.LLV_STATE_DIR = metadataState;
+      fs.rmSync(stateB, { recursive: true, force: true });
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test.each([false, true])("a bounded tail starting inside a marker-bearing record preserves send dedup (already delivered: %s)", async (alreadyDelivered) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tail-boundary-"));
     const transcriptPath = path.join(directory, "delivery-thread.jsonl");
