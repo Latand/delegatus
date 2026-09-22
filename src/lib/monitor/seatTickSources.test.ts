@@ -372,6 +372,27 @@ test("a project whose only lane is hidden is not a project the tick checks (#127
   expect(projects).toEqual([]);
 });
 
+/* A reversible dismiss discharges a parked lane's wakes: the seat was woken
+   at every interval for superseded lanes the operator had dismissed off the
+   board. `undismiss` clears the field and the lane is evidence again. */
+test("a dismissed parked lane raises no wake, and undismissing it restores the lane", async () => {
+  const parked = { id: "pipeline_parked", state: "needs_decision", pausedState: "needs_decision", stateDetail: "parked" };
+  const dismissed = await gather({ pipelines: [lane({ ...parked, dismissedAt: "2026-08-28T11:40:00.000Z" })] });
+  expect(dismissed.pipelines).toEqual([]);
+  expect(reasonsOf(seatTickDecision(dismissed))).toEqual([]);
+  expect(seatTickProjects({
+    ...sources({}),
+    activeSeats: () => [],
+    pipelines: () => [lane({ ...parked, project: "dismissed-only", dismissedAt: "2026-08-28T11:40:00.000Z" })] as never,
+    tasks: () => [] as never,
+  })).toEqual([]);
+
+  const restored = await gather({ pipelines: [lane({ ...parked, dismissedAt: null })] });
+  expect(restored.pipelines.map((pipeline) => pipeline.id)).toEqual(["pipeline_parked"]);
+  // The parked lane is a stalled item again, carried by the interval wake.
+  expect(reasonsOf(seatTickDecision(restored))).toEqual(["interval"]);
+});
+
 test("the check carries the project's own tick settings, expiry already applied (#1275)", async () => {
   const unconfigured = await gather({});
   expect(unconfigured.settings).toMatchObject({ enabled: true, isDefault: true, configured: false });
