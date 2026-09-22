@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
+import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
 
 import { applyAttentionEvent, expiryCauseByClock, expiryFrom, type AttentionEvent, type AttentionTransition } from "./machine";
 import { defaultZoomIntent, isFocusTarget, targetAcceptsIntent } from "./targets";
@@ -30,8 +30,8 @@ import {
 /**
  * The durable home of attention requests (#688 slice 1).
  *
- * Revisioned and written by temp-and-rename under the shared file transaction —
- * the discipline board state already uses — because presence cannot hold this:
+ * Revisioned, and since #1870 slice 5 a collection in `state.sqlite` written
+ * under the collection lease, because presence cannot hold this:
  * it is in-memory, retains for two minutes, and a request has to survive a page
  * reload, a restart, and a root-session rollover.
  */
@@ -60,23 +60,6 @@ export class AttentionValidationError extends Error {
   }
 }
 
-function atomicWriteJson(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const temp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  let descriptor: number | null = null;
-  try {
-    descriptor = fs.openSync(temp, "wx", 0o600);
-    fs.writeFileSync(descriptor, JSON.stringify(value, null, 2) + "\n", "utf8");
-    fs.fsyncSync(descriptor);
-    fs.closeSync(descriptor);
-    descriptor = null;
-    fs.renameSync(temp, filePath);
-  } finally {
-    if (descriptor !== null) fs.closeSync(descriptor);
-    fs.rmSync(temp, { force: true });
-  }
-}
-
 function emptyFile(now: Date): AttentionFileV1 {
   return { schemaVersion: ATTENTION_SCHEMA_VERSION, revision: 0, updatedAt: now.toISOString(), requests: [] };
 }
@@ -99,23 +82,13 @@ function isRequest(value: unknown): value is AttentionRequestV1 {
   );
 }
 
-/** The persisted file. A missing file is an empty one; a malformed file is an
+/** Validate a parsed attention record. A record this build cannot read is an
     error, because losing an in-flight request silently is the failure this
-    whole record exists to prevent. */
-export function readAttentionFile(filePath = attentionFile(), now = new Date()): AttentionFileV1 {
-  let text: string;
-  try {
-    text = fs.readFileSync(filePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyFile(now);
-    throw new AttentionStoreError("could not read attention state", { cause: error });
-  }
-  let parsed: Partial<AttentionFileV1>;
-  try {
-    parsed = JSON.parse(text) as Partial<AttentionFileV1>;
-  } catch (error) {
-    throw new AttentionStoreError("attention state contains malformed JSON", { cause: error });
-  }
+    whole record exists to prevent. Bytes that are not JSON at all are handled
+    by the import instead (#1870): they are kept as `attention.json.unreadable-*`
+    and an incident names them, so the loss is never silent. */
+function parseAttentionBody(raw: unknown, now: Date): AttentionFileV1 {
+  const parsed = (raw ?? {}) as Partial<AttentionFileV1>;
   if (parsed.schemaVersion !== ATTENTION_SCHEMA_VERSION) throw new AttentionStoreError(`unsupported attention schema: ${String(parsed.schemaVersion)}`);
   if (!Number.isInteger(parsed.revision) || !Array.isArray(parsed.requests)) throw new AttentionStoreError("attention state is not a valid record");
   if (!parsed.requests.every(isRequest)) throw new AttentionStoreError("attention state holds an invalid request");
@@ -125,6 +98,92 @@ export function readAttentionFile(filePath = attentionFile(), now = new Date()):
     updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : now.toISOString(),
     requests: parsed.requests,
   };
+}
+
+/** `attention.json` as the store read it before #1870, for a release that may
+    not import yet. A missing file is an empty one; a malformed one is an error. */
+function readLegacyAttentionFile(filePath: string, now: Date): AttentionFileV1 {
+  let text: string;
+  try {
+    text = fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyFile(now);
+    throw new AttentionStoreError("could not read attention state", { cause: error });
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new AttentionStoreError("attention state contains malformed JSON", { cause: error });
+  }
+  return parseAttentionBody(parsed, now);
+}
+
+const META_KEY = "meta";
+const requestKey = (id: string) => `r:${id}`;
+type AttentionMeta = Pick<AttentionFileV1, "schemaVersion" | "revision" | "updatedAt">;
+
+/**
+ * The attention record in `state.sqlite` (#1870 slice 5): a `meta` row holding
+ * the record's own revision and one `r:<id>` row per request, in queue order.
+ * The revision `request_attention` answers with travels in `meta`, so it
+ * continues from the one `attention.json` held and never runs backwards: a
+ * legacy file merged back after a rollback keeps the larger of the two.
+ */
+const attentionStore = new LegacyDocumentStore<AttentionFileV1>({
+  collection: "attention",
+  migrationId: "attention-json-v1",
+  busyMessage: "attention state is busy",
+  parse: (raw) => parseAttentionBody(raw, new Date()),
+  toRows: (file) => [
+    { key: META_KEY, value: { schemaVersion: file.schemaVersion, revision: file.revision, updatedAt: file.updatedAt } satisfies AttentionMeta },
+    ...file.requests.map((request) => ({ key: requestKey(request.id), value: request })),
+  ],
+  fromRows: (rows) => {
+    const meta = rows.find((row) => row.key === META_KEY)?.value as AttentionMeta | undefined;
+    return {
+      schemaVersion: ATTENTION_SCHEMA_VERSION,
+      revision: meta?.revision ?? 0,
+      updatedAt: meta?.updatedAt ?? "",
+      requests: rows.filter((row) => row.key !== META_KEY).map((row) => row.value as AttentionRequestV1),
+    };
+  },
+  toFile: (file) => file,
+  mergeRow: (key, held, incoming) => {
+    if (key === META_KEY) {
+      const [ours, theirs] = [held as AttentionMeta, incoming as AttentionMeta];
+      return theirs.revision > ours.revision ? theirs : ours;
+    }
+    /* A request carries its own revision: the strictly newer one wins
+       whichever side changed it; otherwise the default rule decides. */
+    return (incoming as AttentionRequestV1).revision > (held as AttentionRequestV1).revision ? incoming : undefined;
+  },
+  readLegacy: (filePath) => readLegacyAttentionFile(filePath, new Date()),
+  error: (message, cause) => new AttentionStoreError(message, cause === undefined ? undefined : { cause }),
+});
+
+/** The attention store's legacy import spec, for the import driver and its tests. */
+export function attentionLegacyCollection(filePath = attentionFile()) {
+  return attentionStore.legacyCollection(filePath);
+}
+
+/** Import `attention.json` into SQLite now (the Viewer's activation). */
+export function importLegacyAttention(
+  filePath = attentionFile(),
+  options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true },
+): LegacyImportOutcome {
+  return attentionStore.importLegacy(filePath, options);
+}
+
+/** Write `attention.json` from SQLite for a rollback release that predates #1870. */
+export function checkpointAttentionRollbackMirrorForDemotion(filePath = attentionFile()): void {
+  attentionStore.checkpointRollbackMirror(filePath);
+}
+
+/** The persisted record. A store that was never written is an empty one. */
+export function readAttentionFile(filePath = attentionFile(), now = new Date()): AttentionFileV1 {
+  const file = attentionStore.read(filePath);
+  return file.updatedAt ? file : { ...file, updatedAt: now.toISOString() };
 }
 
 /** Trim history without ever dropping something still in flight. */
@@ -146,18 +205,20 @@ export function mutateAttention<R>(
 ): R {
   const filePath = options.filePath ?? attentionFile();
   const now = options.now ?? new Date();
-  return withFileTransactionSync(filePath, "attention state is busy", () => {
-    const current = readAttentionFile(filePath, now);
+  return attentionStore.mutate(filePath, (stored) => {
+    const current = stored.updatedAt ? stored : { ...stored, updatedAt: now.toISOString() };
     const outcome = mutate(current);
-    if (outcome.requests) {
-      atomicWriteJson(filePath, {
-        schemaVersion: ATTENTION_SCHEMA_VERSION,
-        revision: current.revision + 1,
-        updatedAt: now.toISOString(),
-        requests: retain(outcome.requests),
-      } satisfies AttentionFileV1);
-    }
-    return outcome.result;
+    return {
+      next: outcome.requests
+        ? {
+          schemaVersion: ATTENTION_SCHEMA_VERSION,
+          revision: current.revision + 1,
+          updatedAt: now.toISOString(),
+          requests: retain(outcome.requests),
+        } satisfies AttentionFileV1
+        : undefined,
+      result: outcome.result,
+    };
   });
 }
 

@@ -65,7 +65,7 @@ test("a created request round-trips through the state file with a bumped file re
   expect(createAttentionRequest(input({ intent: "open" }), { now: T0, id: "attention_2" }).request.zoom).toBe("inspect");
 });
 
-test("the file is replaced by rename, leaving no temp file behind", () => {
+test("a write leaves no temp file behind", () => {
   createAttentionRequest(input(), { now: T0, id: "attention_1" });
   transitionAttentionRequest("attention_1", { kind: "offer", deviceId: "device-a" }, { now: T0 });
 
@@ -304,15 +304,21 @@ test.each([
   ["a request with no frame", { frameAtCreation: undefined as never }],
 ])("invalid input is refused: %s", (_label, overrides) => {
   expect(() => createAttentionRequest(input(overrides), { now: T0 })).toThrow(AttentionValidationError);
-  /* Nothing invalid ever reaches the file. */
+  /* Nothing invalid ever reaches the record. */
   expect(fs.existsSync(attentionFile())).toBe(false);
+  expect(fs.existsSync(path.join(sandbox, "state.sqlite"))).toBe(false);
 });
 
-test("a malformed state file refuses to read rather than losing in-flight requests", () => {
+test("a malformed state file is kept aside, never silently dropped, and the store serves empty", () => {
   fs.mkdirSync(path.dirname(attentionFile()), { recursive: true });
   fs.writeFileSync(attentionFile(), "{ not json", "utf8");
 
-  expect(() => readAttentionFile()).toThrow(AttentionStoreError);
+  /* #1870 slice 5: the import records the gap and keeps the bytes as
+     `attention.json.unreadable-*`, which the incident names for recovery. */
+  expect(readAttentionFile().requests).toEqual([]);
+  const keptAside = fs.readdirSync(sandbox).filter((name) => name.startsWith("attention.json.unreadable-"));
+  expect(keptAside).toHaveLength(1);
+  expect(fs.readFileSync(path.join(sandbox, keptAside[0]!), "utf8")).toBe("{ not json");
 });
 
 test("state written by an unknown schema is refused", () => {

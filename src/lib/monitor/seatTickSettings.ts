@@ -1,8 +1,8 @@
 import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
-import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
+import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
 
 import { redactBounded, redactMonitorText } from "./redact";
 
@@ -218,43 +218,93 @@ interface SeatTickSettingsFile {
   projects: Record<string, SeatTickSettings>;
 }
 
-function readFile(filePath: string): SeatTickSettingsFile {
+function emptySettingsFile(): SeatTickSettingsFile {
+  return { version: SEAT_TICK_SETTINGS_SCHEMA_VERSION, projects: {} };
+}
+
+function parseSettingsBody(parsed: unknown): SeatTickSettingsFile {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return emptySettingsFile();
+  const projects = ((parsed as Partial<SeatTickSettingsFile>).projects ?? {}) as Record<string, unknown>;
+  return {
+    version: SEAT_TICK_SETTINGS_SCHEMA_VERSION,
+    projects: Object.fromEntries(Object.entries(projects).map(([project, row]) => [project, normalizeRow(project, row)])),
+  };
+}
+
+/** `seat-tick-settings.json` as the store read it before #1870, for a release
+    that may not import yet. */
+function readLegacySettingsFile(filePath: string): SeatTickSettingsFile {
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { version: SEAT_TICK_SETTINGS_SCHEMA_VERSION, projects: {} };
-    }
-    const projects = ((parsed as Partial<SeatTickSettingsFile>).projects ?? {}) as Record<string, unknown>;
-    return {
-      version: SEAT_TICK_SETTINGS_SCHEMA_VERSION,
-      projects: Object.fromEntries(Object.entries(projects).map(([project, row]) => [project, normalizeRow(project, row)])),
-    };
+    return parseSettingsBody(JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown);
   } catch {
     /* An unreadable settings file reads as "nothing is configured", which is
        the tick as it shipped. Failing the check instead would let one corrupt
-       row stop every project's seat from ever being woken again. */
-    return { version: SEAT_TICK_SETTINGS_SCHEMA_VERSION, projects: {} };
+       row stop every project's seat from ever being woken again. This covers
+       the legacy file only: a read of the SQLite collection that finds it busy
+       throws the store's busy error, as the board and task reads the tick
+       makes already do, and the tick's per-project handling bounds it. */
+    return emptySettingsFile();
   }
 }
 
+const projectKey = (project: string) => `p:${project}`;
+
+/**
+ * The settings in `state.sqlite` (#1870 slice 5): one `p:<project>` row per
+ * configured project. `seat_tick_settings` answers a revision derived from the
+ * row itself, so the row is stored exactly as it was normalized from the file.
+ */
+const settingsStore = new LegacyDocumentStore<SeatTickSettingsFile>({
+  collection: "seat_tick_settings",
+  migrationId: "seat-tick-settings-json-v1",
+  busyMessage: "seat tick settings are busy",
+  parse: parseSettingsBody,
+  toRows: (file) => Object.entries(file.projects).map(([project, row]) => ({ key: projectKey(project), value: row })),
+  fromRows: (rows) => ({
+    version: SEAT_TICK_SETTINGS_SCHEMA_VERSION,
+    projects: Object.fromEntries(rows.map((row) => {
+      const settings = row.value as SeatTickSettings;
+      return [settings.project, settings] as const;
+    })),
+  }),
+  toFile: (file) => file,
+  readLegacy: readLegacySettingsFile,
+  error: (message, cause) => new Error(message, { cause }),
+});
+
+/** The store's legacy import spec, for the import driver and its tests. */
+export function seatTickSettingsLegacyCollection(filePath = seatTickSettingsPath()) {
+  return settingsStore.legacyCollection(filePath);
+}
+
+/** Import `seat-tick-settings.json` into SQLite now (the Viewer's activation). */
+export function importLegacySeatTickSettings(
+  filePath = seatTickSettingsPath(),
+  options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true },
+): LegacyImportOutcome {
+  return settingsStore.importLegacy(filePath, options);
+}
+
+/** Write `seat-tick-settings.json` from SQLite for a rollback release that predates #1870. */
+export function checkpointSeatTickSettingsRollbackMirrorForDemotion(filePath = seatTickSettingsPath()): void {
+  settingsStore.checkpointRollbackMirror(filePath);
+}
+
 export function readSeatTickSettings(project: string, filePath = seatTickSettingsPath()): SeatTickSettings {
-  return readFile(filePath).projects[project] ?? defaultSeatTickSettings(project);
+  return settingsStore.read(filePath).projects[project] ?? defaultSeatTickSettings(project);
 }
 
 export function readSeatTickSettingsFile(filePath = seatTickSettingsPath()): Record<string, SeatTickSettings> {
-  return readFile(filePath).projects;
+  return settingsStore.read(filePath).projects;
 }
 
-/** Serialized read-modify-write of one project's row; every other project's row
-    is re-read inside the transaction, so two writers cannot clobber. */
+/** Serialized read-modify-write of one project's row. Only that row is
+    written, so two writers of different projects cannot clobber each other. */
 export function writeSeatTickSettings(project: string, settings: SeatTickSettings, filePath = seatTickSettingsPath()): void {
-  withFileTransactionSync(filePath, "seat tick settings are busy", () => {
-    const file = readFile(filePath);
-    writeJsonDurably(filePath, {
-      version: SEAT_TICK_SETTINGS_SCHEMA_VERSION,
-      projects: { ...file.projects, [project]: { ...settings, project } },
-    });
-  });
+  settingsStore.mutate(filePath, (file) => ({
+    next: { ...file, projects: { ...file.projects, [project]: { ...settings, project } } },
+    result: undefined,
+  }));
 }
 
 /**
