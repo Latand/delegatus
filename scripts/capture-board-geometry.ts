@@ -687,6 +687,13 @@ function measureOnboarding(phone: boolean) {
       addRow: el.querySelector("[data-mobile2-account-add]") !== null,
     }])),
     filledButtons: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => el.classList.contains("bg-accent") && el.getBoundingClientRect().width > 0).map((el) => (el.textContent ?? "").trim()),
+    /* The band sits inside the phone's horizontal pager: on screen means inside the viewport's width. */
+    tourBandOnScreen: (() => {
+      const band = dialog.querySelector("[data-tour-start]");
+      if (!band) return null;
+      const r = band.getBoundingClientRect();
+      return r.left >= -1 && r.right <= window.innerWidth + 1;
+    })(),
     tourStartInView: (() => {
       const band = dialog.querySelector("[data-tour-start]");
       const body = band?.closest<HTMLElement>(".overflow-y-auto");
@@ -1418,7 +1425,10 @@ async function captureOnboarding(): Promise<void> {
           if (viewport.phone) {
             for (let page_ = 0; page_ < 4; page_ += 1) await page.click("[data-onboarding-primary]");
             await page.waitForTimeout(600);
-            await shot("tour-start", (r) => common("tour-start", r));
+            await shot("tour-start", (r) => {
+              common("tour-start", r);
+              must(r.tourBandOnScreen === true, `${tag}: four presses of Continue did not page the tour to its Start here band`);
+            });
           } else {
             /* The first action is on screen without scrolling. */
             await shot("tour-start", (r) => {

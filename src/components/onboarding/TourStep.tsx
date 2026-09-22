@@ -65,7 +65,7 @@ function StartBand({ projects, initialProject, claudeConnected, onCreated, phone
   const control = "h-8 rounded-[8px] text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11";
   return (
     <section data-tour-start="" aria-labelledby="tour-start-title" className={`flex gap-4 rounded-[12px] border border-accent/35 bg-accent-soft/40 p-3 ${phone ? "flex-col" : ""}`}>
-      <div className={`shrink-0 overflow-hidden rounded-[8px] bg-sunken ${phone ? "aspect-[16/10] w-full" : "h-20 w-32"}`}>
+      <div className={`shrink-0 overflow-hidden rounded-[8px] bg-sunken ${phone ? "aspect-[16/10] w-full" : "h-[60px] w-24"}`}>
         <StartSchematic />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -76,7 +76,7 @@ function StartBand({ projects, initialProject, claudeConnected, onCreated, phone
         ) : (
           <>
             <div className={`flex gap-2 ${phone ? "flex-col" : "flex-wrap items-end"}`}>
-              <label className={`flex flex-col gap-1 ${phone ? "" : "w-[240px]"}`}>
+              <label className={`flex flex-col gap-1 ${phone ? "" : "min-w-[140px] max-w-[240px] flex-1"}`}>
                 <span className="text-label font-semibold text-muted">{t("onboarding.tour.project")}</span>
                 <select
                   data-tour-project=""
@@ -169,11 +169,20 @@ export function TourStep({ projects, initialProject, claudeConnected, checkMinut
     return () => observer.disconnect();
   }, [phone, page]);
 
+  /* Pages are placed by their own offsets: the pager's padding and gap make
+     a page's stride differ from the pager's width. */
+  const pageLeft = (pager: HTMLElement, index: number) => {
+    const first = pager.children[0] as HTMLElement | undefined;
+    const target = pager.children[index] as HTMLElement | undefined;
+    return first && target ? target.offsetLeft - first.offsetLeft : 0;
+  };
+
   useImperativeHandle(handle, () => ({
     advance() {
       if (!phone || page >= total - 1) return false;
       const pager = pagerRef.current;
-      pager?.scrollTo?.({ left: (page + 1) * pager.clientWidth, behavior: "smooth" });
+      /* Instant, so the scroll the swipe listener reads is already the new page. */
+      if (pager) pager.scrollTo?.({ left: pageLeft(pager, page + 1), behavior: "auto" });
       setPage(page + 1);
       return true;
     },
@@ -184,8 +193,11 @@ export function TourStep({ projects, initialProject, claudeConnected, checkMinut
     const pager = pagerRef.current;
     if (!phone || !pager) return;
     const onScroll = () => {
-      if (!pager.clientWidth) return;
-      setPage(Math.max(0, Math.min(total - 1, Math.round(pager.scrollLeft / pager.clientWidth))));
+      let nearest = 0;
+      for (let index = 1; index < total; index += 1) {
+        if (Math.abs(pageLeft(pager, index) - pager.scrollLeft) < Math.abs(pageLeft(pager, nearest) - pager.scrollLeft)) nearest = index;
+      }
+      setPage(nearest);
     };
     pager.addEventListener("scroll", onScroll, { passive: true });
     return () => pager.removeEventListener("scroll", onScroll);
