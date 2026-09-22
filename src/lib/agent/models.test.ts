@@ -73,6 +73,9 @@ test("a card names a Claude model by its CLI display name and leaves other ids a
   expect(modelDisplayName("claude", "opus-5")).toBe("Opus 5");
   expect(modelDisplayName("claude", "fable-5-1")).toBe("Fable 5.1");
   expect(modelDisplayName("claude", "haiku-4-5")).toBe("Haiku 4.5");
+  // The CLI names the `-0` releases without a minor version.
+  expect(modelDisplayName("claude", "sonnet-4-0")).toBe("Sonnet 4");
+  expect(modelDisplayName("claude", "opus-4-0")).toBe("Opus 4");
   expect(modelDisplayName("claude", "3-7-sonnet")).toBe("3-7-sonnet");
   expect(modelDisplayName("claude", "opus-next-9")).toBe("opus-next-9");
   expect(modelDisplayName("codex", "gpt-5.6-sol")).toBe("gpt-5.6-sol");

@@ -97,13 +97,15 @@ const CLAUDE_VERSIONED_MODEL = /^(?:claude-)?(fable|mythos|opus|sonnet|haiku)-(\
 
 /** The name a card shows for the model a conversation ran on. Claude ids read
     as the CLI's own display names (`opus-5-5` → "Opus 5.5", `opus-5` →
-    "Opus 5"); anything else, Codex ids included, is shown as stored. */
+    "Opus 5", `sonnet-4-0` → "Sonnet 4"); anything else, Codex ids included,
+    is shown as stored. */
 export function modelDisplayName(engine: string, model: string): string {
   if (engine !== "claude") return model;
   const match = CLAUDE_VERSIONED_MODEL.exec(model.trim().toLowerCase());
   if (!match) return model;
   const [, family, major, minor, tagged1m] = match;
-  const name = `${family.charAt(0).toUpperCase()}${family.slice(1)} ${minor ? `${major}.${minor}` : major}`;
+  const version = minor && Number(minor) !== 0 ? `${major}.${minor}` : major;
+  const name = `${family.charAt(0).toUpperCase()}${family.slice(1)} ${version}`;
   return tagged1m ? `${name} (1M)` : name;
 }
 
