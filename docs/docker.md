@@ -234,19 +234,33 @@ checkout. Three things differ, because the Viewer here is a release container
 on a per-deploy candidate port behind the runtime host:
 
 - The tailnet is pointed at the runtime host's entry, which outlives every
-  deploy: the gateway's `remoteEntryPort` when `viewer-gateway.json` names one,
-  otherwise the stable port (`LLV_VIEWER_PORT`, 8898 by default). A gateway
-  that trusts the local entry and has no remote entry is refused with
-  `TRUSTED_ENTRY`: that port vouches for loopback-addressed requests, and the
-  tailnet is never pointed at it.
+  deploy: the gateway's remote entry when one is bound, otherwise the stable
+  port. The ports come from `state/viewer-entries.json`, which the runtime host
+  writes once its listeners are up, so a moved stable port or a gateway file
+  edited after the host booted never sends the tailnet to a port nothing
+  listens on. A stable port that is a trusted local entry with no bound remote
+  entry is refused with `TRUSTED_ENTRY`: that port vouches for
+  loopback-addressed requests, and the tailnet is never pointed at it.
 - A key the container already holds (`LLV_TOKEN` from `service.env`) is the
   key the link carries, and turning phone access off keeps it. The trusted
   local entry and the MCP clients vouch with that same key.
+- With no key in `service.env`, a release gates on the key file once phone
+  access is on. The deploy adapter's health probes, the staging deploy's
+  probes and the trusted local entry then carry the key file's key, so
+  deploys keep passing their probes.
+- A staging Viewer (`LLV_STAGING=1`) shares the flag, the key file and the
+  host's tailscaled with production, so its phone step only reads: turning
+  phone access on or off there is refused with `STAGING`.
+- Turning phone access off while Tailscale publishes a different port keeps
+  the remembered choice (`SERVING_OTHER`): the Viewer on that port shares the
+  flag and would otherwise start ungated under its live mapping.
 - Nothing like the launcher runs before `next start`, so the Viewer puts the
   gate back itself at boot, before its first request, whenever the
   `phone-access` file is present: it keeps the key the environment set or
   reads the key file beside the flag, then restores the link if Tailscale runs
-  and the mapping points at this install. If the key cannot be put in place,
+  and the mapping points at this install. Any `phone-access` file counts,
+  whatever it holds, and the press writes it with a rename, so it is never
+  seen half-written. If the key cannot be put in place,
   the Viewer exits with status 78 rather than serve the live mapping ungated;
   fix the key file or remove the `phone-access` file to turn phone access off.
 

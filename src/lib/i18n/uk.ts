@@ -3777,6 +3777,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "onboarding.phone.code.STATUS_UNREADABLE": "Не вдалося прочитати стан Tailscale.",
   "onboarding.phone.code.NOT_READY": "Tailscale на цьому комп'ютері ще не готовий.",
   "onboarding.phone.code.TRUSTED_ENTRY": "Ця Docker-інсталяція довіряє кожному запиту на своєму локальному порту й не має окремого входу для tailnet, тому Viewer не опубліковано. Додайте віддалений вхід у файл шлюзу (див. docs/docker.md) і натисніть знову.",
+  "onboarding.phone.code.STAGING": "Це staging-Viewer. Він ділить доступ із телефона з production-Viewer, тому лише показує стан і нічого не змінює. Вмикайте й вимикайте доступ із телефона в production-Viewer.",
+  "onboarding.phone.code.SERVING_OTHER": "Tailscale публікує порт {detail}, і це не цей Viewer. Доступ із телефона лишається запам'ятованим, тож Viewer на тому порту й далі вимагає ключ. Вимкніть його з того Viewer або приберіть відображення через tailscale serve.",
   "onboarding.phone.code.DISABLE_FAILED": "Не вдалося вимкнути доступ із телефона: {detail}. Посилання досі працює.",
   "qr.turnOn": "Увімкнути доступ із телефона",
   "onboarding.voice.heading": "Де розпізнається ваше диктування",

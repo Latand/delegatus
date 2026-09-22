@@ -1,7 +1,9 @@
-import fs from "node:fs";
 
+import { phoneAccessFlagMayBeSet } from "@/lib/access/phoneAccessBootGate";
 import { statePath } from "@/lib/configDir";
+import { isStagingMode } from "@/lib/staging";
 import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
+import { readViewerEntries, VIEWER_ENTRIES_FILE } from "@/runtime-host/viewerEntries";
 
 import {
   clearPhoneAccessFlag,
@@ -64,6 +66,8 @@ export type PhoneFailureCode =
   | "STATUS_UNREADABLE"
   | "NOT_READY"
   | "TRUSTED_ENTRY"
+  | "STAGING"
+  | "SERVING_OTHER"
   | "DISABLE_FAILED";
 
 export type PhoneRead = { phone: PhoneAccess | null; error: "STATUS_UNREADABLE" | null };
@@ -119,16 +123,27 @@ function dockerManaged(): boolean {
 const STABLE_VIEWER_PORT = 8898;
 
 /**
- * Where the tailnet is pointed on a Docker install, read the way the runtime
- * host reads it (`src/runtime-host/main.ts`): the gateway's remote entry when
- * one is configured, else the stable port. The candidate port in `PORT`
- * changes with every deploy and would leave the mapping behind on a retired
- * release. `publishable` is false when the stable port is a TRUSTED local
- * entry with no remote entry beside it: that listener vouches for
- * loopback-addressed requests with the release's key, and the press never
- * points the tailnet at it.
+ * Where the tailnet is pointed on a Docker install: the runtime host's
+ * gateway remote entry when it is bound, else its stable port. The candidate
+ * port in `PORT` changes with every deploy and would leave the mapping behind
+ * on a retired release. The ports come from what the runtime host recorded
+ * once its listeners came up (`viewerEntries.ts`), because this container is
+ * told neither and the gateway file may have changed since the host read it.
+ * `publishable` is false when the stable port is a TRUSTED local entry with
+ * no remote entry beside it: that listener vouches for loopback-addressed
+ * requests with the release's key, and the press never points the tailnet at
+ * it. Whether it vouches is re-read per request, so it is read live here too.
  */
 function dockerTailnetEntry(): { port: number; publishable: boolean } {
+  const bound = readViewerEntries(statePath(VIEWER_ENTRIES_FILE));
+  if (bound) {
+    if (bound.remoteEntryPort !== null) return { port: bound.remoteEntryPort, publishable: true };
+    if (bound.stableEntry === "pipe") return { port: bound.stablePort, publishable: true };
+    const gateway = readViewerGatewayConfig(statePath(VIEWER_GATEWAY_FILE), bound.stablePort);
+    return { port: bound.stablePort, publishable: gateway.problem !== null || gateway.config.localEntry !== "trusted" };
+  }
+  /* A runtime host older than the record: derive the entries the way it
+     reads them at boot (`src/runtime-host/main.ts`). */
   const configured = Number(process.env.LLV_VIEWER_PORT);
   const stable = Number.isInteger(configured) && configured > 0 ? configured : STABLE_VIEWER_PORT;
   const gateway = readViewerGatewayConfig(statePath(VIEWER_GATEWAY_FILE), stable);
@@ -154,22 +169,10 @@ export function viewerPortFor(requestUrl: string): number {
   }
 }
 
+/** The remembered choice, as the boot reads it: any flag file counts as set,
+    whatever it holds, because the mapping it stands for may be live. */
 function flagPresent(): boolean {
-  try {
-    return fs.readFileSync(phoneAccessFlagPath(), "utf8").trim() === "tailscale";
-  } catch {
-    return false;
-  }
-}
-
-/** The boot's reading of the choice: a flag that exists and cannot be read
-    counts as set, because the mapping it stands for may be live. */
-function flagMayBeSet(): boolean {
-  try {
-    return fs.readFileSync(phoneAccessFlagPath(), "utf8").trim() === "tailscale";
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
+  return phoneAccessFlagMayBeSet(phoneAccessFlagPath());
 }
 
 function tailnetLink(dnsName: string, token: string): string {
@@ -234,6 +237,12 @@ export async function readPhoneAccess(viewerPort: number): Promise<PhoneRead> {
   return { phone: { ...withDns, state: processGates() ? "ready" : "exposed" }, error: null };
 }
 
+/* A staging Viewer shares production's config root, and with it the flag,
+   the key file and the host's tailscaled: its phone step only reads. */
+async function stagingRefusal(viewerPort: number): Promise<PhoneOutcome> {
+  return { ok: false, code: "STAGING", detail: "", keyKept: false, read: await readPhoneAccess(viewerPort) };
+}
+
 /**
  * The one press: persist, token, publish, verify, re-bind. It stops at the
  * first failure; the process environment is only written after a verified
@@ -241,6 +250,7 @@ export async function readPhoneAccess(viewerPort: number): Promise<PhoneRead> {
  * failed press never changes how the next start behaves.
  */
 export async function enablePhoneAccess(viewerPort: number): Promise<PhoneOutcome> {
+  if (isStagingMode()) return stagingRefusal(viewerPort);
   const deadline = Date.now() + PRESS_BOUND_MS;
   const remaining = (bound: number) => Math.max(1, Math.min(bound, deadline - Date.now()));
   const before = await readPhoneAccess(viewerPort);
@@ -341,6 +351,7 @@ export async function enablePhoneAccess(viewerPort: number): Promise<PhoneOutcom
  * later enable hands out the same link.
  */
 export async function disablePhoneAccess(viewerPort: number): Promise<PhoneOutcome> {
+  if (isStagingMode()) return stagingRefusal(viewerPort);
   const binary = await resolveBinary();
   if (binary) {
     let served: { published: boolean; port: number | null } | null = null;
@@ -348,6 +359,13 @@ export async function disablePhoneAccess(viewerPort: number): Promise<PhoneOutco
       served = await serveStatus(binary, { timeoutMs: STATUS_BOUND_MS });
     } catch {
       served = null;
+    }
+    /* A mapping to another port is not this Viewer's to take down, and the
+       remembered choice is also the gate of whichever Viewer it reaches: two
+       Viewers sharing a config root share the flag, and forgetting it here
+       would start that one ungated under its live mapping. */
+    if (served?.published && served.port !== viewerPort && flagPresent()) {
+      return { ok: false, code: "SERVING_OTHER", detail: String(served.port ?? "?"), keyKept: true, read: await readPhoneAccess(viewerPort) };
     }
     if (served === null || (served.published && served.port === viewerPort)) {
       const off = await serveOff(binary, viewerPort, { timeoutMs: SERVE_BOUND_MS });
@@ -409,7 +427,7 @@ function bootTailnetPort(): number | null {
  * this Viewer, so nothing advertises an address this start does not serve.
  */
 export async function restorePhoneAccessGate(): Promise<"off" | "gated" | "linked"> {
-  if (!flagMayBeSet()) return "off";
+  if (!flagPresent()) return "off";
   if (!processGates()) {
     try {
       setEnv("LLV_TOKEN", (await getToken()).token);

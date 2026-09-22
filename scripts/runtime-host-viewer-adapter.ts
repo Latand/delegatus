@@ -32,8 +32,8 @@ import {
 } from "../src/lib/state/hotStateAuthority";
 import {
   obsoleteManagedViewerContainers,
-  viewerAuthenticationTokenFromConfig,
   viewerCandidateDockerArgs,
+  viewerCandidateGateKey,
   viewerCandidateTmuxEnvironment,
   viewerComposeSnapshotWithoutWakatimeCredential,
   viewerComposeServiceFromConfig,
@@ -382,7 +382,7 @@ async function retainOnly(releases: ViewerReleaseIdentity[]): Promise<void> {
 }
 
 function serviceToken(candidate: ViewerReleaseIdentity): string | null {
-  return viewerAuthenticationTokenFromConfig(fs.readFileSync(composeConfigFile(candidate.container), "utf8"));
+  return viewerCandidateGateKey(fs.readFileSync(composeConfigFile(candidate.container), "utf8"));
 }
 
 /** The same credential where the release may predate Compose snapshots: a

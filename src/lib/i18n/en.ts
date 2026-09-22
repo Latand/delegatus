@@ -3873,6 +3873,8 @@ export const en = {
   "onboarding.phone.code.STATUS_UNREADABLE": "Could not read Tailscale's state.",
   "onboarding.phone.code.NOT_READY": "Tailscale is not ready on this computer yet.",
   "onboarding.phone.code.TRUSTED_ENTRY": "This Docker install trusts every request on its local port and has no separate entry for the tailnet, so the Viewer is not published. Add a remote entry to the gateway file (see docs/docker.md) and press again.",
+  "onboarding.phone.code.STAGING": "This is a staging Viewer. It shares phone access with the production Viewer, so it shows the state and changes nothing. Turn phone access on or off from the production Viewer.",
+  "onboarding.phone.code.SERVING_OTHER": "Tailscale publishes port {detail}, which is not this Viewer. Phone access stays remembered, so the Viewer on that port keeps asking for the key. Turn it off from that Viewer, or remove the mapping with tailscale serve.",
   "onboarding.phone.code.DISABLE_FAILED": "Could not turn phone access off: {detail}. The link still works.",
   "qr.turnOn": "Turn on phone access",
   "onboarding.voice.heading": "Where your dictation is transcribed",

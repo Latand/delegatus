@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { constants, existsSync } from "node:fs";
-import { access, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -96,6 +96,14 @@ const MACOS_TAILSCALE = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 /* Inside the managed Docker image the host's own CLI is reached through the
    nsenter shim the Dockerfile writes; the container has no tailscaled. */
 export const DOCKER_TAILSCALE_SHIM = "/usr/local/bin/tailscale";
+/* Names the shim elsewhere. Tests point it at their stand-in, because on a
+   machine where the default path exists (the macOS app's CLI, Intel Homebrew,
+   or this image, where it IS the host's tailscaled) it would run the real one. */
+export const DOCKER_TAILSCALE_SHIM_ENV = "LLV_DOCKER_TAILSCALE_SHIM";
+
+export function dockerTailscaleShim() {
+  return process.env[DOCKER_TAILSCALE_SHIM_ENV]?.trim() || DOCKER_TAILSCALE_SHIM;
+}
 
 export class TailscaleError extends Error {}
 
@@ -149,7 +157,7 @@ async function isExecutable(path) {
   }
 }
 
-export async function detectTailscale({ dockerShim = DOCKER_TAILSCALE_SHIM } = {}) {
+export async function detectTailscale({ dockerShim = dockerTailscaleShim() } = {}) {
   if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1" && (await isExecutable(dockerShim))) {
     return dockerShim;
   }
@@ -437,11 +445,20 @@ export async function readPhoneAccessFlag() {
   }
 }
 
+/* Written beside and renamed over, so the flag is never seen half-written:
+   a truncated flag would read as a choice nobody made. */
 export async function writePhoneAccessFlag() {
   const path = phoneAccessFlagPath();
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, "tailscale\n", { mode: 0o600 });
-  await chmod(path, 0o600);
+  const temporary = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await writeFile(temporary, "tailscale\n", { mode: 0o600, flag: "wx" });
+    await chmod(temporary, 0o600);
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 export async function clearPhoneAccessFlag() {
