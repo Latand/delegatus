@@ -407,10 +407,10 @@ test("the model drill-down keeps model rows available for turn-boundary reconfig
   await click(submenu[0]!);
   // One anchored surface — the root panel is gone, the model panel is in place.
   const modelRows = [...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')];
-  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6-Astra", "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna"]);
+  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6-Astra", "GPT-6-Sol", "GPT-6-Luna", "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna"]);
   // The conversation runs on Sol, so its row is the checked one wherever the
   // catalog puts it; the others stay selectable.
-  expect(modelRows[1]!.getAttribute("aria-checked")).toBe("true");
+  expect(modelRows[3]!.getAttribute("aria-checked")).toBe("true");
   expect(modelRows[0]!.getAttribute("aria-checked")).toBe("false");
   expect(modelRows[0]!.hasAttribute("disabled")).toBe(false);
   // The back row returns to the root panel; its accessible name is the wired

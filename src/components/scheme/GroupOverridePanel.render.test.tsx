@@ -154,7 +154,7 @@ test("a draft pipeline exposes metadata, a canvas pointer, Start, and discard co
   expect(html).not.toContain("Pause pipeline");
 });
 
-test.each(["gpt-6-astra", "gpt-5.6-sol"])("reviewer override offers %s ultra", (model) => {
+test.each(["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol"])("reviewer override offers %s ultra", (model) => {
   const group = { ...flowGroup, flow: { ...flow, roles: { ...flow.roles, reviewer: { engine: "codex" as const, model, effort: "ultra" } } } };
   const html = renderToStaticMarkup(<GroupOverridePanel group={group} onClose={noop} />);
   expect(html).toContain('value="ultra" selected=""');
