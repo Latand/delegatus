@@ -12,6 +12,7 @@ import { initializeStateCollections, readStateCollectionsRows, SqliteStateCollec
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
+import { isLegacyReviewLoopStage, legacyReviewLoopReachable, legacyReviewLoopShapeValid } from "./legacyReviewDefinition";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
@@ -147,6 +148,7 @@ function isAttempt(value: unknown, index: number): boolean {
     attempt.n === index + 1 &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
+    (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
     ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"].includes(String(attempt.state)) &&
     isEffectiveRole(attempt.effectiveRole) &&
     isNullableString(attempt.launchId) &&
@@ -417,7 +419,7 @@ function isStage(value: unknown): value is PipelineStage {
   const role = (value as { role?: unknown }).role;
   if (!(
     typeof stage.id === "string" &&
-    (stage.kind === "run" || stage.kind === "review-loop") &&
+    (stage.kind === "run" || isLegacyReviewLoopStage(stage)) &&
     typeof stage.prompt === "string" &&
     (stage.next === null || typeof stage.next === "string") &&
     isFailEdge(stage.onFail) &&
@@ -439,7 +441,7 @@ function isStage(value: unknown): value is PipelineStage {
   const referencedRoleId = role === undefined ? null : (role as { roleId: EffectivePipelineRole["roleId"] }).roleId;
   if (stage.outputs !== undefined && effective.access !== "read-only") return false;
   if (effective.roleId !== referencedRoleId) return false;
-  if (stage.kind === "review-loop" && effective.access !== "read-only") return false;
+  if (isLegacyReviewLoopStage(stage) && !legacyReviewLoopShapeValid(stage)) return false;
   if (stage.engine !== undefined && stage.engine !== effective.engine) return false;
   if (stage.model !== undefined && stage.model !== effective.model) return false;
   if (stage.effort !== undefined && stage.effort !== effective.effort) return false;
@@ -462,6 +464,10 @@ function isStage(value: unknown): value is PipelineStage {
  */
 export function pipelineGraphError(
   stages: ReadonlyArray<Pick<PipelineStage, "id" | "kind" | "next"> & { onFail?: Pipeline["stages"][number]["onFail"] }>,
+  /** Decoding a stored record passes false: a legacy review-loop no run
+      reaches still loads (retire-flows §3), and start refuses it. Every edit
+      and every start keeps the rule. */
+  options: { legacyReachability?: boolean } = {},
 ): string | null {
   const ids = new Set(stages.map((stage) => stage.id));
   const nextOf = new Map(stages.map((stage) => [stage.id, stage.next] as const));
@@ -469,7 +475,7 @@ export function pipelineGraphError(
     if (stage.next !== null && !ids.has(stage.next)) return `stage ${stage.id} next must reference an existing stage`;
     if (stage.next === stage.id) return `stage ${stage.id} pass edge may not target itself`;
     const onFail = stage.onFail ?? null;
-    if (stage.kind === "review-loop" && onFail) return `review-loop stage ${stage.id} does not support onFail`;
+    if (isLegacyReviewLoopStage(stage) && onFail) return `review-loop stage ${stage.id} does not support onFail`;
     if (onFail && !ids.has(onFail.to)) return `stage ${stage.id} onFail must reference an existing stage`;
     if (onFail && (!Number.isInteger(onFail.maxRounds) || onFail.maxRounds < 1 || onFail.maxRounds > MAX_FAIL_EDGE_ROUNDS)) {
       return `stage ${stage.id} onFail maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`;
@@ -487,17 +493,10 @@ export function pipelineGraphError(
       cursor = nextOf.get(cursor) ?? null;
     }
   }
+  if (options.legacyReachability === false) return null;
   for (const stage of stages) {
-    if (stage.kind !== "review-loop") continue;
-    const reachable = stages.some((candidate) => {
-      if (candidate.kind !== "run") return false;
-      let cursor: string | null = candidate.next;
-      for (let hops = 0; cursor !== null && hops <= stages.length; hops += 1) {
-        if (cursor === stage.id) return true;
-        cursor = nextOf.get(cursor) ?? null;
-      }
-      return false;
-    });
+    if (!isLegacyReviewLoopStage(stage)) continue;
+    const reachable = legacyReviewLoopReachable(stages, stage.id);
     /* #1026: this used to say "review-loop stage requires a preceding run
        stage", which reads as an ordering rule and sent a caller reordering an
        array that was already in the right order. The defect is a missing pass
@@ -559,6 +558,30 @@ function isReviewGrant(value: unknown): boolean {
     && isActor(grant.actor) && typeof grant.at === "string";
 }
 
+const MAX_LEGACY_REVIEW_CONVERSIONS = 32;
+
+/** An explicit legacy review-loop conversion and the definition it replaced. */
+function isLegacyReviewConversion(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const conversion = value as Record<string, unknown>;
+  const original = conversion.original as Record<string, unknown> | null;
+  const reverted = conversion.reverted as Record<string, unknown> | undefined;
+  return typeof conversion.clientRequestId === "string" && conversion.clientRequestId.length > 0 && conversion.clientRequestId.length <= 200
+    && typeof conversion.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(conversion.expectedRevision)
+    && typeof conversion.stageId === "string" && conversion.stageId.length > 0
+    && typeof conversion.fixerStageId === "string" && conversion.fixerStageId.length > 0
+    && typeof conversion.implementerStageId === "string" && conversion.implementerStageId.length > 0
+    && Number.isSafeInteger(conversion.reviewLimit) && (conversion.reviewLimit as number) >= 1 && (conversion.reviewLimit as number) <= MAX_FAIL_EDGE_ROUNDS
+    && ["request", "flow", "default"].includes(String(conversion.reviewLimitSource))
+    && Boolean(original && typeof original === "object" && Array.isArray(original.stages) && original.stages.every(isStage)
+      && isRun(original.run) && (original.run as { stageId: string }).stageId === conversion.stageId
+      && (original.cursor === null || (typeof original.cursor === "object" && typeof (original.cursor as { stageId?: unknown }).stageId === "string")))
+    && typeof conversion.convertedGraphDigest === "string"
+    && isActor(conversion.actor) && typeof conversion.at === "string"
+    && (reverted === undefined || (Boolean(reverted) && typeof reverted === "object" && typeof reverted.clientRequestId === "string"
+      && reverted.clientRequestId.length > 0 && isActor(reverted.actor) && typeof reverted.at === "string"));
+}
+
 function isDecisionAnswer(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const answer = value as Record<string, unknown>;
@@ -618,6 +641,8 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.decisionAnswers === undefined || (Array.isArray(pipeline.decisionAnswers) && pipeline.decisionAnswers.every(isDecisionAnswer))) &&
     (pipeline.reviewPending === undefined || isReviewPending(pipeline.reviewPending)) &&
     (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
+    (pipeline.legacyReviewConversions === undefined || (Array.isArray(pipeline.legacyReviewConversions)
+      && pipeline.legacyReviewConversions.length <= MAX_LEGACY_REVIEW_CONVERSIONS && pipeline.legacyReviewConversions.every(isLegacyReviewConversion))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
     (pipeline.stageReports === undefined || (Array.isArray(pipeline.stageReports) && pipeline.stageReports.length <= MAX_PIPELINE_STAGE_REPORTS && pipeline.stageReports.every(isStageReportEntry))) &&
     (pipeline.pos === undefined || (
@@ -636,7 +661,7 @@ function isPipeline(value: unknown): value is Pipeline {
   if (stages.length < minStages || stages.length > MAX_PIPELINE_STAGES || runs.length !== stages.length) return false;
   const ids = stages.map((stage) => stage.id);
   if (new Set(ids).size !== ids.length) return false;
-  if (pipelineGraphError(stages) !== null) return false;
+  if (pipelineGraphError(stages, { legacyReachability: false }) !== null) return false;
   if (runs.some((run, index) => run.stageId !== stages[index]!.id)) return false;
   const expectedWorktree = path.join(path.dirname(pipeline.repoDir!), `${path.basename(pipeline.repoDir!)}-pipeline-${pipeline.id}`);
   if (pipeline.worktreeDir !== expectedWorktree || pipeline.branch !== `pipeline/${slugify(pipeline.task!)}-${pipeline.id}`) return false;
