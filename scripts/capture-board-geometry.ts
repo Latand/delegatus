@@ -700,6 +700,14 @@ function measureOnboarding(phone: boolean) {
       if (!band || !body) return null;
       return band.getBoundingClientRect().bottom <= body.getBoundingClientRect().bottom + 1;
     })(),
+    /* The links under the band, measured by their glyphs: a link cut by the footer reads as broken. */
+    tourLinksInView: (() => {
+      const links = Array.from(dialog.querySelectorAll<HTMLElement>("[data-tour-links] a"));
+      const body = links[0]?.closest<HTMLElement>(".overflow-y-auto");
+      if (links.length === 0 || !body) return null;
+      const bottom = body.getBoundingClientRect().bottom;
+      return links.every((link) => link.getBoundingClientRect().bottom <= bottom + 1);
+    })(),
     stepCounter: dialog.querySelector("footer span")?.textContent ?? dialog.querySelector("[data-onboarding-step-list-toggle]")?.textContent ?? null,
     phone: dialog.querySelector("[data-phone-state]") ? {
       state: dialog.querySelector<HTMLElement>("[data-phone-state]")!.dataset.phoneState ?? null,
@@ -1424,17 +1432,29 @@ async function captureOnboarding(): Promise<void> {
               if (!viewport.phone) must(r.filledButtons.length === 1, `${tag}: ${r.filledButtons.length} filled buttons on the tour (${r.filledButtons.join(", ")})`);
             });
             if (viewport.phone) {
-              for (let page_ = 0; page_ < 4; page_ += 1) await page.click("[data-onboarding-primary]");
+              /* Every pager page, since pages 2–4 carry the longest bodies on a 358 px page. */
+              for (let page_ = 2; page_ <= 4; page_ += 1) {
+                await page.click("[data-onboarding-primary]");
+                await page.waitForTimeout(400);
+                await shot(`tour-page-${page_}`, (r) => {
+                  common(`tour-page-${page_}`, r);
+                  must(r.filledButtons.length === 1, `${tag}: ${r.filledButtons.length} filled buttons on tour page ${page_} (${r.filledButtons.join(", ")})`);
+                });
+              }
+              await page.click("[data-onboarding-primary]");
               await page.waitForTimeout(600);
               await shot("tour-start", (r) => {
                 common("tour-start", r);
                 must(r.tourBandOnScreen === true, `${tag}: four presses of Continue did not page the tour to its Start here band`);
+                /* On the last page Continue turns nothing: the band's button is the one fill. */
+                must(r.filledButtons.length === 1, `${tag}: ${r.filledButtons.length} filled buttons on the tour's last page (${r.filledButtons.join(", ")})`);
               });
             } else {
               /* The first action is on screen without scrolling. */
               await shot("tour-start", (r) => {
                 common("tour-start", r);
                 must(r.tourStartInView === true, `${tag}: the Start here band is below the fold`);
+                must(r.tourLinksInView === true, `${tag}: the tour's links are cut by the footer`);
               });
             }
             await page.click('[data-tour-effort="medium"]');
