@@ -3,6 +3,12 @@
 Design only. Grounded in `main` at `72154d4ae` (2026-09-19). No code, no build
 was run for this document.
 
+Slice-3 revision, 2026-09-22, grounded in `main` at `7fb7345e5`: §0 adds
+the slice-3 requirement, §1.1 what the code says about it, §2.1 the
+add-account rows, §2.3, §2.4 and §2.6 the phone, tour and voice steps, §3
+and §7 their layout and build plan. Slices 1 and 2 have shipped; their
+sections stay as the record and are unchanged.
+
 ## 0. Originating requirement
 
 Source: GitHub issue #1876, opened 2026-09-19 by the repository owner, body
@@ -38,6 +44,88 @@ each role runs on; the shipped defaults stay (review on Codex) until the user
 chooses; the step shows cost hints; the same design decides what a launch does
 when a stage names an engine with no signed-in account, so that a stage never
 starts and dies.
+
+### Slice 3 requirement (2026-09-22)
+
+Operator request, 2026-09-22, paraphrased in English from the pinned
+specification of this slice (the operator's own words stay off public
+surfaces):
+
+> The setup guide grows from three steps (Engines, Agents, Check) to the full
+> flow.
+>
+> 1. **Phone step = one button.** Today phone access is a launch flag and the
+>    QR button only says "start the viewer with Tailscale access". After this
+>    slice the step shows the state (Tailscale installed / logged in / serve on
+>    / not installed) and ONE primary button turns access on from the running
+>    Viewer: it persists the choice for future starts, enables `tailscale
+>    serve` and the token, restarts or re-binds the Viewer process itself if
+>    that is what it takes, and comes back with the URL and the QR. No terminal
+>    command is ever shown as the happy path. A missing or logged-out Tailscale
+>    gets one plain sentence and one link, nothing else. Fast: one press and a
+>    wait with a visible state.
+> 2. **Tour step = one screen, short, in the product's own words.** It must say
+>    what Agent Log Viewer IS: an orchestrator of coding agents for development
+>    work, where everything revolves around tasks on the kanban board, not a
+>    session viewer. It explains the orchestrator seat (it runs everything, and
+>    how it is woken), what a pipeline is (stages, review rounds, where things
+>    wait for you), and offers the first action: create the first orchestrator
+>    seat in a project (Opus high or medium), preferably an existing project
+>    the Viewer already lists. README keeps the detailed guide; the tour links
+>    to it. Five cards at most, inline SVG schematics where they help.
+> 3. **Transcription step:** choose the backend (local | chatgpt | elevenlabs |
+>    soniox), paste the key for elevenlabs/soniox, one "Check" that calls the
+>    real `/api/transcribe/token` path and reports the answer in a sentence;
+>    writes `transcribe-backend`, `soniox-api-key`, `elevenlabs-api-key` under
+>    the config directory through a server route (keys never logged, never
+>    echoed back, mode 600). Reachable later from the same menus as the Setup
+>    guide.
+> 4. **Several accounts per engine:** the Engines step gets an "Add account"
+>    action per engine that reuses AccountsPanel's existing add/sign-in rows;
+>    every connected account is listed with its state.
+> 5. Everything in en and uk, rendered and checked at desktop 1440 and 1280 and
+>    phone 390; the step list, "Step n of N", Back/Continue/Close semantics and
+>    the marker keep working; existing tests stay green.
+
+Source for items 3 and 4: GitHub issue #2004, opened 2026-09-22, body quoted
+verbatim:
+
+> The onboarding dialog (`src/components/onboarding/OnboardingDialog.tsx`) has
+> three steps: engines, agent mapping, check. Two things a new install needs
+> are missing from it and are only reachable by hand-editing files under the
+> config directory.
+>
+> **1. Transcription backend and key.** Dictation depends on
+> `transcribe-backend` (`local | chatgpt | elevenlabs | soniox`) and, for the
+> live backends, on a key file (`soniox-api-key`, `elevenlabs-api-key`) or the
+> matching env var. On a fresh server the backend defaults to a non-live one,
+> so the composer's live dictation answers `409` from `/api/transcribe/token`
+> and the batch fallback answers `502` when the ChatGPT path has no signed-in
+> Codex account. Nothing in the UI says why; the user sees "cannot transcribe".
+> Wanted: an onboarding step (also reachable from settings) that shows the
+> current backend, lets the user pick one, paste the key for a live backend,
+> and runs a one-shot check (the existing `/api/transcribe/backend` GET already
+> reports availability per backend). The key is written to the same file the
+> server reads today; the step never displays it back.
+>
+> **2. Several accounts per engine.** Onboarding detects one Claude and one
+> Codex sign-in. The accounts panel already supports several accounts per
+> engine with limits and a project binding, but onboarding does not lead
+> there: a user who wants a second account to log in and be selectable for a
+> project has to find the panel on their own. Wanted: the engines step offers
+> "add another account" for each engine, using the same sign-in rows the
+> accounts panel uses, and shows which account a project will use.
+>
+> Notes: the stage host case above was fixed by hand: the key file copied and
+> `transcribe-backend` set to `soniox`; both files are read on every request,
+> so no restart was needed. Design doc: `docs/design/onboarding.md`. Keep the
+> "nothing is gated" rule: every step is skippable and reachable later.
+
+The one-button phone step reverses a decision §8 of the first revision made
+("Turning on Tailscale from the browser … is a new attack surface bought for
+one saved terminal command"). The operator's requirement demands it, so §2.3
+designs it and §8 records what of the old caution survives (the token is
+never rotated from the browser, the public internet is never used).
 
 ### The acceptance script: four problems
 
@@ -125,7 +213,8 @@ gates every request on `LLV_TOKEN` once set and trades `?k=` for a 30-day
 cookie. `GET /api/access` returns `{ tailnetUrl }`, and `AccessQrButton`
 renders the QR client-side or, when the URL is null, the hint "Start the
 viewer with Tailscale access: …" (`qr.startHint`). A running Viewer cannot turn
-this on for itself; it needs a restart with the flag.
+this on for itself today; §1.1 records why it can after slice 3 (nothing in
+the gate is read at boot) and §2.3 designs the button.
 
 **There is no settings page.** Device and install controls live in the rail's
 `RailHeaderMenu` on desktop (`rail.menuLanguage`, `rail.menuQr`,
@@ -147,26 +236,155 @@ container. Its findings on the orchestrator draft (the 8 KB mandate, the MCP
 preflight) are untouched by this design and stay valid follow-ups. Nothing else
 relevant was found in project-scoped or unscoped search.
 
+### 1.1 Addendum for slice 3 (2026-09-22, at `7fb7345e5`)
+
+Slices 1 and 2 shipped; the facts above stay as the record. What the code
+says about the four new pieces:
+
+**The access gate reads its environment on every request, nothing at boot.**
+`src/proxy.ts:50` reads `process.env.LLV_TOKEN` inside `proxy()`;
+`src/app/api/access/route.ts:22` reads `LLV_TS_URL` inside `GET`;
+`src/lib/sameOrigin.ts:34` reads `LLV_TS_HOST` inside `allowedHostNames()`.
+A value written to `process.env` inside the serving Viewer therefore changes
+the gate from the next request on, with no restart. Once `LLV_TOKEN` is set,
+every connection must carry the `llv_auth` cookie, loopback included
+(`proxy.ts:63-67`, "loopback is shared by every OS account"); the cookie is
+set for 30 days by `redirectWithCookie` (`proxy.ts:18-33`,
+`COOKIE_MAX_AGE_SECONDS` at line 8), `secure` only when the request arrived
+over https.
+
+**The Viewer cannot restart itself without taking the launcher down.**
+`bin/cli.mjs` supervises the server as a child; the child's `exit` handler
+(`cli.mjs:390-416`) stops the serve child and the runtime host and then calls
+`process.exit`. A Viewer that exits to "restart with the flag" ends the
+launcher, and nothing starts it again. So the slice re-binds the running
+process and never restarts it (§2.3).
+
+**Every Tailscale primitive already exists in `bin/tailscale.mjs`, in
+foreground form.** `detectTailscale` (line 149) resolves the binary from
+`PATH` or the macOS app bundle; `readStatus` (197) runs `tailscale status
+--json`, treats `NeedsLogin` and `Stopped` as "sign in" (207) and an empty
+`Self.DNSName` as "enable MagicDNS"; `serve` (220) spawns a foreground
+`tailscale serve <port>` (221) that lives as a child and recognises the
+missing operator right by a stderr pattern (237); the token lives at
+`<config>/agent-log-viewer/token` (273), 32 hex characters (94), written with
+mode 600 (283) by `getToken` (287). `src/lib/telegram/sessionStore.ts:5`
+already imports a `bin/*.mjs` module from `src/`, and `tsconfig.json` has
+`allowJs`, so a Viewer route can call these functions rather than copy them.
+
+**The launcher reads no config file.** Every option comes from `argv`
+(`parseArgs`, `cli.mjs:173-215`); `--tailscale` flips `options.tailscale`
+(203); `prepareRuntime` (707-735) detects, reads status and mints the token;
+`buildChildEnv` (338-347) hands `LLV_TOKEN`, `LLV_TS_HOST` and `LLV_TS_URL` to
+the Viewer child; the serve child starts after the server (880-882) and is
+stopped with it (395-401). "Persist the choice for future starts" therefore
+needs one file the launcher reads before `parseArgs` decides.
+
+**Tailscale's background mode is what "persist" needs on the tailnet side.**
+On this machine (`tailscale version` 1.102.4, read 2026-09-22) `tailscale
+serve --help` lists `--bg` ("run the command as a background process") and
+`serve status [--json]`; `tailscale serve status --json` answers `{ TCP: {
+"443": { HTTPS: true } }, Web: { "<dns>:443": { Handlers: { "/": { Proxy:
+"http://127.0.0.1:<port>" } } } } }`. The vendor reference
+(tailscale.com/kb/1242/tailscale-serve, read the same day) states that with
+`--bg` serve "runs persistently in the background until you disable it" and
+"automatically resumes sharing" after a reboot or `tailscale down` / `up`,
+that without `--bg` it must be restarted by hand, and that a configuration is
+removed by appending `off` to the command that created it (`tailscale serve
+--https=443 <target> off`) or wholesale by `tailscale serve reset`. On this
+machine the 443 handler currently proxies to a local port that is not the
+Viewer's, so "serve is on, for something else" is a state the button will
+meet, not a hypothetical. The container image installs no `tailscale`
+(`Dockerfile` names none), so inside it the step reads `missing`.
+
+**The QR button prints the command it should replace.**
+`src/components/AccessQrButton.tsx:143-149` renders `qr.startHint` plus `bunx
+agent-log-viewer --tailscale` when `/api/access` answers a null URL. The
+desktop rail menu has the row `rail.menuQr` (`ProjectRail.tsx:418-419`); the
+phone menus (`ProjectDashboard.tsx:1934-2007`, `OverviewBoard.tsx:185-191`)
+have no QR row.
+
+**Transcription: the backend has a route, the keys have none.**
+`src/lib/transcribeBackend.ts`: `resolveTranscribeBackend` (24-34) reads
+`LLV_TRANSCRIBE_BACKEND`, then the `transcribe-backend` file, then `local`;
+`writeTranscribeBackend` (37-41) writes that file with the default mode;
+`transcribeBackendInfo` (58-70) reports `available` and `keyPath` per option;
+`readElevenLabsApiKey` / `readSonioxApiKey` (78-99) read the env variable
+first and then `elevenlabs-api-key` / `soniox-api-key`, on every request.
+`GET` and `POST /api/transcribe/backend` (`backend/route.ts:17`, `22-45`)
+report and persist the backend and answer 409 when the env locks it (35). No
+route writes a key: the mic menu's key popup (`MicButton.tsx:204-215`) shows
+the file path to copy and leaves the write to the user. `POST
+/api/transcribe/token` (`token/route.ts:30-41`) answers 409 for `local` and
+`chatgpt`, 503 when the live backend has no key (46-51, 77-82), 502 when the
+provider refuses, and `{ token, provider }` on success; the batch route's
+ChatGPT path (`transcribe/route.ts:101-113`) answers 502 when the Codex token
+is missing or expired.
+
+**Accounts: the add row exists and the Engines step hides it.**
+`MobileAddAccountRow` (`AccountsPanel.tsx:1295`) is the "Add a {engine}
+account" row: a label field and Add, calling `state.add(label)`
+(`useEngineAccounts.ts:438`); `MobileEngineSection` renders it under every
+account card inside `MobileAccountsBody` (1426), with `mobileAccountState`
+(1006) giving each row `active | ready | needsSignIn | pending`. `EnginesStep.tsx:108`
+already embeds `MobileAccountsBody`, but only behind the "Sign in" toggle
+(47, 92) and only while no account is connected. A connected engine shows one
+state line and no list.
+
+**The marker and the dialog know three steps.** `ONBOARDING_STEP_IDS`
+(`src/lib/onboarding/marker.ts:17`) is `engines, agents, check`;
+`parseMarker` drops ids it does not know; `useOnboarding.ts:79` writes
+`engines` and `agents` as done on completion; `OnboardingDialog.tsx:27`
+carries the same three in `STEPS`. `openOnboarding(mode)` takes `guide |
+mapping` and no target step.
+
+**The seat and the tour's first action.** `toggleOrchestrator`
+(`Viewer.tsx:404`) opens the dock for the current project;
+`focusHandoffBus.setShell` (743) exposes `openProject`. The dock's create
+draft opens at `ORCHESTRATOR_SPAWN_CONFIG` = Claude Opus at `low`
+(`src/lib/orchestrator/prompt.ts:60-63`), while the Orchestrator role preset
+is Opus at `high` (`src/lib/roles/defaults.ts:42-45`); `docs/orchestrator.md:32-60`
+describes the dock and the draft, and `README.md:93-122` the tasks, pipelines
+and seat in the product's words. The wake numbers stay where card 4 of the
+first revision read them: `seatTick.ts:129` (5-minute check), `105` (hourly
+bound), `125`/`126` (5 and 15 minutes for the seat's own children). The
+attention island's label is `attention.needsYou` (`en.ts:2292`). A fail
+edge's `maxRounds` is the review budget (`src/lib/pipelines/types.ts:82`).
+
+**One evidence driver already renders the guide at all three widths.**
+`scripts/capture-board-geometry.ts:554-583` holds the `onboarding` case with
+`ONBOARDING_VIEWPORTS` = 1440×900, 1280×900, 390×844, light and dark, EN and
+UK, over a seeded home with stub CLIs. Slice 3 adds its states there and
+writes no new driver.
+
 ## 2. The flow
 
-One dialog, five steps, one job each. No welcome screen and no finish screen:
+One dialog, six steps, one job each. No welcome screen and no finish screen:
 the first step is useful at once and the last step's result is the ending.
 
 ```
-1 Engines  →  2 Agents  →  3 Phone  →  4 Tour  →  5 Check
+1 Engines  →  2 Agents  →  3 Phone  →  4 Voice  →  5 Tour  →  6 Check
 ```
+
+Voice sits beside Phone because both are "this device" steps; the tour is
+the last thing read before the check, and the seat its card 5 creates is
+what the check's row 5 then looks at. Slices 1 and 2 shipped "Step {n} of 3";
+slice 3 makes it 6 and inserts three ids into `ONBOARDING_STEP_IDS`
+(`marker.ts:17`) and `STEPS` (`OnboardingDialog.tsx:27`). A marker written by
+an earlier build reads the new ids as `null`, which is the "not visited"
+state, so `firstOpenStep` lands a returning user on Phone.
 
 Shared chrome, all steps:
 
 | Control | EN | UK |
 |---|---|---|
 | Dialog title | Set up Agent Log Viewer | Налаштування Agent Log Viewer |
-| Step counter | Step {n} of 5 | Крок {n} з 5 |
+| Step counter | Step {n} of 6 | Крок {n} з 6 |
 | Primary | Continue | Далі |
 | Back | Back | Назад |
 | Leave | Close, finish later | Закрити, завершити пізніше |
 | Leave hint (tooltip, once) | You can reopen this from the menu: Setup guide | Відкрити знову можна з меню: «Посібник із налаштування» |
-| Step names | Engines · Agents · Phone · Tour · Check | Рушії · Агенти · Телефон · Огляд · Перевірка |
+| Step names | Engines · Agents · Phone · Voice · Tour · Check | Рушії · Агенти · Телефон · Голос · Огляд · Перевірка |
 
 "Close, finish later" and Escape work on every step and write
 `dismissedAt` (§6). Steps are freely navigable from the step list; none is
@@ -210,6 +428,35 @@ from the accounts API shows the panel's existing notice text.
 
 Continue is always enabled. With neither engine connected the label stays
 "Continue" and steps 2 and 5 show their own empty states.
+
+**Several accounts per engine (slice 3, #2004).** The card stops being one
+state line with a hidden sign-in and becomes the engine's account list. Under
+the header line, every account the engine store knows is a row: label, the
+state chip `mobileAccountState` already computes (`AccountsPanel.tsx:1006`:
+active · ready · sign in · signing in), the plan when read, and the row's
+own "sign in" where it applies (the Claude browser-and-code flow, the Codex
+device code, both from `MobileEngineSection`). The last row is "Add a
+{engine} account" (`MobileAddAccountRow`, `AccountsPanel.tsx:1295`): tapping
+it turns it into the label field and Add, which calls `state.add(label)` and
+starts the sign-in the engine uses. Nothing here is new UI: `EnginesStep` renders
+`MobileAccountsBody engines={[state]}` always instead of behind the "Sign in"
+toggle (`EnginesStep.tsx:47, 92, 108`), and the toggle button goes away. The
+header line summarises the list so the card reads at a glance:
+
+| Element | EN | UK |
+|---|---|---|
+| Header, one connected | Connected · {plan} | Підключено · {plan} |
+| Header, several | {count} accounts · {label} is active | Акаунтів: {count} · активний — {label} |
+| Header, connected plus one signed out | {count} accounts · {label} is active · 1 needs sign-in | Акаунтів: {count} · активний — {label} · 1 без входу |
+| Add row (existing keys) | Add a {engine} account / opens the device sign-in | Додати акаунт {engine} / відкриває вхід через код |
+
+"Active" is the account future launches use (`select`, the row's own
+control); the row already says "Use {label} for future launches" on tap. The
+project binding of #1279 stays in the accounts panel: the step says which
+account launches use by default, and a project that binds another account is
+that panel's business (§8). Rows are 56 px (`min-h-14`) inside the 328 px
+desktop card, which the existing row layout already fits (it was drawn for
+358 px); the card grows and the step body scrolls.
 
 Skipped when: never. This step is the ground every other step stands on.
 
@@ -263,78 +510,277 @@ is absent and the step is a read-and-continue table.
 
 ### 2.3 Step 3 — Phone
 
-**One job:** get the Viewer open on the user's phone, or let them say "not
-now" in one tap.
+**One job:** one press turns phone access on from the running Viewer and
+comes back with the link and the QR; or the user says "not now" in one tap.
 
-The Viewer cannot enable remote access for itself (§1), so the step reads the
-state and shows the next action for it. New server fact on `GET /api/access`:
-`tailscale: "serving" | "ready" | "needs-login" | "missing"` beside the
-existing `tailnetUrl` (§7, slice 3).
+The old revision made the step a set of terminal commands because "the
+Viewer cannot enable remote access for itself" (§1). It can: every part of
+the gate is read per request (§1.1), Tailscale has a background serve mode
+that outlives the process that set it, and the launcher can read one file
+before it decides its options. The step reads the state, shows one button
+for it, and never shows a command on the happy path.
 
-| State | EN | UK |
+#### The state the button finds
+
+`GET /api/access` grows from `{ tailnetUrl }` to:
+
+```
+{ tailnetUrl: string | null,
+  phone: { state: "missing" | "needs-login" | "no-dns" | "ready" | "serving-other" | "serving",
+           dnsName: string | null, viewerPort: number, servingPort: number | null,
+           persisted: boolean } }
+```
+
+The route calls `detectTailscale`, `readStatus` and a new `serveStatus`
+from `bin/tailscale.mjs`, each bounded to 3 s, and maps:
+
+| State | Read as | The step shows |
+|---|---|---|
+| `missing` | `detectTailscale` throws | one sentence, one link |
+| `needs-login` | `tailscale status --json` has any `BackendState` other than `Running` (`NeedsLogin`, `Stopped`, `NoState`, `NeedsMachineAuth`, `Starting`); `readStatus` already raises for the first two (`tailscale.mjs:207`) | one sentence, one link |
+| `no-dns` | `Running` and `Self.DNSName` empty (`readStatus`'s MagicDNS error) | one sentence, one link |
+| `ready` | `Running` with a DNS name; `serve status` has no `/` handler on 443, or has one that proxies to the Viewer's own port while this process holds no `LLV_TOKEN` (a `--bg` mapping left by an earlier run) | the button |
+| `serving-other` | the 443 `/` handler proxies to a local port that is not `viewerPort` | the button, with one warning line |
+| `serving` | the 443 `/` handler proxies to `127.0.0.1:<viewerPort>` **and** this process holds `LLV_TOKEN` and `LLV_TS_URL` | the QR, the link, Copy |
+
+`viewerPort` is `process.env.PORT` (set by `buildChildEnv`, `cli.mjs:308`)
+or the listening port the server reports. `persisted` is whether the flag
+file below exists, so the serving state can say "remembered for future
+starts". In `missing`, `needs-login` and `no-dns` the step re-reads the
+state every 5 s while it is on screen, so the user who installs or signs in
+sees the button appear without pressing anything; that is what lets those
+states carry a sentence and a link and nothing else.
+
+#### What the one press does
+
+`POST /api/access/phone` with `{ action: "enable" }`, guarded by
+`rejectCrossOrigin`, bounded to 15 s as a whole, runs these in order and
+stops at the first failure, so a failed press leaves the process exactly as
+it was:
+
+1. **Persist the choice.** Write `<config>/agent-log-viewer/phone-access`
+   containing `tailscale\n` (the same directory as `token`, resolved through
+   `configFilePath`). `bin/cli.mjs` reads this file before `parseArgs`
+   decides and treats its presence as `--tailscale`; §7 has the launcher
+   side. Failure code `PERSIST_FAILED`.
+2. **Read or mint the token.** `getToken()` from `bin/tailscale.mjs`: the
+   existing 32-hex file, mode 600, reused when present, never rotated from
+   here. Failure code `TOKEN_WRITE_FAILED` (its own message names the path).
+3. **Publish in the tailnet.** Spawn `tailscale serve --bg <viewerPort>`
+   through `viewerChildProcessOptions` (the credential isolation
+   `tailscale-credential-isolation.test.ts` pins) and wait for it to exit,
+   bounded 10 s. Stderr matching the operator pattern of `tailscale.mjs:237`
+   is `OPERATOR_RIGHTS`; any other non-zero exit is `SERVE_FAILED` with the
+   last stderr line; no exit in time is `TIMEOUT`. With `--bg` the mapping is
+   tailscaled's, not this process's: it survives the Viewer, the launcher and
+   a reboot (§1.1), which is the "persist" the requirement asks for on the
+   tailnet side.
+4. **Verify.** `tailscale serve status --json` must show the 443 `/` handler
+   proxying to `127.0.0.1:<viewerPort>`; otherwise `VERIFY_FAILED`. A
+   `serving-other` mapping is replaced by step 3, which the step's warning
+   line said before the press.
+5. **Re-bind the running process.** Set `process.env.LLV_TOKEN`,
+   `LLV_TS_HOST = <dnsName>` and `LLV_TS_URL = https://<dnsName>/?k=<token>`
+   in the serving Viewer. From the next request `proxy.ts:50` gates every
+   connection, `sameOrigin.ts:34` admits the tailnet host, and
+   `/api/access` answers the URL. No restart: nothing in the gate is read at
+   boot, and a restart would end the launcher (§1.1). This is the "re-bind"
+   the requirement allows, chosen over "restart" because the process cannot
+   restart itself and stay alive.
+6. **Keep the caller signed in.** The JSON reply sets the `llv_auth` cookie
+   with the attributes `redirectWithCookie` uses (`proxy.ts:23-32`), so the
+   tab that pressed the button survives the gate it just turned on; other
+   tabs of the same browser share the cookie. Another browser on the same
+   computer now meets the 403 page and needs the link once; the serving
+   state says so in one line.
+7. **Answer** the new `GET /api/access` body; the client renders the QR from
+   `tailnetUrl` with the same client-side `qrcode` path `AccessQrButton`
+   uses today (the token never reaches a server log or an image service).
+
+`{ action: "disable" }` is the secondary affordance in the serving state:
+it removes the flag file, runs `tailscale serve --https=443 <viewerPort>
+off` (the vendor-documented removal form, §1.1), and clears the three
+variables from `process.env`; the loopback gate lifts on the next request
+and the cookie becomes inert. It never deletes the token file, so a later
+enable hands out the same link and every phone that scanned it stays signed
+in.
+
+The route is the one place that runs `tailscale` from the Viewer, and it
+runs it with argv only: no shell, the port as a number, the binary from
+`detectTailscale`. A request from the tailnet itself (the phone) is allowed
+to disable and to enable; nothing about it is riskier than the desktop tab,
+since both already hold the token.
+
+#### Copy
+
+| Element | EN | UK |
 |---|---|---|
 | Heading | Open it on your phone | Відкрити на телефоні |
-| Lead | The Viewer stays on this machine. Your phone reaches it over a private network, and a secret key in the link keeps everyone else out. | Viewer лишається на цьому комп'ютері. Телефон підключається через приватну мережу, а секретний ключ у посиланні не пускає сторонніх. |
+| Lead | The Viewer stays on this computer. Your phone reaches it over your own Tailscale network, and a secret key in the link keeps everyone else out. | Viewer лишається на цьому комп'ютері. Телефон підключається через вашу власну мережу Tailscale, а секретний ключ у посиланні не пускає сторонніх. |
 | Skip | Not now | Не зараз |
+| missing: sentence | Install Tailscale on this computer and on your phone, then come back to this step. | Встановіть Tailscale на цьому комп'ютері й на телефоні, потім поверніться до цього кроку. |
+| missing: link | Get Tailscale → `https://tailscale.com/download` | Завантажити Tailscale → same |
+| needs-login: sentence | Tailscale is installed here and not signed in; sign in on this computer and this step continues by itself. | Tailscale встановлено, але вхід не виконано; увійдіть на цьому комп'ютері, і цей крок продовжиться сам. |
+| needs-login: link | How to sign in → `https://tailscale.com/kb/1017/install` | Як увійти → same |
+| no-dns: sentence | Turn on MagicDNS and HTTPS certificates for your Tailscale network, then come back to this step. | Увімкніть MagicDNS і HTTPS-сертифікати для своєї мережі Tailscale, потім поверніться до цього кроку. |
+| no-dns: link | Open the DNS settings → `https://login.tailscale.com/admin/dns` | Відкрити налаштування DNS → same |
+| ready: title | Tailscale is signed in on this computer. | Tailscale на цьому комп'ютері готовий. |
+| ready: button (primary) | Turn on phone access | Увімкнути доступ із телефона |
+| ready: under the button | Publishes the Viewer inside your Tailscale network only, protects it with an access key, and remembers the choice for future starts. | Публікує Viewer лише всередині вашої мережі Tailscale, захищає ключем доступу й запам'ятовує вибір для наступних запусків. |
+| busy: button | Turning on… | Вмикаю… |
+| busy: line | This takes a few seconds. | Це триває кілька секунд. |
+| serving-other: title | Tailscale already publishes another local port ({port}) at this computer's address. | Tailscale уже публікує за адресою цього комп'ютера інший локальний порт ({port}). |
+| serving-other: button | Point it at the Viewer | Перенаправити на Viewer |
+| serving-other: warning | That other service stops being reachable at the Tailscale address. | Той інший сервіс перестане відкриватися за адресою Tailscale. |
 | serving: title | Ready. Scan with your phone's camera | Готово. Наведіть камеру телефона |
 | serving: note | The phone must be signed in to the same Tailscale network. The link holds your access key: share it with nobody. | Телефон має бути в тій самій мережі Tailscale. У посиланні — ваш ключ доступу: нікому його не передавайте. |
-| serving: actions | Copy link | Скопіювати посилання |
-| ready: title | Tailscale is installed. Restart the Viewer with phone access | Tailscale встановлено. Перезапустіть Viewer з доступом із телефона |
-| ready: command | `bunx agent-log-viewer --tailscale` | same |
-| ready: note | Stop the Viewer in its terminal (Ctrl+C), run this, then reopen this step. Running agents keep working. | Зупиніть Viewer у терміналі (Ctrl+C), виконайте команду й відкрийте цей крок знову. Запущені агенти працюють далі. |
-| needs-login | Tailscale is installed and signed out. Run `tailscale up`, then Check again. | Tailscale встановлено, вхід не виконано. Виконайте `tailscale up` і натисніть «Перевірити ще раз». |
-| missing: title | Install Tailscale on this machine and on your phone | Встановіть Tailscale на цьому комп'ютері й на телефоні |
-| missing: note | It is a free private network between your own devices. After installing, sign in on both with the same account and press Check again. | Це безплатна приватна мережа між вашими пристроями. Після встановлення увійдіть на обох під тим самим акаунтом і натисніть «Перевірити ще раз». |
-| other network (disclosure) | Another private network or a VPN | Інша приватна мережа або VPN |
-| other network body | Start the Viewer with `--hostname <address on that network>`. The terminal prints a link with the access key. Open that link on the phone once; it stays signed in for 30 days. | Запустіть Viewer з `--hostname <адреса в цій мережі>`. У терміналі з'явиться посилання з ключем доступу. Відкрийте його на телефоні один раз: вхід зберігається 30 днів. |
-| new key (disclosure) | Lost the phone or shared the link? Restart with `--new-token`: every old link stops working. | Загубили телефон чи поділилися посиланням? Перезапустіть із `--new-token`: усі старі посилання перестануть працювати. |
-| error | Could not read the access state. Try again | Не вдалося прочитати стан доступу. Спробувати ще раз |
+| serving: gate line | Other browsers on this computer now need this link too: the Viewer asks every connection for the key. | Іншим браузерам на цьому комп'ютері тепер теж потрібне це посилання: Viewer запитує ключ у кожного підключення. |
+| serving: persisted line | Phone access stays on the next time you start the Viewer. | Доступ із телефона лишиться увімкненим і після наступного запуску Viewer. |
+| serving: actions | Copy link · Turn off phone access | Скопіювати посилання · Вимкнути доступ із телефона |
+| copied | Copied | Скопійовано |
+| error: read | Could not read the access state. | Не вдалося прочитати стан доступу. |
+| retry | Try again | Спробувати ще раз |
 
-The QR is the existing client-side renderer from `AccessQrButton` (the token
-never reaches a server log or an image service), extracted into a body
-component both surfaces use.
+Failure copy, shown under the button in a `danger-soft` block with "Try
+again"; the code goes into a "Show details" disclosure with the stderr tail,
+never into the sentence:
 
-Skipped when: the wizard is itself open on a phone (`useIsMobile()` and the
-request arrived through the tailnet host): the step shows one line, "You are
-already here on your phone." / «Ви вже відкрили Viewer на телефоні.», marked
-skipped. "Not now" marks it skipped and continues. The restart in the `ready`
-state ends the page session; the wizard reopens on its own afterwards because
-the marker still says unfinished (§6), landing on this step.
+| Code | EN | UK |
+|---|---|---|
+| `OPERATOR_RIGHTS` | Tailscale lets only an operator publish services. Run this once in a terminal, then press the button again: `sudo tailscale set --operator=$USER` | Tailscale дозволяє публікувати сервіси лише оператору. Виконайте це один раз у терміналі й натисніть кнопку знову: `sudo tailscale set --operator=$USER` |
+| `SERVE_FAILED` | Tailscale could not publish the Viewer: {detail}. | Tailscale не зміг опублікувати Viewer: {detail}. |
+| `VERIFY_FAILED` | Tailscale reported success, and the published address does not point at the Viewer yet. Try again in a moment. | Tailscale повідомив про успіх, але опублікована адреса ще не вказує на Viewer. Спробуйте за хвилину. |
+| `TIMEOUT` | Tailscale did not answer within 15 seconds. | Tailscale не відповів за 15 секунд. |
+| `TOKEN_WRITE_FAILED` | Could not save the access key: {detail}. | Не вдалося зберегти ключ доступу: {detail}. |
+| `PERSIST_FAILED` | Could not remember the choice: {detail}. Nothing was turned on. | Не вдалося запам'ятати вибір: {detail}. Нічого не ввімкнено. |
+| `STATUS_UNREADABLE` | Could not read Tailscale's state. | Не вдалося прочитати стан Tailscale. |
+| `DISABLE_FAILED` | Could not turn phone access off: {detail}. The link still works. | Не вдалося вимкнути доступ із телефона: {detail}. Посилання досі працює. |
 
-### 2.4 Step 4 — Tour
+`OPERATOR_RIGHTS` is the one place a terminal command appears, and it is a
+failure path: granting the operator right needs `sudo`, which no web request
+may run. The command is the same one `bin/tailscale.mjs` prints today
+(`OPERATOR_HINT`).
 
-**One job:** five sentences-with-a-picture that say what the product does and
-where to look, readable in under a minute.
+#### The rest of the surface
 
-One screen. Five cards in a row on desktop, a horizontal snap pager on the
-phone. Each card: a 16:10 static schematic drawn with the app's own tokens
-(inline SVG, no screenshots, no animation), a title, at most three lines of
-body. No overlays on the live UI, no coach marks, no "next tip" sequence.
+- The QR body (image, link field, Copy) is extracted from `AccessQrButton`
+  into `AccessQrBody`, used by the step and the popover. The popover's
+  unavailable state (`AccessQrButton.tsx:143-149`) drops the command and
+  shows one button, "Turn on phone access" / «Увімкнути доступ із
+  телефона», which opens the guide on this step (`openOnboarding("guide",
+  "phone")`); `qr.startHint` is retired. The rail menu row `rail.menuQr`
+  keeps opening the popover.
+- Skipped when the wizard is open on a phone over the tailnet
+  (`useIsMobile()` and a host that is not loopback): "You are already here
+  on your phone." / «Ви вже відкрили Viewer на телефоні.», marked skipped.
+  "Not now" marks the step skipped and continues. Inside the container image
+  the state is `missing` and the sentence stands as written.
+- The "other private network" and "new key" disclosures of the first
+  revision are gone from the step: `--hostname` and `--new-token` stay
+  launcher flags documented in the README, and the step's job is one button.
+
+### 2.4 Step 5 — Tour
+
+**One job:** one screen that says, in the product's own words, what Agent
+Log Viewer is and what to do first, readable in under a minute.
+
+The first revision's tour walked the screens (board, tasks, pipelines, seat,
+review rounds). The operator's framing for this slice is different and this
+rewrite follows it: the product is an orchestrator of coding agents for
+development work; everything revolves around tasks on the kanban board; the
+seat runs everything; pipelines and review rounds are how work moves; and
+the tour ends on the first action, creating the first seat in a project the
+Viewer already lists. README keeps the depth and the tour links to it.
+
+One screen. Four cards in a row on desktop and one "Start here" band under
+them; on the phone a horizontal snap pager whose last page is the band. Each
+card: a 16:10 schematic drawn with the app's own tokens (inline SVG, no
+screenshots, no animation), a title, at most four lines of body. No overlays
+on the live UI, no coach marks. Cards 1–4 are static and work offline; card
+5 reads the project list the rail already holds.
 
 | # | Title EN / UK | Body EN | Body UK |
 |---|---|---|---|
-| 1 | The board / Дошка | Every agent on this machine is a card, grouped by project. A card's colour says its state: working, waiting for you, finished, stalled. | Кожен агент на цьому комп'ютері — картка, згрупована за проєктом. Колір картки показує стан: працює, чекає на вас, завершив, завис. |
-| 2 | Tasks / Завдання | A task is one piece of work in your words. Agents and pipelines attach to it, so the board reads as work and its progress. | Завдання — це одна частина роботи вашими словами. До нього прикріплюються агенти й конвеєри, тож дошка показує роботу та її поступ. |
-| 3 | Pipelines and stages / Конвеєри й етапи | A pipeline runs stages in order: build, review, verify. Each stage is a fresh agent in its own worktree that ends with a report: pass, fail, or needs a decision. | Конвеєр виконує етапи по черзі: розробка, рев'ю, перевірка. Кожен етап — новий агент у власному worktree, що завершує звітом: пройдено, не пройдено або потрібне рішення. |
-| 4 | The orchestrator and how it wakes / Оркестратор і як він прокидається | One agent per project runs the pipelines for you. It sleeps between stages. The Viewer checks every 5 minutes: an agent the orchestrator started itself wakes it at the next check once it finishes; a finished stage or something stuck wakes it at most once an hour. You can also just message it. | Один агент на проєкт керує конвеєрами за вас. Між етапами він спить. Viewer перевіряє кожні 5 хвилин: коли агент, якого оркестратор запустив сам, завершує роботу, наступна перевірка його будить; через завершений етап або щось застрягле він прокидається щонайбільше раз на годину. Йому також можна просто написати. |
-| 5 | Review rounds, and when something waits for you / Раунди рев'ю і коли щось чекає на вас | A failed review sends the work back to the builder. The rounds have a budget; when it runs out the pipeline parks and asks you. "Needs you" in the corner counts everything waiting for your answer. Press it to jump there. | Невдале рев'ю повертає роботу розробнику. Раунди мають бюджет; коли він вичерпується, конвеєр зупиняється й питає вас. «Потрібні ви» в кутку рахує все, що чекає на вашу відповідь. Натисніть, щоб перейти. |
+| 1 | An orchestrator for coding agents / Оркестратор для агентів-розробників | Agent Log Viewer runs coding agents on this computer for you. The work is tasks on each project's board (issues, features, bugs). Agents, pipelines and reviews attach to a task, so the board shows where every piece of work stands. | Agent Log Viewer запускає агентів-розробників на цьому комп'ютері замість вас. Робота — це завдання на дошці кожного проєкту (issues, функції, помилки). До завдання прикріплюються агенти, конвеєри й рев'ю, тож дошка показує, де перебуває кожна частина роботи. |
+| 2 | The orchestrator seat / Місце оркестратора | One agent per project holds the seat. You tell it what to ship; it writes the tasks, opens pipelines, starts and watches the agents, and brings you what needs a decision. It sleeps between steps: the Viewer checks every {check} minutes and wakes it when a stage finishes or something stalls, and you can always just write to it. | Один агент на проєкт займає це місце. Ви кажете, що треба зробити; він пише завдання, відкриває конвеєри, запускає й наглядає за агентами та приносить вам те, що потребує рішення. Між кроками він спить: Viewer перевіряє кожні {check} хвилин і будить його, коли етап завершився або щось застрягло, а ви завжди можете просто йому написати. |
+| 3 | Pipelines and review rounds / Конвеєри й раунди рев'ю | A pipeline takes one task through stages in its own worktree: build, review, verify. Each stage is a fresh agent that ends with a verdict. Pass moves on. Fail sends the work back to the builder for another round, within a budget. Needs-decision stops and asks you. | Конвеєр проводить одне завдання через етапи у власному worktree: розробка, рев'ю, перевірка. Кожен етап — новий агент, що завершується вердиктом. «Пройдено» рухає далі. «Не пройдено» повертає роботу розробнику на ще один раунд, у межах бюджету. «Потрібне рішення» зупиняє й питає вас. |
+| 4 | Where things wait for you / Де щось чекає на вас | "Needs you" in the corner counts everything waiting for your answer: a stage that needs a decision, a review budget that ran out, an agent's question. Press it to jump there. Everything else runs without you. | «Потрібні ви» в кутку рахує все, що чекає на вашу відповідь: етап, якому потрібне рішення, вичерпаний бюджет рев'ю, запитання агента. Натисніть, щоб перейти. Решта працює без вас. |
+| 5 | Start here: the first orchestrator / Почніть тут: перший оркестратор | Create the first orchestrator in a project. Pick one the Viewer already lists, choose the effort, and press Create: the seat opens with its instructions already written, and you tell it what to ship. | Створіть першого оркестратора в проєкті. Виберіть той, що Viewer уже показує, оберіть рівень зусилля й натисніть «Створити»: місце відкриється з готовими інструкціями, і ви скажете йому, що зробити. |
 
-Card 4 states the two numbers the new user never saw (5 minutes, one hour).
-They are read from `DEFAULT_SEAT_TICK_POLICY` and
-`SEAT_TICK_WAKE_INTERVAL_MS` at render, so the card cannot drift from the
-code. Since #1881 the hour is the bound for a board where nothing the seat
-spawned is moving: a child the seat launched with `spawn_agent` that settles
-or stalls is due at the next check (`SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS`),
-and while such children only run the bound is 15 minutes. A pipeline stage is
-not the seat's child (its lineage parent is the stage before it), so a
-finished stage is still carried by the hourly wake as "a lane you launched". Card 5 uses the attention island's own label (`NEEDS YOU`) so the word on
-the card is the word on the screen.
+Card 2's `{check}` is `DEFAULT_SEAT_TICK_POLICY.checkIntervalMs`
+(`seatTick.ts:129`) at render, as before; the hourly and 15-minute bounds
+(`seatTick.ts:105, 126`) are left to the README, since the card's job is the
+mechanism, not the schedule. Card 3 says "within a budget" because
+`maxRounds` on the fail edge is that budget (`types.ts:82`). Card 4 uses the
+attention island's own word (`attention.needsYou`), so the word on the card
+is the word on the screen.
 
-Controls: none beyond Back / Continue; on the phone, the pager dots and swipe.
-Empty/error: none; the step is static and works offline. Skipped when: never
-auto-skipped; one click passes it.
+Links, under the cards, 12 px `text-secondary` with the arrow glyph:
 
-### 2.5 Step 5 — Check
+| Link | EN | UK | Target |
+|---|---|---|---|
+| Full guide | Read the full guide on GitHub | Повний посібник на GitHub | `https://github.com/Latand/live-log-viewer-next#how-agents-are-driven` (`package.json` repository) |
+| Seat guide | How the orchestrator works | Як працює оркестратор | `…/blob/main/docs/orchestrator.md` |
+
+#### Card 5's controls (the first action)
+
+| Element | EN | UK |
+|---|---|---|
+| Project select | Project | Проєкт |
+| Select, no projects | No projects yet. Open a folder with a repository first: the board's "Create a project". | Проєктів ще немає. Спершу відкрийте теку з репозиторієм: «Створити проєкт» на дошці. |
+| Effort segment | High (recommended) · Medium | High (рекомендовано) · Medium |
+| Effort note | Opus at high effort thinks longer per step; medium is cheaper and fine for small projects. | Opus на high думає довше на кожному кроці; medium дешевший і достатній для невеликих проєктів. |
+| Button | Create the orchestrator | Створити оркестратора |
+| Already has one | {project} already has an orchestrator. Open it | У проєкту {project} уже є оркестратор. Відкрити |
+| Claude not connected | The orchestrator runs on Claude, which is not connected (step 1). | Оркестратор працює на Claude, який не підключено (крок 1). |
+
+The select lists the projects the rail has (`projectCatalog`, existing
+folders first, the overview and archived projects excluded), preselecting
+the one the wizard opened over. Pressing Create does **not** spawn anything:
+it closes the wizard (writing `tour: "done"`), opens that project through
+the shell bus (`focusHandoffBus.setShell().openProject`, `Viewer.tsx:743`),
+opens the dock (`toggleOrchestrator`, `Viewer.tsx:404`) and hands the create
+draft `engine: "claude", model: "opus"` and the chosen effort. The draft's
+own Confirm is what designates the seat and delivers the mandate, exactly as
+`docs/orchestrator.md:32-60` describes; the tour only removes the finding
+and the choosing. On the phone the same press pushes the orchestrator screen
+(`MobileOrchestratorSheet`) for that project with the same prefill. The
+draft today opens at `low` (`prompt.ts:60-63`); the tour passes `high` or
+`medium` per the operator's ask, and the build gives the draft an `initialEffort`
+input rather than changing `ORCHESTRATOR_SPAWN_CONFIG`, so nothing else that
+opens the draft moves. A project that already holds a seat shows the
+"already has one" line and "Open it" in place of Create.
+
+#### Schematics
+
+Inline SVG, `viewBox="0 0 160 100"`, strokes `currentColor` at 1.5 px on
+`text-muted`, fills from the tokens (`--color-accent`, `--color-success`,
+`--color-warning`, `--color-danger`, `--color-sunken`); no text inside the
+pictures, so nothing needs translating and nothing can overflow:
+
+1. **Board.** Three columns (`x` 8, 58, 108; width 44; height 84, `--color-sunken`),
+   five cards across them (12 × 44 rounded rects), two with a 3 px left bar
+   in `--color-accent` and one in `--color-success`.
+2. **Seat.** A filled circle at (80, 50) r 14 in `--color-accent`; four
+   small cards around it at the corners; arrows from the circle to each
+   card; a dashed arrow from the bottom edge (a message) into the circle; a
+   small "z" made of three shortening strokes above the circle for sleep.
+3. **Pipeline.** Three boxes in a row (build, review, verify: `x` 10, 60,
+   110; 40 × 26 at `y` 30) joined by arrows; a curved arrow from box 2 back
+   over box 1 in `--color-warning` (the fail edge) with a small "×2" made of
+   two ticks; a diamond under box 2 in `--color-danger` (needs decision).
+4. **Needs you.** A rounded rectangle for the board with a small pill at the
+   top-right corner in `--color-danger` holding a filled dot; three dotted
+   lines from cards on the board converging on the pill.
+5. **Start here.** A project card (`--color-sunken`) with a "+" seat circle
+   in `--color-accent` at its corner and a short arrow from the circle into
+   an empty conversation box.
+
+Controls: Back / Continue, the links, and card 5's three controls; on the
+phone, the pager dots and swipe. Empty/error: card 5 with no projects shows
+its own line. Skipped when: never auto-skipped; one click passes it.
+
+### 2.5 Step 6 — Check
 
 **One job:** prove on this machine that an agent spawns, receives a message,
 reports a stage and that a sleeping seat gets woken, and name the broken part
@@ -386,6 +832,91 @@ failed row's state word carries `text-danger` with its glyph.
 "Open the board" writes `completedAt` and closes the dialog. It is enabled
 whatever the check's result, including never run.
 
+### 2.6 Step 4 — Voice (transcription)
+
+**One job:** pick where dictation is transcribed, paste the key if that
+place needs one, and prove in one press that it answers.
+
+Reads `GET /api/transcribe/backend` (`backend/route.ts:17`): the current
+backend, whether the environment locks it, and per option `available` and
+`keyPath`. Four rows, one radio each, in the order the store lists them
+(`TRANSCRIBE_BACKENDS`). Choosing a row calls the existing `POST
+/api/transcribe/backend` (22-45) at once; there is no Save. The two live
+rows carry a key field.
+
+| Element | EN | UK |
+|---|---|---|
+| Heading | Where your dictation is transcribed | Де розпізнається ваше диктування |
+| Lead | The microphone in the composer turns speech into the message. Choose what does the transcribing; the local option keeps every recording on this computer. | Мікрофон у полі вводу перетворює мову на повідомлення. Оберіть, що розпізнаватиме; локальний варіант лишає кожен запис на цьому комп'ютері. |
+| Row: local | Faster Whisper (local) · nothing leaves this computer | Faster Whisper (локально) · нічого не виходить за межі цього комп'ютера |
+| local, not installed | Not installed on this computer. How to install → docs/transcription.md#local | На цьому комп'ютері не встановлено. Як встановити → same |
+| Row: chatgpt | ChatGPT Voice · through your Codex sign-in, after you stop recording | ChatGPT Voice · через ваш вхід у Codex, після зупинки запису |
+| chatgpt, no Codex | Sign in to Codex first (step 1). | Спершу увійдіть у Codex (крок 1). |
+| Row: elevenlabs | ElevenLabs Scribe · live, while you speak · needs an API key | ElevenLabs Scribe · наживо, поки говорите · потрібен API-ключ |
+| Row: soniox | Soniox · live, while you speak · needs an API key | Soniox · наживо, поки говорите · потрібен API-ключ |
+| Key field (label) | API key | API-ключ |
+| Key field (placeholder) | Paste the key | Вставте ключ |
+| Key save | Save key | Зберегти ключ |
+| Key on file | Key on file · Replace | Ключ збережено · Замінити |
+| Key from environment | Key comes from the environment ({var}); it cannot be changed here. | Ключ береться зі змінної середовища ({var}); тут його змінити не можна. |
+| Key saved receipt | Key saved. It is never shown again. | Ключ збережено. Більше він не показується. |
+| Key save failed | Could not save the key: {reason}. | Не вдалося зберегти ключ: {reason}. |
+| Locked by env | Locked by LLV_TRANSCRIBE_BACKEND on this machine; the choice here is read-only. | Заблоковано змінною LLV_TRANSCRIBE_BACKEND на цьому комп'ютері; вибір тут лише для читання. |
+| Check | Check dictation | Перевірити диктування |
+| Checking | Checking… | Перевіряю… |
+| Skip | Keep the local default | Лишити локальний варіант |
+
+The **Check** calls the real path and reports its answer in one sentence,
+in `text-success` or `text-danger`:
+
+| Backend | Call | Answer | Sentence EN | Sentence UK |
+|---|---|---|---|---|
+| elevenlabs, soniox | `POST /api/transcribe/token` | 200 `{ provider }` | Live dictation works with {name}. | Диктування наживо працює з {name}. |
+| same | same | 503 (no key, `token/route.ts:46-51, 77-82`) | No key on file for {name}. Paste it above and save. | Для {name} немає ключа. Вставте його вище й збережіть. |
+| same | same | 502 (provider refused) | {name} refused the key: {detail}. | {name} відхилив ключ: {detail}. |
+| local | `GET /api/transcribe/backend`, `available` | true | Dictation works with Faster Whisper on this computer. Speech is transcribed after you stop. | Диктування працює з Faster Whisper на цьому комп'ютері. Мова розпізнається після зупинки. |
+| local | same | false | Faster Whisper is not installed on this computer. | Faster Whisper на цьому комп'ютері не встановлено. |
+| chatgpt | same | true | Dictation works through your Codex sign-in. Speech is transcribed after you stop. | Диктування працює через ваш вхід у Codex. Мова розпізнається після зупинки. |
+| chatgpt | same | false | No signed-in Codex account. | Немає акаунта Codex із виконаним входом. |
+| any | network or 5xx | | Could not check: {reason}. | Не вдалося перевірити: {reason}. |
+
+The token route answers 409 for `local` and `chatgpt` by design
+(`token/route.ts:33-38`: live mode is ElevenLabs and Soniox only), so for
+those two the check reads availability from the backend route and the
+sentence says "after you stop"; the client falls back to record-then-transcribe on any non-200, as the route's own comment says (`token/route.ts:12-16`).
+The check for ChatGPT proves a credential file, not a live token: an expired
+token surfaces at the first dictation as the 502 the batch route already
+answers (`transcribe/route.ts:110`), and the sentence does not claim more.
+
+**Writes.** The backend goes through the existing `POST
+/api/transcribe/backend`; `writeTranscribeBackend` (37-41) gains `{ mode:
+0o600 }` and a `chmod`, so all three files carry the mode the requirement
+names. The keys go through a new `PUT /api/transcribe/key` with `{
+provider: "elevenlabs" | "soniox", key }`: `rejectCrossOrigin`; the key
+trimmed, 1–512 characters, no line break; written to
+`configFilePath("<provider>-api-key")` through a temp file and rename, mode
+600 plus `chmod`; the reply is `transcribeBackendInfo()` (availability and
+paths, never the key); the handler never logs the body and the client never
+keeps it after the reply. A provider whose key comes from the environment
+(`readElevenLabsApiKey` / `readSonioxApiKey` read the variable first,
+`transcribeBackend.ts:79-80, 91-92`) answers 409 `KEY_FROM_ENV`, and the
+field is disabled with the "from the environment" line. `GET` on that path
+does not exist: there is nothing to read back.
+
+**Reachable later.** A third row in both menus beside "Setup guide" and
+"Agent mapping": "Dictation" / «Диктування», opening this step alone in the
+same shell the mapping uses (`OnboardingMode` gains `voice`). The mic menu's
+key popup (`MicButton.tsx:204-215`) keeps the copyable path and gains one
+button, "Set up in the guide" / «Налаштувати в посібнику», that opens the
+same. `docs/transcription.md:62-68` ("the cloud backends stay off the UI on
+purpose … no in-app toggle") is already false since the mic menu shipped
+and becomes more so; the build rewrites that paragraph.
+
+Controls per row are 44 px on the phone and the key field is 16 px there
+(the iOS no-zoom rule `MobileAddAccountRow` already follows). Skipped when:
+never auto-skipped; "Keep the local default" marks it skipped and continues,
+and the local row stays selected.
+
 ## 3. Layout
 
 Tokens are the existing ones from `src/styles/tokens.css` and
@@ -429,9 +960,9 @@ the rest of the app uses.
 │ ● 1 Engines   │  Who does what                                 (15/700)  │
 │ ◉ 2 Agents    │  Each role starts on the engine, model and…   (13/400)  │
 │ ○ 3 Phone     │                                                          │
-│ ○ 4 Tour      │  ┌ banner: warning-soft, 12 px pad ───────────────────┐  │
-│ ○ 5 Check     │  │ 5 roles run on Codex, which is not connected. …    │  │
-│               │  │ [Move them to Claude] [Connect Codex] Leave as is  │  │
+│ ○ 4 Voice     │  ┌ banner: warning-soft, 12 px pad ───────────────────┐  │
+│ ○ 5 Tour      │  │ 5 roles run on Codex, which is not connected. …    │  │
+│ ○ 6 Check     │  │ [Move them to Claude] [Connect Codex] Leave as is  │  │
 │               │  └────────────────────────────────────────────────────┘  │
 │  200 px       │  ROLE            ENGINE        MODEL      EFFORT   COST  │ 11/600 muted
 │  bg-sunken    │  BUILD                                                   │
@@ -439,7 +970,7 @@ the rest of the app uses.
 │               │  Builder, front  [Cl│Cx]   [Opus 5     ▾] ▮▮▮▯▯  heavy  │
 │               │  …                                     content 720 px    │
 ├───────────────┴──────────────────────────────────────────────────────────┤
-│ Step 2 of 5                                        [ Back ] [ Continue ] │ 60  bg-raised, border-t
+│ Step 2 of 6                                        [ Back ] [ Continue ] │ 60  bg-raised, border-t
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -462,12 +993,34 @@ the rest of the app uses.
 - Engines step: two engine cards side by side, 328 × auto, 16 px gap, each with
   a 3 px left border in the engine's colour role, `EngineMark` 20 px, name
   13 / 600, state line 12 px, action button right-aligned.
-- Phone step: two columns, QR well 240 × 240 on `bg-sunken` at the left, copy
-  and actions at the right; in non-serving states the left column holds the
-  command block.
-- Tour: five cards, 128 px wide × auto, 8 px gaps, in one row (672 px); picture
-  128 × 80 on `bg-sunken`, title 12 / 600, body 12 / 400 `text-secondary`.
-  Card 4 and 5 are the two problems' answers and get the `accent-soft` frame.
+- Step list: six rows of 36 px (216 px plus padding) inside the 528 px the
+  body has between header and footer, so the list never scrolls.
+- Engines step: the two cards keep their 328 px columns; each now holds the
+  account rows (56 px each) and the add row, so a card is 56 × (n + 1) + 64
+  px tall and the body scrolls past ~5 accounts. The header line truncates
+  with an ellipsis; the row labels are the panel's own.
+- Phone step, `ready` and `serving-other`: one column, 480 px wide, the
+  title 15 / 700, the button 32 px `accent` fill under it with the note in
+  12 px `text-secondary`; the failure block (`danger-soft`, 12 px padding)
+  appears under the note and pushes nothing off screen at 640 px. `serving`:
+  two columns, the 240 × 240 QR well on `bg-sunken` at the left, title, note,
+  gate line, persisted line and the two actions at the right. `missing`,
+  `needs-login`, `no-dns`: one sentence (13 / 400) and one link (12 / 600
+  `text-accent`), nothing else; the column is 480 px so the sentence wraps
+  to two lines at most in Ukrainian.
+- Voice step: four rows of 44 px with the radio at the left, the name
+  13 / 600 and the note 12 px `text-secondary` on one line; a selected live
+  row opens to 96 px to hold the key field (32 px, `font-mono` off, the key
+  is a password input) and "Save key". "Check dictation" is a bordered
+  button under the rows; its sentence sits beside it at 13 px and wraps
+  under it when longer than the remaining width.
+- Tour: cards 1–4 in one row, 160 px wide, 8 px gaps (664 of 672); picture
+  160 × 100 on `bg-sunken`, title 12 / 600, body 12 / 400 `text-secondary`
+  at up to four lines. Card 5 is a full-width band (672 × 112) under them
+  with the `accent-soft` frame: its schematic at the left (128 × 80), the
+  title and body, and one row of controls: project select 240 px, effort
+  segment 160 px, Create 32 px `accent` fill. The links sit under the band.
+  Card 2 keeps the `accent-soft` frame that marked the wake card before.
 - Check: five rows 48 px, state glyph 16 px at the left (`muted` ring,
   `accent` spinner, `success` check, `danger` cross, `muted` dash), label
   13 / 400, elapsed seconds right-aligned 11 px tabular-nums. A failed row
@@ -485,8 +1038,8 @@ padding top and bottom. Every tappable target is at least 44 px.
 
 ```
 ┌────────────────────────────────────┐
-│ ‹  Step 2 of 5 · Agents         ✕ │ 52  bg-raised
-│ ▰▰▰▰▱▱▱▱▱▱  (2 px progress, accent)│
+│ ‹  Step 2 of 6 · Agents         ✕ │ 52  bg-raised
+│ ▰▰▰▰▱▱▱▱▱▱▱▱ (2 px progress, accent)│
 ├────────────────────────────────────┤
 │ Who does what            (15/700)  │ 16 px side padding
 │ Each role starts on the…  (13/400) │
@@ -510,15 +1063,23 @@ padding top and bottom. Every tappable target is at least 44 px.
 ```
 
 - The step list collapses into the header line plus the progress bar; tapping
-  the header line opens the five steps as a `MobileSheetRow` list.
+  the header line opens the six steps as a `MobileSheetRow` list.
 - The mapping table becomes one card per role (the table's five columns cannot
   hold at 358 px of content): title row with the cost chip at the right, then
   engine, model, effort stacked, then the headroom line.
-- Engines: the two cards stack. Tour: horizontal snap pager, one card per
-  screen (358 × auto, picture 358 × 224), dots under it, swipe or Continue
-  advances a card and then the step. Check: the rows are unchanged at full
+- Engines: the two cards stack. Check: the rows are unchanged at full
   width; the explanation block's action button is full width.
-- Phone step on a phone shows the skipped line (§2.3).
+- Phone step on a phone over the tailnet shows the skipped line (§2.3); on
+  a phone reached any other way (a dev server on the LAN) it renders the
+  one-column layout at full width, the button full width and 44 px.
+- Voice: rows 56 px; the open live row stacks the 16 px key field and a
+  full-width "Save key"; "Check dictation" is full width and its sentence
+  goes under it.
+- Tour: the pager has five pages; pages 1–4 are the cards at 358 px with a
+  358 × 224 picture; page 5 is the band stacked: picture, title, body, the
+  select (44 px), the effort segment (44 px), Create (44 px, full width),
+  then the two links. Swipe or Continue advances a page and then the step.
+- Engines: the account rows are the panel's own phone rows, unchanged.
 
 Rendered evidence owed by the build: the dialog is a new surface, so each
 slice adds a case to the existing drivers and writes no new one: desktop at
@@ -527,6 +1088,19 @@ through `src/components/mobile/issue1671Evidence.browser.test.tsx`, light and
 dark, EN and UK, with measured overflow checks on the mapping table's longest
 Ukrainian labels («Розробник, виправлення», «Аудитор продакшену») and the
 footer buttons.
+
+Slice 3 adds its states to the `onboarding` case of
+`scripts/capture-board-geometry.ts` (§1.1) and writes no new driver: the
+phone step in each of its six states (a stub `tailscale` on the seeded
+home's `PATH` answering canned `status` and `serve status` JSON, and
+recording the `serve --bg` argv), the press in flight and each failure
+code, the voice step with each row selected, a saved key and each check
+sentence, the tour with and without projects, the engines step with three
+accounts on one engine, and the two new menu rows. Measured in the live DOM
+at 1440, 1280 and 390: no horizontal overflow, the longest Ukrainian
+controls unclipped («Увімкнути доступ із телефона», «Перенаправити на
+Viewer», «Перевірити диктування», «Створити оркестратора»), the four tour
+cards in one row at 1280, and 44 px targets on the phone.
 
 ## 4. The agent-mapping model
 
@@ -803,8 +1377,9 @@ every active seat.
 ## 6. Entry points
 
 **The marker.** `state/onboarding.json`, schema 1:
-`{ completedAt, dismissedAt, reason, steps: { engines, agents, phone, tour,
-check: "done" | "skipped" | null }, lastHealth: { at, result, failedCode } }`.
+`{ completedAt, dismissedAt, reason, steps: { engines, agents, phone, voice,
+tour, check: "done" | "skipped" | null }, lastHealth: { at, result, failedCode } }`
+(slice 3 added `voice`; a file written before it reads the new ids as `null`).
 Read and written through `GET` / `PUT /api/onboarding`. Server-side and per
 install, so a second browser or the phone does not replay the wizard.
 
@@ -824,17 +1399,18 @@ absent:
 **Never blocking.** The dialog closes from every step by Escape, the ✕ or
 "Close, finish later"; closing writes `dismissedAt` and it does not reopen by
 itself again, with one exception: a marker with neither `completedAt` nor
-`dismissedAt` (the page died mid-wizard, or the phone step's restart) reopens
+`dismissedAt` (the page died mid-wizard) reopens
 on the step the `steps` map says is next. Nothing in the app is disabled while
 the wizard is unfinished, and the launch refusal of §4.5 works identically
 with or without it.
 
-**Re-entry.** Two rows in each menu, since there is no settings page (§1):
+**Re-entry.** Three rows in each menu, since there is no settings page (§1):
 
 | Surface | Row EN / UK | Opens |
 |---|---|---|
 | Desktop `RailHeaderMenu`, phone `MobileMenuSheet` | Setup guide / Посібник із налаштування | the wizard at step 1, all steps reachable, prior results shown |
 | same | Agent mapping / Призначення агентів | the step-2 table alone |
+| same | Dictation / Диктування | the Voice step alone (§2.6) |
 
 Plus one line on the existing zero-projects panel (`overview-first-run`), under
 "Create a project": "Set up engines and agents" / «Налаштувати рушії та
@@ -895,13 +1471,103 @@ the orchestrator and a separate lane. Depends on #1874's fix for row 5's
 remedy. The engine tests run by path against an isolated state directory; this
 slice never sweeps `src/lib/agent/` or the runtime directories.
 
-### Slice 3 — phone and tour
+### Slice 3 — phone, tour, voice, accounts (this revision)
 
-Fence: `src/app/api/access/route.ts` (the `tailscale` state, a bounded
-`tailscale status --json` read), `src/components/AccessQrButton.tsx` (extract
-the QR body), `src/components/onboarding/{PhoneStep,TourStep}.tsx` with the
-five inline SVG schematics, `src/lib/i18n/{en,uk}.ts`. `bin/cli.mjs` and
-`bin/tailscale.mjs` are untouched.
+What the builder builds, in the order that keeps every intermediate state
+green:
+
+1. **The shell.** `ONBOARDING_STEP_IDS` becomes `engines, agents, phone,
+   voice, tour, check` (`marker.ts:17`; `parseMarker` and `emptySteps`
+   follow); `STEPS` in `OnboardingDialog.tsx` matches; `openOnboarding(mode,
+   step?)` gains `voice` as a mode and an optional target step, carried on
+   the same window event; `useOnboarding.ts:79` marks every visited step
+   rather than two by name; "Step {n} of 6". Tests: the marker round-trips
+   the six ids and reads an old three-id file with the new ids `null`; the
+   dialog opens on the target step and the `voice` mode shows that step
+   alone.
+2. **Accounts.** `EnginesStep` renders `MobileAccountsBody` always, drops
+   the "Sign in" toggle, and computes the header line from the store (§2.1).
+   Test: three accounts on one engine list three rows and the add row; the
+   header names the active one.
+3. **Voice.** `PUT /api/transcribe/key` and its test (writes mode 600 under
+   an isolated `XDG_CONFIG_HOME`, never echoes, 409 from the environment,
+   rejects a line break); `writeTranscribeBackend` mode 600; `VoiceStep`
+   over the two routes with the check sentences; the "Dictation" menu row
+   and the mic popup button. Test: each check sentence against a stubbed
+   token route answer (200, 503, 502) and backend availability.
+4. **Tour.** `TourStep` with the five schematics, the project select over
+   `projectCatalog`, the effort segment, and the create hand-off through the
+   shell bus; the dock's create draft accepts `initialEffort`. Test: Create
+   opens the chosen project's dock with `opus` and the chosen effort and
+   spawns nothing; no projects shows the line; a seated project shows "Open
+   it".
+5. **Phone.** In `bin/tailscale.mjs`: `serveBackground(tailscalePath,
+   port)` (spawn `serve --bg <port>`, resolve on exit with code and stderr),
+   `serveStatus(tailscalePath)` (parse `serve status --json` into `{ port
+   443: proxied port | null }`), `serveOff(tailscalePath, port)`,
+   `phoneAccessFlagPath()`, `readPhoneAccessFlag()`, `writePhoneAccessFlag()`
+   and `clearPhoneAccessFlag()`. In `bin/cli.mjs`: read the flag before
+   `parseArgs` and set `options.tailscale` from it; when the flag (not the
+   argv switch) turned it on, publish with `serveBackground` once after
+   readiness instead of the foreground child and leave the mapping in place
+   at exit; `--help` names the file. `src/app/api/access/route.ts` answers
+   the `phone` block; new `src/app/api/access/phone/route.ts` runs the enable
+   and disable sequences of §2.3 and sets the cookie. `AccessQrBody`
+   extracted; `PhoneStep`; the popover button. Tests, all against a stub
+   `tailscale` binary on an isolated `PATH` and config home: the six states
+   from canned JSON; enable writes the flag, reuses an existing token file
+   at mode 600, spawns `serve --bg <port>` with argv only, sets the three
+   variables only after a verifying `serve status`, and answers with the
+   cookie; each failure code from the matching stub behaviour (operator
+   stderr, non-zero exit, a stub that never exits, a status that does not
+   verify), with `process.env` untouched afterwards; disable clears the
+   variables and the flag and keeps the token; `bin/cli.exposure.integration.test.ts`
+   gains one case where the flag file and the stub make the real CLI start
+   in tailnet mode and answer `/api/access` with the URL once the `?k=`
+   cookie is set.
+6. **Evidence and docs.** The capture case (§3), `README.md` "Phone access"
+   (the button first, the flag as the equivalent) and `docs/transcription.md`
+   (§2.6).
+
+Fence:
+
+- `bin/cli.mjs`, `bin/tailscale.mjs`, `bin/tailscale-credential-isolation.test.ts`
+  (one case for the background spawn), `bin/cli.exposure.integration.test.ts`
+- `src/app/api/access/route.ts`, new `src/app/api/access/phone/route.ts`,
+  their tests
+- new `src/app/api/transcribe/key/route.ts` and test; `src/lib/transcribeBackend.ts`
+  (`writeTranscribeKey`, mode 600 on the backend file) and its test
+- `src/components/AccessQrButton.tsx` (extract `AccessQrBody`, the
+  unavailable-state button)
+- `src/components/onboarding/{PhoneStep,VoiceStep,TourStep}.tsx` and their
+  DOM tests; `OnboardingDialog.tsx`, `useOnboarding.ts`, `EnginesStep.tsx`,
+  `menuEntries.tsx`
+- `src/lib/onboarding/marker.ts` and test
+- `src/components/ProjectRail.tsx` (the "Dictation" row), `src/components/MicButton.tsx`
+  (one button), `src/components/orchestrator/OrchestratorPanel.tsx` and
+  `src/components/mobile/MobileOrchestratorSheet.tsx` (an `initialEffort`
+  input for the create draft, nothing else)
+- `src/lib/i18n/{en,uk}.ts` (`onboarding.phone.*`, `onboarding.voice.*`,
+  `onboarding.tour.*`, `onboarding.engines.accounts*`, `onboarding.menu.voice`,
+  the popover button; `qr.startHint` removed from both)
+- `scripts/capture-board-geometry.ts` (the onboarding case), `README.md`,
+  `docs/transcription.md`
+
+Outside the fence: `src/proxy.ts`, `src/lib/sameOrigin.ts` (both already
+read per request and need no change), `src/lib/orchestrator/prompt.ts`
+(`ORCHESTRATOR_SPAWN_CONFIG` stays `low`; the tour passes its effort in),
+`src/components/AccountsPanel.tsx` (everything the step needs is exported
+already), `src/lib/monitor/*`, `src/lib/pipelines/*`. If any of these turns
+out to need a change, that is a finding for its own lane.
+
+Gates, every stage of the lane: `bunx tsc --noEmit --incremental false`
+logged to a file with its exit code; the touched tests by path with
+`LLV_STATE_DIR` and an isolated `HOME`, never the operator's config (#1905);
+`bun run build`; the privacy gate from the merge base; `free -m` before each
+heavy command, one at a time, none under 4 GB free. The stub `tailscale` is
+the only Tailscale the tests ever run: no test and no capture touches the
+operator's tailnet or serve configuration, which on this machine carries a
+live mapping (§1.1).
 
 ## 8. Deliberately left out
 
@@ -915,10 +1581,21 @@ Deferred — not currently justified:
   tour's content: five static cards answer P3, and an overlay needs its own
   dismissal state, focus handling and per-viewport anchoring for every surface
   it points at.
-- **Turning on Tailscale from the browser, or rotating the token from the
-  UI.** Remote access is set when the process starts; a route that restarts the
-  Viewer or rewrites its own access key from a web request is a new attack
-  surface bought for one saved terminal command.
+- **Rotating the access key from the browser.** The one-button phone step
+  (§2.3) turns access on and off from the running Viewer, which the operator
+  asked for on 2026-09-22 and which reverses the first revision's caution
+  here. What survives of that caution: the key is never rotated from a web
+  request (`--new-token` stays a launcher flag), the public internet
+  (Funnel) is never used, and the route runs `tailscale` with argv only.
+- **Showing which account each project will use in the Engines step.**
+  #2004 asks for it; the binding is per project (#1279) and the step is per
+  install, so it stays in the accounts panel, and the step names the
+  account future launches use by default.
+- **Removing a saved transcription key from the guide.** Replace covers the
+  wrong-key case; deleting the file is the mic menu's path today and stays.
+- **A sixth tour card, or a walk through the screens.** The operator's
+  framing is the orchestrator, the tasks and the first action; the board and
+  the conversation view teach themselves once a seat exists.
 - **Prices, token counts or a measured "this role used N % of your week".**
   The Viewer holds no price data and no per-conversation totals. A measured
   hint from `limitsHistoryStore` deltas is plausible later; it needs
@@ -929,10 +1606,10 @@ Deferred — not currently justified:
   serves none of the four problems.
 - **Automatic fallback to the other engine, in any form**, including "only
   during onboarding". Ruled out by the operator on #1875.
-- **Creating the user's first project or first orchestrator inside the
-  wizard.** The zero-projects panel already does the first; an auto-created
-  seat is a paid session nobody asked for. The tour's card 4 points at the
-  Orchestrator button.
+- **Spawning the first orchestrator from inside the wizard.** The tour's
+  card 5 finds the project and prefills the create draft; the draft's own
+  Confirm is the paid action, and the wizard never presses it. Creating a
+  project stays with the zero-projects panel.
 - **The orchestrator draft's own gaps** (the 8 KB mandate shown raw, the
   missing `viewer` MCP preflight) from the 2026-08-25 research. Real, separate,
   and the health check's `MCP_UNREACHABLE` row will now surface the second one
@@ -948,11 +1625,13 @@ Deferred — not currently justified:
 | Engines | | shows Codex as not connected before anything runs | | | keeps its place |
 | Agents + cost hints | | the move action and the "very heavy" mark on astra xhigh | | | keeps its place |
 | Launch refusal (§4.5) | | ends "starts and dies" for users who never open the wizard | | | keeps its place; the only part that protects a user who skips everything |
-| Phone | | | | the whole step | keeps its place, optional |
-| Tour | card 4 states the 5-minute and one-hour numbers | | cards 1–5 | | keeps its place at five cards |
+| Phone | | | | the whole step, now one button (§2.3) | keeps its place, optional |
+| Tour | card 2 states how the seat is woken | | cards 1–4 say what the product is; card 5 is the first action | | keeps its place at five cards |
+| Voice (§2.6) | | | the composer's microphone works on the first evening (#2004) | | keeps its place, skippable |
+| Add account (§2.1) | | a second account is one row away (#2004) | | | keeps its place |
 | Check rows 1–3 | | row 1 names a disconnected engine | | | keeps its place |
 | Check rows 4–5 | proves the wake and detects the #1874 condition | | | | keeps its place |
-| Marker + re-entry | | | | | required by the issue; two menu rows |
+| Marker + re-entry | | | | | required by the issue; three menu rows |
 
 Cut while drafting, for serving none of the four: a welcome screen, a finish
 screen with a recap, quick-fill presets beyond the single "Move them to
