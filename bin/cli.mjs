@@ -8,7 +8,18 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { detectTailscale, getToken, readStatus, serve as serveTailscale, TailscaleError } from "./tailscale.mjs";
+import {
+  detectTailscale,
+  getToken,
+  OPERATOR_HINT,
+  OPERATOR_PATTERN,
+  phoneAccessFlagPath,
+  readPhoneAccessFlag,
+  readStatus,
+  serve as serveTailscale,
+  serveBackground,
+  TailscaleError,
+} from "./tailscale.mjs";
 import {
   browserOpenCommand,
   cliRuntimeHostConfig,
@@ -79,6 +90,8 @@ Options:
   -p, --port <n>       Port for the local server (default ${DEFAULT_PORT})
   -H, --hostname <h>   Bind address (default ${DEFAULT_HOSTNAME})
       --tailscale      Access over Tailscale
+                       (also on while ${phoneAccessFlagPath()} exists; the
+                       setup guide's phone step writes it)
       --no-open        Don't open the browser
       --new-token      Create a new access key
       --new-operator-token  Rotate the operator spawn capability
@@ -112,6 +125,9 @@ Options:
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `the runtime host socket is owned by pid ${ownerPid}, while this CLI spawned pid ${childPid}; stop the other agent-log-viewer instance for this installation and try again`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; restarting in ${delay}ms`,
     runtimeHostRestartFail: (detail) => `[runtime host] restart failed: ${detail}`,
+    phoneAccessSkipped: (detail) => `Phone access is turned on in the setup guide, and Tailscale is not ready, so this start is local only:\n${detail}`,
+    phoneAccessUngated: (detail) => `Warning: the access key could not be read, so this start asks no key: ${detail}`,
+    phoneServeFailed: (detail) => `Phone access is turned on in the setup guide, and publishing in the tailnet failed: ${detail}`,
   },
   uk: {
     usage: () => `Використання: agent-log-viewer [опції]
@@ -120,6 +136,8 @@ Options:
   -p, --port <n>       Порт для локального сервера (типово ${DEFAULT_PORT})
   -H, --hostname <h>   Адреса прив'язки (типово ${DEFAULT_HOSTNAME})
       --tailscale      Доступ через Tailscale
+                       (також увімкнено, поки існує ${phoneAccessFlagPath()};
+                       його записує крок «Телефон» посібника з налаштування)
       --no-open        Не відкривати браузер
       --new-token      Створити новий ключ доступу
       --new-operator-token  Оновити операторський ключ запуску агентів
@@ -153,6 +171,9 @@ Options:
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `сокетом runtime host володіє процес ${ownerPid}, а цей CLI запустив процес ${childPid}; зупиніть інший agent-log-viewer для цієї інсталяції та повторіть спробу`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; повторний запуск за ${delay} мс`,
     runtimeHostRestartFail: (detail) => `[runtime host] помилка повторного запуску: ${detail}`,
+    phoneAccessSkipped: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але Tailscale не готовий, тому цей запуск лише локальний:\n${detail}`,
+    phoneAccessUngated: (detail) => `Увага: не вдалося прочитати ключ доступу, тому цей запуск не питає ключа: ${detail}`,
+    phoneServeFailed: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але опублікувати в tailnet не вдалося: ${detail}`,
   },
 };
 
@@ -346,6 +367,14 @@ function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment, ex
   const telegramProvisioner = join(packageRoot, "bin", "provision-telegram-connector.mjs");
   if (!env.LLV_TELEGRAM_PROVISIONER && existsSync(telegramProvisioner)) {
     env.LLV_TELEGRAM_PROVISIONER = telegramProvisioner;
+  }
+
+  /* A local-only start never advertises a tailnet link it inherited from the
+     shell that launched it. */
+  if (runtime.tailnetSkipped) {
+    delete env.LLV_TOKEN;
+    delete env.LLV_TS_HOST;
+    delete env.LLV_TS_URL;
   }
 
   if (runtime.llvToken) {
@@ -684,14 +713,18 @@ async function waitForReadiness(port, timeoutMs = READINESS_TIMEOUT_MS, processH
   throw new Error(m.serverTimeout(timeoutMs / 1000));
 }
 
-function localUrl(options) {
+/* The key rides in the local link too when this start gates on one: the
+   Viewer asks every connection for it, loopback included, and the terminal
+   that started it is the one place the operator can read it. */
+function localUrl(options, runtime) {
   const host = options.hostname === "::1" ? "[::1]" : options.hostname;
-  return `http://${host}:${options.port}/`;
+  const key = runtime?.llvToken ? `?k=${runtime.llvToken}` : "";
+  return `http://${host}:${options.port}/${key}`;
 }
 
-function printBanner(version, options) {
+function printBanner(version, options, runtime) {
   console.log(`  ✳ Agent Log Viewer v${version}`);
-  console.log(m.bannerOpened(localUrl(options)));
+  console.log(m.bannerOpened(localUrl(options, runtime)));
   console.log(m.bannerReads());
   console.log(m.bannerStop());
 }
@@ -787,6 +820,8 @@ async function prepareRuntime(options) {
     llvTsHost: undefined,
     tailnetUrl: undefined,
     tailscalePath: undefined,
+    /* Set when the remembered choice fell back to a local start. */
+    tailnetSkipped: false,
   };
 
   const nonLoopbackBind = !isLoopbackHostname(options.hostname);
@@ -795,8 +830,32 @@ async function prepareRuntime(options) {
   }
 
   if (options.tailscale) {
-    const tailscalePath = await detectTailscale();
-    const status = await readStatus(tailscalePath);
+    let tailscalePath;
+    let status;
+    try {
+      tailscalePath = await detectTailscale();
+      status = await readStatus(tailscalePath);
+    } catch (error) {
+      /* The remembered choice never stops the Viewer from starting: a
+         Tailscale that went away since starts locally, and says why. */
+      if (!(options.tailscaleFromFlag && error instanceof TailscaleError)) throw error;
+      console.error(m.phoneAccessSkipped(error.message));
+      options.tailscale = false;
+      options.tailscaleFromFlag = false;
+      runtime.tailnetSkipped = true;
+      /* The gate still goes on. A background mapping a previous tailnet start
+         published belongs to tailscaled, not to this process: it resumes when
+         tailscaled comes back, and it would otherwise proxy the whole tailnet
+         into a Viewer that asks for nothing. The link itself stays unset, so
+         nothing advertises an address this start does not serve. */
+      try {
+        const { token } = await getToken({ rotate: options.newToken });
+        runtime.llvToken = token;
+      } catch (tokenError) {
+        console.error(m.phoneAccessUngated(tokenError instanceof Error ? tokenError.message : String(tokenError)));
+      }
+      return runtime;
+    }
     const { token } = await getToken({ rotate: options.newToken });
     runtime.llvToken = token;
     runtime.llvTsHost = status.dnsName;
@@ -878,6 +937,12 @@ function linkSkills(packageRoot) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  /* Phone access turned on from the setup guide is remembered as a file; its
+     presence stands for --tailscale. */
+  if (!options.tailscale && !options.help && !options.version && await readPhoneAccessFlag()) {
+    options.tailscale = true;
+    options.tailscaleFromFlag = true;
+  }
   const packageRoot = findPackageRoot(cliDir);
   try {
     linkSkills(packageRoot);
@@ -1003,7 +1068,10 @@ async function main() {
     record.remove();
   });
 
-  if (options.tailscale && runtime.tailscalePath) {
+  /* The --tailscale switch keeps its foreground serve, which stops with the
+     Viewer. The remembered choice publishes in the background once the
+     server answers, and leaves the mapping to tailscaled at exit. */
+  if (options.tailscale && runtime.tailscalePath && !options.tailscaleFromFlag) {
     tailscaleProcessRef.current = serveTailscale(runtime.tailscalePath, options.port);
   }
 
@@ -1105,13 +1173,25 @@ async function main() {
     });
   }
 
-  printBanner(version, options);
+  if (options.tailscaleFromFlag && runtime.tailscalePath) {
+    const published = await serveBackground(runtime.tailscalePath, options.port);
+    if (published.timedOut || published.code !== 0) {
+      const detail = published.timedOut ? "timeout" : published.stderr.trim() || `exit ${published.code}`;
+      console.error(OPERATOR_PATTERN.test(published.stderr) ? OPERATOR_HINT : m.phoneServeFailed(detail));
+      /* Nothing is published, so the tailnet address answers nothing: the
+         banner and its QR would be an invitation to a link that is not
+         there. The gate stays on — the key was minted for this start. */
+      runtime.tailnetUrl = undefined;
+    }
+  }
+
+  printBanner(version, options, runtime);
   if (options.tailscale) {
     await printTailscaleBanner(runtime);
   }
 
   if (!options.noOpen && process.stdout.isTTY) {
-    openBrowser(localUrl(options));
+    openBrowser(localUrl(options, runtime));
   }
 }
 

@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, test } from "bun:test";
+
+import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 const fixtures = new Set<string>();
 const children = new Set<ReturnType<typeof spawn>>();
@@ -117,6 +119,7 @@ function captureOutput(child: ReturnType<typeof spawn>) {
       }
       throw new Error(`CLI output did not include ${JSON.stringify(text)}:\n${output}`);
     },
+    text: () => output,
   };
 }
 
@@ -170,7 +173,12 @@ const hostname = ${options.ignoreHostname ? JSON.stringify("0.0.0.0") : "hostnam
 const server = Bun.serve({
   hostname,
   port: Number(process.env.PORT),
-  fetch() { return new Response("ok"); },
+  fetch(request) {
+    /* What the launcher handed the Viewer, for the phone-access case. */
+    /* Whether the gate is on, never the key itself. */
+    if (new URL(request.url).pathname === "/api/access") return Response.json({ tailnetUrl: process.env.LLV_TS_URL ?? null, host: process.env.LLV_TS_HOST ?? null, gated: Boolean(process.env.LLV_TOKEN) });
+    return new Response("ok");
+  },
 });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGINT", stop);
@@ -199,10 +207,15 @@ process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 `),
   ]);
+  /* Hermetic for the tailnet gate: a shell the Viewer spawned carries these. */
+  const inherited = { ...process.env };
+  delete inherited.LLV_TOKEN;
+  delete inherited.LLV_TS_HOST;
+  delete inherited.LLV_TS_URL;
   return {
     cli: path.join(bin, "cli.mjs"),
     env: {
-      ...process.env,
+      ...inherited,
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
       LLV_STATE_DIR: state,
@@ -308,3 +321,87 @@ test("an address the platform will not evaluate neither stops startup nor claims
   // the silence: startup survived, and the listener is still loopback-only.
   expect(await probe(nonLoopbackAddress, port)).toBe(0);
 });
+
+test("phone access remembered by the setup guide starts the real CLI in tailnet mode with a background serve", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const stub = createTailscaleStub({ root: path.dirname(fixture.env.TMPDIR!) });
+  const configDir = path.join(fixture.env.XDG_CONFIG_HOME!, "agent-log-viewer");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(path.join(configDir, "phone-access"), "tailscale\n");
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("Tailnet:", 15_000);
+  const token = (await readFile(path.join(configDir, "token"), "utf8")).trim();
+  expect(token).toMatch(/^[0-9a-f]{32}$/);
+  const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null; host: string | null; gated: boolean };
+  expect(answer).toEqual({ tailnetUrl: `https://${STUB_DNS_NAME}/?k=${token}`, host: STUB_DNS_NAME, gated: true });
+  /* Published once, in the background, and never as a foreground child. */
+  expect(stub.calls()).toContain(`serve --bg ${port}`);
+  expect(stub.calls()).not.toContain(`serve ${port}`);
+  expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
+});
+
+test("a remembered choice whose publish fails says so and advertises no tailnet link", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const stub = createTailscaleStub({ root: path.dirname(fixture.env.TMPDIR!) });
+  stub.setServeMode("fail");
+  const configDir = path.join(fixture.env.XDG_CONFIG_HOME!, "agent-log-viewer");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(path.join(configDir, "phone-access"), "tailscale\n");
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("Agent Log Viewer v", 15_000);
+  await waitForStatus("127.0.0.1", port, 200);
+  /* The publish failed, so the tailnet address answers nothing: the banner
+     that would carry it, and its QR, are not printed. */
+  expect(output.text()).toContain("listener already in use");
+  expect(output.text()).not.toContain("Tailnet:");
+  /* The key was minted for this start, and the local link carries it. */
+  expect(output.text()).toContain(`http://127.0.0.1:${port}/?k=`);
+}, 30_000);
+
+test("a remembered choice whose Tailscale went away starts locally and says why", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const stub = createTailscaleStub({ root: path.dirname(fixture.env.TMPDIR!) });
+  stub.setStatus({ BackendState: "NeedsLogin" });
+  const configDir = path.join(fixture.env.XDG_CONFIG_HOME!, "agent-log-viewer");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(path.join(configDir, "phone-access"), "tailscale\n");
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    /* A stale link from the launching shell is not advertised by a local start. */
+    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en", LLV_TS_URL: "https://stale.tailnet.example/?k=stale", LLV_TS_HOST: "stale.tailnet.example" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("this start is local only", 10_000);
+  await waitForStatus("127.0.0.1", port, 200);
+  const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null; gated: boolean };
+  expect(answer.tailnetUrl).toBeNull();
+  /* The gate stays on. A background mapping an earlier tailnet start left
+     behind resumes when tailscaled comes back, and it would otherwise proxy
+     the tailnet into a Viewer that asks nothing. */
+  expect(answer.gated).toBe(true);
+  expect((await readFile(path.join(configDir, "token"), "utf8")).trim()).toMatch(/^[0-9a-f]{32}$/);
+  expect(stub.calls().some((call) => call.startsWith("serve"))).toBe(false);
+}, 30_000);

@@ -132,16 +132,33 @@ keeps its own login, and agents launched afterwards use the active one.
 
 ## Phone access
 
+Open the setup guide (sidebar **More** menu → **Setup guide**, or the board's
+⋯ menu on a phone) and go to **Phone**. If Tailscale is signed in on this
+computer, one button, **Turn on phone access**, publishes the running Viewer
+inside your tailnet with `tailscale serve --bg`, protects it with the access
+key and comes back with the link and its QR code. Nothing restarts. The
+choice is remembered in `~/.config/agent-log-viewer/phone-access`, so the next
+start publishes again by itself; **Turn off phone access** takes the mapping
+down and forgets the choice. When Tailscale is missing, signed out or has no
+MagicDNS name, the step says which in one sentence with a link, and picks up
+the change by itself.
+
+The same thing from a terminal:
+
 ```bash
 bunx agent-log-viewer --tailscale
 ```
 
-`--tailscale` keeps the server on `127.0.0.1` and publishes it inside your
-tailnet with `tailscale serve`. The public internet (Funnel) is never used.
-The terminal prints the tailnet URL with a QR code; the same QR is in the web
-app under the sidebar's **More** menu. The URL carries a 32-character access
-key; after the first visit the server sets a cookie for 30 days, and
-`--new-token` invalidates every earlier key and cookie.
+Either way the server stays on `127.0.0.1` and is published only inside your
+tailnet; the public internet (Funnel) is never used. The terminal prints the
+tailnet URL with a QR code; the same QR is in the web app under the sidebar's
+**More** menu. The URL carries a 32-character access key; after the first
+visit the server sets a cookie for 30 days, and `--new-token` invalidates
+every earlier key and cookie. Once phone access is on, every browser, on
+this computer too, needs the link once.
+
+Publishing needs Tailscale's operator right. If the button reports that it
+is missing, run `sudo tailscale set --operator=$USER` once and press it again.
 
 <img src="docs/media/readme/phone-conversation.svg" width="300" alt="A conversation on a 390 px phone screen, its test run expanded">
 
@@ -159,10 +176,11 @@ through the Viewer, so treat it as a secret.
   message. By default this runs locally with faster-whisper, and no audio
   leaves the machine; run `scripts/setup-whisper.sh` once to install it. Cloud
   backends (ChatGPT through your Codex login, ElevenLabs, Soniox) are a
-  per-machine opt-in: right-click the microphone button to pick one, and the
-  choice is saved in the config directory. `LLV_TRANSCRIBE_BACKEND` overrides
-  that choice and locks the menu. See
-  [docs/transcription.md](docs/transcription.md).
+  per-machine opt-in: pick one in the setup guide's **Voice** step (also the
+  **Dictation** menu row) or by right-clicking the microphone button. The
+  Voice step saves an ElevenLabs or Soniox key without showing it again and
+  checks that dictation answers. `LLV_TRANSCRIBE_BACKEND` overrides the
+  choice and locks it. See [docs/transcription.md](docs/transcription.md).
 - **Read aloud.** An answer's speaker button reads it with OpenAI, ElevenLabs
   or Soniox speech, billed to your own API key. Right-click the button to pick
   the provider.

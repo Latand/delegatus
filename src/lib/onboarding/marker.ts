@@ -3,6 +3,8 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 
+import { ONBOARDING_STEP_IDS, type OnboardingStepId, type OnboardingStepState } from "./steps";
+
 /**
  * Whether this install has been through the setup guide (#1876, design §6).
  *
@@ -15,9 +17,7 @@ import { statePath } from "@/lib/configDir";
  * reach someone who ran `claude` before they ever opened the Viewer.
  */
 
-export const ONBOARDING_STEP_IDS = ["engines", "agents", "check"] as const;
-export type OnboardingStepId = typeof ONBOARDING_STEP_IDS[number];
-export type OnboardingStepState = "done" | "skipped" | null;
+export { ONBOARDING_STEP_IDS, type OnboardingStepId, type OnboardingStepState } from "./steps";
 
 /** The last health check this install ran (#1876, design §6), written by the
     check itself. Design §6 gives a failed one a `warning` dot on the "Setup
@@ -37,8 +37,8 @@ export type OnboardingMarker = {
 
 const markerFile = () => statePath("onboarding.json");
 
-function emptySteps(): Record<OnboardingStepId, OnboardingStepState> {
-  return { engines: null, agents: null, check: null };
+export function emptySteps(): Record<OnboardingStepId, OnboardingStepState> {
+  return Object.fromEntries(ONBOARDING_STEP_IDS.map((id) => [id, null])) as Record<OnboardingStepId, OnboardingStepState>;
 }
 
 function parseLastHealth(raw: unknown): OnboardingLastHealth | null {

@@ -88,6 +88,8 @@ import path from "node:path";
 
 import { chromium, type Browser, type Page } from "playwright-core";
 
+import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
+
 import { createCaptureDirectory } from "./capture-directory";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -674,7 +676,68 @@ function measureOnboarding(phone: boolean) {
     modelSelectWidths: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-row] select")).filter((_, index) => index % 2 === 0).map((el) => Math.round(el.getBoundingClientRect().width)),
     selectedSegmentRing: Array.from(dialog.querySelectorAll<HTMLElement>("[role=radio][aria-checked=true]")).slice(0, 1).map((el) => getComputedStyle(el).boxShadow)[0] ?? null,
     enginesStepMark: dialog.querySelector<HTMLElement>('[data-onboarding-step="engines"] [data-step-mark]')?.dataset.stepMark ?? null,
-    signInHint: dialog.querySelector("[data-onboarding-sign-in-hint]")?.textContent ?? null,
+    /* Slice 3: every control whose label no longer fits its box, by name. */
+    clippedControls: Array.from(dialog.querySelectorAll<HTMLElement>("button, a, label, select")).filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflowX !== "visible";
+    }).map((el) => (el.textContent ?? "").trim().slice(0, 50)),
+    accounts: Object.fromEntries(Array.from(dialog.querySelectorAll<HTMLElement>("[data-onboarding-engine]")).map((el) => [el.dataset.onboardingEngine!, {
+      header: el.querySelector("[data-onboarding-engine-header]")?.textContent ?? null,
+      rows: el.querySelectorAll("[data-mobile2-account]").length,
+      addRow: el.querySelector("[data-mobile2-account-add]") !== null,
+    }])),
+    filledButtons: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => el.classList.contains("bg-accent") && el.getBoundingClientRect().width > 0).map((el) => (el.textContent ?? "").trim()),
+    /* The phone pager lays every page out side by side; only the page on screen competes for the eye. */
+    filledOnScreen: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => {
+      const r = el.getBoundingClientRect();
+      return el.classList.contains("bg-accent") && r.width > 0 && r.left >= -1 && r.right <= window.innerWidth + 1;
+    }).map((el) => (el.textContent ?? "").trim()),
+    /* The band sits inside the phone's horizontal pager: on screen means inside the viewport's width. */
+    tourBandOnScreen: (() => {
+      const band = dialog.querySelector("[data-tour-start]");
+      if (!band) return null;
+      const r = band.getBoundingClientRect();
+      return r.left >= -1 && r.right <= window.innerWidth + 1;
+    })(),
+    tourStartInView: (() => {
+      const band = dialog.querySelector("[data-tour-start]");
+      const body = band?.closest<HTMLElement>(".overflow-y-auto");
+      if (!band || !body) return null;
+      return band.getBoundingClientRect().bottom <= body.getBoundingClientRect().bottom + 1;
+    })(),
+    /* The links under the band, measured by their glyphs: a link cut by the footer reads as broken. */
+    tourLinksInView: (() => {
+      const links = Array.from(dialog.querySelectorAll<HTMLElement>("[data-tour-links] a"));
+      const body = links[0]?.closest<HTMLElement>(".overflow-y-auto");
+      if (links.length === 0 || !body) return null;
+      const bottom = body.getBoundingClientRect().bottom;
+      return links.every((link) => link.getBoundingClientRect().bottom <= bottom + 1);
+    })(),
+    stepCounter: dialog.querySelector("footer span")?.textContent ?? dialog.querySelector("[data-onboarding-step-list-toggle]")?.textContent ?? null,
+    phone: dialog.querySelector("[data-phone-state]") ? {
+      state: dialog.querySelector<HTMLElement>("[data-phone-state]")!.dataset.phoneState ?? null,
+      text: dialog.querySelector("[data-phone-state]")!.textContent ?? "",
+      links: Array.from(dialog.querySelectorAll("[data-phone-state] a")).map((el) => el.getAttribute("href")),
+      buttons: Array.from(dialog.querySelectorAll<HTMLElement>("[data-phone-state] button")).map((el) => (el.textContent ?? "").trim()),
+      failure: dialog.querySelector<HTMLElement>("[data-phone-failure]")?.dataset.phoneFailure ?? null,
+      link: dialog.querySelector<HTMLInputElement>("[data-phone-link]")?.value ?? null,
+      qr: dialog.querySelector("[data-phone-state] img") !== null,
+    } : null,
+    voice: dialog.querySelector("[data-onboarding-voice]") ? {
+      selected: dialog.querySelector<HTMLElement>("[data-voice-backend][data-selected]")?.dataset.voiceBackend ?? null,
+      result: dialog.querySelector("[data-voice-check-result]")?.textContent ?? null,
+      tone: dialog.querySelector<HTMLElement>("[data-voice-check-result]")?.dataset.tone ?? null,
+      keyField: dialog.querySelector("[data-voice-key-field] input") !== null,
+      skip: dialog.querySelector("[data-voice-skip]") !== null,
+      html: dialog.querySelector("[data-onboarding-voice]")!.innerHTML,
+    } : null,
+    tour: dialog.querySelector("[data-onboarding-tour]") ? {
+      cardTops: Array.from(dialog.querySelectorAll<HTMLElement>("[data-tour-card]")).map((el) => Math.round(el.getBoundingClientRect().top)),
+      pictures: dialog.querySelectorAll("[data-tour-card] svg").length,
+      start: dialog.querySelector("[data-tour-start]") !== null,
+      create: dialog.querySelector("[data-tour-create]")?.textContent ?? null,
+      projects: Array.from(dialog.querySelectorAll<HTMLOptionElement>("[data-tour-project] option")).map((el) => el.textContent ?? ""),
+    } : null,
     /* The Check step (slice 2): row states, the open failure and its block. */
     health: dialog.querySelector("[data-health-check]") ? {
       state: dialog.querySelector<HTMLElement>("[data-health-check]")!.dataset.healthCheck ?? null,
@@ -805,6 +868,7 @@ async function captureOnboarding(): Promise<void> {
   const report: Record<string, unknown> = { commit: Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout.toString().trim(), case: "onboarding" };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
+  const tailscale = createTailscaleStub({ root: BASE });
   const resetInstall = async (codexInstalled: boolean) => {
     fs.rmSync(path.join(STATE_DIR, "onboarding.json"), { force: true });
     fs.rmSync(path.join(STATE_DIR, "role-presets.json"), { force: true });
@@ -823,7 +887,9 @@ async function captureOnboarding(): Promise<void> {
       cwd: repoRoot,
       /* PATH without the operator's own bin directories: which CLI is
          installed is decided by the stubs under the seeded home alone. */
-      env: { ...buildEnvironment(port), PATH: "/usr/bin:/bin" },
+      /* The stand-in tailscale comes first, so the phone step never reads or
+         changes the operator's own tailnet (#1876 slice 3). */
+      env: { ...buildEnvironment(port), PATH: `${tailscale.dir}:/usr/bin:/bin`, HOSTNAME: "127.0.0.1" },
       stdio: ["ignore", "inherit", "inherit"],
     });
     await waitForServer(baseUrl, server);
@@ -870,296 +936,602 @@ async function captureOnboarding(): Promise<void> {
             check(reading);
           };
 
-          /* 1. First run: the guide opens by itself on the Engines step. */
-          await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-          await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="missing"]', { timeout: 60_000 });
-          await page.waitForSelector('[data-onboarding-engine="claude"][data-engine-state="connected"]', { timeout: 60_000 });
-          await shot("engines-one-connected", (r) => {
-            must(r.engines.claude === "connected" && r.engines.codex === "missing", `${tag}: with a Codex credential and no Codex command the engines read ${JSON.stringify(r.engines)}`);
-          });
+          try {
+            /* 1. First run: the guide opens by itself on the Engines step. */
+            await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+            await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="missing"]', { timeout: 60_000 });
+            await page.waitForSelector('[data-onboarding-engine="claude"][data-engine-state="connected"]', { timeout: 60_000 });
+            await shot("engines-one-connected", (r) => {
+              must(r.engines.claude === "connected" && r.engines.codex === "missing", `${tag}: with a Codex credential and no Codex command the engines read ${JSON.stringify(r.engines)}`);
+            });
 
-          /* 2. The mapping: five roles and one variant sit on Codex, which is not connected. */
-          await page.click("[data-onboarding-primary]");
-          await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
-          await page.click('[data-mapping-group="rare"] button[aria-expanded]');
-          await page.waitForSelector('[data-mapping-row="deployer"]');
-          await shot("agents-blocked", (r) => {
-            /* Seven rows ship on Codex: builder, fix rounds, reviewer, verifier, cleaner, prod-auditor, deployer. */
-            must(r.blockedRows === 7, `${tag}: ${r.blockedRows} blocked rows, expected the seven Codex rows`);
-            must(r.nudges >= 1, `${tag}: no very-heavy nudge on the reviewer's xhigh default`);
-            must(r.legendFirst, `${tag}: the cost legend comes after the first row`);
-            must(r.costClasses.includes("reviewer=very-heavy") && r.costClasses.includes("cleaner=moderate"), `${tag}: cost classes ${r.costClasses.join(", ")}`);
-            must(r.roleLabels.length === 10, `${tag}: ${r.roleLabels.length} role rows rendered, expected 10`);
-          });
+            /* 2. The mapping: five roles and one variant sit on Codex, which is not connected. */
+            await page.click("[data-onboarding-primary]");
+            await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
+            await page.click('[data-mapping-group="rare"] button[aria-expanded]');
+            await page.waitForSelector('[data-mapping-row="deployer"]');
+            await shot("agents-blocked", (r) => {
+              /* Seven rows ship on Codex: builder, fix rounds, reviewer, verifier, cleaner, prod-auditor, deployer. */
+              must(r.blockedRows === 7, `${tag}: ${r.blockedRows} blocked rows, expected the seven Codex rows`);
+              must(r.nudges >= 1, `${tag}: no very-heavy nudge on the reviewer's xhigh default`);
+              must(r.legendFirst, `${tag}: the cost legend comes after the first row`);
+              must(r.costClasses.includes("reviewer=very-heavy") && r.costClasses.includes("cleaner=moderate"), `${tag}: cost classes ${r.costClasses.join(", ")}`);
+              must(r.roleLabels.length === 10, `${tag}: ${r.roleLabels.length} role rows rendered, expected 10`);
+            });
 
-          /* 3. "Move them to Claude", then its receipt and every row changed. */
-          await page.click("[data-mapping-move]");
-          await page.waitForSelector("[data-mapping-receipt]", { timeout: 30_000 });
-          await shot("agents-moved", (r) => {
-            must(r.blockedRows === 0 && r.banner === null, `${tag}: after the move ${r.blockedRows} rows are still blocked`);
-          });
-          const moved = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "role-presets.json"), "utf8")) as { overrides: Record<string, { config?: { engine: string }; variants?: Record<string, { engine: string }> }> };
-          must(moved.overrides.reviewer?.config?.engine === "claude" && moved.overrides.builder?.variants?.["apply-fixes"]?.engine === "claude", `${tag}: the stored mapping after the move is ${JSON.stringify(moved.overrides)}`);
-          await page.click("[data-mapping-receipt] button");
-          await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
-          const undone = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "role-presets.json"), "utf8")) as { overrides: Record<string, unknown> };
-          must(Object.keys(undone.overrides).length === 0, `${tag}: undo left ${JSON.stringify(undone.overrides)}`);
+            /* 3. "Move them to Claude", then its receipt and every row changed. */
+            await page.click("[data-mapping-move]");
+            await page.waitForSelector("[data-mapping-receipt]", { timeout: 30_000 });
+            await shot("agents-moved", (r) => {
+              must(r.blockedRows === 0 && r.banner === null, `${tag}: after the move ${r.blockedRows} rows are still blocked`);
+            });
+            const moved = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "role-presets.json"), "utf8")) as { overrides: Record<string, { config?: { engine: string }; variants?: Record<string, { engine: string }> }> };
+            must(moved.overrides.reviewer?.config?.engine === "claude" && moved.overrides.builder?.variants?.["apply-fixes"]?.engine === "claude", `${tag}: the stored mapping after the move is ${JSON.stringify(moved.overrides)}`);
+            await page.click("[data-mapping-receipt] button");
+            await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
+            /* The banner is back as soon as the answer lands; the file behind
+               it is written by the server, so the read waits for it rather
+               than racing it. */
+            let undone = { overrides: {} as Record<string, unknown> };
+            const undoneBy = Date.now() + 10_000;
+            do {
+              undone = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "role-presets.json"), "utf8")) as { overrides: Record<string, unknown> };
+              if (Object.keys(undone.overrides).length === 0) break;
+              await page.waitForTimeout(100);
+            } while (Date.now() < undoneBy);
+            must(Object.keys(undone.overrides).length === 0, `${tag}: undo left ${JSON.stringify(undone.overrides)}`);
 
-          /* 3b. Both engines connected, with quota readings: the headroom sits
-             in the cost cell and the rows keep their rhythm. Then one changed
-             row, then its reset. */
-          fakeCli("codex", true);
-          await fetch(`${baseUrl}/api/accounts/cli`);
-          await page.route("**/api/accounts", async (route) => {
-            const response = await route.fetch();
-            const body = await response.json() as Record<string, { accounts?: Record<string, unknown>[] }>;
-            for (const engine of ["claude", "codex"]) for (const account of body[engine]?.accounts ?? []) account.limits = SEEDED_LIMITS;
-            await route.fulfill({ response, json: body });
-          });
-          await page.reload({ waitUntil: "domcontentloaded" });
-          await page.waitForSelector("[data-mapping-headroom]", { timeout: 60_000 });
-          await page.click('[data-mapping-group="rare"] button[aria-expanded]');
-          await page.waitForSelector('[data-mapping-row="deployer"]');
-          await shot("agents-headroom", (r) => {
-            must(r.blockedRows === 0 && r.banner === null, `${tag}: both engines connected and ${r.blockedRows} rows still blocked`);
-            must(r.headrooms.length >= 7, `${tag}: ${r.headrooms.length} headroom lines with quota readings`);
-            for (const line of r.headrooms) must(line.h <= 17, `${tag}: headroom "${line.text}" wraps (${line.h}px)`);
+            /* 3b. Both engines connected, with quota readings: the headroom sits
+               in the cost cell and the rows keep their rhythm. Then one changed
+               row, then its reset. */
+            fakeCli("codex", true);
+            await fetch(`${baseUrl}/api/accounts/cli`);
+            await page.route("**/api/accounts", async (route) => {
+              const response = await route.fetch();
+              const body = await response.json() as Record<string, { accounts?: Record<string, unknown>[] }>;
+              for (const engine of ["claude", "codex"]) for (const account of body[engine]?.accounts ?? []) account.limits = SEEDED_LIMITS;
+              await route.fulfill({ response, json: body });
+            });
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await page.waitForSelector("[data-mapping-headroom]", { timeout: 60_000 });
+            await page.click('[data-mapping-group="rare"] button[aria-expanded]');
+            await page.waitForSelector('[data-mapping-row="deployer"]');
+            await shot("agents-headroom", (r) => {
+              must(r.blockedRows === 0 && r.banner === null, `${tag}: both engines connected and ${r.blockedRows} rows still blocked`);
+              must(r.headrooms.length >= 7, `${tag}: ${r.headrooms.length} headroom lines with quota readings`);
+              for (const line of r.headrooms) must(line.h <= 17, `${tag}: headroom "${line.text}" wraps (${line.h}px)`);
+              if (!viewport.phone) {
+                const tallest = Math.max(...r.plainRowHeights);
+                must(tallest <= 52, `${tag}: a mapping row with a headroom line is ${tallest}px tall`);
+              }
+              must(Boolean(r.selectedSegmentRing && r.selectedSegmentRing !== "none"), `${tag}: the selected engine segment has no ring`);
+            });
+            await page.locator('[data-mapping-row="reviewer"] select').nth(1).selectOption("high");
+            await page.waitForSelector('[data-mapping-reset="reviewer"]');
+            await page.locator('[data-mapping-row="reviewer"]').scrollIntoViewIfNeeded();
+            await shot("agents-changed", (r) => {
+              must(r.changedRows === 1, `${tag}: ${r.changedRows} changed rows after one change`);
+              if (viewport.phone) for (const offset of r.chipOffsets) must(offset <= 6, `${tag}: a card's cost chip sits ${offset}px below its role name`);
+            });
+            await page.click('[data-mapping-reset="reviewer"]');
+            await page.waitForSelector('[data-mapping-reset="reviewer"]', { state: "detached" });
+            await page.unroute("**/api/accounts");
+            codexSignedIn(false);
+            fakeCli("codex", false);
+            await fetch(`${baseUrl}/api/accounts/cli`);
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await page.waitForSelector("[data-mapping-banner]", { timeout: 60_000 });
+
+            /* 4. Codex installed and signed out; its sign-in opens in place. */
+            fakeCli("codex", true);
+            if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
+            else await page.click('[data-onboarding-step="engines"]');
+            await page.click('[data-onboarding-engine="codex"] button');
+            await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="signed-out"]', { timeout: 30_000 });
+            /* Slice 3: the card is the account list, with the add row always there. */
+            await page.waitForSelector('[data-onboarding-accounts="codex"] [data-mobile2-account-add="codex"]');
+            await shot("engines-sign-in", (r) => {
+              must(r.engines.codex === "signed-out", `${tag}: codex reads ${r.engines.codex} after the install`);
+              must(r.accounts.codex?.addRow === true, `${tag}: a signed-out Codex card offers no Add row`);
+            });
+
+            /* 5. Neither engine connected: both steps say so. A reload reopens
+               the unfinished guide by itself, on the step after the last done. */
+            claudeSignedIn(false);
+            fakeCli("codex", false);
+            await fetch(`${baseUrl}/api/accounts/cli`);
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await page.waitForSelector("[data-agent-mapping] [data-mapping-row]", { timeout: 60_000 });
+            await shot("agents-neither", (r) => {
+              must(r.roleLabels.length > 0 && r.blockedRows === r.roleLabels.length, `${tag}: with no engine ${r.blockedRows} of ${r.roleLabels.length} rendered rows are blocked, expected every one`);
+            });
+            if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
+            else await page.click('[data-onboarding-step="engines"]');
+            await page.waitForSelector("[data-onboarding-engines-note]");
+            await shot("engines-neither", (r) => {
+              must(r.engines.claude !== "connected" && r.engines.codex === "missing", `${tag}: engines read ${JSON.stringify(r.engines)} with nothing signed in`);
+            });
             if (!viewport.phone) {
-              const tallest = Math.max(...r.plainRowHeights);
-              must(tallest <= 52, `${tag}: a mapping row with a headroom line is ${tallest}px tall`);
+              await page.click('[data-onboarding-step="agents"]');
+              await page.waitForSelector("[data-agent-mapping] [data-mapping-row]");
+              const mark = await page.$eval('[data-onboarding-step="engines"] [data-step-mark]', (el) => (el as HTMLElement).dataset.stepMark);
+              must(mark === "warn", `${tag}: with no engine the visited Engines step shows ${mark}, expected the warning mark`);
             }
-            must(Boolean(r.selectedSegmentRing && r.selectedSegmentRing !== "none"), `${tag}: the selected engine segment has no ring`);
-          });
-          await page.locator('[data-mapping-row="reviewer"] select').nth(1).selectOption("high");
-          await page.waitForSelector('[data-mapping-reset="reviewer"]');
-          await page.locator('[data-mapping-row="reviewer"]').scrollIntoViewIfNeeded();
-          await shot("agents-changed", (r) => {
-            must(r.changedRows === 1, `${tag}: ${r.changedRows} changed rows after one change`);
-            if (viewport.phone) for (const offset of r.chipOffsets) must(offset <= 6, `${tag}: a card's cost chip sits ${offset}px below its role name`);
-          });
-          await page.click('[data-mapping-reset="reviewer"]');
-          await page.waitForSelector('[data-mapping-reset="reviewer"]', { state: "detached" });
-          await page.unroute("**/api/accounts");
-          codexSignedIn(false);
-          fakeCli("codex", false);
-          await fetch(`${baseUrl}/api/accounts/cli`);
-          await page.reload({ waitUntil: "domcontentloaded" });
-          await page.waitForSelector("[data-mapping-banner]", { timeout: 60_000 });
+            claudeSignedIn(true);
 
-          /* 4. Codex installed and signed out; its sign-in opens in place. */
-          fakeCli("codex", true);
-          if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
-          else await page.click('[data-onboarding-step="engines"]');
-          await page.click('[data-onboarding-engine="codex"] button');
-          await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="signed-out"]', { timeout: 30_000 });
-          await page.click('[data-onboarding-sign-in="codex"]');
-          await page.waitForSelector('[data-onboarding-sign-in-body="codex"]');
-          await shot("engines-sign-in", (r) => {
-            must(r.engines.codex === "signed-out", `${tag}: codex reads ${r.engines.codex} after the install`);
-            must(Boolean(r.signInHint), `${tag}: the open sign-in says nothing about which row continues`);
-          });
+            /* 6. Close, finish later: the marker says dismissed and a reload stays shut. */
+            await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
+            const marker = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: { dismissedAt: string | null } | null };
+            must(Boolean(marker.marker?.dismissedAt), `${tag}: Escape did not record a dismissal`);
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await page.waitForTimeout(3_000);
+            must(await page.$("[data-onboarding-dialog]") === null, `${tag}: the dismissed guide reopened by itself`);
 
-          /* 5. Neither engine connected: both steps say so. A reload reopens
-             the unfinished guide by itself, on the step after the last done. */
-          claudeSignedIn(false);
-          fakeCli("codex", false);
-          await fetch(`${baseUrl}/api/accounts/cli`);
-          await page.reload({ waitUntil: "domcontentloaded" });
-          await page.waitForSelector("[data-agent-mapping] [data-mapping-row]", { timeout: 60_000 });
-          await shot("agents-neither", (r) => {
-            must(r.roleLabels.length > 0 && r.blockedRows === r.roleLabels.length, `${tag}: with no engine ${r.blockedRows} of ${r.roleLabels.length} rendered rows are blocked, expected every one`);
-          });
-          if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
-          else await page.click('[data-onboarding-step="engines"]');
-          await page.waitForSelector("[data-onboarding-engines-note]");
-          await shot("engines-neither", (r) => {
-            must(r.engines.claude !== "connected" && r.engines.codex === "missing", `${tag}: engines read ${JSON.stringify(r.engines)} with nothing signed in`);
-          });
-          if (!viewport.phone) {
-            await page.click('[data-onboarding-step="agents"]');
+            /* 7. The menu row opens the mapping alone. */
+            if (viewport.phone) {
+              await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
+              await page.click('[data-mobile2-open="menu"]');
+              await page.waitForSelector('[data-testid="menu-agent-mapping"]');
+              await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
+              await page.click('[data-testid="menu-agent-mapping"]');
+            } else {
+              await page.click("[data-rail-menu]");
+              await page.waitForSelector("[data-rail-menu-agent-mapping]");
+              await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
+              await page.click("[data-rail-menu-agent-mapping]");
+            }
+            await page.waitForSelector('[data-onboarding-dialog="mapping"] [data-mapping-row]', { timeout: 30_000 });
+            await shot("mapping-alone", (r) => {
+              must(r.heading === null && r.roleLabels.length >= 7, `${tag}: the mapping surface read heading=${r.heading}, ${r.roleLabels.length} rows`);
+              if (!viewport.phone) for (const width of r.modelSelectWidths) must(width <= 221, `${tag}: a model select stretches to ${width}px on the standalone mapping`);
+            });
+
+            /* 8. The guide from the menu, walked to its end: Open the board completes it. */
+            await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
+            if (viewport.phone) {
+              await page.click('[data-mobile2-open="menu"]');
+              await page.waitForSelector('[data-testid="menu-setup-guide"]');
+              await page.click('[data-testid="menu-setup-guide"]');
+            } else {
+              await page.click("[data-rail-menu]");
+              await page.waitForSelector("[data-rail-menu-setup-guide]");
+              await page.click("[data-rail-menu-setup-guide]");
+            }
+            await page.waitForSelector('[data-onboarding-dialog="guide"]');
+            /* The guide reopens on the first step not yet done; go to Agents by the step list. */
+            const openStep = async (id: string) => {
+              if (viewport.phone) await page.click("[data-onboarding-step-list-toggle]");
+              await page.click(`[data-onboarding-step="${id}"]`);
+            };
+            await openStep("agents");
             await page.waitForSelector("[data-agent-mapping] [data-mapping-row]");
-            const mark = await page.$eval('[data-onboarding-step="engines"] [data-step-mark]', (el) => (el as HTMLElement).dataset.stepMark);
-            must(mark === "warn", `${tag}: with no engine the visited Engines step shows ${mark}, expected the warning mark`);
-          }
-          claudeSignedIn(true);
+            await shot("finish", () => {});
 
-          /* 6. Close, finish later: the marker says dismissed and a reload stays shut. */
-          await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
-          const marker = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: { dismissedAt: string | null } | null };
-          must(Boolean(marker.marker?.dismissedAt), `${tag}: Escape did not record a dismissal`);
-          await page.reload({ waitUntil: "domcontentloaded" });
-          await page.waitForTimeout(3_000);
-          must(await page.$("[data-onboarding-dialog]") === null, `${tag}: the dismissed guide reopened by itself`);
-
-          /* 7. The menu row opens the mapping alone. */
-          if (viewport.phone) {
-            await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
-            await page.click('[data-mobile2-open="menu"]');
-            await page.waitForSelector('[data-testid="menu-agent-mapping"]');
-            await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
-            await page.click('[data-testid="menu-agent-mapping"]');
-          } else {
-            await page.click("[data-rail-menu]");
-            await page.waitForSelector("[data-rail-menu-agent-mapping]");
-            await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
-            await page.click("[data-rail-menu-agent-mapping]");
-          }
-          await page.waitForSelector('[data-onboarding-dialog="mapping"] [data-mapping-row]', { timeout: 30_000 });
-          await shot("mapping-alone", (r) => {
-            must(r.heading === null && r.roleLabels.length >= 7, `${tag}: the mapping surface read heading=${r.heading}, ${r.roleLabels.length} rows`);
-            if (!viewport.phone) for (const width of r.modelSelectWidths) must(width <= 221, `${tag}: a model select stretches to ${width}px on the standalone mapping`);
-          });
-
-          /* 8. The guide from the menu, walked to its end: Open the board completes it. */
-          await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
-          if (viewport.phone) {
-            await page.click('[data-mobile2-open="menu"]');
-            await page.waitForSelector('[data-testid="menu-setup-guide"]');
-            await page.click('[data-testid="menu-setup-guide"]');
-          } else {
-            await page.click("[data-rail-menu]");
-            await page.waitForSelector("[data-rail-menu-setup-guide]");
-            await page.click("[data-rail-menu-setup-guide]");
-          }
-          await page.waitForSelector('[data-onboarding-dialog="guide"]');
-          /* The guide reopens on the first step not yet done; go to Agents by the step list. */
-          const openStep = async (id: string) => {
-            if (viewport.phone) await page.click("[data-onboarding-step-list-toggle]");
-            await page.click(`[data-onboarding-step="${id}"]`);
-          };
-          await openStep("agents");
-          await page.waitForSelector("[data-agent-mapping] [data-mapping-row]");
-          await shot("finish", () => {});
-
-          /* 9. The Check step, one frame per state its run can be in. */
-          let health: unknown = healthAnswer("idle");
-          /* A start the server refuses, when a frame asks for one; every GET
-             answers the state being captured. */
-          let healthStart: { status: number; json: unknown } | null = null;
-          await page.route("**/api/onboarding/health*", (route) => route.request().method() === "POST" && healthStart
-            ? route.fulfill({ status: healthStart.status, json: healthStart.json })
-            : route.fulfill({ json: health }));
-          await page.click("[data-onboarding-primary]");
-          /* `within` tells two frames of the same run state apart, so a frame is
-             never shot before its own answer has rendered. */
-          const checkFrame = async (name: string, answer: unknown, expectState: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void, within?: string) => {
-            health = answer;
+            /* 9. The Check step, one frame per state its run can be in. */
+            let health: unknown = healthAnswer("idle");
+            /* A start the server refuses, when a frame asks for one; every GET
+               answers the state being captured. */
+            let healthStart: { status: number; json: unknown } | null = null;
+            await page.route("**/api/onboarding/health*", (route) => route.request().method() === "POST" && healthStart
+              ? route.fulfill({ status: healthStart.status, json: healthStart.json })
+              : route.fulfill({ json: health }));
+            await page.click("[data-onboarding-primary]");
+            /* `within` tells two frames of the same run state apart, so a frame is
+               never shot before its own answer has rendered. */
+            const checkFrame = async (name: string, answer: unknown, expectState: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void, within?: string) => {
+              health = answer;
+              await openStep("agents");
+              await page.waitForSelector("[data-agent-mapping]");
+              await openStep("check");
+              await page.waitForSelector(`[data-health-check="${expectState}"]${within ? ` ${within}` : ""}`, { timeout: 30_000 });
+              await shot(name, (r) => {
+                must(r.health !== null && r.health.rows.length === 5, `${tag} ${name}: the check shows ${r.health?.rows.length ?? 0} rows`);
+                must((r.health?.failureOverflow ?? 0) <= 0, `${tag} ${name}: the failure block overflows by ${r.health?.failureOverflow}px`);
+                must((r.health?.rowLabelsClipped.length ?? 0) === 0, `${tag} ${name}: clipped row labels ${r.health?.rowLabelsClipped.join(", ")}`);
+                /* One accent while the step waits on the user, none while it runs. */
+                const accents = expectState === "running" ? 0 : 1;
+                must(r.health?.filledAccents.length === accents, `${tag} ${name}: ${r.health?.filledAccents.length} filled accent buttons (${r.health?.filledAccents.join(", ")}), expected ${accents}`);
+                const tall = (r.health?.rowLines ?? []).filter((entry) => entry.lines > 2);
+                must(tall.length === 0, `${tag} ${name}: row labels over two lines: ${tall.map((entry) => `${entry.id}=${entry.lines}`).join(", ")}`);
+                check(r);
+              });
+            };
+            await checkFrame("check-idle", healthAnswer("idle"), "idle", (r) => {
+              must(Boolean(r.health?.lead?.includes("Haiku")), `${tag}: the check's lead does not name the model: ${r.health?.lead}`);
+              must(r.health?.filledAccents[0] === "start", `${tag}: before a run the accent is on ${r.health?.filledAccents[0]}`);
+            });
+            await checkFrame("check-running", healthAnswer("running"), "running", (r) => {
+              must(r.health?.rows.join(" ") === "spawn=passed delivery=passed report=running wake=waiting filing=waiting", `${tag}: running rows ${r.health?.rows.join(" ")}`);
+              /* Nothing is filled while it runs: the brightest control on a
+                 two-minute wait would otherwise be the one that leaves. */
+              must(r.health?.filledAccents.length === 0, `${tag}: while the check runs the accent is on ${r.health?.filledAccents.join(", ")}`);
+            });
+            await checkFrame("check-passed", healthAnswer("passed"), "passed", (r) => {
+              must(r.health?.summary === "passed", `${tag}: a passed run shows summary ${r.health?.summary}`);
+              must(r.health?.filledAccents[0] === "footer", `${tag}: after a pass the accent is on ${r.health?.filledAccents[0]}, not Open the board`);
+            });
+            /* The pass a new install ends on: no orchestrator, so row 5 is skipped. */
+            await checkFrame("check-passed-no-seat", healthAnswer("noSeat"), "passed", (r) => {
+              must(r.health?.rows.join(" ") === "spawn=passed delivery=passed report=passed wake=passed filing=skipped", `${tag}: the no-orchestrator pass shows ${r.health?.rows.join(" ")}`);
+              must(Boolean(r.health?.note), `${tag}: the skipped row carries no note`);
+              const filing = r.health?.rowLines.find((entry) => entry.id === "filing");
+              must(filing?.lines === 1, `${tag}: the longest row label takes ${filing?.lines} lines beside its note`);
+            }, "[data-health-note]");
+            await checkFrame("check-cleanup-problem", healthAnswer("cleanupProblem"), "passed", (r) => {
+              must(Boolean(r.health?.cleanupProblem), `${tag}: a cleanup that could not finish says nothing`);
+              must(/next time|наступного разу/.test(r.health?.cleanupProblem ?? ""), `${tag}: the cleanup line gives no next step: ${r.health?.cleanupProblem}`);
+            }, "[data-health-cleanup-problem]");
+            /* Between the run settling and the end of cleanup: every poll that
+               lands in that window shows this line. */
+            await checkFrame("check-cleaning", healthAnswer("cleaning"), "passed", (r) => {
+              must(Boolean(r.health?.cleaning), `${tag}: a run still cleaning up says nothing`);
+              must(r.health?.cleanupProblem === null, `${tag}: a cleanup still running already reports a problem`);
+            }, "[data-health-cleaning]");
+            await checkFrame("check-stopped", healthAnswer("stopped"), "stopped", (r) => {
+              must(r.health?.summary === "stopped", `${tag}: a stopped run shows summary ${r.health?.summary}`);
+              must(r.health!.rows.slice(1).every((entry) => entry.endsWith("=notRun")), `${tag}: after Stop the rows that never ran read ${r.health?.rows.join(" ")}`);
+            });
+            /* A start the server refuses (no engine connected): the step says so
+               where it would have shown a run. */
+            health = healthAnswer("idle");
+            healthStart = { status: 409, json: { error: "Connect an engine first: no engine can start an agent on this machine.", code: "NO_ENGINE" } };
             await openStep("agents");
             await page.waitForSelector("[data-agent-mapping]");
             await openStep("check");
-            await page.waitForSelector(`[data-health-check="${expectState}"]${within ? ` ${within}` : ""}`, { timeout: 30_000 });
-            await shot(name, (r) => {
-              must(r.health !== null && r.health.rows.length === 5, `${tag} ${name}: the check shows ${r.health?.rows.length ?? 0} rows`);
-              must((r.health?.failureOverflow ?? 0) <= 0, `${tag} ${name}: the failure block overflows by ${r.health?.failureOverflow}px`);
-              must((r.health?.rowLabelsClipped.length ?? 0) === 0, `${tag} ${name}: clipped row labels ${r.health?.rowLabelsClipped.join(", ")}`);
-              /* One accent while the step waits on the user, none while it runs. */
-              const accents = expectState === "running" ? 0 : 1;
-              must(r.health?.filledAccents.length === accents, `${tag} ${name}: ${r.health?.filledAccents.length} filled accent buttons (${r.health?.filledAccents.join(", ")}), expected ${accents}`);
-              const tall = (r.health?.rowLines ?? []).filter((entry) => entry.lines > 2);
-              must(tall.length === 0, `${tag} ${name}: row labels over two lines: ${tall.map((entry) => `${entry.id}=${entry.lines}`).join(", ")}`);
-              check(r);
+            await page.waitForSelector('[data-health-check="idle"]');
+            await page.click("[data-health-start]");
+            await page.waitForSelector("[data-health-start-failed]");
+            await shot("check-start-refused", (r) => {
+              must(Boolean(r.health?.startFailed), `${tag}: a refused start says nothing`);
+              must(!r.health!.startFailed!.includes("{"), `${tag}: the refusal line paints a placeholder: ${r.health?.startFailed}`);
+              must(r.health?.rows.length === 5, `${tag}: a refused start left ${r.health?.rows.length ?? 0} rows`);
+              /* A refusal the step has its own sentence for is read in the
+                 interface language, never as the server's English one. */
+              const own = locale === "uk" ? "Спершу підключіть рушій (крок 1)." : "Connect an engine first (step 1).";
+              must(r.health?.startFailed === own, `${tag}: the refusal reads "${r.health?.startFailed}", expected "${own}"`);
             });
-          };
-          await checkFrame("check-idle", healthAnswer("idle"), "idle", (r) => {
-            must(Boolean(r.health?.lead?.includes("Haiku")), `${tag}: the check's lead does not name the model: ${r.health?.lead}`);
-            must(r.health?.filledAccents[0] === "start", `${tag}: before a run the accent is on ${r.health?.filledAccents[0]}`);
-          });
-          await checkFrame("check-running", healthAnswer("running"), "running", (r) => {
-            must(r.health?.rows.join(" ") === "spawn=passed delivery=passed report=running wake=waiting filing=waiting", `${tag}: running rows ${r.health?.rows.join(" ")}`);
-            /* Nothing is filled while it runs: the brightest control on a
-               two-minute wait would otherwise be the one that leaves. */
-            must(r.health?.filledAccents.length === 0, `${tag}: while the check runs the accent is on ${r.health?.filledAccents.join(", ")}`);
-          });
-          await checkFrame("check-passed", healthAnswer("passed"), "passed", (r) => {
-            must(r.health?.summary === "passed", `${tag}: a passed run shows summary ${r.health?.summary}`);
-            must(r.health?.filledAccents[0] === "footer", `${tag}: after a pass the accent is on ${r.health?.filledAccents[0]}, not Open the board`);
-          });
-          /* The pass a new install ends on: no orchestrator, so row 5 is skipped. */
-          await checkFrame("check-passed-no-seat", healthAnswer("noSeat"), "passed", (r) => {
-            must(r.health?.rows.join(" ") === "spawn=passed delivery=passed report=passed wake=passed filing=skipped", `${tag}: the no-orchestrator pass shows ${r.health?.rows.join(" ")}`);
-            must(Boolean(r.health?.note), `${tag}: the skipped row carries no note`);
-            const filing = r.health?.rowLines.find((entry) => entry.id === "filing");
-            must(filing?.lines === 1, `${tag}: the longest row label takes ${filing?.lines} lines beside its note`);
-          }, "[data-health-note]");
-          await checkFrame("check-cleanup-problem", healthAnswer("cleanupProblem"), "passed", (r) => {
-            must(Boolean(r.health?.cleanupProblem), `${tag}: a cleanup that could not finish says nothing`);
-            must(/next time|наступного разу/.test(r.health?.cleanupProblem ?? ""), `${tag}: the cleanup line gives no next step: ${r.health?.cleanupProblem}`);
-          }, "[data-health-cleanup-problem]");
-          /* Between the run settling and the end of cleanup: every poll that
-             lands in that window shows this line. */
-          await checkFrame("check-cleaning", healthAnswer("cleaning"), "passed", (r) => {
-            must(Boolean(r.health?.cleaning), `${tag}: a run still cleaning up says nothing`);
-            must(r.health?.cleanupProblem === null, `${tag}: a cleanup still running already reports a problem`);
-          }, "[data-health-cleaning]");
-          await checkFrame("check-stopped", healthAnswer("stopped"), "stopped", (r) => {
-            must(r.health?.summary === "stopped", `${tag}: a stopped run shows summary ${r.health?.summary}`);
-            must(r.health!.rows.slice(1).every((entry) => entry.endsWith("=notRun")), `${tag}: after Stop the rows that never ran read ${r.health?.rows.join(" ")}`);
-          });
-          /* A start the server refuses (no engine connected): the step says so
-             where it would have shown a run. */
-          health = healthAnswer("idle");
-          healthStart = { status: 409, json: { error: "Connect an engine first: no engine can start an agent on this machine.", code: "NO_ENGINE" } };
-          await openStep("agents");
-          await page.waitForSelector("[data-agent-mapping]");
-          await openStep("check");
-          await page.waitForSelector('[data-health-check="idle"]');
-          await page.click("[data-health-start]");
-          await page.waitForSelector("[data-health-start-failed]");
-          await shot("check-start-refused", (r) => {
-            must(Boolean(r.health?.startFailed), `${tag}: a refused start says nothing`);
-            must(!r.health!.startFailed!.includes("{"), `${tag}: the refusal line paints a placeholder: ${r.health?.startFailed}`);
-            must(r.health?.rows.length === 5, `${tag}: a refused start left ${r.health?.rows.length ?? 0} rows`);
-            /* A refusal the step has its own sentence for is read in the
-               interface language, never as the server's English one. */
-            const own = locale === "uk" ? "Спершу підключіть рушій (крок 1)." : "Connect an engine first (step 1).";
-            must(r.health?.startFailed === own, `${tag}: the refusal reads "${r.health?.startFailed}", expected "${own}"`);
-          });
-          healthStart = null;
+            healthStart = null;
 
-          for (const failed of HEALTH_FAILURES) {
-            const code = failed.code;
-            await checkFrame(`check-${failed.name ?? code.toLowerCase().replace(/_/g, "-")}`, healthAnswer({ failed }), "failed", (r) => {
-              must(r.health?.failure === code, `${tag}: expected failure ${code}, the step shows ${r.health?.failure}`);
-              /* The whole block, not its first paragraph: the sentence that
-                 says what to do carries `{bin}` and is the one that was left
-                 unsubstituted. */
-              must(Boolean(r.health?.failureText) && !r.health!.failureAll!.includes("{"), `${tag} ${code}: unfilled sentence "${r.health?.failureAll}"`);
-              must(!r.health!.failureAll!.includes("`"), `${tag} ${code}: markdown backticks painted in "${r.health?.failureAll}"`);
-              const index = HEALTH_ROW_IDS.indexOf(failed.row);
-              must(r.health!.rows.slice(index + 1).every((entry) => entry.endsWith("=waiting")), `${tag} ${code}: rows after the failure are not waiting: ${r.health?.rows.join(" ")}`);
-              must(r.health?.summary === "failed", `${tag} ${code}: no failed footer line`);
-              must(r.health?.filledAccents[0] === "start", `${tag} ${code}: after a failure the accent is on ${r.health?.filledAccents[0]}, not Run it again`);
-              /* At rest, the failure leaves the button that runs the check again in view. */
-              must(r.health?.inView.start === true && r.health?.inView.summary === true, `${tag} ${code}: Run it again ${r.health?.inView.start ? "in view" : "below the fold"}, footer line ${r.health?.inView.summary ? "in view" : "below the fold"}`);
-              /* "Open the agent" sentences only beside the button that opens it. */
-              const namesAgent = /open the agent|відкрийте (картку )?агента/i.test(r.health!.failureAll!);
-              must(!namesAgent || r.health?.actionLabel === (locale === "uk" ? "Відкрити агента" : "Open the agent"), `${tag} ${code}: the sentence names the agent beside "${r.health?.actionLabel}"`);
-              if (code === "TICK_OFF") must(r.health?.action === null, `${tag}: TICK_OFF offers ${r.health?.action}`);
-              if (index === 0) must(!/rows before it|попередні кроки/.test(r.health!.failureAll! + (r.health?.summaryText ?? "")), `${tag} ${code}: a first-row failure says the rows before it passed`);
+            for (const failed of HEALTH_FAILURES) {
+              const code = failed.code;
+              await checkFrame(`check-${failed.name ?? code.toLowerCase().replace(/_/g, "-")}`, healthAnswer({ failed }), "failed", (r) => {
+                must(r.health?.failure === code, `${tag}: expected failure ${code}, the step shows ${r.health?.failure}`);
+                /* The whole block, not its first paragraph: the sentence that
+                   says what to do carries `{bin}` and is the one that was left
+                   unsubstituted. */
+                must(Boolean(r.health?.failureText) && !r.health!.failureAll!.includes("{"), `${tag} ${code}: unfilled sentence "${r.health?.failureAll}"`);
+                must(!r.health!.failureAll!.includes("`"), `${tag} ${code}: markdown backticks painted in "${r.health?.failureAll}"`);
+                const index = HEALTH_ROW_IDS.indexOf(failed.row);
+                must(r.health!.rows.slice(index + 1).every((entry) => entry.endsWith("=waiting")), `${tag} ${code}: rows after the failure are not waiting: ${r.health?.rows.join(" ")}`);
+                must(r.health?.summary === "failed", `${tag} ${code}: no failed footer line`);
+                must(r.health?.filledAccents[0] === "start", `${tag} ${code}: after a failure the accent is on ${r.health?.filledAccents[0]}, not Run it again`);
+                /* At rest, the failure leaves the button that runs the check again in view. */
+                must(r.health?.inView.start === true && r.health?.inView.summary === true, `${tag} ${code}: Run it again ${r.health?.inView.start ? "in view" : "below the fold"}, footer line ${r.health?.inView.summary ? "in view" : "below the fold"}`);
+                /* "Open the agent" sentences only beside the button that opens it. */
+                const namesAgent = /open the agent|відкрийте (картку )?агента/i.test(r.health!.failureAll!);
+                must(!namesAgent || r.health?.actionLabel === (locale === "uk" ? "Відкрити агента" : "Open the agent"), `${tag} ${code}: the sentence names the agent beside "${r.health?.actionLabel}"`);
+                if (code === "TICK_OFF") must(r.health?.action === null, `${tag}: TICK_OFF offers ${r.health?.action}`);
+                if (index === 0) must(!/rows before it|попередні кроки/.test(r.health!.failureAll! + (r.health?.summaryText ?? "")), `${tag} ${code}: a first-row failure says the rows before it passed`);
+              });
+            }
+            /* The machine detail, opened, on the longest sentence pair. */
+            await page.click("[data-health-failure] button[aria-expanded]");
+            await page.waitForSelector("[data-health-details]");
+            await page.waitForTimeout(400);
+            await shot("check-details", (r) => {
+              must(Boolean(r.health?.detailsOpen), `${tag}: Show details did not open`);
+              must(r.health?.inView.details === true, `${tag}: the opened details sit below the fold`);
+              /* The detail opens above the controls: the button that runs the check again stays whole. */
+              must(r.health?.inView.start === true, `${tag}: with the detail open, Run it again sits below the fold`);
             });
+            health = healthAnswer("idle");
+            await openStep("agents");
+            await openStep("check");
+            await page.waitForSelector('[data-health-check="idle"]');
+            await page.click("[data-onboarding-primary]");
+            await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
+            await page.unroute("**/api/onboarding/health*");
+            const finished = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: { completedAt: string | null } | null };
+            must(Boolean(finished.marker?.completedAt), `${tag}: Open the board did not record a completed guide`);
+
+            /* 10. Slice 3 (#1876, #2004): the guide from the menu again, walked
+               through its three new steps and the account list. Phone access
+               runs against the stand-in tailscale; live dictation answers are
+               served here so no key reaches a provider. */
+            const uk = locale === "uk";
+            const openGuide = async (row: "setup-guide" | "dictation") => {
+              if (viewport.phone) {
+                await page.click('[data-mobile2-open="menu"]');
+                await page.waitForSelector(`[data-testid="menu-${row}"]`);
+                if (row === "dictation") await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu-slice3.png`) });
+                await page.click(`[data-testid="menu-${row}"]`);
+              } else {
+                await page.click("[data-rail-menu]");
+                await page.waitForSelector(`[data-rail-menu-${row}]`);
+                if (row === "dictation") await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu-slice3.png`) });
+                await page.click(`[data-rail-menu-${row}]`);
+              }
+            };
+            const revisit = async (id: string) => {
+              await openStep(id === "agents" ? "engines" : "agents");
+              await openStep(id);
+            };
+            const common = (name: string, r: NonNullable<ReturnType<typeof measureOnboarding>>) => {
+              must(r.clippedControls.length === 0, `${tag} ${name}: clipped controls ${r.clippedControls.join(" | ")}`);
+            };
+            await page.route("**/api/accounts", async (route) => {
+              const response = await route.fetch();
+              const body = await response.json() as Record<string, { accounts?: Record<string, unknown>[]; active?: string }>;
+              const claude = body.claude;
+              const first = claude?.accounts?.[0];
+              if (claude && first) {
+                claude.accounts = [
+                  { ...first, limits: SEEDED_LIMITS },
+                  { ...first, id: `${String(first.id)}-lab`, label: "Lab", limits: SEEDED_LIMITS },
+                  { ...first, id: `${String(first.id)}-spare`, label: "Spare", authPresent: false, authHealth: "signed_out", limits: undefined },
+                ];
+              }
+              await route.fulfill({ response, json: body });
+            });
+            /* The accounts store reads once per page: reload so the three rows land. */
+            await page.reload({ waitUntil: "domcontentloaded" });
+            if (viewport.phone) await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
+            else await page.waitForSelector("[data-rail-menu]", { timeout: 60_000 });
+            await openGuide("setup-guide");
+            await page.waitForSelector('[data-onboarding-dialog="guide"]');
+            await openStep("engines");
+            await page.waitForFunction(() => document.querySelectorAll('[data-onboarding-engine="claude"] [data-mobile2-account]').length === 3, undefined, { timeout: 30_000 });
+            await shot("engines-three-accounts", (r) => {
+              common("engines-three-accounts", r);
+              must(r.accounts.claude?.rows === 3 && r.accounts.claude.addRow, `${tag}: the Claude card lists ${r.accounts.claude?.rows} accounts, add row ${r.accounts.claude?.addRow}`);
+              must(/^(3 accounts|Акаунтів: 3)/.test(r.accounts.claude?.header ?? ""), `${tag}: the Claude header reads "${r.accounts.claude?.header}"`);
+              must(/(6|з 6)/.test(r.stepCounter ?? ""), `${tag}: the step counter reads "${r.stepCounter}"`);
+            });
+            await page.unroute("**/api/accounts");
+
+            /* Phone: every state Tailscale can be in. Not installed is served
+               here, since the stand-in is always on the server's PATH. */
+            const phoneFrame = async (name: string, expectState: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void, selector?: string) => {
+              await revisit("phone");
+              await page.waitForSelector(selector ?? `[data-phone-state="${expectState}"]`, { timeout: 30_000 });
+              await shot(name, (r) => {
+                common(name, r);
+                must(r.phone?.state === expectState, `${tag} ${name}: the step shows ${r.phone?.state}`);
+                must(!/sudo|--tailscale|bunx/.test(r.phone?.text ?? "") || r.phone?.failure === "OPERATOR_RIGHTS", `${tag} ${name}: a terminal command on the step: ${r.phone?.text}`);
+                check(r);
+              });
+            };
+            const sentenceOnly = (name: string) => (r: NonNullable<ReturnType<typeof measureOnboarding>>) => {
+              must(r.phone?.links.length === 1 && r.phone.buttons.length === 0, `${tag} ${name}: ${r.phone?.links.length} links and buttons ${JSON.stringify(r.phone?.buttons)}; one sentence and one link expected`);
+            };
+            await page.route("**/api/access", (route) => route.fulfill({ json: { tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: port, servingPort: null, persisted: false }, phoneError: null } }));
+            await phoneFrame("phone-missing", "missing", sentenceOnly("phone-missing"));
+            await page.unroute("**/api/access");
+            tailscale.setStatus({ BackendState: "NeedsLogin" });
+            await phoneFrame("phone-needs-login", "needs-login", sentenceOnly("phone-needs-login"));
+            tailscale.setStatus({ BackendState: "Running", Self: { DNSName: "" } });
+            await phoneFrame("phone-no-dns", "no-dns", sentenceOnly("phone-no-dns"));
+            tailscale.setStatus({ BackendState: "Running", Self: { DNSName: `${STUB_DNS_NAME}.` } });
+            tailscale.setServing(null);
+            tailscale.setServeMode("ok");
+            await phoneFrame("phone-ready", "ready", (r) => {
+              must(r.phone?.buttons[0] === (uk ? "Увімкнути доступ із телефона" : "Turn on phone access"), `${tag}: the ready step's button reads ${JSON.stringify(r.phone?.buttons)}`);
+              must(r.filledButtons.length === 1, `${tag}: ${r.filledButtons.length} filled buttons on the ready step (${r.filledButtons.join(", ")})`);
+            });
+            tailscale.setServing(3000);
+            await phoneFrame("phone-serving-other", "serving-other", (r) => {
+              must((r.phone?.text ?? "").includes("3000"), `${tag}: the serving-other title does not name the port`);
+              must(r.phone?.buttons[0] === (uk ? "Перенаправити на Viewer" : "Point it at the Viewer"), `${tag}: serving-other button ${JSON.stringify(r.phone?.buttons)}`);
+            });
+            /* A mapping an earlier run left on this Viewer's port while this
+               process gates on nothing: the tailnet reaches it open. */
+            tailscale.setServing(port);
+            await phoneFrame("phone-exposed", "exposed", (r) => {
+              must(r.phone?.buttons[0] === (uk ? "Увімкнути доступ із телефона" : "Turn on phone access"), `${tag}: the exposed step's button reads ${JSON.stringify(r.phone?.buttons)}`);
+              must(r.filledButtons.length === 1, `${tag}: ${r.filledButtons.length} filled buttons on the exposed step (${r.filledButtons.join(", ")})`);
+            });
+            tailscale.setServing(null);
+            await revisit("phone");
+            await page.waitForSelector('[data-phone-state="ready"]');
+            /* The press in flight, held at the network until its frame is taken,
+               then answered by the server with the operator right missing. */
+            tailscale.setServeMode("operator");
+            let releasePress: () => void = () => {};
+            const held = new Promise<void>((resolve) => { releasePress = resolve; });
+            await page.route("**/api/access/phone", async (route) => { await held; await route.continue(); });
+            await page.click("[data-phone-enable]");
+            await page.waitForSelector("[data-phone-enable][disabled]");
+            await shot("phone-busy", (r) => {
+              common("phone-busy", r);
+              must(/Turning on|Вмикаю/.test(r.phone?.buttons[0] ?? ""), `${tag}: the pressed button reads ${r.phone?.buttons[0]}`);
+            });
+            releasePress();
+            await page.waitForSelector('[data-phone-failure="OPERATOR_RIGHTS"]', { timeout: 30_000 });
+            await page.unroute("**/api/access/phone");
+            const failureFrame = async (code: string, prepare: () => void, undo: () => void, open = false) => {
+              prepare();
+              await page.click("[data-phone-enable]");
+              await page.waitForSelector(`[data-phone-failure="${code}"]`, { timeout: 30_000 });
+              if (open) await page.click("[data-phone-failure] summary");
+              await page.locator("[data-phone-failure]").scrollIntoViewIfNeeded();
+              await shot(`phone-failure-${code.toLowerCase().replace(/_/g, "-")}${open ? "-details" : ""}`, (r) => {
+                common(code, r);
+                must(r.phone?.failure === code, `${tag}: expected ${code}, the step shows ${r.phone?.failure}`);
+                must(!(r.phone?.text ?? "").includes("{"), `${tag} ${code}: unfilled sentence ${r.phone?.text}`);
+              });
+              undo();
+              must(!fs.existsSync(path.join(HOME, ".config", "agent-log-viewer", "phone-access")) || fs.statSync(path.join(HOME, ".config", "agent-log-viewer", "phone-access")).isDirectory(), `${tag} ${code}: a failed press left the choice remembered`);
+            };
+            await page.locator("[data-phone-failure]").scrollIntoViewIfNeeded();
+            await shot("phone-failure-operator-rights", (r) => {
+              common("operator", r);
+              must(r.phone?.failure === "OPERATOR_RIGHTS" && (r.phone.text).includes("sudo tailscale set --operator=$USER"), `${tag}: the operator failure reads ${r.phone?.text}`);
+            });
+            await failureFrame("SERVE_FAILED", () => tailscale.setServeMode("fail"), () => {}, true);
+            await failureFrame("VERIFY_FAILED", () => tailscale.setServeMode("noverify"), () => {});
+            await failureFrame("TIMEOUT", () => tailscale.setServeMode("hang"), () => {});
+            const configDir = path.join(HOME, ".config", "agent-log-viewer");
+            const flagPath = path.join(configDir, "phone-access");
+            const tokenPath = path.join(configDir, "token");
+            await failureFrame("PERSIST_FAILED", () => { tailscale.setServeMode("ok"); fs.mkdirSync(flagPath, { recursive: true }); }, () => fs.rmSync(flagPath, { recursive: true, force: true }));
+            await failureFrame("TOKEN_WRITE_FAILED", () => { fs.rmSync(tokenPath, { force: true }); fs.mkdirSync(tokenPath, { recursive: true }); }, () => fs.rmSync(tokenPath, { recursive: true, force: true }));
+            /* The one press, for real: remembered, published with --bg, verified,
+               re-bound — the running production server now asks every
+               connection for the key, and this tab kept its cookie. */
+            tailscale.setServeMode("ok");
+            await page.click("[data-phone-enable]");
+            await page.waitForSelector('[data-phone-state="serving"] img', { timeout: 30_000 });
+            await shot("phone-serving", (r) => {
+              common("phone-serving", r);
+              must(Boolean(r.phone?.qr) && (r.phone?.link ?? "").startsWith(`https://${STUB_DNS_NAME}/?k=`), `${tag}: serving shows qr=${r.phone?.qr} link=${r.phone?.link?.slice(0, 40)}`);
+            });
+            must(fs.readFileSync(flagPath, "utf8") === "tailscale\n", `${tag}: the choice was not remembered`);
+            must(tailscale.calls().includes(`serve --bg ${port}`), `${tag}: the stand-in never saw serve --bg ${port}`);
+            const gated = await fetch(`${baseUrl}/api/onboarding`);
+            must(gated.status === 403, `${tag}: after the press a request without the key answered ${gated.status}; the running server did not re-bind its gate`);
+            const keyed = await fetch(`${baseUrl}/api/onboarding`, { headers: { authorization: `Bearer ${fs.readFileSync(tokenPath, "utf8").trim()}` } });
+            must(keyed.status === 200, `${tag}: with the key the server answered ${keyed.status}`);
+            report[`${tag}-gate`] = { withoutKey: gated.status, withKey: keyed.status };
+            await page.click("[data-phone-disable]");
+            await page.waitForSelector('[data-phone-state="ready"]', { timeout: 30_000 });
+            const lifted = await fetch(`${baseUrl}/api/onboarding`);
+            must(lifted.status === 200 && !fs.existsSync(flagPath), `${tag}: after Turn off the server answered ${lifted.status} and the flag ${fs.existsSync(flagPath) ? "stayed" : "went"}`);
+
+            /* Voice: each backend, a saved key, and each check sentence. */
+            const voiceFrame = async (name: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void) => {
+              await shot(name, (r) => { common(name, r); check(r); });
+            };
+            const choose = async (id: string) => {
+              await page.click(`[data-voice-backend="${id}"] input[type=radio]`);
+              await page.waitForSelector(`[data-voice-backend="${id}"][data-selected]`);
+            };
+            const check = async (answer?: { status: number; json: unknown }) => {
+              if (answer) await page.route("**/api/transcribe/token", (route) => route.fulfill(answer));
+              await page.click("[data-voice-check]");
+              await page.waitForSelector("[data-voice-check-result]", { timeout: 30_000 });
+              if (answer) await page.unroute("**/api/transcribe/token");
+            };
+            await revisit("voice");
+            await page.waitForSelector("[data-onboarding-voice]", { timeout: 30_000 });
+            await voiceFrame("voice-local", (r) => must(r.voice?.selected === "local" && r.voice.skip, `${tag}: the voice step opens on ${r.voice?.selected}, skip ${r.voice?.skip}`));
+            await check();
+            await voiceFrame("voice-check-local", (r) => must(r.voice?.tone === "danger" && Boolean(r.voice.result), `${tag}: local check says ${r.voice?.result}`));
+            await choose("chatgpt");
+            await check();
+            await voiceFrame("voice-chatgpt", (r) => must(Boolean(r.voice?.result), `${tag}: chatgpt check says nothing`));
+            await choose("elevenlabs");
+            await check();
+            await voiceFrame("voice-elevenlabs-no-key", (r) => must(r.voice?.keyField === true && /ElevenLabs/.test(r.voice.result ?? ""), `${tag}: elevenlabs without a key reads ${r.voice?.result}`));
+            await choose("soniox");
+            const fakeKey = ["capture", "placeholder", "not", "a", "real", "value"].join("-");
+            await page.fill("[data-voice-key-field] input", fakeKey);
+            await voiceFrame("voice-soniox-key-field", (r) => must(r.voice?.keyField === true, `${tag}: soniox shows no key field`));
+            await page.click("[data-voice-key-save]");
+            await page.waitForSelector('[data-voice-key-note="saved"]', { timeout: 30_000 });
+            await voiceFrame("voice-key-saved", (r) => {
+              must(!(r.voice?.html ?? "").includes(fakeKey), `${tag}: the saved key is still in the page`);
+              must(r.voice?.skip === false, `${tag}: Keep the local default is offered with soniox selected`);
+            });
+            const keyFile = path.join(configDir, "soniox-api-key");
+            must(fs.readFileSync(keyFile, "utf8") === `${fakeKey}\n` && (fs.statSync(keyFile).mode & 0o777) === 0o600, `${tag}: the key file is not the key at mode 600`);
+            await check({ status: 200, json: { token: "served-by-the-capture", provider: "soniox" } });
+            await voiceFrame("voice-check-live-ok", (r) => must(r.voice?.tone === "success", `${tag}: live ok reads ${r.voice?.result}`));
+            await check({ status: 502, json: { error: "Soniox token: HTTP 401" } });
+            await voiceFrame("voice-check-live-refused", (r) => must(r.voice?.tone === "danger" && /401/.test(r.voice.result ?? ""), `${tag}: refused reads ${r.voice?.result}`));
+            fs.rmSync(keyFile, { force: true });
+            await choose("local");
+
+            /* Tour: four cards in one row on the desktop, the pager on the phone,
+               and Create handing over to the orchestrator draft. */
+            await revisit("tour");
+            await page.waitForSelector("[data-onboarding-tour]", { timeout: 30_000 });
+            await shot("tour", (r) => {
+              common("tour", r);
+              must(r.tour?.pictures === 4 && r.tour.start, `${tag}: the tour draws ${r.tour?.pictures} pictures, start band ${r.tour?.start}`);
+              if (!viewport.phone) must(new Set(r.tour?.cardTops).size === 1, `${tag}: the four cards are not in one row (${r.tour?.cardTops.join(", ")})`);
+              must((r.tour?.projects ?? []).includes(PROJECT_NAME), `${tag}: the project select lists ${JSON.stringify(r.tour?.projects)}`);
+              if (!viewport.phone) must(r.filledButtons.length === 1, `${tag}: ${r.filledButtons.length} filled buttons on the tour (${r.filledButtons.join(", ")})`);
+            });
+            if (viewport.phone) {
+              /* Every pager page, since pages 2–4 carry the longest bodies on a 358 px page. */
+              for (let page_ = 2; page_ <= 4; page_ += 1) {
+                await page.click("[data-onboarding-primary]");
+                await page.waitForTimeout(400);
+                await shot(`tour-page-${page_}`, (r) => {
+                  common(`tour-page-${page_}`, r);
+                  must(r.filledOnScreen.length === 1, `${tag}: ${r.filledOnScreen.length} filled buttons on tour page ${page_} (${r.filledOnScreen.join(", ")})`);
+                });
+              }
+              await page.click("[data-onboarding-primary]");
+              await page.waitForTimeout(600);
+              await shot("tour-start", (r) => {
+                common("tour-start", r);
+                must(r.tourBandOnScreen === true, `${tag}: four presses of Continue did not page the tour to its Start here band`);
+                /* On the last page Continue turns nothing: the band's button is the one fill. */
+                must(r.filledOnScreen.length === 1, `${tag}: ${r.filledOnScreen.length} filled buttons on the tour's last page (${r.filledOnScreen.join(", ")})`);
+              });
+            } else {
+              /* The first action is on screen without scrolling. */
+              await shot("tour-start", (r) => {
+                common("tour-start", r);
+                must(r.tourStartInView === true, `${tag}: the Start here band is below the fold`);
+                must(r.tourLinksInView === true, `${tag}: the tour's links are cut by the footer`);
+              });
+            }
+            await page.click('[data-tour-effort="medium"]');
+            await page.click("[data-tour-create]");
+            await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
+            await page.waitForTimeout(1_500);
+            await page.screenshot({ path: path.join(OUT_DIR, `${tag}-tour-created.png`) });
+            if (!viewport.phone) {
+              /* The dock's draft shows what Create will launch without a drag. */
+              const choices = await page.evaluate(() => {
+                const block = document.querySelector("[data-orchestrator-launch-choices]");
+                const scroller = block?.closest(".overflow-y-auto");
+                if (!block || !scroller) return null;
+                /* The last row, Reasoning, holds the model and effort the tour chose. */
+                const reasoning = block.firstElementChild?.lastElementChild ?? block;
+                const a = reasoning.getBoundingClientRect();
+                const b = scroller.getBoundingClientRect();
+                return { inView: a.top >= b.top - 1 && a.bottom <= b.bottom + 1, top: a.top, bottom: a.bottom, viewTop: b.top, viewBottom: b.bottom };
+              });
+              must(choices?.inView === true, `${tag}: the draft's Reasoning row is out of view after the hand-off (${JSON.stringify(choices)})`);
+            }
+            const prefill = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([key]) => key.startsWith("llvOrchestratorDraft:"))));
+            const values = Object.entries(prefill).map(([key, value]) => `${key.split(":").at(-1)}=${value}`).sort();
+            must(values.includes("effort=medium") && values.includes("model=opus") && values.includes("engine=claude"), `${tag}: the tour left the draft at ${values.join(", ")}`);
+            report[`${tag}-tour-prefill`] = values;
+            /* The draft the hand-off opened is a sheet on the phone; a reload
+               returns to the board with it closed. */
+            await page.reload({ waitUntil: "domcontentloaded" });
+            if (viewport.phone) await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
+            else await page.waitForSelector("[data-rail-menu]", { timeout: 60_000 });
+
+            /* The Dictation menu row opens the Voice step alone. */
+            await openGuide("dictation");
+            await page.waitForSelector('[data-onboarding-dialog="voice"] [data-onboarding-voice]', { timeout: 30_000 });
+            await shot("voice-alone", (r) => {
+              common("voice-alone", r);
+              must(r.footerButtons.length === 0 && r.voice !== null, `${tag}: the Dictation row shows footer ${r.footerButtons.length}, voice ${r.voice !== null}`);
+            });
+            await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
+            /* Closing writes the dismissal after the dialog is gone; wait for it,
+               or it lands after the next combination has reset the marker. */
+            for (let attempt = 0; attempt < 50; attempt += 1) {
+              const settled = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: { dismissedAt: string | null } | null };
+              if (settled.marker?.dismissedAt) break;
+              await page.waitForTimeout(100);
+            }
+
+          } catch (error) {
+            /* One combination failing is recorded with a frame of where it stood, and the others still run. */
+            await page.screenshot({ path: path.join(OUT_DIR, `${tag}-error.png`) }).catch(() => {});
+            const marker = await fetch(`${baseUrl}/api/onboarding`).then((response) => response.text()).catch((reason: unknown) => String(reason));
+            failures.push(`${tag}: stopped: ${error instanceof Error ? error.message.split("\n")[0] : String(error)} (marker ${marker.slice(0, 300)})`);
           }
-          /* The machine detail, opened, on the longest sentence pair. */
-          await page.click("[data-health-failure] button[aria-expanded]");
-          await page.waitForSelector("[data-health-details]");
-          await page.waitForTimeout(400);
-          await shot("check-details", (r) => {
-            must(Boolean(r.health?.detailsOpen), `${tag}: Show details did not open`);
-            must(r.health?.inView.details === true, `${tag}: the opened details sit below the fold`);
-            /* The detail opens above the controls: the button that runs the check again stays whole. */
-            must(r.health?.inView.start === true, `${tag}: with the detail open, Run it again sits below the fold`);
-          });
-          health = healthAnswer("idle");
-          await openStep("agents");
-          await openStep("check");
-          await page.waitForSelector('[data-health-check="idle"]');
-          await page.click("[data-onboarding-primary]");
-          await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
-          await page.unroute("**/api/onboarding/health*");
-          const finished = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: { completedAt: string | null } | null };
-          must(Boolean(finished.marker?.completedAt), `${tag}: Open the board did not record a completed guide`);
-
           report[tag] = frames;
           await context.close();
         }

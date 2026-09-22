@@ -7,12 +7,78 @@ import { Check, Copy, QrCode } from "lucide-react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale } from "@/lib/i18n";
 import { Z } from "@/components/layers";
-
-interface AccessResponse {
-  tailnetUrl: string | null;
-}
+import { openOnboarding } from "@/components/onboarding/useOnboarding";
 
 type LoadState = { status: "idle" } | { status: "ready"; url: string } | { status: "unavailable" } | { status: "error" };
+
+/** The QR for a link, drawn in the browser: the key in it never reaches a
+    server log or an image service. The renderer loads on first use. */
+export function AccessQrImage({ url, size = 220 }: { url: string; size?: number }) {
+  const { t } = useLocale();
+  // Keyed by url so a stale QR from a previous render never flashes for the
+  // wrong link (the effect only ever calls setState from its async
+  // continuation, never synchronously in the effect body).
+  const [qr, setQr] = useState<{ url: string; dataUrl: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    // Dynamic import keeps the QR renderer (and its dijkstrajs/pngjs deps) out
+    // of the main bundle until someone actually needs a code.
+    import("qrcode")
+      .then(({ toDataURL }) => toDataURL(url, { margin: 1, width: size }))
+      .then((dataUrl) => {
+        if (!cancelled) setQr({ url, dataUrl });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [url, size]);
+  const src = qr && qr.url === url ? qr.dataUrl : null;
+  return src ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={src} alt={t("qr.alt")} className="mx-auto" style={{ width: size, height: size }} />
+  ) : (
+    <span className="flex items-center justify-center text-[12px] text-primary" style={{ width: size, height: size }}>{t("qr.generating")}</span>
+  );
+}
+
+/** The link field and its Copy button, shared by the popover and the setup
+    guide's phone step. */
+export function AccessQrLink({ url, copyLabel }: { url: string; copyLabel?: string }) {
+  const { t } = useLocale();
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(() => {
+    navigator.clipboard
+      .writeText(url)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 2_000);
+      })
+      .catch(() => {});
+  }, [url]);
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        readOnly
+        value={url}
+        data-phone-link=""
+        aria-label={t("qr.linkAria")}
+        onFocus={(event) => event.currentTarget.select()}
+        className="min-h-[44px] min-w-0 flex-1 truncate rounded-[8px] border border-border bg-canvas px-2 py-1.5 font-mono text-[10.5px] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
+      />
+      <button
+        type="button"
+        data-phone-copy=""
+        aria-label={copyLabel ?? t("qr.copy")}
+        onClick={copy}
+        className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center gap-1 rounded-[8px] border border-border bg-card px-2 py-1.5 text-[11px] font-semibold text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0"
+      >
+        {copied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+        {copyLabel ? <span>{copied ? t("onboarding.phone.copied") : copyLabel}</span> : null}
+      </button>
+    </div>
+  );
+}
 
 /**
  * Header button that renders a QR code for the tailnet URL (with the access
@@ -25,18 +91,13 @@ export function AccessQrButton() {
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<LoadState>({ status: "idle" });
-  // Keyed by url so a stale QR from a previous render never flashes for the
-  // wrong link (the effect that fills this in only ever calls setState from
-  // its async continuation, never synchronously in the effect body).
-  const [qr, setQr] = useState<{ url: string; dataUrl: string } | null>(null);
-  const [copied, setCopied] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open || state.status !== "idle") return;
     let cancelled = false;
     fetch("/api/access")
-      .then((res) => res.json() as Promise<AccessResponse>)
+      .then((res) => res.json() as Promise<{ tailnetUrl?: string | null }>)
       .then((json) => {
         if (cancelled) return;
         setState(json.tailnetUrl ? { status: "ready", url: json.tailnetUrl } : { status: "unavailable" });
@@ -48,25 +109,6 @@ export function AccessQrButton() {
       cancelled = true;
     };
   }, [open, state.status]);
-
-  useEffect(() => {
-    if (state.status !== "ready") return;
-    let cancelled = false;
-    const url = state.url;
-    // Dynamic import keeps the QR renderer (and its dijkstrajs/pngjs deps) out
-    // of the main bundle until someone actually opens the popover.
-    import("qrcode")
-      .then(({ toDataURL }) => toDataURL(url, { margin: 1, width: 220 }))
-      .then((dataUrl) => {
-        if (!cancelled) setQr({ url, dataUrl });
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [state]);
-
-  const qrSrc = state.status === "ready" && qr && qr.url === state.url ? qr.dataUrl : null;
 
   useEffect(() => {
     if (!open) return;
@@ -85,17 +127,6 @@ export function AccessQrButton() {
       window.removeEventListener("pointerdown", onDown);
     };
   }, [open]);
-
-  const copy = useCallback(() => {
-    if (state.status !== "ready") return;
-    navigator.clipboard
-      .writeText(state.url)
-      .then(() => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 2_000);
-      })
-      .catch(() => {});
-  }, [state]);
 
   return (
     <div ref={panelRef} className="relative ml-auto shrink-0">
@@ -126,37 +157,20 @@ export function AccessQrButton() {
           ) : state.status === "error" ? (
             <span className="text-[12px] font-semibold text-danger">{t("qr.failed")}</span>
           ) : state.status === "unavailable" ? (
-            <span className="text-[12px] leading-relaxed text-primary">
-              {t("qr.startHint")}
-              <code className="break-all rounded bg-sunken px-1 py-0.5 font-mono text-[11px]">
-                bunx agent-log-viewer --tailscale
-              </code>
-            </span>
+            /* Phone access is off: one button to the guide's phone step,
+               which turns it on from here. */
+            <button
+              type="button"
+              data-qr-turn-on=""
+              onClick={() => { setOpen(false); openOnboarding("guide", "phone"); }}
+              className="inline-flex min-h-[44px] items-center justify-center rounded-[8px] bg-accent px-3 text-[12px] font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-8"
+            >
+              {t("qr.turnOn")}
+            </button>
           ) : (
             <>
-              {qrSrc ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={qrSrc} alt={t("qr.alt")} className="mx-auto h-[220px] w-[220px]" />
-              ) : (
-                <span className="text-[12px] text-primary">{t("qr.generating")}</span>
-              )}
-              <div className="flex items-center gap-1.5">
-                <input
-                  readOnly
-                  value={state.url}
-                  aria-label={t("qr.linkAria")}
-                  onFocus={(event) => event.currentTarget.select()}
-                  className="min-h-[44px] min-w-0 flex-1 truncate rounded-[8px] border border-border bg-canvas px-2 py-1.5 font-mono text-[10.5px] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
-                />
-                <button
-                  type="button"
-                  aria-label={t("qr.copy")}
-                  onClick={copy}
-                  className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center gap-1 rounded-[8px] border border-border bg-card px-2 py-1.5 text-[11px] font-semibold text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0 sm:min-w-0"
-                >
-                  {copied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
-                </button>
-              </div>
+              <AccessQrImage url={state.url} />
+              <AccessQrLink url={state.url} />
               <span className="text-[10.5px] text-muted">{t("qr.scanHint")}</span>
             </>
           )}

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { constants, existsSync } from "node:fs";
-import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -217,6 +217,145 @@ export async function readStatus(tailscalePath) {
   return { backendState, dnsName };
 }
 
+/* The operator-right refusal, as `tailscale serve` words it on stderr. */
+export const OPERATOR_PATTERN = /operator|access denied|permission/i;
+
+/**
+ * Run one tailscale command to completion with a bound: argv only, no shell,
+ * the credential isolation every launcher child gets. Never rejects; the
+ * caller reads `timedOut`, `code` and the output.
+ */
+export function runTailscale(tailscalePath, args, { timeoutMs = 3_000 } = {}) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(tailscalePath, args, viewerChildProcessOptions({ stdio: ["ignore", "pipe", "pipe"] }));
+    } catch (error) {
+      resolve({ code: null, stdout: "", stderr: error instanceof Error ? error.message : String(error), timedOut: false });
+      return;
+    }
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ stdout, stderr, ...result });
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish({ code: null, timedOut: true });
+    }, timeoutMs);
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.on("error", (error) => {
+      stderr += error.message;
+      finish({ code: null, timedOut: false });
+    });
+    child.on("exit", (code) => finish({ code, timedOut: false }));
+  });
+}
+
+/**
+ * `tailscale status --json`, read without judging it: the Viewer's phone step
+ * shows a sentence per state where the launcher throws. Rejects only when the
+ * status cannot be read at all.
+ */
+export async function readTailscaleState(tailscalePath, { timeoutMs = 3_000 } = {}) {
+  const result = await runTailscale(tailscalePath, ["status", "--json"], { timeoutMs });
+  if (result.timedOut || result.code !== 0) {
+    throw new TailscaleError(result.stderr.trim() || t.statusExited(result.code ?? 1));
+  }
+  let status;
+  try {
+    status = JSON.parse(result.stdout);
+  } catch {
+    throw new TailscaleError(t.statusUnreadable);
+  }
+  const backendState = typeof status?.BackendState === "string" ? status.BackendState : "";
+  const rawDnsName = typeof status?.Self?.DNSName === "string" ? status.Self.DNSName : "";
+  return { backendState, dnsName: rawDnsName.replace(/\.$/, "") };
+}
+
+/**
+ * What the tailnet's HTTPS 443 root is published as, from `tailscale serve
+ * status --json`: `{ published: false }` when nothing is, otherwise the local
+ * port it proxies to (null when the handler is not a loopback proxy).
+ *
+ * Two maps carry a mapping, and both count. A background serve (`--bg`) writes
+ * the top-level `Web`; a FOREGROUND `tailscale serve <port>` — the form an
+ * explicit `--tailscale` start still uses — keeps its own map under
+ * `Foreground[<session>]` and leaves the top-level one empty. Reading only the
+ * top level makes a Viewer that is serving read as "not serving".
+ */
+function webMaps(json) {
+  if (!json || typeof json !== "object") return [];
+  const maps = [];
+  if (json.Web && typeof json.Web === "object") maps.push(json.Web);
+  if (json.Foreground && typeof json.Foreground === "object") {
+    for (const session of Object.values(json.Foreground)) {
+      if (session && typeof session === "object" && session.Web && typeof session.Web === "object") maps.push(session.Web);
+    }
+  }
+  return maps;
+}
+
+export function parseServeStatus(json) {
+  for (const web of webMaps(json)) {
+    const found = rootOf(web);
+    if (found) return found;
+  }
+  return { published: false, port: null };
+}
+
+function rootOf(web) {
+  for (const [hostPort, entry] of Object.entries(web)) {
+    if (!hostPort.endsWith(":443")) continue;
+    const root = entry?.Handlers?.["/"];
+    if (!root) continue;
+    const proxy = typeof root.Proxy === "string" ? root.Proxy : "";
+    let port = null;
+    try {
+      const url = new URL(proxy.includes("://") ? proxy : `http://${proxy}`);
+      const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+      if (loopback && url.port) port = Number(url.port);
+    } catch {
+      port = null;
+    }
+    return { published: true, port };
+  }
+  return null;
+}
+
+export async function serveStatus(tailscalePath, { timeoutMs = 3_000 } = {}) {
+  const result = await runTailscale(tailscalePath, ["serve", "status", "--json"], { timeoutMs });
+  if (result.timedOut || result.code !== 0) {
+    throw new TailscaleError(result.stderr.trim() || t.statusExited(result.code ?? 1));
+  }
+  const text = result.stdout.trim();
+  if (!text) return { published: false, port: null };
+  try {
+    return parseServeStatus(JSON.parse(text));
+  } catch {
+    throw new TailscaleError(t.statusUnreadable);
+  }
+}
+
+/**
+ * Publish the port in the tailnet in Tailscale's background mode: the mapping
+ * belongs to tailscaled, outlives this process and resumes after a reboot.
+ * Resolves with the exit (or the timeout) and never throws.
+ */
+export function serveBackground(tailscalePath, port, { timeoutMs = 10_000 } = {}) {
+  return runTailscale(tailscalePath, ["serve", "--bg", String(port)], { timeoutMs });
+}
+
+/** Remove what `serveBackground` published, in the vendor's removal form. */
+export function serveOff(tailscalePath, port, { timeoutMs = 10_000 } = {}) {
+  return runTailscale(tailscalePath, ["serve", "--https=443", String(port), "off"], { timeoutMs });
+}
+
 export function serve(tailscalePath, port) {
   const child = spawn(tailscalePath, ["serve", String(port)], viewerChildProcessOptions({
     stdio: ["ignore", "ignore", "pipe"],
@@ -234,7 +373,7 @@ export function serve(tailscalePath, port) {
 
   child.stderr.on("data", (chunk) => {
     const text = chunk.toString("utf8");
-    if (/operator|access denied|permission/i.test(text)) {
+    if (OPERATOR_PATTERN.test(text)) {
       state.operatorHintPrinted = true;
       console.error(OPERATOR_HINT);
       return;
@@ -272,6 +411,34 @@ function configRoot() {
 
 function tokenPath() {
   return join(configRoot(), "agent-log-viewer", "token");
+}
+
+/**
+ * The phone-access choice, remembered for future starts: its presence makes
+ * the launcher behave as if `--tailscale` were given. Written by the Viewer's
+ * one-button phone step, beside the token.
+ */
+export function phoneAccessFlagPath() {
+  return join(configRoot(), "agent-log-viewer", "phone-access");
+}
+
+export async function readPhoneAccessFlag() {
+  try {
+    return (await readFile(phoneAccessFlagPath(), "utf8")).trim() === "tailscale";
+  } catch {
+    return false;
+  }
+}
+
+export async function writePhoneAccessFlag() {
+  const path = phoneAccessFlagPath();
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, "tailscale\n", { mode: 0o600 });
+  await chmod(path, 0o600);
+}
+
+export async function clearPhoneAccessFlag() {
+  await rm(phoneAccessFlagPath(), { force: true });
 }
 
 function generateToken() {

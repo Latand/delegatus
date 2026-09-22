@@ -7,43 +7,60 @@ import { Z } from "@/components/layers";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import type { OnboardingMarker, OnboardingStepId } from "@/lib/onboarding/marker";
+import type { OnboardingMarker } from "@/lib/onboarding/marker";
+import { ONBOARDING_STEP_IDS, type OnboardingStepId, type OnboardingStepState } from "@/lib/onboarding/steps";
 import type { RoleEngine } from "@/lib/roles/types";
 
 import { AgentMappingTable, type EngineStatus } from "./AgentMappingTable";
 import { CheckStep } from "./CheckStep";
 import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./EnginesStep";
+import { PhoneStep, type PhoneStepOutcome } from "./PhoneStep";
+import { TourStep, type TourHandle, type TourProject } from "./TourStep";
 import { putOnboarding, useOnboarding, type OnboardingMode } from "./useOnboarding";
+import { VoiceStep } from "./VoiceStep";
 
 /**
- * The setup guide (#1876, design §2–§3): Engines, Agents and Check. One
- * dialog, one job per step, no welcome or finish screen. Nothing is gated:
- * steps are freely navigable, every step closes by Escape, ✕ or "Close,
- * finish later", and nothing in the app waits on it — the launch refusal works
- * the same with or without it. The "Agent mapping" menu row opens step 2's
- * table alone in the same shell.
+ * The setup guide (#1876, design §2–§3): Engines, Agents, Phone, Voice, Tour
+ * and Check. One dialog, one job per step, no welcome or finish screen.
+ * Nothing is gated: steps are freely navigable, every step closes by Escape,
+ * ✕ or "Close, finish later", and nothing in the app waits on it — the launch
+ * refusal works the same with or without it. The "Agent mapping" and
+ * "Dictation" menu rows open step 2's table or step 4 alone in the same shell.
  */
 
-const STEPS: readonly OnboardingStepId[] = ["engines", "agents", "check"];
+const STEPS: readonly OnboardingStepId[] = ONBOARDING_STEP_IDS;
 
 const STEP_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   engines: "onboarding.step.engines",
   agents: "onboarding.step.agents",
+  phone: "onboarding.step.phone",
+  voice: "onboarding.step.voice",
+  tour: "onboarding.step.tour",
   check: "onboarding.step.check",
 };
 
 const HEADING_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
   engines: "onboarding.engines.heading",
   agents: "onboarding.agents.heading",
+  phone: "onboarding.phone.heading",
+  voice: "onboarding.voice.heading",
+  tour: "onboarding.tour.heading",
   check: "onboarding.check.heading",
 };
 
-/* The Check step writes its own lead: it names the model the run will use. */
+/* The Check step writes its own lead: it names the model the run will use.
+   The tour's cards are its lead. */
 const LEAD_KEY: Record<OnboardingStepId, Parameters<TFunction>[0] | null> = {
   engines: "onboarding.engines.lead",
   agents: "onboarding.agents.lead",
+  phone: "onboarding.phone.lead",
+  voice: "onboarding.voice.lead",
+  tour: null,
   check: null,
 };
+
+/* The seat tick's shipped check interval, until the server says otherwise. */
+const DEFAULT_CHECK_MINUTES = 5;
 
 /** `/api/accounts` also says whether each engine's command resolves; the
     engine stores parse the accounts, so the step reads that one fact itself. */
@@ -82,10 +99,16 @@ function firstOpenStep(marker: OnboardingMarker | null): number {
   return index < 0 ? 0 : index;
 }
 
-export function OnboardingDialog({ mode, marker, onClose }: {
+export function OnboardingDialog({ mode, initialStep, marker, onClose, projects = [], currentProject = null, checkMinutes = DEFAULT_CHECK_MINUTES }: {
   mode: OnboardingMode;
+  /** Open the guide on this step (the QR popover opens it on Phone). */
+  initialStep?: OnboardingStepId | null;
   marker: OnboardingMarker | null;
   onClose: (outcome: "dismissed" | "completed") => void;
+  /** The projects the rail lists, for the tour's first action. */
+  projects?: readonly TourProject[];
+  currentProject?: string | null;
+  checkMinutes?: number;
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
@@ -94,8 +117,21 @@ export function OnboardingDialog({ mode, marker, onClose }: {
   const { cli, recheck } = useCliPresence();
   const now = useNow();
   const [view, setView] = useState<OnboardingMode>(mode);
-  const [step, setStep] = useState(() => mode === "mapping" ? 1 : firstOpenStep(marker));
-  const [steps, setSteps] = useState<Record<OnboardingStepId, "done" | "skipped" | null>>(() => marker?.steps ?? { engines: null, agents: null, check: null });
+  const [step, setStep] = useState(() => {
+    const target = mode === "mapping" ? "agents" : mode === "voice" ? "voice" : initialStep ?? null;
+    return target ? STEPS.indexOf(target) : firstOpenStep(marker);
+  });
+  const [steps, setSteps] = useState<Record<OnboardingStepId, OnboardingStepState>>(() => ({ ...Object.fromEntries(STEPS.map((id) => [id, null])), ...marker?.steps }) as Record<OnboardingStepId, OnboardingStepState>);
+  /* What the Phone step ended on: Continue counts it done only once phone
+     access is on, and skipped otherwise. */
+  const phoneOutcome = useRef<PhoneStepOutcome | null>(null);
+  /* The phone state on screen, for who holds the one filled button. */
+  const [phoneState, setPhoneState] = useState<PhoneStepOutcome | null>(null);
+  const tourRef = useRef<TourHandle>(null);
+  const [tourAtEnd, setTourAtEnd] = useState(false);
+  /* Every step the guide showed; finishing marks the ones never left by
+     Continue as done, since the user has seen them. */
+  const visited = useRef(new Set<OnboardingStepId>());
   const [stepListOpen, setStepListOpen] = useState(false);
   const [checkOwnsPrimary, setCheckOwnsPrimary] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -154,21 +190,39 @@ export function OnboardingDialog({ mode, marker, onClose }: {
   const enginesSettled = claude.status !== "loading" && codex.status !== "loading";
   const noEngine = enginesSettled && !statuses.claude.connected && !statuses.codex.connected;
   const current = STEPS[step]!;
+  useEffect(() => {
+    if (view === "guide") visited.current.add(current);
+  }, [view, current]);
   const last = step === STEPS.length - 1;
 
-  const markDone = (id: OnboardingStepId) => {
-    if (steps[id] === "done") return;
-    setSteps((value) => ({ ...value, [id]: "done" }));
-    void putOnboarding({ steps: { [id]: "done" } });
+  const mark = (id: OnboardingStepId, state: "done" | "skipped") => {
+    if (steps[id] === state) return;
+    setSteps((value) => ({ ...value, [id]: state }));
+    void putOnboarding({ steps: { [id]: state } });
   };
+  const markDone = (id: OnboardingStepId) => mark(id, "done");
   const goTo = (index: number) => {
     setStepListOpen(false);
     setStep(Math.max(0, Math.min(STEPS.length - 1, index)));
   };
+  const skipAndContinue = (id: OnboardingStepId) => {
+    mark(id, "skipped");
+    goTo(STEPS.indexOf(id) + 1);
+  };
   const next = () => {
-    markDone(current);
-    if (last) onClose("completed");
+    /* On the phone the tour is a pager: Continue turns its pages first. */
+    if (current === "tour" && tourRef.current?.advance()) return;
+    if (current === "phone" && phoneOutcome.current !== "serving") mark("phone", "skipped");
+    else markDone(current);
+    if (last) {
+      for (const id of visited.current) if (id !== current && !steps[id]) markDone(id);
+      onClose("completed");
+    }
     else goTo(step + 1);
+  };
+  const tourCreated = () => {
+    markDone("tour");
+    onClose("dismissed");
   };
   const recheckAll = () => {
     recheck();
@@ -186,7 +240,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
   };
   useEffect(() => { dismissRef.current = dismiss; });
 
-  const title = view === "mapping" ? t("onboarding.mappingTitle") : t("onboarding.title");
+  const title = view === "mapping" ? t("onboarding.mappingTitle") : view === "voice" ? t("onboarding.voiceTitle") : t("onboarding.title");
   const heading = view === "mapping" ? null : (
     <>
       <h2 className="text-title font-bold text-primary">{t(HEADING_KEY[current])}</h2>
@@ -198,8 +252,24 @@ export function OnboardingDialog({ mode, marker, onClose }: {
       {view === "mapping" ? <p className="mb-4 text-body leading-[1.45] text-secondary">{t("onboarding.agents.leadStandalone")}</p> : null}
       <AgentMappingTable statuses={statuses} layout={isMobile ? "card" : "table"} onConnect={onConnect} />
     </>
+  ) : view === "voice" ? (
+    <VoiceStep />
   ) : current === "check" ? (
     <CheckStep noEngine={noEngine} onGoEngines={() => goTo(0)} onLeave={dismiss} onSkip={skipCheck} onOwnsPrimary={setCheckOwnsPrimary} />
+  ) : current === "phone" ? (
+    <PhoneStep onSkip={() => skipAndContinue("phone")} onState={(state) => { phoneOutcome.current = state; setPhoneState(state); }} />
+  ) : current === "voice" ? (
+    <VoiceStep onSkip={() => skipAndContinue("voice")} onGoEngines={() => goTo(0)} />
+  ) : current === "tour" ? (
+    <TourStep
+      handle={tourRef}
+      projects={projects}
+      initialProject={currentProject}
+      claudeConnected={statuses.claude.connected}
+      checkMinutes={checkMinutes}
+      onCreated={tourCreated}
+      onAtEnd={setTourAtEnd}
+    />
   ) : (
     <EnginesStep claude={claude} codex={codex} cli={cli} now={now} onRecheck={recheckAll} />
   );
@@ -235,16 +305,23 @@ export function OnboardingDialog({ mode, marker, onClose }: {
   );
 
   /* The Check step's rows open in place with a failure; the dialog takes the height it needs, up to the viewport. */
-  const checkTall = view === "guide" && current === "check";
+  const checkTall = view === "guide" && (current === "check" || current === "tour");
+  /* One filled button at a time: while a step's own action is the next thing
+     to press (Run the check, Turn on phone access, the tour's draft button),
+     Continue steps back to a border. On the phone Continue turns the tour's
+     pages, so it keeps its fill until the last page, where the band is. */
+  const stepOwnsPrimary = (current === "check" && checkOwnsPrimary)
+    || (current === "phone" && (phoneState === "ready" || phoneState === "serving-other" || phoneState === "exposed"))
+    || (current === "tour" && (!isMobile || tourAtEnd));
   const counter = t("onboarding.stepCounter", { n: step + 1, total: STEPS.length });
-  const footerButtons = view === "mapping" ? null : (
+  const footerButtons = view !== "guide" ? null : (
     <>
       {step > 0 ? (
         <button type="button" onClick={() => goTo(step - 1)} className="inline-flex h-8 items-center justify-center rounded-[8px] border border-border bg-card px-3.5 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-1">
           {t("onboarding.back")}
         </button>
       ) : null}
-      <button type="button" data-onboarding-primary="" onClick={next} className={`inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2] ${current === "check" && checkOwnsPrimary ? "border border-border bg-card text-primary hover:bg-sunken" : "bg-accent text-white hover:opacity-90"}`}>
+      <button type="button" data-onboarding-primary="" onClick={next} className={`inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2] ${stepOwnsPrimary ? "border border-border bg-card text-primary hover:bg-sunken" : "bg-accent text-white hover:opacity-90"}`}>
         {last ? t("onboarding.finish") : t("onboarding.continue")}
       </button>
     </>
@@ -342,8 +419,19 @@ export function OnboardingDialog({ mode, marker, onClose }: {
 }
 
 /** Mounted once in the Viewer: opens by itself on a first run and from the menus. */
-export function OnboardingHost() {
-  const { mode, marker, close } = useOnboarding();
+export function OnboardingHost({ projects, currentProject }: { projects?: readonly TourProject[]; currentProject?: string | null }) {
+  const { mode, step, opening, marker, checkMinutes, close } = useOnboarding();
   if (!mode) return null;
-  return <OnboardingDialog key={mode} mode={mode} marker={marker} onClose={close} />;
+  return (
+    <OnboardingDialog
+      key={`${mode}:${opening}`}
+      mode={mode}
+      initialStep={step}
+      marker={marker}
+      onClose={close}
+      projects={projects}
+      currentProject={currentProject}
+      checkMinutes={checkMinutes ?? DEFAULT_CHECK_MINUTES}
+    />
+  );
 }
