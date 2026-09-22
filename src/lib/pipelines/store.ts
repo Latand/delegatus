@@ -441,7 +441,7 @@ function isStage(value: unknown): value is PipelineStage {
   const referencedRoleId = role === undefined ? null : (role as { roleId: EffectivePipelineRole["roleId"] }).roleId;
   if (stage.outputs !== undefined && effective.access !== "read-only") return false;
   if (effective.roleId !== referencedRoleId) return false;
-  if (isLegacyReviewLoopStage(stage) && !legacyReviewLoopShapeValid(stage)) return false;
+  if (isLegacyReviewLoopStage(stage) && !legacyReviewLoopShapeValid(stage as PipelineStage)) return false;
   if (stage.engine !== undefined && stage.engine !== effective.engine) return false;
   if (stage.model !== undefined && stage.model !== effective.model) return false;
   if (stage.effort !== undefined && stage.effort !== effective.effort) return false;

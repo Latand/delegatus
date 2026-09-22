@@ -32,7 +32,7 @@ export const RECOMMENDED_REVIEW_LIMIT = 5;
 
 export type LegacyReviewLoopStage = PipelineStage & { kind: typeof LEGACY_REVIEW_LOOP_KIND };
 
-export function isLegacyReviewLoopStage(stage: Pick<PipelineStage, "kind">): stage is LegacyReviewLoopStage {
+export function isLegacyReviewLoopStage<T extends { kind?: unknown }>(stage: T): stage is T & { kind: typeof LEGACY_REVIEW_LOOP_KIND } {
   return stage.kind === LEGACY_REVIEW_LOOP_KIND;
 }
 
@@ -98,7 +98,6 @@ export type LegacyReviewRefusalCode =
   | "graph-invalid"
   /* Pipeline-level refusals the engine adds; the pure preview never reads them. */
   | "pipeline-settled"
-  | "archived"
   | "live-ownership"
   | "unresolved-delivery"
   | "live-flow";

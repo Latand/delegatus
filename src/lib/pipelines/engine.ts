@@ -72,6 +72,7 @@ import {
   MAX_TASK_LENGTH,
   MIN_STARTED_PIPELINE_STAGES,
 } from "./limits";
+import * as legacyReview from "./legacyReviewDefinition";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
 import { pipelineDeliveryGuidance, renderDecisionInput, renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
@@ -105,6 +106,7 @@ import type {
   PipelineStageAttempt,
   PipelineDecisionAnswer,
   PipelineReviewGrant,
+  PipelineLegacyReviewConversion,
   PipelineStageReport,
   PipelineStageReportEntry,
   PipelineTerminalReap,
@@ -3440,7 +3442,7 @@ async function tickRunStage(
       conversationId: attempt.conversationId,
       agentPath: attempt.agentPath,
       paneId: attempt.paneId,
-      ...(attempt.historical ? { adopted: true as const } : {}),
+      ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}),
     }, ports, durable);
   if (unregisteredHostDeath && canSpendRecoveryCheck()) {
     recordVerdictRecoveryMiss(pipeline, attempt, ports, unregisteredHostDeath, null);
@@ -3498,7 +3500,7 @@ async function tickRunStage(
       conversationId: attempt.conversationId,
       agentPath: attempt.agentPath,
       paneId: attempt.paneId,
-      ...(attempt.historical ? { adopted: true as const } : {}),
+      ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}),
     });
     if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
     if (stopped.outcome === "failed" || stopped.outcome === "unresolved" || stopped.outcome === "unconfirmed") {
@@ -6139,7 +6141,8 @@ function terminalizeAttemptForClose(candidate: StageHostCandidate, note: string,
  * it running with its own launch, conversation and pane, and the tick tracks it
  * as a live host until it produces a verdict. Skipping them let a helper the
  * pipeline started keep burning quota behind a lane that had already left the
- * board — this issue again, through another door.
+ * board — this issue again, through another door. A legacy review attempt a
+ * conversion kept is probed as the host it was, never labelled adopted.
  */
 function launchedStageHosts(pipeline: Pipeline): StageHostCandidate[] {
   const candidates: StageHostCandidate[] = [];
@@ -6160,7 +6163,7 @@ function launchedStageHosts(pipeline: Pipeline): StageHostCandidate[] {
           conversationId: attempt.conversationId,
           agentPath: attempt.agentPath,
           paneId: attempt.paneId,
-          ...(attempt.historical ? { adopted: true as const } : {}),
+          ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}),
           launchId: attempt.launchId,
         },
         /* Same reading orphanAgentPane uses: a verdict or a completion stamp
@@ -6530,6 +6533,10 @@ export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field">
   decisionAnswer?: PipelineDecisionAnswer;
   /** The grant an accepted or replayed continue-review holds (#1938). */
   reviewContinuation?: PipelineReviewGrant;
+  /** What preview-legacy-review answers; nothing is written. */
+  legacyReviewPreview?: legacyReview.LegacyReviewPreview;
+  /** The conversion an accepted, replayed or reverted legacy-review action holds. */
+  legacyReviewConversion?: PipelineLegacyReviewConversion;
   replayed?: boolean;
 };
 
@@ -6683,6 +6690,152 @@ function continueReview(
   return { pipeline, reviewContinuation: grant, replayed: false };
 }
 
+/** Who may convert or revert a legacy review-loop stage: the creator
+    conversation or the operator. Also checked before MCP receipt access. */
+export function legacyReviewActorRefusal(pipeline: Pipeline, actor: PauseResumeActor | null): PipelinePatchResult | null {
+  if (!actor || (actor.kind === "agent" && (!actor.conversationId || actor.conversationId !== pipeline.srcConversationId))) {
+    return { error: "only the pipeline creator conversation or a direct user action can convert a legacy review stage", status: 403 };
+  }
+  return null;
+}
+
+const SETTLED_FLOW_STATES = new Set(["closed", "approved", "done_comment"]);
+
+/** Why this record may not be converted now, whatever its definition says:
+    settled records stay as recorded, and nothing converts under live
+    execution, an unresolved delivery or a review flow that has not settled.
+    A flow row that cannot be read is not assumed settled, which is what
+    keeps the paused unsafe-relay lane, matched by its attempt's flowId,
+    exactly as it is. */
+function legacyReviewOwnershipRefusals(pipeline: Pipeline, ports: PipelinePorts): legacyReview.LegacyReviewRefusal[] {
+  const refusals: legacyReview.LegacyReviewRefusal[] = [];
+  if (pipeline.state === "completed" || pipeline.state === "closed") {
+    refusals.push({ code: "pipeline-settled", message: `a ${pipeline.state} pipeline stays as recorded; its legacy review remains readable history` });
+    return refusals;
+  }
+  const liveAttempt = pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.activation || attempt.unresolvedTermination
+    || ["spawning", "running", "reviewing", "committing"].includes(attempt.state)));
+  if ((pipeline.closeTeardown && pipeline.closeTeardown.phase !== "settled") || pipeline.activationCloseRequested
+    || pipeline.unconfirmedHosts?.length || liveAttempt || pipelineSurvivorRefusal(pipeline)) {
+    refusals.push({ code: "live-ownership", message: "a stage host or activation of this pipeline is still live; convert once it has settled" });
+  }
+  const operation = pipeline.delivery?.operation;
+  if (operation && (operation.state !== "settled" || (operation.result?.ok && operation.result.uncertain))) {
+    refusals.push({ code: "unresolved-delivery", message: "a publication of this pipeline has not resolved; convert once it has" });
+  }
+  for (const run of pipeline.runs) {
+    for (const attempt of run.attempts) {
+      if (!attempt.flowId) continue;
+      const flow = ports.getFlow(attempt.flowId);
+      if (!flow || !SETTLED_FLOW_STATES.has(flow.state)) {
+        refusals.push({ code: "live-flow", message: `review flow ${attempt.flowId} of stage ${run.stageId} is ${flow ? flow.state : "unreadable"}; a lane holding an unsettled flow is left exactly as it is` });
+        return refusals;
+      }
+    }
+  }
+  return refusals;
+}
+
+/** The pure preview, with the limit recorded on the stage's review flow, the
+    store's graph rules, and this record's own refusals. */
+function previewLegacyReview(pipeline: Pipeline, req: PatchPipelineRequest, ports: PipelinePorts): legacyReview.LegacyReviewPreview {
+  const options = {
+    ...(req.stageId !== undefined ? { stageId: req.stageId } : {}),
+    ...(req.reviewLimit !== undefined ? { reviewLimit: req.reviewLimit } : {}),
+    ...(req.implementerStageId !== undefined ? { implementerStageId: req.implementerStageId } : {}),
+  };
+  const target = options.stageId ?? pipeline.stages.find(legacyReview.isLegacyReviewLoopStage)?.id;
+  const flowId = target ? runFor(pipeline, target)?.attempts.findLast((attempt) => attempt.flowId)?.flowId : null;
+  const flowRoundLimit = flowId ? ports.getFlow(flowId)?.roundLimit ?? null : null;
+  const preview = legacyReview.previewLegacyReviewConversion(pipeline, options, {
+    flowRoundLimit,
+    graphError: (stages) => pipelineGraphError(stages),
+  });
+  const refusals = legacyReviewOwnershipRefusals(pipeline, ports);
+  if (!refusals.length) return preview;
+  return preview.ok
+    ? { ok: false, stageId: preview.stageId, refusals, reviewLimit: preview.reviewLimit, recommendedReviewLimit: legacyReview.RECOMMENDED_REVIEW_LIMIT, implementerCandidates: [preview.implementerStageId] }
+    : { ...preview, refusals: [...refusals, ...preview.refusals] };
+}
+
+function legacyReviewRequestShapeError(req: PatchPipelineRequest, revert: boolean): PipelinePatchResult | null {
+  if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)
+    || (req.stageId !== undefined && (typeof req.stageId !== "string" || !req.stageId))
+    || (revert && typeof req.stageId !== "string")
+    || (req.reviewLimit !== undefined && !Number.isSafeInteger(req.reviewLimit))
+    || (req.implementerStageId !== undefined && (typeof req.implementerStageId !== "string" || !req.implementerStageId))) {
+    return {
+      error: revert
+        ? "revert-legacy-review requires clientRequestId (up to 200 characters), stageId and expectedRevision from get_pipeline"
+        : "convert-legacy-review requires clientRequestId (up to 200 characters) and expectedRevision from get_pipeline; stageId, an integer reviewLimit and implementerStageId are optional",
+      status: 400,
+    };
+  }
+  return null;
+}
+
+/** Explicit, revision-fenced conversion of one legacy review-loop stage: the
+    converted plan and the immutable original are one record write. No flow,
+    host or Git work happens here, and an old verdict never becomes the new
+    reviewer's. Replays by clientRequestId. */
+function convertLegacyReview(
+  pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
+): PipelinePatchResult {
+  const refusal = legacyReviewActorRefusal(pipeline, actor);
+  if (refusal) return refusal;
+  const shape = legacyReviewRequestShapeError(req, false);
+  if (shape) return shape;
+  const prior = pipeline.legacyReviewConversions?.find((item) => item.clientRequestId === req.clientRequestId);
+  if (prior) {
+    if (prior.expectedRevision !== req.expectedRevision || (req.stageId !== undefined && req.stageId !== prior.stageId)
+      || (req.reviewLimit !== undefined && req.reviewLimit !== prior.reviewLimit)
+      || (req.implementerStageId !== undefined && req.implementerStageId !== prior.implementerStageId)) {
+      return { error: "clientRequestId already belongs to a different legacy review conversion", status: 409 };
+    }
+    return { pipeline, legacyReviewConversion: prior, replayed: true };
+  }
+  // Rollback disables admission; converted records and their originals stay readable.
+  if (process.env.LLV_PIPELINE_LEGACY_REVIEW_CONVERSION === "0") return { error: "convert-legacy-review is disabled", status: 409 };
+  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+    return { error: "the pipeline changed since it was read; read it again and preview before converting", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
+  }
+  const preview = previewLegacyReview(pipeline, req, ports);
+  if (!preview.ok) {
+    return { error: `legacy review conversion refused: ${preview.refusals.map((item) => `${item.code}: ${item.message}`).join("; ")}`, status: 409, legacyReviewPreview: preview };
+  }
+  const conversion = legacyReview.applyLegacyReviewConversion(pipeline, preview, {
+    clientRequestId: req.clientRequestId!, expectedRevision: req.expectedRevision!, actor: actor!, at: ports.now(),
+  });
+  return { pipeline, legacyReviewConversion: conversion, replayed: false };
+}
+
+function revertLegacyReview(
+  pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
+): PipelinePatchResult {
+  const refusal = legacyReviewActorRefusal(pipeline, actor);
+  if (refusal) return refusal;
+  const shape = legacyReviewRequestShapeError(req, true);
+  if (shape) return shape;
+  const prior = pipeline.legacyReviewConversions?.find((item) => item.reverted?.clientRequestId === req.clientRequestId);
+  if (prior) {
+    if (prior.stageId !== req.stageId) return { error: "clientRequestId already belongs to a different legacy review revert", status: 409 };
+    return { pipeline, legacyReviewConversion: prior, replayed: true };
+  }
+  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+    return { error: "the pipeline changed since it was read; read it again before reverting", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
+  }
+  const receipt = { clientRequestId: req.clientRequestId!, actor: actor!, at: ports.now() };
+  /* An attempt that ran under the conversion answers first: that is repaired forward whatever else holds. */
+  const trial = legacyReview.revertLegacyReviewConversion(structuredClone(pipeline), req.stageId!, receipt);
+  if (!trial.conversion) return { error: trial.error, status: 409 };
+  const ownership = legacyReviewOwnershipRefusals(pipeline, ports).filter((item) => item.code !== "live-flow");
+  if (ownership.length) return { error: ownership.map((item) => item.message).join("; "), status: 409 };
+  const reverted = legacyReview.revertLegacyReviewConversion(pipeline, req.stageId!, receipt);
+  if (!reverted.conversion) return { error: reverted.error, status: 409 };
+  return { pipeline, legacyReviewConversion: reverted.conversion, replayed: false };
+}
+
 export async function patchPipeline(
   id: string,
   req: PatchPipelineRequest,
@@ -6702,6 +6855,13 @@ export async function patchPipeline(
     if (recoveryError) return { error: recoveryError, status: 409 };
     return takeoverPipelineDelivery(id, req.expectedOwner, req.expectedEpoch!, req.reason, conversationId);
   }
+  if (req.action === "preview-legacy-review") {
+    /* A read: no lease and no write, from either store. An archived draft
+       previews too; converting it waits until it is restored. */
+    const pipeline = findPipelineRecord(id);
+    if (!pipeline) return { error: "pipeline not found", status: 404 };
+    return { pipeline, legacyReviewPreview: previewLegacyReview(pipeline, req, ports) };
+  }
   if (req.action === "publish") {
     let pipeline = findPipelineRecord(id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
@@ -6715,7 +6875,17 @@ export async function patchPipeline(
   }
   const patched = await withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
-    if (!pipeline) return { error: "pipeline not found", status: 404 };
+    if (!pipeline) {
+      if ((req.action === "convert-legacy-review" || req.action === "revert-legacy-review") && findPipelineRecord(id)) {
+        return { error: "archived records are read-only; restore the pipeline before converting it", status: 409 };
+      }
+      return { error: "pipeline not found", status: 404 };
+    }
+    if (req.action === "convert-legacy-review" || req.action === "revert-legacy-review") {
+      const result = req.action === "convert-legacy-review" ? convertLegacyReview(pipeline, req, actor, ports) : revertLegacyReview(pipeline, req, actor, ports);
+      if (result.pipeline && !result.replayed) persist();
+      return result;
+    }
     if (req.action === "resolve-decision") {
       const result = resolveDecision(pipeline, req, actor, ports);
       if (result.pipeline && !result.replayed) persist();
@@ -6767,6 +6937,10 @@ export async function patchPipeline(
          implement conversation. The graph rules (acyclic pass edges,
          review-loop reachability) already held on every draft edit. */
       if (pipeline.stages.length < MIN_STARTED_PIPELINE_STAGES) return { error: `add at least ${MIN_STARTED_PIPELINE_STAGES} stage before starting`, status: 409 };
+      /* Decoding admits a legacy draft whose review-loop no run reaches
+         (retire-flows §3); it starts only once the full graph holds. */
+      const graphError = pipelineGraphError(pipeline.stages);
+      if (graphError) return { error: graphError, status: 409 };
       /* #1876: the pipeline stays a draft while a stage names an engine
          nobody is signed in to. */
       const engineRefusal = stageEngineRefusal(pipeline.stages, pipeline.project, ports);
