@@ -88,14 +88,37 @@ export function useOrchestratorDraftPrefill(project: string, launch: Pick<AgentL
 export function useOrchestratorDraftReveal(project: string, target: RefObject<HTMLElement | null>): void {
   useEffect(() => {
     let frame: ReturnType<typeof setTimeout> | null = null;
+    let settle: (() => void) | null = null;
     /* After the prefill's state has rendered, so the rows are the ones shown.
        Aligned by the end: the dock's body can be shorter than the choices, and
        the last row, Reasoning, carries the model and effort the tour chose. */
+    const scroll = () => target.current?.scrollIntoView({ block: "end" });
+    /* The dock settles its height after it opens, which moves the rows again,
+       so the reveal holds through those resizes for a moment, and lets go as
+       soon as the operator touches the draft. */
+    const hold = () => {
+      settle?.();
+      const scroller = target.current?.parentElement;
+      if (!scroller || typeof ResizeObserver === "undefined") return;
+      const observer = new ResizeObserver(scroll);
+      observer.observe(scroller);
+      const release = () => settle?.();
+      const timer = setTimeout(release, 1_500);
+      const inputs = ["wheel", "pointerdown", "keydown", "touchstart"] as const;
+      for (const name of inputs) scroller.addEventListener(name, release, { passive: true });
+      settle = () => {
+        settle = null;
+        observer.disconnect();
+        clearTimeout(timer);
+        for (const name of inputs) scroller.removeEventListener(name, release);
+      };
+    };
     const reveal = () => {
       if (frame !== null) clearTimeout(frame);
       frame = setTimeout(() => {
         frame = null;
-        target.current?.scrollIntoView({ block: "end" });
+        scroll();
+        hold();
       }, 0);
     };
     if (pendingReveal === project) {
@@ -110,6 +133,7 @@ export function useOrchestratorDraftReveal(project: string, target: RefObject<HT
     return () => {
       off();
       if (frame !== null) clearTimeout(frame);
+      settle?.();
     };
   }, [project, target]);
 }
