@@ -45,6 +45,12 @@ async function main(): Promise<void> {
      read one ourselves the way an API route would. */
   await new Promise((resolve) => setTimeout(resolve, 50));
   const read = readAccountSource("claude-accounts.json");
+  /* A bridge read the way the MCP bridge tools and the files route make one
+     (#1870 slice 4): before the activation it answers from the legacy files. */
+  const bridge = await import("@/lib/bridge/store");
+  bridge.readBridgeReportLog();
+  bridge.readBridgeChannel();
+  bridge.readBridgeChannel({ project: "seeded-project", seatConversationId: "seeded-seat" });
   console.log(JSON.stringify({ kind: read.kind }));
 }
 
