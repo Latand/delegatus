@@ -125,6 +125,8 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   /* What the Phone step ended on: Continue counts it done only once phone
      access is on, and skipped otherwise. */
   const phoneOutcome = useRef<PhoneStepOutcome | null>(null);
+  /* The phone state on screen, for who holds the one filled button. */
+  const [phoneState, setPhoneState] = useState<PhoneStepOutcome | null>(null);
   const tourRef = useRef<TourHandle>(null);
   /* Every step the guide showed; finishing marks the ones never left by
      Continue as done, since the user has seen them. */
@@ -254,7 +256,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   ) : current === "check" ? (
     <CheckStep noEngine={noEngine} onGoEngines={() => goTo(0)} onLeave={dismiss} onSkip={skipCheck} onOwnsPrimary={setCheckOwnsPrimary} />
   ) : current === "phone" ? (
-    <PhoneStep onSkip={() => skipAndContinue("phone")} onState={(state) => { phoneOutcome.current = state; }} />
+    <PhoneStep onSkip={() => skipAndContinue("phone")} onState={(state) => { phoneOutcome.current = state; setPhoneState(state); }} />
   ) : current === "voice" ? (
     <VoiceStep onSkip={() => skipAndContinue("voice")} onGoEngines={() => goTo(0)} />
   ) : current === "tour" ? (
@@ -301,7 +303,14 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   );
 
   /* The Check step's rows open in place with a failure; the dialog takes the height it needs, up to the viewport. */
-  const checkTall = view === "guide" && current === "check";
+  const checkTall = view === "guide" && (current === "check" || current === "tour");
+  /* One filled button at a time: while a step's own action is the next thing
+     to press (Run the check, Turn on phone access, Create the orchestrator),
+     Continue steps back to a border. On the phone Continue turns the tour's
+     pages, so it keeps its fill there. */
+  const stepOwnsPrimary = (current === "check" && checkOwnsPrimary)
+    || (current === "phone" && (phoneState === "ready" || phoneState === "serving-other"))
+    || (current === "tour" && !isMobile);
   const counter = t("onboarding.stepCounter", { n: step + 1, total: STEPS.length });
   const footerButtons = view !== "guide" ? null : (
     <>
@@ -310,7 +319,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
           {t("onboarding.back")}
         </button>
       ) : null}
-      <button type="button" data-onboarding-primary="" onClick={next} className={`inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2] ${current === "check" && checkOwnsPrimary ? "border border-border bg-card text-primary hover:bg-sunken" : "bg-accent text-white hover:opacity-90"}`}>
+      <button type="button" data-onboarding-primary="" onClick={next} className={`inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2] ${stepOwnsPrimary ? "border border-border bg-card text-primary hover:bg-sunken" : "bg-accent text-white hover:opacity-90"}`}>
         {last ? t("onboarding.finish") : t("onboarding.continue")}
       </button>
     </>

@@ -152,7 +152,22 @@ export function TourStep({ projects, initialProject, claudeConnected, checkMinut
   const phone = useIsMobile();
   const pagerRef = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState(0);
+  const [pageHeight, setPageHeight] = useState<number | null>(null);
   const total = CARDS.length + 1;
+
+  /* The pager is as tall as the page on screen, so a short card is not
+     followed by the empty height of the tallest one. */
+  useEffect(() => {
+    const pager = pagerRef.current;
+    const current = pager?.children[page] as HTMLElement | undefined;
+    if (!phone || !current) return;
+    const measure = () => setPageHeight(current.offsetHeight);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(current);
+    return () => observer.disconnect();
+  }, [phone, page]);
 
   useImperativeHandle(handle, () => ({
     advance() {
@@ -197,7 +212,12 @@ export function TourStep({ projects, initialProject, claudeConnected, checkMinut
   if (phone) {
     return (
       <div data-onboarding-tour="phone" className="flex flex-col gap-3">
-        <div ref={pagerRef} aria-label={t("onboarding.tour.pagerAria")} className="-mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-4 px-4 [scrollbar-width:none]">
+        <div
+          ref={pagerRef}
+          aria-label={t("onboarding.tour.pagerAria")}
+          style={pageHeight ? { height: pageHeight } : undefined}
+          className="-mx-4 flex snap-x snap-mandatory items-start gap-4 overflow-x-auto overflow-y-hidden scroll-px-4 px-4 transition-[height] duration-150 motion-reduce:transition-none [scrollbar-width:none]"
+        >
           {cards}
           <div className="w-full shrink-0 snap-start">{band}</div>
         </div>

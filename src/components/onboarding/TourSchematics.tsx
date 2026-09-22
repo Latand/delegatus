@@ -18,7 +18,7 @@ function Frame({ children, className }: { children: React.ReactNode; className?:
 
 const card = (x: number, y: number, bar?: string) => (
   <g key={`${x}-${y}`}>
-    <rect x={x} y={y} width={36} height={12} rx={2.5} fill="var(--color-card)" stroke="currentColor" strokeWidth={1} />
+    <rect x={x} y={y} width={36} height={12} rx={2.5} fill="var(--color-sunken)" stroke="currentColor" strokeWidth={1} />
     {bar ? <rect x={x} y={y} width={3} height={12} rx={1} fill={bar} /> : null}
   </g>
 );
@@ -27,12 +27,14 @@ const card = (x: number, y: number, bar?: string) => (
 export function BoardSchematic() {
   return (
     <Frame>
-      {[8, 58, 108].map((x) => <rect key={x} x={x} y={8} width={44} height={84} rx={4} fill="var(--color-sunken)" />)}
+      {[8, 58, 108].map((x) => <rect key={x} x={x} y={8} width={44} height={84} rx={4} fill="var(--color-card)" stroke="currentColor" strokeWidth={1} strokeOpacity={0.5} />)}
       {card(12, 16, "var(--color-accent)")}
       {card(12, 32)}
+      {card(12, 48)}
       {card(62, 16, "var(--color-accent)")}
       {card(62, 32)}
       {card(112, 16, "var(--color-success)")}
+      {card(112, 32, "var(--color-success)")}
     </Frame>
   );
 }
@@ -78,7 +80,7 @@ export function PipelineSchematic() {
 export function NeedsYouSchematic() {
   return (
     <Frame>
-      <rect x={10} y={14} width={140} height={78} rx={6} fill="var(--color-sunken)" />
+      <rect x={10} y={14} width={140} height={78} rx={6} fill="var(--color-card)" stroke="currentColor" strokeWidth={1} strokeOpacity={0.5} />
       <rect x={116} y={6} width={30} height={16} rx={8} fill="var(--color-danger)" />
       <circle cx={131} cy={14} r={3} fill="var(--color-card)" />
       {card(20, 34)}
@@ -93,7 +95,7 @@ export function NeedsYouSchematic() {
 export function StartSchematic() {
   return (
     <Frame>
-      <rect x={10} y={20} width={70} height={60} rx={6} fill="var(--color-sunken)" />
+      <rect x={10} y={20} width={70} height={60} rx={6} fill="var(--color-card)" stroke="currentColor" strokeWidth={1} strokeOpacity={0.5} />
       <circle cx={78} cy={24} r={11} fill="var(--color-accent)" />
       <path d="M78 19 v10 M73 24 h10" stroke="var(--color-card)" strokeWidth={2} strokeLinecap="round" />
       <path d="M90 30 L104 42 M98 42 L104 42 L104 36" {...STROKE} />
