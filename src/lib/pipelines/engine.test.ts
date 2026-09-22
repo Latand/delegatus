@@ -8770,6 +8770,29 @@ test("a spent budget whose final fix wrote no new head keeps the #1868 behaviour
   expect(current.reviewPending).toBeUndefined();
 });
 
+test("a budget handoff recorded before reviewed heads existed is judged against the head its fix started from (#1938)", async () => {
+  for (const [label, heads, expected] of [
+    ["unchanged", () => REVIEW_HEADS[0]!, "completed"],
+    ["moved", (round: number) => REVIEW_HEADS[round - 1]!, "needs_review"],
+  ] as const) {
+    const h = movingHeadHarness(heads);
+    await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+    await tickPipelines([], h.ports);
+    await buildRound(h, "built v1");
+    await critiqueRound(h, "fail", "round 1");
+    /* The handoff as a pre-#1938 engine wrote it: no reviewed head. */
+    const legacy = loadPipelines()[0]!;
+    expect(legacy.cursor).toMatchObject({ stageId: "build", activatedBy: { budgetSpent: true } });
+    delete legacy.runs.find((run) => run.stageId === "critique")!.attempts[0]!.reviewedHead;
+    savePipelines([legacy]);
+    await buildRound(h, "built v2");
+    const current = loadPipelines()[0]!;
+    expect({ label, state: current.state }).toEqual({ label, state: expected });
+    expect(current.runs.find((run) => run.stageId === "critique")!.attempts[0]!.reviewedHead).toBe(REVIEW_HEADS[0]);
+    if (expected === "needs_review") expect(current.reviewPending).toMatchObject({ reviewedHead: REVIEW_HEADS[0], currentHead: REVIEW_HEADS[1] });
+  }
+});
+
 test("continue-review resumes review of the current head with an explicit added budget, replays by clientRequestId and refuses a competing continuation (#1938)", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;

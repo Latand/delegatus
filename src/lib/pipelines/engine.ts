@@ -2420,6 +2420,11 @@ function commitPassedStage(
     );
     return;
   }
+  /* #1938: a handoff recorded before reviewed heads were captured names none.
+     Its review committed nothing, so the head this fix started from is the
+     one that review judged. */
+  const handoff = passSuccessor(pipeline, stage, attempt).handoff;
+  if (handoff?.attempt && handoff.attempt.reviewedHead === undefined) handoff.attempt.reviewedHead = pipeline.lastPassedCommit;
   pipeline.lastPassedCommit = result.sha;
   if (!publishesRemoteBranch(pipeline)) {
     attempt.state = "passed";
