@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import { captureSelectedContext, encodeSelectedContextRef } from "@/lib/selection/selectedContext";
 
-import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText";
+import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
 import { parseRuntimeCommand } from "./commands";
 import { normalizeQueueEntry, type QueueEntry, type RuntimeEvent } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";

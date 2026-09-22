@@ -52,6 +52,12 @@ import { McpCallCard } from "../runtime/McpCallCard";
  * keeps their own bubble.
  */
 function resolveDeliveredItem(item: Item, provenance: ProvenanceLookup): Item {
+  if (item.structuredUserRef && (item.kind === "user" || item.kind === "tmsg")) {
+    const resolved = provenance.forItem(item);
+    if (resolved?.origin === "agent") return internalCard(item.ts, item.text, resolved.senderRole);
+    if (item.kind === "user" && resolved?.selectedContext) return { ...item, selectedContext: resolved.selectedContext };
+    return item;
+  }
   if (item.kind === "user") {
     /* A selected-context capture exists only on operator composer sends. */
     if (item.selectedContext) return item;

@@ -1,3 +1,6 @@
+import { structuredUserReferenceKey } from "@/lib/runtime/codexStructuredUserText";
+import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
+
 import {
   selectedConversationResolver,
   type BoundedTranscriptTail,
@@ -120,6 +123,19 @@ export interface SelectedContextTarget {
  */
 export function selectedContextArg(value: unknown): SelectedContextRef | null {
   if (value === undefined || value === null) return null;
+  if (typeof value === "string") {
+    const token = value.trim().replace(/^ctx=/, "");
+    if (structuredUserReferenceKey(token)) {
+      try {
+        const ref = readStructuredUserMetadata(token).selectedContext;
+        if (!ref) throw new Error("the delivery contains no selected-card reference");
+        return ref;
+      } catch {
+        throw new McpToolRefusal("the selected-context handle is unavailable or contains no selected-card reference. Pass a conversationId explicitly.",
+          { code: "selected_context_unavailable" });
+      }
+    }
+  }
   const ref = typeof value === "string"
     ? decodeSelectedContextRef(value.trim().replace(/^ctx=/, ""))
     : parseSelectedContextRef(value);

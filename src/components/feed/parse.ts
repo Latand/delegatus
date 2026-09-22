@@ -256,7 +256,7 @@ export interface ReasoningMember {
     sign-in the operator can act on, or any other provider failure. */
 export type TurnErrorReason = "auth" | "other";
 
-export type Item =
+export type Item = (
   | { kind: "prose"; ts: unknown; text: string; engine: "codex" | "claude" | "openclaw"; sourceId?: string }
   | { kind: "user"; ts: unknown; text: string; selectedContext?: SelectedContextRef }
   | MandateItem
@@ -289,7 +289,8 @@ export type Item =
      or an internal relay card. Without evidence it renders as this system row. */
   | { kind: "sysmsg"; label: string; text: string; deliveredMessage?: { engineMessageId: string | null; ts: unknown } }
   | { kind: "compact"; ts: unknown; trigger?: string; preTokens?: number; summary?: string }
-  | { kind: "raw"; text: string; err: boolean };
+  | { kind: "raw"; text: string; err: boolean }
+) & { structuredUserRef?: string };
 
 /** One rendered feed row: `key` is stable across incremental re-feeds, so a
     row keeps its DOM node (and its memoized render) while the tail grows. */
@@ -588,6 +589,7 @@ function inboxImagesFromPath(path: string): Extract<Item, { kind: "inbox-image" 
 }
 
 interface CodexUserContent {
+  metadataRef?: string;
   text: string;
   attachments: Item[];
   structured: boolean;
@@ -2530,7 +2532,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
        identity — the bubble and the attachment cards alike. An image-only
        send produces nothing but attachment rows, and they are the only thing
        that can say which submission the picture arrived for. */
-    const emit = (item: Item) => entrySeqs.push(push(item, content.deliveryDedup));
+    const emit = (item: Item) => entrySeqs.push(push(
+      content.metadataRef ? { ...item, structuredUserRef: content.metadataRef } : item,
+      content.deliveryDedup,
+    ));
     const { cleaned, images } = extractInboxImages(content.text);
     const voice = cleaned ? parseRealtimeDelegation(cleaned) : null;
     if (voice) emit({ kind: "voice", ts, ...voice });
@@ -2601,10 +2606,14 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const reconcileCodexUserEcho = (pending: PendingCodexUser, ts: unknown, decoded: CodexUserContent) => {
     const { cleaned, images } = extractInboxImages(decoded.text);
     if (cleaned) {
-      const internal = decoded.origin?.kind === "agent";
+      const previous = pending.entrySeqs.map((seq) => entries[entryIndex(seq)]?.item)
+        .find((item) => item?.kind === "user" || item?.kind === "tmsg");
+      const internal = decoded.origin?.kind === "agent" || (!decoded.origin && previous?.kind === "tmsg" && previous.internal);
       const echoItem: Item = internal
-        ? internalRelayItem(ts, cleaned, decoded.origin!)
+        ? internalRelayItem(ts, cleaned, decoded.origin ?? { kind: "agent", ...(previous?.kind === "tmsg" ? { role: previous.peer } : {}) })
         : { kind: "user", ts, text: cleaned };
+      const metadataRef = decoded.metadataRef ?? previous?.structuredUserRef;
+      if (metadataRef) echoItem.structuredUserRef = metadataRef;
       const matchSeq = pending.entrySeqs.find((seq) => {
         const idx = entryIndex(seq);
         const kind = idx >= 0 ? entries[idx]?.item.kind : undefined;

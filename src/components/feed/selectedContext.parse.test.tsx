@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { setLocale } from "@/lib/i18n";
-import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
+import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.legacy.fixture";
 import { captureSelectedContext } from "@/lib/selection/selectedContext";
 
 import { FeedItem } from "./FeedItem";

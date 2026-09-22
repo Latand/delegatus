@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -14,7 +14,10 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { saveTelegramSession, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import { CodexAppServerHost, redactCodexHostDiagnostic, rolloutTurnsFromDisk } from "./codexAppServerHost";
-import { encodeCodexStructuredUserText } from "./codexStructuredUserText";
+import { encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
+import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
+import type { SelectedContextRef } from "@/lib/selection/selectedContext";
+
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import type { HostState, RuntimeEvent } from "./engineHost";
 import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn } from "./liveTurn";
@@ -29,6 +32,20 @@ import {
   VOICE_PERSONA_FILE,
   voiceSessionPersona,
 } from "./voicePersona";
+
+const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", conversationId: "conversation_marker_fixture", capturedAt: "2026-09-22T00:00:00.000Z" };
+let metadataState: string;
+let previousMetadataState: string | undefined;
+beforeEach(() => {
+  previousMetadataState = process.env.LLV_STATE_DIR;
+  metadataState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-metadata-"));
+  process.env.LLV_STATE_DIR = metadataState;
+});
+afterEach(() => {
+  if (previousMetadataState === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = previousMetadataState;
+  fs.rmSync(metadataState, { recursive: true, force: true });
+});
 
 function deliveryDedup(operationId: string): string {
   return createHash("sha256").update(operationId).digest("hex");
@@ -1342,20 +1359,20 @@ describe("CodexAppServerHost", () => {
 
     expect((await host.health()).activeFlags).toContain(STRUCTURED_IMAGE_CAPABILITY);
     const firstContent = structuredContent("inspect", [first]);
-    expect(await host.send({ id: "image-start", ...firstContent })).toEqual({
+    expect(await host.send({ id: "image-start", ...firstContent, selectedContext: COMPACT_SELECTED, origin: { kind: "operator" } })).toEqual({
       outcome: "turn-started",
       turnId: "turn-1",
     });
     expect(server.requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
       input: [
         { type: "localImage", path: `/runtime-images/${first.sha256}` },
-        { type: "text", text: encodeCodexStructuredUserText("inspect", firstContent.contentDigest, null, null, deliveryDedup("image-start")) },
+        { type: "text", text: encodeCodexStructuredUserText("inspect", firstContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-start")) },
       ],
       clientUserMessageId: "image-start",
     });
 
     const secondContent = structuredContent("", [second]);
-    expect(await host.send({ id: "image-steer", expectedTurnId: "turn-1", ...secondContent })).toEqual({
+    expect(await host.send({ id: "image-steer", expectedTurnId: "turn-1", ...secondContent, selectedContext: COMPACT_SELECTED, origin: { kind: "operator" } })).toEqual({
       outcome: "steered",
       turnId: "turn-1",
     });
@@ -1363,11 +1380,17 @@ describe("CodexAppServerHost", () => {
       expectedTurnId: "turn-1",
       input: [
         { type: "localImage", path: `/runtime-images/${second.sha256}` },
-        { type: "text", text: encodeCodexStructuredUserText("", secondContent.contentDigest, null, null, deliveryDedup("image-steer")) },
+        { type: "text", text: encodeCodexStructuredUserText("", secondContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-steer")) },
       ],
       clientUserMessageId: "image-steer",
     });
     expect(resolved).toEqual([first, second]);
+    for (const method of ["turn/start", "turn/steer"]) {
+      const params = server.requests.find((request) => request.method === method)!.params as { input: Array<{ type: string; text?: string }> };
+      const wire = params.input.find((part) => part.type === "text")!.text!;
+      expect(wire.split("\n")[0]!.length).toBeLessThanOrEqual(96);
+      expect(decodeCodexStructuredUserText(wire).metadataRef).toBeDefined();
+    }
     await host.release();
   });
 
@@ -2323,11 +2346,13 @@ describe("CodexAppServerHost", () => {
         entryId: "long-history-send", conversationId: "conversation_fixture",
         binding: {threadId: "long-native-thread", accountId: "fixture"},
         clientUserMessageId: "long-history-send", nativeSubmissionId: "native-submission",
-        revision: 1, versions: [{revision: 1, operationId: "long-history-send", text: "Continue the authorized review", images: [], contentDigest: "fixture-digest"}],
+        revision: 1, versions: [{revision: 1, operationId: "long-history-send", text: "Continue the authorized review", images: [], contentDigest: "fixture-digest", selectedContext: COMPACT_SELECTED, origin: { kind: "agent", role: "orchestrator" }}],
         profilePolicy: "thread-at-dispatch", state: "queued", mutationOperationId: null,
         dispatchedRevision: null, dispatchedTurnId: null, proof: null, reason: null,
       };
       entry.versions[0].input = await host.nativeQueue!.prepare(entry, entry.versions[0]);
+      const preparedText = entry.versions[0].input.find((part) => part.type === "text");
+      expect(preparedText?.type === "text" && preparedText.text.split("\n")[0]!.length).toBeLessThanOrEqual(96);
       const user = {type: "userMessage", id: "canonical-user", clientId: entry.clientUserMessageId, content: entry.versions[0].input};
       // Match the observed 316-turn, roughly 2,500-item / 12 MB projection.
       // The target is recent; reading unrelated history must fit the original

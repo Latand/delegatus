@@ -16,7 +16,7 @@ import { StructuredInjectError } from "./engineHost";
 import type { RuntimeEvent } from "./engineHost";
 import type { RuntimeEventStore } from "./eventStore";
 import { structuredContent } from "./structuredContent";
-import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
+import { decodeCodexStructuredUserText } from "./codexStructuredUserText.server";
 
 /* An isolated, short scratch root. Nothing here reads or writes the operator's
    own state: the rollout each test uses is created under it and removed after. */
@@ -228,6 +228,7 @@ test("active-turn injection appends the operator's input and issues no turn RPC"
     threadId: server.threadId,
     text: "also check the migration path",
     contentDigest: digestOf("also check the migration path"),
+    selectedContext: { version: 1, state: "selected", conversationId: "conversation_injection_fixture", capturedAt: "2026-09-22T00:00:00.000Z" },
   });
 
   /* The placement the engine actually gives an active thread: the items join
@@ -252,8 +253,10 @@ test("active-turn injection appends the operator's input and issues no turn RPC"
   expect(item.role).toBe("user");
   expect(item.content[0]!.type).toBe("input_text");
   const decoded = decodeCodexStructuredUserText(item.content[0]!.text);
+  expect(item.content[0]!.text.split("\n")[0]!.length).toBeLessThanOrEqual(96);
   expect(decoded.text).toBe("also check the migration path");
   expect(decoded.origin).toEqual({ kind: "operator" });
+  expect(decoded.selectedContext?.state === "selected" && decoded.selectedContext.conversationId).toBe("conversation_injection_fixture");
 
   await host.release();
 });

@@ -23,7 +23,7 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
-import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText";
+import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
 import { deliveryDedupToken } from "./deliveryDedup";
 import { CodexReplayFrameReducer, ReplayFrameOverflowError, sanitizeCodexImageFrame, shrinkReducedReplayFrame, type ImageSink, type ReplayFrameBudgets } from "./codexImageFrames";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
@@ -1699,12 +1699,10 @@ export class CodexAppServerHost implements EngineHost {
         text: encodeCodexStructuredUserText(
           normalized.content.text,
           normalized.content.images.length > 0 ? normalized.contentDigest : undefined,
-          /* #844: the selected-card reference becomes durable HERE, on the
-             canonical structured-user record, so it survives a restart and a
-             re-parse and the transcript row renders the composer badge. */
+          /* Persist the selected card before dispatch; the rollout carries
+             its immutable handle for tools and the transcript badge. */
           normalized.selectedContext,
-          /* #1117: authorship lands on the same record, so the feed can tell
-             the operator's bubble from an inter-agent relay without a join. */
+          /* The compact marker retains origin; its record holds the sender. */
           normalized.origin,
           codexDeliveryDedup(normalized.id),
         ),
@@ -3176,7 +3174,9 @@ export class CodexAppServerHost implements EngineHost {
     const clientId = stringField(item, "clientId");
     if (!clientId) return;
     const wireText = userMessageText(item);
-    const decoded = wireText === null ? null : decodeCodexStructuredUserText(wireText);
+    let decoded: ReturnType<typeof decodeCodexStructuredUserText> | null = null;
+    try { decoded = wireText === null ? null : decodeCodexStructuredUserText(wireText); }
+    catch { /* Missing metadata cannot prove a payload, including image-only sends. */ }
     const text = decoded?.text ?? null;
     const contentDigest = decoded?.contentDigest ?? null;
     const previous = this.confirmedDeliveries.get(clientId);
