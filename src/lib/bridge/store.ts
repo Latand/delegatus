@@ -1,9 +1,32 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
+import {
+  importLegacyCollection,
+  lazyReconcileAllowed,
+  legacyDatabasePath,
+  legacyImportAllowed,
+  TOMBSTONE_README,
+  writeLegacyRollbackMirror,
+  type LegacyCollectionSpec,
+  type LegacyImportHooks,
+  type LegacyImportOutcome,
+  type LegacyReconcileSummary,
+} from "@/lib/state/legacyImport";
+import {
+  importStateCollection,
+  readStateImport,
+  recordStateImportMirror,
+  SqliteStateCollection,
+  type StateImportRow,
+} from "@/lib/state/sqliteStateStore";
+import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 import {
@@ -35,17 +58,34 @@ import {
  *
  * Modelled on `src/lib/lifecycle/journal.ts` deliberately — monotonic seq,
  * idempotent append keyed by a caller-stable string, capacity trim with retired
- * ids, one file transaction per write. That journal is the tested shape for "an
+ * ids, one transaction per write. That journal is the tested shape for "an
  * append-only record a late replay cannot duplicate", and the bridge needs
  * exactly that property for a manager that retries a report after its host died.
  *
- * Two files rather than one, because they have different writers and different
- * failure meanings: the manager appends reports, the gateway advances the
- * cursor, and a busy log must not block a cursor write.
+ * Two collections rather than one, because they have different writers and
+ * different failure meanings: the manager appends reports, the gateway advances
+ * the cursor, and a busy log must not block a cursor write.
+ *
+ * Both live in the `state.sqlite` beside the legacy files (#1870, slice 4):
+ *
+ * - `bridge_reports`, imported once from `bridge-reports.json`: `meta` holds
+ *   lastSeq and the trim marks, `e:<id>` is one report (the journal shape of
+ *   design §4.4), `x:<id>` a retired id in retirement order, `answer:<ref>` a
+ *   recorded answer and `pending:<ref>` a parked one.
+ * - `bridge_channels`, imported once from `bridge.json` (row `manager`) and
+ *   every `bridge-channels/<hash>.json` (row `channel:<hash>`).
+ *
+ * Each imported file is kept as `<name>.imported-<release>` and a tombstone
+ * directory takes its place, so an older release fails visibly instead of
+ * writing a file nothing reads (src/lib/state/legacyImport.ts).
  */
 
 const BRIDGE_CHANNEL_BUSY = "bridge channel is busy";
 const BRIDGE_LOG_BUSY = "bridge report log is busy";
+const REPORTS_COLLECTION = "bridge_reports";
+const CHANNELS_COLLECTION = "bridge_channels";
+const MANAGER_CHANNEL_ROW = "manager";
+const CHANNEL_FILE = /^([0-9a-f]{32})\.json$/;
 
 function bridgeChannelKey(scope: BridgeChannelScope): string {
   return crypto.createHash("sha256")
@@ -54,22 +94,21 @@ function bridgeChannelKey(scope: BridgeChannelScope): string {
     .slice(0, 32);
 }
 
+/** The legacy file a channel was stored in before #1870; now the path its
+    import reads and its rollback mirror writes. */
 export function bridgeChannelPath(scope?: BridgeChannelScope): string {
   return scope
     ? statePath("bridge-channels", `${bridgeChannelKey(scope)}.json`)
     : statePath("bridge.json");
 }
 
-function bridgeChannelPathFromKey(key: string): string {
-  return statePath("bridge-channels", `${key}.json`);
-}
-
+/** The legacy report log, likewise. */
 export function bridgeReportLogPath(): string {
   return statePath("bridge-reports.json");
 }
 
 /**
- * Raised when a bridge file exists but cannot be read as one. Fatal by design,
+ * Raised when bridge state exists but cannot be read as one. Fatal by design,
  * for the reason `LifecycleJournalCorruptError` is: a truncated write that read
  * as "nothing here yet" would restart `lastSeq` at 0, and a gateway cursor
  * sitting above a reset `lastSeq` is permanently deaf to the manager with
@@ -263,16 +302,6 @@ function normalizeLog(value: unknown, target: string): BridgeReportLogV1 {
   };
 }
 
-function readLog(): BridgeReportLogV1 {
-  const target = bridgeReportLogPath();
-  return normalizeLog(readJsonFile(target), target);
-}
-
-/** The durable report log exactly as stored. */
-export function readBridgeReportLog(): BridgeReportLogV1 {
-  return readLog();
-}
-
 function normalizeChannel(
   value: unknown,
   target: string,
@@ -313,6 +342,240 @@ function normalizeChannel(
   };
 }
 
+/* ── SQLite storage (#1870, slice 4) ─────────────────────────────────────── */
+
+/** One stored row of either collection. */
+type BridgeRow = { k: string; v: unknown };
+
+function isBridgeRow(value: unknown): value is BridgeRow {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && typeof (value as BridgeRow).k === "string" && Boolean((value as BridgeRow).k)
+    && Object.hasOwn(value as object, "v");
+}
+
+function databaseIdentity(database: string): string {
+  try {
+    const stat = fs.statSync(database);
+    return `${stat.dev}:${stat.ino}`;
+  } catch {
+    return "absent";
+  }
+}
+
+/* Cached per database and collection, and validated against the file's
+   identity rather than its name: a test that removes its state directory and
+   starts over must not be served by a connection to the file that used to be
+   there. */
+const collections = new Map<string, { identity: string; collection: SqliteStateCollection<BridgeRow> }>();
+
+function openCollection(database: string, name: string): SqliteStateCollection<BridgeRow> {
+  const cacheKey = `${database}\0${name}`;
+  const held = collections.get(cacheKey);
+  if (held && held.identity === databaseIdentity(database)) return held.collection;
+  const collection = new SqliteStateCollection<BridgeRow>(database, {
+    collection: name,
+    schemaVersion: 1,
+    busyMessage: name === REPORTS_COLLECTION ? BRIDGE_LOG_BUSY : BRIDGE_CHANNEL_BUSY,
+    key: (row) => row.k,
+    decode: (value) => (isBridgeRow(value) ? value : null),
+    clone: (row) => structuredClone(row),
+    strictDecode: true,
+    decodeError: (error) => Object.assign(
+      new BridgeStateCorruptError(`${database}#${name}`, "a stored row is malformed"),
+      { cause: error },
+    ),
+  });
+  collections.set(cacheKey, { identity: databaseIdentity(database), collection });
+  return collection;
+}
+
+function cachedCollection(database: string, name: string): SqliteStateCollection<BridgeRow> | null {
+  const held = collections.get(`${database}\0${name}`);
+  return held && held.identity === databaseIdentity(database) ? held.collection : null;
+}
+
+/** Drops this process's cached handles. Tests that rebuild a state directory
+    under one path call it; nothing in the product does. */
+export function resetBridgeCollectionsForTests(): void {
+  collections.clear();
+}
+
+/** The report collection, importing the legacy log on first use. Null only for
+    a read before the import may run (a release that has not been promoted):
+    the caller then reads the legacy file, which is what every reader did before
+    the collection existed. */
+function reportsCollection(purpose: "read" | "write"): SqliteStateCollection<BridgeRow> | null {
+  const legacyPath = bridgeReportLogPath();
+  const database = legacyDatabasePath(legacyPath);
+  const cached = cachedCollection(database, REPORTS_COLLECTION);
+  if (cached) return cached;
+  if (!readStateImport(database, REPORTS_COLLECTION)) {
+    /* Nothing above this line writes: a read that arrives here from a module
+       load the barrier refuses (#1905) leaves the state directory as it was. */
+    if (!legacyImportAllowed(legacyPath)) {
+      if (purpose === "read") return null;
+      throw new FileTransactionBusyError("bridge report log is waiting for release promotion");
+    }
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true, mode: 0o700 });
+    importLegacyBridgeReports(legacyPath, { reconcile: lazyReconcileAllowed(legacyPath) });
+  }
+  return openCollection(database, REPORTS_COLLECTION);
+}
+
+/** The channel collection, likewise. */
+function channelsCollection(purpose: "read" | "write"): SqliteStateCollection<BridgeRow> | null {
+  const directory = path.dirname(bridgeChannelPath());
+  const database = path.join(directory, "state.sqlite");
+  const cached = cachedCollection(database, CHANNELS_COLLECTION);
+  if (cached) return cached;
+  if (!readStateImport(database, CHANNELS_COLLECTION)) {
+    if (!legacyImportAllowed(bridgeChannelPath())) {
+      if (purpose === "read") return null;
+      throw new FileTransactionBusyError("bridge channel is waiting for release promotion");
+    }
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    importLegacyBridgeChannels(directory, { reconcile: lazyReconcileAllowed(bridgeChannelPath()) });
+  }
+  return openCollection(database, CHANNELS_COLLECTION);
+}
+
+/* ── The report log as rows ─────────────────────────────────────────────── */
+
+type LogMeta = Pick<BridgeReportLogV1, "lastSeq" | "trimmedThroughSeq" | "trimmedThroughByChannel">;
+
+/** The log as rows, in the order they are stored: meta, reports by seq, retired
+    ids oldest first, answers, parked answers. A duplicate id in a file older
+    code wrote keeps its first row, because a key names one row. */
+function rowsFromLog(log: BridgeReportLogV1): BridgeRow[] {
+  const meta: LogMeta = {
+    lastSeq: log.lastSeq,
+    trimmedThroughSeq: log.trimmedThroughSeq,
+    trimmedThroughByChannel: log.trimmedThroughByChannel ?? {},
+  };
+  const rows: BridgeRow[] = [{ k: "meta", v: meta }];
+  const seen = new Set<string>();
+  const push = (row: BridgeRow) => {
+    if (seen.has(row.k)) return;
+    seen.add(row.k);
+    rows.push(row);
+  };
+  for (const report of [...log.reports].sort((left, right) => left.seq - right.seq)) push({ k: `e:${report.id}`, v: report });
+  for (const id of log.retired) push({ k: `x:${id}`, v: { id } });
+  for (const ref of log.answeredRefs ?? []) push({ k: `answer:${ref}`, v: ref });
+  for (const pending of log.pendingAnswers ?? []) push({ k: `pending:${pending.ref}`, v: pending });
+  return rows;
+}
+
+function logFromRows(rows: readonly BridgeRow[], target: string): BridgeReportLogV1 {
+  const log = emptyLog();
+  const answered: unknown[] = [];
+  const pending: unknown[] = [];
+  for (const row of rows) {
+    if (row.k === "meta") {
+      const meta = row.v as Partial<LogMeta>;
+      log.lastSeq = Number.isInteger(meta.lastSeq) ? meta.lastSeq as number : 0;
+      log.trimmedThroughSeq = Number.isInteger(meta.trimmedThroughSeq) ? meta.trimmedThroughSeq as number : 0;
+      log.trimmedThroughByChannel = meta.trimmedThroughByChannel ?? {};
+    } else if (row.k.startsWith("e:")) {
+      const report = normalizeReport(row.v);
+      if (!report) throw new BridgeStateCorruptError(target, `stored report ${row.k} is malformed`);
+      log.reports.push(report);
+    } else if (row.k.startsWith("x:")) {
+      log.retired.push(row.k.slice(2));
+    } else if (row.k.startsWith("answer:")) {
+      answered.push(row.v);
+    } else if (row.k.startsWith("pending:")) {
+      pending.push(row.v);
+    }
+  }
+  log.reports.sort((left, right) => left.seq - right.seq);
+  log.lastSeq = Math.max(log.lastSeq, log.reports.at(-1)?.seq ?? 0);
+  log.answeredRefs = normalizeAnsweredRefs(answered);
+  log.pendingAnswers = normalizePendingAnswers(pending, log.answeredRefs);
+  return log;
+}
+
+/** The rows that changed between two row sets, as one patch. */
+function diffRows(previous: readonly BridgeRow[], next: readonly BridgeRow[]): { records: BridgeRow[]; deleteKeys: string[] } {
+  const held = new Map(previous.map((row) => [row.k, JSON.stringify(row)] as const));
+  const nextKeys = new Set(next.map((row) => row.k));
+  return {
+    records: next.filter((row) => held.get(row.k) !== JSON.stringify(row)),
+    deleteKeys: previous.map((row) => row.k).filter((key) => !nextKeys.has(key)),
+  };
+}
+
+function readLog(): BridgeReportLogV1 {
+  const collection = reportsCollection("read");
+  if (!collection) {
+    const target = bridgeReportLogPath();
+    return normalizeLog(readJsonFile(target), target);
+  }
+  return logFromRows(collection.snapshot(), `${collection.filename}#${REPORTS_COLLECTION}`);
+}
+
+/** The durable report log exactly as stored. */
+export function readBridgeReportLog(): BridgeReportLogV1 {
+  return readLog();
+}
+
+/** One serialized read-modify-write of the log. `mutate` edits the log it is
+    handed and says whether it changed anything; only changed rows are written,
+    and an unchanged log writes nothing, so its revision stays put. */
+function mutateLog<R>(mutate: (log: BridgeReportLogV1) => { result: R; changed: boolean }): R {
+  const collection = reportsCollection("write")!;
+  let result: R;
+  collection.patchSync(() => {
+    const rows = collection.snapshot();
+    const log = logFromRows(rows, `${collection.filename}#${REPORTS_COLLECTION}`);
+    const outcome = mutate(log);
+    result = outcome.result;
+    return outcome.changed ? diffRows(rows, rowsFromLog(log)) : { records: [] };
+  });
+  return result!;
+}
+
+/* ── Channels as rows ───────────────────────────────────────────────────── */
+
+function channelRowKey(scope?: BridgeChannelScope): string {
+  return scope ? `channel:${bridgeChannelKey(scope)}` : MANAGER_CHANNEL_ROW;
+}
+
+function channelFileFor(directory: string, rowKey: string): string {
+  return rowKey === MANAGER_CHANNEL_ROW
+    ? path.join(directory, "bridge.json")
+    : path.join(directory, "bridge-channels", `${rowKey.slice("channel:".length)}.json`);
+}
+
+function readChannelRow(rowKey: string, scope?: BridgeChannelScope): BridgeChannelV1 | null {
+  const collection = channelsCollection("read");
+  if (!collection) {
+    const target = channelFileFor(path.dirname(bridgeChannelPath()), rowKey);
+    return normalizeChannel(readJsonFile(target), target, scope);
+  }
+  const row = collection.get(rowKey);
+  return row ? normalizeChannel(row.v, `${collection.filename}#${rowKey}`, scope) : null;
+}
+
+/** One serialized read-modify-write of one channel row. */
+function mutateChannel<R>(
+  rowKey: string,
+  mutate: (read: () => BridgeChannelV1 | null) => { result: R; next?: BridgeChannelV1 },
+  scope?: BridgeChannelScope,
+): R {
+  const collection = channelsCollection("write")!;
+  let result: R;
+  collection.patchSync(() => {
+    const outcome = mutate(() => {
+      const row = collection.get(rowKey);
+      return row ? normalizeChannel(row.v, `${collection.filename}#${rowKey}`, scope) : null;
+    });
+    result = outcome.result;
+    return { records: outcome.next ? [{ k: rowKey, v: outcome.next }] : [] };
+  });
+  return result!;
+}
+
 /**
  * Record the batch just handed out and mint the token that settles it.
  *
@@ -325,19 +588,17 @@ export function issueBridgeAckToken(
   now = new Date(),
   scope?: BridgeChannelScope,
 ): string {
-  const target = bridgeChannelPath(scope);
-  return withFileTransactionSync(target, BRIDGE_CHANNEL_BUSY, () => {
-    const current = readBridgeChannel(scope);
+  return mutateChannel(channelRowKey(scope), (read) => {
+    const current = read();
     if (!current) throw new Error("the bridge channel is not open");
     const token = scope
       ? `ack_${bridgeChannelKey(scope)}_${crypto.randomBytes(18).toString("hex")}`
       : `ack_${crypto.randomBytes(18).toString("hex")}`;
-    writeJsonDurably(target, {
-      ...current,
-      outstanding: { token, throughSeq, issuedAt: now.toISOString() },
-    } satisfies BridgeChannelV1);
-    return token;
-  });
+    return {
+      result: token,
+      next: { ...current, outstanding: { token, throughSeq, issuedAt: now.toISOString() } },
+    };
+  }, scope);
 }
 
 /**
@@ -348,9 +609,9 @@ export function issueBridgeAckToken(
  */
 export function redeemBridgeAckToken(token: string, now = new Date()): { ok: boolean; throughSeq: number } {
   const scopedKey = /^ack_([0-9a-f]{32})_[0-9a-f]{36}$/.exec(token)?.[1];
-  const target = scopedKey ? bridgeChannelPathFromKey(scopedKey) : bridgeChannelPath();
-  return withFileTransactionSync(target, BRIDGE_CHANNEL_BUSY, () => {
-    const current = normalizeChannel(readJsonFile(target), target);
+  const rowKey = scopedKey ? `channel:${scopedKey}` : MANAGER_CHANNEL_ROW;
+  return mutateChannel(rowKey, (read) => {
+    const current = read();
     if (scopedKey && current && (
       !current.project
       || !current.seatConversationId
@@ -359,10 +620,10 @@ export function redeemBridgeAckToken(token: string, now = new Date()): { ok: boo
         seatConversationId: current.seatConversationId,
       }) !== scopedKey
     )) {
-      throw new BridgeStateCorruptError(target, "its stored scope does not match its acknowledgement token");
+      throw new BridgeStateCorruptError(rowKey, "its stored scope does not match its acknowledgement token");
     }
     if (!current?.outstanding || current.outstanding.token !== token) {
-      return { ok: false, throughSeq: current?.managerReportCursor ?? 0 };
+      return { result: { ok: false, throughSeq: current?.managerReportCursor ?? 0 } };
     }
     const throughSeq = Math.max(current.managerReportCursor, current.outstanding.throughSeq);
     const next: BridgeChannelV1 = {
@@ -371,15 +632,13 @@ export function redeemBridgeAckToken(token: string, now = new Date()): { ok: boo
       updatedAt: now.toISOString(),
     };
     delete next.outstanding;
-    writeJsonDurably(target, next);
-    return { ok: true, throughSeq };
+    return { result: { ok: true, throughSeq }, next };
   });
 }
 
 /** Channel state as stored, or null when the bridge was never opened. */
 export function readBridgeChannel(scope?: BridgeChannelScope): BridgeChannelV1 | null {
-  const target = bridgeChannelPath(scope);
-  return normalizeChannel(readJsonFile(target), target, scope);
+  return readChannelRow(channelRowKey(scope), scope);
 }
 
 /**
@@ -395,12 +654,11 @@ export function openBridgeChannel(
   scope?: BridgeChannelScope,
 ): BridgeChannelV1 {
   if (!rootId.trim()) throw new Error("bridge channel requires a root identity");
-  const target = bridgeChannelPath(scope);
-  return withFileTransactionSync(target, BRIDGE_CHANNEL_BUSY, () => {
-    const current = readBridgeChannel(scope);
+  return mutateChannel(channelRowKey(scope), (read) => {
+    const current = read();
     /* The project seat owns the durable channel and cursor. Root identity
        records its first opener; additional roots preserve the position. */
-    if (current) return current;
+    if (current) return { result: current };
     const channel: BridgeChannelV1 = {
       schemaVersion: BRIDGE_CHANNEL_SCHEMA_VERSION,
       rootId,
@@ -409,22 +667,60 @@ export function openBridgeChannel(
       managerReportCursor: 0,
       updatedAt: now.toISOString(),
     };
-    writeJsonDurably(target, channel);
-    return channel;
-  });
+    return { result: channel, next: channel };
+  }, scope);
+}
+
+/**
+ * Retire reports past the capacity, oldest first, except the quarantine.
+ * Mutates `file`.
+ */
+function trimToCapacity(file: BridgeReportLogV1, legacyCursor: number): void {
+  if (file.reports.length <= BRIDGE_REPORT_CAPACITY) return;
+  let remaining = file.reports.length - BRIDGE_REPORT_CAPACITY;
+  const trimmed: BridgeReportV1[] = [];
+  const retained: BridgeReportV1[] = [];
+  for (const report of file.reports) {
+    /* Unrouted rows are the quarantine. Trimming them would turn "visible
+       and waiting" into silent loss, including every pre-#787 row whose
+       intended project cannot be reconstructed safely. */
+    const quarantined = !report.targetSeatConversationId
+      || (report.project == null && report.seq > legacyCursor);
+    if (remaining > 0 && !quarantined) {
+      trimmed.push(report);
+      remaining -= 1;
+    } else {
+      retained.push(report);
+    }
+  }
+  file.reports = retained;
+  const oldestRetained = retained[0]?.seq ?? file.lastSeq + 1;
+  file.trimmedThroughSeq = Math.max(file.trimmedThroughSeq, oldestRetained - 1);
+  file.trimmedThroughByChannel ??= {};
+  for (const report of trimmed) {
+    if (!report.project || !report.targetSeatConversationId) continue;
+    const key = bridgeChannelKey({
+      project: report.project,
+      seatConversationId: report.targetSeatConversationId,
+    });
+    file.trimmedThroughByChannel[key] = Math.max(
+      file.trimmedThroughByChannel[key] ?? 0,
+      report.seq,
+    );
+  }
+  file.retired = [...file.retired, ...trimmed.map((report) => report.id)].slice(-BRIDGE_RETIRED_ID_CAPACITY);
 }
 
 /**
  * Append every report whose id is not already recorded (or already retired by
- * trimming), in one file transaction. Returns what was actually added, so a
+ * trimming), in one transaction. Returns what was actually added, so a
  * manager can tell a genuinely new report from a replay of one it already sent.
  */
 export function appendBridgeReports(
   inputs: readonly BridgeReportInput[],
 ): { appended: BridgeReportV1[]; skipped: number } {
   if (inputs.length === 0) return { appended: [], skipped: 0 };
-  return withFileTransactionSync(bridgeReportLogPath(), BRIDGE_LOG_BUSY, () => {
-    const file = readLog();
+  return mutateLog((file) => {
     const known = new Set<string>([...file.reports.map((report) => report.id), ...file.retired]);
     const appended: BridgeReportV1[] = [];
     let skipped = 0;
@@ -460,44 +756,9 @@ export function appendBridgeReports(
       file.reports.push(report);
       appended.push(report);
     }
-    if (appended.length === 0) return { appended, skipped };
-    if (file.reports.length > BRIDGE_REPORT_CAPACITY) {
-      const legacyCursor = readBridgeChannel()?.managerReportCursor ?? 0;
-      let remaining = file.reports.length - BRIDGE_REPORT_CAPACITY;
-      const trimmed: BridgeReportV1[] = [];
-      const retained: BridgeReportV1[] = [];
-      for (const report of file.reports) {
-        /* Unrouted rows are the quarantine. Trimming them would turn "visible
-           and waiting" into silent loss, including every pre-#787 row whose
-           intended project cannot be reconstructed safely. */
-        const quarantined = !report.targetSeatConversationId
-          || (report.project == null && report.seq > legacyCursor);
-        if (remaining > 0 && !quarantined) {
-          trimmed.push(report);
-          remaining -= 1;
-        } else {
-          retained.push(report);
-        }
-      }
-      file.reports = retained;
-      const oldestRetained = retained[0]?.seq ?? file.lastSeq + 1;
-      file.trimmedThroughSeq = Math.max(file.trimmedThroughSeq, oldestRetained - 1);
-      file.trimmedThroughByChannel ??= {};
-      for (const report of trimmed) {
-        if (!report.project || !report.targetSeatConversationId) continue;
-        const key = bridgeChannelKey({
-          project: report.project,
-          seatConversationId: report.targetSeatConversationId,
-        });
-        file.trimmedThroughByChannel[key] = Math.max(
-          file.trimmedThroughByChannel[key] ?? 0,
-          report.seq,
-        );
-      }
-      file.retired = [...file.retired, ...trimmed.map((report) => report.id)].slice(-BRIDGE_RETIRED_ID_CAPACITY);
-    }
-    writeJsonDurably(bridgeReportLogPath(), file);
-    return { appended, skipped };
+    if (appended.length === 0) return { result: { appended, skipped }, changed: false };
+    trimToCapacity(file, readBridgeChannel()?.managerReportCursor ?? 0);
+    return { result: { appended, skipped }, changed: true };
   });
 }
 
@@ -508,13 +769,13 @@ export function appendBridgeReports(
  * ANSWERED — the cursor says only that it was read aloud — so the answer has to
  * outlive the turn that carried it. It lands in the report log rather than in a
  * channel: the seq it names is already log-global, and the attention queue then
- * needs exactly one file to know whether a report is still asking.
+ * needs exactly one collection to know whether a report is still asking.
  *
  * Log-global is also why the seq alone may never be taken at face value. The
  * ref is resolved against the log INSIDE the write transaction and recorded only
  * when it names a decision request this directive's own seat filed:
  *
- * - a ref naming nothing yet would sit in the file waiting to pre-answer
+ * - a ref naming nothing yet would sit in the log waiting to pre-answer
  *   whatever report later takes that seq, silencing a question nobody replied to;
  * - a ref naming another project's row would let one project's directive clear
  *   another project's ask, because the number carries no ownership of its own;
@@ -538,16 +799,15 @@ export function recordBridgeDirectiveAnswer(
   canonicalSeatConversationId: CanonicalSeatConversationId,
 ): void {
   if (!Number.isInteger(ref) || ref < 1) return;
-  withFileTransactionSync(bridgeReportLogPath(), BRIDGE_LOG_BUSY, () => {
-    const file = readLog();
-    if (!directiveMayAnswer(file, ref, scope, canonicalSeatConversationId)) return;
+  mutateLog((file) => {
+    if (!directiveMayAnswer(file, ref, scope, canonicalSeatConversationId)) return { result: undefined, changed: false };
     const refs = file.answeredRefs ?? [];
-    if (refs.includes(ref)) return;
+    if (refs.includes(ref)) return { result: undefined, changed: false };
     file.answeredRefs = normalizeAnsweredRefs([...refs, ref]);
     /* The parked row has served its purpose the moment the answer is recorded
        for real; leaving it would keep a settled ref waiting on a delivery. */
     file.pendingAnswers = (file.pendingAnswers ?? []).filter((entry) => entry.ref !== ref);
-    writeJsonDurably(bridgeReportLogPath(), file);
+    return { result: undefined, changed: true };
   });
 }
 
@@ -591,15 +851,14 @@ export function recordBridgeDirectivePendingAnswer(
   canonicalSeatConversationId: CanonicalSeatConversationId,
 ): void {
   if (!Number.isInteger(ref) || ref < 1 || !operationId) return;
-  withFileTransactionSync(bridgeReportLogPath(), BRIDGE_LOG_BUSY, () => {
-    const file = readLog();
-    if (!directiveMayAnswer(file, ref, scope, canonicalSeatConversationId)) return;
-    if ((file.answeredRefs ?? []).includes(ref)) return;
+  mutateLog((file) => {
+    if (!directiveMayAnswer(file, ref, scope, canonicalSeatConversationId)) return { result: undefined, changed: false };
+    if ((file.answeredRefs ?? []).includes(ref)) return { result: undefined, changed: false };
     file.pendingAnswers = normalizePendingAnswers([
       ...(file.pendingAnswers ?? []).filter((entry) => entry.ref !== ref),
       { ref, operationId, project: scope.project, seatConversationId: scope.seatConversationId },
     ], file.answeredRefs ?? []);
-    writeJsonDurably(bridgeReportLogPath(), file);
+    return { result: undefined, changed: true };
   });
 }
 
@@ -697,13 +956,412 @@ export function acknowledgeBridgeReports(
   scope?: BridgeChannelScope,
 ): BridgeChannelV1 | null {
   if (!Number.isInteger(throughSeq) || throughSeq < 1) return readBridgeChannel(scope);
-  const target = bridgeChannelPath(scope);
-  return withFileTransactionSync(target, BRIDGE_CHANNEL_BUSY, () => {
-    const current = readBridgeChannel(scope);
-    if (!current) return null;
-    if (throughSeq <= current.managerReportCursor) return current;
+  return mutateChannel(channelRowKey(scope), (read) => {
+    const current = read();
+    if (!current) return { result: null };
+    if (throughSeq <= current.managerReportCursor) return { result: current };
     const next: BridgeChannelV1 = { ...current, managerReportCursor: throughSeq, updatedAt: now.toISOString() };
-    writeJsonDurably(target, next);
-    return next;
-  });
+    return { result: next, next };
+  }, scope);
+}
+
+/* ── Import of bridge-reports.json (design §6.2, the slice 1 helper) ────── */
+
+/**
+ * Fold a report log that changed after the import back in: a rollback release
+ * ran on the mirror, or an older writer raced the fence. The log is a journal,
+ * so nothing is deleted by absence: a report the file adds joins (keeping its
+ * seq when it lies past everything SQLite holds, otherwise taking the next one,
+ * so no cursor has already passed it), an id the file retired is retired here
+ * too, answers and parked answers are unioned, and the trim marks take the
+ * higher value.
+ */
+function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { fenceOwner: boolean }): LegacyReconcileSummary {
+  const collection = openCollection(legacyDatabasePath(legacyPath), REPORTS_COLLECTION);
+  const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
+  collection.patchSync(() => {
+    const rows = collection.snapshot();
+    const log = logFromRows(rows, `${collection.filename}#${REPORTS_COLLECTION}`);
+    const live = new Map(log.reports.map((report) => [report.id, report] as const));
+    const retired = new Set(log.retired);
+    for (const id of body.retired) {
+      if (retired.has(id)) continue;
+      if (live.delete(id)) {
+        summary.removed += 1;
+        summary.keys.push(`e:${id}`);
+      }
+      log.retired.push(id);
+      retired.add(id);
+    }
+    log.reports = [...live.values()];
+    for (const report of body.reports) {
+      if (live.has(report.id) || retired.has(report.id)) continue;
+      if (report.seq > log.lastSeq) {
+        log.lastSeq = report.seq;
+        log.reports.push(report);
+      } else {
+        log.lastSeq += 1;
+        log.reports.push({ ...report, seq: log.lastSeq });
+        summary.conflicts.push(`e:${report.id}`);
+      }
+      live.set(report.id, report);
+      summary.added += 1;
+      summary.keys.push(`e:${report.id}`);
+    }
+    log.reports.sort((left, right) => left.seq - right.seq);
+    log.lastSeq = Math.max(log.lastSeq, body.lastSeq);
+    log.trimmedThroughSeq = Math.max(log.trimmedThroughSeq, body.trimmedThroughSeq);
+    for (const [key, seq] of Object.entries(body.trimmedThroughByChannel ?? {})) {
+      log.trimmedThroughByChannel![key] = Math.max(log.trimmedThroughByChannel![key] ?? 0, seq);
+    }
+    log.answeredRefs = normalizeAnsweredRefs([...(log.answeredRefs ?? []), ...(body.answeredRefs ?? [])]);
+    log.pendingAnswers = normalizePendingAnswers([...(body.pendingAnswers ?? []), ...(log.pendingAnswers ?? [])], log.answeredRefs);
+    trimToCapacity(log, readBridgeChannel()?.managerReportCursor ?? 0);
+    log.retired = log.retired.slice(-BRIDGE_RETIRED_ID_CAPACITY);
+    return diffRows(rows, rowsFromLog(log));
+  }, { fenceOwner: options.fenceOwner });
+  return summary;
+}
+
+/** The report log's legacy import spec, for the import driver and its tests. */
+export function bridgeReportsLegacyCollection(legacyPath = bridgeReportLogPath()): LegacyCollectionSpec<BridgeReportLogV1> {
+  return {
+    collection: REPORTS_COLLECTION,
+    schemaVersion: 1,
+    migrationId: "bridge-reports-json-v1",
+    legacyPath,
+    /* A log whose recorded rows do not survive the round trip refuses the
+       import and leaves the file untouched, as the JSON store refused to read it. */
+    parse: (raw) => normalizeLog(raw, legacyPath),
+    toRows: (body): StateImportRow[] => rowsFromLog(body)
+      .map((row) => ({ key: row.k, value: row, controllerActive: true })),
+    reconcile: (body, _baseline, options) => mergeLegacyLog(legacyPath, body, options),
+    mirrorBody: () => {
+      const collection = openCollection(legacyDatabasePath(legacyPath), REPORTS_COLLECTION);
+      let mirror: { body: unknown; revision: number } | null = null;
+      collection.checkpointMirror((rows, revision) => {
+        mirror = { body: logFromRows(rows, `${collection.filename}#${REPORTS_COLLECTION}`), revision };
+      });
+      return mirror!;
+    },
+  };
+}
+
+/** The highest position any gateway cursor has reached, read leniently: it
+    only raises a floor, so a channel that cannot be read contributes nothing. */
+function highestKnownCursor(directory: string): number {
+  const positions: number[] = [];
+  const consider = (value: unknown) => {
+    try {
+      const channel = normalizeChannel(value, directory);
+      if (!channel) return;
+      positions.push(channel.managerReportCursor, channel.outstanding?.throughSeq ?? 0);
+    } catch { /* unreadable: no floor from it */ }
+  };
+  try {
+    const collection = channelsCollection("read");
+    if (collection) {
+      for (const row of collection.snapshot()) consider(row.v);
+      return Math.max(0, ...positions);
+    }
+  } catch { /* fall back to the files */ }
+  for (const source of listChannelSources(directory)) {
+    try { consider(JSON.parse(fs.readFileSync(source.file, "utf8"))); } catch { /* skip */ }
+  }
+  return Math.max(0, ...positions);
+}
+
+/**
+ * Import `bridge-reports.json` into SQLite now. The Viewer's activation calls
+ * this with `reconcile: true`; tests drive the helper's crash seams through
+ * `hooks`.
+ *
+ * A log that could not be read imports empty with a recorded gap, as the
+ * design prescribes for every store. For this one store that alone would
+ * restart seq at 1 below every gateway cursor, which is the permanent deafness
+ * `BridgeStateCorruptError` was written to prevent — so the empty log's seq
+ * starts at the highest cursor any channel holds, and the next report reaches
+ * every gateway.
+ */
+export function importLegacyBridgeReports(
+  legacyPath = bridgeReportLogPath(),
+  options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true },
+): LegacyImportOutcome {
+  const outcome = importLegacyCollection(bridgeReportsLegacyCollection(legacyPath), options);
+  if ((outcome.state === "imported" || outcome.state === "reimported") && outcome.record.gap) {
+    const floor = highestKnownCursor(path.dirname(legacyPath));
+    if (floor > 0) {
+      const collection = openCollection(legacyDatabasePath(legacyPath), REPORTS_COLLECTION);
+      collection.patchSync(() => {
+        const rows = collection.snapshot();
+        const log = logFromRows(rows, `${collection.filename}#${REPORTS_COLLECTION}`);
+        if (log.lastSeq >= floor) return { records: [] };
+        log.lastSeq = floor;
+        return diffRows(rows, rowsFromLog(log));
+      });
+    }
+  }
+  return outcome;
+}
+
+/* ── Import of bridge.json and bridge-channels/ ─────────────────────────── */
+
+type ChannelSource = { rowKey: string; file: string };
+type ChannelRead =
+  | { kind: "missing" | "tombstone" }
+  | { kind: "unreadable"; bytes: Buffer }
+  | { kind: "channel"; bytes: Buffer; channel: BridgeChannelV1 | null };
+
+/** `bridge.json` and every `<hash>.json` under `bridge-channels/`. The lock
+    directories the legacy writers leave (`<file>.write-lock`, `.write-locks`)
+    and tombstones do not end in `.json` as files, so they are not sources. */
+function listChannelSources(directory: string): ChannelSource[] {
+  const sources: ChannelSource[] = [{ rowKey: MANAGER_CHANNEL_ROW, file: path.join(directory, "bridge.json") }];
+  const root = path.join(directory, "bridge-channels");
+  let names: string[] = [];
+  try { names = fs.readdirSync(root); } catch { /* no scoped channel yet */ }
+  for (const name of names.sort()) {
+    const match = CHANNEL_FILE.exec(name);
+    if (match) sources.push({ rowKey: `channel:${match[1]}`, file: path.join(root, name) });
+  }
+  return sources;
+}
+
+function readChannelSource(source: ChannelSource): ChannelRead {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(source.file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+    throw new FileTransactionBusyError(`a bridge channel is unreadable for now: ${(error as Error).message}`);
+  }
+  if (stat.isDirectory()) return { kind: "tombstone" };
+  let bytes: Buffer;
+  try {
+    bytes = fs.readFileSync(source.file);
+  } catch (error) {
+    // EIO, EACCES and the like may be transient: retry later, never import empty.
+    throw new FileTransactionBusyError(`a bridge channel is unreadable for now: ${(error as Error).message}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8")) as unknown;
+  } catch {
+    return { kind: "unreadable", bytes };
+  }
+  /* Valid JSON the store cannot mean refuses the import, as it refused the read. */
+  const channel = normalizeChannel(parsed, source.file);
+  if (channel && source.rowKey !== MANAGER_CHANNEL_ROW && (
+    !channel.project || !channel.seatConversationId
+    || `channel:${bridgeChannelKey({ project: channel.project, seatConversationId: channel.seatConversationId })}` !== source.rowKey
+  )) {
+    throw new BridgeStateCorruptError(source.file, "its project or seat does not match the scoped channel path");
+  }
+  return { kind: "channel", bytes, channel };
+}
+
+function fsyncDirectory(directory: string): void {
+  const descriptor = fs.openSync(directory, "r");
+  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+}
+
+function stamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function freeName(base: string): string {
+  return fs.existsSync(base) ? `${base}-${stamp()}` : base;
+}
+
+function channelTombstone(file: string): void {
+  fs.mkdirSync(file, { recursive: true, mode: 0o700 });
+  const readme = path.join(file, TOMBSTONE_README);
+  if (!fs.existsSync(readme)) {
+    fs.writeFileSync(readme, [
+      `${path.basename(file)} moved into SQLite.`,
+      `It now lives in the "${CHANNELS_COLLECTION}" collection of state.sqlite in the state directory.`,
+      "This directory stands in its place so that an older release fails visibly instead of writing a file nothing reads.",
+      "",
+    ].join("\n"), { mode: 0o600 });
+  }
+  fsyncDirectory(path.dirname(file));
+}
+
+/** Rename a channel file to its kept copy (or aside as unreadable) and leave
+    the tombstone in its place. */
+function retireChannelFile(file: string, suffix: string): string | null {
+  let preservedAs: string | null = null;
+  try {
+    if (fs.lstatSync(file).isFile()) {
+      preservedAs = freeName(`${file}.${suffix}`);
+      fs.renameSync(file, preservedAs);
+      fsyncDirectory(path.dirname(file));
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  channelTombstone(file);
+  return preservedAs;
+}
+
+function releaseTag(directory: string): string | null {
+  try {
+    return hotStateWriterRevision(directory)?.slice(0, 12) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Import every channel once, verified, then retire each file behind a
+ * tombstone. `bridge.json` becomes the `manager` row and each scoped file its
+ * `channel:<hash>` row; the collection's import evidence digests every source
+ * by name and bytes, as the conversation-migration journal roots do (slice 7).
+ *
+ * Runs under `bridge.json`'s own write lock and the channel root's, so two
+ * importers queue and import once. A file that is not JSON at all imports as
+ * a recorded gap and is kept aside as `.unreadable-*`; valid JSON the store
+ * cannot mean refuses the import and leaves every file alone.
+ *
+ * A record that already stands with channel files beside it is the rollback
+ * window closing (or an older writer that raced it): each readable file folds
+ * in where its cursor is ahead of the row — the cursor is monotonic, so ahead
+ * is the only direction that can be news — or where no row exists, and then
+ * the tombstones return. An unreadable file there changes nothing.
+ */
+export function importLegacyBridgeChannels(
+  directory = path.dirname(bridgeChannelPath()),
+  options: { reconcile: boolean; hooks?: Pick<LegacyImportHooks, "afterCommit"> } = { reconcile: true },
+): LegacyImportOutcome {
+  assertStateMutationAllowed(directory);
+  assertStateStartupMutation(directory, `${CHANNELS_COLLECTION} import`);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const database = path.join(directory, "state.sqlite");
+  const managerFile = path.join(directory, "bridge.json");
+  const root = path.join(directory, "bridge-channels");
+  return withFileTransactionSync(managerFile, BRIDGE_CHANNEL_BUSY, () =>
+    withFileTransactionSync(root, BRIDGE_CHANNEL_BUSY, () => {
+      const sources = listChannelSources(directory).map((source) => ({ source, read: readChannelSource(source) }));
+      const held = readStateImport(database, CHANNELS_COLLECTION);
+      const tag = releaseTag(directory) ?? stamp();
+      if (held) {
+        const files = sources.filter(({ read }) => read.kind === "channel" || read.kind === "unreadable");
+        if (files.length === 0) {
+          channelTombstone(managerFile);
+          return { state: "already-imported", record: held, incident: null };
+        }
+        if (!options.reconcile) return { state: "reconcile-deferred", record: held, incident: null };
+        const collection = openCollection(database, CHANNELS_COLLECTION);
+        let folded = 0;
+        collection.patchSync(() => {
+          const records: BridgeRow[] = [];
+          for (const { source, read } of files) {
+            if (read.kind !== "channel" || !read.channel) continue;
+            const row = collection.get(source.rowKey);
+            const current = row ? normalizeChannel(row.v, source.rowKey) : null;
+            if (current && read.channel.managerReportCursor <= current.managerReportCursor) continue;
+            records.push({ k: source.rowKey, v: read.channel });
+          }
+          folded = records.length;
+          return { records };
+        }, { fenceOwner: true });
+        for (const { source, read } of files) {
+          const preservedAs = retireChannelFile(source.file, read.kind === "unreadable" ? `unreadable-${stamp()}` : `imported-${tag}`);
+          if (read.kind === "unreadable") {
+            console.error(`[state import] legacy-unreadable ${CHANNELS_COLLECTION}: ${path.basename(source.file)} reappeared unreadable `
+              + `after the import; kept as ${preservedAs ? path.basename(preservedAs) : "nothing"}, SQLite unchanged`);
+          }
+        }
+        channelTombstone(managerFile);
+        if (folded > 0) {
+          console.error(`[state import] legacy-reconciled ${CHANNELS_COLLECTION}: folded ${folded} channel(s) a rollback release or an older writer advanced`);
+        }
+        return { state: "already-imported", record: held, incident: null };
+      }
+
+      const rows: StateImportRow[] = [];
+      const unreadable: string[] = [];
+      const digest = crypto.createHash("sha256");
+      let bytes = 0;
+      let files = 0;
+      for (const { source, read } of sources) {
+        if (read.kind === "missing" || read.kind === "tombstone") continue;
+        files += 1;
+        bytes += read.bytes.length;
+        digest.update(path.basename(source.file)).update("\0").update(read.bytes);
+        if (read.kind === "unreadable") {
+          unreadable.push(path.basename(source.file));
+          continue;
+        }
+        if (read.channel) rows.push({ key: source.rowKey, value: { k: source.rowKey, v: read.channel }, controllerActive: true });
+      }
+      const { record } = importStateCollection(database, {
+        collection: CHANNELS_COLLECTION,
+        schemaVersion: 1,
+        migrationId: "bridge-channels-json-v1",
+        rows,
+        sourceName: "bridge.json+bridge-channels",
+        sourceSha256: files > 0 ? digest.digest("hex") : null,
+        sourceBytes: bytes,
+        gap: unreadable.length > 0 ? `legacy-unreadable: ${unreadable.join(", ")}` : null,
+        release: releaseTag(directory),
+      });
+      options.hooks?.afterCommit?.();
+      for (const { source, read } of sources) {
+        if (read.kind === "missing" || read.kind === "tombstone") continue;
+        const preservedAs = retireChannelFile(source.file, read.kind === "unreadable" ? `unreadable-${stamp()}` : `imported-${tag}`);
+        if (read.kind === "unreadable") {
+          console.error(`[state import] legacy-unreadable ${CHANNELS_COLLECTION}: ${path.basename(source.file)} could not be parsed; `
+            + `the channel starts unopened and the file is kept as ${preservedAs ? path.basename(preservedAs) : "nothing"}`);
+        }
+      }
+      channelTombstone(managerFile);
+      return { state: "imported", record, incident: null };
+    }));
+}
+
+/* ── Rollback mirrors (§6.4) ────────────────────────────────────────────── */
+
+/**
+ * Write every channel back as the file a rollback release reads, from one
+ * collection revision. A row's tombstone goes and its file lands durably; a
+ * `bridge.json` the collection holds nothing for is left empty rather than
+ * tombstoned, because an install that never opened the unscoped channel is what
+ * the rollback release must find. The fold-back compares cursors row by row, so
+ * the mirror records its revision and no digest.
+ */
+export function checkpointBridgeChannelsRollbackMirrorForDemotion(directory = path.dirname(bridgeChannelPath())): void {
+  const database = path.join(directory, "state.sqlite");
+  if (!readStateImport(database, CHANNELS_COLLECTION)) return;
+  assertStateMutationAllowed(directory);
+  const managerFile = path.join(directory, "bridge.json");
+  const root = path.join(directory, "bridge-channels");
+  withFileTransactionSync(managerFile, BRIDGE_CHANNEL_BUSY, () =>
+    withFileTransactionSync(root, BRIDGE_CHANNEL_BUSY, () => {
+      const collection = openCollection(database, CHANNELS_COLLECTION);
+      const clear = (file: string) => {
+        try { if (fs.lstatSync(file).isDirectory()) fs.rmSync(file, { recursive: true, force: true }); }
+        catch { /* nothing at the path */ }
+      };
+      const revision = collection.checkpointMirrorForDemotion((rows) => {
+        clear(managerFile);
+        for (const row of rows) {
+          const file = channelFileFor(directory, row.k);
+          clear(file);
+          writeJsonDurably(file, row.v);
+        }
+      });
+      recordStateImportMirror(database, CHANNELS_COLLECTION, null, revision);
+    }));
+}
+
+/** Write `bridge-reports.json` from SQLite for a rollback release that predates #1870. */
+export function checkpointBridgeReportsRollbackMirrorForDemotion(legacyPath = bridgeReportLogPath()): void {
+  writeLegacyRollbackMirror(bridgeReportsLegacyCollection(legacyPath));
+}
+
+/** Both bridge mirrors, for the demotion checkpoint. */
+export function checkpointBridgeRollbackMirrorsForDemotion(directory = path.dirname(bridgeReportLogPath())): void {
+  checkpointBridgeReportsRollbackMirrorForDemotion(path.join(directory, "bridge-reports.json"));
+  checkpointBridgeChannelsRollbackMirrorForDemotion(directory);
 }
