@@ -160,7 +160,8 @@ export function groupHideState(
     }
   }
   for (const pipeline of inputs.pipelines) {
-    if (!pipeline.taskIds.includes(task.id) || pipeline.state !== "needs_decision") continue;
+    /* #1938: a lane parked on an unreviewed head asks for the operator too. */
+    if (!pipeline.taskIds.includes(task.id) || (pipeline.state !== "needs_decision" && pipeline.state !== "needs_review")) continue;
     const moved = laneMovedAt(pipeline);
     const dismissed = parse(pipeline.dismissedAt);
     if (moved > hiddenAt && !(moved <= dismissed)) {

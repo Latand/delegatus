@@ -201,3 +201,12 @@ test("a hidden group that holds the project's seat conversation renders shown, w
   expect(groupHideState(hiddenTask(), { members: [], pipelines: [], seat: { conversationIds: ["conversation_other"], paths: [] } })).toMatchObject({ hidden: true });
   expect(groupHideState(hiddenTask(), { members: [], pipelines: [], seat: null })).toMatchObject({ hidden: true });
 });
+
+/* #1938: a lane that parks on an unreviewed head after the hide asks for the
+   operator as a decision lane does, so the hidden group comes back. */
+test("a hidden group comes back when its pipeline parks in needs_review after the hide (#1938)", () => {
+  expect(groupHideState(hiddenTask(), { members: [], pipelines: [pipeline("needs_review", ["2026-09-14T11:30:00.000Z"])] }))
+    .toEqual({ hidden: false, resurfaced: { kind: "pipeline-decision", pipelineId: "pipeline-a", at: "2026-09-14T11:30:00.000Z" } });
+  expect(groupHideState(hiddenTask(), { members: [], pipelines: [pipeline("needs_review", ["2026-09-14T10:40:00.000Z"])] }))
+    .toEqual({ hidden: true, since: HIDDEN_AT });
+});
