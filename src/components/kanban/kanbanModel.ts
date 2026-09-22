@@ -187,7 +187,7 @@ export interface KanbanModelInput {
   now: number;
 }
 
-const ACTIVE_PIPELINE_STATES = new Set(["provisioning", "running", "needs_decision", "paused"]);
+const ACTIVE_PIPELINE_STATES = new Set(["provisioning", "running", "needs_decision", "needs_review", "paused"]);
 /** A stage with an attempt in flight right now. `pending` is not started,
     `passed`/`failed`/`skipped` are over. */
 const IN_FLIGHT_STAGES: ReadonlySet<StageChipState> = new Set(["running", "reviewing", "committing"]);
@@ -433,7 +433,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       .sort((a, b) => pipelineWorkAt(b) - pipelineWorkAt(a) || a.id.localeCompare(b.id))
       .map((pipeline) => summarizePipeline(pipeline, flowsById));
     const provisioning = summaries.filter((summary) => summary.pipeline.state === "provisioning").length;
-    const pipelineNeeds = summaries.some((summary) => summary.pipeline.state === "needs_decision");
+    const pipelineNeeds = summaries.some((summary) => summary.pipeline.state === "needs_decision" || summary.pipeline.state === "needs_review");
     const working = members.filter((member) => member.working).length;
     const needsYou = pipelineNeeds || members.some((member) => member.needsYou);
     const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));

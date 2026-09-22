@@ -9,7 +9,7 @@ import { Bot } from "lucide-react";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
-import { stageCardLabel, stageLatestAttemptPlace } from "../pipelines/pipelineModel";
+import { pipelineReviewHeads, stageCardLabel, stageLatestAttemptPlace } from "../pipelines/pipelineModel";
 import { formatResetClock } from "../rateLimit";
 import { clockDuration, humanizeDuration } from "../turnDuration";
 
@@ -252,6 +252,7 @@ export function MobilePipelineQueueRow({ row, onOpen }: { row: MobileBoardPipeli
        it twice would leave the row without the fact that put it here. */
     t(row.stageFailed ? "mobile2.board.pipelineStageFailed" : "mobile2.board.pipelineStage", { stage: row.stage, total: row.total, name: stageName }),
     row.findings ? t("mobile2.board.pipelineFindings", { count: row.findings }) : null,
+    pipelineReviewHeads(t, row.review),
   ].filter(Boolean).join(" · ");
   const Tag = onOpen ? "button" : "div";
   return (
@@ -260,7 +261,7 @@ export function MobilePipelineQueueRow({ row, onOpen }: { row: MobileBoardPipeli
       data-mobile2-row="pipeline"
       data-mobile2-go={onOpen ? "pipeline" : undefined}
       data-mobile2-pipeline-row={row.id}
-      data-mobile2-state="needs_decision"
+      data-mobile2-state={row.review ? "needs_review" : "needs_decision"}
       className={`${CARD} min-h-14 ${EDGE.warning}`}
     >
       {/* The hidden dot keeps this row's title on the same line as every other
@@ -283,7 +284,7 @@ export function MobilePipelineQueueRow({ row, onOpen }: { row: MobileBoardPipeli
           )}
         </span>
       </span>
-      <Badge tone="warning">{t("mobile2.board.badgeDecision")}</Badge>
+      <Badge tone="warning">{t(row.review ? "mobile2.pipelines.badgeReview" : "mobile2.board.badgeDecision")}</Badge>
     </Tag>
   );
 }

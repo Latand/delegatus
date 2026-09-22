@@ -1,5 +1,6 @@
 import type { Pipeline, PipelineEdgeKind, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { latestAttempt, stageFailEdgeRoundsUsed, stagePromptExtra, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { failEdgeMaxRounds } from "@/lib/pipelines/failEdgeBudget";
 
 import { graphOrder, operationalAttempts, type StageView } from "./pipelineGraph";
 
@@ -58,7 +59,7 @@ export function paneFacts(pipeline: Pipeline, stage: PipelineStage, shown: Pipel
     startedBy: shown?.activatedBy ? { stageId: shown.activatedBy.stageId, edge: shown.activatedBy.edge } : null,
     runsAfter: shown ? null : pipeline.stages.find((candidate) => candidate.next === stage.id)?.id ?? null,
     nextAttempt: view?.again && shown === latest ? view.previous : null,
-    onFail: stage.onFail ? { to: stage.onFail.to, fired: stageFailEdgeRoundsUsed(pipeline, stage), max: stage.onFail.maxRounds } : null,
+    onFail: stage.onFail ? { to: stage.onFail.to, fired: stageFailEdgeRoundsUsed(pipeline, stage), max: failEdgeMaxRounds(pipeline, stage) } : null,
   };
 }
 
