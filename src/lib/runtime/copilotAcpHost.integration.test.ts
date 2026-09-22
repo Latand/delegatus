@@ -395,3 +395,135 @@ describe.skipIf(!BIN)("Copilot CLI over ACP through the structured spawn path (B
     }
   }, 180_000);
 });
+
+/*
+ * The same Viewer path against a REAL Copilot login and the account's own
+ * model (`auto`), no stub provider. Gated separately on LLV_COPILOT_REAL_HOME,
+ * the managed account home to launch in, because every turn spends the
+ * account's plan allowance (about five premium requests per run). The Viewer's
+ * registry and journal stay in a throw-away directory; the transcript lands in
+ * the account's own `session-state`, as it would from the Viewer.
+ */
+const REAL_HOME = process.env.LLV_COPILOT_REAL_HOME?.trim() ?? "";
+
+describe.skipIf(!BIN || !REAL_HOME)("Copilot CLI over ACP through the structured spawn path (real login)", () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-copilot-real-"));
+  const hosts: CopilotAcpHost[] = [];
+  afterAll(async () => {
+    for (const host of hosts) await host.release().catch(() => {});
+    await bindStructuredDeliveryQueue([]);
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  test("spawn, tool turn, interrupt-and-resend, resume and render on a real account", async () => {
+    const cwd = path.join(sandbox, "work");
+    fs.mkdirSync(cwd, { recursive: true });
+    const mcpStub = path.join(sandbox, "mcp-stub.cjs");
+    fs.writeFileSync(mcpStub, MCP_STUB);
+    const mcpReport = path.join(sandbox, "mcp-report.json");
+    const viewerMcpServer = { command: process.execPath, args: [mcpStub], env: { STUB_REPORT: mcpReport } };
+    const account: AccountContext = {
+      engine: "copilot", accountId: "copilot-real", kind: "managed", home: REAL_HOME,
+      transcriptRoot: path.join(REAL_HOME, "session-state"), env: { ...process.env, LLV_COPILOT_BIN: BIN },
+    };
+    const registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const journal = new RuntimeJournal(path.join(sandbox, "runtime.sqlite"), { structuredHosts: true });
+    const client = runtimeClient(journal);
+    const started: CopilotAcpHost[] = [];
+    const startHost = async (input: StructuredSpawnInput, capability: string) => {
+      const host = await startCopilotStructuredHost(input, capability, { binary: BIN, viewerMcpServer });
+      hosts.push(host);
+      started.push(host);
+      return host;
+    };
+    const receipt = (operationId: string) => journal.operationResult(operationId)?.receipt;
+    const recover = (request: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(request, {
+      registry, client, transport: () => "structured", resolveAccount: () => account,
+      spawn: (input) => spawnStructuredConversation(input, { startHost }),
+      requestDeliveryDrain: () => kickStructuredDeliveryQueue(),
+    });
+    await bindStructuredDeliveryQueue([], { registry, client, recover });
+    const send = async (conversationId: string, artifactPath: string, text: string, policy: "queue" | "interrupt-active") => {
+      const operationId = `op-${crypto.randomUUID()}`;
+      const admitted = await enqueueStructuredMessage({ path: artifactPath, conversationId, clientMessageId: operationId, operationId, text, policy },
+        { enabled: () => true, client: () => client, registry: () => registry, kick: kickStructuredDeliveryQueue });
+      expect(admitted?.ok).toBe(true);
+      return operationId;
+    };
+    const settled = (operationId: string) => until(() => receipt(operationId), (value) => value?.status === "delivered" || value?.status === "failed" || value?.status === "uncertain", `receipt ${operationId}`, 120_000);
+    const idle = (host: CopilotAcpHost, what: string) => until(() => host.health(), (state) => state.status === "idle", what, 180_000);
+    const lastAssistant = (file: string) => String(transcriptRecords(file).filter((line) => line.type === "assistant.message" && String(line.data.content ?? "").trim()).at(-1)?.data.content ?? "");
+    const log = (step: string, detail: unknown) => console.info(`[copilot real] ${step}`, JSON.stringify(detail));
+
+    try {
+      /* 1: spawn on the account's own model. */
+      const spec = freshSpecFor("copilot", cwd, { model: "auto", title: "Copilot real-login check", mcpServers: ["viewer"] });
+      const begun = beginLegacySpawnFixture(registry, { engine: "copilot", cwd, transport: "structured", accountId: account.accountId, launchProfile: spec.launchProfile });
+      if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+      const spawned = await spawnStructuredConversation({ engine: "copilot", receipt: begun.receipt, spec, account, "prompt": "Reply with only the word READY.", registry, client }, { startHost });
+      expect(spawned).toMatchObject({ state: "settled" });
+      const host = started[0]!;
+      const artifactPath = host.identity.path;
+      const conversationId = registry.conversationForPath(artifactPath)!.id;
+      await idle(host, "the first turn");
+      log("spawn", { cli: (await host.health()).protocolVersion, reply: lastAssistant(artifactPath), mcpCapability: JSON.parse(fs.readFileSync(mcpReport, "utf8")) });
+      expect(lastAssistant(artifactPath).toUpperCase()).toContain("READY");
+      expect(JSON.parse(fs.readFileSync(mcpReport, "utf8"))).toEqual({ capability: true });
+
+      /* 2: a tool turn under the bypass profile's --allow-all. */
+      const toolOp = await send(conversationId, artifactPath, "Run the shell command `echo copilot-real-run` and reply with its exact output only.", "queue");
+      expect(await settled(toolOp)).toMatchObject({ status: "delivered" });
+      await idle(host, "the tool turn");
+      const tools = transcriptRecords(artifactPath).filter((line) => line.type === "tool.execution_complete");
+      log("tool", { tools: tools.length, reply: lastAssistant(artifactPath) });
+      expect(tools.length).toBeGreaterThan(0);
+      expect(lastAssistant(artifactPath)).toContain("copilot-real-run");
+
+      /* 3: interrupt-and-resend while the model is still writing a long answer. */
+      const deltas: number[] = [];
+      const stream = host.attach((await host.health()).eventCursor)[Symbol.asyncIterator]();
+      void (async () => { for (;;) { const next = await stream.next(); if (next.done) return; if (next.value.kind === "delta") deltas.push(performance.now()); } })();
+      const longOp = await send(conversationId, artifactPath, "Write the numbers from 1 to 400, one per line, each followed by the number in English words. Output nothing else.", "queue");
+      expect(await settled(longOp)).toMatchObject({ status: "delivered" });
+      const longTurn = receipt(longOp)!.turnId!;
+      await until(() => deltas.length, (count) => count > 0, "the long answer to start streaming", 120_000);
+      await Bun.sleep(2_000);
+      expect((await host.health()).activeTurnRef).toBe(longTurn);
+      const sentAt = performance.now();
+      const resendOp = await send(conversationId, artifactPath, "Stop that. Reply with only the word CHANGED.", "interrupt-active");
+      const resent = await settled(resendOp);
+      log("interrupt-and-resend", { receipt: { status: resent?.status, delivery: resent?.delivery, interruptedTurnId: resent?.interruptedTurnId === longTurn }, receiptMs: Math.round(performance.now() - sentAt) });
+      expect(resent).toMatchObject({ status: "delivered", delivery: "interrupt-then-turn-started", interruptedTurnId: longTurn });
+      await idle(host, "the resent turn");
+      const types = transcriptRecords(artifactPath).map((line) => `${line.type}:${String(line.data.reason ?? line.data.content ?? "")}`);
+      const abortAt = types.lastIndexOf("abort:user_initiated");
+      expect(abortAt).toBeGreaterThan(-1);
+      expect(types.indexOf("user.message:Stop that. Reply with only the word CHANGED.")).toBeGreaterThan(abortAt);
+      expect(types.filter((line) => line === "user.message:Stop that. Reply with only the word CHANGED.")).toHaveLength(1);
+      log("resent reply", { reply: lastAssistant(artifactPath) });
+      expect(lastAssistant(artifactPath).toUpperCase()).toContain("CHANGED");
+
+      /* 4: resume in a new child through the Viewer's recovery. */
+      await host.release();
+      await until(() => registry.readOnlySnapshot().entries[`copilot:${host.identity.sessionId}`]?.status, (status) => status === "unhosted" || status === "dead", "the released row");
+      expect(await recover({ path: artifactPath, conversationId })).toMatchObject({ conversationId, spawned: true });
+      const resumed = started.at(-1)!;
+      expect(resumed.identity.sessionId).toBe(host.identity.sessionId);
+      const againOp = await send(conversationId, artifactPath, "Reply with only the word AGAIN.", "queue");
+      expect(await settled(againOp)).toMatchObject({ status: "delivered" });
+      await idle(resumed, "the resumed turn");
+      log("resume", { resumedSameSession: true, reply: lastAssistant(artifactPath), resumeRecord: transcriptRecords(artifactPath).some((line) => line.type === "session.resume") });
+      expect(lastAssistant(artifactPath).toUpperCase()).toContain("AGAIN");
+
+      /* 5: the transcript renders in the feed. */
+      const described = describeTranscript("copilot-sessions", path.join(REAL_HOME, "session-state"), artifactPath, fs.statSync(artifactPath));
+      expect(described).toMatchObject({ engine: "copilot", fmt: "copilot", cwd });
+      const items = buildFeed({ path: artifactPath, engine: "copilot", fmt: "copilot", activity: "recent" } as FileEntry, fs.readFileSync(artifactPath, "utf8").split("\n").filter(Boolean), false, "").items;
+      log("feed", { kinds: [...new Set(items.map((item: Item) => item.kind))] });
+      expect(items.some((item: Item) => item.kind === "note")).toBe(true);
+      await resumed.release();
+    } finally {
+      journal.close();
+    }
+  }, 900_000);
+});
