@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, KeyRound, Lock } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { TranscribeBackend, TranscribeBackendInfo, TranscribeBackendOption } from "@/lib/transcribeBackend";
@@ -97,7 +97,10 @@ function KeyArea({ provider, option, note, onSaved, onNote }: {
   onNote: (note: KeyNote | null) => void;
 }) {
   const { t } = useLocale();
-  const [draft, setDraft] = useState("");
+  /* Uncontrolled on purpose: the key lives in the field until it is sent,
+     never in component state, and the field is emptied once the server has it. */
+  const fieldRef = useRef<HTMLInputElement>(null);
+  const [filled, setFilled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [replacing, setReplacing] = useState(false);
   const source = option?.keySource ?? null;
@@ -107,7 +110,7 @@ function KeyArea({ provider, option, note, onSaved, onNote }: {
   }
 
   const save = async () => {
-    const key = draft.trim();
+    const key = fieldRef.current?.value.trim() ?? "";
     if (!key || saving) return;
     setSaving(true);
     onNote(null);
@@ -122,8 +125,8 @@ function KeyArea({ provider, option, note, onSaved, onNote }: {
         return;
       }
       const body: unknown = await response.json();
-      /* The field is emptied the moment the server has the key. */
-      setDraft("");
+      if (fieldRef.current) fieldRef.current.value = "";
+      setFilled(false);
       setReplacing(false);
       onNote({ provider, kind: "saved" });
       if (isInfo(body)) onSaved(body);
@@ -169,9 +172,9 @@ function KeyArea({ provider, option, note, onSaved, onNote }: {
             type="password"
             autoComplete="off"
             spellCheck={false}
-            value={draft}
+            ref={fieldRef}
             placeholder={t("onboarding.voice.keyPlaceholder")}
-            onChange={(event) => setDraft(event.currentTarget.value)}
+            onChange={(event) => setFilled(event.currentTarget.value.trim().length > 0)}
             className="h-8 min-w-0 flex-1 rounded-[8px] border border-border bg-canvas px-2.5 text-ui text-primary placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:text-[16px]"
           />
         </label>
@@ -179,7 +182,7 @@ function KeyArea({ provider, option, note, onSaved, onNote }: {
           type="button"
           data-voice-key-save=""
           onClick={() => void save()}
-          disabled={!draft.trim() || saving}
+          disabled={!filled || saving}
           className="inline-flex h-8 shrink-0 items-center justify-center rounded-[8px] border border-border bg-card px-3 text-ui font-semibold text-primary hover:bg-sunken disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11"
         >
           {t("onboarding.voice.keySave")}
