@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 
 import { captureSelectedContext, type SelectedContextRef } from "@/lib/selection/selectedContext";
 
-import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText";
+import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
+import { encodeCodexStructuredUserText } from "./codexStructuredUserText.legacy.fixture";
 
 /**
  * The canonical structured-user record's marker line (#844 §persistence). The

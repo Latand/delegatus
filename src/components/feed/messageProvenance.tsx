@@ -9,6 +9,7 @@ import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 import { assignDeliveredOccurrences, candidateDigests, occurrenceCandidate } from "./deliveredOccurrences";
 import type { FeedEntry, Item } from "./parse";
 import { BoundedLru } from "./scrollMemory";
+import { useStructuredUserProvenance } from "./structuredUserProvenance";
 
 /**
  * Delivery-evidence provenance for the feed (#1117): a delivered Claude
@@ -378,6 +379,7 @@ export function useDeliveredMessageProvenance(
   items: readonly FeedEntry[],
   pending: readonly string[] = NO_PENDING,
 ): ProvenanceLookup {
+  const structuredForItem = useStructuredUserProvenance(items);
   const pendingKey = pending.join("\n");
   const wanted = useMemo<WantedEvidence>(
     () => (path ? wantedEvidence(items, pending) : { drivers: [], candidates: [], pending: NO_PENDING }),
@@ -493,8 +495,12 @@ export function useDeliveredMessageProvenance(
     return parts.join("\n");
   }, [assignment]);
   return useMemo(
-    () => lookupFor(data, assignment, resolving, settledMessages),
+    () => {
+      const lookup = lookupFor(data, assignment, resolving, settledMessages);
+      return { ...lookup, forItem: (item: Item) => item.structuredUserRef
+        ? structuredForItem(item) : lookup.forItem(item) };
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the assignment's CONTENT (assignmentKey) and the submissions it can resolve; a same-content map keeps the lookup
-    [data, assignmentKey, submissionsKey, resolving, settledMessages],
+    [data, assignmentKey, submissionsKey, resolving, settledMessages, structuredForItem],
   );
 }

@@ -5,7 +5,8 @@ import path from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText";
+import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
+import { decodeCodexStructuredUserText as decodeWire } from "./codexStructuredUserText";
 
 /**
  * The real installed Codex app-server, with NO credentials at all (#1560).
@@ -169,7 +170,8 @@ test.skipIf(!installed)(
       let ours: RolloutRecord | undefined;
       while (Date.now() < deadline) {
         records = fs.existsSync(thread!.path!) ? readRollout(thread!.path!) : [];
-        ours = records.find((record) => record.payload?.content?.some((part) => part.text?.includes(dedup)));
+        ours = records.find((record) => record.payload?.content?.some((part) =>
+          typeof part.text === "string" && decodeWire(part.text).deliveryDedup === dedup));
         if (ours) break;
         await Bun.sleep(100);
       }
@@ -180,6 +182,8 @@ test.skipIf(!installed)(
       expect(ours!.payload?.type).toBe("message");
       expect(ours!.payload?.role).toBe("user");
       expect(ours!.payload?.content?.[0]?.type).toBe("input_text");
+      expect(ours!.payload?.content?.[0]?.text).toBe(wire);
+      expect(wire.split("\n")[0]!.length).toBeLessThanOrEqual(96);
 
       /* And it round-trips through the Viewer's own decoder, so the marker the
          dedup check looks for survives the engine verbatim. */
