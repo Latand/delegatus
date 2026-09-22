@@ -422,7 +422,7 @@ function RailHeaderMenu() {
             <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{pushLabel}</span>
             <PushBell onStatus={onPushStatus} />
           </div>
-          {/* #1876: the setup guide and its agent mapping, reachable again. */}
+          {/* #1876: the setup guide, its agent mapping and dictation, reachable again. */}
           <div className="my-1 border-t border-border" />
           <button
             type="button"
@@ -439,6 +439,14 @@ function RailHeaderMenu() {
             onClick={() => { setOpen(false); openOnboarding("mapping"); }}
           >
             {t("onboarding.menu.mapping")}
+          </button>
+          <button
+            type="button"
+            data-rail-menu-dictation=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { setOpen(false); openOnboarding("voice"); }}
+          >
+            {t("onboarding.menu.voice")}
           </button>
         </div>
       ) : null}

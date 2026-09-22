@@ -25,6 +25,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
 import { ProcessStatusControls } from "../TaskHeader";
+import { useOrchestratorDraftPrefill, useOrchestratorDraftReveal } from "./draftPrefill";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { OrchestratorConversation } from "./OrchestratorConversation";
@@ -191,6 +192,8 @@ export function OrchestratorPanel({
     initialModel: ORCHESTRATOR_SPAWN_CONFIG.model,
     initialEffort: ORCHESTRATOR_SPAWN_CONFIG.effort,
   });
+  /* The setup guide's tour opens this draft prefilled (#1876 slice 3). */
+  useOrchestratorDraftPrefill(project, launch);
 
   const setMandate = (value: string) => {
     setMandateState(value);
@@ -678,6 +681,7 @@ export function OrchestratorPanel({
       ) : (
         <OrchestratorDraft
           mode="create"
+          project={project}
           state={state}
           mandate={mandate}
           edited={mandate !== ORCHESTRATOR_SYSTEM_PROMPT}
@@ -825,6 +829,7 @@ function RotateDraft({
  */
 function OrchestratorDraft({
   mode,
+  project,
   state,
   mandate,
   edited,
@@ -842,6 +847,8 @@ function OrchestratorDraft({
   onCancel,
 }: {
   mode: "create" | "rotate";
+  /** Set on the create draft: the setup guide's hand-off reveals its launch choices. */
+  project?: string;
   state: Extract<OrchestratorPanelState, { kind: "draft" } | { kind: "intent-error" }>;
   mandate: string;
   /** The text differs from what the draft started with — the built-in default,
@@ -884,6 +891,8 @@ function OrchestratorDraft({
      already true when the designation fails, the effect never re-runs, and the
      text the error is about stays behind a click. */
   const rules = useRef<HTMLDetailsElement>(null);
+  const launchChoices = useRef<HTMLDivElement>(null);
+  useOrchestratorDraftReveal(project ?? "", launchChoices);
   useEffect(() => {
     if (edited && rules.current) rules.current.open = true;
   }, [edited]);
@@ -958,7 +967,7 @@ function OrchestratorDraft({
           {t(viewerMcpRegistered ? "orchPanel.viewerMcpRegistered" : "orchPanel.viewerMcpMissing")}
         </p>
 
-        <div className="shrink-0">
+        <div ref={launchChoices} className="shrink-0" data-orchestrator-launch-choices>
           <AgentLaunchControls draft={launch} disabled={submitting} stacked />
         </div>
 

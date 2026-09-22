@@ -144,6 +144,14 @@ export interface KanbanSeatState {
   togglePlacement(): void;
 }
 
+/** Expand a project's seat, for a surface that hands the operator to its
+    create draft (the setup guide's tour, #1876 slice 3). */
+export function expandKanbanSeat(project: string): void {
+  if (typeof window === "undefined") return;
+  const current = read();
+  write({ ...current, collapsed: { ...current.collapsed, [project]: false } });
+}
+
 export function useKanbanSeat(project: string): KanbanSeatState {
   const record = useSyncExternalStore(subscribe, read, serverSnapshot);
   const windowHeight = typeof window === "undefined" ? 900 : window.innerHeight;

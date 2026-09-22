@@ -27,6 +27,7 @@ import {
   seatRequestSettled,
   type SeatSubmitFailure,
 } from "../orchestrator/seatState";
+import { onOrchestratorDraftRequest, takePendingSeatOpen } from "../orchestrator/draftPrefill";
 import { useOrchestratorIncumbent, type OrchestratorIncumbentRead } from "../orchestrator/useOrchestratorIncumbent";
 import { useOrchestratorSeat, type OrchestratorSeatRead } from "../orchestrator/useOrchestratorSeat";
 import { useSeatConfirm } from "../orchestrator/useSeatConfirm";
@@ -179,6 +180,20 @@ export function MobileSeatCard({
     setArm(null);
     nav.closeSheet();
   }, [nav]);
+  /* The setup guide's tour asks for this project's seat (#1876 slice 3): the
+     request may land before this card mounts with the project's board. */
+  useEffect(() => {
+    /* A prefill opens the create draft, as the board's invitation does; a
+       project that already has a seat opens the seat. */
+    const open = (opens: ReturnType<typeof takePendingSeatOpen>) => {
+      if (opens === "draft") openSheet("rotate", { handoff: true, from: null });
+      else if (opens === "seat") openSheet("seat", { handoff: false, from: null });
+    };
+    open(takePendingSeatOpen(project));
+    return onOrchestratorDraftRequest((request) => {
+      if (request.project === project) open(takePendingSeatOpen(project));
+    });
+  }, [project, openSheet]);
   useEffect(() => {
     /* A back gesture, or another surface opening its own sheet, took this one
        down without going through `closeSheet`. The arming goes with it. */

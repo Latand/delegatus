@@ -66,8 +66,20 @@ test("the health result round-trips, and every unusable shape reads as none at a
 
 test("patches are validated and applied", () => {
   expect(parseOnboardingPatch({ completed: true, steps: { agents: "done" } })).toEqual({ completed: true, steps: { agents: "done" } });
-  expect(parseOnboardingPatch({ steps: { phone: "done" } })).toBe("unknown step: phone");
+  expect(parseOnboardingPatch({ steps: { welcome: "done" } })).toBe("unknown step: welcome");
   expect(parseOnboardingPatch({ dismissed: false })).toBe("dismissed must be true");
   expect(parseOnboardingPatch({ extra: 1 })).toBe("unknown field: extra");
   expect(applyOnboardingPatch(null, { dismissed: true }, NOW)).toMatchObject({ dismissedAt: NOW, completedAt: null });
+});
+
+test("slice 3: the six step ids round-trip, and a marker written with three reads the new ids as not visited", () => {
+  const file = path.join(sandbox, "six-steps.json");
+  const patch = parseOnboardingPatch({ steps: { engines: "done", agents: "done", phone: "skipped", voice: "done", tour: "done", check: null } });
+  expect(typeof patch).toBe("object");
+  writeOnboardingMarker(applyOnboardingPatch(null, patch as Exclude<typeof patch, string>, NOW), file);
+  expect(readOnboardingMarker(file)?.steps).toEqual({ engines: "done", agents: "done", phone: "skipped", voice: "done", tour: "done", check: null });
+
+  const old = path.join(sandbox, "three-steps.json");
+  fs.writeFileSync(old, JSON.stringify({ schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: { engines: "done", agents: "done", check: null }, lastHealth: null }));
+  expect(readOnboardingMarker(old)?.steps).toEqual({ engines: "done", agents: "done", phone: null, voice: null, tour: null, check: null });
 });

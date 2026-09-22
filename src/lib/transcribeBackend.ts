@@ -33,11 +33,46 @@ export function resolveTranscribeBackend(): TranscribeBackend {
   return "local";
 }
 
+/** Write a config file at mode 600 through a temp file and a rename, so a
+    reader never sees half of it and an older, wider file keeps no mode. */
+function writePrivateConfigFile(file: string, content: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
+  try {
+    fs.writeFileSync(temp, content, { mode: 0o600 });
+    fs.chmodSync(temp, 0o600);
+    fs.renameSync(temp, file);
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
+}
+
 /** Persists the mic-menu choice; the env override, when set, still wins. */
 export function writeTranscribeBackend(backend: TranscribeBackend): void {
-  const file = configFilePath("transcribe-backend");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, backend + "\n");
+  writePrivateConfigFile(configFilePath("transcribe-backend"), backend + "\n");
+}
+
+export type LiveTranscribeProvider = "elevenlabs" | "soniox";
+
+export const LIVE_KEY_ENV: Record<LiveTranscribeProvider, string> = {
+  elevenlabs: "ELEVENLABS_API_KEY",
+  soniox: "SONIOX_API_KEY",
+};
+
+/** Where a live provider's key comes from right now: the variable wins over
+    the file, exactly as the readers below resolve it. */
+export function liveKeySource(provider: LiveTranscribeProvider): "env" | "file" | null {
+  if (process.env[LIVE_KEY_ENV[provider]]?.trim()) return "env";
+  return (provider === "soniox" ? readSonioxApiKey() : readElevenLabsApiKey()) ? "file" : null;
+}
+
+/**
+ * Write a live provider's key to the file its reader reads on every request
+ * (#2004): mode 600, never logged, never read back by any route. The caller
+ * has already refused a key the environment supplies.
+ */
+export function writeTranscribeKey(provider: LiveTranscribeProvider, key: string): void {
+  writePrivateConfigFile(configFilePath(`${provider}-api-key`), key + "\n");
 }
 
 export interface TranscribeBackendOption {
@@ -46,6 +81,9 @@ export interface TranscribeBackendOption {
   available: boolean;
   /** Where the missing credential must go — shown copyable in the key popup. */
   keyPath: string;
+  /** For the live backends: whether the key comes from the environment or
+      the file, or is absent. Never the key itself. */
+  keySource?: "env" | "file" | null;
 }
 
 export interface TranscribeBackendInfo {
@@ -63,8 +101,8 @@ export function transcribeBackendInfo(): TranscribeBackendInfo {
     options: [
       { id: "local", available: localWhisperReady(), keyPath: whisperPythonPath() },
       { id: "chatgpt", available: readCodexAuth() !== null, keyPath: codexAuthPath() },
-      { id: "elevenlabs", available: readElevenLabsApiKey() !== null, keyPath: configFilePath("elevenlabs-api-key") },
-      { id: "soniox", available: readSonioxApiKey() !== null, keyPath: configFilePath("soniox-api-key") },
+      { id: "elevenlabs", available: readElevenLabsApiKey() !== null, keyPath: configFilePath("elevenlabs-api-key"), keySource: liveKeySource("elevenlabs") },
+      { id: "soniox", available: readSonioxApiKey() !== null, keyPath: configFilePath("soniox-api-key"), keySource: liveKeySource("soniox") },
     ],
   };
 }

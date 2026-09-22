@@ -34,6 +34,7 @@ import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
 import { VoiceComposerHost } from "./voice/VoiceComposerHost";
 import { VoicePipHost } from "./voice/VoicePipHost";
 import { focusHandoffBus } from "./attention/focusHandoffBus";
+import { expandKanbanSeat } from "./kanban/kanbanSeatStore";
 import { ConnectionPill } from "./ConnectionPill";
 import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows";
 import { KeepAwakeProvider } from "./KeepAwakeControl";
@@ -42,6 +43,7 @@ import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { getMobileNav } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import type { MobileShellHost } from "./mobile/MobileShell";
+import { onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
 import { OverviewBoard } from "./OverviewBoard";
 import { BarIslandProvider } from "./ProjectBar";
@@ -198,6 +200,13 @@ export function Viewer() {
   useAgentChimes(files, requestScope, scopeCertified);
   const { archivedProjects, archiveProject, unarchiveProject } = useArchivedProjects(files, projectAliases);
   const catalogProjects = useMemo(() => new Set(projectCatalog.map((entry) => entry.project)), [projectCatalog]);
+  /* The setup guide's tour offers the projects the rail lists, the most
+     recently active first; archived ones are left out (#1876 slice 3). */
+  const tourProjects = useMemo(() => projectCatalog
+    .filter((entry) => !archivedProjects.has(entry.project))
+    .sort((a, b) => b.smt - a.smt)
+    .map((entry) => ({ project: entry.project, name: projectDisplayName(entry.project, projectDisplayNames[entry.project] ?? entry.displayName) })),
+  [projectCatalog, archivedProjects, projectDisplayNames]);
   const catalogConversationCounts = useMemo(
     () => new Map(projectCatalog.map((entry) => [entry.project, entry.conversations])),
     [projectCatalog],
@@ -408,6 +417,18 @@ export function Viewer() {
       return next;
     });
   }, [project]);
+
+  /* The setup guide's tour hands the operator to a project's orchestrator
+     draft (#1876 slice 3): open the project and its seat. The draft itself
+     takes the prefill; the phone's seat card opens its own sheet. */
+  useEffect(() => onOrchestratorDraftRequest((request) => {
+    selectProject(request.project);
+    if (isMobile) return;
+    expandKanbanSeat(request.project);
+    rememberDockOpen(request.project, true);
+    setOrchestratorOpenProject(request.project);
+    setOrchestratorOpen(true);
+  }), [isMobile, selectProject]);
 
   /* The whole rail goes away behind one control (issue #1819): while a stream
      is watching, no project name, count, limit or account name may be on the
@@ -1201,7 +1222,7 @@ export function Viewer() {
       <ArtifactPreviewHost mobile={isMobile} />
       {/* #1876: the setup guide. Opens by itself on a first run and from the
           menus' "Setup guide" and "Agent mapping" rows. */}
-      <OnboardingHost />
+      <OnboardingHost projects={tourProjects} currentProject={project === OVERVIEW ? null : project} />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card
           because the card unmounts on board navigation while the call keeps

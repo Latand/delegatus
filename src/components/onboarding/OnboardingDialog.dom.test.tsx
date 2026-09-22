@@ -39,6 +39,8 @@ Object.assign(globalThis, {
   fetch: (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.includes("/api/roles")) return json({ schemaVersion: 2, roles: [] });
+    if (url.includes("/api/transcribe/backend")) return json({ backend: "local", lockedByEnv: false, options: [] });
+    if (url.includes("/api/access")) return json({ tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: 8898, servingPort: null, persisted: false }, phoneError: null });
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
   },
 });
@@ -116,6 +118,48 @@ test("an engine whose command is missing reads Not installed even with a credent
   expect(codex.textContent).toContain("Not installed");
   expect(codex.textContent).not.toContain("Connected");
   expect(host.querySelector("[data-onboarding-engines-note]")?.textContent).toContain("With Claude only");
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test("slice 3: the guide lists six steps, counts to six and opens on the step it was asked for", () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="voice" marker={null} onClose={() => {}} />));
+  const steps = Array.from(host.querySelectorAll("[data-onboarding-step]")).map((element) => element.getAttribute("data-onboarding-step"));
+  expect(steps).toEqual(["engines", "agents", "phone", "voice", "tour", "check"]);
+  expect(host.querySelector("[data-onboarding-step=voice]")?.getAttribute("aria-current")).toBe("step");
+  expect(host.textContent).toContain("Step 4 of 6");
+  expect(host.textContent).toContain("Where your dictation is transcribed");
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test("slice 3: a marker written by the three-step guide lands a returning user on Phone", () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, steps: { engines: "done", agents: "done", phone: null, voice: null, tour: null, check: null } } as const;
+  flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
+  expect(host.querySelector("[data-onboarding-step=phone]")?.getAttribute("aria-current")).toBe("step");
+  expect(host.textContent).toContain("Step 3 of 6");
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test("slice 3: the Dictation menu mode shows the Voice step alone, without the step list or the footer", async () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="voice" marker={null} onClose={() => {}} />));
+  expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-dialog")).toBe("voice");
+  expect(host.querySelector("[data-onboarding-step]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-primary]")).toBeNull();
+  expect(host.querySelector("[role=dialog]")?.getAttribute("aria-label")).toBe("Dictation");
+  expect(host.textContent).toContain("Where your dictation is transcribed");
+  for (let attempt = 0; attempt < 50 && !host.querySelector("[data-onboarding-voice]"); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(host.querySelector("[data-onboarding-voice]")).not.toBeNull();
   flushSync(() => root.unmount());
   host.remove();
 });

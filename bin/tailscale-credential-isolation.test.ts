@@ -5,7 +5,7 @@ import path from "node:path";
 import { once } from "node:events";
 
 import { discardWakatimeEnvironmentCredential, WAKATIME_CREDENTIAL_ENV } from "./server-runtime.mjs";
-import { readStatus, serve } from "./tailscale.mjs";
+import { readStatus, serve, serveBackground } from "./tailscale.mjs";
 
 afterEach(() => {
   discardWakatimeEnvironmentCredential();
@@ -49,6 +49,18 @@ describe("published launcher auxiliary child credential isolation", () => {
       const handle = serve(probe.executable, 8898);
       const [code] = await once(handle.child, "exit");
       expect(code).toBe(0);
+    } finally {
+      fs.rmSync(probe.directory, { recursive: true, force: true });
+    }
+  });
+
+  test("the background serve the phone step runs receives no ambient WakaTime credential", async () => {
+    const probe = tailscaleProbe();
+    discardWakatimeEnvironmentCredential();
+    process.env[WAKATIME_CREDENTIAL_ENV] = ["tailscale", "serve", "bg", "fixture"].join("-");
+    try {
+      const result = await serveBackground(probe.executable, 8898);
+      expect(result).toMatchObject({ code: 0, timedOut: false });
     } finally {
       fs.rmSync(probe.directory, { recursive: true, force: true });
     }

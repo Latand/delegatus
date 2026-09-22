@@ -11,6 +11,7 @@ import { micVisual } from "@/lib/dictationTimer";
 import { translate, useLocale } from "@/lib/i18n";
 
 import { Z } from "./layers";
+import { openOnboarding } from "./onboarding/useOnboarding";
 
 export interface MicButtonViewProps extends UseDictationResult {
   onText: (text: string) => void;
@@ -219,6 +220,15 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
               {copied ? t("mic.copied") : t("mic.copy")}
             </button>
           </span>
+          {/* The setup guide's Voice step saves the key without a terminal (#2004). */}
+          <button
+            type="button"
+            data-mic-open-voice-guide=""
+            className="inline-flex min-h-8 items-center justify-center rounded-[8px] bg-accent px-2.5 text-[12px] font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { onClose(); openOnboarding("voice"); }}
+          >
+            {t("onboarding.voice.micSetup")}
+          </button>
           <button
             type="button"
             className="self-start rounded-[8px] px-2 py-1 text-[11px] font-semibold text-muted hover:bg-canvas hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
