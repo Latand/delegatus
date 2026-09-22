@@ -48,7 +48,7 @@ export interface TranscriptHost {
   agentPid: number;
   display: string;
   windowName?: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   cwd: string;
   /** argv observed with this pid; detects a pid that was recycled between
       observation and delivery. */

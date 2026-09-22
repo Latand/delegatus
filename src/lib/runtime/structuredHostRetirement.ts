@@ -445,7 +445,7 @@ export interface StructuredHostRetirementReclaim {
 
 export interface StructuredHostRetirementRecord {
   key: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   sessionId: string;
   conversationId: string | null;
   title: string | null;

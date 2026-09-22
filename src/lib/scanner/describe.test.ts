@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -382,6 +383,37 @@ test("a deleted nested worktree (repo/worktrees/<name>) still groups under its p
   expect(projectForCwd(deepNested)).toBe(projectForCwd(repo));
   expect(projectForCwd(nested)).toBe(identity.project);
   expect(projectInfoFromCwd(nested)?.worktree).toBe("memory-ui-redesign");
+});
+
+test("a Copilot session from a deleted worktree still groups under its parent repo", () => {
+  /* docs/design/copilot-engine.md 3.1: a Copilot transcript's cwd is
+     `session.start.data.context.cwd`, and it goes through the same one
+     algorithm as every other engine. The worktree is gone before the scan. */
+  useStateDirectory("deleted-copilot-state");
+  const repo = path.join(SANDBOX, "deleted-copilot-main");
+  const identity = createRepository(repo);
+  const deadWorktree = path.join(repo, ".worktrees", "copilot-lane");
+  expect(fs.existsSync(deadWorktree)).toBe(false);
+  const root = path.join(SANDBOX, "copilot-home", "session-state");
+  const sessionId = crypto.randomUUID();
+  const transcript = path.join(root, sessionId, "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, [
+    { type: "session.start", data: { sessionId, copilotVersion: "1.0.87", context: { cwd: deadWorktree } }, timestamp: "2026-09-22T20:00:00.000Z" },
+    { type: "user.message", data: { content: "Fix the flaky test" }, timestamp: "2026-09-22T20:00:01.000Z" },
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+
+  const described = describe("copilot-sessions", root, transcript, fs.statSync(transcript));
+  expect(described).toMatchObject({
+    engine: "copilot",
+    fmt: "copilot",
+    kind: "session",
+    cwd: deadWorktree,
+    project: identity.project,
+    worktree: "copilot-lane",
+    title: "Fix the flaky test",
+  });
+  expect(projectForCwd(repo)).toBe(described.project);
 });
 
 test("conversation metadata carries the exact cwd and its canonical project root", () => {

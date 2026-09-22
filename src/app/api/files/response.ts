@@ -315,7 +315,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       : claudeProjectRootFor(parentPath);
     const placeholder = {
       path: parentPath,
-      root: parentConversation.engine === "codex" ? "codex-sessions" as const : "claude-projects" as const,
+      root: parentConversation.engine === "codex" ? "codex-sessions" as const
+        : parentConversation.engine === "copilot" ? "copilot-sessions" as const : "claude-projects" as const,
       name: rootPath ? path.relative(rootPath, parentPath) : path.basename(parentPath),
       /* Cross-project lineage stub: the foreign parent groups under ITS owning
          project (ownership → canonical cwd → profile hint), falling back to

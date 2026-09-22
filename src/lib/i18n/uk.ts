@@ -722,6 +722,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "draft.speedStandard": "стандартний",
 
   // Локалізовані назви рівнів міркувань (у CLI надсилаються оригінальні токени)
+  "effortTier.none": "без міркувань",
   "effortTier.minimal": "мінімальні",
   "effortTier.low": "низькі",
   "effortTier.medium": "середні",
@@ -841,6 +842,18 @@ export const uk: Record<keyof typeof en, Message> = {
 
   "telegram.title": "Telegram",
   "telegram.rowAria": "Підключення Telegram",
+  "copilot.accounts.rowAria": "Акаунти GitHub Copilot",
+  "copilot.accounts.title": "Акаунти GitHub Copilot",
+  "copilot.accounts.none": "немає акаунта",
+  "copilot.accounts.hint": "Кожен акаунт має власну теку Copilot. Щоб увійти, виконайте його команду входу в терміналі; запуски використовують активний акаунт.",
+  "copilot.accounts.active": "активний",
+  "copilot.accounts.use": "Використати",
+  "copilot.accounts.copyLogin": "Копіювати вхід",
+  "copilot.accounts.copied": "Скопійовано",
+  "copilot.accounts.copyFailed": "Не вдалося скопіювати команду входу.",
+  "copilot.accounts.labelPlaceholder": "Назва нового акаунта",
+  "copilot.accounts.add": "Додати",
+  "copilot.accounts.failed": "Зміна акаунтів Copilot не вдалася.",
   "telegram.close": "Закрити",
   "telegram.readOnlyNote": "Лише читання · тільки сесії оператора",
   "telegram.status.disconnected": "Не підключено",
@@ -1243,6 +1256,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "render.compactSummary": "підсумок розмови",
   "render.stdinSession": "stdin → сесія {id}",
   "render.record": "запис",
+  "render.turnInterrupted": "Хід перервано",
   "render.transcriptRecord": "запис транскрипту",
   "render.recordDetails": "деталі запису",
   "render.protocol": "протокол",
@@ -2517,6 +2531,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "queue.steerHint": "Додає до вже запущеного ходу замість того, щоб перервати його.",
   "queue.steerUnsupported": "Цього агента не можна скерувати; відправка перерве поточний хід.",
   "queue.steerIdle": "Немає запущеного ходу, щоб скерувати.",
+  "queue.interruptResendMessage": "Перервати й надіслати",
+  "queue.interruptResendHint": "Цей агент не вміє скеровувати хід: поточний хід зупиниться, а ваше повідомлення почне наступний.",
 
   /* Нативне додавання в контекст (#1560). Формулювання тримає єдину різницю,
      яку операція справді дає: текст стає частиною того, що модель прочитає

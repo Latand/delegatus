@@ -983,12 +983,15 @@ export function defaultPipelinePorts(
           sessionId = receiptPublished ? receipt.key?.sessionId ?? null : null;
         }
         if (!agentPath) continue;
-        const runtime = membership.runtime ?? (receipt ? {
-          engine: receipt.engine,
+        /* Copilot is not a pipeline stage engine yet (design slice 4). */
+        const runtimeEngine = receipt?.engine ?? conversation?.engine;
+        if (runtimeEngine === "copilot") continue;
+        const runtime = membership.runtime ?? (receipt && runtimeEngine ? {
+          engine: runtimeEngine,
           model: receipt.launchProfile.model,
           effort: receipt.launchProfile.effort,
-        } : conversation ? {
-          engine: conversation.engine,
+        } : conversation && runtimeEngine ? {
+          engine: runtimeEngine,
           model: generation?.launchProfile.model ?? null,
           effort: generation?.launchProfile.effort ?? null,
         } : null);

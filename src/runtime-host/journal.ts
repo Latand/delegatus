@@ -29,6 +29,9 @@ import {
   RuntimeIdempotencyConflictError,
   newOperationId,
   runtimeCompactCapability,
+  isStructuredHostKind,
+  runtimeHostKindForEngine,
+  runtimeSteerCapability,
   type NormalizedRuntimeEventInput,
   type RuntimeOperationCommand,
   type RuntimeOperationReceipt,
@@ -260,10 +263,12 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
   return {
     conversationId: typeof payload.conversationId === "string" ? payload.conversationId : id,
     sessionKey: {
-      engine: key.engine === "claude" ? "claude" : "codex",
+      engine: key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex",
       sessionId: typeof key.sessionId === "string" ? key.sessionId : id,
     },
-    hostKind: payload.hostKind === "codex-app-server" || payload.hostKind === "claude-broker" || payload.hostKind === "tmux-legacy" ? payload.hostKind : "unhosted",
+    hostKind: isStructuredHostKind(typeof payload.hostKind === "string" ? payload.hostKind : null) || payload.hostKind === "tmux-legacy"
+      ? payload.hostKind as RuntimeSession["hostKind"]
+      : "unhosted",
     host: payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",
     turn: payload.turn === "idle" || payload.turn === "running" || payload.turn === "interrupt_requested" ? payload.turn : "unknown",
     provenance: payload.provenance === "derived" || payload.provenance === "replayed" ? payload.provenance : "structured",
@@ -279,6 +284,8 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
     artifactPath: typeof payload.artifactPath === "string" ? payload.artifactPath : null,
     capabilities: {
       steer: capabilities.steer === true,
+      /* Copilot: no steer; a message for the running turn interrupts and resends. */
+      ...(capabilities.steerMode === "interrupt" ? { steerMode: "interrupt" as const } : {}),
       structuredAttention: capabilities.structuredAttention === true,
       nativeQueue: capabilities.nativeQueue === true,
       /* #1560. Fail-closed like every other observed capability: a projection
@@ -291,7 +298,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
       } } : {}),
       imageInput: capabilities.imageInput && typeof capabilities.imageInput === "object"
         ? capabilities.imageInput as RuntimeSession["capabilities"]["imageInput"]
-        : runtimeImageCapability(key.engine === "claude" ? "claude" : "codex", false),
+        : runtimeImageCapability(key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex", false),
     },
     ...(payload.diagnostics && typeof payload.diagnostics === "object" ? { diagnostics: {
       executable: typeof record(payload.diagnostics).executable === "string" ? String(record(payload.diagnostics).executable).split(/[\\/]/).at(-1)!.slice(0, 80) : "unknown",
@@ -729,7 +736,7 @@ export class RuntimeJournal {
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
-    details: Partial<Pick<RuntimeOperationReceipt, "turnId" | "queuePosition" | "reason">> = {},
+    details: Partial<Pick<RuntimeOperationReceipt, "turnId" | "queuePosition" | "reason" | "delivery" | "interruptedTurnId">> = {},
     options: RuntimeTransitionOptions = {},
     nativeTransition?: NativeQueueTransition,
   ): RuntimeOperationResult {
@@ -944,7 +951,7 @@ export class RuntimeJournal {
           const session = this.entity<RuntimeSession>("session", options.requireHostedConversationId);
           if (!session
             || session.host !== "hosted"
-            || (session.hostKind !== "codex-app-server" && session.hostKind !== "claude-broker")) {
+            || !isStructuredHostKind(session.hostKind)) {
             throw new Error("structured recovery ownership changed before retry admission");
           }
         }
@@ -1946,8 +1953,8 @@ export class RuntimeJournal {
       }
     } else if (this.structuredHosts
       && command.kind === "send"
-      && (session?.hostKind === "codex-app-server" || session?.hostKind === "claude-broker")) {
-      if (command.policy === "queue" && session.hostKind === "codex-app-server"
+      && isStructuredHostKind(session?.hostKind)) {
+      if (command.policy === "queue" && session?.hostKind === "codex-app-server"
         && session.diagnostics?.queueCapability === "unknown") {
         status = "rejected";
         reason = "native-queue-capability-unknown";
@@ -2005,6 +2012,12 @@ export class RuntimeJournal {
       } else if ((command.kind === "steer" || command.policy !== "queue") && session.turn === "running" && session.capabilities.steer) {
         status = "pending";
         turnId = session.activeTurnId;
+      } else if (command.kind === "steer" && session.capabilities.steerMode === "interrupt" && (session.turn === "running" || session.turn === "idle")) {
+        /* No steer on this engine (Copilot): the delivery queue interrupts the
+           running turn and sends the message as the next one, and a turn that
+           already ended leaves it a plain new turn (docs/design/copilot-engine.md 3.4). */
+        status = "pending";
+        turnId = session.turn === "running" ? session.activeTurnId : null;
       } else if (command.kind === "steer") {
         status = "rejected";
         reason = "stale-turn";
@@ -2192,7 +2205,7 @@ export class RuntimeJournal {
         payload: {
           conversationId: command.conversationId,
           sessionKey: { engine: command.engine, sessionId: command.sessionId ?? command.conversationId },
-          hostKind: command.engine === "codex" ? "codex-app-server" : "claude-broker",
+          hostKind: runtimeHostKindForEngine(command.engine),
           host: "registering",
           turn: "unknown",
           provenance: "structured",
@@ -2201,7 +2214,7 @@ export class RuntimeJournal {
           cwd: command.cwd,
           artifactPath: null,
           capabilities: {
-            steer: command.engine === "codex",
+            ...runtimeSteerCapability(command.engine),
             structuredAttention: true,
             imageInput: runtimeImageCapability(command.engine, false),
           },

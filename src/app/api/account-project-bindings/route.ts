@@ -47,7 +47,8 @@ function carriers(): CarrierConversation[] {
   return carrierConversations(
     Object.values(snapshot.conversations).flatMap((conversation) => {
       const generation = conversation.generations.at(-1);
-      if (!generation) return [];
+      /* Project account bindings cover Claude and Codex. */
+      if (!generation || conversation.engine === "copilot") return [];
       return [{
         engine: conversation.engine,
         busy: conversation.turn.state === "busy",

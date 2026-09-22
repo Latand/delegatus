@@ -9,8 +9,8 @@ const effortCache = globalCache<[number, number, string | null]>("effort");
 /** Union of all three CLI scales: codex minimal…ultra, claude low…max, and
     OpenClaw's `--thinking`, which adds `off` at the bottom and `adaptive` —
     a request to let the model choose, which is a recorded setting rather than
-    a rung on the ladder. */
-const TIERS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "adaptive"]);
+    a rung on the ladder. Copilot adds `none` at the bottom of its own ladder. */
+const TIERS = new Set(["none", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "adaptive"]);
 
 function normalizeEffort(value: string | null | undefined): string | null {
   const tier = value?.trim().toLowerCase() ?? "";
@@ -24,6 +24,9 @@ function pickEffort(entry: FileEntry, obj: Record<string, unknown>): string | nu
     if (direct) return direct;
     const settings = recordValue(recordValue(payload?.collaboration_mode)?.settings);
     return stringValue(settings?.reasoning_effort);
+  }
+  if (entry.root === "copilot-sessions" && (obj.type === "session.start" || obj.type === "session.model_change")) {
+    return stringValue(recordValue(obj.data)?.reasoningEffort);
   }
   if (entry.root === "openclaw-sessions" && obj.type === "thinking_level_change") {
     return stringValue(obj.thinkingLevel);
@@ -67,7 +70,7 @@ export interface EntryEffortResult {
 
 export function entryEffortResult(entry: FileEntry): EntryEffortResult {
   if (
-    (entry.root !== "claude-projects" && entry.root !== "codex-sessions" && entry.root !== "openclaw-sessions")
+    (entry.root !== "claude-projects" && entry.root !== "codex-sessions" && entry.root !== "openclaw-sessions" && entry.root !== "copilot-sessions")
     || !entry.path.endsWith(".jsonl")
   ) {
     return { value: null, complete: true };

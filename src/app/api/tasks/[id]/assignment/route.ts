@@ -30,7 +30,8 @@ function spawnParamsForPath(pathname: string): TaskPipelineSpawnParams | null {
   const conversation = registry.conversationForPath(pathname);
   const profile = registry.launchProfileForPath(pathname);
   const repoDir = profile?.cwd || headCwd(pathname);
-  if (!conversation || !repoDir) return null;
+  /* Copilot is not a task-pipeline engine yet (design slice 4). */
+  if (!conversation || !repoDir || conversation.engine === "copilot") return null;
   return {
     repoDir,
     engine: conversation.engine,

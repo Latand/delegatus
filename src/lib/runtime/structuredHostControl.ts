@@ -40,7 +40,7 @@ export function readStructuredHostRecords(dependencies: {
   }
   const entries = Object.values(file.entries)
     .filter((entry) => Boolean(entry.structuredHost?.process)
-      && (entry.key.engine === "claude" || entry.key.engine === "codex")
+      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot")
       /* A pane-hosted entry is already a tmux row; listing it twice would
          offer two kills for one process tree. */
       && entry.host === null)

@@ -31,6 +31,7 @@ import {
   type HeldDeliveryCommand,
   type HeldDeliveryCommandInput,
   type LaunchProfile,
+  type MigrationEngine,
   type MigrationIntent,
   type MigrationOrigin,
   type NativeGeneration,
@@ -89,6 +90,7 @@ import {
 } from "./sqliteRegistryStore";
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
+import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
@@ -109,7 +111,7 @@ export interface TmuxHostEvidence {
 }
 
 export interface StructuredHostColumns {
-  kind: "codex-app-server" | "claude-broker";
+  kind: "codex-app-server" | "claude-broker" | "copilot-acp";
   endpoint: string;
   process: ProcessIdentity | null;
   eventCursor: number;
@@ -354,7 +356,8 @@ export interface DurableConversationMembership {
   round: number | null;
   parentConversationId: ViewerConversationId | null;
   /** Child runtime captured at adoption admission so pipeline recovery can
-      parse the materialized transcript with its owning engine. */
+      parse the materialized transcript with its owning engine. Pipeline
+      stages run Claude or Codex; Copilot is not a stage engine yet. */
   runtime?: {
     engine: Extract<AgentEngine, "claude" | "codex">;
     model: string | null;
@@ -536,7 +539,7 @@ export class SupersedenceConflictError extends Error {
 
 export interface RegistryConversation {
   id: ViewerConversationId;
-  engine: Extract<AgentEngine, "claude" | "codex">;
+  engine: AgentEngine;
   generations: NativeGeneration[];
   /** Provider-created transcript artifacts that retain this conversation's
       identity while the canonical generation path advances. */
@@ -651,6 +654,34 @@ export interface DeliveryOperationOwner {
   terminalDisposition: DeliveryTerminalDisposition | null;
   terminalReason: string | null;
   settledAt: string | null;
+  /** How a delivered send reached a running turn when it took more than a
+      plain send: `interrupt-then-turn-started` on an engine without steer
+      (Copilot), whose message interrupted the running turn and started the
+      next one. Kept here, beside the settlement, so `message_receipt` still
+      answers it once the journal receipt has been compacted. Absent on every
+      other delivery. */
+  delivery?: RuntimeDeliveryMode;
+  /** The turn that delivery interrupted. */
+  interruptedTurnId?: string;
+}
+
+/** The delivery route a settled send is recorded with (see `delivery` above). */
+export interface DeliveryRoute {
+  delivery: RuntimeDeliveryMode;
+  interruptedTurnId: string | null;
+}
+
+/** The owner row a reservation writes for itself, when it is still that reservation's. */
+function deliveryOwner(file: RegistryFile, delivery: HeldDelivery): DeliveryOperationOwner | undefined {
+  const owner = file.deliveryOperationOwners[delivery.command.operationId];
+  return owner?.deliveryId === delivery.id ? owner : undefined;
+}
+
+function recordDeliveryRoute(owner: DeliveryOperationOwner | undefined, route: DeliveryRoute | null | undefined): void {
+  if (!owner || !route) return;
+  owner.delivery = route.delivery;
+  if (route.interruptedTurnId) owner.interruptedTurnId = route.interruptedTurnId;
+  else delete owner.interruptedTurnId;
 }
 
 /**
@@ -701,11 +732,11 @@ export interface RegistryFile {
   /** Durable redirects for conversation IDs that escaped before scanner-owned
       provisional identities were adopted by their canonical owner. */
   conversationAliases: Record<string, ViewerConversationId>;
-  conversationRevision: Record<Extract<AgentEngine, "claude" | "codex">, number>;
+  conversationRevision: Record<AgentEngine, number>;
   migrationIntents: Record<string, MigrationIntent>;
-  engineRouting: Record<Extract<AgentEngine, "claude" | "codex">, { activeAccountId: string | null; revision: number }>;
-  autoBalance: Record<Extract<AgentEngine, "claude" | "codex">, AutoBalancePolicy>;
-  quotaObservations: Record<Extract<AgentEngine, "claude" | "codex">, Record<string, DurableQuotaObservation>>;
+  engineRouting: Record<AgentEngine, { activeAccountId: string | null; revision: number }>;
+  autoBalance: Record<AgentEngine, AutoBalancePolicy>;
+  quotaObservations: Record<AgentEngine, Record<string, DurableQuotaObservation>>;
   heldDeliveries: Record<string, HeldDelivery>;
   deliveryOperationOwners: Record<string, DeliveryOperationOwner>;
   /** Keyed by canonical conversation id; see {@link DeliveryEvidenceCompaction}. */
@@ -758,7 +789,7 @@ type SuccessorGenerationInput = Omit<NativeGeneration, "createdAt" | "archivedAt
   Partial<Pick<NativeGeneration, "launchProfile" | "historyHash" | "host">>;
 
 export interface ConversationObservation {
-  engine: Extract<AgentEngine, "claude" | "codex">;
+  engine: AgentEngine;
   path: string;
   accountId: string | null;
   launchProfile: LaunchProfile;
@@ -815,7 +846,7 @@ function rewriteAccountPath(pathname: string, rewrites: readonly AccountPathRewr
     artifact. Returns the ids of the conversations whose paths changed. */
 function rewriteRegistryAccountPaths(
   file: RegistryFile,
-  engine: Extract<AgentEngine, "claude" | "codex">,
+  engine: MigrationEngine,
   rewrites: readonly AccountPathRewrite[],
 ): Set<ViewerConversationId> {
   const changed = new Set<ViewerConversationId>();
@@ -1081,9 +1112,12 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
 
 function migrationReadinessSignature(
   file: RegistryFile,
-  engine: Extract<AgentEngine, "claude" | "codex">,
+  engine: AgentEngine,
   paths: ReadonlySet<string>,
 ): string {
+  /* Account migration covers Claude and Codex; Copilot has no migration scope
+     (docs/design/copilot-engine.md, slices 2–4). */
+  if (engine === "copilot") return "";
   const conversations = [...new Map([...paths].flatMap(path => registryConversationsForPath(file, path))
     .filter(conversation => conversation.engine === engine && paths.has(conversation.generations.at(-1)?.path ?? ""))
     .map(conversation => [conversation.id, conversation])).values()];
@@ -1121,10 +1155,11 @@ function activeHostPathsChangedByEntry(
 
 function advanceMigrationScopeRevision(
   file: RegistryFile,
-  engine: Extract<AgentEngine, "claude" | "codex">,
+  engine: AgentEngine,
   previousSignature: string,
   paths: ReadonlySet<string>,
 ): void {
+  if (engine === "copilot") return;
   if (migrationReadinessSignature(file, engine, paths) === previousSignature) return;
   file.conversationRevision[engine] += 1;
   file.engineRouting[engine].revision += 1;
@@ -1132,7 +1167,7 @@ function advanceMigrationScopeRevision(
 
 function migrationScopeCounts(
   file: RegistryFile,
-  engine: Extract<AgentEngine, "claude" | "codex">,
+  engine: MigrationEngine,
   targetId: string,
 ): MigrationScopeCounts {
   const counts: MigrationScopeCounts = { total: 0, idle: 0, busy: 0, deferred: 0, alreadyTarget: 0 };
@@ -1222,6 +1257,7 @@ function migrationEnrollmentAdmission(
   intent: MigrationIntent,
 ): MigrationEnrollmentAdmission {
   if (intent.origin !== "auto") return { kind: "accepted" };
+  if (conversation.engine === "copilot") return { kind: "refused", reason: "account migration does not cover Copilot conversations" };
   const project = conversationProjectKey(conversation.projectOwnership, source.launchProfile);
   try {
     const resolution = admitAutomaticAccountTarget({
@@ -1585,11 +1621,11 @@ const EMPTY: RegistryFile = {
   legacyResumePanes: { serverPid: null, panes: {} },
   conversations: {},
   conversationAliases: {},
-  conversationRevision: { claude: 0, codex: 0 },
+  conversationRevision: { claude: 0, codex: 0, copilot: 0 },
   migrationIntents: {},
-  engineRouting: { claude: { activeAccountId: null, revision: 0 }, codex: { activeAccountId: null, revision: 0 } },
-  autoBalance: { claude: emptyPolicy(), codex: emptyPolicy() },
-  quotaObservations: { claude: {}, codex: {} },
+  engineRouting: { claude: { activeAccountId: null, revision: 0 }, codex: { activeAccountId: null, revision: 0 }, copilot: { activeAccountId: null, revision: 0 } },
+  autoBalance: { claude: emptyPolicy(), codex: emptyPolicy(), copilot: emptyPolicy() },
+  quotaObservations: { claude: {}, codex: {}, copilot: {} },
   heldDeliveries: {},
   deliveryOperationOwners: {},
   deliveryEvidenceCompactions: {},
@@ -1686,6 +1722,11 @@ function liveViewerChildCount(file: RegistryFile, parentConversationId: ViewerCo
 }
 
 function nativeGenerationId(pathname: string): string {
+  /* A Copilot transcript is `<session-id>/events.jsonl`: the id is the directory. */
+  if (path.basename(pathname) === "events.jsonl") {
+    const directory = path.basename(path.dirname(pathname)).match(/^[0-9a-f-]{36}$/i)?.[0];
+    if (directory) return directory.toLowerCase();
+  }
   return path.basename(pathname).match(/([0-9a-f-]{36})(?:\.jsonl)?$/i)?.[1] ?? crypto.randomUUID();
 }
 
@@ -1701,7 +1742,7 @@ function normalizeGeneration(value: NativeGeneration, policy?: McpGrantPolicy): 
 function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   if (!value || typeof value !== "object") return null;
   const host = value as Partial<StructuredHostColumns>;
-  if (host.kind !== "codex-app-server" && host.kind !== "claude-broker") return null;
+  if (host.kind !== "codex-app-server" && host.kind !== "claude-broker" && host.kind !== "copilot-acp") return null;
   const eventCursor = (value as Record<string, unknown>).eventCursor;
   if (eventCursor !== undefined && (!Number.isSafeInteger(eventCursor) || (eventCursor as number) < 0)) {
     throw new Error("structured host event cursor is invalid");
@@ -2451,6 +2492,10 @@ function normalizeDeliveryOperationOwners(
         settledAt: typeof owner.settledAt === "string"
           ? owner.settledAt
           : referencedDelivery?.deliveredAt ?? settledDelivery?.deliveredAt ?? null,
+        ...(owner.delivery === "interrupt-then-turn-started" ? { delivery: owner.delivery } : {}),
+        ...(owner.delivery === "interrupt-then-turn-started" && typeof owner.interruptedTurnId === "string" && owner.interruptedTurnId
+          ? { interruptedTurnId: owner.interruptedTurnId }
+          : {}),
       };
     }
   }
@@ -3224,7 +3269,7 @@ function normalizeQueuedPinnedSpawn(value: unknown, policy?: McpGrantPolicy): Qu
     || !candidate.accountId
     || (candidate.locale !== "en" && candidate.locale !== "uk")
     || !spec
-    || (spec.engine !== "claude" && spec.engine !== "codex")
+    || (spec.engine !== "claude" && spec.engine !== "codex" && spec.engine !== "copilot")
     || typeof spec.command !== "string"
     || typeof spec.cwd !== "string"
     || typeof spec.windowName !== "string"
@@ -3334,7 +3379,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     parentSource: value.parentSource === "explicit" || value.parentSource === "inferred-caller" ? value.parentSource : null,
     state,
     artifactLifecycle: value.artifactLifecycle === "materialized" ? "materialized" : "pending",
-    key: value.key && typeof value.key === "object" && (value.key.engine === "claude" || value.key.engine === "codex") && typeof value.key.sessionId === "string" ? value.key : null,
+    key: value.key && typeof value.key === "object" && (value.key.engine === "claude" || value.key.engine === "codex" || value.key.engine === "copilot") && typeof value.key.sessionId === "string" ? value.key : null,
     pane,
     verifiedHost: value.verifiedHost && typeof value.verifiedHost === "object" && value.verifiedHost.kind === "tmux" ? value.verifiedHost : null,
     target: pane?.paneId ?? (typeof value.target === "string" && /^%\d+$/.test(value.target) ? value.target : null),
@@ -3473,6 +3518,7 @@ function upgradeV1(parsed: Omit<Partial<RegistryFile>, "version">, policy?: McpG
     autoBalance: {
       claude: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
       codex: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
+      copilot: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
     },
     entries: (parsed.entries as RegistryFile["entries"]) ?? {},
     receipts: Object.fromEntries(Object.entries((parsed.receipts as RegistryFile["receipts"]) ?? {}).map(([id, receipt]) => [id, normalizeReceipt(receipt, policy)])),
@@ -3523,10 +3569,11 @@ export function normalizeRegistry(value: unknown, policy?: McpGrantPolicy): Regi
       migrationIntents: parsed.migrationIntents && typeof parsed.migrationIntents === "object" ? parsed.migrationIntents : {},
       engineRouting: parsed.engineRouting && typeof parsed.engineRouting === "object" ? { ...EMPTY.engineRouting, ...parsed.engineRouting } : clone(EMPTY.engineRouting),
       autoBalance: parsed.autoBalance && typeof parsed.autoBalance === "object"
-        ? { claude: normalizePolicy(parsed.autoBalance.claude), codex: normalizePolicy(parsed.autoBalance.codex) }
+        ? { claude: normalizePolicy(parsed.autoBalance.claude), codex: normalizePolicy(parsed.autoBalance.codex), copilot: normalizePolicy(parsed.autoBalance.copilot) }
         : {
             claude: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
             codex: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
+            copilot: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
           },
       quotaObservations: parsed.quotaObservations && typeof parsed.quotaObservations === "object"
         ? { ...EMPTY.quotaObservations, ...parsed.quotaObservations }
@@ -5447,7 +5494,7 @@ export class AgentRegistry {
     file: RegistryFile,
     launchId: string,
     host: TmuxHostEvidence,
-    observed: { engine: Extract<AgentEngine, "claude" | "codex">; cwd: string },
+    observed: { engine: AgentEngine; cwd: string },
   ): SpawnReceipt | null {
     const receipt = file.receipts[launchId];
     if (!receipt || receipt.state !== "conflicted" || !receipt.pane) return receipt ?? null;
@@ -5472,7 +5519,7 @@ export class AgentRegistry {
   confirmSpawnPaneAlive(
     launchId: string,
     host: TmuxHostEvidence,
-    observed: { engine: Extract<AgentEngine, "claude" | "codex">; cwd: string },
+    observed: { engine: AgentEngine; cwd: string },
   ): SpawnReceipt | null {
     const current = this.readOnlySnapshot().receipts[launchId];
     if (!current || current.state !== "conflicted") return current ? clone(current) : null;
@@ -5564,7 +5611,7 @@ export class AgentRegistry {
     const createdAt = now();
     const conversation = existingConversation ?? {
       id: receipt.conversationId,
-      engine: receipt.engine as Extract<AgentEngine, "claude" | "codex">,
+      engine: receipt.engine,
       generations: [],
       continuityPaths: [],
       abandonedContinuityPaths: [],
@@ -6473,7 +6520,7 @@ export class AgentRegistry {
 
   /** Allocates one Viewer-owned identity for every native generation. Paths
       remain an interoperability detail and can change on every account move. */
-  ensureConversation(engine: Extract<AgentEngine, "claude" | "codex">, artifactPath: string, accountId: string | null): RegistryConversation {
+  ensureConversation(engine: AgentEngine, artifactPath: string, accountId: string | null): RegistryConversation {
     return this.mutate((file) => {
       const existing = Object.values(file.conversations).find((conversation) => conversation.engine === engine && conversationOwnsPath(conversation, artifactPath));
       if (existing) return clone(existing);
@@ -6517,7 +6564,7 @@ export class AgentRegistry {
       backfill, account provenance, and authoritative turn observations. */
   reconcileConversations(observations: ConversationObservation[]): RegistryFile {
     return this.mutate((file) => {
-      const scopeChanged = new Set<Extract<AgentEngine, "claude" | "codex">>();
+      const scopeChanged = new Set<AgentEngine>();
       const firstPathByNativeSession = new Map<string, string>();
       const pathPendingLaunches = correlatePathPendingReceipts(file, observations);
       const conversationsByPath = new Map<string, RegistryConversation[]>();
@@ -6760,7 +6807,7 @@ export class AgentRegistry {
          snapshot — lets one inventory pass establish a parent plus its children
          atomically. Authoritative viewer-spawn edges are preserved; self-edges
          and cycles are refused. */
-      const ownerForPath = (pathname: string, engine: Extract<AgentEngine, "claude" | "codex">): RegistryConversation | null =>
+      const ownerForPath = (pathname: string, engine: AgentEngine): RegistryConversation | null =>
         preferredConversationOwner(file, (conversationsByPath.get(pathname) ?? []).filter((candidate) =>
           file.conversations[candidate.id] === candidate
           && candidate.engine === engine
@@ -6901,7 +6948,7 @@ export class AgentRegistry {
       The generation record is the source of truth for which account owns a
       conversation; deriving the account from the path layout stays in the
       account manager only as recovery for artifacts the registry never saw. */
-  transcriptAccountId(engine: Extract<AgentEngine, "claude" | "codex">, artifactPath: string): string | null {
+  transcriptAccountId(engine: AgentEngine, artifactPath: string): string | null {
     const snapshot = this.readOnlySnapshot();
     for (const conversation of Object.values(snapshot.conversations)) {
       if (conversation.engine !== engine) continue;
@@ -7184,7 +7231,7 @@ export class AgentRegistry {
     return conversation?.generations.at(-1)?.path ?? artifactPath;
   }
 
-  setEngineRouting(engine: Extract<AgentEngine, "claude" | "codex">, accountId: string): number {
+  setEngineRouting(engine: AgentEngine, accountId: string): number {
     return withAccountMutationLock(() => this.mutate((file) => {
       const route = file.engineRouting[engine];
       route.activeAccountId = accountId;
@@ -7193,11 +7240,11 @@ export class AgentRegistry {
     }));
   }
 
-  engineRouting(engine: Extract<AgentEngine, "claude" | "codex">): { activeAccountId: string | null; revision: number } {
+  engineRouting(engine: AgentEngine): { activeAccountId: string | null; revision: number } {
     return this.readKeyed(file => clone(file.engineRouting[engine]));
   }
 
-  migrationScope(engine: Extract<AgentEngine, "claude" | "codex">, targetId: string): MigrationScopeCounts {
+  migrationScope(engine: MigrationEngine, targetId: string): MigrationScopeCounts {
     return migrationScopeCounts(this.readOnlySnapshot(), engine, targetId);
   }
 
@@ -7214,7 +7261,7 @@ export class AgentRegistry {
       never run again on it: owed deliveries on its conversations and their
       parked `failed-recoverable` migrations. */
   retireAccount(
-    engine: Extract<AgentEngine, "claude" | "codex">,
+    engine: MigrationEngine,
     accountId: string,
     fallbackAccountId: string,
     liveness: AccountLivenessOptions = {},
@@ -7288,7 +7335,7 @@ export class AgentRegistry {
   /** Moves registry paths back after an interrupted account removal returned
       its home to place (issue #1857). Nothing else changes: this undoes only
       the path half of `retireAccount`, and is a no-op when that never ran. */
-  rewriteAccountPaths(engine: Extract<AgentEngine, "claude" | "codex">, rewrite: readonly AccountPathRewrite[]): number {
+  rewriteAccountPaths(engine: MigrationEngine, rewrite: readonly AccountPathRewrite[]): number {
     return withAccountMutationLock(() => this.mutate((file) => {
       const changedAt = now();
       const touched = rewriteRegistryAccountPaths(file, engine, rewrite);
@@ -7303,7 +7350,7 @@ export class AgentRegistry {
   }
 
   commitMigrationIntent(input: {
-    engine: Extract<AgentEngine, "claude" | "codex">;
+    engine: MigrationEngine;
     targetId: string;
     origin: MigrationOrigin;
     requestId: string;
@@ -7433,6 +7480,8 @@ export class AgentRegistry {
       const conversation = file.conversations[canonicalId];
       if (!conversation) throw new Error("viewer conversation is unknown");
       if (conversation.pinnedAccountId) return clone(conversation);
+      /* Account migration covers Claude and Codex only. */
+      if (conversation.engine === "copilot") return clone(conversation);
       const targetId = file.engineRouting[conversation.engine].activeAccountId;
       const source = conversation.generations.at(-1);
       if (!targetId || !source || source.accountId === null || source.accountId === targetId) return clone(conversation);
@@ -7511,6 +7560,7 @@ export class AgentRegistry {
       const canonicalId = resolveConversationAlias(file, id);
       const conversation = file.conversations[canonicalId];
       if (!conversation) throw new Error("viewer conversation is unknown");
+      if (conversation.engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
       if (reconfigureOwner
         && (conversation.reconfigure?.operationId !== reconfigureOwner.operationId
           || conversation.reconfigure.revision !== reconfigureOwner.revision
@@ -7598,7 +7648,7 @@ export class AgentRegistry {
     });
   }
 
-  upsertMigrationIntent(engine: Extract<AgentEngine, "claude" | "codex">, targetId: string, origin: MigrationOrigin, requestId: string, evidence: MigrationIntent["evidence"] = null): MigrationIntent {
+  upsertMigrationIntent(engine: MigrationEngine, targetId: string, origin: MigrationOrigin, requestId: string, evidence: MigrationIntent["evidence"] = null): MigrationIntent {
     return this.mutate((file) => {
       const active = Object.values(file.migrationIntents).find((intent) => intent.engine === engine && intent.state === "draining" && engineScopedIntent(intent));
       if (active) {
@@ -7921,11 +7971,11 @@ export class AgentRegistry {
     });
   }
 
-  autoBalancePolicy(engine: Extract<AgentEngine, "claude" | "codex">): AutoBalancePolicy {
+  autoBalancePolicy(engine: AgentEngine): AutoBalancePolicy {
     return clone(this.readOnlySnapshot().autoBalance[engine]);
   }
 
-  quotaObservations(engine: Extract<AgentEngine, "claude" | "codex">): DurableQuotaObservation[] {
+  quotaObservations(engine: AgentEngine): DurableQuotaObservation[] {
     return clone(Object.values(this.readOnlySnapshot().quotaObservations[engine]));
   }
 
@@ -7941,7 +7991,7 @@ export class AgentRegistry {
   }
 
   recordQuotaEvaluation(input: {
-    engine: Extract<AgentEngine, "claude" | "codex">;
+    engine: AgentEngine;
     observations: DurableQuotaObservation[];
     signature: string | null;
     evidence?: MigrationIntent["evidence"];
@@ -7974,7 +8024,7 @@ export class AgentRegistry {
     });
   }
 
-  setAutoBalancePolicy(engine: Extract<AgentEngine, "claude" | "codex">, enabled: boolean, expectedRevision?: number): AutoBalancePolicy {
+  setAutoBalancePolicy(engine: AgentEngine, enabled: boolean, expectedRevision?: number): AutoBalancePolicy {
     return this.mutate((file) => {
       const policy = file.autoBalance[engine];
       if (expectedRevision !== undefined && policy.revision !== expectedRevision) throw new Error("automatic balance policy revision is stale");
@@ -7986,7 +8036,7 @@ export class AgentRegistry {
   }
 
   recordAutoBalanceOutcome(
-    engine: Extract<AgentEngine, "claude" | "codex">,
+    engine: AgentEngine,
     outcome: "complete" | "stopped" | "failed-partial",
     evidence: AutoBalancePolicy["lastTrigger"],
     cooldownUntil: string,
@@ -8436,6 +8486,7 @@ export class AgentRegistry {
     state: Extract<HeldDelivery["state"], "delivered" | "failed">,
     error: string | null = null,
     disposition?: DeliveryTerminalDisposition,
+    route?: DeliveryRoute | null,
   ): DeliveryOperationOwner | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
@@ -8444,6 +8495,7 @@ export class AgentRegistry {
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
       owner.terminalReason = error?.slice(0, 240) ?? null;
       owner.settledAt = now();
+      if (state === "delivered") recordDeliveryRoute(owner, route);
       return clone(owner);
     });
   }
@@ -8455,6 +8507,8 @@ export class AgentRegistry {
     /** What the settling caller PROVED. Omitted where it proved nothing, which
         the receipt reads as an unverified fate rather than a safe resend. */
     disposition?: DeliveryTerminalDisposition,
+    /** How a delivered send reached the engine, when the journal recorded it. */
+    route?: DeliveryRoute | null,
   ): HeldDelivery {
     return this.mutate((file) => {
       const delivery = file.heldDeliveries[id];
@@ -8472,6 +8526,7 @@ export class AgentRegistry {
       if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       syncDeliveryOperationOwnerState(file, delivery, disposition);
+      if (state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), route);
       const settled = clone(delivery);
       if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
       return settled;
@@ -8484,6 +8539,7 @@ export class AgentRegistry {
     state: Extract<HeldDelivery["state"], "delivered" | "failed">,
     error: string | null = null,
     disposition?: DeliveryTerminalDisposition,
+    route?: DeliveryRoute | null,
   ): HeldDelivery | null {
     return this.recordDeliveryOutcomesForOperations([{
       conversationId,
@@ -8491,6 +8547,7 @@ export class AgentRegistry {
       state,
       error,
       ...(disposition ? { disposition } : {}),
+      ...(route ? { route } : {}),
     }])[0] ?? null;
   }
 
@@ -8504,6 +8561,7 @@ export class AgentRegistry {
       state: Extract<HeldDelivery["state"], "delivered" | "failed">;
       error?: string | null;
       disposition?: DeliveryTerminalDisposition;
+      route?: DeliveryRoute | null;
     }[],
   ): (HeldDelivery | null)[] {
     return this.mutate((file) => {
@@ -8533,6 +8591,7 @@ export class AgentRegistry {
         if (outcome.state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
         if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
         syncDeliveryOperationOwnerState(file, delivery, outcome.disposition);
+        if (outcome.state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), outcome.route);
         compactConversations.add(delivery.conversationId);
         return clone(delivery);
       });

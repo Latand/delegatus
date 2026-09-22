@@ -33,7 +33,7 @@ import { useLocale } from "@/lib/i18n";
  * its per-draft sessionStorage keys and a transient surface keeps nothing.
  */
 
-export type LaunchEngine = "claude" | "codex";
+export type LaunchEngine = "claude" | "codex" | "copilot";
 export type { SpeedChoice };
 
 /** Secret-free slice of one stored account that a launch selector needs. */
@@ -48,7 +48,19 @@ export type LaunchAccountCatalog = Record<LaunchEngine, { active: string; accoun
 const ENGINES: { key: LaunchEngine; label: string }[] = [
   { key: "claude", label: "Claude" },
   { key: "codex", label: "Codex" },
+  { key: "copilot", label: "Copilot" },
 ];
+
+/** The engines a surface offers when it names none: every surface launches
+    Claude and Codex. Copilot is offered only where a surface opts in — the
+    agent draft — because pipeline stages and orchestrator seats do not run it
+    yet (docs/design/copilot-engine.md, slice 4). */
+export const DEFAULT_LAUNCH_ENGINES: readonly LaunchEngine[] = ["claude", "codex"];
+export const AGENT_LAUNCH_ENGINES: readonly LaunchEngine[] = ["claude", "codex", "copilot"];
+
+export function launchEngineLabel(engine: LaunchEngine): string {
+  return ENGINES.find((entry) => entry.key === engine)?.label ?? engine;
+}
 
 /** Crash-safe read of one engine section of `/api/accounts`: a malformed body
     yields an empty section, which simply hides that engine's selector. */
@@ -67,8 +79,8 @@ export function launchAccountSection(raw: unknown): LaunchAccountCatalog[LaunchE
 
 /** Both engine sections of one `/api/accounts` body. */
 export function launchAccountCatalogOf(body: unknown): LaunchAccountCatalog {
-  const raw = body as { claude?: unknown; codex?: unknown } | null;
-  return { claude: launchAccountSection(raw?.claude), codex: launchAccountSection(raw?.codex) };
+  const raw = body as { claude?: unknown; codex?: unknown; copilot?: unknown } | null;
+  return { claude: launchAccountSection(raw?.claude), codex: launchAccountSection(raw?.codex), copilot: launchAccountSection(raw?.copilot) };
 }
 
 /**
@@ -161,7 +173,7 @@ export function useAgentLaunchDraft(options: {
 
   const [engine, setEngineState] = useState<LaunchEngine>(() => {
     const stored = read("engine");
-    if (stored === "codex" || stored === "claude") return stored;
+    if (stored === "codex" || stored === "claude" || stored === "copilot") return stored;
     return options.initialEngine ?? "claude";
   });
   const [model, setModelState] = useState(() => read("model") || options.initialModel || defaultModelFor(engine));
@@ -227,18 +239,21 @@ export function EngineRadioGroup({
   engine,
   disabled,
   roomy,
+  engines = DEFAULT_LAUNCH_ENGINES,
   onChange,
 }: {
   engine: LaunchEngine;
   disabled?: boolean;
   /** The 32px control step for surfaces that give the draft its own column. */
   roomy?: boolean;
+  /** The engines this surface can launch; Claude and Codex unless it opts in. */
+  engines?: readonly LaunchEngine[];
   onChange: (engine: LaunchEngine) => void;
 }) {
   const { t } = useLocale();
   return (
     <div className="flex shrink-0 items-center gap-1" role="radiogroup" aria-label={t("draft.engineAria")}>
-      {ENGINES.map(({ key, label }) => {
+      {ENGINES.filter(({ key }) => engines.includes(key)).map(({ key, label }) => {
         const active = engine === key;
         const chip = engineTintOf(key);
         return (
@@ -287,7 +302,7 @@ export function LaunchAccountSelect({
       roomy={roomy}
       className={className}
       onChange={(event) => draft.setAccountId(event.target.value)}
-      aria-label={t("draft.accountAria", { engine: draft.engine === "codex" ? "Codex" : "Claude" })}
+      aria-label={t("draft.accountAria", { engine: launchEngineLabel(draft.engine) })}
     >
       {draft.accounts.map((account) => (
         /* The engine's active account is the default for future launches; a

@@ -123,7 +123,7 @@ function readState(): ProjectCatalogState {
       if (!value || typeof value !== "object" || Array.isArray(value)) continue;
       const file = value as Partial<CachedProjectFile>;
       if (
-        (file.rootName !== "codex-sessions" && file.rootName !== "claude-projects" && file.rootName !== "claude-tasks" && file.rootName !== "openclaw-sessions") ||
+        (file.rootName !== "codex-sessions" && file.rootName !== "claude-projects" && file.rootName !== "claude-tasks" && file.rootName !== "openclaw-sessions" && file.rootName !== "copilot-sessions") ||
         typeof file.size !== "number" ||
         typeof file.mtimeMs !== "number" ||
         typeof file.stateKey !== "string" ||
@@ -135,8 +135,8 @@ function readState(): ProjectCatalogState {
       ) {
         continue;
       }
-      const engine = file.engine === "codex" || file.engine === "claude" || file.engine === "shell" || file.engine === "openclaw" ? file.engine : undefined;
-      const fmt = file.fmt === "codex" || file.fmt === "claude" || file.fmt === "plain" || file.fmt === "openclaw" ? file.fmt : undefined;
+      const engine = file.engine === "codex" || file.engine === "claude" || file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" ? file.engine : undefined;
+      const fmt = file.fmt === "codex" || file.fmt === "claude" || file.fmt === "plain" || file.fmt === "openclaw" || file.fmt === "copilot" ? file.fmt : undefined;
       const cwd = typeof file.cwd === "string" ? file.cwd : file.cwd === null ? null : undefined;
       const sessionStartedAt = typeof file.sessionStartedAt === "string"
         ? file.sessionStartedAt
@@ -241,6 +241,7 @@ function writeState(state: ProjectCatalogState): void {
 function isConversation(rootName: RawEntry["rootName"], kind: string): boolean {
   return rootName === "codex-sessions"
     || rootName === "openclaw-sessions"
+    || rootName === "copilot-sessions"
     || (rootName === "claude-projects" && (kind === "session" || kind === "subagent"));
 }
 
@@ -248,6 +249,7 @@ function engineForRoot(rootName: RawEntry["rootName"]): ProjectCatalogFile["engi
   if (rootName === "codex-sessions") return "codex";
   if (rootName === "claude-projects") return "claude";
   if (rootName === "openclaw-sessions") return "openclaw";
+  if (rootName === "copilot-sessions") return "copilot";
   return "shell";
 }
 
@@ -255,6 +257,7 @@ function fmtForRoot(rootName: RawEntry["rootName"]): ProjectCatalogFile["fmt"] {
   if (rootName === "codex-sessions") return "codex";
   if (rootName === "claude-projects") return "claude";
   if (rootName === "openclaw-sessions") return "openclaw";
+  if (rootName === "copilot-sessions") return "copilot";
   return "plain";
 }
 
@@ -264,6 +267,7 @@ function fallbackTitle(raw: RawEntry, kind: string): string {
   if (raw.rootName === "codex-sessions") return "Codex session";
   if (raw.rootName === "claude-projects") return "Claude session";
   if (raw.rootName === "openclaw-sessions") return "OpenClaw session";
+  if (raw.rootName === "copilot-sessions") return "Copilot session";
   return "Background task " + filename.split(".")[0];
 }
 
@@ -594,7 +598,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
       kind: file.kind,
       fmt: file.fmt,
     });
-    if (!file.session || (file.engine !== "codex" && file.engine !== "claude" && file.engine !== "openclaw")) return;
+    if (!file.session || (file.engine !== "codex" && file.engine !== "claude" && file.engine !== "openclaw" && file.engine !== "copilot")) return;
     conversationCatalog.push({
       path: file.path,
       root: file.rootName,

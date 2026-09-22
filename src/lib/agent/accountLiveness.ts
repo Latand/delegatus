@@ -221,7 +221,7 @@ export function conversationIsLive(
 }
 
 /** Artifact paths held by a live registry entry, computed once per evaluation. */
-function liveEntryPaths(file: RegistryFile, engine: ManagedAccountEngine, probe: LivenessProbe): Set<string> {
+function liveEntryPaths(file: RegistryFile, engine: AgentEngine, probe: LivenessProbe): Set<string> {
   const paths = new Set<string>();
   for (const entry of Object.values(file.entries)) {
     if (entry.key.engine !== engine || !entryIsLive(entry, probe)) continue;
@@ -289,8 +289,8 @@ export function staleUndeliverableHeldDeliveryIds(
   options: AccountLivenessOptions = {},
 ): string[] {
   const probe = livenessProbe(options);
-  const pathsByEngine = new Map<ManagedAccountEngine, Set<string>>();
-  const livePathsFor = (engine: ManagedAccountEngine): Set<string> => {
+  const pathsByEngine = new Map<AgentEngine, Set<string>>();
+  const livePathsFor = (engine: AgentEngine): Set<string> => {
     let paths = pathsByEngine.get(engine);
     if (!paths) {
       paths = liveEntryPaths(file, engine, probe);

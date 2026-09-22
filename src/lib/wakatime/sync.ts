@@ -49,7 +49,7 @@ export interface WakatimeStateV1 {
   credentialGeneration: string | null;
   streams: Record<string, {
     entity: string;
-    engine: "claude" | "codex";
+    engine: "claude" | "codex" | "copilot";
     project: string;
     startedAtMs: number;
     endedAtMs: number | null;
@@ -91,7 +91,7 @@ export interface WakatimeCredential {
 
 export interface DirectOperatorWakatimeHeartbeat {
   key: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   project: string;
   atMs: number;
 }
@@ -195,7 +195,7 @@ function stateFrom(value: unknown): WakatimeStateV1 | null {
   for (const [key, candidate] of Object.entries(value.streams)) {
     if (!/^[a-f0-9]{64}$/.test(key) || !record(candidate)
       || typeof candidate.entity !== "string"
-      || (candidate.engine !== "claude" && candidate.engine !== "codex")
+      || (candidate.engine !== "claude" && candidate.engine !== "codex" && candidate.engine !== "copilot")
       || typeof candidate.project !== "string" || candidate.project.length === 0
       || !finite(candidate.startedAtMs)
       || !(candidate.endedAtMs === null || finite(candidate.endedAtMs))
@@ -300,7 +300,7 @@ function sampleTimes(start: number, end: number, closed: boolean, last: number |
 
 function addWindow(
   state: WakatimeStateV1,
-  source: { engine: "claude" | "codex"; lastActivityAtMs: number },
+  source: { engine: "claude" | "codex" | "copilot"; lastActivityAtMs: number },
   streamKey: string,
   project: string,
   window: TurnBoundary,
@@ -601,7 +601,7 @@ export function createWakatimeSync(deps: WakatimeSyncDependencies): WakatimeSync
     const now = deps.now();
     const existingKeys = new Set(current.pending.map((event) => event.key));
     const observations: Array<{
-      source: { engine: "claude" | "codex"; lastActivityAtMs: number };
+      source: { engine: "claude" | "codex" | "copilot"; lastActivityAtMs: number };
       streamKey: string;
       project: string;
       window: TurnBoundary;
@@ -618,7 +618,7 @@ export function createWakatimeSync(deps: WakatimeSyncDependencies): WakatimeSync
         const registry = deps.registrySnapshot();
         const lookup = conversationLookupFromSnapshot(registry);
         for (const entry of scan.files) {
-          if ((entry.engine !== "claude" && entry.engine !== "codex")
+          if ((entry.engine !== "claude" && entry.engine !== "codex" && entry.engine !== "copilot")
             || (entry.root !== "claude-projects" && entry.root !== "codex-sessions")
             || !entry.path.endsWith(".jsonl") || entry.derivationComplete !== true) continue;
           const conversation = lookup.conversationForPath(entry.path);
@@ -1023,7 +1023,7 @@ export function enqueueProductionOperatorHeartbeat(
 ): void {
   if (!enabled()) return;
   if (!/^[a-f0-9]{64}$/.test(action.key)
-    || (action.engine !== "claude" && action.engine !== "codex")
+    || (action.engine !== "claude" && action.engine !== "codex" && action.engine !== "copilot")
     || !action.project.trim()
     || action.project.trim() === UNRESOLVED_PROJECT
     || !Number.isSafeInteger(action.atMs)

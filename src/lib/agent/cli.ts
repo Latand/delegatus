@@ -27,7 +27,7 @@ export { ENGINE_EFFORTS, isEngineEffort } from "./efforts";
  * else.
  */
 
-export type AgentEngine = "claude" | "codex";
+export type AgentEngine = "claude" | "codex" | "copilot";
 
 /**
  * Candidate absolute paths for an agent CLI on Windows, in probe order.
@@ -63,7 +63,7 @@ export function resolveBinary(name: string): string {
     return name;
   }
   const home = os.homedir();
-  if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1" && (name === "claude" || name === "codex")) {
+  if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1" && (name === "claude" || name === "codex" || name === "copilot")) {
     const shim = "/usr/local/bin/" + name;
     try {
       fs.accessSync(shim, fs.constants.X_OK);
@@ -120,6 +120,27 @@ export function resolveHostBinary(name: string): string {
     }
   }
   return name;
+}
+
+/** The Copilot CLI a structured host launches: `LLV_COPILOT_BIN` when set
+    (tests and pinned installs), otherwise the same probe as the other CLIs. */
+export function resolveCopilotBinary(env: NodeJS.ProcessEnv = process.env): string {
+  return env.LLV_COPILOT_BIN?.trim() || resolveBinary("copilot");
+}
+
+/** Why a Copilot launch cannot start on this machine, or null when the CLI
+    resolves to an executable. A bare name that no probe found is missing. */
+export function copilotBinaryGap(env: NodeJS.ProcessEnv = process.env): string | null {
+  const binary = resolveCopilotBinary(env);
+  if (!path.isAbsolute(binary)) {
+    return "the GitHub Copilot CLI is not installed; install it with `bun add -g @github/copilot@1.0.87` or set LLV_COPILOT_BIN";
+  }
+  try {
+    fs.accessSync(binary, fs.constants.X_OK);
+    return null;
+  } catch {
+    return `the GitHub Copilot CLI at ${binary} is not executable`;
+  }
 }
 
 export function shellQuote(value: string): string {
@@ -347,6 +368,41 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
         /* Plugin grants are a Codex thread capability decided by the spawn
            route from the session's origin (issue #687), never by the command
            builder — a fresh spec carries none. */
+        plugins: [],
+        title: options.title?.trim() || null,
+        project: null,
+        parentConversationId: null,
+        role: "worker",
+        goal: null,
+        plan: null,
+      },
+    };
+  }
+  if (engine === "copilot") {
+    /* Copilot runs on the structured transport only (docs/design/copilot-engine.md
+       3.3); this command is what the launch profile records for display, and
+       the host builds its own argv from the profile. */
+    const permissionMode = options.readOnly ? "default" : options.permissionMode ?? "bypassPermissions";
+    const args = [resolveCopilotBinary(), "--acp", "--no-auto-update", "-C", cwd];
+    if (options.model) args.push("--model", options.model);
+    if (options.effort) args.push("--reasoning-effort", options.effort);
+    args.push("--disable-builtin-mcps");
+    if (!options.allowSubagents) args.push("--excluded-tools", "task", "read_agent", "write_agent", "list_agents");
+    if (permissionMode === "bypassPermissions") args.push("--allow-all");
+    return {
+      command: args.map(shellQuote).join(" "),
+      cwd,
+      windowName: "copilot-new",
+      engine: "copilot",
+      launchProfile: {
+        cwd,
+        model: options.model ?? null,
+        effort: options.effort ?? null,
+        fast: null,
+        permissionMode,
+        readOnly: options.readOnly ?? false,
+        allowSubagents: options.allowSubagents ?? false,
+        mcpServers,
         plugins: [],
         title: options.title?.trim() || null,
         project: null,

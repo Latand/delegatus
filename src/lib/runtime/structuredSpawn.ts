@@ -8,7 +8,7 @@ import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
 import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
-import { effectiveClaudePermissionMode, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
+import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { identityMaterializationFence, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
@@ -34,8 +34,9 @@ import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, type Runtim
 import { supervisedRuntimeHostUnavailableReason } from "./flags";
 import { StructuredHostAdoptionCleanupError, StructuredSessionMaterializationError, type EngineHost, type HostState, type SessionMaterializationEvidence } from "./engineHost";
 import { messageOriginRole, type MessageOrigin } from "./messageOrigin";
-import { runtimeSettingsCapability, type RuntimeOperationResult, type RuntimeSession, type RuntimeSnapshot } from "./contracts";
-import { bindClaudeHostPersistence, bindCodexHostPersistence } from "./registry";
+import { isStructuredHostKind, runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeOperationResult, type RuntimeSession, type RuntimeSnapshot } from "./contracts";
+import { bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPersistence } from "./registry";
+import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
 import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
@@ -71,13 +72,14 @@ export function queuedPinnedSpawnTitle(locale: "en" | "uk", retryAt: string): st
 }
 
 export async function resolvePinnedSpawnAdmission(
-  engine: "claude" | "codex",
+  engine: "claude" | "codex" | "copilot",
   account: AccountContext,
   /** The model the pinned launch names, so a tier weekly it does not draw on
       never refuses it (issues #1796, #1431). */
   model?: string | null,
 ): Promise<SpawnAccountAdmission> {
-  if (engine === "codex") {
+  /* Neither Codex nor Copilot exposes a pre-launch limit read here. */
+  if (engine === "codex" || engine === "copilot") {
     return { kind: "admissible", basis: "current", stale: false, retryAt: null };
   }
   return claudeValidityFromLimitRead(await fetchClaudeLimits(
@@ -527,7 +529,7 @@ export async function reconcileStructuredSpawnReplay(
       launchProfile: current.launchProfile,
       status: runtimeEntryStatus(sessionMatches),
       host: null,
-      structuredHost: sessionMatches.hostKind === "codex-app-server" || sessionMatches.hostKind === "claude-broker"
+      structuredHost: isStructuredHostKind(sessionMatches.hostKind)
         ? {
           kind: sessionMatches.hostKind,
           endpoint: "runtime:reconciled",
@@ -691,8 +693,8 @@ export interface StructuredSpawnRecoveryOptions {
   now?: () => number;
   timeoutMs?: number;
   actuationCap?: number;
-  resolveSpawnAccount?: (engine: "claude" | "codex", accountId: string | null) => AccountContext;
-  resolvePinnedSpawnAdmission?: (engine: "claude" | "codex", account: AccountContext) => Promise<SpawnAccountAdmission>;
+  resolveSpawnAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null) => AccountContext;
+  resolvePinnedSpawnAdmission?: (engine: "claude" | "codex" | "copilot", account: AccountContext) => Promise<SpawnAccountAdmission>;
   spawnStructuredConversation?: typeof spawnStructuredConversation;
   spawnTmuxAgent?: typeof spawnAgentWithPrompt;
   publishFilesRevision?: typeof publishFilesRevision;
@@ -986,13 +988,13 @@ async function projectDeadStructuredSpawn(
     scope: { type: "session", id: receipt.conversationId },
     kind: "session-status",
     producer: {
-      kind: key.engine === "codex" ? "codex-app-server" : "claude-broker",
+      kind: runtimeHostKindForEngine(key.engine),
       eventKey,
     },
     payload: {
       conversationId: receipt.conversationId,
       sessionKey: key,
-      hostKind: key.engine === "codex" ? "codex-app-server" : "claude-broker",
+      hostKind: runtimeHostKindForEngine(key.engine),
       host: "dead",
       turn: "idle",
       provenance: "structured",
@@ -1001,7 +1003,7 @@ async function projectDeadStructuredSpawn(
       cwd: entry.cwd,
       artifactPath,
       capabilities: {
-        steer: key.engine === "codex",
+        ...runtimeSteerCapability(key.engine),
         structuredAttention: true,
         imageInput: runtimeImageCapability(key.engine, false),
         runtimeSettings: runtimeSettingsCapability(key.engine),
@@ -1410,7 +1412,7 @@ export async function recoverPendingStructuredSpawns(
 
 function pendingColumns(engine: AgentEngine, eventCursor = 0, writerClaimEpoch = 0): StructuredHostColumns {
   return {
-    kind: engine === "codex" ? "codex-app-server" : "claude-broker",
+    kind: runtimeHostKindForEngine(engine),
     endpoint: "stdio:pending",
     process: null,
     eventCursor,
@@ -1429,6 +1431,12 @@ function hostIdentity(engine: AgentEngine, host: SpawnedStructuredHost, input: S
     if (!identity.path) throw new Error("structured Codex spawn feature gap: app-server returned no transcript path");
     const key = sessionKey("codex", identity.threadId);
     if (!key) throw new Error("structured Codex spawn returned an invalid thread identity");
+    return { key, path: identity.path };
+  }
+  if (engine === "copilot") {
+    const identity = host.identity as { sessionId?: string; path?: string };
+    const key = identity.sessionId ? sessionKey("copilot", identity.sessionId) : null;
+    if (!key || !identity.path) throw new Error("structured Copilot spawn returned no session identity");
     return { key, path: identity.path };
   }
   const identity = host.identity as { sessionId?: string };
@@ -1495,7 +1503,59 @@ export function claudeHostLaunchPaths(
   };
 }
 
+/**
+ * The Copilot host options for one launch (docs/design/copilot-engine.md 3.3).
+ * Model and effort always come from the durable launch profile, on a fresh
+ * start and on a resume alike: CLI 1.0.87 fixes them per process and does not
+ * persist effort with the session.
+ */
+export function copilotHostOptions(
+  input: Pick<StructuredSpawnInput, "spec" | "account">,
+  access: Pick<StructuredHostAccessMaterialization, "env" | "host">,
+  initialEventCursor?: number,
+): CopilotAcpHostOptions {
+  const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  return {
+    binary: resolveCopilotBinary(process.env),
+    cwd: input.spec.cwd,
+    copilotHome: input.account.home,
+    model: profile.model ?? undefined,
+    effort: profile.effort ?? undefined,
+    /* The bypass mode is the only one that grants every tool up front; any
+       other profile answers each permission request through attention. */
+    allowAll: !launchProfileEngineReadOnly(profile) && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
+    allowSubagents: profile.allowSubagents,
+    mcpServers: profile.mcpServers,
+    ...(access.host.releaseCleanup ? { releaseCleanup: access.host.releaseCleanup } : {}),
+    initialEventCursor,
+    env: access.env,
+  };
+}
+
+/**
+ * Starts (or, for a resume successor, adopts) the Copilot host of one
+ * structured launch. `overrides` is the test seam the gated BYOK integration
+ * test uses to add its loopback provider; production passes none.
+ */
+export async function startCopilotStructuredHost(
+  input: StructuredSpawnInput,
+  capability: string,
+  overrides: Partial<CopilotAcpHostOptions> = {},
+): Promise<CopilotAcpHost> {
+  const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  const resumeSessionId = structuredResumeSessionId(input);
+  const initialEventCursor = resumeSessionId
+    ? input.registry.readOnlySnapshot().entries[sessionKeyId({ engine: "copilot", sessionId: resumeSessionId })]?.structuredHost?.eventCursor
+    : undefined;
+  const access = materializeStructuredHostAccess(structuredHostAccessPolicy(profile), input.account.env, capability);
+  const options = { ...copilotHostOptions(input, access, initialEventCursor), ...overrides };
+  return resumeSessionId
+    ? await CopilotAcpHost.adopt(resumeSessionId, options)
+    : await CopilotAcpHost.start(options);
+}
+
 async function defaultStartHost(input: StructuredSpawnInput, capability: string): Promise<SpawnedStructuredHost> {
+  if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability);
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   const resumeSessionId = structuredResumeSessionId(input);
   const initialEventCursor = resumeSessionId
@@ -1564,6 +1624,9 @@ async function defaultBindHost(
   claimEpoch: number,
   releasedStatus: "unhosted" | "dead" = "unhosted",
 ): Promise<() => void> {
+  if (key.engine === "copilot") {
+    return await bindCopilotHostPersistence(registry, key, host as CopilotAcpHost, claimOwner, claimEpoch, releasedStatus);
+  }
   return key.engine === "codex"
     ? await bindCodexHostPersistence(registry, key, host as CodexAppServerHost, claimOwner, claimEpoch, releasedStatus)
     : await bindClaudeHostPersistence(registry, key, host as ClaudeStreamBrokerHost, claimOwner, claimEpoch, releasedStatus);
