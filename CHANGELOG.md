@@ -85,9 +85,12 @@ guarantees for the 1.x series.
   board changes made since the upgrade. Deployed releases rolled back through
   the release fence get a fresh `board.json` written for them automatically.
 - A version older than this one cannot read the SQLite attention requests,
-  reply suggestions or seat tick settings, and fails on the directories left at
-  `attention.json`, `reply-suggestions.json` and `seat-tick-settings.json`,
-  naming the path. Upgrade again to recover. Replacing a directory with its
+  reply suggestions or seat tick settings, and each finds a directory where its
+  file was. Only attention fails at once: its reads error with EISDIR, naming
+  the path. The older reply-suggestion and seat tick readers treat any
+  unreadable file as empty, so that version shows no drafts and runs every
+  project on the default tick (a project whose tick was turned off ticks
+  again) until its next write fails on the directory. Upgrade again to recover. Replacing a directory with its
   `<name>.imported-*` copy also works, but loses the changes made since the
   upgrade. Deployed releases rolled back through the release fence get all
   three files written back for them automatically, and the changes they make

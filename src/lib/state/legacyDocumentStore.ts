@@ -188,7 +188,9 @@ export class LegacyDocumentStore<D> {
    * rewrote since then stays and is listed as a conflict; a row only the file
    * holds is added. None of these stores' older releases carry a mirror marker
    * through their writes, so a file missing a row proves nothing: missing rows
-   * are spared, never deleted.
+   * are spared, never deleted: a set or request the rollback release removed
+   * comes back at roll-forward. A store whose older writers do carry a marker
+   * through their writes needs a merge of its own.
    */
   private merge(filePath: string, document: D, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary {
     const collection = this.open(legacyDatabasePath(filePath));

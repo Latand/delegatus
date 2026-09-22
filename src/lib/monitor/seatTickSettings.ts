@@ -240,7 +240,10 @@ function readLegacySettingsFile(filePath: string): SeatTickSettingsFile {
   } catch {
     /* An unreadable settings file reads as "nothing is configured", which is
        the tick as it shipped. Failing the check instead would let one corrupt
-       row stop every project's seat from ever being woken again. */
+       row stop every project's seat from ever being woken again. This covers
+       the legacy file only: a read of the SQLite collection that finds it busy
+       throws the store's busy error, as the board and task reads the tick
+       makes already do, and the tick's per-project handling bounds it. */
     return emptySettingsFile();
   }
 }
