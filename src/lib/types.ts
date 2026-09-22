@@ -9,17 +9,18 @@ export type RootKey =
   | "codex-sessions"
   | "claude-projects"
   | "claude-tasks"
-  | "openclaw-sessions";
+  | "openclaw-sessions"
+  | "copilot-sessions";
 
-export type Engine = "codex" | "claude" | "shell" | "openclaw";
+export type Engine = "codex" | "claude" | "shell" | "openclaw" | "copilot";
 export type Activity = "live" | "recent" | "stalled" | "idle";
-export type Fmt = "codex" | "claude" | "plain" | "openclaw";
+export type Fmt = "codex" | "claude" | "plain" | "openclaw" | "copilot";
 
 /** The engines that write a structured transcript the Viewer parses — every
     `Engine` except `"shell"`, whose background tasks are plain output logs.
     Named once so the readers that must switch on the dialect (title and search
     text, turn state, model, effort, the feed) all agree on the same set. */
-export type TranscriptEngine = Extract<Engine, "codex" | "claude" | "openclaw">;
+export type TranscriptEngine = Extract<Engine, "codex" | "claude" | "openclaw" | "copilot">;
 
 declare const epochSecondsBrand: unique symbol;
 /**
@@ -774,7 +775,7 @@ export interface ResourceSession {
       structured hosts were listed, which only ever held tmux panes. */
   kind?: "tmux" | "structured";
   path: string | null;
-  engine: "claude" | "codex" | null;
+  engine: "claude" | "codex" | "copilot" | null;
   /** Several live panes claim the same stable conversation identity. */
   hostConflict?: boolean;
   title: string | null;

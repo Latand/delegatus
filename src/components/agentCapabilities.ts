@@ -187,7 +187,7 @@ const structuredCompact = (session: RuntimeSessionView["session"] | undefined): 
 function isStructuredHost(rv: RuntimeSessionView | null): boolean {
   if (!rv || rv.legacy || !rv.structuredControlsEnabled) return false;
   const kind = rv.session.hostKind;
-  return kind === "codex-app-server" || kind === "claude-broker";
+  return kind === "codex-app-server" || kind === "claude-broker" || kind === "copilot-acp";
 }
 
 /** The host died or fell unhosted after a crash — recovery moves to the banner.

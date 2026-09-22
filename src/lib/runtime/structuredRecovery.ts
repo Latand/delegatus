@@ -59,7 +59,7 @@ export interface StructuredRecoveryDependencies {
   registry?: AgentRegistry;
   client?: RuntimeHostClient | null;
   transport?: () => "tmux" | "structured";
-  resolveAccount?: (engine: "claude" | "codex", accountId: string | null, project: string | null) => AccountContext;
+  resolveAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null, project: string | null) => AccountContext;
   spawn?: typeof spawnStructuredConversation;
   processIdentity?: () => ProcessIdentity;
   requestDeliveryDrain?: () => void;
@@ -91,7 +91,7 @@ class StructuredRecoverySupersededError extends Error {
 
 interface RecoveryCandidate {
   conversationId: ViewerConversationId;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   key: SessionKey;
   path: string;
   accountId: string | null;
@@ -164,7 +164,10 @@ function candidateFor(
     ...(entry?.launchProfile ?? {}),
     cwd: entry?.launchProfile?.cwd || generation.launchProfile.cwd || entry?.cwd,
   });
-  const hostPark = hostLive ? park(conversation.engine, hostAccountId, snapshot, inheritedProfile.model) : null;
+  /* Copilot reports no plan limits (design 3.11), so nothing can park it. */
+  const hostPark = hostLive && conversation.engine !== "copilot"
+    ? park(conversation.engine, hostAccountId, snapshot, inheritedProfile.model)
+    : null;
   const publishReady = hostLive && !hostPark;
   const inheritedTitle = durableSemanticTitle(generation.launchProfile.title, 120)
     ?? durableSemanticTitle(entry?.launchProfile?.title, 120);

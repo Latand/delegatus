@@ -26,6 +26,12 @@ export function sessionKeyId(key: SessionKey): string {
 }
 
 export function sessionKeyFromTranscript(engine: AgentEngine, pathname: string): SessionKey | null {
+  /* Copilot names every transcript `events.jsonl`; the session id is its
+     directory, `$COPILOT_HOME/session-state/<id>/events.jsonl`. */
+  if (engine === "copilot") {
+    if (path.basename(pathname) !== "events.jsonl") return null;
+    return sessionKey(engine, path.basename(path.dirname(pathname)));
+  }
   const base = path.basename(pathname);
   const match = base.match(SESSION_ID);
   return match ? sessionKey(engine, match[0]) : null;

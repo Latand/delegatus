@@ -14,7 +14,7 @@ import { derivedSpawnTitle, durableSemanticTitle, SPAWN_TITLE_REQUIRED_ERROR } f
  * without a DOM. */
 
 /** The engine a draft can launch — the transcript roots differ per engine. */
-export type DraftEngine = "claude" | "codex";
+export type DraftEngine = "claude" | "codex" | "copilot";
 
 /** Display phase of a draft card, derived from the durable attempt + timers. */
 export type DraftPhase = "draft" | "launching" | "booting" | "booting-slow" | "confirming" | "confirming-slow" | "attention";
@@ -139,7 +139,7 @@ export function hasRecoverableRequest(attempt: SpawnAttempt): attempt is SpawnAt
   const request = attempt.request;
   return Boolean(
     request &&
-    (request.engine === "claude" || request.engine === "codex") &&
+    (request.engine === "claude" || request.engine === "codex" || request.engine === "copilot") &&
     request.engine === attempt.engine &&
     (request.title === undefined || (typeof request.title === "string" && durableSemanticTitle(request.title, 120) !== null)) &&
     typeof request.model === "string" &&
@@ -429,11 +429,11 @@ export function provisionalSpawnFile(
   };
   return {
     path: `spawn:${outcome.launchId}`,
-    root: attempt.engine === "codex" ? "codex-sessions" : "claude-projects",
+    root: attempt.engine === "codex" ? "codex-sessions" : attempt.engine === "copilot" ? "copilot-sessions" : "claude-projects",
     name: `spawn:${outcome.launchId}`,
     project,
     ...(attempt.request?.cwd ? { cwd: attempt.request.cwd } : {}),
-    title: attempt.engine === "codex" ? "Codex" : "Claude",
+    title: attempt.engine === "codex" ? "Codex" : attempt.engine === "copilot" ? "Copilot" : "Claude",
     engine: attempt.engine,
     kind: "session",
     fmt: attempt.engine,

@@ -6,7 +6,7 @@ import { parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDepl
   type ViewerDeploymentList, type ViewerDeploymentListOptions } from "./contracts";
 
 
-import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSession, RuntimeSessionRead, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
+import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSession, RuntimeSessionRead, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionDetails, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
 import { runtimeHostSocket } from "./flags";
 
 // The snapshot frame carries every hosted session, and a hosted session keeps
@@ -112,7 +112,7 @@ export interface RuntimeHostClient {
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
-    details?: { turnId?: string | null; queuePosition?: number | null; reason?: string | null },
+    details?: RuntimeTransitionDetails,
     options?: RuntimeTransitionOptions,
   ): Promise<RuntimeOperationResult>;
   /** Releases the retention a terminal transition took out under
@@ -203,7 +203,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
-    details?: { turnId?: string | null; queuePosition?: number | null; reason?: string | null },
+    details?: RuntimeTransitionDetails,
     options: RuntimeTransitionOptions = {},
   ): Promise<RuntimeOperationResult> {
     return this.call("operation-transition", {

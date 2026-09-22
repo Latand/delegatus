@@ -1485,6 +1485,7 @@ function nowMs(): number {
 export function structuredComposerSession(runtimeSession: RuntimeSessionView | null): RuntimeSessionView | null {
   if (!runtimeSession?.structuredControlsEnabled || runtimeSession.legacy) return null;
   return runtimeSession.session.hostKind === "codex-app-server" || runtimeSession.session.hostKind === "claude-broker"
+    || runtimeSession.session.hostKind === "copilot-acp"
     ? runtimeSession
     : null;
 }
@@ -4121,16 +4122,21 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     })();
   };
 
+  /* An engine without steer that interrupts and resends instead (Copilot):
+     the steer action is offered under its true name and submits as the
+     default interrupt-active send (docs/design/copilot-engine.md 3.4). */
+  const steerByInterrupt = structuredSession?.session.capabilities?.steerMode === "interrupt";
   const steerRunningTurn = () => {
-    if (!structuredSession?.session.capabilities?.steer) {
+    if (!structuredSession?.session.capabilities?.steer && !steerByInterrupt) {
       setStatus({ kind: "err", text: t("queue.steerUnsupported") });
       return;
     }
-    if (structuredSession.session.turn !== "running") {
+    if (structuredSession?.session.turn !== "running") {
       setStatus({ kind: "err", text: t("queue.steerIdle") });
       return;
     }
-    queueSubmit(undefined, { policy: "steer-if-active" });
+    if (steerByInterrupt) queueSubmit();
+    else queueSubmit(undefined, { policy: "steer-if-active" });
   };
 
   /* Every submission method funnels through the queue-first path (round-1 P1#1):
@@ -4545,15 +4551,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
             onSelect: injectContext,
           } as const]
           : []),
-        ...(structuredSession?.session.capabilities?.steer
+        ...(structuredSession?.session.capabilities?.steer || steerByInterrupt
           ? [{
             id: "steer",
-            label: t("queue.steerMessage"),
-            description: t("queue.steerHint"),
+            label: steerByInterrupt ? t("queue.interruptResendMessage") : t("queue.steerMessage"),
+            description: steerByInterrupt ? t("queue.interruptResendHint") : t("queue.steerHint"),
             /* Refused BEFORE anything is admitted: a steer with nothing running
                is not a steer, and a durable operation that fails later reads to
                the operator as a message lost rather than never accepted. */
-            disabled: busy || voiceSending || sendBlocked || structuredSession.session.turn !== "running",
+            disabled: busy || voiceSending || sendBlocked || structuredSession?.session.turn !== "running",
             onSelect: steerRunningTurn,
           } as const]
           : []),

@@ -242,6 +242,16 @@ export async function dispatchStructuredControl(
     }
   }
 
+  /* Copilot's model, effort and account are fixed at launch in slice 1
+     (docs/design/copilot-engine.md 3.8): the child would have to restart. */
+  const reconfigurableEngine = conversation.engine === "copilot" ? null : conversation.engine;
+  if (request.action === "reconfigure" && !reconfigurableEngine) {
+    return {
+      status: 409,
+      body: { error: "a Copilot conversation's model, effort and account are fixed at launch", code: "unsupported-capability" },
+    };
+  }
+
   if (structuredKill
     && !entry.structuredHost?.process
     && (entry.status === "dead" || entry.status === "unhosted")) {
@@ -264,7 +274,7 @@ export async function dispatchStructuredControl(
   let attributeSwitch: (() => AccountOverrideNotice | undefined) | null = null;
   try {
     const reconfiguration = request.action === "reconfigure"
-      ? reconfigurationFromBody(conversation.engine, request.reconfiguration ?? {})
+      ? reconfigurationFromBody(reconfigurableEngine!, request.reconfiguration ?? {})
       : null;
     if (reconfiguration && !reconfiguration.value) {
       return { status: 400, body: { error: reconfiguration.error ?? "invalid configuration" } };
@@ -321,7 +331,7 @@ export async function dispatchStructuredControl(
     if (reconfiguration?.value?.accountId) {
       const accountExists = dependencies.accountExists ?? ((engine: "claude" | "codex", accountId: string) =>
         (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).some((account) => account.id === accountId));
-      if (!accountExists(conversation.engine, reconfiguration.value.accountId)) {
+      if (!accountExists(reconfigurableEngine!, reconfiguration.value.accountId)) {
         return { status: 400, body: { error: `account is not available for ${conversation.engine}` } };
       }
       /* #1279: a reconfigure that MOVES this conversation onto another account
@@ -340,7 +350,7 @@ export async function dispatchStructuredControl(
       if (reconfiguration.value.accountId !== generation.accountId) {
         const accountId = reconfiguration.value.accountId;
         attributeSwitch = () => (dependencies.attributeAccountChoice ?? attributeNamedAccountChoice)({
-          engine: conversation.engine,
+          engine: reconfigurableEngine!,
           project: conversationProjectKey(conversation.projectOwnership, generation.launchProfile, {
             /* A getter, so the transcript is read only for a conversation that
                names no project of its own — an ADOPTED one, whose launch

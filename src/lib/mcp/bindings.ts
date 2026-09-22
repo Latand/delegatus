@@ -1084,11 +1084,11 @@ function text(value: unknown): string {
 function validateExplicitMcpLaunchModel(args: McpToolArgs, fallbackRole?: string): void {
   const model = text(args.model);
   if (!model) return;
-  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex") return;
+  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot") return;
   const roleId = text(args.role) || fallbackRole;
   const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams }) : null;
-  let engine: "claude" | "codex" | null = null;
-  if (args.engine === "claude" || args.engine === "codex") engine = args.engine;
+  let engine: "claude" | "codex" | "copilot" | null = null;
+  if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot") engine = args.engine;
   else if (role?.ok && role.value) engine = role.value.config.engine;
   if (!engine) return;
   const validation = validateLaunchModel(engine, model);
@@ -1996,7 +1996,7 @@ async function listConversations(
   const conversations = source.items
     .filter(objectRecord) as unknown as FileEntry[];
   const rows = conversations
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
     .slice(0, limit)
     .map((entry) => ({
       conversationId: entry.conversationId ?? null,
@@ -2163,9 +2163,10 @@ function conversationDeliverability(
 const CONVERSATION_MESSAGE_KINDS = ["message", "reasoning", "tool_call", "tool_result", "trace"] as const;
 const CONVERSATION_MESSAGE_ROLES = ["user", "assistant", "system", "tool"] as const;
 
-function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | null {
+function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | "copilot" | null {
   if (rootName === "codex-sessions") return "codex";
   if (rootName === "claude-projects") return "claude";
+  if (rootName === "copilot-sessions") return "copilot";
   return null;
 }
 
@@ -2215,7 +2216,7 @@ async function conversationMessages(
 
   let transcriptPath = requestedPath;
   let conversationId: string | null = null;
-  let engine: "claude" | "codex" | null = null;
+  let engine: "claude" | "codex" | "copilot" | null = null;
   if (requestedId) {
     const target = selectedConversationTarget({ conversationId: requestedId }, selectedDependencies);
     transcriptPath = target.path!;
@@ -2234,7 +2235,7 @@ async function conversationMessages(
     if (!engine) {
       engine = conversationEngineForRoot(pinned.rootName);
       if (!engine) {
-        throw new McpToolRefusal("conversation_messages supports Claude and Codex transcripts only.", {
+        throw new McpToolRefusal("conversation_messages supports Claude, Codex and Copilot transcripts only.", {
           code: "conversation_messages_engine_unsupported",
         });
       }
@@ -3201,7 +3202,7 @@ async function boardSnapshot(
   }
   const files = (await dependencies.completedFileScan()).snapshot.files;
   const conversations = files
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
     .filter((entry) => !project || entry.project === project)
     .filter((entry) => !activity || entry.activity === activity)
     .filter((entry) => !liveOnly || entry.activity === "live" || entry.activity === "stalled")

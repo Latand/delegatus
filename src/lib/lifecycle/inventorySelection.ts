@@ -95,7 +95,7 @@ function abortError(reason?: unknown): Error {
 }
 
 function isConversationRow(entry: FileEntry): boolean {
-  return entry.engine === "claude" || entry.engine === "codex";
+  return entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot";
 }
 
 /**

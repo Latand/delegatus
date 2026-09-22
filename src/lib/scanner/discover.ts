@@ -9,6 +9,7 @@ import { scheduleTranscriptIndex, type TranscriptIndexFeed } from "../search/tra
 import { isClaudeWorkflowBookkeeping } from "./claudeNative";
 import { codexThreadIdFromPath, nativeCodexParentThreadId } from "./codexNative";
 import { isOpenclawTranscript } from "./openclawNative";
+import { isCopilotTranscriptPath } from "./copilotNative";
 import { describe } from "./describe";
 import type { ConversationCatalogEntry } from "./conversationCatalog";
 import {
@@ -108,6 +109,9 @@ async function walkPaths(rootName: RootKey, root: string, dir: string, limit: Li
        backups). Filtering here rather than at hydration keeps them out of the
        resource-scope inventory too, which only checks the `.jsonl` suffix. */
     if (rootName === "openclaw-sessions" && !isOpenclawTranscript(entry.name)) return { paths: [], complete: true };
+    /* A Copilot session directory holds checkpoints, file snapshots and
+       research notes beside its one transcript, `events.jsonl`. */
+    if (rootName === "copilot-sessions" && !isCopilotTranscriptPath(root, path.join(dir, entry.name))) return { paths: [], complete: true };
     return { paths: [{ rootName, root, path: path.join(dir, entry.name) }], complete: true };
   }));
   return {
@@ -195,8 +199,9 @@ function transcriptIndexFeed(
        excluded from it rather than inserted as an unparseable row. OpenClaw
        conversations stay searchable through the catalog's title and
        first-prompt text; full-text search over their bodies moves with the
-       index's own schema migration. */
-    sources: catalog.flatMap((entry) => (entry.engine === "openclaw" ? [] : [{
+       index's own schema migration. Copilot transcripts are left out the same
+       way until the index can parse their record shape. */
+    sources: catalog.flatMap((entry) => (entry.engine === "openclaw" || entry.engine === "copilot" ? [] : [{
       path: entry.path,
       project: projectByPath?.get(entry.path) ?? entry.project,
       engine: entry.engine,
@@ -353,7 +358,7 @@ function resourceActivity(previous: FileEntry | undefined, mtime: number, size: 
 
 /** Placeholder card labels for the resource scope, which names a transcript
     before any of its bytes have been read. */
-const ENGINE_LABEL = { codex: "Codex", claude: "Claude", openclaw: "OpenClaw" } as const;
+const ENGINE_LABEL = { codex: "Codex", claude: "Claude", openclaw: "OpenClaw", copilot: "Copilot" } as const;
 
 function resourceScopeFromPaths(raw: RawPath[], baseline?: ResourceScopeSnapshot): ResourceScopeSnapshot {
   const previousByPath = new Map((baseline?.files ?? []).map((entry) => [entry.path, entry] as const));
@@ -362,7 +367,8 @@ function resourceScopeFromPaths(raw: RawPath[], baseline?: ResourceScopeSnapshot
     const previous = previousByPath.get(entry.path);
     const engine = entry.rootName === "codex-sessions"
       ? "codex" as const
-      : entry.rootName === "openclaw-sessions" ? "openclaw" as const : "claude" as const;
+      : entry.rootName === "openclaw-sessions" ? "openclaw" as const
+        : entry.rootName === "copilot-sessions" ? "copilot" as const : "claude" as const;
     const mtime = previous?.mtime ?? Date.now() / 1000;
     const size = previous?.size ?? 1;
     const activity = resourceActivity(previous, mtime, size);

@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { codexSessionRoots } from "@/lib/accounts/codex";
 import { claudeProjectRoots } from "@/lib/accounts/claude";
+import { copilotSessionRoots, legacyCopilotHome } from "@/lib/accounts/copilot";
 
 import type { RootKey } from "../types";
 import { DEFAULT_SCHEME_CARDS_PER_PROJECT, DEFAULT_SCHEME_PROJECT_CAP } from "./schemeWindow";
@@ -70,6 +71,9 @@ export const ROOTS: Record<RootKey, string> = {
   /* Every OpenClaw scan root is a descendant of this one; the per-agent roots
      that discovery actually walks come from `openclawSessionRoots()`. */
   "openclaw-sessions": path.join(HOME, ".openclaw/agents"),
+  /* The legacy Copilot home's transcripts; every managed account adds its own
+     `<home>/session-state` through `copilotSessionRoots()`. */
+  "copilot-sessions": path.join(legacyCopilotHome(), "session-state"),
 };
 
 /** Every scanner root, including all account homes, with real-path dedupe. */
@@ -79,6 +83,7 @@ export function scanRootEntries(): [RootKey, string][] {
     ...claudeProjectRoots().map((root): [RootKey, string] => ["claude-projects", root]),
     ["claude-tasks", ROOTS["claude-tasks"]],
     ...openclawSessionRoots().map((root): [RootKey, string] => ["openclaw-sessions", root]),
+    ...copilotSessionRoots().map((root): [RootKey, string] => ["copilot-sessions", root]),
   ];
   const seen = new Set<string>();
   return entries.filter(([, root]) => { const real = realpathSafe(root) ?? path.resolve(root); if (seen.has(real)) return false; seen.add(real); return true; });

@@ -6,12 +6,15 @@
  * claude: `--effort <level>` per `claude --help`.
  * codex: `-c model_reasoning_effort=<level>`; the tier list mirrors
  * `supported_reasoning_levels` in ~/.codex/models_cache.json for current models.
+ * copilot: `--reasoning-effort <level>`, verbatim from `copilot --help` (1.0.87).
+ * There is no per-model scale; the CLI decides what a model supports.
  */
-export type AgentEngineName = "claude" | "codex";
+export type AgentEngineName = "claude" | "codex" | "copilot";
 
 export const ENGINE_EFFORTS: Record<AgentEngineName, readonly string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh"],
+  copilot: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
 };
 
 export function isEngineEffort(engine: AgentEngineName, value: string): boolean {
@@ -19,7 +22,7 @@ export function isEngineEffort(engine: AgentEngineName, value: string): boolean 
 }
 
 /** Canonical low→high ordering across every tier either CLI has ever recorded. */
-const EFFORT_ORDER: readonly string[] = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const EFFORT_ORDER: readonly string[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
 /** Whether a token belongs to the canonical CLI tier vocabulary at all —
     engine/model fit is the engine's own verdict (a per-model scale like
@@ -58,6 +61,7 @@ const OPENCLAW_EFFORTS: readonly string[] = ["off", "minimal", "low", "medium", 
 export function effortScale(engine: string, model: string | null | undefined): readonly string[] | null {
   if (engine === "claude") return ENGINE_EFFORTS.claude;
   if (engine === "openclaw") return OPENCLAW_EFFORTS;
+  if (engine === "copilot") return ENGINE_EFFORTS.copilot;
   if (engine !== "codex") return null;
   const id = (model ?? "").trim().toLowerCase();
   for (const [re, scale] of CODEX_MODEL_SCALES) {

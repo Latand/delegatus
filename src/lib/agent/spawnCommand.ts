@@ -10,7 +10,8 @@ import { claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } fr
 import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
-import { freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
+import { copilotBinaryGap, freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
+import { NoCopilotAccountError, UnknownCopilotAccountError } from "@/lib/accounts/copilot";
 import { agentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnRequest } from "@/lib/agent/registry";
 import { reasoningFromBody } from "@/lib/agent/efforts";
 import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHEDULED_REPORT_SESSION_CLASS, type McpSessionClass } from "@/lib/agent/mcpAllowlist";
@@ -120,6 +121,9 @@ export interface SpawnCommandDependencies {
       (#1876). A role-shaped launch onto an engine that is not ready is refused
       before any receipt exists; absent means no check. */
   engineReadiness?(engine: AgentEngine, project: string | null): EngineReadiness;
+  /** Why a Copilot launch cannot start here (the CLI is missing), or null.
+      Injected by tests; production probes the binary. */
+  copilotBinaryGap?(): string | null;
 }
 
 class RuntimeImageStorageError extends Error {}
@@ -174,6 +178,7 @@ interface SuggestResponse {
   imageInput: {
     claude: ReturnType<typeof runtimeImageCapability>;
     codex: ReturnType<typeof runtimeImageCapability>;
+    copilot: ReturnType<typeof runtimeImageCapability>;
   };
 }
 
@@ -216,6 +221,8 @@ export async function spawnSuggestions(req: NextRequest): Promise<NextResponse<S
     imageInput: {
       claude: runtimeImageCapability("claude", transport === "structured"),
       codex: runtimeImageCapability("codex", transport === "structured" && codexModelSupportsImages(null)),
+      /* ACP advertises `promptCapabilities.image` (CLI 1.0.87). */
+      copilot: runtimeImageCapability("copilot", transport === "structured"),
     },
   });
 }
@@ -293,10 +300,10 @@ export async function executeSpawnRequest(
   if (role.value && isSpawnDeniedRole(role.value.role) && body.allowSubagents === true) {
     return NextResponse.json({ error: `${role.value.role} launches cannot enable subagents: reviewer and verifier sessions run every check in-session` }, { status: 400 });
   }
-  const engine = body.engine === "claude" || body.engine === "codex"
+  const engine = body.engine === "claude" || body.engine === "codex" || body.engine === "copilot"
     ? (body.engine as AgentEngine)
     : (role.value?.config.engine ?? null);
-  if (!engine) return NextResponse.json({ error: "engine must be claude or codex" }, { status: 400 });
+  if (!engine) return NextResponse.json({ error: "engine must be claude, codex or copilot" }, { status: 400 });
   /* #1876: a role's launch onto an engine nobody is signed in to is refused in
      words, before a receipt exists, and never moved onto the other engine. */
   const readiness = role.value && (engine === "claude" || engine === "codex")
@@ -346,6 +353,10 @@ export async function executeSpawnRequest(
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
+  /* Copilot has no tmux path (docs/design/copilot-engine.md 3.3). */
+  if (engine === "copilot" && transport !== "structured") {
+    return NextResponse.json({ error: "GitHub Copilot launches need the structured transport (a runtime host); it has no tmux path" }, { status: 409 });
+  }
   if (transport === "structured") {
     try {
       dependencies.assertStructuredRuntime();
@@ -357,7 +368,7 @@ export async function executeSpawnRequest(
       model: selectedModel.model,
       hasImages: images.length > 0,
       fast: reasoning.fast,
-    });
+    }) ?? (engine === "copilot" ? (dependencies.copilotBinaryGap ?? copilotBinaryGap)() : null);
     if (gap) return NextResponse.json({ error: gap }, { status: 409 });
     /* The scaffold-composed prompt rides structured first-message delivery.
        Enforce its UTF-8 envelope before the durable receipt, blob storage,
@@ -628,7 +639,8 @@ export async function executeSpawnRequest(
       /* Durable launch DISPLAY payload (issue #614/#615): the RAW operator
          draft and canonical delivered echo persist through scan lag. */
       launchDisplay,
-      memberships: pipelineAttemptTarget && pipelineSourceConversationId ? [{
+      /* Copilot is not a pipeline stage engine yet (design slice 4). */
+      memberships: pipelineAttemptTarget && pipelineSourceConversationId && engine !== "copilot" ? [{
         kind: "pipeline",
         containerId: pipelineAttemptTarget.pipelineId,
         role: pipelineAttemptTarget.role,
@@ -715,6 +727,10 @@ export async function executeSpawnRequest(
       if (error instanceof ProjectAccountRefusedError) {
         return NextResponse.json({ error: error.message }, { status: 409 });
       }
+      /* A Copilot launch with no account set up, or naming one that is gone. */
+      if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError) {
+        return NextResponse.json({ error: error.message }, { status: 409 });
+      }
       if (body.accountId === undefined) throw error;
       if (engine === "claude" && requestedAccountId) {
         try {
@@ -765,7 +781,7 @@ export async function executeSpawnRequest(
         mcpServers: grantedServers,
         deferClaudeSpawnPolicy: true,
       });
-      const permissionMode = engine === "claude" && transport === "structured"
+      const permissionMode = (engine === "claude" || engine === "copilot") && transport === "structured"
         ? structuredClaudePermissionMode(specBase.launchProfile?.permissionMode, {
           agentInitiated,
           operatorAuthenticated: authenticatedCaller?.kind === "operator",
@@ -863,7 +879,9 @@ export async function executeSpawnRequest(
        retried, an existing attempt resumed — is the same launch arriving twice,
        not a second choice, and the journal is capped: duplicates evict the
        older crossings it exists to keep. */
-    const accountOverride = begun.kind === "created" && requestedAccountId && account.accountId === requestedAccountId
+    /* Project account bindings cover Claude and Codex; a Copilot launch names
+       its account or uses the selected one, so there is no pool to cross. */
+    const accountOverride = begun.kind === "created" && engine !== "copilot" && requestedAccountId && account.accountId === requestedAccountId
       ? attributeNamedAccountChoice({
         engine,
         project: spawnProject,
@@ -937,6 +955,8 @@ export async function executeSpawnRequest(
     const adoptMaterializedAttempt = async (receipt: typeof begun.receipt, agentPath: string): Promise<void> => {
       if (!pipelineSourceConversationId || !dependencies.adoptPipelineAttemptFromSource) return;
       const materialized = registry.readOnlySnapshot().receipts[receipt.launchId] ?? receipt;
+      /* Copilot is not a pipeline stage engine yet (design slice 4). */
+      if (materialized.engine === "copilot") return;
       try {
         await dependencies.adoptPipelineAttemptFromSource(pipelineSourceConversationId, {
           launchId: materialized.launchId,

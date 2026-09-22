@@ -63,7 +63,7 @@ interface TaskSpawnDependencies {
   /** #1279: the project the work belongs to is part of the question, because
       this route names no account of its own — it resolves one. The account id
       is the one this task already ran on, a PREFERENCE and not a pin. */
-  resolveSpawnAccount(engine: AgentEngine, preferredAccountId: string | null, project: string | null, model?: string | null): AccountContext;
+  resolveSpawnAccount(engine: Extract<AgentEngine, "claude" | "codex">, preferredAccountId: string | null, project: string | null, model?: string | null): AccountContext;
   spawnAgentWithPrompt: typeof spawnAgentWithPrompt;
   resolveSpawnedTranscriptPath: typeof resolveSpawnedTranscriptPath;
   ensureTaskPipelineForAssignment?: typeof ensureTaskPipelineForAssignment;
@@ -113,7 +113,7 @@ function taskRequestDigest(task: BoardTask, shape: Record<string, unknown>): str
   return crypto.createHash("sha256").update(JSON.stringify({ taskId: task.id, text: task.text, shape })).digest("hex");
 }
 
-function assignmentPatch(receipt: SpawnReceipt, at: string, accountId: string, engine: AgentEngine): AssignmentPatch {
+function assignmentPatch(receipt: SpawnReceipt, at: string, accountId: string, engine: Extract<AgentEngine, "claude" | "codex">): AssignmentPatch {
   const failed = receipt.state === "failed" || receipt.state === "conflicted";
   let state: TaskAssignment["state"] = "spawning";
   if (failed) state = "failed";
@@ -228,6 +228,8 @@ async function postTaskSpawn(
     ? retryOf.engine
     : body.engine === "claude" || body.engine === "codex" ? (body.engine as AgentEngine) : null;
   if (!engine) return NextResponse.json({ error: "engine must be claude or codex" }, { status: 400 });
+  /* Task fan-out launches on the tmux transport; Copilot has none. */
+  if (engine === "copilot") return NextResponse.json({ error: "launch a Copilot agent through the structured spawn path" }, { status: 409 });
   if (body.clientAttemptId !== undefined
     && (typeof body.clientAttemptId !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(body.clientAttemptId))) {
     return NextResponse.json({ error: "clientAttemptId must be 8-128 URL-safe characters" }, { status: 400 });

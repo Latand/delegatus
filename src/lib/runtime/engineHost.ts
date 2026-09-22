@@ -127,6 +127,11 @@ export class RuntimeReplayGapError extends Error {
 export interface EngineHost {
   readonly nativeQueue?: NativeQueueHost;
   readonly supportsSteer?: boolean;
+  /** How a host without steer takes a message meant for its running turn.
+      `interrupt`: the delivery queue interrupts that turn and sends the
+      message as the next one (Copilot's ACP has no steer). Absent keeps the
+      host's own steer handling, or the `unsupported-steering` refusal. */
+  readonly steerFallback?: "interrupt";
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
   send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt>;
   interrupt(turnRef: string): Promise<void>;
