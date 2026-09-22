@@ -7,7 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, test } from "bun:test";
 
-import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
+import { createTailscaleStub, hermeticTailscaleEnvironment, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 const fixtures = new Set<string>();
 const children = new Set<ReturnType<typeof spawn>>();
@@ -206,8 +206,9 @@ process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 `),
   ]);
-  /* Hermetic for the tailnet gate: a shell the Viewer spawned carries these. */
-  const inherited = { ...process.env };
+  /* Hermetic for the tailnet gate: a shell the Viewer spawned carries these,
+     and never the host's Tailscale through the Docker shim. */
+  const inherited = hermeticTailscaleEnvironment(process.env, path.join(fixture, "no-tailscale-shim", "tailscale"));
   delete inherited.LLV_TOKEN;
   delete inherited.LLV_TS_HOST;
   delete inherited.LLV_TS_URL;

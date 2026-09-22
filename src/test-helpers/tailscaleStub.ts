@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { DOCKER_TAILSCALE_SHIM_ENV } from "../../bin/tailscale.mjs";
+
 /**
  * A stand-in `tailscale` for the phone-access tests and the capture driver.
  * It is the only Tailscale they ever run: the operator's tailnet and serve
@@ -42,6 +44,27 @@ export type TailscaleStub = {
 };
 
 export const STUB_DNS_NAME = "viewer-host.example-tailnet.ts.net";
+
+/**
+ * The environment for anything a test starts that may resolve Tailscale (the
+ * launcher, a Viewer). An agent started from the Docker Viewer inherits
+ * `LLV_DOCKER_NSENTER_SHIMS=1`, and with it `detectTailscale` tries
+ * `/usr/local/bin/tailscale` before `PATH`: wherever that file exists (this
+ * image's shim into the host's tailscaled, a manual install, the macOS app's
+ * CLI) a test copying its own environment would publish and take down the
+ * operator's real tailnet mapping. Here the Docker branch is off and its shim
+ * names `shim` (by default a path that does not exist), so only a stand-in
+ * on `PATH` can ever run.
+ */
+export function hermeticTailscaleEnvironment<Environment extends Record<string, string | undefined>>(
+  base: Environment,
+  shim = path.join(os.tmpdir(), "llv-no-tailscale-shim", "tailscale"),
+): Environment {
+  const environment: Record<string, string | undefined> = { ...base };
+  delete environment.LLV_DOCKER_NSENTER_SHIMS;
+  environment[DOCKER_TAILSCALE_SHIM_ENV] = shim;
+  return environment as Environment;
+}
 
 export function serveStatusJson(port: number | null, dnsName = STUB_DNS_NAME): string {
   if (port === null) return "{}";
