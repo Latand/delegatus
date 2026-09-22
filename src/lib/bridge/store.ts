@@ -514,6 +514,28 @@ function readLog(): BridgeReportLogV1 {
   return logFromRows(collection.snapshot(), `${collection.filename}#${REPORTS_COLLECTION}`);
 }
 
+/**
+ * A signature that moves whenever the report log does, for a cache keyed on it
+ * (the files projection, whose seat asks derive from this log). It opens the
+ * log the way a read does, lazy import included, so the first request and the
+ * next one see the same signature; before the import may run it is the legacy
+ * file's, and a log that cannot be opened keys on the file rather than failing
+ * the caller.
+ */
+export function bridgeReportLogSignature(): string {
+  try {
+    const collection = reportsCollection("read");
+    if (collection) return `${REPORTS_COLLECTION}:sqlite:${collection.revision()}`;
+  } catch { /* keyed on the legacy file below */ }
+  const target = bridgeReportLogPath();
+  try {
+    const stat = fs.statSync(target);
+    return `${target}:${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return `${target}:missing`;
+  }
+}
+
 /** The durable report log exactly as stored. */
 export function readBridgeReportLog(): BridgeReportLogV1 {
   return readLog();

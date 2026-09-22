@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { bridgeReportLogSignature } from "@/lib/bridge/store";
 import { statePath } from "@/lib/configDir";
 import { diffFilesBodies, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER } from "@/lib/filesDelta";
 import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
@@ -179,7 +180,7 @@ function projectionBaseKey(
          #1168), so a report filed — or answered — between two identical scans
          has to invalidate the projection. Without it the ask would appear, and
          clear, only when some unrelated store happened to move. */
-      hotStateSignature("bridge_reports", "bridge-reports.json"),
+      bridgeReportLogSignature(),
     ],
   })).digest("hex");
 }
