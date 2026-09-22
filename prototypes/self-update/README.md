@@ -11,14 +11,23 @@ What the page does:
 
 - **Update available.** Every poll interval (60 min by default) and on
   *Check now*, `git ls-remote` against the remote, compared with the
-  checkout's `HEAD`. When the tip differs it fetches the tip into
+  installed release. When the tip differs it fetches the tip into
   `refs/self-update/tip` (no branch or working-tree change) and shows the
-  commits between the two revisions and the `CHANGELOG.md` entries the tip
-  adds. A check that fails is shown as failed, never as up to date.
-- **Update.** Five steps, streamed live: fetch, check out the exact tip SHA,
-  `bun install --frozen-lockfile`, `bun run build`, ready. The first failure
-  stops the sequence and offers *Retry from <step>*. Nothing is restarted: the
-  running processes keep serving the previous build until you restart them.
+  commits between the two revisions (merges left out) and the `CHANGELOG.md`
+  entries the tip adds. A check that fails is shown as failed, never as up to
+  date.
+- **Update.** Five steps, streamed live: fetch, check out the exact tip SHA
+  into its own release directory (`git worktree add` under
+  `<config-root>/self-update/releases/`), `bun install --frozen-lockfile` and
+  `bun run build` there, ready. Only a ready build becomes the installed
+  release (`<config-root>/self-update/release.json`). The first failure stops
+  the sequence and offers *Retry from <step>*. Nothing is restarted, and
+  nothing is written where a running process serves from: both keep serving
+  the previous release, whole, until you restart them onto the new one.
+- **What runs.** The header shows what the live processes serve (per process
+  when they differ), the built release while it is not running yet, and the
+  available one. It turns green only when every live process runs the
+  newest build.
 - **Restart web / Restart runtime host.** Two separate actions. The runtime
   host restart drops the agents it supervises, so it asks for an inline
   confirmation first. Every stop signals the process group of a PID the
@@ -61,6 +70,10 @@ return to *healthy*; the Viewer link then serves the new version.
 ~/.cache/llv-bun-1.4.0/bin/bun prototypes/self-update/bench.ts stop --purge   # …and removes the bench directory
 ```
 
+Each update leaves a release directory with its own `node_modules` and
+`.next` (about 1.8 GB here) under `config/self-update/releases/`; nothing prunes
+them yet, and `stop --purge` removes them with the rest.
+
 `bench.json` in the bench root holds the ports and the PIDs with their start
 identities. `stop` signals the prototype first, then the web and runtime-host
 records (the ones the bench started and any the prototype's restarts replaced
@@ -91,7 +104,9 @@ them with). Logs: `config/self-update/logs/{web,runtime-host}.log`,
 Each flag has a `SELF_UPDATE_*` environment twin (`--help` lists them). On
 start it adopts web and runtime-host records left in
 `<config-root>/self-update/processes.json` whose PIDs still carry the recorded
-start identity; stopping the prototype leaves both processes running.
+start identity; stopping the prototype leaves both processes running. Every
+start and restart runs from the installed release as it stands then: the
+checkout until an update publishes one.
 
 ## Tests and frames
 

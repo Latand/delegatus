@@ -12,10 +12,11 @@ guarantees for the 1.x series.
   wired into the Viewer yet. Against one managed install (a checkout, its own
   config root, its web process and its runtime host) it checks the remote for
   a newer revision and summarises the commits and changelog entries between
-  the two, builds the new revision in place through five live steps (fetch,
-  check out, install, build, ready) that stop at the first failure and leave
-  the running processes alone, and restarts web and the runtime host as two
-  separate actions, the second behind an inline confirmation. `bench.ts start`
+  the two, builds the new revision in its own release directory through five
+  live steps (fetch, check out, install, build, ready) that stop at the first
+  failure and never write where the running processes serve from, and
+  restarts web and the runtime host onto it as two separate actions, the
+  second behind an inline confirmation. `bench.ts start`
   builds a duplicate install pinned to an older commit under `/var/tmp` to try
   it on; `bench.ts stop` stops every process it recorded (#2007).
 

@@ -102,8 +102,9 @@ the #1905 and standalone-leak incidents:
 which builds the revision from its canonical mirror into a candidate container,
 health-gates it, and atomically repoints the stable listener; the runtime host
 itself hands over to a successor generation through the singleton fence. The
-prototype has no mirror, no candidate and no fence handoff: it builds **in
-place** and restarts **by PID**. The canonical remote is
+prototype has no mirror, no candidate and no fence handoff: it builds each
+update in **its own release directory** (a git worktree of the checkout) and
+restarts **by PID** into it. The canonical remote is
 `https://github.com/Latand/live-log-viewer-next.git` (overridable with
 `LLV_VIEWER_CANONICAL_REMOTE`), and an anonymous `git ls-remote` against it
 answers `refs/heads/main` without credentials (checked 2026-09-22).
@@ -124,6 +125,7 @@ prototypes/self-update/
   lib/git.ts         ls-remote, head, fetch tip, commits between, file at rev
   lib/changelog.ts   parse Keep a Changelog, section delta, summary (pure)
   lib/steps.ts       sequential step runner with injected spawn (pure over a port)
+  lib/release.ts     the installed-release pointer (release.json) and release directories
   lib/processes.ts   ManagedProcess: start, readiness, stop by PID, health
   lib/state.ts       Snapshot type, store, change subscription
   ui/index.html      the page
@@ -202,8 +204,8 @@ carrying `LLV_STATE_DIR=$HOME/.config/agent-log-viewer/state` and
 
 One mutating action at a time (`update`, `restart web`, `restart runtime
 host`); a `check` may run beside a restart but not beside an update, because
-the update moves `HEAD`. The UI never reasons about that itself: it disables
-buttons from `snapshot.busy`.
+a finished update moves the installed release the check compares against. The
+UI never reasons about that itself: it disables buttons from `snapshot.busy`.
 
 SSE over polling: a Next build streams hundreds of log lines over minutes, and
 the page must show a step turning `failed` the moment it does. The UI opens
@@ -216,12 +218,13 @@ has one input.
 
 ```ts
 interface Snapshot {
-  running:   { version: string; sha: string; short: string; date: string };   // from package.json + git at HEAD
-  available: { version: string; sha: string; short: string; date: string } | null;
+  installed: Revision;            // the newest built release: what the next start runs
+  serving:   { web: Revision | null; runtimeHost: Revision | null };  // what each live process was started from
+  available: Revision | null;     // Revision = { version, sha, short, date } from package.json + git
   check:  { state: "idle"|"checking"|"up-to-date"|"update-available"|"failed";
             at: string|null; error: string|null; nextPollAt: string|null;
             delta: { commits: {short:string; subject:string}[]; changelog: ChangelogDelta } | null };
-  update: { state: "idle"|"running"|"done"|"failed"; target: string|null;
+  update: { state: "idle"|"running"|"done"|"failed"; target: string|null; releaseDir: string|null;
             steps: Step[]; startedAt: string|null; finishedAt: string|null };
   processes: { web: ProcessStatus; runtimeHost: ProcessStatus };
   busy: "update"|"restart-web"|"restart-runtime-host"|null;
@@ -272,7 +275,7 @@ bench's `stop` uses `bench.json` the same way.
 
 | | ready after start | health every 10 s |
 | --- | --- | --- |
-| web | `GET http://127.0.0.1:<port>/` is `200`, 90 s budget (cold `next start` on this checkout takes 10–30 s), 500 ms poll | same request, 5 s timeout |
+| web | `GET http://127.0.0.1:<port>/` is `200` and so is the first `/_next/static/…js` chunk that page references, 90 s budget (cold `next start` on this checkout takes 10–30 s), 500 ms poll | same requests, 5 s timeout |
 | runtime host | socket connects **and** fence file `pid` equals recorded PID, 15 s budget, 100 ms poll; then one `runtime-host-health` frame answered `"ok":true` | the same frame, 5 s timeout; `result.pid` must equal the recorded PID |
 
 A start whose child exits before readiness is `failed` with the exit code and
@@ -285,55 +288,72 @@ the prototype never frees a port.
 
 ## Update pipeline
 
-**Check.** `git ls-remote <remote> refs/heads/<branch>` (no objects) and
-`git -C <checkout> rev-parse HEAD`. Equal → `up-to-date`. Different → the
-check also runs `git -C <checkout> fetch --no-tags <remote>
-refs/heads/<branch>:refs/self-update/tip`, which brings objects into the
-repository and moves nothing in the working tree or on any branch, and then
-computes the delta locally:
+**Release directories.** The checkout is the first release. An update never
+writes into a directory a process serves from: `next start` reads `.next`
+chunks and `node_modules` lazily, so a build in place left the running web
+process answering 500 on every chunk its own page referenced while `/` still
+answered 200 (found by the review of the first build). Each update checks the
+target out as a git worktree at `<config-root>/self-update/releases/<sha12>`,
+installs and builds there, and only a ready build is published to
+`<config-root>/self-update/release.json` (`{ sha, dir }`, atomic rename). The
+**installed release** is that pointer, or the checkout at its `HEAD` when
+nothing was published. Every start and restart runs from the installed
+release as it stands at that moment, and records its short SHA with the PID.
+Old release directories stay on disk (Deferred: pruning).
 
-- commits: `git log --format=%h%x09%s HEAD..refs/self-update/tip`;
+**Check.** `git ls-remote <remote> refs/heads/<branch>` (no objects) against
+the installed release's SHA. Equal → `up-to-date`. Different → the check also
+runs `git -C <checkout> fetch --no-tags <remote>
++refs/heads/<branch>:refs/self-update/tip`, which brings objects into the
+repository and moves nothing in any working tree or on any branch, and then
+computes the delta locally (`<installed>` is the installed release's SHA):
+
+- commits: `git log --no-merges --format=%H%x09%s <installed>..refs/self-update/tip`,
+  each SHA cut to 7 characters like every other SHA on the page; the count in
+  the header is that list's length (a pull request's merge subject names its
+  branch, and the commits it brings are listed on their own);
 - changelog: `git show refs/self-update/tip:CHANGELOG.md` and
-  `git show HEAD:CHANGELOG.md`, parsed by `lib/changelog.ts`;
+  `git show <installed>:CHANGELOG.md`, parsed by `lib/changelog.ts`;
 - available version: `package.json` at the tip, the tip's short SHA and
   `%cI` date.
 
 The poll is `ls-remote` alone; the fetch happens only when something is new.
-A tip that is an ancestor of `HEAD` (the checkout is ahead) is reported as
+A tip that is an ancestor of the installed release (it is ahead) is reported as
 `up-to-date` with "Ahead of origin/main by N". A tip that neither contains nor
-is contained by `HEAD` is `update-available` with "Diverged" in the summary;
+is contained by it is `update-available` with "Diverged" in the summary;
 the update still checks out the exact tip.
 
 **Changelog delta.** Parse both files into `{ heading, sections: { type,
 items[] } }` where an item is its bullet text joined to one line. The delta is
-every version heading present at the tip and absent at `HEAD`, whole, plus for
-`[Unreleased]` every item present at the tip and absent at `HEAD` (compared
+every version heading present at the tip and absent at the installed release,
+whole, plus for `[Unreleased]` every item present at the tip and absent there (compared
 after whitespace normalisation). Summary line: `N commits · M changelog
 entries (2 Added, 3 Changed, 1 Fixed)`. Below it, per type, each item's first
-sentence cut to 160 characters, at most 8 items, then `+k more`. No changelog
-difference → `No changelog entries for these commits.`
+sentence, at most 8 items, then `+k more`. A first sentence over 160
+characters loses its parenthetical asides, then ends at the last clause
+boundary (`, ` `; ` `: ` ` — `) past half the limit, else the last word, with
+`…`. No changelog difference → `No changelog entries for these commits.`
 
-**Update** runs five steps, each `{ command, args, cwd: checkout, env:
-childEnv("build") }`, sequentially, stopping at the first failure, never
-starting or stopping a process:
+**Update** runs five steps, each with `env: childEnv("build")`, sequentially,
+stopping at the first failure, never starting or stopping a process
+(`<release>` is `<config-root>/self-update/releases/<target sha12>`):
 
-| step | command | done when |
+| step | command (cwd) | done when |
 | --- | --- | --- |
-| fetch | `git fetch --no-tags <remote> refs/heads/<branch>:refs/self-update/tip` | exit 0 and `git rev-parse refs/self-update/tip` equals the target recorded at update start; else failed with "The remote moved since the last check. Check again." |
-| checkout | `git checkout --detach <target sha>` | exit 0 (a dirty checkout fails here with git's own message; nothing is reset) |
-| install | `<bun> install --frozen-lockfile` | exit 0 |
-| build | `<bun> run build` | exit 0 (`next build --webpack && bun scripts/build-mcp.ts`) |
-| ready | `git rev-parse HEAD` equals target and `.next/BUILD_ID` is readable | both true |
+| fetch | `git fetch --no-tags <remote> +refs/heads/<branch>:refs/self-update/tip` (checkout) | exit 0 and `git rev-parse refs/self-update/tip` equals the target recorded at update start; else failed with "The remote moved since the last check. Check again." |
+| checkout | `git worktree add --detach <release> <target sha>` (checkout); when `<release>` exists from an earlier attempt, `git checkout --detach <target sha>` (release) | exit 0 |
+| install | `<bun> install --frozen-lockfile` (release) | exit 0 |
+| build | `<bun> run build` (release) | exit 0 (`next build --webpack && bun scripts/build-mcp.ts`) |
+| ready | `git rev-parse HEAD` in `<release>` equals target and `<release>/.next/BUILD_ID` is readable; then `release.json` is published | both true |
 
 Before `install` and `build` the runner reads `/proc/meminfo` `MemAvailable`
 and fails the step with "Not enough free memory (N MB available, 4096 needed)"
 when it is under 4 GB, without running the command. Step output goes to
 `<config-root>/self-update/logs/<step>.log` (truncated per run) and the last
 40 lines to the Snapshot. `retry` reruns from the failed step with the same
-target. A build in place means the running web process serves the previous
-build's HTML while `.next` changes underneath it; asset hashes can 404 until
-the restart, which is why the `done` copy says to restart promptly and why the
-build stage's evidence run restarts web right after the update.
+target. Because nothing is built where a process serves from, the running
+processes keep serving the previous release, whole, through the update and
+after it, until each one is restarted.
 
 ## State machines and copy
 
@@ -345,7 +365,7 @@ All copy is English. `HH:MM` is local time.
 | --- | --- |
 | idle | `Not checked yet` · button `Check now` |
 | checking | `Checking origin/main…` · button disabled |
-| up-to-date | `Up to date, checked at 12:04` · `Next check at 13:04` |
+| up-to-date | `Up to date, checked at 12:04` · `Next check at 13:04`, only when every live process serves the installed release; otherwise, amber, `a1b2c3d is built and not running yet · restart web and the runtime host to run it · checked 12:04` |
 | update-available | `Update available · 5 commits behind origin/main` · the delta · button `Check now` |
 | failed | `Check failed at 12:04` · error line in danger, e.g. `fatal: unable to access '…': Could not resolve host` · button `Retry check` |
 | any, while update runs | copy unchanged, `Check now` disabled with tooltip `Update in progress` |
@@ -354,11 +374,11 @@ All copy is English. `HH:MM` is local time.
 
 | state | copy |
 | --- | --- |
-| idle, nothing available | section hidden except `Run a check to see if an update is available.` |
+| idle, nothing available | `Run a check to see if an update is available.`; after a failed check `The last check failed, so there is nothing to build yet. Retry the check above.`; when up to date `Nothing to build: a1b2c3d is the newest revision of origin/main.` |
 | idle, available | heading `Update to a1b2c3d (1.2.3)` · primary button `Update` · `This builds the new version. Nothing restarts until you choose to.` |
 | running | button replaced by `Updating… step 4 of 5` · steps as below |
-| done | `Built a1b2c3d in 4 m 12 s. Running processes still serve the previous version. Restart web, then the runtime host, to apply.` · button `Update` hidden |
-| failed | `Update stopped at build after 1 m 03 s. Running processes were not touched.` · button `Retry from build` |
+| done | `Built a1b2c3d in 4 m 12 s.` then, counting a process only once it is `healthy` on the build: `The running processes still serve the previous release. Restart web, then the runtime host, to run it.` / `Web runs it; restart the runtime host to run it there too.` / `Web and the runtime host now run it.` · button `Update` hidden |
+| failed | `Update stopped at build after 1 m 03 s. The running processes were not touched; the build happens in its own release directory.` and, in mono, the step's last `fatal:`/`error` line · button `Retry from build` |
 
 Step rows, one per step, in order: `fetch` → `Fetch a1b2c3d`, `checkout` →
 `Check out a1b2c3d`, `install` → `Install dependencies`, `build` → `Build`,
@@ -387,7 +407,16 @@ mono, sunken) and a `Full log` link to `/api/steps/<name>/log`.
 | stopping | badge `◐ stopping` · `Stopping PID 48190… agents are being dropped` |
 | starting | badge `◐ starting` · `Starting… waiting for the socket and the fence` |
 | failed | badge `✕ failed` · `Exited with code 1 after 0.4 s` or `Socket not ready within 15 s` · last lines · button `Start runtime host` |
-| stopped | badge `○ stopped` · `Not running` · button `Start runtime host` |
+| stopped | badge `○ stopped` · `Not running` · button `Start runtime host`, which starts it without the confirmation (a stopped host supervises nobody) |
+
+A process that serves a release older than the installed one carries, in the
+accent tone, `Serves 7fb7345; a1b2c3d is built. Restart to run it.` It
+appears only once an update is published, never mid-build.
+
+The header's version row: `Running <revision>` when the live processes serve
+the same revision (`Web runs …` and `Runtime host runs …` when they differ),
+`Built <revision>` while the installed release is not what they serve, and
+`Available <revision>` when the check found a newer tip.
 
 The standing warning line under the block heading, always visible:
 `Restarting the runtime host drops the agents it supervises. Restart web first
@@ -685,6 +714,8 @@ the bench for the operator afterwards.
   over a tailnet needs the Viewer's operator capability.
 - **Docker installs** (the runtime-host container, candidate containers) and
   **Windows** (named pipes, no `/proc`, no process groups).
-- **Rollback** to the previous checkout and build.
+- **Rollback** to the previous release (its directory is still on disk).
+- **Pruning** release directories no process runs and no pointer names; each
+  holds its own `node_modules` and `.next` (about 1.8 GB on this repository).
 - **A shared helper** between the prototype and `bin/cli.mjs` for the child
   environment, the fence-owner parse and port allocation.
