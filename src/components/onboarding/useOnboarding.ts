@@ -2,21 +2,25 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import type { OnboardingMarker, OnboardingPatch } from "@/lib/onboarding/marker";
+import type { OnboardingMarker, OnboardingPatch, OnboardingStepId } from "@/lib/onboarding/marker";
 
 /**
  * Where the setup guide opens from (#1876, design §6): by itself on a first
- * run, from the two menu rows, and from the zero-projects panel. Every entry
- * dispatches one window event; the dialog is mounted once, in the Viewer.
+ * run, from the three menu rows, from the zero-projects panel, and on a
+ * given step from the QR popover and the mic menu. Every entry dispatches one
+ * window event; the dialog is mounted once, in the Viewer.
  */
 
-export type OnboardingMode = "guide" | "mapping";
+/** `mapping` and `voice` open step 2 or step 4 alone, for the menu rows. */
+export type OnboardingMode = "guide" | "mapping" | "voice";
+
+type OpenRequest = { mode: OnboardingMode; step: OnboardingStepId | null };
 
 const OPEN_EVENT = "llv:open-onboarding";
 
-export function openOnboarding(mode: OnboardingMode = "guide"): void {
+export function openOnboarding(mode: OnboardingMode = "guide", step: OnboardingStepId | null = null): void {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent<OnboardingMode>(OPEN_EVENT, { detail: mode }));
+  window.dispatchEvent(new CustomEvent<OpenRequest>(OPEN_EVENT, { detail: { mode, step } }));
 }
 
 export async function putOnboarding(patch: OnboardingPatch): Promise<OnboardingMarker | null> {
@@ -43,22 +47,37 @@ export function landingAllowsGuide(location: Pick<Location, "hash" | "search" | 
 
 export function useOnboarding(): {
   mode: OnboardingMode | null;
+  step: OnboardingStepId | null;
+  /** Counts openings, so every open starts the dialog afresh. */
+  opening: number;
   marker: OnboardingMarker | null;
+  /** The seat tick's check interval, which the tour's seat card names. */
+  checkMinutes: number | null;
   close: (outcome: "dismissed" | "completed") => void;
 } {
   const [mode, setMode] = useState<OnboardingMode | null>(null);
+  const [step, setStep] = useState<OnboardingStepId | null>(null);
+  const [opening, setOpening] = useState(0);
   const [marker, setMarker] = useState<OnboardingMarker | null>(null);
+  const [checkMinutes, setCheckMinutes] = useState<number | null>(null);
 
   useEffect(() => {
-    const onOpen = (event: Event) => setMode((event as CustomEvent<OnboardingMode>).detail ?? "guide");
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<OpenRequest | OnboardingMode | undefined>).detail;
+      const request = typeof detail === "string" ? { mode: detail, step: null } : detail;
+      setMode(request?.mode ?? "guide");
+      setStep(request?.step ?? null);
+      setOpening((value) => value + 1);
+    };
     window.addEventListener(OPEN_EVENT, onOpen);
     let cancelled = false;
     void fetch("/api/onboarding")
-      .then(async (response) => response.ok ? (await response.json()) as { marker: OnboardingMarker | null } : null)
+      .then(async (response) => response.ok ? (await response.json()) as { marker: OnboardingMarker | null; seatTickCheckMinutes?: unknown } : null)
       .catch(() => null)
       .then((body) => {
         if (cancelled || !body) return;
         setMarker(body.marker);
+        if (typeof body.seatTickCheckMinutes === "number" && body.seatTickCheckMinutes > 0) setCheckMinutes(body.seatTickCheckMinutes);
         /* First run: never decided. A marker neither completed nor dismissed is
            a guide the page died in the middle of; both reopen by themselves. */
         const unfinished = body.marker === null || (!body.marker.completedAt && !body.marker.dismissedAt);
@@ -76,9 +95,11 @@ export function useOnboarding(): {
 
   const close = useCallback((outcome: "dismissed" | "completed") => {
     setMode(null);
-    void putOnboarding(outcome === "completed" ? { completed: true, steps: { engines: "done", agents: "done" } } : { dismissed: true })
+    /* Each step wrote its own state as it was left; completing adds only the
+       fact of completion. */
+    void putOnboarding(outcome === "completed" ? { completed: true } : { dismissed: true })
       .then((written) => { if (written) setMarker(written); });
   }, []);
 
-  return { mode, marker, close };
+  return { mode, step, opening, marker, checkMinutes, close };
 }

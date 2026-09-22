@@ -200,6 +200,13 @@ export function Viewer() {
   useAgentChimes(files, requestScope, scopeCertified);
   const { archivedProjects, archiveProject, unarchiveProject } = useArchivedProjects(files, projectAliases);
   const catalogProjects = useMemo(() => new Set(projectCatalog.map((entry) => entry.project)), [projectCatalog]);
+  /* The setup guide's tour offers the projects the rail lists, the most
+     recently active first; archived ones are left out (#1876 slice 3). */
+  const tourProjects = useMemo(() => projectCatalog
+    .filter((entry) => !archivedProjects.has(entry.project))
+    .sort((a, b) => b.smt - a.smt)
+    .map((entry) => ({ project: entry.project, name: projectDisplayName(entry.project, projectDisplayNames[entry.project] ?? entry.displayName) })),
+  [projectCatalog, archivedProjects, projectDisplayNames]);
   const catalogConversationCounts = useMemo(
     () => new Map(projectCatalog.map((entry) => [entry.project, entry.conversations])),
     [projectCatalog],
@@ -1215,7 +1222,7 @@ export function Viewer() {
       <ArtifactPreviewHost mobile={isMobile} />
       {/* #1876: the setup guide. Opens by itself on a first run and from the
           menus' "Setup guide" and "Agent mapping" rows. */}
-      <OnboardingHost />
+      <OnboardingHost projects={tourProjects} currentProject={project === OVERVIEW ? null : project} />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card
           because the card unmounts on board navigation while the call keeps

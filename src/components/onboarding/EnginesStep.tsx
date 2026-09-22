@@ -1,19 +1,20 @@
 "use client";
 
 import { RefreshCw } from "lucide-react";
-import { useState } from "react";
 
 import { MobileAccountsBody } from "@/components/AccountsPanel";
 import { EngineMark } from "@/components/EngineMark";
 import type { AccountOption, EngineAccountsState } from "@/hooks/useEngineAccounts";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type TFunction } from "@/lib/i18n";
 import type { RoleEngine } from "@/lib/roles/types";
 
 /**
  * Step 1 (#1876, design §2.1): which engines this machine can run right now.
- * Sign-in reuses the accounts screen's own rows — the Claude browser-and-code
- * flow and the Codex device code — embedded under the engine's card, so there
- * is one sign-in implementation and this step only decides when to show it.
+ * Each engine's card is its account list: the accounts screen's own rows —
+ * each account's state and its sign-in (the Claude browser-and-code flow, the
+ * Codex device code) — with "Add a {engine} account" last, so several
+ * accounts per engine are one row away (#2004) and there is one sign-in
+ * implementation.
  */
 
 export type CliPresence = "found" | "missing" | null;
@@ -42,26 +43,26 @@ export function engineAccount(state: Pick<EngineAccountsState, "accounts" | "act
   return connected.find((account) => account.id === state.active) ?? connected[0] ?? null;
 }
 
+/** The card's one-line summary of the list under it (design §2.1). */
+function headerLine(state: EngineAccountsState, connected: boolean, t: TFunction): string {
+  const signedIn = state.accounts.filter(accountConnected);
+  const needSignIn = state.accounts.length - signedIn.length;
+  const account = engineAccount(state);
+  if (state.accounts.length > 1 && account) {
+    const head = t("onboarding.engines.accountsHeader", { count: state.accounts.length, label: account.label });
+    return needSignIn > 0 ? `${head} · ${t("onboarding.engines.accountsNeedSignIn", { count: needSignIn })}` : head;
+  }
+  if (connected) return account?.plan ? t("onboarding.engines.connected", { plan: account.plan }) : t("onboarding.engines.connectedNoPlan");
+  return state.status === "error" ? t("onboarding.engines.authUnknown") : t("onboarding.engines.signedOut");
+}
+
 function EngineCard({ state, cli, now, onRecheck }: { state: EngineAccountsState; cli: CliPresence; now: number; onRecheck: () => void }) {
   const { t } = useLocale();
-  const [signingIn, setSigningIn] = useState(false);
   const engine = state.engine;
   const missing = cli === "missing";
   const connected = engineReady(state, cli);
-  const account = engineAccount(state);
   const loading = state.status === "loading" && state.accounts.length === 0;
-  /* The embedded rows either carry their own "sign in" or, for an account
-     only a terminal can sign in, leave "add an account" as the way in. */
-  const signable = state.accounts.some((candidate) => !accountConnected(candidate) && (engine === "claude" || candidate.kind === "managed"));
-  const stateLine = loading
-    ? null
-    : connected
-      ? account?.plan ? t("onboarding.engines.connected", { plan: account.plan }) : t("onboarding.engines.connectedNoPlan")
-      : missing
-        ? t("onboarding.engines.missing")
-        : state.status === "error"
-          ? t("onboarding.engines.authUnknown")
-          : t("onboarding.engines.signedOut");
+  const stateLine = loading ? null : missing ? t("onboarding.engines.missing") : headerLine(state, connected, t);
   const tone = connected ? "text-success" : missing ? "text-danger" : "text-warning";
   return (
     <div
@@ -77,22 +78,12 @@ function EngineCard({ state, cli, now, onRecheck }: { state: EngineAccountsState
           <EngineMark engine={engine} size={18} />
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="text-body font-semibold text-primary">{ENGINE_NAME[engine]}</span>
-            <span className={`text-ui ${tone}`}>{stateLine}</span>
+            <span data-onboarding-engine-header="" className={`truncate text-ui ${tone}`} title={stateLine ?? undefined}>{stateLine}</span>
           </span>
           {missing ? (
             <button type="button" onClick={onRecheck} className="inline-flex h-8 shrink-0 items-center gap-1 rounded-[8px] border border-border bg-canvas px-2.5 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11">
               <RefreshCw className="h-3 w-3" aria-hidden />
               {t("onboarding.engines.recheck")}
-            </button>
-          ) : !connected ? (
-            <button
-              type="button"
-              data-onboarding-sign-in={engine}
-              aria-expanded={signingIn}
-              onClick={() => setSigningIn((value) => !value)}
-              className={`inline-flex h-8 shrink-0 items-center rounded-[8px] px-3 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 ${signingIn ? "border border-border bg-canvas text-primary hover:bg-sunken" : "bg-accent text-white hover:opacity-90"}`}
-            >
-              {signingIn ? t("onboarding.engines.hideSignIn") : t("onboarding.engines.signIn")}
             </button>
           ) : null}
         </div>
@@ -100,14 +91,13 @@ function EngineCard({ state, cli, now, onRecheck }: { state: EngineAccountsState
       {missing ? (
         <p className="text-ui text-secondary">{t(engine === "claude" ? "onboarding.engines.missingClaude" : "onboarding.engines.missingCodex")}</p>
       ) : null}
-      {signingIn && !connected ? (
-        <div data-onboarding-sign-in-body={engine} className="-mx-3 -mb-3 border-t border-border">
-          <p data-onboarding-sign-in-hint={engine} className="px-3 pt-2.5 text-ui text-secondary">
-            {signable ? t("onboarding.engines.signInPick") : t("onboarding.engines.signInAdd", { engine: ENGINE_NAME[engine] })}
-          </p>
+      {/* Every account the engine store knows, with its own sign-in, and the
+          accounts panel's add row last (#2004): the same rows, not new UI. */}
+      {loading ? null : (
+        <div data-onboarding-accounts={engine} className="-mx-3 -mb-3 border-t border-border">
           <MobileAccountsBody engines={[state]} now={now} />
         </div>
-      ) : null}
+      )}
     </div>
   );
 }

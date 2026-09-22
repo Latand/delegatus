@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { statePath } from "@/lib/configDir";
 import { applyOnboardingPatch, parseOnboardingPatch, readOnboardingMarker, resolveOnboardingMarker, writeOnboardingMarker } from "@/lib/onboarding/marker";
+import { DEFAULT_SEAT_TICK_POLICY, seatTickPolicy } from "@/lib/monitor/seatTick";
 import { readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -21,10 +22,13 @@ function existingInstall(): boolean {
   return fs.existsSync(statePath("role-presets.json"));
 }
 
-/** The setup guide's marker; `marker: null` means it was never decided and the guide opens. */
+/** The setup guide's marker; `marker: null` means it was never decided and the
+    guide opens. The seat tick's check interval rides along for the tour's seat
+    card, which names it; a tick turned off reads as the shipped interval. */
 export async function GET(): Promise<NextResponse> {
   try {
-    return NextResponse.json({ marker: resolveOnboardingMarker(existingInstall) });
+    const checkIntervalMs = seatTickPolicy()?.checkIntervalMs ?? DEFAULT_SEAT_TICK_POLICY.checkIntervalMs;
+    return NextResponse.json({ marker: resolveOnboardingMarker(existingInstall), seatTickCheckMinutes: Math.round(checkIntervalMs / 60_000) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

@@ -15,7 +15,10 @@ import { statePath } from "@/lib/configDir";
  * reach someone who ran `claude` before they ever opened the Viewer.
  */
 
-export const ONBOARDING_STEP_IDS = ["engines", "agents", "check"] as const;
+/* Slice 3 inserted phone, voice and tour. A marker written before them reads
+   the new ids as null, the "not visited" state, so a returning user lands on
+   the first of them. */
+export const ONBOARDING_STEP_IDS = ["engines", "agents", "phone", "voice", "tour", "check"] as const;
 export type OnboardingStepId = typeof ONBOARDING_STEP_IDS[number];
 export type OnboardingStepState = "done" | "skipped" | null;
 
@@ -37,8 +40,8 @@ export type OnboardingMarker = {
 
 const markerFile = () => statePath("onboarding.json");
 
-function emptySteps(): Record<OnboardingStepId, OnboardingStepState> {
-  return { engines: null, agents: null, check: null };
+export function emptySteps(): Record<OnboardingStepId, OnboardingStepState> {
+  return Object.fromEntries(ONBOARDING_STEP_IDS.map((id) => [id, null])) as Record<OnboardingStepId, OnboardingStepState>;
 }
 
 function parseLastHealth(raw: unknown): OnboardingLastHealth | null {
