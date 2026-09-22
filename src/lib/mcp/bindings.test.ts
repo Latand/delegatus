@@ -15,7 +15,9 @@ import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/co
 import type { Pipeline } from "@/lib/pipelines/types";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, canonicalOrchestratorProject, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -3681,4 +3683,40 @@ test("resolve-decision forwards its receipt key and server actor and wakes the c
     await Promise.resolve();
     expect(ticks).toBe(1);
   } finally { unregister(); }
+});
+
+test("with the rename alias recorded, the Viewer's own project is the seat's under the old and the new remote", () => {
+  /* rename-delegatus.md §2.3: a release resolves its own project from the
+     canonical remote string. Deployed releases carry the old string until
+     slice 4 moves it, and a host may already be configured with the new one;
+     either way `deploy_exact_sha` compares it against the seat's project, so
+     both spellings must fold into the one key once the forge-proven alias is
+     recorded. */
+  const restoreState = process.env.LLV_STATE_DIR;
+  const restoreRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-renamed-viewer-project-"));
+  process.env.LLV_STATE_DIR = state;
+  resetProjectAliasesForTests();
+  try {
+    const oldRemote = "https://github.com/acme/old-widgets.git";
+    const newRemote = "https://github.com/acme/delegated-widgets.git";
+    const before = projectIdentityFromRemote(oldRemote, state)!;
+    const after = projectIdentityFromRemote(newRemote, state)!;
+    expect(persistProjectAliases([{ source: before.project, target: after.project, displayName: after.displayName }])).toBe(true);
+    /* The seat was designated under the old key and is read alias-resolved. */
+    const seatProject = canonicalOrchestratorProject(before.project);
+    expect(seatProject).toBe(after.project);
+    const viewerProject = () => productionDomainDependencies.viewerProject?.() ?? null;
+    for (const remote of [oldRemote, newRemote]) {
+      process.env.LLV_VIEWER_CANONICAL_REMOTE = remote;
+      expect(viewerProject()).toBe(seatProject);
+    }
+  } finally {
+    if (restoreState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = restoreState;
+    if (restoreRemote === undefined) delete process.env.LLV_VIEWER_CANONICAL_REMOTE;
+    else process.env.LLV_VIEWER_CANONICAL_REMOTE = restoreRemote;
+    resetProjectAliasesForTests();
+    fs.rmSync(state, { recursive: true, force: true });
+  }
 });

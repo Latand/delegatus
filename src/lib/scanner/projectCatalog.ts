@@ -10,9 +10,17 @@ import {
   durableProjectAliasCandidates,
   persistProjectAliases,
   projectAliasesCanAccept,
+  recordedProjectRemote,
+  recordProjectRemote,
   type ProjectAliasRegistration,
 } from "@/lib/projects/aliases";
-import { displayNameFromProjectIdentity } from "@/lib/projects/identity";
+import {
+  forgeRenameCandidateFor,
+  forgeRenameCandidatesFromMoves,
+  scheduleForgeRenames,
+  type ForgeRenameCandidate,
+} from "@/lib/projects/forgeRename";
+import { displayNameFromProjectIdentity, projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/succession";
 
 import type { Engine, Fmt, ProjectCatalogEntry } from "../types";
@@ -438,6 +446,9 @@ function claudeSlug(raw: RawEntry): string | null {
   return path.relative(raw.root, raw.path).split(path.sep)[0] || null;
 }
 
+/** Project roots whose remote this process has already put in the ledger. */
+const ledgerRecordedRoots = new Set<string>();
+
 function migrationPlan(
   changes: ReadonlyMap<string, ReadonlySet<string>>,
   groups: ReadonlyMap<string, ProjectCatalogEntry>,
@@ -617,11 +628,38 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
   publishConversationCatalogForScan(conversationCatalog, scanToken, complete);
   if (isCurrentPersistence && persistIndex && complete) {
     let boardHealed = true;
+    const forgeCandidates: ForgeRenameCandidate[] = [];
     if (options.persist !== false) {
+      /* Fill the remote ledger a forge-proven rename reads its old remote from
+         (rename-delegatus.md §2.3), once per project root per process. */
+      for (const group of groups.values()) {
+        if (!group.projectRoot) continue;
+        const seen = `${group.project}\0${group.projectRoot}`;
+        if (ledgerRecordedRoots.has(seen)) continue;
+        ledgerRecordedRoots.add(seen);
+        try {
+          const identity = projectIdentityFromRepositoryRoot(group.projectRoot);
+          if (identity) recordProjectRemote(identity);
+        } catch {
+          ledgerRecordedRoots.delete(seen);
+        }
+      }
       try {
         const plan = migrationPlan(changes, groups);
         if (plan.conflicts.length > 0) throw new Error("ambiguous catalog project identity");
         const migrations = plan.migrations;
+        /* A file re-described under a new key is the same unproven evidence
+           as the durable pass's: when both keys are remotes this machine has
+           recorded, the origin changed, and only the forge may join them
+           (§2.4, #2035). */
+        for (const [source, target] of [...migrations]) {
+          const sourceRemote = recordedProjectRemote(source);
+          const targetRemote = recordedProjectRemote(target);
+          if (!sourceRemote || !targetRemote || sourceRemote === targetRemote) continue;
+          migrations.delete(source);
+          const candidate = forgeRenameCandidateFor(source, groups.get(target)?.projectRoot);
+          if (candidate) forgeCandidates.push(candidate);
+        }
         const registrations: ProjectAliasRegistration[] = [...migrations].map(([source, target]) => ({
           source,
           target,
@@ -632,6 +670,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
            on every scan, so skipping it here loses nothing while the clean
            registrations, the board migration, and the catalog write proceed. */
         const durable = durableProjectAliasCandidates();
+        forgeCandidates.push(...forgeRenameCandidatesFromMoves(durable.remoteMoves));
         let deferredSources = durable.conflicts.length;
         for (const registration of durable.registrations) {
           const held = migrations.get(registration.source);
@@ -661,13 +700,21 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
          so a scan costs nothing while no folder has moved; the next scan
          re-projects the old key's conversations through the recorded alias. */
       try {
-        recordProjectSuccessions([...projectsByCwd]
-          .filter(([, projects]) => projects.size > 1)
+        const movedCwds = [...projectsByCwd].filter(([, projects]) => projects.size > 1);
+        recordProjectSuccessions(movedCwds
           .flatMap(([cwd, projects]) => [...projects].map((project) => projectSuccessionFor(project, cwd))));
+        /* The same signal, for a remote that changed: a candidate for the
+           forge, which alone may prove it a rename. */
+        forgeCandidates.push(...movedCwds
+          .flatMap(([cwd, projects]) => [...projects].map((project) => forgeRenameCandidateFor(project, cwd)))
+          .filter((candidate): candidate is ForgeRenameCandidate => candidate !== null));
       } catch {
         console.error("[project catalog] project identity succession deferred; a later scan will retry");
       }
     }
+    /* Network work, so detached from the scan and after its persistence; an
+       unanswered lookup decides nothing and the next scan asks again. */
+    scheduleForgeRenames(forgeCandidates);
     if (boardHealed) {
       writeState({ version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: nextFiles });
     } else {

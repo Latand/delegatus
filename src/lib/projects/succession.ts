@@ -2,7 +2,7 @@ import fs from "node:fs";
 
 import { migrateBoardProjects } from "@/lib/board/store";
 import { appendLifecycleEvents } from "@/lib/lifecycle/journal";
-import { canonicalProject, persistProjectAliases, projectAliasesCanAccept } from "@/lib/projects/aliases";
+import { canonicalProject, persistProjectAliases, projectAliasesCanAccept, recordProjectRemote } from "@/lib/projects/aliases";
 import {
   directoryProjectId,
   isCanonicalProjectId,
@@ -32,8 +32,11 @@ import { projectRootForCwd } from "@/lib/scanner/describe";
  * Only a PATH-DERIVED source is ever moved: a `dir-` id or a local-repository
  * id, verified against the folder itself, so the old key provably named this
  * folder and no other. A remote identity that changes (an `origin` renamed or
- * re-pointed) is not a succession: a remote names a repository every clone of
- * it shares, and aliasing it would fold other checkouts into this one.
+ * re-pointed) is not a succession on this evidence: a remote names a
+ * repository every clone of it shares, and aliasing it would fold other
+ * checkouts into this one. The one exception is a rename the forge proves
+ * (`forgeRename.ts`), which is recorded through {@link recordProjectSuccessions}
+ * like any other succession.
  */
 export interface ProjectSuccession {
   source: string;
@@ -64,7 +67,12 @@ function namesFolder(project: string, folder: string): boolean {
 function currentIdentity(folder: string): { project: string; displayName: string } | null {
   const root = projectRootForCwd(folder);
   const repository = root ? projectIdentityFromRepositoryRoot(root) : null;
-  if (repository) return { project: repository.project, displayName: repository.displayName };
+  if (repository) {
+    /* Every resolution feeds the remote ledger a forge-proven rename reads
+       its old remote from (rename-delegatus.md §2.3). */
+    recordProjectRemote(repository);
+    return { project: repository.project, displayName: repository.displayName };
+  }
   return projectIdentityFromDirectory(folder);
 }
 

@@ -61,8 +61,14 @@ once an origin is added is `repo-<remote>`. Anything recorded before the move
 new pipelines get the new one. `src/lib/projects/succession.ts` records that
 move once as an alias in the same map `canonicalProject` reads, and only for a
 path-derived source verified against the folder. It runs on scan, at seat tick
-boot and sweep, and at designation. A remote that changes (renamed or
-re-pointed origin) is never aliased, because every clone shares a remote id.
+boot and sweep, and at designation. A remote change is aliased only when the
+forge proves a rename: `src/lib/projects/forgeRename.ts` asks GitHub for the
+old and the new name, and only the same numeric repository id joins them. The
+old remote comes from `state/project-remotes.json`, which each machine fills
+with the remote behind every repository key it resolves, because a key's hash
+cannot be reversed. A re-pointed origin (a fork, an unrelated repository) is
+never aliased, and neither is a remote this machine never recorded, because
+every clone shares a remote id.
 <!-- END:worktree-grouping -->
 
 <!-- BEGIN:live-state-and-publication -->
