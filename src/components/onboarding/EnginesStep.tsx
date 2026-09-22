@@ -94,7 +94,9 @@ function EngineCard({ state, cli, now, onRecheck }: { state: EngineAccountsState
       {/* Every account the engine store knows, with its own sign-in, and the
           accounts panel's add row last (#2004): the same rows, not new UI. */}
       {loading ? null : (
-        <div data-onboarding-accounts={engine} className="-mx-3 -mb-3 border-t border-border">
+        /* A missing command makes every sign-in and add press fail, so the
+           rows stay listed but inert until Check again finds the command. */
+        <div data-onboarding-accounts={engine} inert={missing} className={`-mx-3 -mb-3 border-t border-border ${missing ? "opacity-55" : ""}`}>
           <MobileAccountsBody engines={[state]} now={now} />
         </div>
       )}

@@ -40,12 +40,12 @@ afterEach(async () => {
   }
 });
 
-async function mount(claude: EngineAccountsState, codex: EngineAccountsState): Promise<HTMLDivElement> {
+async function mount(claude: EngineAccountsState, codex: EngineAccountsState, cli: { claude: "found" | "missing"; codex: "found" | "missing" } = { claude: "found", codex: "found" }): Promise<HTMLDivElement> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   mounted = { root, host };
-  await act(async () => root.render(<EnginesStep claude={claude} codex={codex} cli={{ claude: "found", codex: "found" }} now={1_800_000_000} onRecheck={() => {}} />));
+  await act(async () => root.render(<EnginesStep claude={claude} codex={codex} cli={cli} now={1_800_000_000} onRecheck={() => {}} />));
   return host;
 }
 
@@ -78,4 +78,16 @@ test("an engine with no account still offers the add row as its way in", async (
   const card = host.querySelector("[data-onboarding-engine=codex]")!;
   expect(card.getAttribute("data-engine-state")).toBe("signed-out");
   expect(card.querySelector("[data-mobile2-account-add=codex]")).not.toBeNull();
+});
+
+test("an engine whose command is missing lists its accounts but offers no sign-in or add until it is installed", async () => {
+  const codex = engineState("codex", [account({ id: "cx-main", label: "Main", authPresent: false, authHealth: "signed_out", loginState: "idle" })], "cx-main");
+  const host = await mount(engineState("claude", [account({ id: "cl-main", label: "Main" })], "cl-main"), codex, { claude: "found", codex: "missing" });
+  const card = host.querySelector("[data-onboarding-engine=codex]")!;
+  expect(card.getAttribute("data-engine-state")).toBe("missing");
+  expect(card.querySelector("[data-mobile2-account=cx-main]")).not.toBeNull();
+  /* Pressing sign-in or add would run the command that is not there. */
+  expect(card.querySelector("[data-onboarding-accounts=codex]")?.hasAttribute("inert")).toBe(true);
+  expect(card.textContent).toContain("Install the Codex CLI");
+  expect(host.querySelector("[data-onboarding-accounts=claude]")?.hasAttribute("inert")).toBe(false);
 });
