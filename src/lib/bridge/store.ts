@@ -632,7 +632,7 @@ export function issueBridgeAckToken(
 export function redeemBridgeAckToken(token: string, now = new Date()): { ok: boolean; throughSeq: number } {
   const scopedKey = /^ack_([0-9a-f]{32})_[0-9a-f]{36}$/.exec(token)?.[1];
   const rowKey = scopedKey ? `channel:${scopedKey}` : MANAGER_CHANNEL_ROW;
-  return mutateChannel(rowKey, (read) => {
+  return mutateChannel<{ ok: boolean; throughSeq: number }>(rowKey, (read) => {
     const current = read();
     if (scopedKey && current && (
       !current.project
@@ -1130,7 +1130,8 @@ export function importLegacyBridgeReports(
 
 type ChannelSource = { rowKey: string; file: string };
 type ChannelRead =
-  | { kind: "missing" | "tombstone" }
+  | { kind: "missing" }
+  | { kind: "tombstone" }
   | { kind: "unreadable"; bytes: Buffer }
   | { kind: "channel"; bytes: Buffer; channel: BridgeChannelV1 | null };
 
