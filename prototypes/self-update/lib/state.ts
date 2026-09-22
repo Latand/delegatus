@@ -36,6 +36,9 @@ export interface UpdateState {
   target: string | null;
   targetShort: string | null;
   targetVersion: string | null;
+  /* The release directory this update checks out, installs and builds in:
+     never the directory a running process serves from. */
+  releaseDir: string | null;
   steps: Step[];
   startedAt: string | null;
   finishedAt: string | null;
@@ -51,7 +54,7 @@ export interface ProcessStatus {
   lastHealthAt: string | null;
   lastHealthOk: boolean | null;
   error: string | null;
-  /* Short SHA the checkout was at when this process started. */
+  /* Short SHA of the release this process was started from. */
   revision: string | null;
 }
 
@@ -61,7 +64,10 @@ export interface ProcessView extends ProcessStatus { tail: string[] }
 export type Busy = "update" | "restart-web" | "restart-runtime-host" | null;
 
 export interface Snapshot {
-  running: Revision;
+  /* The newest built release: what the next start or restart runs. */
+  installed: Revision;
+  /* What each live process actually serves (null when it is not running). */
+  serving: { web: Revision | null; runtimeHost: Revision | null };
   available: Revision | null;
   check: CheckState;
   update: UpdateState;
@@ -77,18 +83,18 @@ export function pendingSteps(): Step[] {
 }
 
 export function idleUpdate(): UpdateState {
-  return { state: "idle", target: null, targetShort: null, targetVersion: null, steps: pendingSteps(), startedAt: null, finishedAt: null };
+  return { state: "idle", target: null, targetShort: null, targetVersion: null, releaseDir: null, steps: pendingSteps(), startedAt: null, finishedAt: null };
 }
 
 export function stoppedProcess(): ProcessStatus {
   return { state: "stopped", pid: null, port: null, socket: null, startedAt: null, lastHealthAt: null, lastHealthOk: null, error: null, revision: null };
 }
 
-export interface CheckSlice { running: Revision | null; available: Revision | null; check: CheckState }
+export interface CheckSlice { installed: Revision | null; available: Revision | null; check: CheckState }
 
 export function initialCheck(): CheckSlice {
   return {
-    running: null,
+    installed: null,
     available: null,
     check: { state: "idle", at: null, error: null, nextPollAt: null, note: null, behind: 0, delta: null },
   };
@@ -102,7 +108,7 @@ export function applyCheck(previous: CheckSlice, outcome: CheckOutcome, now: Dat
   const nextPollAt = new Date(now.getTime() + pollMinutes * 60_000).toISOString();
   if (!outcome.ok) {
     return {
-      running: outcome.running ?? previous.running,
+      installed: outcome.installed ?? previous.installed,
       available: previous.available,
       check: { ...previous.check, state: "failed", at, error: outcome.error, nextPollAt },
     };
@@ -112,7 +118,7 @@ export function applyCheck(previous: CheckSlice, outcome: CheckOutcome, now: Dat
     : outcome.relation === "diverged" ? `Diverged from origin/${branch}` : null;
   const available = outcome.relation === "behind" || outcome.relation === "diverged" ? outcome.available : null;
   return {
-    running: outcome.running,
+    installed: outcome.installed,
     available,
     check: {
       state: available ? "update-available" : "up-to-date",

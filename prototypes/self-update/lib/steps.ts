@@ -1,12 +1,16 @@
 /* The five update steps, run one after another, stopping at the first failure.
-   The runner never starts or stops a process: the running build keeps serving
-   whatever happens here. Commands go through an injected port so tests stub
+   The target is checked out into its own release directory (a git worktree of
+   the checkout) and installed and built there; the directory the running
+   processes serve from is never written. Only a ready build is published as
+   the installed release, which the next restart runs. The runner never starts
+   or stops a process. Commands go through an injected port so tests stub
    them. */
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { TIP_REF } from "./git";
 import { readStartIdentity, signalGroup } from "./processes";
+import { releaseDirFor, type Release } from "./release";
 import { idleUpdate, pendingSteps, STEP_NAMES, type Step, type StepName, type UpdateState } from "./state";
 
 export { STEP_NAMES, type StepName };
@@ -20,8 +24,11 @@ export interface StepPorts {
   /* Runs a command to completion and answers its exit code. */
   run(command: string[], options: RunOptions): Promise<number>;
   memAvailableMb(): number;
-  revParse(ref: string): Promise<string>;
-  buildIdReadable(): boolean;
+  revParse(ref: string, cwd: string): Promise<string>;
+  exists(path: string): boolean;
+  buildIdReadable(dir: string): boolean;
+  /* Makes a ready build the installed release. */
+  publish(release: Release): void;
   now(): number;
 }
 
@@ -31,6 +38,7 @@ export interface RunnerConfig {
   branch: string;
   bun: string;
   logDir: string;
+  releasesDir: string;
   env: Record<string, string>;
 }
 
@@ -60,6 +68,7 @@ export class UpdateRunner {
       target,
       targetShort: meta.short ?? target.slice(0, 7),
       targetVersion: meta.version ?? null,
+      releaseDir: releaseDirFor(this.config.releasesDir, target),
       steps: pendingSteps(),
       startedAt: this.iso(),
     };
@@ -139,9 +148,10 @@ export class UpdateRunner {
   private async runStep(name: StepName, push: (line: string, toTail?: boolean) => void): Promise<number | null> {
     const { checkout, remote, branch, bun, env } = this.config;
     const target = this.state.target!;
-    const command = async (argv: string[]): Promise<number> => {
-      push(`$ ${argv.join(" ")}`, false);
-      const code = await this.ports.run(argv, { cwd: checkout, env, onLine: (line) => push(line) });
+    const release = this.state.releaseDir!;
+    const command = async (argv: string[], cwd: string): Promise<number> => {
+      push(`$ ${argv.join(" ")}   (in ${cwd})`, false);
+      const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line) });
       push(`exit ${code}`, false);
       if (code !== 0) throw new StepFailure(code);
       return code;
@@ -152,24 +162,27 @@ export class UpdateRunner {
     };
     switch (name) {
       case "fetch": {
-        const code = await command(["git", "fetch", "--no-tags", remote, `refs/heads/${branch}:${TIP_REF}`]);
-        const fetched = (await this.ports.revParse(TIP_REF)).trim();
+        const code = await command(["git", "fetch", "--no-tags", remote, `+refs/heads/${branch}:${TIP_REF}`], checkout);
+        const fetched = (await this.ports.revParse(TIP_REF, checkout)).trim();
         if (fetched !== target) throw new Error("The remote moved since the last check. Check again.");
         return code;
       }
       case "checkout":
-        return command(["git", "checkout", "--detach", target]);
+        /* A directory an earlier attempt at this target left is reused. */
+        if (this.ports.exists(release)) return command(["git", "checkout", "--detach", target], release);
+        return command(["git", "worktree", "add", "--detach", release, target], checkout);
       case "install":
         guardMemory();
-        return command([bun, "install", "--frozen-lockfile"]);
+        return command([bun, "install", "--frozen-lockfile"], release);
       case "build":
         guardMemory();
-        return command([bun, "run", "build"]);
+        return command([bun, "run", "build"], release);
       case "ready": {
-        const head = (await this.ports.revParse("HEAD")).trim();
+        const head = (await this.ports.revParse("HEAD", release)).trim();
         if (head !== target) throw new Error(`HEAD is ${head.slice(0, 7)}, expected ${target.slice(0, 7)}`);
-        if (!this.ports.buildIdReadable()) throw new Error(".next/BUILD_ID is missing after the build");
-        push(`HEAD is ${target.slice(0, 7)} and .next/BUILD_ID is present`);
+        if (!this.ports.buildIdReadable(release)) throw new Error(".next/BUILD_ID is missing after the build");
+        this.ports.publish({ sha: target, dir: release });
+        push(`${target.slice(0, 7)} is built in ${release}; the next restart runs it`);
         return null;
       }
     }
@@ -182,7 +195,7 @@ export class UpdateRunner {
    this runner started and nothing else. */
 export interface RealPorts extends StepPorts { abort(): void }
 
-export function realPorts(checkout: string): RealPorts {
+export function realPorts(publish: (release: Release) => void): RealPorts {
   let current: { pid: number; startIdentity: string | null } | null = null;
   return {
     async run(command, { cwd, env, onLine }) {
@@ -207,13 +220,15 @@ export function realPorts(checkout: string): RealPorts {
       signalGroup({ pid: current.pid, startIdentity: current.startIdentity }, "SIGTERM");
     },
     memAvailableMb,
-    async revParse(ref) {
-      const child = Bun.spawn(["git", "rev-parse", "--verify", "--quiet", ref], { cwd: checkout, stdout: "pipe", stderr: "ignore" });
+    async revParse(ref, cwd) {
+      const child = Bun.spawn(["git", "rev-parse", "--verify", "--quiet", ref], { cwd, stdout: "pipe", stderr: "ignore" });
       const out = await new Response(child.stdout).text();
       await child.exited;
       return out.trim();
     },
-    buildIdReadable: () => existsSync(join(checkout, ".next", "BUILD_ID")),
+    exists: (path) => existsSync(path),
+    buildIdReadable: (dir) => existsSync(join(dir, ".next", "BUILD_ID")),
+    publish,
     now: () => Date.now(),
   };
 }

@@ -63,61 +63,70 @@ export async function lsRemote(checkout: string, remote: string, branch: string)
 }
 
 export async function fetchTip(checkout: string, remote: string, branch: string): Promise<void> {
-  await git(checkout, "fetch", "--no-tags", remote, `refs/heads/${branch}:${TIP_REF}`);
+  await git(checkout, "fetch", "--no-tags", remote, `+refs/heads/${branch}:${TIP_REF}`);
 }
 
 async function count(checkout: string, range: string): Promise<number> {
   return Number((await git(checkout, "rev-list", "--count", range)).trim());
 }
 
+/* Merge commits are left out: a pull request's merge subject names its branch,
+   and the commits it brings are listed on their own. Every SHA on the page is
+   spelled with 7 characters; %h would lengthen some of them. */
 async function commitsBetween(checkout: string, from: string, to: string): Promise<CommitLine[]> {
-  const out = await git(checkout, "log", "--format=%h%x09%s", `${from}..${to}`);
+  const out = await git(checkout, "log", "--no-merges", "--format=%H%x09%s", `${from}..${to}`);
   return out.split("\n").filter(Boolean).map((line) => {
     const tab = line.indexOf("\t");
-    return { short: line.slice(0, tab), subject: line.slice(tab + 1) };
+    return { short: line.slice(0, 7), subject: line.slice(tab + 1) };
   });
 }
 
 export type Relation = "equal" | "behind" | "ahead" | "diverged";
 
 export type CheckOutcome =
-  | { ok: true; running: Revision; available: Revision | null; relation: Relation; ahead: number; behind: number; delta: UpdateDelta | null }
-  | { ok: false; error: string; running: Revision | null };
+  | { ok: true; installed: Revision; available: Revision | null; relation: Relation; ahead: number; behind: number; delta: UpdateDelta | null }
+  | { ok: false; error: string; installed: Revision | null };
 
-export interface CheckInput { checkout: string; remote: string; branch: string }
+/* installed: the revision of the newest built release (what the next restart
+   runs); the checkout's HEAD when nothing was built yet. */
+export interface CheckInput { checkout: string; remote: string; branch: string; installed?: string }
 
-export async function checkForUpdate({ checkout, remote, branch }: CheckInput): Promise<CheckOutcome> {
-  let running: Revision | null = null;
+export async function checkForUpdate({ checkout, remote, branch, installed: installedRev = "HEAD" }: CheckInput): Promise<CheckOutcome> {
+  let installed: Revision | null = null;
   try {
-    running = await readRevision(checkout, "HEAD");
+    installed = await readRevision(checkout, installedRev);
+    const base = installed.sha;
     const tip = await lsRemote(checkout, remote, branch);
-    if (tip === running.sha) return { ok: true, running, available: null, relation: "equal", ahead: 0, behind: 0, delta: null };
+    if (tip === base) return { ok: true, installed, available: null, relation: "equal", ahead: 0, behind: 0, delta: null };
 
     const known = await runGit(["cat-file", "-e", `${tip}^{commit}`], checkout);
     const fetched = await runGit(["rev-parse", "--verify", "--quiet", TIP_REF], checkout);
     if (known.code !== 0 || fetched.stdout.trim() !== tip) await fetchTip(checkout, remote, branch);
 
-    const [ahead, behind] = await Promise.all([count(checkout, `${tip}..HEAD`), count(checkout, `HEAD..${tip}`)]);
-    const relation: Relation = behind === 0 ? "ahead" : ahead === 0 ? "behind" : "diverged";
-    if (relation === "ahead") return { ok: true, running, available: null, relation, ahead, behind, delta: null };
+    const [ahead, behindAll] = await Promise.all([count(checkout, `${tip}..${base}`), count(checkout, `${base}..${tip}`)]);
+    const relation: Relation = behindAll === 0 ? "ahead" : ahead === 0 ? "behind" : "diverged";
+    if (relation === "ahead") return { ok: true, installed, available: null, relation, ahead, behind: 0, delta: null };
 
     const [available, commits, oldLog, newLog] = await Promise.all([
       readRevision(checkout, tip),
-      commitsBetween(checkout, "HEAD", tip),
-      showFile(checkout, "HEAD", "CHANGELOG.md"),
+      commitsBetween(checkout, base, tip),
+      showFile(checkout, base, "CHANGELOG.md"),
       showFile(checkout, tip, "CHANGELOG.md"),
     ]);
     const changelog = changelogDelta(oldLog, newLog);
+    /* Counted as listed (no merges); a tip that only merges known work still
+       counts its merges rather than reading "0 commits behind". */
+    const behind = commits.length > 0 ? commits.length : behindAll;
     return {
       ok: true,
-      running,
+      installed,
       available,
       relation,
       ahead,
       behind,
-      delta: { commits, changelog, summary: summarizeDelta(changelog, commits.length) },
+      delta: { commits, changelog, summary: summarizeDelta(changelog, behind) },
     };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error), running };
+    return { ok: false, error: error instanceof Error ? error.message : String(error), installed };
   }
 }

@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { STEP_NAMES, UpdateRunner, type StepName, type StepPorts } from "./steps";
 
 const TARGET = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+const CHECKOUT = "/var/tmp/checkout";
+const RELEASES = "/var/tmp/releases";
+const RELEASE = `${RELEASES}/a1b2c3d4e5f6`;
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
 
@@ -15,10 +18,13 @@ function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<
   const logDir = mkdtempSync("/var/tmp/self-update-steps-");
   roots.push(logDir);
   const calls: string[][] = [];
+  const cwds: string[] = [];
+  const published: { sha: string; dir: string }[] = [];
   let clock = 1_000;
   const ports: StepPorts = {
-    async run(command, { onLine }) {
+    async run(command, { cwd, onLine }) {
       calls.push(command);
+      cwds.push(cwd);
       const step = stepOf(command);
       clock += 250;
       for (const line of scripts[step]?.lines ?? [`${step} ok`]) onLine(line);
@@ -26,21 +32,23 @@ function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<
     },
     memAvailableMb: () => 8_192,
     revParse: async () => TARGET,
+    exists: () => false,
     buildIdReadable: () => true,
+    publish: (release) => { published.push(release); },
     now: () => clock,
     ...overrides,
   };
   const runner = new UpdateRunner(
-    { checkout: "/var/tmp/checkout", remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir, env: { PATH: "/usr/bin" } },
+    { checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir, releasesDir: RELEASES, env: { PATH: "/usr/bin" } },
     ports,
     () => {},
   );
-  return { runner, calls, logDir };
+  return { runner, calls, cwds, published, logDir };
 }
 
 function stepOf(command: string[]): StepName {
   if (command.includes("fetch")) return "fetch";
-  if (command.includes("checkout")) return "checkout";
+  if (command.includes("checkout") || command.includes("worktree")) return "checkout";
   if (command.includes("install")) return "install";
   if (command.includes("build")) return "build";
   throw new Error(`unexpected command ${command.join(" ")}`);
@@ -48,19 +56,41 @@ function stepOf(command: string[]): StepName {
 
 describe("UpdateRunner", () => {
   test("runs the five steps in order and records durations", async () => {
-    const { runner, calls } = harness({});
+    const { runner, calls, cwds } = harness({});
     await runner.start(TARGET);
     expect(runner.state.state).toBe("done");
     expect(runner.state.steps.map((step) => [step.name, step.state])).toEqual(STEP_NAMES.map((name) => [name, "done"]));
     expect(calls).toEqual([
-      ["git", "fetch", "--no-tags", "/var/tmp/remote.git", "refs/heads/main:refs/self-update/tip"],
-      ["git", "checkout", "--detach", TARGET],
+      ["git", "fetch", "--no-tags", "/var/tmp/remote.git", "+refs/heads/main:refs/self-update/tip"],
+      ["git", "worktree", "add", "--detach", RELEASE, TARGET],
       ["/opt/bun", "install", "--frozen-lockfile"],
       ["/opt/bun", "run", "build"],
     ]);
+    expect(cwds).toEqual([CHECKOUT, CHECKOUT, RELEASE, RELEASE]);
     for (const step of runner.state.steps.slice(0, 4)) expect(step.durationMs).toBe(250);
     expect(runner.state.target).toBe(TARGET);
     expect(runner.state.finishedAt).not.toBeNull();
+  });
+
+  test("the running checkout is never installed into or built in; ready publishes the release", async () => {
+    const { runner, published, cwds } = harness({});
+    await runner.start(TARGET);
+    expect(cwds.slice(2)).not.toContain(CHECKOUT);
+    expect(runner.state.releaseDir).toBe(RELEASE);
+    expect(published).toEqual([{ sha: TARGET, dir: RELEASE }]);
+  });
+
+  test("a release directory left by an earlier attempt is checked out in place", async () => {
+    const { runner, calls, cwds } = harness({}, { exists: (path) => path === RELEASE });
+    await runner.start(TARGET);
+    expect(calls[1]).toEqual(["git", "checkout", "--detach", TARGET]);
+    expect(cwds[1]).toBe(RELEASE);
+  });
+
+  test("a failed build publishes nothing", async () => {
+    const { runner, published } = harness({ build: { exit: 1 } });
+    await runner.start(TARGET);
+    expect(published).toEqual([]);
   });
 
   test("stops at the first non-zero exit and leaves later steps pending", async () => {
@@ -122,12 +152,13 @@ describe("UpdateRunner", () => {
     expect(calls).toHaveLength(1);
   });
 
-  test("ready fails when the build left no BUILD_ID", async () => {
-    const { runner } = harness({}, { buildIdReadable: () => false });
+  test("ready fails when the build left no BUILD_ID, and publishes nothing", async () => {
+    const { runner, published } = harness({}, { buildIdReadable: (dir) => dir !== RELEASE });
     await runner.start(TARGET);
     const ready = runner.state.steps.find((step) => step.name === "ready")!;
     expect(ready.state).toBe("failed");
     expect(ready.tail.at(-1)).toBe(".next/BUILD_ID is missing after the build");
+    expect(published).toEqual([]);
   });
 
   test("marks the running step while its command runs", async () => {

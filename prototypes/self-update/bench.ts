@@ -17,7 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { CANONICAL_REMOTE, type Config } from "./lib/config";
 import { childEnv, runtimePaths } from "./lib/env";
 import { freePort, isAlive, ManagedProcess, ProcessRegistry, readStartIdentity, sameProcess, signalGroup, type ProcessRecord } from "./lib/processes";
-import { managedSpecs } from "./server";
+import { managedSpecs, releasePointer } from "./server";
 import { memAvailableMb, MIN_AVAILABLE_MB, pumpLines } from "./lib/steps";
 
 const DEFAULT_ROOT = "/var/tmp/llv-self-update-bench";
@@ -181,7 +181,8 @@ async function start(argv: string[]): Promise<void> {
   }
   await run(["git", "-C", checkout, "remote", "set-url", "origin", CANONICAL_REMOTE]);
   guardMemory("git fetch");
-  await run(["git", "-C", checkout, "fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"]);
+  /* Forced: the clone's main may hold local commits the remote never had. */
+  await run(["git", "-C", checkout, "fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
   const target = (await run(["git", "-C", checkout, "rev-parse", "--verify", `${at ?? "origin/main~5"}^{commit}`], { quiet: true })).trim();
   await run(["git", "-C", checkout, "checkout", "--detach", target]);
 
@@ -217,6 +218,9 @@ async function start(argv: string[]): Promise<void> {
     bun,
     processesFile: join(configRoot, "self-update", "processes.json"),
   };
+  /* A fresh bench runs the checkout itself; a release an earlier run built and
+     published is not what this one starts. */
+  rmSync(releasePointer(config).file, { force: true });
   const { web: webSpec, host: hostSpec, paths } = managedSpecs(config);
   for (const dir of [paths.state, paths.tmp, paths.cache, dirname(webSpec.logFile)]) mkdirSync(dir, { recursive: true });
   const registry = new ProcessRegistry(config.processesFile);

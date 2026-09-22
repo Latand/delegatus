@@ -10,6 +10,7 @@ import { parseConfig, type Config } from "./lib/config";
 import { childEnv, runtimePaths } from "./lib/env";
 import { checkForUpdate, readRevision, type CheckOutcome } from "./lib/git";
 import { ManagedProcess, ProcessRegistry, runtimeHostProbe, webProbe } from "./lib/processes";
+import { ReleasePointer } from "./lib/release";
 import {
   applyCheck, Changes, initialCheck, STEP_NAMES,
   type Busy, type CheckSlice, type ProcessStatus, type ProcessView, type Revision, type Snapshot, type StepName, type UpdateState,
@@ -33,7 +34,10 @@ export interface ProcessPort {
 export interface ServerDeps {
   changes: Changes;
   checker(): Promise<CheckOutcome>;
-  readRunning(): Promise<Revision>;
+  /* The newest built release: what the next start or restart runs. */
+  readInstalled(): Promise<Revision>;
+  /* Version and date of a revision a process was started from. */
+  describe(revision: string): Promise<Revision>;
   runner: RunnerPort;
   web: ProcessPort;
   host: ProcessPort;
@@ -55,14 +59,39 @@ class App {
   slice: CheckSlice = initialCheck();
   private checking: Promise<void> | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly described = new Map<string, Revision>();
+  private readonly describing = new Set<string>();
 
   constructor(private readonly deps: ServerDeps) {}
+
+  /* What a live process serves: its recorded revision, with version and date
+     once they are read. */
+  private serving(port: ProcessPort): Revision | null {
+    const { pid, revision } = port.status;
+    if (pid === null || !revision) return null;
+    return this.described.get(revision) ?? { version: "", sha: "", short: revision, date: "" };
+  }
+
+  /* Reads version and date for any process revision not seen before; emits
+     once they arrive. */
+  describeServing(): void {
+    for (const port of [this.deps.web, this.deps.host]) {
+      const revision = port.status.pid !== null ? port.status.revision : null;
+      if (!revision || this.described.has(revision) || this.describing.has(revision)) continue;
+      this.describing.add(revision);
+      void this.deps.describe(revision)
+        .then((described) => { this.described.set(revision, { ...described, short: revision }); })
+        .catch(() => { this.described.set(revision, { version: "", sha: "", short: revision, date: "" }); })
+        .finally(() => { this.describing.delete(revision); this.deps.changes.emit(); });
+    }
+  }
 
   snapshot(): Snapshot {
     const { deps } = this;
     const view = (port: ProcessPort): ProcessView => ({ ...port.status, tail: port.lines().slice(-PROCESS_TAIL) });
     return {
-      running: this.slice.running ?? UNKNOWN_REVISION,
+      installed: this.slice.installed ?? UNKNOWN_REVISION,
+      serving: { web: this.serving(deps.web), runtimeHost: this.serving(deps.host) },
       available: this.slice.available,
       check: this.slice.check,
       update: deps.runner.state,
@@ -72,15 +101,16 @@ class App {
     };
   }
 
-  async refreshRunning(): Promise<void> {
+  async refreshInstalled(): Promise<void> {
     try {
-      this.slice = { ...this.slice, running: await this.deps.readRunning() };
+      this.slice = { ...this.slice, installed: await this.deps.readInstalled() };
     } catch { /* keeps the previous value; the next check reports the error */ }
     this.deps.changes.emit();
   }
 
-  /* A check may run beside a restart but never beside an update: the update
-     moves HEAD. A second request while one runs joins it. */
+  /* A check may run beside a restart but never beside an update: a finished
+     update moves the installed release the check compares against. A second
+     request while one runs joins it. */
   check(): Promise<void> {
     if (this.checking) return this.checking;
     this.slice = { ...this.slice, check: { ...this.slice.check, state: "checking" } };
@@ -90,7 +120,7 @@ class App {
         const outcome = await this.deps.checker();
         this.slice = applyCheck(this.slice, outcome, new Date(), this.deps.info.pollMinutes, this.deps.info.branch);
       } catch (error) {
-        const failed: CheckOutcome = { ok: false, error: error instanceof Error ? error.message : String(error), running: null };
+        const failed: CheckOutcome = { ok: false, error: error instanceof Error ? error.message : String(error), installed: null };
         this.slice = applyCheck(this.slice, failed, new Date(), this.deps.info.pollMinutes, this.deps.info.branch);
       } finally {
         this.checking = null;
@@ -125,7 +155,7 @@ class App {
     void action().catch(() => { /* the port reports its own failure in its state */ }).finally(async () => {
       this.busy = null;
       if (busy === "update") {
-        await this.refreshRunning();
+        await this.refreshInstalled();
         if (this.deps.runner.state.state === "done") void this.check();
       }
       this.deps.changes.emit();
@@ -168,16 +198,7 @@ export function createServer(deps: ServerDeps, options: { port: number; hostname
     const payload = `event: state\ndata: ${JSON.stringify(app.snapshot())}\n\n`;
     for (const send of clients) send(payload);
   };
-  /* The checkout step moves HEAD mid-update; the header and the process
-     blocks compare against it, so it is re-read once per run of that step. */
-  let headReadFor = "";
-  const offHead = deps.changes.on(() => {
-    const { startedAt, steps } = deps.runner.state;
-    const key = `${startedAt}`;
-    if (steps.find((step) => step.name === "checkout")?.state !== "done" || key === headReadFor) return;
-    headReadFor = key;
-    void app.refreshRunning();
-  });
+  const offServing = deps.changes.on(() => app.describeServing());
   const offChanges = deps.changes.on(() => {
     if (pending || clients.size === 0) return;
     pending = setTimeout(broadcast, Math.max(0, lastSent + SSE_MIN_GAP_MS - Date.now()));
@@ -276,7 +297,8 @@ export function createServer(deps: ServerDeps, options: { port: number; hostname
   const healthTimer = deps.healthIntervalMs > 0
     ? setInterval(() => { void deps.web.checkHealth(); void deps.host.checkHealth(); }, deps.healthIntervalMs)
     : null;
-  void app.refreshRunning();
+  void app.refreshInstalled();
+  app.describeServing();
   if (deps.checkOnBoot) void app.check();
 
   return {
@@ -284,7 +306,7 @@ export function createServer(deps: ServerDeps, options: { port: number; hostname
     app,
     stop() {
       offChanges();
-      offHead();
+      offServing();
       if (pending) clearTimeout(pending);
       if (healthTimer) clearInterval(healthTimer);
       app.stopTimers();
@@ -293,21 +315,28 @@ export function createServer(deps: ServerDeps, options: { port: number; hostname
   };
 }
 
-function shortHead(checkout: string): string | null {
-  const result = Bun.spawnSync(["git", "rev-parse", "--short=7", "HEAD"], { cwd: checkout, stdout: "pipe", stderr: "ignore" });
-  return result.exitCode === 0 ? result.stdout.toString().trim() : null;
+/* Where the installed-release pointer and the release directories live. */
+export function releasePointer(config: Config): ReleasePointer {
+  return new ReleasePointer(join(config.configRoot, "self-update", "release.json"), config.checkout);
+}
+
+export function releasesDir(config: Config): string {
+  return join(config.configRoot, "self-update", "releases");
 }
 
 /* The two managed processes, started exactly as bin/cli.mjs starts a packaged
-   install's (runtime host first, then `next start`), under the isolated root. */
+   install's (runtime host first, then `next start`), under the isolated root,
+   each from the installed release as it stands when that start happens. */
 export function managedSpecs(config: Config) {
   const paths = runtimePaths(config.configRoot);
   const logs = join(config.configRoot, "self-update", "logs");
-  const revision = () => shortHead(config.checkout);
+  const releases = releasePointer(config);
+  const cwd = () => releases.current().dir;
+  const revision = () => releases.current().sha.slice(0, 7) || null;
   const web = {
     role: "web" as const,
     command: [config.bun, "--bun", "node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", String(config.webPort)],
-    cwd: config.checkout,
+    cwd,
     env: childEnv(config, "web"),
     port: config.webPort,
     socket: null,
@@ -321,7 +350,7 @@ export function managedSpecs(config: Config) {
   const host = {
     role: "runtime-host" as const,
     command: [config.bun, "--bun", "src/runtime-host/main.ts"],
-    cwd: config.checkout,
+    cwd,
     env: childEnv(config, "runtime-host"),
     port: null,
     socket: paths.socket,
@@ -365,7 +394,8 @@ async function main(): Promise<void> {
   const host = new ManagedProcess(hostSpec, registry, emit);
   web.adopt();
   host.adopt();
-  const ports = realPorts(config.checkout);
+  const releases = releasePointer(config);
+  const ports = realPorts((release) => releases.publish(release));
   const runner = new UpdateRunner(
     {
       checkout: config.checkout,
@@ -373,6 +403,7 @@ async function main(): Promise<void> {
       branch: config.branch,
       bun: config.bun,
       logDir: join(config.configRoot, "self-update", "steps"),
+      releasesDir: releasesDir(config),
       env: { ...childEnv(config, "build"), GIT_TERMINAL_PROMPT: "0" },
     },
     ports,
@@ -380,8 +411,9 @@ async function main(): Promise<void> {
   );
   const running = createServer({
     changes,
-    checker: () => checkForUpdate({ checkout: config.checkout, remote: config.remote, branch: config.branch }),
-    readRunning: () => readRevision(config.checkout, "HEAD"),
+    checker: () => checkForUpdate({ checkout: config.checkout, remote: config.remote, branch: config.branch, installed: releases.current().sha || "HEAD" }),
+    readInstalled: () => readRevision(config.checkout, releases.current().sha || "HEAD"),
+    describe: (revision) => readRevision(config.checkout, revision),
     runner,
     web,
     host,

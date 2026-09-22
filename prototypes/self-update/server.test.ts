@@ -9,7 +9,7 @@ const TIP: Revision = { version: "1.2.3", sha: "a1b2c3d".padEnd(40, "1"), short:
 function behind(): CheckOutcome {
   return {
     ok: true,
-    running: RUNNING,
+    installed: RUNNING,
     available: TIP,
     relation: "behind",
     ahead: 0,
@@ -27,13 +27,14 @@ class FakeRunner implements RunnerPort {
   pending: (() => void) | null = null;
   started: string[] = [];
   constructor(private readonly changes: Changes) {}
+  finishAs: "failed" | "done" = "failed";
   start(target: string): Promise<void> {
     this.started.push(target);
     this.state = { ...idleUpdate(), state: "running", target, startedAt: new Date().toISOString() };
     this.changes.emit();
     return new Promise((resolve) => {
       this.pending = () => {
-        this.state = { ...this.state, state: "failed", finishedAt: new Date().toISOString() };
+        this.state = { ...this.state, state: this.finishAs, finishedAt: new Date().toISOString() };
         this.changes.emit();
         resolve();
       };
@@ -67,13 +68,16 @@ afterEach(() => { for (const server of servers.splice(0)) server.stop(); });
 function boot(outcome: () => CheckOutcome = behind) {
   const changes = new Changes();
   const reads = { count: 0 };
+  const installed = { current: RUNNING };
   const runner = new FakeRunner(changes);
   const web = new FakeProcess();
   const host = new FakeProcess();
   const deps: ServerDeps = {
     changes,
-    checker: async () => outcome(),
-    readRunning: async () => { reads.count += 1; return RUNNING; },
+    /* The real checker compares against the installed pointer, as this does. */
+    checker: async () => { const result = outcome(); return result.ok ? { ...result, installed: installed.current } : result; },
+    readInstalled: async () => { reads.count += 1; return installed.current; },
+    describe: async (revision) => [RUNNING, TIP].find((candidate) => candidate.short === revision) ?? { ...RUNNING, sha: revision, short: revision },
     runner,
     web,
     host,
@@ -83,7 +87,7 @@ function boot(outcome: () => CheckOutcome = behind) {
   const server = createServer(deps, { port: 0 });
   servers.push(server);
   const base = `http://127.0.0.1:${server.port}`;
-  return { base, runner, web, host, changes, server, reads };
+  return { base, runner, web, host, changes, server, reads, installed };
 }
 
 async function state(base: string): Promise<Snapshot> {
@@ -122,7 +126,9 @@ describe("routes", () => {
   test("GET /api/state answers the snapshot shape", async () => {
     const { base } = boot();
     const snapshot = await state(base);
-    expect(snapshot.running.short).toBe("7fb7345");
+    expect(snapshot.installed.short).toBe("7fb7345");
+    expect(snapshot.serving.web?.short).toBe("7fb7345");
+    expect(snapshot.serving.runtimeHost?.version).toBe("1.2.2");
     expect(snapshot.check.state).toBe("idle");
     expect(snapshot.update.state).toBe("idle");
     expect(snapshot.processes.web.pid).toBe(4242);
@@ -163,16 +169,35 @@ describe("routes", () => {
     expect((await state(base)).busy).toBeNull();
   });
 
-  test("the running revision is re-read once the checkout step has moved HEAD", async () => {
-    const { runner, changes, reads } = boot();
-    await Bun.sleep(10);
+  test("the installed release is re-read when an update finishes, not while it runs", async () => {
+    const { base, runner, reads, installed } = boot();
+    await post(`${base}/api/check`);
+    await Bun.sleep(20);
+    await post(`${base}/api/update`);
+    await Bun.sleep(20);
+    expect((await state(base)).installed.short).toBe("7fb7345");
     const before = reads.count;
-    runner.state = { ...runner.state, state: "running", startedAt: "2026-09-22T12:00:00.000Z" };
-    runner.state.steps[1] = { ...runner.state.steps[1]!, state: "done" };
-    changes.emit();
-    changes.emit();
+    installed.current = TIP;
+    runner.finishAs = "done";
+    runner.pending?.();
+    await Bun.sleep(30);
+    expect(reads.count).toBeGreaterThan(before);
+    expect((await state(base)).installed.short).toBe("a1b2c3d");
+  });
+
+  test("serving follows each process's own revision", async () => {
+    const { base, web, changes } = boot();
     await Bun.sleep(10);
-    expect(reads.count).toBe(before + 1);
+    web.status = { ...web.status, revision: "a1b2c3d" };
+    changes.emit();
+    await Bun.sleep(20);
+    const snapshot = await state(base);
+    expect(snapshot.serving.web?.version).toBe("1.2.3");
+    expect(snapshot.serving.runtimeHost?.short).toBe("7fb7345");
+    web.status = { ...web.status, pid: null, state: "stopped", revision: null };
+    changes.emit();
+    await Bun.sleep(20);
+    expect((await state(base)).serving.web).toBeNull();
   });
 
   test("retry is 409 unless the update failed", async () => {

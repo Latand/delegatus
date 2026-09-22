@@ -188,6 +188,8 @@ document.addEventListener("click", (event) => {
   else if (action === "update") void act("update", "/api/update");
   else if (action === "retry") void act("update", "/api/update/retry");
   else if (action === "restart-web") void act("restart-web", "/api/restart/web");
+  /* A stopped runtime host supervises nobody, so starting it drops nothing and asks nothing. */
+  else if (action === "start-host") void act("restart-runtime-host", "/api/restart/runtime-host", { confirm: true });
   else if (action === "arm-host") { ui.armed = true; render(); document.querySelector<HTMLElement>('[data-key="confirm-host"]')?.focus(); }
   else if (action === "cancel-host") { ui.armed = false; render(); document.querySelector<HTMLElement>('[data-key="arm-host"]')?.focus(); }
   else if (action === "confirm-host") { ui.armed = false; void act("restart-runtime-host", "/api/restart/runtime-host", { confirm: true }); }
@@ -215,6 +217,19 @@ function button(label: string, action: string, options: { tone?: string; disable
   }, label);
 }
 
+/* The processes that serve something other than the installed release, named
+   for copy ("web", "the runtime host"). */
+function staleNames(s: Snapshot): string[] {
+  const names: string[] = [];
+  if (s.serving.web && s.serving.web.short !== s.installed.short) names.push("web");
+  if (s.serving.runtimeHost && s.serving.runtimeHost.short !== s.installed.short) names.push("the runtime host");
+  return names;
+}
+
+function pair(label: string, value: string): HTMLElement {
+  return span({ class: "pair" }, span({ class: "label" }, label), span({ class: "value" }, value));
+}
+
 function renderHeader(s: Snapshot): Child[] {
   const branch = `origin/${s.meta.branch}`;
   const check = s.check;
@@ -229,6 +244,10 @@ function renderHeader(s: Snapshot): Child[] {
   let status: Child[];
   if (check.state === "checking") {
     status = [icon("running"), span({ class: "status-text" }, `Checking ${branch}…`)];
+  } else if (check.state === "up-to-date" && staleNames(s).length > 0) {
+    /* Built is not running: green waits until every live process runs it. */
+    status = [icon("warning"), span({ class: "status-text" },
+      `${s.installed.short} is built and not running yet · restart ${staleNames(s).join(" and ")} to run it · checked ${clock(check.at)}`)];
   } else if (check.state === "up-to-date") {
     status = [icon("done"), span({ class: "status-text" },
       `Up to date, checked at ${clock(check.at)}`,
@@ -244,12 +263,18 @@ function renderHeader(s: Snapshot): Child[] {
     status = [icon("pending"), span({ class: "status-text" }, "Not checked yet")];
   }
 
-  const pairs: Child[] = [
-    span({ class: "pair" }, span({ class: "label" }, "Running"), span({ class: "value" }, revisionText(s.running))),
-  ];
-  if (s.available) {
-    pairs.push(span({ class: "pair" }, span({ class: "label" }, "Available"), span({ class: "value" }, revisionText(s.available))));
+  /* Running is what the live processes serve; Built appears while the
+     installed release is not what they serve. */
+  const { web, runtimeHost } = s.serving;
+  const pairs: Child[] = [];
+  if (web && runtimeHost && web.short !== runtimeHost.short) {
+    pairs.push(pair("Web runs", revisionText(web)), pair("Runtime host runs", revisionText(runtimeHost)));
+  } else {
+    const running = web ?? runtimeHost;
+    pairs.push(pair("Running", running ? revisionText(running) : "nothing"));
   }
+  if (staleNames(s).length > 0 || (!web && !runtimeHost)) pairs.push(pair("Built", revisionText(s.installed)));
+  if (s.available) pairs.push(pair("Available", revisionText(s.available)));
   return [
     h("div", { class: "row spread header-top" }, h("h1", { class: "title" }, "Agent Log Viewer · self-update"), checkButton),
     h("div", { class: "versions" }, ...pairs),
@@ -281,7 +306,7 @@ function renderStep(step: Step, short: string): HTMLElement {
         h("button", { type: "button", class: "btn link", "data-action": "toggle-log", "data-log": id, "data-key": `toggle-${id}`, "aria-expanded": open ? "true" : "false" }, open ? "Hide log ▾" : "Show log ▸"),
       ) : null),
     open && hasOutput ? h("div", { class: "disclosure" },
-      h("pre", { class: "log", "data-scroll": id, tabindex: "0", "aria-label": `${STEP_LABEL[step.name](short)} log, last ${step.tail.length} lines` }, step.tail.join("\n")),
+      h("pre", { class: step.state === "failed" ? "log wrap" : "log", "data-scroll": id, tabindex: "0", "aria-label": `${STEP_LABEL[step.name](short)} log, last ${step.tail.length} lines` }, step.tail.join("\n")),
       h("div", { class: "log-foot" }, h("a", { href: `/api/steps/${step.name}/log`, target: "_blank", rel: "noopener" }, "Full log ↗")),
     ) : null,
   );
@@ -294,8 +319,9 @@ function renderUpdate(s: Snapshot): { children: Child[]; edge: string } {
 
   if (update.state === "idle" || (update.state === "done" && freshTarget)) {
     if (!s.available || s.check.state !== "update-available") {
-      const copy = s.check.state === "up-to-date"
-        ? `Nothing to build: this checkout is on the newest revision of ${branch}.`
+      const copy = s.check.state === "up-to-date" ? `Nothing to build: ${s.installed.short} is the newest revision of ${branch}.`
+        : s.check.state === "failed" ? "The last check failed, so there is nothing to build yet. Retry the check above."
+        : s.check.state === "checking" ? `Checking ${branch}…`
         : "Run a check to see if an update is available.";
       return { children: [h("h2", { class: "section-title" }, "Update"), h("p", { class: "note" }, copy)], edge: "" };
     }
@@ -334,27 +360,40 @@ function renderUpdate(s: Snapshot): { children: Child[]; edge: string } {
   }
   const failed = update.steps.find((step) => step.state === "failed");
   const failedName = failed?.name ?? "the first step";
+  const cause = failed ? lastError(failed.tail) : null;
   return {
     children: [
       h("div", { class: "row spread wrap" },
         h("h2", { class: "section-title" }, heading),
         h("div", { class: "actions" }, button(`Retry from ${failedName}`, "retry", { tone: "primary", disabled: s.busy !== null || ui.pending.has("update") }))),
-      h("p", { class: "outcome danger" }, `Update stopped at ${failedName} after ${duration(elapsed)}. Running processes were not touched.`),
+      h("div", { class: "outcome danger" },
+        h("p", {}, `Update stopped at ${failedName} after ${duration(elapsed)}. The running processes were not touched; the build happens in its own release directory.`),
+        cause ? h("p", { class: "cause" }, cause) : null),
       steps,
     ],
     edge: "card update edge-danger",
   };
 }
 
-/* What the done state asks for depends on which processes already run the build. */
+/* The line of a failed step's output that says why: the last fatal or error
+   line, else its last line. */
+function lastError(tail: string[]): string | null {
+  const lines = tail.filter((line) => line.trim() !== "");
+  return [...lines].reverse().find((line) => /^(fatal|error)\b|\berror:|ERR!/i.test(line.trim())) ?? lines.at(-1) ?? null;
+}
+
+/* What the done state asks for depends on which processes already run the
+   build: a process counts once it is healthy on it, never while it starts. */
 function appliedCopy(s: Snapshot, short: string): string {
-  const serves = (view: ProcessView) => view.pid !== null && view.revision === short;
-  const web = serves(s.processes.web);
-  const host = serves(s.processes.runtimeHost);
+  const runs = (view: ProcessView) => view.pid !== null && view.state === "healthy" && view.revision === short;
+  const web = runs(s.processes.web);
+  const host = runs(s.processes.runtimeHost);
+  if (s.busy === "restart-web") return "Web is restarting onto it.";
+  if (s.busy === "restart-runtime-host") return "The runtime host is restarting onto it.";
   if (web && host) return "Web and the runtime host now run it.";
-  if (web) return "Web runs it; restart the runtime host to apply it there too.";
-  if (host) return "The runtime host runs it; restart web to apply it there too.";
-  return "Running processes still serve the previous version. Restart web, then the runtime host, to apply.";
+  if (web) return "Web runs it; restart the runtime host to run it there too.";
+  if (host) return "The runtime host runs it; restart web to run it there too.";
+  return "The running processes still serve the previous release. Restart web, then the runtime host, to run it.";
 }
 
 function renderChanges(s: Snapshot): Child[] | null {
@@ -443,9 +482,10 @@ function renderProcess(s: Snapshot, role: "web" | "runtimeHost"): { children: Ch
     children.push(h("p", { class: "value" }, "Not running"));
   }
 
-  /* After an update the checkout moves ahead of what a process serves. */
-  if (status.revision && status.pid !== null && s.running.short && status.revision !== s.running.short && status.state !== "stopping") {
-    children.push(h("p", { class: "stale" }, `Serves ${status.revision}; the checkout is at ${s.running.short}. Restart to apply.`));
+  /* Once an update is built and published, a process started earlier serves
+     the previous release until it restarts. */
+  if (status.revision && status.pid !== null && s.installed.short && status.revision !== s.installed.short && status.state !== "stopping") {
+    children.push(h("p", { class: "stale" }, `Serves ${status.revision}; ${s.installed.short} is built. Restart to run it.`));
   }
 
   const tailId = `tail-${role}`;
@@ -457,7 +497,7 @@ function renderProcess(s: Snapshot, role: "web" | "runtimeHost"): { children: Ch
       open ? h("pre", { class: "log", "data-scroll": tailId, tabindex: "0" }, status.tail.join("\n")) : null));
   }
 
-  const running = status.state !== "stopped" && status.state !== "failed";
+  const running = status.pid !== null;
   const label = running ? (isHost ? "Restart runtime host" : "Restart web") : (isHost ? "Start runtime host" : "Start web");
   if (isHost && ui.armed && !acting) {
     children.push(h("div", { class: "confirm", role: "alertdialog", "aria-label": "Confirm runtime host restart" },
@@ -468,7 +508,7 @@ function renderProcess(s: Snapshot, role: "web" | "runtimeHost"): { children: Ch
   } else {
     const disabled = blocked || status.state === "stopping" || status.state === "starting";
     children.push(h("div", { class: "actions" }, isHost
-      ? button(label, "arm-host", { tone: "warning", disabled, title: s.busy && s.busy !== busyKey ? "Another action is running" : undefined })
+      ? button(label, running ? "arm-host" : "start-host", { tone: "warning", disabled, key: "arm-host", title: s.busy && s.busy !== busyKey ? "Another action is running" : undefined })
       : button(label, "restart-web", { disabled, title: s.busy && s.busy !== busyKey ? "Another action is running" : undefined })));
   }
 
@@ -495,7 +535,7 @@ function byId(id: string): HTMLElement {
 function render(): void {
   const s = ui.snapshot;
   if (!s) return;
-  const header = s.check.state === "update-available" ? "card header edge-warning"
+  const header = s.check.state === "update-available" || (s.check.state === "up-to-date" && staleNames(s).length > 0) ? "card header edge-warning"
     : s.check.state === "failed" ? "card header edge-danger" : "card header";
   patch(byId("header"), renderHeader(s), header);
   const update = renderUpdate(s);

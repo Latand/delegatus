@@ -47,6 +47,13 @@ beforeAll(async () => {
     await git(work, "add", ".");
     await git(work, "commit", "-m", subject);
   }
+  /* A pull request lands as a merge commit: its own subject says nothing. */
+  await git(work, "checkout", "-b", "side");
+  writeFileSync(join(work, "side.txt"), "side\n");
+  await git(work, "add", ".");
+  await git(work, "commit", "-m", "Explain the side change");
+  await git(work, "checkout", "main");
+  await git(work, "merge", "--no-ff", "-m", "Merge pull request #9 from fixture/side", "side");
   await git(work, "push", "origin", "main");
   tipSha = await git(work, "rev-parse", "HEAD");
 });
@@ -66,21 +73,39 @@ describe("checkForUpdate against a bare-repo remote", () => {
     const outcome = await checkForUpdate({ checkout, remote, branch: "main" });
     if (!outcome.ok) throw new Error(outcome.error);
     expect(outcome.relation).toBe("behind");
-    expect(outcome.behind).toBe(4);
+    expect(outcome.behind).toBe(5);
     expect(outcome.available?.sha).toBe(tipSha);
     expect(outcome.available?.version).toBe("1.0.1");
-    expect(outcome.delta?.commits.map((commit) => commit.subject)).toEqual([
-      "Say when the check fails",
-      "Tidy the step rows",
+    expect(outcome.delta?.commits.map((commit) => commit.subject).sort()).toEqual([
+      "Explain the side change",
       "Fix the header",
       "Release 1.0.1",
+      "Say when the check fails",
+      "Tidy the step rows",
     ]);
     expect(outcome.delta?.changelog.headings).toEqual(["1.0.1"]);
     expect(outcome.delta?.changelog.entries.map((entry) => entry.text)).toEqual(["A later fix (#5)", "Second release (#2)"]);
-    expect(outcome.delta?.summary.line).toBe("4 commits · 2 changelog entries (1 Fixed, 1 Changed)");
+    expect(outcome.delta?.summary.line).toBe("5 commits · 2 changelog entries (1 Fixed, 1 Changed)");
     const state = applyCheck(initialCheck(), outcome, new Date("2026-09-22T12:04:00"), 60);
     expect(state.check.state).toBe("update-available");
     expect(state.available?.sha).toBe(tipSha);
+  });
+
+  test("merge commits are left out of the list and the count, and every SHA is spelled with 7 characters", async () => {
+    const outcome = await checkForUpdate({ checkout, remote, branch: "main" });
+    if (!outcome.ok) throw new Error(outcome.error);
+    expect(outcome.delta?.commits.some((commit) => commit.subject.startsWith("Merge "))).toBe(false);
+    for (const commit of outcome.delta!.commits) expect(commit.short).toMatch(/^[0-9a-f]{7}$/);
+    expect(outcome.available?.short).toBe(tipSha.slice(0, 7));
+  });
+
+  test("compares the remote with the installed release, which need not be HEAD", async () => {
+    const outcome = await checkForUpdate({ checkout, remote, branch: "main", installed: tipSha });
+    if (!outcome.ok) throw new Error(outcome.error);
+    expect(outcome.relation).toBe("equal");
+    expect(outcome.installed.sha).toBe(tipSha);
+    expect(outcome.installed.version).toBe("1.0.1");
+    expect(await git(checkout, "rev-parse", "HEAD")).toBe(firstSha);
   });
 
   test("the fetch lands on refs/self-update/tip and moves nothing else", async () => {
@@ -102,7 +127,7 @@ describe("checkForUpdate against a bare-repo remote", () => {
       expect(after.check.state).toBe("failed");
       expect(after.check.error).toBe(outcome.error);
       expect(after.available?.sha).toBe(tipSha);
-      expect(after.check.delta?.commits).toHaveLength(4);
+      expect(after.check.delta?.commits).toHaveLength(5);
     } finally {
       renameSync(moved, remote);
     }
