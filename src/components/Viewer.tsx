@@ -34,6 +34,7 @@ import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
 import { VoiceComposerHost } from "./voice/VoiceComposerHost";
 import { VoicePipHost } from "./voice/VoicePipHost";
 import { focusHandoffBus } from "./attention/focusHandoffBus";
+import { expandKanbanSeat } from "./kanban/kanbanSeatStore";
 import { ConnectionPill } from "./ConnectionPill";
 import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows";
 import { KeepAwakeProvider } from "./KeepAwakeControl";
@@ -42,6 +43,7 @@ import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { getMobileNav } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import type { MobileShellHost } from "./mobile/MobileShell";
+import { onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
 import { OverviewBoard } from "./OverviewBoard";
 import { BarIslandProvider } from "./ProjectBar";
@@ -408,6 +410,18 @@ export function Viewer() {
       return next;
     });
   }, [project]);
+
+  /* The setup guide's tour hands the operator to a project's orchestrator
+     draft (#1876 slice 3): open the project and its seat. The draft itself
+     takes the prefill; the phone's seat card opens its own sheet. */
+  useEffect(() => onOrchestratorDraftRequest((request) => {
+    selectProject(request.project);
+    if (isMobile) return;
+    expandKanbanSeat(request.project);
+    rememberDockOpen(request.project, true);
+    setOrchestratorOpenProject(request.project);
+    setOrchestratorOpen(true);
+  }), [isMobile, selectProject]);
 
   /* The whole rail goes away behind one control (issue #1819): while a stream
      is watching, no project name, count, limit or account name may be on the

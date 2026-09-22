@@ -16,6 +16,7 @@ import { useModalLayer } from "@/components/modalLayer";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
+import { useOrchestratorDraftPrefill } from "@/components/orchestrator/draftPrefill";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SPAWN_CONFIG, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
@@ -216,7 +217,7 @@ interface SeatSheetProps {
 
 /** The draft's own launch state, on the create keys the desktop dock uses. */
 function useCreateDraft(project: string) {
-  return useAgentLaunchDraft({
+  const launch = useAgentLaunchDraft({
     storage: {
       read: (name) => readSeatDraftField(project, name),
       write: (name, value) => writeSeatDraftField(project, name, value),
@@ -225,6 +226,9 @@ function useCreateDraft(project: string) {
     initialModel: ORCHESTRATOR_SPAWN_CONFIG.model,
     initialEffort: ORCHESTRATOR_SPAWN_CONFIG.effort,
   });
+  /* The setup guide's tour opens this draft prefilled (#1876 slice 3). */
+  useOrchestratorDraftPrefill(project, launch);
+  return launch;
 }
 
 /**

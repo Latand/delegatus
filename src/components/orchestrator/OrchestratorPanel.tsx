@@ -25,6 +25,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
 import { ProcessStatusControls } from "../TaskHeader";
+import { useOrchestratorDraftPrefill } from "./draftPrefill";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { OrchestratorConversation } from "./OrchestratorConversation";
@@ -191,6 +192,8 @@ export function OrchestratorPanel({
     initialModel: ORCHESTRATOR_SPAWN_CONFIG.model,
     initialEffort: ORCHESTRATOR_SPAWN_CONFIG.effort,
   });
+  /* The setup guide's tour opens this draft prefilled (#1876 slice 3). */
+  useOrchestratorDraftPrefill(project, launch);
 
   const setMandate = (value: string) => {
     setMandateState(value);
