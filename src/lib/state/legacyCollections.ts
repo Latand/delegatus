@@ -1,4 +1,4 @@
-import { statePath } from "@/lib/configDir";
+import { stateDir, statePath } from "@/lib/configDir";
 
 import type { LegacyImportOutcome } from "./legacyImport";
 
@@ -30,6 +30,18 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     collection: "board",
     importAtActivation: async () => (await import("@/lib/board/store")).importLegacyBoard(statePath("board.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/board/store")).checkpointBoardRollbackMirrorForDemotion(statePath("board.json")),
+  },
+  {
+    collection: "bridge_reports",
+    importAtActivation: async () => (await import("@/lib/bridge/store")).importLegacyBridgeReports(statePath("bridge-reports.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/bridge/store")).checkpointBridgeReportsRollbackMirrorForDemotion(statePath("bridge-reports.json")),
+  },
+  /* `bridge.json` and every `bridge-channels/<hash>.json`: the entry names the
+     state directory, and the store reads both sources beneath it. */
+  {
+    collection: "bridge_channels",
+    importAtActivation: async () => (await import("@/lib/bridge/store")).importLegacyBridgeChannels(stateDir(), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/bridge/store")).checkpointBridgeChannelsRollbackMirrorForDemotion(stateDir()),
   },
   {
     collection: "accounts",

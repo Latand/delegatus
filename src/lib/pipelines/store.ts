@@ -181,6 +181,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isNullableString(attempt.error) &&
     (attempt.decisionRequested === undefined || typeof attempt.decisionRequested === "boolean") &&
     (attempt.budgetSpent === undefined || typeof attempt.budgetSpent === "boolean") &&
+    (attempt.reviewedHead === undefined || isNullableString(attempt.reviewedHead)) &&
     isVerdictRecovery(attempt.verdictRecovery) &&
     isAttemptDefinition(attempt.definition) &&
     isSpawnActivation(attempt.activation) &&
@@ -531,6 +532,33 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
     && ["pending", "running", "settled"].includes(operation.state));
 }
 
+/** #1938: the needs_review record and its continue-review grants. */
+function isReviewPending(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const pending = value as Record<string, unknown>;
+  return typeof pending.stageId === "string" && pending.stageId.length > 0
+    && Number.isSafeInteger(pending.attempt) && (pending.attempt as number) >= 0
+    && typeof pending.fixStageId === "string" && pending.fixStageId.length > 0
+    && Number.isSafeInteger(pending.fixAttempt) && (pending.fixAttempt as number) > 0
+    && isNullableString(pending.reviewedHead)
+    && typeof pending.currentHead === "string"
+    && ["pass", "fail", "needs_decision"].includes(String(pending.verdict))
+    && Number.isSafeInteger(pending.findings) && (pending.findings as number) >= 0
+    && typeof pending.at === "string";
+}
+
+function isReviewGrant(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const grant = value as Record<string, unknown>;
+  return typeof grant.clientRequestId === "string" && grant.clientRequestId.length > 0 && grant.clientRequestId.length <= 200
+    && typeof grant.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(grant.expectedRevision)
+    && typeof grant.stageId === "string" && grant.stageId.length > 0
+    && Number.isSafeInteger(grant.rounds) && (grant.rounds as number) >= 1 && (grant.rounds as number) <= MAX_FAIL_EDGE_ROUNDS
+    && isNullableString(grant.reviewedHead)
+    && typeof grant.currentHead === "string"
+    && isActor(grant.actor) && typeof grant.at === "string";
+}
+
 function isDecisionAnswer(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const answer = value as Record<string, unknown>;
@@ -572,8 +600,8 @@ function isPipeline(value: unknown): value is Pipeline {
     pipeline.stages.every(isStage) &&
     Array.isArray(pipeline.runs) &&
     pipeline.runs.every(isRun) &&
-    ["draft", "provisioning", "running", "needs_decision", "paused", "completed", "closed"].includes(String(pipeline.state)) &&
-    (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "completed", "closed"].includes(String(pipeline.pausedState))) &&
+    ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"].includes(String(pipeline.state)) &&
+    (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"].includes(String(pipeline.pausedState))) &&
     (pipeline.pausedAt === undefined || isNullableString(pipeline.pausedAt)) &&
     (pipeline.resumedAt === undefined || isNullableString(pipeline.resumedAt)) &&
     isNullableString(pipeline.stateDetail) &&
@@ -588,6 +616,8 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
     (pipeline.restored === undefined || typeof pipeline.restored === "boolean") &&
     (pipeline.decisionAnswers === undefined || (Array.isArray(pipeline.decisionAnswers) && pipeline.decisionAnswers.every(isDecisionAnswer))) &&
+    (pipeline.reviewPending === undefined || isReviewPending(pipeline.reviewPending)) &&
+    (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
     (pipeline.stageReports === undefined || (Array.isArray(pipeline.stageReports) && pipeline.stageReports.length <= MAX_PIPELINE_STAGE_REPORTS && pipeline.stageReports.every(isStageReportEntry))) &&
     (pipeline.pos === undefined || (

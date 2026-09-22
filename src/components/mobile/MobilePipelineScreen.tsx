@@ -24,6 +24,7 @@ import {
   latestAttempt,
   patchPipeline,
   pipelineLinkedTasks,
+  pipelineReviewHeads,
   pipelineStagePosition,
   resolveStageNavFile,
   stageAttempts,
@@ -217,6 +218,7 @@ export const PIPELINE_STATE_WORD = {
   provisioning: "mobile2.pipelines.badgeProvisioning",
   running: "mobile2.pipelines.badgeRunning",
   needs_decision: "mobile2.pipelines.badgeDecision",
+  needs_review: "mobile2.pipelines.badgeReview",
   paused: "mobile2.pipelines.badgePaused",
   completed: "mobile2.pipelines.badgeCompleted",
   closed: "mobile2.pipelines.badgeClosed",
@@ -227,6 +229,7 @@ const STATE_TONE: Record<Pipeline["state"], { phrase: string; dot: string }> = {
   provisioning: { phrase: "font-semibold text-accent", dot: "bg-accent" },
   running: { phrase: "font-semibold text-accent", dot: "bg-accent" },
   needs_decision: { phrase: "font-semibold text-warning", dot: "bg-warning" },
+  needs_review: { phrase: "font-semibold text-warning", dot: "bg-warning" },
   paused: { phrase: "font-semibold text-warning", dot: "bg-warning" },
   completed: { phrase: "", dot: "bg-success" },
   closed: { phrase: "", dot: "bg-strong" },
@@ -254,6 +257,10 @@ export function mobilePipelineActions(state: Pipeline["state"]): MobilePipelineA
       return [{ key: "pause", action: "pause", primary: false }];
     case "paused":
       return [{ key: "resume", action: "resume", primary: true }];
+    /* #1938: continuing needs an explicit round budget, which is a
+       pipeline_action call; the phone names the state and offers the close. */
+    case "needs_review":
+      return [{ key: "archive", action: "close", primary: false }];
     case "completed":
     case "closed":
       return [{ key: "archive", action: "close", primary: false }];
@@ -459,6 +466,8 @@ export function MobilePipelineScreen({
     });
   };
   const dismissed = pipelineHiddenFromBoard(pipeline);
+  /* #1938: the last verdict and both heads, under the state word. */
+  const reviewHeads = pipelineReviewHeads(t, pipeline);
 
   const title = (
     <span className="flex min-w-0 flex-1 flex-col">
@@ -475,6 +484,9 @@ export function MobilePipelineScreen({
           </>
         ) : null}
       </span>
+      {reviewHeads ? (
+        <span data-mobile2-review-heads className="min-w-0 truncate text-label tabular-nums leading-tight text-warning" title={reviewHeads}>{reviewHeads}</span>
+      ) : null}
     </span>
   );
 

@@ -1,6 +1,7 @@
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { activeCardMigration } from "@/lib/accounts/migration";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
+import { pipelineReviewSummary, type PipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
@@ -228,6 +229,8 @@ export interface MobileBoardPipelineRow {
   findings: number | null;
   /** Seconds since the pipeline stopped and asked for the operator. */
   seconds: number | null;
+  /** On a needs_review lane (#1938): the last verdict and both heads. */
+  review: PipelineReviewSummary | null;
 }
 
 export type MobileNeedsYouItem =
@@ -276,7 +279,9 @@ function boardPipelines(pipelines: readonly Pipeline[]): Pipeline[] {
 }
 
 function pipelineRow(pipeline: Pipeline, now: number): MobileBoardPipelineRow {
-  const stageId = pipeline.cursor?.stageId ?? null;
+  /* A needs_review lane has no cursor (#1938); it stands on its review stage. */
+  const review = pipelineReviewSummary(pipeline);
+  const stageId = pipeline.cursor?.stageId ?? review?.stageId ?? null;
   const index = stageId ? pipeline.stages.findIndex((stage) => stage.id === stageId) : -1;
   const stage = index >= 0 ? pipeline.stages[index] : null;
   const attempts = stageId ? pipeline.runs.find((run) => run.stageId === stageId)?.attempts ?? [] : [];
@@ -293,6 +298,7 @@ function pipelineRow(pipeline: Pipeline, now: number): MobileBoardPipelineRow {
     stageFailed: last?.verdict?.status === "fail",
     findings,
     seconds: at === null ? null : Math.max(0, now - at),
+    review,
   };
 }
 
@@ -313,7 +319,7 @@ export function needsDecisionPipelineRows(
   closing: readonly string[] = NO_IDS,
 ): MobileBoardPipelineRow[] {
   return boardPipelines(pipelines)
-    .filter((pipeline) => pipeline.project === project && pipeline.state === "needs_decision")
+    .filter((pipeline) => pipeline.project === project && (pipeline.state === "needs_decision" || pipeline.state === "needs_review"))
     /* A lane the operator hid while it waits on this decision, or is closing,
        no longer waits on them here (#1671); the pipelines list still carries a
        hidden one. */
@@ -331,7 +337,7 @@ const NO_IDS: readonly string[] = [];
  * back in the queue. A lane that waits on no decision has nothing hidden.
  */
 export function pipelineHiddenFromBoard(pipeline: Pipeline): boolean {
-  if (pipeline.state !== "needs_decision" || !pipeline.dismissedAt) return false;
+  if ((pipeline.state !== "needs_decision" && pipeline.state !== "needs_review") || !pipeline.dismissedAt) return false;
   return laneMovedAt(pipeline) <= Date.parse(pipeline.dismissedAt);
 }
 

@@ -21,6 +21,7 @@ import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
+import { pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -622,6 +623,9 @@ function pipelineSummary(pipeline: Pipeline): PipelineSummary {
 function laneSettlement(pipeline: Pipeline): SeatTickOwnLaneInput["settled"] | null {
   if (pipeline.hiddenAt || pipeline.dismissedAt || pipeline.closedAt || pipeline.state === "closed") return null;
   const attempts = pipeline.runs.flatMap((run) => run.attempts);
+  /* #1938: a spent review budget left an unreviewed head. It is never
+     "completed", and it outranks the passed fix attempt it ended on. */
+  if (pipeline.state === "needs_review" || pipeline.pausedState === "needs_review") return "needs_review";
   if (pipeline.state === "completed") return "completed";
   if (pipeline.state === "needs_decision" || pipeline.pausedState === "needs_decision") {
     /* A lane that parked with no attempt behind it never ran a stage, so what
@@ -701,6 +705,7 @@ function ownSettledLanes(
       ...(settled === "provisioning-failed"
         ? { detail: redactBounded(pipeline.stateDetail ?? "", OWN_LANE_DETAIL_LIMIT) || null }
         : {}),
+      ...(settled === "needs_review" && pipelineReviewSummary(pipeline) ? { review: pipelineReviewSummary(pipeline)! } : {}),
     });
   }
   const at = (lane: SeatTickOwnLaneInput) => (lane.updatedAt ? Date.parse(lane.updatedAt) : Number.NaN);

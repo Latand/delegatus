@@ -714,7 +714,7 @@ describe("MCP tool service", () => {
     expect(bindingCalls).toEqual(["archive", "unarchive"]);
   });
 
-  test("only resolve-decision recovers an interrupted pipeline action receipt", async () => {
+  test("only resolve-decision and continue-review recover an interrupted pipeline action receipt (#1938)", async () => {
     const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})])) as unknown as McpToolBindings;
     const bindingCalls: string[] = [];
     bindings.pipeline_action = async (args) => {
@@ -730,7 +730,7 @@ describe("MCP tool service", () => {
       const result = await createMcpToolService(bindings, pendingStore).callTool("pipeline_action", {
         clientRequestId: `interrupted-${action}`, pipelineId: "pipeline_fixture", action,
       });
-      if (action === "resolve-decision") {
+      if (action === "resolve-decision" || action === "continue-review") {
         expect(result).toMatchObject({ ok: true, pipelineId: "pipeline_fixture" });
         expect(completed).toEqual([result]);
       } else {
@@ -738,7 +738,7 @@ describe("MCP tool service", () => {
         expect(completed).toEqual([]);
       }
     }
-    expect(bindingCalls).toEqual(["resolve-decision"]);
+    expect(bindingCalls).toEqual(["resolve-decision", "continue-review"]);
   });
 
   test("agent_activity keeps a durable receipt: it appends to the same journal lifecycle_events does", async () => {

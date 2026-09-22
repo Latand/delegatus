@@ -231,7 +231,7 @@ export function buildProjectSummaries(
     const summary = summaryFor(pipeline.project, projectDisplayName(pipeline.project, projectDisplayNames[pipeline.project]));
     summary.catalogOnly = false;
     if (pipeline.state === "provisioning" || pipeline.state === "running") summary.liveCount += 1;
-    if (pipeline.state === "needs_decision" || pipeline.state === "paused") summary.attentionCount += 1;
+    if (pipeline.state === "needs_decision" || pipeline.state === "needs_review" || pipeline.state === "paused") summary.attentionCount += 1;
     summary.smt = Math.max(summary.smt, (Date.parse(pipeline.createdAt) || 0) / 1000);
   }
   return [...map.values()].sort((a, b) => {

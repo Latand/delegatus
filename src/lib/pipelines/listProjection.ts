@@ -22,7 +22,7 @@
 import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 
 import { latestOperationalStageAttempt } from "./attemptSelection";
-import { failEdgeExhaustion } from "./failEdgeBudget";
+import { failEdgeExhaustion, failEdgeMaxRounds, pipelineReviewSummary, type PipelineReviewSummary } from "./failEdgeBudget";
 import { loadArchivedPipelines, loadPipelinesForList, withDeliveryPublicationDetail } from "./store";
 import type {
   Pipeline,
@@ -87,6 +87,7 @@ export type PipelineListStage = {
   effort: string | null;
   access: PipelineAccess | null;
   next: string | null;
+  /** `maxRounds` includes rounds continue-review granted (#1938). */
   onFail: { to: string; maxRounds: number; onExhausted: PipelineFailEdgeExhaustion } | null;
   attempts: number;
   latestAttempt: PipelineListAttempt | null;
@@ -115,6 +116,9 @@ export type PipelineListRow = {
   cursor: { stageId: string; state: PipelineCursorState } | null;
   attemptCount: number;
   unconfirmedHostCount: number;
+  /** Present only in `needs_review` (#1938): the reviewed head, the current
+      unreviewed head and the last verdict. */
+  review?: PipelineReviewSummary;
   stages: PipelineListStage[];
   pos: { x: number; y: number } | null;
 };
@@ -208,7 +212,7 @@ function stageRow(
     effort: role?.effort ?? stage.effort ?? null,
     access: role?.access ?? stage.access ?? null,
     next: stage.next,
-    onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: stage.onFail.maxRounds, onExhausted: failEdgeExhaustion(stage.onFail) } : null,
+    onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: failEdgeMaxRounds(pipeline, stage), onExhausted: failEdgeExhaustion(stage.onFail) } : null,
     attempts: attempts.length,
     /* The canonical selector, not "the last element": a lineage-adopted
        historical attempt is evidence, never the stage's current work. */
@@ -250,6 +254,7 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     attemptCount,
     unconfirmedHostCount: pipeline.unconfirmedHosts?.length ?? 0,
+    ...reviewField(pipeline),
     stages: (pipeline.stages ?? []).map((stage) => stageRow(pipeline, stage, attemptsByStage.get(stage.id) ?? [])),
     pos: pipeline.pos ? { x: pipeline.pos.x, y: pipeline.pos.y } : null,
   };
@@ -267,6 +272,8 @@ export type PipelineCompactRow = {
   cursor: { stageId: string; state: PipelineCursorState } | null;
   /** Clamped. */
   stateDetail: string | null;
+  /** As on the full row (#1938). */
+  review?: PipelineReviewSummary;
   stages: Array<{
     id: string;
     latestAttempt: { n: number; state: PipelineAttemptState; verdict: StageVerdictStatus | null } | null;
@@ -296,6 +303,7 @@ export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
     state: pipeline.state,
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     stateDetail: clampChars(withDeliveryPublicationDetail(pipeline).stateDetail, COMPACT_DETAIL_CHARS),
+    ...reviewField(pipeline),
     stages: (pipeline.stages ?? []).map((stage) => {
       const attempt = latestOperationalStageAttempt(pipeline, stage.id);
       return {
@@ -304,6 +312,11 @@ export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
       };
     }),
   };
+}
+
+function reviewField(pipeline: Pipeline): { review?: PipelineReviewSummary } {
+  const review = pipelineReviewSummary(pipeline);
+  return review ? { review } : {};
 }
 
 function yieldToEventLoop(): Promise<void> {

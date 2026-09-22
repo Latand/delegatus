@@ -28,7 +28,7 @@ import type {
   StageVerdictStatus,
 } from "@/lib/pipelines/types";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
-import { failEdgeRoundsUsed } from "@/lib/pipelines/failEdgeBudget";
+import { failEdgeMaxRounds, failEdgeRoundsUsed, pipelineReviewSummary, type PipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 
 import { PIPELINES_CHANGED_EVENT } from "./pipelineEvents";
 
@@ -140,7 +140,20 @@ export function pipelineStateLabel(t: TFunction, state: PipelineState): string {
 }
 
 export const PIPELINE_BUSY_STATES: ReadonlySet<PipelineState> = new Set(["provisioning", "running"]);
-export const PIPELINE_ATTENTION_STATES: ReadonlySet<PipelineState> = new Set(["needs_decision", "paused"]);
+export const PIPELINE_ATTENTION_STATES: ReadonlySet<PipelineState> = new Set(["needs_decision", "needs_review", "paused"]);
+
+/** The line a needs_review lane carries on every card (#1938): the last
+    verdict, the head it judged, and the current head nobody reviewed. */
+export function pipelineReviewHeads(t: TFunction, source: Pick<Pipeline, "reviewPending" | "state" | "pausedState"> | PipelineReviewSummary | null): string | null {
+  const review = source && "lastVerdict" in source ? source : source ? pipelineReviewSummary(source) : null;
+  if (!review) return null;
+  const short = (sha: string | null) => sha ? sha.slice(0, 8) : t("pipelineReview.unknownHead");
+  return t("pipelineReview.heads", {
+    verdict: t(`kanban.past.stageVerdict.${review.lastVerdict}`),
+    reviewed: short(review.reviewedHead),
+    current: short(review.currentHead),
+  });
+}
 
 /**
  * Is the pipeline actively working its cursor stage? Pausing a running pipeline
@@ -1493,7 +1506,7 @@ export function pipelineBoardEdges(pipeline: Pipeline): PipelineBoardEdge[] {
         to: stage.onFail.to,
         kind: "fail",
         usedRounds: failEdgeRoundsUsed(pipeline, stage),
-        maxRounds: stage.onFail.maxRounds,
+        maxRounds: failEdgeMaxRounds(pipeline, stage),
         isNext: false,
       });
     }

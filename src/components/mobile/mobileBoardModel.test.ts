@@ -484,3 +484,34 @@ test("a retired seat whose stored path is stale is still no row on the phone boa
   /* And one whose revocation carries no path is named by its conversation. */
   expect(retiredSeatPaths([{ conversationId: "conversation_retired", path: null }], [product, retired])).toEqual(["/p/seat-moved.jsonl"]);
 });
+
+/* #1938: a lane parked in needs_review waits on the operator like a decision,
+   stands on its review stage, and carries the verdict and both heads. */
+test("a needs_review lane is in the phone queue on its review stage with both heads (#1938)", () => {
+  const parked = pipeline({
+    id: "p-review",
+    state: "needs_review",
+    reviewPending: {
+    stageId: "review", attempt: 2, fixStageId: "implement", fixAttempt: 3,
+    reviewedHead: "1111111111111111111111111111111111111111", currentHead: "2222222222222222222222222222222222222222",
+    verdict: "fail" as const, findings: 2, at: "2026-09-20T00:00:00.000Z",
+  },
+    runs: [{ stageId: "review", attempts: [
+      { n: 1, state: "failed", verdict: { status: "fail", findings: ["P1 a"] }, startedAt: null, completedAt: null },
+      { n: 2, state: "failed", verdict: { status: "fail", findings: ["P1 a", "P2 b"] }, startedAt: null, completedAt: new Date((NOW - 60) * 1_000).toISOString() },
+    ] }] as never,
+  });
+  const [row] = needsDecisionPipelineRows([parked], PROJECT, NOW);
+  expect(row).toMatchObject({
+    id: "p-review",
+    stage: 3,
+    stageFailed: true,
+    findings: 2,
+    review: { stageId: "review", reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), lastVerdict: "fail", findings: 2 },
+  });
+  expect(row!.stageRef?.id).toBe("review");
+  const model = buildMobileBoard({ files: [], pipelines: [parked], project: PROJECT, now: NOW });
+  expect(model.needsYou.map((item) => item.kind === "pipeline" ? item.id : item.path)).toEqual(["p-review"]);
+  /* Hidden while it waits, it leaves the queue as a decision lane does. */
+  expect(needsDecisionPipelineRows([{ ...parked, dismissedAt: new Date(NOW * 1_000).toISOString() }], PROJECT, NOW)).toEqual([]);
+});

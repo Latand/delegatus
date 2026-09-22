@@ -6,7 +6,6 @@ import path from "node:path";
 import {
   acknowledgeBridgeReports,
   appendBridgeReports,
-  bridgeChannelPath,
   bridgeReportId,
   bridgeReportLogPath,
   drainBridgeReports,
@@ -14,6 +13,7 @@ import {
   readBridgeChannel,
   readBridgeReportLog,
 } from "./store";
+import { persistedBridgeChannel, persistedBridgeReportRowsText } from "./storeFixture";
 import {
   BRIDGE_DRAIN_BATCH_MAX,
   BRIDGE_REPORT_BODY_MAX_BYTES,
@@ -61,7 +61,7 @@ test("the channel links the root identity to the manager record by name, never b
 
   /* AC22: a manager replacement must cost nothing, which is only true while no
      durable bridge field can name the incumbent. */
-  const stored = fs.readFileSync(bridgeChannelPath(), "utf8");
+  const stored = JSON.stringify(persistedBridgeChannel());
   expect(stored).not.toContain("conversation_");
   expect(Object.keys(JSON.parse(stored) as Record<string, unknown>).sort()).toEqual([
     "managerRecordRef",
@@ -270,7 +270,7 @@ test("a legacy confirmation_request row still reads, sheds its authorization pay
   /* Appends after the legacy row keep working, and only the new row drains. */
   appendBridgeReports([report("after-legacy")]);
   expect(drainBridgeReports().reports.map((entry) => entry.id)).toEqual([bridgeReportId("after-legacy")]);
-  expect(fs.readFileSync(bridgeReportLogPath(), "utf8")).not.toContain("nonce-legacy");
+  expect(persistedBridgeReportRowsText()).not.toContain("nonce-legacy");
 });
 
 test("the drain tolerates a channel that was never opened", () => {
