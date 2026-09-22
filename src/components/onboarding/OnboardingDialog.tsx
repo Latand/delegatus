@@ -7,7 +7,8 @@ import { Z } from "@/components/layers";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import { ONBOARDING_STEP_IDS, type OnboardingMarker, type OnboardingStepId, type OnboardingStepState } from "@/lib/onboarding/marker";
+import type { OnboardingMarker } from "@/lib/onboarding/marker";
+import { ONBOARDING_STEP_IDS, type OnboardingStepId, type OnboardingStepState } from "@/lib/onboarding/steps";
 import type { RoleEngine } from "@/lib/roles/types";
 
 import { AgentMappingTable, type EngineStatus } from "./AgentMappingTable";
