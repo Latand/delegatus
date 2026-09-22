@@ -145,7 +145,7 @@ test("a stage row says how often work came back to it, from the same edge rule",
 test("a stage that has not launched shows its configuration, marked as configuration", () => {
   const record = pipeline([BUILD, REVIEW], [{ stageId: "build", attempts: [] }, { stageId: "review", attempts: [] }]);
   expect(stageIdentity(record, BUILD)).toEqual({
-    engine: "claude", model: "opus", modelLabel: "Opus 5", effort: "high",
+    engine: "claude", model: "opus", modelLabel: "Opus 5.5", effort: "high",
     source: "configured", modelIsDefault: true, next: null,
   });
 });
@@ -177,7 +177,7 @@ test("a stage that has run shows the values it was actually launched on, not the
   ]);
   expect(stageIdentity(record, BUILD)).toEqual({
     engine: "claude", model: "sonnet", modelLabel: "Sonnet", effort: "medium",
-    source: "launched", modelIsDefault: false, next: { engine: "claude", model: "opus", modelLabel: "Opus 5", effort: "high" },
+    source: "launched", modelIsDefault: false, next: { engine: "claude", model: "opus", modelLabel: "Opus 5.5", effort: "high" },
   });
 });
 

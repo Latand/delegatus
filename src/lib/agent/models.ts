@@ -31,7 +31,9 @@ export function codexModelSupportsImages(model: string | null | undefined): bool
 
 export const ENGINE_MODELS: Record<"claude" | "codex", readonly AgentModelOption[]> = {
   claude: [
-    { id: "opus", label: "Opus 5", shortLabel: "Opus 5", use: "review" },
+    // Claude Code 2.1.280 resolves the `opus` alias to claude-opus-5-5 on
+    // first-party auth, so the alias row names what it launches.
+    { id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" },
     { id: "fable", label: "Fable", shortLabel: "Fable", use: "general" },
     { id: "sonnet", label: "Sonnet", shortLabel: "Sonnet", use: "implement" },
     { id: "haiku", label: "Haiku", shortLabel: "Haiku", use: "general" },
@@ -86,6 +88,25 @@ export function normalizeClaudeLaunchModel(value: string | null | undefined): Cl
     if (model === family || new RegExp(`(?:^|[-_.])${family}(?:[-_.]|$)`).test(model)) return family;
   }
   return null;
+}
+
+/* A versioned Claude id as the scanner keeps it (`opus-5-5`, `claude-opus-5`,
+   `fable-5-1[1m]`), dated suffixes already stripped. Older family-last ids
+   (`3-7-sonnet`) and provider-prefixed ones do not match and read as stored. */
+const CLAUDE_VERSIONED_MODEL = /^(?:claude-)?(fable|mythos|opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(\[1m\])?$/;
+
+/** The name a card shows for the model a conversation ran on. Claude ids read
+    as the CLI's own display names (`opus-5-5` → "Opus 5.5", `opus-5` →
+    "Opus 5", `sonnet-4-0` → "Sonnet 4"); anything else, Codex ids included,
+    is shown as stored. */
+export function modelDisplayName(engine: string, model: string): string {
+  if (engine !== "claude") return model;
+  const match = CLAUDE_VERSIONED_MODEL.exec(model.trim().toLowerCase());
+  if (!match) return model;
+  const [, family, major, minor, tagged1m] = match;
+  const version = minor && Number(minor) !== 0 ? `${major}.${minor}` : major;
+  const name = `${family.charAt(0).toUpperCase()}${family.slice(1)} ${version}`;
+  return tagged1m ? `${name} (1M)` : name;
 }
 
 /** The provider tier bucket a Claude spawn of `model` draws on (issues #1796,

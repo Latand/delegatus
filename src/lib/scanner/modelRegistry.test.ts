@@ -19,7 +19,7 @@ describe("normalizeModelKey", () => {
 
 describe("registryWindow", () => {
   test("contains the frozen documented registry seed", () => {
-    expect(MODEL_REGISTRY_VERSION).toBe("2026-09-01");
+    expect(MODEL_REGISTRY_VERSION).toBe("2026-09-22");
     expect(registryWindow("fable-5", "standard")).toBe(1_000_000);
     expect(registryWindow("opus-4-8", "standard")).toBe(1_000_000);
     expect(registryWindow("sonnet-4-5", "standard")).toBe(200_000);
@@ -37,5 +37,18 @@ describe("registryWindow", () => {
     expect(normalizeModelKey("claude-fable-5-1")).toEqual({ key: "fable-5-1", mode: "standard" });
     expect(resolveRegistryKey("fable")).toBe("fable-5-1");
     expect(registryWindow("fable-5", "standard")).toBe(1_000_000);
+  });
+
+  test("Opus 5.5 is known, the opus alias resolves to it, and Opus 5 stays registered", () => {
+    /* Claude Code 2.1.280 lists claude-opus-5-5 with a native 1M window and
+       resolves `opus` to it on first-party auth; claude-opus-5 stays
+       selectable as the previous Opus with the same window. */
+    expect(normalizeModelKey("claude-opus-5-5")).toEqual({ key: "opus-5-5", mode: "standard" });
+    expect(normalizeModelKey("claude-opus-5-5[1m]")).toEqual({ key: "opus-5-5", mode: "1m" });
+    expect(normalizeModelKey("us.anthropic.claude-opus-5-5")).toEqual({ key: "opus-5-5", mode: "standard" });
+    expect(registryWindow("opus-5-5", "standard")).toBe(1_000_000);
+    expect(registryWindow("opus-5-5", "1m")).toBe(1_000_000);
+    expect(registryWindow("opus-5", "standard")).toBe(1_000_000);
+    expect(resolveRegistryKey("opus")).toBe("opus-5-5");
   });
 });
