@@ -472,10 +472,12 @@ export class SelfUpdateService {
         tail: [],
         ...extra,
       };
-      if (entry.pid !== null && entry.startIdentity && (entry.state === "healthy" || entry.state === "starting")
-        && !this.deps.processAlive(entry.pid, entry.startIdentity)) {
-        return { ...status, state: "failed", error: { kind: "gone", pid: entry.pid }, lastHealthOk: false, lastHealthAt: at };
+      const gone = entry.pid !== null && entry.startIdentity !== null && !this.deps.processAlive(entry.pid, entry.startIdentity);
+      if (gone && (entry.state === "healthy" || entry.state === "starting")) {
+        return { ...status, pid: null, state: "failed", error: entry.error ?? { kind: "gone", pid: entry.pid! }, lastHealthOk: false, lastHealthAt: at };
       }
+      /* A failed launch names no live process: its card offers a start. */
+      if (gone && entry.state === "failed") return { ...status, pid: null };
       return status;
     };
     const web = fromRecord(record.web, {
@@ -488,13 +490,17 @@ export class SelfUpdateService {
       else if (healthError) host = { ...host, state: "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: healthError } };
     }
 
+    /* Busy follows what the processes are, after the PID check: a "starting"
+       entry whose PID is gone is a launch that failed, which blocks nothing,
+       and the surface offers to start it again. */
+    const moving = (view: ProcessView) => view.state === "stopping" || view.state === "starting";
     let busy: Busy = runner.state.state === "running" ? "update" : null;
-    if (!busy && (record.web.state === "stopping" || record.web.state === "starting")) busy = "restart-web";
-    if (!busy && (record.runtimeHost.state === "stopping" || record.runtimeHost.state === "starting")) busy = "restart-runtime-host";
+    if (!busy && moving(web)) busy = "restart-web";
+    if (!busy && moving(host)) busy = "restart-runtime-host";
     const pending = this.pendingRestart;
     if (pending) {
       const entry = pending.role === "web" ? record.web : record.runtimeHost;
-      const settled = entry.requestId === pending.requestId && entry.state !== "stopping" && entry.state !== "starting";
+      const settled = entry.requestId === pending.requestId && !moving(pending.role === "web" ? web : host);
       if (settled || now - pending.at > PENDING_RESTART_MS) this.pendingRestart = null;
       else busy = busy ?? (pending.role === "web" ? "restart-web" : "restart-runtime-host");
     }

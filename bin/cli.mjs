@@ -613,8 +613,13 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
       }
       hooks.onReady?.(processHandle.child);
     } catch (error) {
+      /* A host that ended on its own is reported with its exit; one this
+         supervisor had to stop (no socket in time, another fence owner) with
+         the reason it was stopped. Either way it is failed, never left
+         reading as "starting" under a PID that is gone. */
+      const exitedOnItsOwn = processHandle.child.exitCode !== null || processHandle.child.signalCode !== null;
       await stopChild(processHandle);
-      if (initial) throw error;
+      hooks.onLaunchFailed?.(processHandle.child, processHandle.state.spawnedAt, exitedOnItsOwn, error instanceof Error ? error.message : String(error));
       throw error;
     }
   };
@@ -1028,6 +1033,10 @@ async function main() {
       onReady: () => record.set("runtimeHost", { state: "healthy", error: null }),
       onStopping: () => record.set("runtimeHost", { state: "stopping" }),
       onExit: (child, spawnedAt) => record.set("runtimeHost", { state: "failed", error: exitError(child, spawnedAt) }),
+      onLaunchFailed: (child, spawnedAt, exitedOnItsOwn, detail) => record.set("runtimeHost", {
+        state: "failed",
+        error: exitedOnItsOwn ? exitError(child, spawnedAt) : { kind: "message", text: detail },
+      }),
     },
   );
   try {

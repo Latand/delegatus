@@ -258,8 +258,18 @@ test("a host restart whose new and previous releases both fail is retried by the
     const record = readRecord(fixture.state);
     return record.runtimeHost.requestId === "restart-host-both-broken" && record.runtimeHost.state === "failed" ? record : null;
   });
+  /* The restart's own summary: both releases were tried. */
   expect(failed.runtimeHost.error?.kind).toBe("message");
   expect(existsSync(`/proc/${before.runtimeHost.pid}`)).toBe(false);
+
+  /* A backoff attempt that fails before readiness is recorded as failed with
+     its own exit, never left reading "starting" under a PID that is gone. */
+  const retried = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.runtimeHost.pid !== failed.runtimeHost.pid && record.runtimeHost.state === "failed" ? record : null;
+  }, 15_000);
+  expect(retried.runtimeHost.error).toMatchObject({ kind: "exit", code: 3 });
+  expect(existsSync(`/proc/${retried.runtimeHost.pid}`)).toBe(false);
 
   /* The previous release can start again: the backoff finds it without anyone asking. */
   writeFileSync(rootHost, STUB_HOST);

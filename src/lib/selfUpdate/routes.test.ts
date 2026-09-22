@@ -15,7 +15,7 @@ import { buildEnv } from "./env";
 import { checkForUpdate, readRevision, runGit } from "./git";
 import { readLauncherRecord, requestRestart } from "./launcher";
 import { deploymentsEnabled, detectMode } from "./mode";
-import { readStartIdentity } from "./pid";
+import { readStartIdentity, sameProcess } from "./pid";
 import { getEvents, getSnapshot, getStepLog, postCheck, postRestart, postUpdate } from "./routes";
 import { prepareManagedCheckRepo, setSelfUpdateServiceForTests } from "./instance";
 import { SelfUpdateService, type ServiceDeps } from "./service";
@@ -427,6 +427,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
         now: () => Date.now(),
       }, onChange),
       hostHealth: async () => ({ pid, startIdentity, hostEpoch: 1 }),
+      processAlive: (candidate, identity) => sameProcess({ pid: candidate, startIdentity: identity }),
     }));
     return h;
   }
@@ -496,6 +497,32 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const log = await getStepLog("build").text();
     expect(log).toContain("run build ok");
     expect(getStepLog("everything").status).toBe(404);
+  });
+
+  test("a host whose launch failed blocks nothing, and a restart asked of it settles on the failure", async () => {
+    const h = harness();
+    setSelfUpdateServiceForTests(h.service);
+    /* Above the kernel's PID ceiling: a PID nothing can hold. */
+    const deadPid = 4_194_304 + 17;
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    record.runtimeHost = { ...record.runtimeHost, state: "starting", pid: deadPid, startIdentity: "1", error: null };
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    let s = await snapshot();
+    expect(s.busy).toBeNull();
+    expect(s.processes.runtimeHost).toMatchObject({ state: "failed", pid: null, error: { kind: "gone", pid: deadPid } });
+
+    expect((await postRestart(post("/restart", { role: "runtime-host", confirm: true }))).status).toBe(202);
+    expect((await snapshot()).busy).toBe("restart-runtime-host");
+    const request = JSON.parse(readFileSync(record.requestFile, "utf8")) as { requestId: string };
+    /* The launcher tried and the new host exited before it was ready. */
+    record.runtimeHost = { ...record.runtimeHost, requestId: request.requestId, state: "failed", pid: deadPid + 1, error: { kind: "exit", code: 3, signal: null, afterMs: 120 } };
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    s = await snapshot();
+    expect(s.busy).toBeNull();
+    expect(s.processes.runtimeHost).toMatchObject({ state: "failed", pid: null, error: { kind: "exit", code: 3 } });
+    /* Nothing is busy: Update is refused only because no check has run. */
+    const update = await postUpdate(post("/update", { key: "press-after-failure" }));
+    expect(((await update.json()) as { code: string }).code).toBe("no-update");
   });
 
   test("a restart is refused while an update builds, and so is a second update", async () => {
