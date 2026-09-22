@@ -728,6 +728,7 @@ function measureOnboarding(phone: boolean) {
       result: dialog.querySelector("[data-voice-check-result]")?.textContent ?? null,
       tone: dialog.querySelector<HTMLElement>("[data-voice-check-result]")?.dataset.tone ?? null,
       keyField: dialog.querySelector("[data-voice-key-field] input") !== null,
+      skip: dialog.querySelector("[data-voice-skip]") !== null,
       html: dialog.querySelector("[data-onboarding-voice]")!.innerHTML,
     } : null,
     tour: dialog.querySelector("[data-onboarding-tour]") ? {
@@ -1398,7 +1399,7 @@ async function captureOnboarding(): Promise<void> {
             };
             await revisit("voice");
             await page.waitForSelector("[data-onboarding-voice]", { timeout: 30_000 });
-            await voiceFrame("voice-local", (r) => must(r.voice?.selected === "local", `${tag}: the voice step opens on ${r.voice?.selected}`));
+            await voiceFrame("voice-local", (r) => must(r.voice?.selected === "local" && r.voice.skip, `${tag}: the voice step opens on ${r.voice?.selected}, skip ${r.voice?.skip}`));
             await check();
             await voiceFrame("voice-check-local", (r) => must(r.voice?.tone === "danger" && Boolean(r.voice.result), `${tag}: local check says ${r.voice?.result}`));
             await choose("chatgpt");
@@ -1415,6 +1416,7 @@ async function captureOnboarding(): Promise<void> {
             await page.waitForSelector('[data-voice-key-note="saved"]', { timeout: 30_000 });
             await voiceFrame("voice-key-saved", (r) => {
               must(!(r.voice?.html ?? "").includes(fakeKey), `${tag}: the saved key is still in the page`);
+              must(r.voice?.skip === false, `${tag}: Keep the local default is offered with soniox selected`);
             });
             const keyFile = path.join(configDir, "soniox-api-key");
             must(fs.readFileSync(keyFile, "utf8") === `${fakeKey}\n` && (fs.statSync(keyFile).mode & 0o777) === 0o600, `${tag}: the key file is not the key at mode 600`);
@@ -1467,6 +1469,18 @@ async function captureOnboarding(): Promise<void> {
             await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
             await page.waitForTimeout(1_500);
             await page.screenshot({ path: path.join(OUT_DIR, `${tag}-tour-created.png`) });
+            if (!viewport.phone) {
+              /* The dock's draft shows what Create will launch without a drag. */
+              const choices = await page.evaluate(() => {
+                const block = document.querySelector("[data-orchestrator-launch-choices]");
+                const scroller = block?.closest(".overflow-y-auto");
+                if (!block || !scroller) return null;
+                const a = block.getBoundingClientRect();
+                const b = scroller.getBoundingClientRect();
+                return { inView: a.top >= b.top - 1 && a.bottom <= b.bottom + 1, top: a.top, bottom: a.bottom, viewTop: b.top, viewBottom: b.bottom };
+              });
+              must(choices?.inView === true, `${tag}: the draft's launch choices are out of view after the hand-off (${JSON.stringify(choices)})`);
+            }
             const prefill = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([key]) => key.startsWith("llvOrchestratorDraft:"))));
             const values = Object.entries(prefill).map(([key, value]) => `${key.split(":").at(-1)}=${value}`).sort();
             must(values.includes("effort=medium") && values.includes("model=opus") && values.includes("engine=claude"), `${tag}: the tour left the draft at ${values.join(", ")}`);
