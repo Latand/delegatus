@@ -13,11 +13,12 @@ export type CostClass = "light" | "moderate" | "heavy" | "very-heavy";
 const MODEL_SIZE: readonly (readonly [RegExp, 1 | 2 | 3])[] = [
   [/^haiku\b/, 1],
   [/^gpt-5\.6-luna\b/, 1],
+  [/^gpt-6-luna\b/, 1],
   [/^sonnet\b/, 2],
   [/^gpt-5\.6-terra\b/, 2],
   [/^(opus|fable)\b/, 3],
   [/^gpt-5\.6-sol\b/, 3],
-  [/^gpt-6-astra\b/, 3],
+  [/^gpt-6-(astra|sol)\b/, 3],
 ];
 
 /** Size class of a catalogued model; an uncatalogued one counts as large. */

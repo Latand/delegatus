@@ -171,21 +171,26 @@ test("a malformed accounts body hides the selector rather than breaking the draf
 });
 
 
-test.each(["ultra", "max"])("model switch reconciles and persists Astra/%s for Luna", async (effort) => {
+test.each([
+  ["gpt-6-astra", "ultra", "gpt-5.6-luna"],
+  ["gpt-6-astra", "max", "gpt-5.6-luna"],
+  ["gpt-6-sol", "ultra", "gpt-6-luna"],
+  ["gpt-6-sol", "max", "gpt-6-luna"],
+] as const)("model switch reconciles and persists %s/%s for %s", async (from, effort, to) => {
   store.clear();
   store.set("engine", "codex");
-  store.set("model", "gpt-6-astra");
+  store.set("model", from);
   store.set("effort", effort);
   const { host, draft } = mount();
   await settle();
   const model = host.querySelector('select[aria-label="Agent model"]') as HTMLSelectElement;
   flushSync(() => {
-    model.value = "gpt-5.6-luna";
+    model.value = to;
     model.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
   });
   const expected = effort === "ultra" ? "" : effort;
   expect((host.querySelector('select[aria-label="Reasoning effort level"]') as HTMLSelectElement).value).toBe(expected);
-  expect(draft().model).toBe("gpt-5.6-luna");
+  expect(draft().model).toBe(to);
   expect(draft().effort).toBe(expected);
   expect(store.get("effort")).toBe(expected || undefined);
 });

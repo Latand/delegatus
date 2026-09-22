@@ -1590,7 +1590,12 @@ test("the badge is localized with the rest of the dock", async () => {
 });
 
 
-test.each(["ultra", "max"])("Astra/%s to Luna submits the displayed effort", async (effort) => {
+test.each([
+  ["gpt-6-astra", "ultra", "gpt-5.6-luna"],
+  ["gpt-6-astra", "max", "gpt-5.6-luna"],
+  ["gpt-6-sol", "ultra", "gpt-6-luna"],
+  ["gpt-6-sol", "max", "gpt-6-luna"],
+] as const)("%s/%s to %s submits the displayed effort", async (from, effort, to) => {
   const host = mount();
   await settle();
   const codex = [...host.querySelectorAll('[role="radio"]')].find((node) => node.textContent === "Codex") as HTMLButtonElement;
@@ -1601,11 +1606,11 @@ test.each(["ultra", "max"])("Astra/%s to Luna submits the displayed effort", asy
     field.value = value;
     field.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
   });
-  select(modelSelect, "gpt-6-astra");
+  select(modelSelect, from);
   select(effortSelect, effort);
   expect(effortSelect.value).toBe(effort);
-  select(modelSelect, "gpt-5.6-luna");
-  expect(modelSelect.value).toBe("gpt-5.6-luna");
+  select(modelSelect, to);
+  expect(modelSelect.value).toBe(to);
   const expected = effort === "ultra" ? "" : effort;
   expect(effortSelect.value).toBe(expected);
   expect(effortSelect.selectedOptions[0]?.textContent).toBe(expected || "effort: default");
@@ -1613,7 +1618,7 @@ test.each(["ultra", "max"])("Astra/%s to Luna submits the displayed effort", asy
   flushSync(() => confirmButton(host).click());
   await settle();
   expect(seatPosts).toHaveLength(1);
-  expect(seatPosts[0]?.model).toBe("gpt-5.6-luna");
+  expect(seatPosts[0]?.model).toBe(to);
   expect(seatPosts[0]?.effort).toBe(expected || undefined);
 });
 

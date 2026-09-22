@@ -312,10 +312,15 @@ test("a parked pipeline offers retry and skip", async () => {
 });
 
 
-test.each(["ultra", "max"])("reviewer override reconciles Astra/%s to Luna before PATCH", (effort) => {
+test.each([
+  ["gpt-6-astra", "ultra", "gpt-5.6-luna"],
+  ["gpt-6-astra", "max", "gpt-5.6-luna"],
+  ["gpt-6-sol", "ultra", "gpt-6-luna"],
+  ["gpt-6-sol", "max", "gpt-6-luna"],
+] as const)("reviewer override reconciles %s/%s to %s before PATCH", (from, effort, to) => {
   const group: SchemeGroup = {
     ...flowGroup,
-    flow: { ...flowGroup.flow!, roles: { ...flowGroup.flow!.roles, reviewer: { engine: "codex", model: "gpt-6-astra", effort } } },
+    flow: { ...flowGroup.flow!, roles: { ...flowGroup.flow!.roles, reviewer: { engine: "codex", model: from, effort } } },
   };
   const { host, root } = mount(<GroupOverridePanel group={group} onClose={() => undefined} />);
   try {
@@ -323,12 +328,12 @@ test.each(["ultra", "max"])("reviewer override reconciles Astra/%s to Luna befor
     // happy-dom lacks React's text-input value tracker; use the input's handler.
     const propsKey = Object.keys(model).find((key) => key.startsWith("__reactProps$"))!;
     const props = (model as unknown as Record<string, { onChange: (event: unknown) => void }>)[propsKey]!;
-    flushSync(() => props.onChange({ target: { value: "gpt-5.6-luna" } }));
-    expect(model.value).toBe("gpt-5.6-luna");
+    flushSync(() => props.onChange({ target: { value: to } }));
+    expect(model.value).toBe(to);
     const expected = effort === "ultra" ? null : effort;
     expect((host.querySelectorAll("select")[1] as HTMLSelectElement).value).toBe(expected ?? "");
     flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent === "Update reviewer")!.click());
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.body).toMatchObject({ action: "set-roles", roles: { reviewer: { model: "gpt-5.6-luna", effort: expected } } });
+    expect(calls[0]?.body).toMatchObject({ action: "set-roles", roles: { reviewer: { model: to, effort: expected } } });
   } finally { flushSync(() => root.unmount()); }
 });
