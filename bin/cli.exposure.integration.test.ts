@@ -204,10 +204,15 @@ process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 `),
   ]);
+  /* Hermetic for the tailnet gate: a shell the Viewer spawned carries these. */
+  const inherited = { ...process.env };
+  delete inherited.LLV_TOKEN;
+  delete inherited.LLV_TS_HOST;
+  delete inherited.LLV_TS_URL;
   return {
     cli: path.join(bin, "cli.mjs"),
     env: {
-      ...process.env,
+      ...inherited,
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
       LLV_STATE_DIR: state,
@@ -352,7 +357,8 @@ test("a remembered choice whose Tailscale went away starts locally and says why"
   const port = await availablePort();
   const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
     cwd: path.dirname(path.dirname(fixture.cli)),
-    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en" },
+    /* A stale link from the launching shell is not advertised by a local start. */
+    env: { ...fixture.env, PATH: `${stub.dir}:${path.dirname(process.execPath)}`, LLV_LANG: "en", LLV_TS_URL: "https://stale.tailnet.example/?k=stale", LLV_TS_HOST: "stale.tailnet.example" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   children.add(child);

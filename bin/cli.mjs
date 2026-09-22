@@ -353,6 +353,14 @@ function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment) {
     env.LLV_TELEGRAM_PROVISIONER = telegramProvisioner;
   }
 
+  /* A local-only start never advertises a tailnet link it inherited from the
+     shell that launched it. */
+  if (runtime.tailnetSkipped) {
+    delete env.LLV_TOKEN;
+    delete env.LLV_TS_HOST;
+    delete env.LLV_TS_URL;
+  }
+
   if (runtime.llvToken) {
     env.LLV_TOKEN = runtime.llvToken;
   }
@@ -729,6 +737,8 @@ async function prepareRuntime(options) {
     llvTsHost: undefined,
     tailnetUrl: undefined,
     tailscalePath: undefined,
+    /* Set when the remembered choice fell back to a local start. */
+    tailnetSkipped: false,
   };
 
   const nonLoopbackBind = !isLoopbackHostname(options.hostname);
@@ -749,6 +759,7 @@ async function prepareRuntime(options) {
       console.error(m.phoneAccessSkipped(error.message));
       options.tailscale = false;
       options.tailscaleFromFlag = false;
+      runtime.tailnetSkipped = true;
       return runtime;
     }
     const { token } = await getToken({ rotate: options.newToken });
