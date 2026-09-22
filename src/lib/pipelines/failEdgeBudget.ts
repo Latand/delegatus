@@ -1,4 +1,4 @@
-import type { Pipeline, PipelineEdgeKind, PipelineFailEdge, PipelineFailEdgeExhaustion, PipelineStage } from "./types";
+import type { Pipeline, PipelineEdgeKind, PipelineFailEdge, PipelineFailEdgeExhaustion, PipelineStage, StageVerdictStatus } from "./types";
 
 /** What the record says when a spent fail edge handed its last findings on
     without asking the source again (#1868). */
@@ -39,6 +39,16 @@ export function failEdgeRoundsUsed(pipeline: Pipeline, stage: PipelineStage): nu
   return edgeRoundsUsed(pipeline, { from: stage.id, to: stage.onFail.to, kind: "fail" });
 }
 
+/** The rounds a stage's fail edge may spend: its frozen `maxRounds` plus every
+    round a `continue-review` granted it since (#1938). */
+export function failEdgeMaxRounds(pipeline: Pipeline, stage: PipelineStage): number {
+  if (!stage.onFail) return 0;
+  const granted = (pipeline.reviewGrants ?? [])
+    .filter((grant) => grant.stageId === stage.id)
+    .reduce((sum, grant) => sum + grant.rounds, 0);
+  return stage.onFail.maxRounds + granted;
+}
+
 export function failEdgeExhaustion(edge: PipelineFailEdge): PipelineFailEdgeExhaustion {
   return edge.onExhausted ?? "advance";
 }
@@ -46,8 +56,35 @@ export function failEdgeExhaustion(edge: PipelineFailEdge): PipelineFailEdgeExha
 /** Whether this stage has already handed findings along its spent fail edge.
     Read from the stage's own attempts, so the handoff happens once per stage:
     when another stage's fail edge later loops back through this one and it
-    fails again, it parks as budget exhausted. */
+    fails again, it parks as budget exhausted. Each `continue-review` grant
+    (#1938) buys one more handoff, at the end of the rounds it added. */
 export function failEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage): boolean {
   const run = pipeline.runs.find((candidate) => candidate.stageId === stage.id);
-  return Boolean(run?.attempts.some((attempt) => !attempt.historical && attempt.budgetSpent));
+  const handoffs = run?.attempts.filter((attempt) => !attempt.historical && attempt.budgetSpent).length ?? 0;
+  const grants = (pipeline.reviewGrants ?? []).filter((grant) => grant.stageId === stage.id).length;
+  return handoffs > grants;
+}
+
+/** What `needs_review` names on every surface (#1938): the review stage, the
+    head it last judged, the head nobody reviewed, and the verdict it gave. */
+export type PipelineReviewSummary = {
+  stageId: string;
+  reviewedHead: string | null;
+  currentHead: string;
+  lastVerdict: StageVerdictStatus;
+  findings: number;
+};
+
+export function pipelineReviewSummary(pipeline: Pick<Pipeline, "reviewPending" | "state" | "pausedState">): PipelineReviewSummary | null {
+  const pending = pipeline.reviewPending;
+  /* A lane closed out of needs_review keeps the record as history; only the
+     open state names it. */
+  if (!pending || (pipeline.state !== "needs_review" && pipeline.pausedState !== "needs_review")) return null;
+  return {
+    stageId: pending.stageId,
+    reviewedHead: pending.reviewedHead,
+    currentHead: pending.currentHead,
+    lastVerdict: pending.verdict,
+    findings: pending.findings,
+  };
 }

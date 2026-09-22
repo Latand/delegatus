@@ -1,4 +1,4 @@
-import { ENGINE_MODELS, defaultModelFor } from "@/lib/agent/models";
+import { ENGINE_MODELS, defaultModelFor, modelDisplayName } from "@/lib/agent/models";
 import { edgeRoundsUsed } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineEdgeKind, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 
@@ -46,7 +46,7 @@ const LAUNCHED = (attempt: PipelineStageAttempt) => attempt.state !== "pending";
 
 function shortLabel(engine: string, model: string): string {
   const catalogue = engine === "claude" || engine === "codex" ? ENGINE_MODELS[engine] : [];
-  return catalogue.find((option) => option.id === model)?.shortLabel ?? model;
+  return catalogue.find((option) => option.id === model)?.shortLabel ?? modelDisplayName(engine, model);
 }
 
 function valuesOf(role: { engine: string; model: string | null; effort: string | null }): StageRunValues {

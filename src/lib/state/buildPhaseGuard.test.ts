@@ -76,6 +76,25 @@ function seededRoot(): { root: string; state: string } {
   write("account-mutation-revision.json", { revision: 1 });
   write("claude-auth-operations.json", { version: 1, operations: [] });
   write("codex-login-attempts.json", { version: 1, attempts: [] });
+  /* The bridge stores (#1870 slice 4): the report log, the unscoped channel
+     and one scoped channel, which the child reads through the bridge store. */
+  write("bridge-reports.json", { schemaVersion: 1, lastSeq: 1, trimmedThroughSeq: 0, reports: [], retired: [] });
+  write("bridge.json", { schemaVersion: 1, rootId: "root_seeded", managerRecordRef: "orchestrator", managerReportCursor: 1, updatedAt: "2026-09-20T00:00:00.000Z" });
+  fs.mkdirSync(path.join(state, "bridge-channels"));
+  write(path.join("bridge-channels", `${crypto.createHash("sha256").update("seeded-project\0seeded-seat").digest("hex").slice(0, 32)}.json`), {
+    schemaVersion: 1,
+    rootId: "root_seeded",
+    project: "seeded-project",
+    seatConversationId: "seeded-seat",
+    managerRecordRef: "orchestrator",
+    managerReportCursor: 1,
+    updatedAt: "2026-09-20T00:00:00.000Z",
+  });
+  /* The operator-facing small stores (#1870 slice 5), which the child reads
+     through their stores the way the MCP tools and the routes do. */
+  write("attention.json", { schemaVersion: 1, revision: 57, updatedAt: "2026-09-20T00:00:00.000Z", requests: [] });
+  write("reply-suggestions.json", { schemaVersion: 1, revision: 9, updatedAt: "2026-09-20T00:00:00.000Z", sets: [], admissions: [] });
+  write("seat-tick-settings.json", { version: 1, projects: {} });
   return { root, state };
 }
 
@@ -139,6 +158,10 @@ describe("a build-phase module load never mutates state (#1905)", () => {
     expect(snapshot(root)).toEqual(before);
     expect(fs.existsSync(path.join(state, "state.sqlite"))).toBe(false);
     expect(fs.lstatSync(path.join(state, "claude-accounts.json")).isFile()).toBe(true);
+    expect(fs.lstatSync(path.join(state, "bridge-reports.json")).isFile()).toBe(true);
+    for (const name of ["attention.json", "reply-suggestions.json", "seat-tick-settings.json"]) {
+      expect(fs.lstatSync(path.join(state, name)).isFile()).toBe(true);
+    }
   }, 30_000);
 
   test("the same load outside a build writes nothing either: only the Viewer's activation imports", async () => {
@@ -157,6 +180,11 @@ describe("a build-phase module load never mutates state (#1905)", () => {
     expect(JSON.parse(run.out.trim()) as { kind: string }).toEqual({ kind: "collection" });
     expect(fs.existsSync(path.join(state, "state.sqlite"))).toBe(true);
     expect(fs.lstatSync(path.join(state, "claude-accounts.json")).isDirectory()).toBe(true);
+    expect(fs.lstatSync(path.join(state, "bridge-reports.json")).isDirectory()).toBe(true);
+    expect(fs.lstatSync(path.join(state, "bridge.json")).isDirectory()).toBe(true);
+    for (const name of ["attention.json", "reply-suggestions.json", "seat-tick-settings.json"]) {
+      expect(fs.lstatSync(path.join(state, name)).isDirectory()).toBe(true);
+    }
   }, 30_000);
 
   /*
@@ -201,6 +229,8 @@ describe("a process that owns the release fence without serving traffic", () => 
     /* The rollback release finds its files where it left them. */
     expect(fs.lstatSync(path.join(state, "claude-accounts.json")).isFile()).toBe(true);
     expect(fs.lstatSync(path.join(state, "account-project-bindings.json")).isFile()).toBe(true);
+    expect(fs.lstatSync(path.join(state, "attention.json")).isFile()).toBe(true);
+    expect(fs.lstatSync(path.join(state, "seat-tick-settings.json")).isFile()).toBe(true);
   }, 30_000);
 });
 

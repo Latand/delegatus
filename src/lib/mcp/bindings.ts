@@ -88,7 +88,7 @@ import { projectSuccessionFor } from "@/lib/projects/succession";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { createPipelineFromRequest, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
+import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
@@ -196,7 +196,9 @@ import {
 } from "./selectedContextTarget";
 import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
-const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision"]);
+const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review"]);
+/* Writes whose clientRequestId is their durable receipt key, attributed to the caller. */
+const PIPELINE_RECEIPT_ACTIONS = new Set<PipelineAction>(["resolve-decision", "continue-review", "convert-legacy-review", "revert-legacy-review"]);
 const PIPELINE_GRAPH_EDIT_ACTIONS = new Set<PipelineAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
 
 interface LinkTaskToPipelineDependencies {
@@ -1484,13 +1486,13 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): 
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
-  const request = withoutKeys(args, ["pipelineId", ...(action === "resolve-decision" ? [] : ["clientRequestId"]), "full", "compact"]);
+  const request = withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact"]);
   const before = dependencies.readPipelineRecord
     ? dependencies.readPipelineRecord(pipelineId)
     : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
   const beforeFields = fieldValues(before);
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
-  const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || action === "resolve-decision" || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
+  const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest);
   if (!result.pipeline) {
@@ -1498,6 +1500,8 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     /* A refused close carries the hosts it stopped and the one it could not
        (#670); an agent driving the board must not get less than an HTTP caller. */
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
+    /* A refused conversion carries its editable preview. */
+    if (result.legacyReviewPreview) throw new McpToolRefusal(message, { legacyReviewPreview: result.legacyReviewPreview });
     if (action === "publish" || action === "takeover") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
@@ -1521,6 +1525,25 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
       attempt: result.decisionAnswer.attempt,
       nextAttempt: result.decisionAnswer.nextAttempt,
       at: result.decisionAnswer.at,
+    }, replayed: result.replayed } : {}),
+    ...(result.reviewContinuation ? { reviewContinuation: {
+      clientRequestId: result.reviewContinuation.clientRequestId,
+      stageId: result.reviewContinuation.stageId,
+      rounds: result.reviewContinuation.rounds,
+      reviewedHead: result.reviewContinuation.reviewedHead,
+      currentHead: result.reviewContinuation.currentHead,
+      at: result.reviewContinuation.at,
+    }, replayed: result.replayed } : {}),
+    ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}),
+    ...(result.legacyReviewConversion ? { legacyReviewConversion: {
+      clientRequestId: result.legacyReviewConversion.clientRequestId,
+      stageId: result.legacyReviewConversion.stageId,
+      fixerStageId: result.legacyReviewConversion.fixerStageId,
+      implementerStageId: result.legacyReviewConversion.implementerStageId,
+      reviewLimit: result.legacyReviewConversion.reviewLimit,
+      reviewLimitSource: result.legacyReviewConversion.reviewLimitSource,
+      at: result.legacyReviewConversion.at,
+      ...(result.legacyReviewConversion.reverted ? { reverted: result.legacyReviewConversion.reverted } : {}),
     }, replayed: result.replayed } : {}),
   });
 }
@@ -3285,7 +3308,7 @@ async function listPipelines(
   context: McpToolCallContext = {},
 ): Promise<McpToolPayload> {
   throwIfCallEnded(context);
-  const states = stringSet(args.state, ["open", "draft", "provisioning", "running", "paused", "needs_decision", "completed", "closed"]);
+  const states = stringSet(args.state, ["open", "draft", "provisioning", "running", "paused", "needs_decision", "needs_review", "completed", "closed"]);
   const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(), updatedSince: sinceTime(args.updatedSince) };
   const source = dependencies.pipelineSelectionSource?.();
@@ -4957,13 +4980,17 @@ export function viewerMcpBindings(
     pipeline_action: Object.assign(
       (args: McpToolArgs) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
       { authorizeReceipt: (args: McpToolArgs) => {
-        if (args.action !== "resolve-decision") return;
+        if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
         const id = required(args, "pipelineId");
         const pipeline = domainDependencies.readPipelineRecord
           ? domainDependencies.readPipelineRecord(id)
           : domainDependencies.getPipelines?.().pipelines.find((item) => item.id === id);
         if (!pipeline) throw new Error("pipeline not found");
-        const refusal = decisionAnswerActorRefusal(pipeline, pauseResumeActorOf(domainDependencies), args.clientRequestId);
+        const refusal = args.action === "continue-review"
+          ? continueReviewActorRefusal(pipeline, pauseResumeActorOf(domainDependencies))
+          : args.action === "convert-legacy-review" || args.action === "revert-legacy-review"
+            ? legacyReviewActorRefusal(pipeline, pauseResumeActorOf(domainDependencies))
+            : decisionAnswerActorRefusal(pipeline, pauseResumeActorOf(domainDependencies), args.clientRequestId);
         if (refusal) throw new Error(refusal.error);
       } },
     ),

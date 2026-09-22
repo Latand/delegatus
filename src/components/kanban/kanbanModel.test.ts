@@ -9,6 +9,8 @@ import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
 import { buildKanbanModel, cardHasLiveWork, KANBAN_STATUSES, summarizePipeline } from "./kanbanModel";
+import { pipelineProgress } from "./PipelineSection";
+import { translate, type TFunction } from "@/lib/i18n";
 
 /* Pure projection tests: invented tasks, transcripts and pipelines, a layout
    built the way the scheme builds it, and the real band projection on top. */
@@ -570,4 +572,27 @@ test("a seat conversation no task holds draws no Not-on-a-task card either (#184
   /* The same read without `previous` (a failed read) draws both. */
   const unread = buildKanbanModel({ bands, tasks, pipelines: [], projection, files, seat: { conversationIds: [files[0]!.conversationId!], paths: [] }, now: NOW });
   expect(unread.unlinked.length).toBe(2);
+});
+
+/* #1938: a lane parked in needs_review makes its card ask for the operator,
+   and the card's progress sentence names the verdict and both heads. */
+test("a needs_review lane's card needs the operator and says the last review failed on an unreviewed head (#1938)", () => {
+  const en = ((key: string, params?: Record<string, string | number>) => translate("en", key as never, params)) as TFunction;
+  const parked = linkedPipeline("p-review", [{ state: "passed" }], {
+    state: "needs_review",
+    cursor: null,
+    reviewPending: {
+      stageId: "verify", attempt: 1, fixStageId: "build", fixAttempt: 2,
+      reviewedHead: "a".repeat(40), currentHead: "b".repeat(40), verdict: "fail", findings: 1, at: "2026-09-16T00:00:00.000Z",
+    },
+  } as Partial<Pipeline>);
+  const tasks = [task("sorted", "assigned")];
+  const projection = projectTaskWorkflows(tasks, [parked], [], []);
+  const bands = buildTaskBands(layout([]), { tasks, projection, untitled: "Untitled task" });
+  const card = buildKanbanModel({ bands, tasks, pipelines: [parked], projection, files: [], flows: [], now: NOW })
+    .columns.assigned.cards.find((candidate) => candidate.task?.id === "sorted")!;
+  expect(card.needsYou).toBe(true);
+  const summary = card.pipelines[0]!;
+  expect(pipelineProgress(en, summary, (stage) => stage.id))
+    .toBe("needs review · last review fail on aaaaaaaa · current head bbbbbbbb unreviewed");
 });

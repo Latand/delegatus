@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 
@@ -357,6 +357,53 @@ test("current production records without verdict recovery metadata load and roun
   });
 });
 
+/* #1938: a needs_review record with its grants round-trips, a #1868 budget
+   handoff recorded before reviewed heads existed still loads, and a malformed
+   review record is refused. */
+test("needs_review records, continue-review grants and pre-#1938 budget handoffs load and round-trip (#1938)", () => {
+  sandboxed((sandbox) => {
+    const build = (id: string) => {
+      const record = buildPipeline({
+        id, task: "task", project: "viewer", repoDir: "/repo", stages: v3Stages(),
+        srcPath: null, srcConversationId: null, now: "2026-09-20T00:00:00.000Z",
+      });
+      record.stages[1]!.onFail = { to: "build", maxRounds: 1 };
+      record.state = "running";
+      record.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
+      return record;
+    };
+    const attempt = (n: number, state: "passed" | "failed", over: Record<string, unknown> = {}) => ({
+      n, state, effectiveRole: { ...v3Role }, launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null,
+      flowId: null, startedAt: null, completedAt: "2026-09-20T00:00:00.000Z", input: null, activatedBy: null, output: null, verdict: null, error: null, ...over,
+    });
+    /* The old handoff: budgetSpent with no reviewedHead. */
+    const legacy = build("review1938");
+    legacy.runs[1]!.attempts.push(attempt(1, "failed", { budgetSpent: true, verdict: { status: "fail", findings: ["P1 x"] } }) as never);
+    const parked = build("review1938b");
+    parked.runs[1]!.attempts.push(attempt(1, "failed", { budgetSpent: true, reviewedHead: "1".repeat(40), verdict: { status: "fail", findings: ["P1 x"] } }) as never);
+    parked.state = "needs_review";
+    parked.cursor = null;
+    parked.reviewPending = {
+      stageId: "verify", attempt: 1, fixStageId: "build", fixAttempt: 1,
+      reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), verdict: "fail", findings: 1, at: "2026-09-20T00:00:00.000Z",
+    };
+    parked.reviewGrants = [{
+      clientRequestId: "grant", expectedRevision: "0".repeat(64), stageId: "verify", rounds: 2,
+      reviewedHead: null, currentHead: "2".repeat(40), actor: { kind: "operator" }, at: "2026-09-20T00:00:00.000Z",
+    }];
+    fs.writeFileSync(path.join(sandbox, "pipelines.json"), JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [legacy, parked] }), "utf8");
+    const loaded = loadPipelines();
+    expect(loaded.map((record) => record.state)).toEqual(["running", "needs_review"]);
+    expect(loaded[0]!.runs[1]!.attempts[0]!.reviewedHead).toBeUndefined();
+    savePipelines(loaded);
+    expect(loadPipelines()).toEqual(loaded);
+
+    const malformed = structuredClone(parked);
+    malformed.reviewGrants![0]!.rounds = 0;
+    expect(() => savePipelines([malformed])).toThrow();
+  });
+});
+
 test("a settled legacy terminal reap protects the attempts it already inspected", () => {
   sandboxed((sandbox) => {
     const pipeline = buildPipeline({
@@ -554,12 +601,14 @@ test("v3 validation: acyclic pass edges, valid fail edges, 1–8 stage bounds (#
     expect(() => savePipelines([buildPipeline({ id: "wide0008", task: "task", project: "viewer", repoDir: "/repo", stages: wide(8), srcPath: null, srcConversationId: null, now: "now" })])).not.toThrow();
     expect(() => savePipelines([buildPipeline({ id: "wide0009", task: "task", project: "viewer", repoDir: "/repo", stages: wide(9), srcPath: null, srcConversationId: null, now: "now" })])).toThrow("malformed pipeline record");
 
-    /* A review-loop must stay pass-reachable from a run stage. */
+    /* A legacy review-loop no run reaches is still decoded (retire-flows §3):
+       the store never drops a stored definition; every edit and start refuse it. */
     const orphanReview = buildPipeline({ id: "bad00004", task: "task", project: "viewer", repoDir: "/repo", stages: [
       { id: "review", kind: "review-loop", prompt: "review", next: null, effectiveRole: { ...v3Role, access: "read-only" } },
       { id: "build", kind: "run", prompt: "build", next: null, effectiveRole: { ...v3Role } },
     ], srcPath: null, srcConversationId: null, now: "now" });
-    expect(() => savePipelines([orphanReview])).toThrow("malformed pipeline record");
+    expect(() => savePipelines([orphanReview])).not.toThrow();
+    expect(pipelineGraphError(orphanReview.stages)).toContain("review-loop stage review is unreachable");
 
     /* Review verdict recovery belongs to the bound flow, so a persisted
        review-loop fail edge is rejected before it can become unreachable. */

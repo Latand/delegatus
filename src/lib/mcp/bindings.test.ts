@@ -3620,6 +3620,43 @@ test("task placement bindings require atomic guards and classify field refusals 
 });
 
 
+test("continue-review forwards its receipt key, added budget and server actor, answers the grant and wakes the controller (#1938)", async () => {
+  const calls: unknown[] = [];
+  const reviewContinuation = { clientRequestId: "continue-1", expectedRevision: "a".repeat(64), stageId: "review", rounds: 2, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), actor: { kind: "operator" }, at: "2026-09-20T00:00:00.000Z" };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
+      calls.push({ request, actor });
+      return { pipeline: { id: "pipeline_1", state: "running" }, reviewContinuation, replayed: false };
+    },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_creator", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+  const request = { clientRequestId: "continue-1", pipelineId: "pipeline_1", action: "continue-review", addRounds: 2, expectedRevision: "a".repeat(64) };
+  const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+  let ticks = 0;
+  const unregister = registerPipelineTick(async () => { ticks += 1; });
+  try {
+    const answer = await service.callTool("pipeline_action", request);
+    expect(answer).toMatchObject({ ok: true, reviewContinuation: { clientRequestId: "continue-1", stageId: "review", rounds: 2, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40) } });
+    expect(calls).toEqual([{ request: { clientRequestId: "continue-1", action: "continue-review", addRounds: 2, expectedRevision: request.expectedRevision }, actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_creator" } }]);
+    await Promise.resolve();
+    expect(ticks).toBe(1);
+  } finally { unregister(); }
+});
+
+test("continue-review from a conversation that did not create the pipeline is refused before its receipt is spent (#1938)", async () => {
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    patchPipeline: async () => { throw new Error("must not be reached"); },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_other", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+  const answer = await service.callTool("pipeline_action", { clientRequestId: "continue-2", pipelineId: "pipeline_1", action: "continue-review", addRounds: 1, expectedRevision: "a".repeat(64) });
+  expect(answer).toMatchObject({ ok: false });
+  expect(JSON.stringify(answer)).toContain("only the pipeline creator");
+});
+
 test("resolve-decision forwards its receipt key and server actor and wakes the controller", async () => {
   const calls: unknown[] = [];
   const decisionAnswer = { clientRequestId: "decision-answer", stageId: "build", attempt: 1, nextAttempt: 2, at: "2026-09-20T00:00:00.000Z" };

@@ -18,7 +18,10 @@ import {
   persistedCodexOperationJournal,
   resetMigrationOperationStoreForTests,
 } from "@/lib/accounts/migration/provider";
+import { createAttentionRequest, readAttentionFile } from "@/lib/attention/store";
 import { boardFor, mutateBoard } from "@/lib/board/store";
+import { readSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { readReplySuggestionsFile } from "@/lib/suggestions/store";
 import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import {
@@ -224,6 +227,74 @@ test("the board joins the same activation import and demotion mirror", async () 
   expect(rolledForward.get("board")).toMatchObject({ state: "already-imported", incident: null });
   expect(fs.statSync(boardFile).isDirectory()).toBe(true);
   expect(boardFor("repo", boardFile).prefs.manual).toEqual(["/legacy", "/after-import"]);
+});
+
+/* #1870 slice 5: the operator-facing small stores ride the same release path.
+   The attention revision is the design's named check for this slice: it
+   continues from the file's across the import and the mirror carries it. */
+test("attention, reply suggestions and seat tick settings join the activation import and demotion mirror", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-legacy-collections-small-"));
+  sandboxes.push(sandbox);
+  const revision = "6".repeat(40);
+  process.env.LLV_STATE_DIR = sandbox;
+  process.env.PORT = "19073";
+  const file = (name: string) => path.join(sandbox, name);
+  fs.writeFileSync(file("viewer-release.json"), JSON.stringify({
+    endpoint: "http://127.0.0.1:19073",
+    revision,
+    hotStateBackend: HOT_STATE_BACKEND,
+  }));
+  fs.writeFileSync(file("attention.json"), JSON.stringify({ schemaVersion: 1, revision: 41, updatedAt: "2026-09-19T00:00:00.000Z", requests: [] }));
+  fs.writeFileSync(file("reply-suggestions.json"), JSON.stringify({ schemaVersion: 1, revision: 5, updatedAt: "2026-09-19T00:00:00.000Z", sets: [], admissions: [] }));
+  fs.writeFileSync(file("seat-tick-settings.json"), JSON.stringify({ version: 1, projects: { repo: { project: "repo", enabled: false, reason: "quiet", updatedAt: "2026-09-19T00:00:00.000Z" } } }));
+  const request = {
+    rootId: "root_small",
+    origin: "root-agent" as const,
+    target: { kind: "conversation" as const, path: "/tmp/reviewer.jsonl" },
+    frameAtCreation: { project: "repo", rect: { x: 0, y: 0, w: 600, h: 780 }, boardRevision: 1 },
+    intent: "show" as const,
+    reason: "The reviewer finished.",
+  };
+
+  // Before activation the release may not import: reads fall back to the files, writes are busy.
+  expect(readAttentionFile().revision).toBe(41);
+  expect(readSeatTickSettings("repo").enabled).toBe(false);
+  expect(() => createAttentionRequest(request, { id: "attention_early" })).toThrow("waiting for release promotion");
+  expect(fs.statSync(file("attention.json")).isFile()).toBe(true);
+
+  const boundary = await establishHotStateCutoverBoundary(() => true, {
+    pollMs: 0,
+    stablePolls: 1,
+    maxPolls: 2,
+    schedule: (callback) => { callback(); return { unref() {} }; },
+  });
+  await initializeHotStateStoresAtStartup(boundary);
+  const outcomes = await ensureLegacyCollectionsImported();
+
+  for (const [collection, name] of [["attention", "attention.json"], ["reply_suggestions", "reply-suggestions.json"], ["seat_tick_settings", "seat-tick-settings.json"]] as const) {
+    expect(outcomes.get(collection)).toMatchObject({ state: "imported" });
+    expect(readStateImport(path.join(sandbox, "state.sqlite"), collection)?.release).toBe(revision.slice(0, 12));
+    expect(fs.statSync(file(name)).isDirectory()).toBe(true);
+  }
+  createAttentionRequest(request, { id: "attention_after" });
+  expect(readAttentionFile().revision).toBe(42);
+  writeSeatTickSettings("repo", { ...readSeatTickSettings("repo"), reason: "still quiet" });
+
+  await checkpointHotStateRollbackMirrorsForDemotion();
+
+  const mirror = JSON.parse(fs.readFileSync(file("attention.json"), "utf8")) as { revision: number; requests: { id: string }[] };
+  expect(mirror.revision).toBe(42);
+  expect(mirror.requests.map((entry) => entry.id)).toEqual(["attention_after"]);
+  expect(JSON.parse(fs.readFileSync(file("seat-tick-settings.json"), "utf8")).projects.repo.reason).toBe("still quiet");
+  expect(JSON.parse(fs.readFileSync(file("reply-suggestions.json"), "utf8")).revision).toBe(5);
+
+  // Roll-forward: the untouched mirrors are recognized and retired, not imported twice.
+  const rolledForward = await ensureLegacyCollectionsImported();
+  for (const collection of ["attention", "reply_suggestions", "seat_tick_settings"]) {
+    expect(rolledForward.get(collection)).toMatchObject({ state: "already-imported", incident: null });
+  }
+  expect(readAttentionFile().revision).toBe(42);
+  expect(readReplySuggestionsFile().revision).toBe(5);
 });
 
 /* The conversation-migration journal roots are the one moved store whose

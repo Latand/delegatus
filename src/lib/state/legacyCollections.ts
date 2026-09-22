@@ -1,4 +1,4 @@
-import { statePath } from "@/lib/configDir";
+import { stateDir, statePath } from "@/lib/configDir";
 
 import type { LegacyImportOutcome } from "./legacyImport";
 
@@ -32,9 +32,38 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     checkpointMirrorForDemotion: async () => (await import("@/lib/board/store")).checkpointBoardRollbackMirrorForDemotion(statePath("board.json")),
   },
   {
+    collection: "bridge_reports",
+    importAtActivation: async () => (await import("@/lib/bridge/store")).importLegacyBridgeReports(statePath("bridge-reports.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/bridge/store")).checkpointBridgeReportsRollbackMirrorForDemotion(statePath("bridge-reports.json")),
+  },
+  /* `bridge.json` and every `bridge-channels/<hash>.json`: the entry names the
+     state directory, and the store reads both sources beneath it. */
+  {
+    collection: "bridge_channels",
+    importAtActivation: async () => (await import("@/lib/bridge/store")).importLegacyBridgeChannels(stateDir(), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/bridge/store")).checkpointBridgeChannelsRollbackMirrorForDemotion(stateDir()),
+  },
+  {
     collection: "accounts",
     importAtActivation: async () => (await import("@/lib/accounts/accountsStore")).importLegacyAccounts(undefined, { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/accounts/accountsStore")).checkpointAccountRollbackMirrorsForDemotion(),
+  },
+  /* The operator-facing small stores (slice 5). Each entry resolves the
+     store's own path, which honours the store's test override. */
+  {
+    collection: "attention",
+    importAtActivation: async () => (await import("@/lib/attention/store")).importLegacyAttention(undefined, { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/attention/store")).checkpointAttentionRollbackMirrorForDemotion(),
+  },
+  {
+    collection: "reply_suggestions",
+    importAtActivation: async () => (await import("@/lib/suggestions/store")).importLegacyReplySuggestions(undefined, { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/suggestions/store")).checkpointReplySuggestionsRollbackMirrorForDemotion(),
+  },
+  {
+    collection: "seat_tick_settings",
+    importAtActivation: async () => (await import("@/lib/monitor/seatTickSettings")).importLegacySeatTickSettings(undefined, { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/monitor/seatTickSettings")).checkpointSeatTickSettingsRollbackMirrorForDemotion(),
   },
   /* The conversation-migration journal roots: a directory of per-operation
      files rather than one file, so the entry names the root and the store keys

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { getPipeline, patchPipeline, type PipelineCloseReport } from "@/lib/pipelines/engine";
+import type { LegacyReviewPreview } from "@/lib/pipelines/legacyReviewDefinition";
 import { pipelineRevision } from "@/lib/pipelines/store";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { PIPELINE_ACTIONS, type PatchPipelineRequest, type Pipeline, type PipelineAction, type PipelineGraphEdit, type PipelineGuardErrorCode, type PipelineGuardField, type PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
@@ -15,7 +16,7 @@ export const dynamic = "force-dynamic";
 
 const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 
-const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision"]);
+const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review"]);
 
 type PipelineApiError = ApiError & {
   code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED;
@@ -28,6 +29,8 @@ type PipelineApiError = ApiError & {
   path?: string;
   /** Present when a close was refused: the hosts it stopped and the one it could not. */
   close?: PipelineCloseReport;
+  /** Present when a legacy review conversion was refused: the editable preview. */
+  legacyReviewPreview?: LegacyReviewPreview;
 };
 
 export async function GET(
@@ -78,9 +81,10 @@ export async function PATCH(
          create path does, so its caller gets the same field-level list. */
       ...(result.violations?.length ? { violations: result.violations } : {}),
       ...(result.close ? { close: result.close } : {}),
+      ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}),
     }, { status: result.status ?? 400 });
     if (CONTROLLER_ACTIONS.has(body.action)) requestPipelineTick();
-    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}) });
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}) });
   } catch (error) {
     /* #1766: nothing was admitted, so the same action may be repeated. */
     if (error instanceof StoreBusyBeforeAdmissionError) {

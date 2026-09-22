@@ -13,6 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { CORPUS_BODY_MARKERS, pipelineCorpus } from "./fixtures/corpus";
 import {
   PIPELINE_LIST_MAX_LIMIT,
+  pipelineCompactRow,
   pipelineListRow,
   projectPipelineListRows,
   selectPipelineListRecords,
@@ -225,5 +226,49 @@ describe("cancellation", () => {
 
   test("a page that fits inside one batch still completes without a checkpoint", async () => {
     expect(await projectPipelineListRows({ limit: 3 }, { source })).toHaveLength(3);
+  });
+});
+
+/* #1938: a lane parked in needs_review carries the reviewed head, the current
+   unreviewed head and the last verdict on both row shapes. */
+describe("needs_review rows", () => {
+  const reviewed = "a".repeat(40);
+  const unreviewed = "b".repeat(40);
+  function needsReview(): Pipeline {
+    const record = structuredClone(corpus[0]!);
+    const review = record.stages[1]!;
+    review.onFail = { to: record.stages[0]!.id, maxRounds: 2 };
+    record.state = "needs_review";
+    record.cursor = null;
+    record.closedAt = null;
+    record.reviewPending = {
+      stageId: review.id, attempt: 2, fixStageId: record.stages[0]!.id, fixAttempt: 3,
+      reviewedHead: reviewed, currentHead: unreviewed, verdict: "fail", findings: 2, at: "2026-09-20T00:00:00.000Z",
+    };
+    return record;
+  }
+
+  test("the full and compact rows name both heads and the last verdict", () => {
+    const expected = { stageId: needsReview().stages[1]!.id, reviewedHead: reviewed, currentHead: unreviewed, lastVerdict: "fail", findings: 2 };
+    expect(pipelineListRow(needsReview())).toMatchObject({ state: "needs_review", review: expected });
+    expect(pipelineCompactRow(needsReview())).toMatchObject({ state: "needs_review", review: expected });
+  });
+
+  test("an open listing includes it, and a completed or closed lane carries no review field", () => {
+    const record = needsReview();
+    expect(selectPipelineListRecords([record], { state: "open" })).toHaveLength(1);
+    expect(selectPipelineListRecords([record], { state: "needs_review" })).toHaveLength(1);
+    const closed = { ...needsReview(), state: "closed" as const, closedAt: "2026-09-21T00:00:00.000Z" };
+    expect(pipelineListRow(closed)).not.toHaveProperty("review");
+    expect(pipelineListRow(corpus[0]!)).not.toHaveProperty("review");
+  });
+
+  test("a stage's listed maxRounds includes the rounds continue-review granted", () => {
+    const record = needsReview();
+    record.reviewGrants = [{
+      clientRequestId: "grant", expectedRevision: "0".repeat(64), stageId: record.stages[1]!.id, rounds: 3,
+      reviewedHead: reviewed, currentHead: unreviewed, actor: { kind: "operator" }, at: "2026-09-20T00:00:00.000Z",
+    }];
+    expect(pipelineListRow(record).stages[1]!.onFail?.maxRounds).toBe(5);
   });
 });

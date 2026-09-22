@@ -15,7 +15,7 @@ import { CtxChip } from "@/components/PlanChip";
 import { captureReader, restoreReader, type ReaderSnapshot } from "@/components/scheme/NativeConversationPane";
 import { useProcessKill } from "@/components/TaskHeader";
 import { useAgentCapabilities } from "@/components/useAgentCapabilities";
-import { cleanTitle, fmtAge } from "@/components/utils";
+import { cleanTitle, fileModelLabel, fmtAge } from "@/components/utils";
 
 import { ConversationAccountChip } from "./AccountPicker";
 import { engineWord } from "./identityMarks";
@@ -260,7 +260,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       ) : null}
       {file.model ? (
         <span className="ch-model" title={t("kanban.readerModelTitle")}>
-          <span>{file.model}</span>
+          <span>{fileModelLabel(file)}</span>
           <EffortScale effort={file.effort} />
           {file.effort ? <span className="ch-effort">{file.effort}</span> : null}
         </span>

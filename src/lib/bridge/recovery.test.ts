@@ -15,11 +15,11 @@ import { bridgeDirectiveId } from "./directive";
 import {
   acknowledgeBridgeReports,
   appendBridgeReports,
-  bridgeChannelPath,
   drainBridgeReports,
   openBridgeChannel,
   readBridgeChannel,
 } from "./store";
+import { persistedBridgeChannel } from "./storeFixture";
 import type { BridgeReportInput } from "./types";
 
 /**
@@ -87,7 +87,7 @@ test("replacing the manager leaves the channel and its cursor untouched (§7.3, 
   });
   expect(readBridgeChannel()).toEqual(before!);
   /* AC22 again, now against a channel that has outlived one incumbent. */
-  expect(fs.readFileSync(bridgeChannelPath(), "utf8")).not.toContain("conversation_manager");
+  expect(JSON.stringify(persistedBridgeChannel())).not.toContain("conversation_manager");
 
   /* The successor continues the report stream at the next seq — it does not
      restart it, so the gateway's cursor still means what it meant. */

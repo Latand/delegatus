@@ -42,7 +42,7 @@ export function mobilePipelinesModel(pipelines: readonly Pipeline[], closing: re
   for (const pipeline of pipelines) {
     if (closing.includes(pipeline.id)) continue;
     if (pipeline.state === "draft" || pipeline.state === "closed" || pipeline.hiddenAt) continue;
-    if (pipeline.state === "needs_decision") model.needs.push(pipeline);
+    if (pipeline.state === "needs_decision" || pipeline.state === "needs_review") model.needs.push(pipeline);
     else if (ACTIVE_STATES.has(pipeline.state)) model.active.push(pipeline);
     else if (pipeline.state === "completed") model.completed.push(pipeline);
   }

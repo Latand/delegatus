@@ -334,6 +334,7 @@
 .kb .stage-section .sec-head .progress { flex: 0 4 auto; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .stage-section .sec-head .grow { flex: 1; }
 .kb .stage-section .graph-edit { margin: 2px 0 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb .stage-section .review-heads { margin: 2px 0 0; font-size: var(--text-caption); font-weight: 600; color: var(--color-warning); overflow-wrap: anywhere; }
 .kb .stage-section .stage-report { margin: 2px 0 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .stage-section .stage-findings { margin: 2px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; }
 .kb .stage-section .stage-findings li { display: flex; gap: 6px; align-items: baseline; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; }

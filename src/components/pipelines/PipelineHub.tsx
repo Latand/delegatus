@@ -14,6 +14,7 @@ const TONES: Record<Pipeline["state"], string> = {
   provisioning: "var(--color-accent)",
   running: "var(--color-accent)",
   needs_decision: "var(--color-warning)",
+  needs_review: "var(--color-warning)",
   paused: "var(--color-warning)",
   completed: "var(--color-success)",
   closed: "var(--color-muted)",

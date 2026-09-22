@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { Pipeline, PipelineEdgeActivation, PipelineStage } from "./types";
 
-import { edgeRoundsUsed, failEdgeRoundsUsed } from "./failEdgeBudget";
+import { edgeRoundsUsed, failEdgeBudgetSpent, failEdgeMaxRounds, failEdgeRoundsUsed, pipelineReviewSummary } from "./failEdgeBudget";
 
 /* `critique -> review` with `critique.onFail = { to: fix, maxRounds: 2 }` and
    `fix.next = critique` — the shape of the pipeline in #1754. */
@@ -81,4 +81,32 @@ test("lineage-adopted evidence and other edges spend no round", () => {
   expect(edgeRoundsUsed(record, { from: "plan", to: "fix", kind: "pass" })).toBe(1);
   expect(edgeRoundsUsed(record, { from: "critique", to: "missing", kind: "fail" })).toBe(0);
   expect(failEdgeRoundsUsed(record, FIX)).toBe(0);
+});
+
+/* #1938: continue-review grants add rounds to a frozen edge and buy one more
+   handoff each; the review summary is read only while the lane waits. */
+test("continue-review grants add to maxRounds and each buys one more handoff (#1938)", () => {
+  const grant = (rounds: number) => ({ clientRequestId: `g${rounds}`, expectedRevision: "0".repeat(64), stageId: "critique", rounds, reviewedHead: null, currentHead: "2".repeat(40), actor: { kind: "operator" }, at: "t" });
+  const record = pipeline([
+    { stageId: "critique", attempts: [attempt(1, { state: "failed" }), attempt(2, { state: "failed", budgetSpent: true })] },
+    { stageId: "fix", attempts: [] },
+  ]);
+  expect(failEdgeMaxRounds(record, CRITIQUE)).toBe(2);
+  expect(failEdgeBudgetSpent(record, CRITIQUE)).toBe(true);
+  (record as { reviewGrants?: unknown[] }).reviewGrants = [grant(3)];
+  expect(failEdgeMaxRounds(record, CRITIQUE)).toBe(5);
+  expect(failEdgeBudgetSpent(record, CRITIQUE)).toBe(false);
+  record.runs[0]!.attempts.push(attempt(3, { state: "failed", budgetSpent: true }));
+  expect(failEdgeBudgetSpent(record, CRITIQUE)).toBe(true);
+  /* A grant for another stage changes nothing here. */
+  expect(failEdgeMaxRounds(record, FIX)).toBe(0);
+});
+
+test("the review summary exists only while the lane waits in needs_review (#1938)", () => {
+  const reviewPending = { stageId: "critique", attempt: 2, fixStageId: "fix", fixAttempt: 3, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), verdict: "fail" as const, findings: 1, at: "t" };
+  expect(pipelineReviewSummary({ state: "needs_review", pausedState: null, reviewPending }))
+    .toEqual({ stageId: "critique", reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), lastVerdict: "fail", findings: 1 });
+  expect(pipelineReviewSummary({ state: "paused", pausedState: "needs_review", reviewPending })).not.toBeNull();
+  expect(pipelineReviewSummary({ state: "closed", pausedState: null, reviewPending })).toBeNull();
+  expect(pipelineReviewSummary({ state: "needs_review", pausedState: null })).toBeNull();
 });

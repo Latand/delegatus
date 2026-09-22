@@ -1,4 +1,5 @@
 import { effortMeter as meterOf } from "@/lib/agent/efforts";
+import { modelDisplayName } from "@/lib/agent/models";
 import { getLocale, translate } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
@@ -99,6 +100,13 @@ function modelBaseHex(file: FileEntry): string {
     if (re.test(model)) return color;
   }
   return base;
+}
+
+/** The model a card names for this conversation (`opus-5-5` → "Opus 5.5"),
+    or null when none was observed. `file.model` itself stays the stored id,
+    because launch prefills and the tint read it. */
+export function fileModelLabel(file: Pick<FileEntry, "engine" | "model">): string | null {
+  return file.model ? modelDisplayName(file.engine, file.model) : null;
 }
 
 /** Identity color tinted by model family (Terra green, Sol amber, Fable deep orange…). */
