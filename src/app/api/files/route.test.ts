@@ -470,6 +470,22 @@ test("a state database incident reaches systemHealth.storage on the next read (#
   expect((await refreshed.json() as { systemHealth: { storage?: unknown } }).systemHealth.storage).toEqual({ incidents: [incident] });
 });
 
+test("a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)", async () => {
+  scannedFiles = [];
+  recordManagerReport({ key: "warm-up", class: "status", at: new Date().toISOString(), body: "warm" });
+  await GET(new Request("http://127.0.0.1/api/files"));
+  const warm = await GET(new Request("http://127.0.0.1/api/files"));
+  expect(warm.headers.get("x-llv-files-projection-cache")).toBe("hit");
+  const revision = readStateCollectionRevision(path.join(stateDir, "state.sqlite"), "bridge_reports");
+  expect(revision).not.toBeNull();
+
+  recordManagerReport({ key: "filed-between-scans", class: "question", at: new Date().toISOString(), body: "which branch?" });
+
+  expect(readStateCollectionRevision(path.join(stateDir, "state.sqlite"), "bridge_reports")).toBe(revision! + 1);
+  const refreshed = await GET(new Request("http://127.0.0.1/api/files"));
+  expect(refreshed.headers.get("x-llv-files-projection-cache")).toBe("miss");
+});
+
 test("a cross-process SQLite pipeline commit invalidates a warm files projection", async () => {
   scannedFiles = [];
   savePipelines([]);
