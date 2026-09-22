@@ -191,6 +191,16 @@ export class SelfUpdateService {
       return this.decision.value;
     }
     const value = await this.deps.mode();
+    /* A host that does not answer is a moment, never a fact about the
+       install: a deployment's own handover replaces the host, and a web
+       process promoted mid-deployment asks before the host is back. So that
+       answer is never cached, and a managed install stays managed through
+       it: by the last managed decision, or by a deployment it recorded as
+       still running. */
+    if (value.mode === "unsupported" && value.reason === "no-runtime-host") {
+      if (this.decision?.value.mode === "managed" || managedActive(this.managed)) return { mode: "managed", reason: null, record: null };
+      return value;
+    }
     this.decision = { value, at: now };
     return value;
   }

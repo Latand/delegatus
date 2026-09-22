@@ -6,6 +6,7 @@ import { NextRequest } from "next/server";
 
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { ViewerDeploymentPhase, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { requestViewerDeployment, setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 
@@ -13,7 +14,7 @@ import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
 import { buildEnv } from "./env";
 import { checkForUpdate, readRevision, runGit } from "./git";
 import { readLauncherRecord, requestRestart } from "./launcher";
-import { detectMode } from "./mode";
+import { deploymentsEnabled, detectMode } from "./mode";
 import { readStartIdentity } from "./pid";
 import { getEvents, getSnapshot, getStepLog, postCheck, postRestart, postUpdate } from "./routes";
 import { prepareManagedCheckRepo, setSelfUpdateServiceForTests } from "./instance";
@@ -243,6 +244,60 @@ describe("managed install: an update is one Viewer deployment", () => {
       `self-update-${tipSha.slice(0, 12)}-press-2`,
     ]);
     expect(requests[1]!.revision).toBe(tipSha);
+  });
+
+  test("a host that stops answering during its own handover leaves the install managed, in this web process and the next", async () => {
+    const dir = mkdtempSync(join(root, "managed-handover-"));
+    let clock = Date.now();
+    let hostAnswers = true;
+    phase = null;
+    error = null;
+    const away = () => { throw new Error("connect ENOENT runtime-host.sock"); };
+    setDeploymentRuntimeForTests(async (request) => { phase = "admitted"; return { state: "accepted", deploymentId: "deployment-7", revision: request.revision!, replayed: false }; });
+    const deps = baseDeps(dir, {
+      now: () => clock,
+      /* Detection goes through the real probe: the host's own answer to a
+         deployment that cannot exist, or a socket error while it is away. */
+      mode: () => detectMode({
+        env: {},
+        readRecord: () => null,
+        alive: () => false,
+        deploymentsEnabled: () => deploymentsEnabled({ readViewerDeployment: async () => (hostAnswers ? null : away()) } as unknown as RuntimeHostClient),
+      }),
+      releaseTarget: () => ({ revision: firstSha }),
+      prepareCheckRepo: () => prepareManagedCheckRepo(join(dir, "check.git"), join(dir, "no-mirror", "objects")),
+      readDeployment: async (id) => (hostAnswers ? status(id) : away()),
+      hostHealth: async () => (hostAnswers ? { pid: 4242, startIdentity: "1", hostEpoch: 3, generation: { revision: firstSha } } : away()),
+    });
+    const service = new SelfUpdateService(deps);
+    setSelfUpdateServiceForTests(service);
+    await postCheck(post("/check"));
+    await until((next) => next.check.state === "update-available");
+    await postUpdate(post("/update", { key: "press-1" }));
+    phase = "host-handoff";
+    expect((await snapshot()).update.steps.find((step) => step.state === "running")?.name).toBe("handoff");
+
+    /* The host is being replaced, and the cached decision has run out. */
+    hostAnswers = false;
+    clock += 31_000;
+    let s = await snapshot();
+    expect(s.mode).toBe("managed");
+    expect(s.busy).toBe("update");
+    expect(s.update).toMatchObject({ state: "running", deploymentId: "deployment-7" });
+    expect(s.processes.runtimeHost.state).toBe("starting");
+
+    /* A web process promoted by the same deployment asks first while the host is away. */
+    service.saveNow();
+    setSelfUpdateServiceForTests(new SelfUpdateService(deps));
+    s = await snapshot();
+    expect(s.mode).toBe("managed");
+    expect(s.update).toMatchObject({ state: "running", deploymentId: "deployment-7" });
+
+    hostAnswers = true;
+    phase = "succeeded";
+    s = await snapshot();
+    expect(s.mode).toBe("managed");
+    expect(s.update.state).toBe("done");
   });
 
   test("a deployment is followed while nobody has the surface open", async () => {
