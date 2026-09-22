@@ -79,6 +79,41 @@ export function kanbanLayoutMode(width: number): KanbanLayoutMode {
   return "tabs";
 }
 
+/** The grid's four column tracks, written onto the board as `--c-<status>`.
+    Only the grid modes have tracks; the scroller and the tabs lay their
+    columns out as flex items.
+
+    A project board in the wide mode balances its columns: each shelf grows
+    from its 264 px by an equal third of 35 % of what Assigned held beyond the
+    shelves, so Assigned keeps 65 % of the width it had with the shelves
+    capped (`--shelf-balanced` in kanbanBoard.css), and never less than
+    `--work-min`. The narrow mode keeps its fixed 220 px shelves, and the
+    cross-project Overview keeps its capped shelves.
+
+    A shelf holding reading (an open conversation, an agent draft, `+ Task`
+    composing) gets at least the reading width and never less than a balanced
+    shelf. The wide share (#1841) goes to the shelf the operator widened, and
+    Assigned takes a shelf's track. */
+export function kanbanColumnTracks(
+  mode: KanbanLayoutMode,
+  { overview, wide, reading }: { overview: boolean; wide: TaskStatus | null; reading: ReadonlySet<TaskStatus> },
+): Record<`--c-${TaskStatus}`, string> | null {
+  if (mode !== "wide" && mode !== "narrow") return null;
+  const balanced = mode === "wide" && !overview;
+  const shelf = mode === "narrow" ? "220px" : balanced ? "minmax(232px, var(--shelf-balanced))" : "minmax(232px, var(--shelf-w))";
+  const work = mode === "narrow" ? "minmax(440px, 1fr)" : "minmax(var(--work-min), 1fr)";
+  const tracks: Record<`--c-${TaskStatus}`, string> = { "--c-inbox": shelf, "--c-assigned": work, "--c-blocked": shelf, "--c-done": shelf };
+  if (reading.size) {
+    tracks["--c-assigned"] = "minmax(440px, 1fr)";
+    for (const status of reading) tracks[`--c-${status}`] = balanced ? "minmax(420px, max(460px, var(--shelf-balanced)))" : "minmax(420px, 460px)";
+  }
+  if (wide) {
+    tracks["--c-assigned"] = shelf;
+    tracks[`--c-${wide}`] = work;
+  }
+  return tracks;
+}
+
 /** The columns' mode beside a seat docked at the side (#1841). The seat is the
     operator's choice, so it never costs them the columns: where the board
     alone would still show them, what the seat leaves scrolls rather than
@@ -2077,15 +2112,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
      cross-project Overview keeps its fixed shares and reads no pin. */
   const widthControls = mode !== "tabs" && !props.overview;
   const wideShelf = widthControls ? wideColumns.wide : null;
-  const gridMode = mode === "wide" || mode === "narrow";
-  const shelfShare = mode === "narrow" ? "220px" : "minmax(232px, var(--shelf-w))";
-  const workShare = mode === "narrow" ? "minmax(440px, 1fr)" : "minmax(var(--work-min), 1fr)";
-  const readingStyle = gridMode && (readingStatuses.size || wideShelf)
-    ? ({
-      ...(readingStatuses.size ? { "--c-assigned": "minmax(440px, 1fr)", ...Object.fromEntries([...readingStatuses].map((status) => [`--c-${status}`, "minmax(420px, 460px)"])) } : {}),
-      ...(wideShelf ? { "--c-assigned": shelfShare, [`--c-${wideShelf}`]: workShare } : {}),
-    } as CSSProperties)
-    : undefined;
+  const columnTracks = kanbanColumnTracks(mode, { overview: Boolean(props.overview), wide: wideShelf, reading: readingStatuses });
+  const boardStyle = columnTracks ? (columnTracks as CSSProperties) : undefined;
 
   /* ── K9a: + Task, + Agent and the drafts cards hold ─────────────────── */
   const openNewTask = () => {
@@ -2357,7 +2385,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
             className={`board${mode === "tabs" ? " tabs" : mode === "scroll" ? " scroll" : mode === "narrow" ? " narrow" : ""}${(mode === "wide" || mode === "narrow") && readingStatuses.size ? " reading" : ""}`}
             data-board=""
             data-mode={mode}
-            style={readingStyle}
+            style={boardStyle}
           >
             {columnsView}
           </div>
@@ -2526,10 +2554,10 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       role={mode === "tabs" ? "tabpanel" : "region"}
     >
       <div className="col-head">
-        <h2 id={`kb-h-${status}`}>{statusLabel(t, status)}</h2>
+        <h2 id={`kb-h-${status}`} title={label}>{label}</h2>
         <span className="n num">{filtering ? t("kanban.columnCount", { shown: shown.length, total: column.cards.length }) : column.cards.length}</span>
-        {column.working ? <span className="live num">{t("kanban.columnWorking", { count: column.working })}</span> : null}
-        {column.needsYou ? <span className="needs num">{t("kanban.columnNeeds", { count: column.needsYou })}</span> : null}
+        {column.working ? <span className="live num" data-count={column.working} title={t("kanban.columnWorking", { count: column.working })}><span className="ct">{t("kanban.columnWorking", { count: column.working })}</span></span> : null}
+        {column.needsYou ? <span className="needs num" data-count={column.needsYou} title={t("kanban.columnNeeds", { count: column.needsYou })}><span className="ct">{t("kanban.columnNeeds", { count: column.needsYou })}</span></span> : null}
         <span className="spacer" />
         {widths && widths.wide === status ? (
           <button
