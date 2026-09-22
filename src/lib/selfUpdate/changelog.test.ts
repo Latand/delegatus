@@ -116,7 +116,9 @@ describe("changelogDelta", () => {
 describe("summarizeDelta", () => {
   test("counts per type in first-seen order", () => {
     const summary = summarizeDelta(changelogDelta(OLD, NEW), 5);
-    expect(summary.line).toBe("5 commits · 5 changelog entries (1 Added, 2 Fixed, 2 Changed)");
+    expect(summary.commitCount).toBe(5);
+    expect(summary.entryCount).toBe(5);
+    expect(summary.counts).toEqual([{ type: "Added", count: 1 }, { type: "Fixed", count: 2 }, { type: "Changed", count: 2 }]);
     expect(summary.groups.map((group) => [group.type, group.items.length])).toEqual([
       ["Added", 1],
       ["Fixed", 2],
@@ -160,7 +162,8 @@ describe("summarizeDelta", () => {
 
   test("says so when the commits carry no changelog entry", () => {
     const summary = summarizeDelta(changelogDelta(NEW, NEW), 1);
-    expect(summary.line).toBe("1 commit · No changelog entries for these commits.");
+    expect(summary.commitCount).toBe(1);
+    expect(summary.entryCount).toBe(0);
     expect(summary.groups).toEqual([]);
   });
 });

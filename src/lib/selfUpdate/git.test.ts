@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkForUpdate, readRevision, runGit } from "./git";
-import { applyCheck, initialCheck } from "./state";
+import { applyCheck, initialCheck } from "./checkState";
 
 /* A local bare repository stands in for the canonical remote: no network. */
 const root = mkdtempSync("/var/tmp/self-update-git-");
@@ -70,7 +70,7 @@ describe("checkForUpdate against a bare-repo remote", () => {
   });
 
   test("a newer tip is update-available with commits, version and the changelog delta", async () => {
-    const outcome = await checkForUpdate({ checkout, remote, branch: "main" });
+    const outcome = await checkForUpdate({ repo: checkout, remote, branch: "main" });
     if (!outcome.ok) throw new Error(outcome.error);
     expect(outcome.relation).toBe("behind");
     expect(outcome.behind).toBe(5);
@@ -83,16 +83,19 @@ describe("checkForUpdate against a bare-repo remote", () => {
       "Say when the check fails",
       "Tidy the step rows",
     ]);
-    expect(outcome.delta?.changelog.headings).toEqual(["1.0.1"]);
-    expect(outcome.delta?.changelog.entries.map((entry) => entry.text)).toEqual(["A later fix (#5)", "Second release (#2)"]);
-    expect(outcome.delta?.summary.line).toBe("5 commits · 2 changelog entries (1 Fixed, 1 Changed)");
+    expect(outcome.delta?.summary.groups.map((group) => [group.type, group.items])).toEqual([
+      ["Fixed", ["A later fix (#5)"]],
+      ["Changed", ["Second release (#2)"]],
+    ]);
+    expect(outcome.delta?.summary.commitCount).toBe(5);
+    expect(outcome.delta?.summary.entryCount).toBe(2);
     const state = applyCheck(initialCheck(), outcome, new Date("2026-09-22T12:04:00"), 60);
     expect(state.check.state).toBe("update-available");
     expect(state.available?.sha).toBe(tipSha);
   });
 
   test("merge commits are left out of the list and the count, and every SHA is spelled with 7 characters", async () => {
-    const outcome = await checkForUpdate({ checkout, remote, branch: "main" });
+    const outcome = await checkForUpdate({ repo: checkout, remote, branch: "main" });
     if (!outcome.ok) throw new Error(outcome.error);
     expect(outcome.delta?.commits.some((commit) => commit.subject.startsWith("Merge "))).toBe(false);
     for (const commit of outcome.delta!.commits) expect(commit.short).toMatch(/^[0-9a-f]{7}$/);
@@ -100,12 +103,23 @@ describe("checkForUpdate against a bare-repo remote", () => {
   });
 
   test("compares the remote with the installed release, which need not be HEAD", async () => {
-    const outcome = await checkForUpdate({ checkout, remote, branch: "main", installed: tipSha });
+    const outcome = await checkForUpdate({ repo: checkout, remote, branch: "main", installed: tipSha });
     if (!outcome.ok) throw new Error(outcome.error);
     expect(outcome.relation).toBe("equal");
     expect(outcome.installed.sha).toBe(tipSha);
     expect(outcome.installed.version).toBe("1.0.1");
     expect(await git(checkout, "rev-parse", "HEAD")).toBe(firstSha);
+  });
+
+  test("a bare check repository learns the installed revision from the remote first (managed mode)", async () => {
+    const bare = join(root, "check.git");
+    await git(root, "init", "--bare", bare);
+    const outcome = await checkForUpdate({ repo: bare, remote, branch: "main", installed: firstSha, fetchInstalled: true });
+    if (!outcome.ok) throw new Error(outcome.error);
+    expect(outcome.installed.version).toBe("1.0.0");
+    expect(outcome.relation).toBe("behind");
+    expect(outcome.available?.sha).toBe(tipSha);
+    expect(outcome.delta?.commits).toHaveLength(5);
   });
 
   test("the fetch lands on refs/self-update/tip and moves nothing else", async () => {
@@ -115,11 +129,11 @@ describe("checkForUpdate against a bare-repo remote", () => {
   });
 
   test("a failed check keeps the previous available revision and carries git's message", async () => {
-    const before = applyCheck(initialCheck(), await checkForUpdate({ checkout, remote, branch: "main" }), new Date(), 60);
+    const before = applyCheck(initialCheck(), await checkForUpdate({ repo: checkout, remote, branch: "main" }), new Date(), 60);
     const moved = `${remote}-moved`;
     renameSync(remote, moved);
     try {
-      const outcome = await checkForUpdate({ checkout, remote, branch: "main" });
+      const outcome = await checkForUpdate({ repo: checkout, remote, branch: "main" });
       expect(outcome.ok).toBe(false);
       if (outcome.ok) return;
       expect(outcome.error).toContain(remote);
@@ -135,7 +149,7 @@ describe("checkForUpdate against a bare-repo remote", () => {
 
   test("after checking out the tip the install is up to date", async () => {
     await git(checkout, "checkout", "--detach", tipSha);
-    const outcome = await checkForUpdate({ checkout, remote, branch: "main" });
+    const outcome = await checkForUpdate({ repo: checkout, remote, branch: "main" });
     if (!outcome.ok) throw new Error(outcome.error);
     expect(outcome.relation).toBe("equal");
     expect(outcome.available).toBeNull();
@@ -147,24 +161,25 @@ describe("checkForUpdate against a bare-repo remote", () => {
     writeFileSync(join(checkout, "local.txt"), "ahead\n");
     await git(checkout, "add", ".");
     await git(checkout, "commit", "-m", "Local commit");
-    const outcome = await checkForUpdate({ checkout, remote, branch: "main" });
+    const outcome = await checkForUpdate({ repo: checkout, remote, branch: "main" });
     if (!outcome.ok) throw new Error(outcome.error);
     expect(outcome.relation).toBe("ahead");
     expect(outcome.ahead).toBe(1);
     const state = applyCheck(initialCheck(), outcome, new Date(), 60);
     expect(state.check.state).toBe("up-to-date");
-    expect(state.check.note).toBe("Ahead of origin/main by 1");
+    expect(state.check.relation).toBe("ahead");
+    expect(state.check.ahead).toBe(1);
   });
 
   test("a checkout that diverged is still update-available", async () => {
     writeFileSync(join(work, "notes.txt"), "remote moved on\n");
     await git(work, "commit", "-am", "Remote moves on");
     await git(work, "push", "origin", "main");
-    const outcome = await checkForUpdate({ checkout, remote, branch: "main" });
+    const outcome = await checkForUpdate({ repo: checkout, remote, branch: "main" });
     if (!outcome.ok) throw new Error(outcome.error);
     expect(outcome.relation).toBe("diverged");
     const state = applyCheck(initialCheck(), outcome, new Date(), 60);
     expect(state.check.state).toBe("update-available");
-    expect(state.check.note).toBe("Diverged from origin/main");
+    expect(state.check.relation).toBe("diverged");
   });
 });

@@ -1,7 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { STEP_NAMES, UpdateRunner, type StepName, type StepPorts } from "./steps";
+import { UpdateRunner, type StepPorts } from "./steps";
+import { CHECKOUT_STEPS as STEP_NAMES, type CheckoutStepName as StepName } from "./types";
 
 const TARGET = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const CHECKOUT = "/var/tmp/checkout";
@@ -159,6 +160,16 @@ describe("UpdateRunner", () => {
     expect(ready.state).toBe("failed");
     expect(ready.tail.at(-1)).toBe(".next/BUILD_ID is missing after the build");
     expect(published).toEqual([]);
+  });
+
+  test("a run the web restart cut short reads back as failed at the step it was in", () => {
+    const { runner } = harness({});
+    const steps = runner.state.steps.map((step, index) => ({ ...step, state: index < 3 ? "done" as const : index === 3 ? "running" as const : "pending" as const }));
+    runner.restore({ ...runner.state, state: "running", target: TARGET, steps });
+    expect(runner.state.state).toBe("failed");
+    const build = runner.state.steps.find((step) => step.name === "build")!;
+    expect(build.state).toBe("failed");
+    expect(build.tail.at(-1)).toBe("The Viewer restarted while this step ran.");
   });
 
   test("marks the running step while its command runs", async () => {
