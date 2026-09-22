@@ -245,6 +245,14 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect(requests[1]!.revision).toBe(tipSha);
   });
 
+  test("the check repository survives being prepared by several requests at once", async () => {
+    const dir = mkdtempSync(join(root, "managed-race-"));
+    const results = await Promise.all(Array.from({ length: 6 }, () => prepareManagedCheckRepo(join(dir, "check.git"), join(dir, "no-mirror", "objects"))));
+    expect(new Set(results).size).toBe(1);
+    expect(existsSync(join(dir, "check.git", "HEAD"))).toBe(true);
+    expect((await runGit(["rev-parse", "--is-bare-repository"], join(dir, "check.git"))).stdout.trim()).toBe("true");
+  });
+
   test("the deployment outlives the web process that asked for it", async () => {
     const dir = mkdtempSync(join(root, "managed-restart-"));
     phase = null;

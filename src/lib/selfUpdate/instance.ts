@@ -24,14 +24,28 @@ const TICK_ACTIVE_MS = 1_000;
 const TICK_IDLE_MS = 5_000;
 const KEEPALIVE_MS = 15_000;
 
+const preparing = new Map<string, Promise<string>>();
+
+/* The snapshot and the check both ask for the repository, often at the same
+   moment on first use; two `git init`s racing over one directory fail on
+   each other's template files. One preparation per directory is in flight at
+   a time, and the repository is created without template hooks at all. */
 /** The bare repository the managed install checks against. Its object store
     borrows the deploy adapter's canonical mirror (read-only, through git's
     alternates) when that mirror exists, so a check fetches only what is new;
     nothing is ever written into the mirror. */
-export async function prepareManagedCheckRepo(directory: string, mirrorObjects: string): Promise<string> {
+export function prepareManagedCheckRepo(directory: string, mirrorObjects: string): Promise<string> {
+  const running = preparing.get(directory);
+  if (running) return running;
+  const next = prepareOnce(directory, mirrorObjects).finally(() => preparing.delete(directory));
+  preparing.set(directory, next);
+  return next;
+}
+
+async function prepareOnce(directory: string, mirrorObjects: string): Promise<string> {
   if (!existsSync(join(directory, "HEAD"))) {
     mkdirSync(directory, { recursive: true });
-    const result = await runGit(["init", "--bare", "--quiet", directory], directory);
+    const result = await runGit(["init", "--bare", "--quiet", "--template=", directory], directory);
     if (result.code !== 0) throw new Error(result.stderr.trim() || "git init failed");
   }
   const alternates = join(directory, "objects", "info", "alternates");
