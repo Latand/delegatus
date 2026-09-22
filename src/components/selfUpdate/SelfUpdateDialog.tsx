@@ -9,6 +9,7 @@ import { useLocale } from "@/lib/i18n";
 import type { Snapshot } from "@/lib/selfUpdate/types";
 
 import { OPEN_SELF_UPDATE_EVENT } from "./openSelfUpdate";
+import { actionError, type ActionError } from "./selfUpdateCopy";
 import { SelfUpdateView, type ViewActions, type ViewState } from "./SelfUpdateView";
 import { useSelfUpdateFeed } from "./useSelfUpdateFeed";
 
@@ -45,7 +46,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const [armed, setArmed] = useState(false);
   const [openLogs, setOpenLogs] = useState<Set<string>>(() => new Set());
   const [pending, setPending] = useState<Set<string>>(() => new Set());
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ActionError | null>(null);
   const [webRestart, setWebRestart] = useState<{ pid: number | null } | null>(null);
   const firstWebPid = useRef<number | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -71,13 +72,13 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
         headers: body === undefined ? {} : { "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
-      const payload = await response.json().catch(() => null) as ({ error?: string; snapshot?: Snapshot } & Partial<Snapshot>) | null;
-      if (!response.ok) setError(payload?.error ?? `Request failed (${response.status})`);
+      const payload = await response.json().catch(() => null) as ({ error?: string; code?: string; detail?: string; snapshot?: Snapshot } & Partial<Snapshot>) | null;
+      if (!response.ok) setError(actionError(response.status, payload));
       const next = response.ok ? payload as Snapshot | null : payload?.snapshot;
       if (next && next.meta) feed.accept(next);
       return response.ok;
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+    } catch {
+      setError({ code: "offline" });
       return false;
     } finally {
       setPending((value) => {

@@ -13,7 +13,7 @@ import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 import { selfUpdateService, snapshotStream } from "./instance";
-import type { ActionResult } from "./service";
+import { refuse, type ActionResult } from "./service";
 import { CHECKOUT_STEPS, type CheckoutStepName } from "./types";
 
 function operatorGate(request: NextRequest): NextResponse | null {
@@ -25,11 +25,19 @@ function operatorGate(request: NextRequest): NextResponse | null {
 
 const noStore = { "cache-control": "no-store" };
 
+/* A refusal answers `code` (worded by the surface in the operator's
+   language), `error` (the same in English, for API readers) and `detail`
+   (machine output), with the snapshot. */
 async function answer(result: ActionResult): Promise<NextResponse> {
   const snapshot = await selfUpdateService().snapshot();
   return result.ok
     ? NextResponse.json(snapshot, { status: 202, headers: noStore })
-    : NextResponse.json({ error: result.error, snapshot }, { status: result.status, headers: noStore });
+    : NextResponse.json({ error: result.error, code: result.code, ...(result.detail ? { detail: result.detail } : {}), snapshot }, { status: result.status, headers: noStore });
+}
+
+/* A malformed request is refused before anything is read. */
+function invalid(code: "bad-key" | "bad-role" | "confirm-required", error: string): NextResponse {
+  return NextResponse.json({ error, code }, { status: 400, headers: noStore });
 }
 
 async function body(request: NextRequest): Promise<Record<string, unknown>> {
@@ -64,8 +72,8 @@ export async function postCheck(request: NextRequest): Promise<NextResponse> {
   if (refused) return refused;
   const service = selfUpdateService();
   const snapshot = await service.snapshot();
-  if (snapshot.mode === "unsupported") return answer({ ok: false, status: 409, error: "This install cannot check for updates" });
-  if (snapshot.busy === "update") return answer({ ok: false, status: 409, error: "An update is running" });
+  if (snapshot.mode === "unsupported") return answer(refuse(409, "cannot-check", "This install cannot check for updates"));
+  if (snapshot.busy === "update") return answer(refuse(409, "busy-update", "An update is running"));
   void service.check();
   return answer({ ok: true });
 }
@@ -77,7 +85,7 @@ export async function postUpdate(request: NextRequest): Promise<NextResponse> {
   if (refused) return refused;
   const input = await body(request);
   const key = typeof input.key === "string" ? input.key : "";
-  if (!/^[A-Za-z0-9-]{1,64}$/.test(key)) return NextResponse.json({ error: "key must be 1–64 letters, digits or dashes" }, { status: 400 });
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(key)) return invalid("bad-key", "key must be 1–64 letters, digits or dashes");
   const service = selfUpdateService();
   return answer(input.retry === true ? await service.retry(key) : await service.startUpdate(key));
 }
@@ -89,10 +97,10 @@ export async function postRestart(request: NextRequest): Promise<NextResponse> {
   if (refused) return refused;
   const input = await body(request);
   if (input.role !== "web" && input.role !== "runtime-host") {
-    return NextResponse.json({ error: "role must be web or runtime-host" }, { status: 400 });
+    return invalid("bad-role", "role must be web or runtime-host");
   }
   if (input.role === "runtime-host" && input.confirm !== true) {
-    return NextResponse.json({ error: "Restarting the runtime host needs {\"confirm\":true}" }, { status: 400 });
+    return invalid("confirm-required", "Restarting the runtime host needs {\"confirm\":true}");
   }
   return answer(await selfUpdateService().restart(input.role));
 }

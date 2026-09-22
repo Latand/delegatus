@@ -6,12 +6,21 @@
 import { spawn } from "node:child_process";
 
 import { changelogDelta, summarizeDelta } from "./changelog";
-import { shortSha, type CommitLine, type Relation, type Revision, type UpdateDelta } from "./types";
+import { shortSha, type CheckFailureCode, type CommitLine, type Relation, type Revision, type UpdateDelta } from "./types";
 
 export const TIP_REF = "refs/self-update/tip";
 export const CANONICAL_REMOTE = "https://github.com/Latand/live-log-viewer-next.git";
 
 export interface GitResult { code: number; stdout: string; stderr: string }
+
+/** A check failure whose reason is ours to word; the client words it from
+    `code`, and the message is for logs and API readers. */
+export class CheckError extends Error {
+  constructor(readonly code: CheckFailureCode, message: string) {
+    super(message);
+    this.name = "CheckError";
+  }
+}
 
 /* Git never prompts: a remote that wants credentials fails the check instead
    of hanging it. */
@@ -59,7 +68,7 @@ export async function readRevision(repo: string, rev: string): Promise<Revision>
 export async function lsRemote(repo: string, remote: string, branch: string): Promise<string> {
   const out = await git(repo, "ls-remote", remote, `refs/heads/${branch}`);
   const sha = out.trim().split(/\s+/)[0] ?? "";
-  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`The remote has no branch ${branch}`);
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new CheckError("no-branch", `The remote has no branch ${branch}`);
   return sha;
 }
 
@@ -99,7 +108,7 @@ async function commitsBetween(repo: string, from: string, to: string): Promise<C
 
 export type CheckOutcome =
   | { ok: true; installed: Revision; available: Revision | null; relation: Relation; ahead: number; behind: number; delta: UpdateDelta | null }
-  | { ok: false; error: string; installed: Revision | null };
+  | { ok: false; error: string; code?: CheckFailureCode; installed: Revision | null };
 
 /** installed: the revision the install runs or will run next; `HEAD` in a
     checkout that was never updated. `fetchInstalled` lets a bare check
@@ -141,6 +150,11 @@ export async function checkForUpdate({ repo, remote, branch, installed: installe
       delta: { commits, summary: summarizeDelta(changelogDelta(oldLog, newLog), behind) },
     };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error), installed };
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      ...(error instanceof CheckError ? { code: error.code } : {}),
+      installed,
+    };
   }
 }

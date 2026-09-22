@@ -11,14 +11,17 @@ import {
   clock,
   duration,
   headerStatus,
-  lastError,
+  checkErrorText,
   processErrorText,
+  refusalText,
   revisionText,
   runningStepNumber,
   staleProcesses,
   stepLabel,
+  stepFailureText,
   stepName,
   targetText,
+  type ActionError,
   type IconKind,
 } from "./selfUpdateCopy";
 
@@ -33,7 +36,8 @@ export interface ViewState {
   armed: boolean;
   openLogs: ReadonlySet<string>;
   pending: ReadonlySet<string>;
-  error: string | null;
+  /** Why the last action was refused, worded here in the operator's language. */
+  error: ActionError | null;
   /** A web restart was asked for and nothing answers yet. */
   waitingForWeb: boolean;
   /** The web process answering now is not the one that served this page. */
@@ -171,6 +175,7 @@ function Pair({ label, value }: { label: string; value: string }) {
 
 function Header({ s, state, actions, t, locale }: { s: Snapshot; state: ViewState; actions: ViewActions; t: TFunction; locale: "en" | "uk" }) {
   const status = headerStatus(s, t);
+  const checkError = checkErrorText(s.check, `origin/${s.meta.branch}`, t);
   const updating = s.busy === "update";
   const checking = s.check.state === "checking" || state.pending.has("check");
   const { web, runtimeHost } = s.serving;
@@ -211,8 +216,8 @@ function Header({ s, state, actions, t, locale }: { s: Snapshot; state: ViewStat
           {status.next ? <span className="text-muted"> · {status.next}</span> : null}
         </span>
       </div>
-      {s.check.state === "failed" && s.check.error ? <p data-error="check" className={ERROR_LINE}>{s.check.error}</p> : null}
-      {state.error ? <p data-error="action" className={ERROR_LINE}>{state.error}</p> : null}
+      {s.check.state === "failed" && checkError ? <p data-error="check" className={ERROR_LINE}>{checkError}</p> : null}
+      {state.error ? <p data-error="action" className={ERROR_LINE}>{refusalText(state.error, t)}</p> : null}
     </section>
   );
 }
@@ -327,7 +332,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
   }
   const failed = update.steps.find((step) => step.state === "failed") ?? update.steps[0]!;
   const failedName = stepName(failed.name, t);
-  const cause = lastError(failed.tail);
+  const cause = stepFailureText(failed, t);
   const copy = managed
     ? t(update.rolledBack ? "selfUpdate.update.rolledBack" : "selfUpdate.update.failedManaged", { step: failedName, duration: duration(elapsed, t) })
     : t("selfUpdate.update.failed", { step: failedName, duration: duration(elapsed, t) });

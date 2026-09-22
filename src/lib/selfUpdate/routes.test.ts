@@ -194,8 +194,12 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect(s.check.delta?.summary.groups).toEqual([{ type: "Fixed", items: ["The header says what runs (#7)"], more: 0 }]);
     expect(s.processes.runtimeHost).toMatchObject({ state: "healthy", pid: 4242, revision: firstSha.slice(0, 7) });
 
-    expect((await postRestart(post("/restart", { role: "web" }))).status).toBe(409);
-    expect((await postUpdate(post("/update", { key: "a b" }))).status).toBe(400);
+    const managedRestart = await postRestart(post("/restart", { role: "web" }));
+    expect(managedRestart.status).toBe(409);
+    expect(((await managedRestart.json()) as { code: string }).code).toBe("managed-restart");
+    const badKey = await postUpdate(post("/update", { key: "a b" }));
+    expect(badKey.status).toBe(400);
+    expect(((await badKey.json()) as { code: string }).code).toBe("bad-key");
     const accepted = await postUpdate(post("/update", { key: "press-1" }));
     expect(accepted.status).toBe(202);
     expect(requests).toEqual([{ revision: tipSha, idempotencyKey: `self-update-${tipSha.slice(0, 12)}-press-1` }]);
@@ -203,8 +207,10 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect(s.busy).toBe("update");
     expect(s.update).toMatchObject({ state: "running", target: tipSha, deploymentId: "deployment-1" });
 
-    /* One deployment at a time. */
-    expect((await postUpdate(post("/update", { key: "press-2" }))).status).toBe(409);
+    /* One deployment at a time; the refusal is a code the surface words. */
+    const second = await postUpdate(post("/update", { key: "press-2" }));
+    expect(second.status).toBe(409);
+    expect(((await second.json()) as { code: string }).code).toBe("busy-update");
     expect(requests).toHaveLength(1);
 
     phase = "building";
@@ -323,6 +329,18 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect(new Set(results).size).toBe(1);
     expect(existsSync(join(dir, "check.git", "HEAD"))).toBe(true);
     expect((await runGit(["rev-parse", "--is-bare-repository"], join(dir, "check.git"))).stdout.trim()).toBe("true");
+  });
+
+  test("a release target that cannot be read fails the check with a code, and no sentence of ours", async () => {
+    const dir = mkdtempSync(join(root, "managed-no-target-"));
+    setSelfUpdateServiceForTests(new SelfUpdateService(baseDeps(dir, {
+      mode: async () => ({ mode: "managed", reason: null, record: null }),
+      releaseTarget: () => null,
+      prepareCheckRepo: () => prepareManagedCheckRepo(join(dir, "check.git"), join(dir, "no-mirror", "objects")),
+    })));
+    await postCheck(post("/check"));
+    const s = await until((next) => next.check.state === "failed");
+    expect(s.check).toMatchObject({ errorCode: "no-release-target", error: null });
   });
 
   test("the deployment outlives the web process that asked for it", async () => {

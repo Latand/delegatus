@@ -2,7 +2,7 @@
    takes, in the operator's language. The component renders what these
    answer; the DOM tests read the same answers through the rendered page. */
 import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
-import type { ProcessError, ProcessView, Revision, Snapshot, Step, StepName } from "@/lib/selfUpdate/types";
+import { REFUSAL_CODES, type CheckState, type ProcessError, type ProcessView, type RefusalCode, type Revision, type Snapshot, type Step, type StepName } from "@/lib/selfUpdate/types";
 
 export type IconKind = "pending" | "running" | "done" | "failed" | "warning";
 
@@ -135,6 +135,7 @@ export function processErrorText(error: ProcessError | null, role: "web" | "runt
         : t("selfUpdate.error.timeoutHost", { seconds: seconds(error.budgetMs) });
     case "port-in-use": return t("selfUpdate.error.port", { port: error.port });
     case "gone": return t("selfUpdate.error.gone", { pid: error.pid });
+    case "no-answer": return t("selfUpdate.error.noAnswer");
     case "fell-back": return t("selfUpdate.error.fellBack", { sha: error.revision ?? "?", detail: error.detail });
     case "message": return error.text;
   }
@@ -143,4 +144,51 @@ export function processErrorText(error: ProcessError | null, role: "web" | "runt
 /** The step the running update is in, counted from one. */
 export function runningStepNumber(steps: Step[]): number {
   return Math.max(1, steps.findIndex((step) => step.state === "running") + 1);
+}
+
+/** Why an action was refused, as the page knows it: a code the server sent,
+    or what the page itself saw (403 from the operator gate, another HTTP
+    status, no answer at all). `detail` is machine output. */
+export type ActionError =
+  | { code: RefusalCode; detail?: string }
+  | { code: "forbidden" }
+  | { code: "http"; status: number }
+  | { code: "offline" };
+
+/** A refusal as the page words it: the server's code when it sent one,
+    else what the page saw. The server's English `error` is for API readers. */
+export function actionError(status: number, payload: { code?: string; detail?: string } | null): ActionError {
+  const code = payload?.code;
+  if (code && (REFUSAL_CODES as readonly string[]).includes(code)) {
+    return { code: code as RefusalCode, ...(payload?.detail ? { detail: payload.detail } : {}) };
+  }
+  if (status === 403) return { code: "forbidden" };
+  return { code: "http", status };
+}
+
+export function refusalText(error: ActionError, t: TFunction): string {
+  if (error.code === "http") return t("selfUpdate.refusal.http", { status: error.status });
+  const text = t(`selfUpdate.refusal.${error.code}` as MessageKey);
+  return "detail" in error && error.detail ? `${text}: ${error.detail}` : text;
+}
+
+/** The check's failure line: our reason worded, else git's own line. */
+export function checkErrorText(check: CheckState, branch: string, t: TFunction): string | null {
+  if (check.errorCode) return t(`selfUpdate.checkError.${check.errorCode}` as MessageKey, { branch });
+  return check.error;
+}
+
+/** Why a step failed: our reason worded; a command's failure is its own last
+    fatal or error line; an unexpected failure is the text it carried. */
+export function stepFailureText(step: Step, t: TFunction): string | null {
+  const failure = step.failure;
+  if (!failure || failure.kind === "exit") return lastError(step.tail);
+  switch (failure.kind) {
+    case "memory": return t("selfUpdate.stepFailure.memory", { available: failure.availableMb, needed: failure.neededMb });
+    case "remote-moved": return t("selfUpdate.stepFailure.remoteMoved", { expected: failure.expected, fetched: failure.fetched });
+    case "head-mismatch": return t("selfUpdate.stepFailure.headMismatch", { head: failure.head, expected: failure.expected });
+    case "build-id-missing": return t("selfUpdate.stepFailure.buildIdMissing");
+    case "interrupted": return t("selfUpdate.stepFailure.interrupted");
+    case "error": return failure.text;
+  }
 }

@@ -41,10 +41,16 @@ export type Relation = "equal" | "behind" | "ahead" | "diverged";
 
 export type CheckStateName = "idle" | "checking" | "up-to-date" | "update-available" | "failed";
 
+/** Why a check failed, when the reason is ours to word; a failure git or
+    the network reported travels as `error`, its own line, instead. */
+export type CheckFailureCode = "no-release-target" | "no-branch" | "cannot-check";
+
 export interface CheckState {
   state: CheckStateName;
   at: string | null;
+  /** Machine output: the line git or the host printed. */
   error: string | null;
+  errorCode: CheckFailureCode | null;
   nextPollAt: string | null;
   relation: Relation | null;
   ahead: number;
@@ -63,13 +69,27 @@ export const MANAGED_STEPS: readonly ManagedStepName[] = ["admit", "image", "can
 
 export type StepStateName = "pending" | "running" | "done" | "failed";
 
+/** Why a step failed, as facts the client words. `exit` and `error` point at
+    machine output: the command's own last lines, or the text an unexpected
+    exception carried. */
+export type StepFailure =
+  | { kind: "memory"; availableMb: number; neededMb: number }
+  | { kind: "remote-moved"; expected: string; fetched: string }
+  | { kind: "head-mismatch"; head: string; expected: string }
+  | { kind: "build-id-missing" }
+  | { kind: "interrupted" }
+  | { kind: "exit"; code: number }
+  | { kind: "error"; text: string };
+
 export interface Step {
   name: StepName;
   state: StepStateName;
   startedAt: string | null;
   durationMs: number | null;
   exitCode: number | null;
+  /** Machine output only: the command's own lines, or the host's. */
   tail: string[];
+  failure: StepFailure | null;
 }
 
 export interface UpdateState {
@@ -100,6 +120,8 @@ export type ProcessError =
   /** The new release did not start, so the launcher started the previous
       one again (checkout mode: the web process is the page itself). */
   | { kind: "fell-back"; revision: string | null; detail: string }
+  /** The runtime host did not answer its health request at all. */
+  | { kind: "no-answer" }
   | { kind: "message"; text: string };
 
 export interface ProcessStatus {
@@ -118,6 +140,29 @@ export interface ProcessStatus {
 export interface ProcessView extends ProcessStatus { tail: string[] }
 
 export type Busy = "update" | "restart-web" | "restart-runtime-host" | null;
+
+/** Why a request was refused, for the client to word. `detail` is machine
+    output (the runtime host's own refusal), never a sentence of ours. */
+export type RefusalCode =
+  | "busy-update"
+  | "busy-restart-web"
+  | "busy-restart-runtime-host"
+  | "no-update"
+  | "not-failed"
+  | "cannot-check"
+  | "cannot-update"
+  | "cannot-restart"
+  | "managed-restart"
+  | "deployment-busy"
+  | "deployment-refused"
+  | "bad-key"
+  | "bad-role"
+  | "confirm-required";
+
+export const REFUSAL_CODES: readonly RefusalCode[] = [
+  "busy-update", "busy-restart-web", "busy-restart-runtime-host", "no-update", "not-failed", "cannot-check",
+  "cannot-update", "cannot-restart", "managed-restart", "deployment-busy", "deployment-refused", "bad-key", "bad-role", "confirm-required",
+];
 
 export interface Snapshot {
   mode: InstallMode;
@@ -145,7 +190,7 @@ export interface Snapshot {
 export const UNKNOWN_REVISION: Revision = { version: "", sha: "", short: "", date: "" };
 
 export function pendingSteps(names: readonly StepName[]): Step[] {
-  return names.map((name) => ({ name, state: "pending", startedAt: null, durationMs: null, exitCode: null, tail: [] }));
+  return names.map((name) => ({ name, state: "pending", startedAt: null, durationMs: null, exitCode: null, tail: [], failure: null }));
 }
 
 export function idleUpdate(names: readonly StepName[] = CHECKOUT_STEPS): UpdateState {
@@ -168,7 +213,7 @@ export function stoppedProcess(): ProcessStatus {
 }
 
 export function idleCheck(): CheckState {
-  return { state: "idle", at: null, error: null, nextPollAt: null, relation: null, ahead: 0, behind: 0, delta: null };
+  return { state: "idle", at: null, error: null, errorCode: null, nextPollAt: null, relation: null, ahead: 0, behind: 0, delta: null };
 }
 
 /** Every SHA on the surface is spelled with 7 characters. */

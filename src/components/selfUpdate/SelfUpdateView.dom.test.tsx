@@ -28,6 +28,8 @@ Object.assign(globalThis, {
 });
 
 const { SelfUpdateView } = await import("./SelfUpdateView");
+const { actionError } = await import("./selfUpdateCopy");
+type ActionError = import("./selfUpdateCopy").ActionError;
 const { setLocale } = await import("@/lib/i18n");
 
 afterAll(() => { void dom.happyDOM.close(); });
@@ -135,7 +137,7 @@ afterEach(() => {
   setLocale("en");
 });
 
-function render(s: Snapshot, state: Partial<{ armed: boolean; openLogs: Set<string>; pending: Set<string>; error: string | null; waitingForWeb: boolean; reloadTo: string | null }> = {}, live: "sse" | "polling" | "connecting" = "sse"): HTMLElement {
+function render(s: Snapshot, state: Partial<{ armed: boolean; openLogs: Set<string>; pending: Set<string>; error: ActionError | null; waitingForWeb: boolean; reloadTo: string | null }> = {}, live: "sse" | "polling" | "connecting" = "sse"): HTMLElement {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -404,6 +406,51 @@ describe("the rest of the surface", () => {
     const el = render(snapshot(), {}, "polling");
     expect(text(el.querySelector("footer"))).toContain("Live updates unavailable, polling");
     expect(text(el.querySelector("footer"))).toContain("Checks every 60 min");
+  });
+
+  test("a refusal is worded from its code, and what the page saw itself is worded too", () => {
+    let el = render(snapshot(), { error: actionError(409, { code: "busy-update", error: "Busy: update" } as never) });
+    expect(text(el.querySelector('[data-error="action"]'))).toBe("An update is running.");
+    flushSync(() => root!.unmount());
+    el = render(snapshot(), { error: actionError(503, { code: "deployment-refused", detail: "runtime host socket is unavailable" }) });
+    expect(text(el.querySelector('[data-error="action"]'))).toBe("The runtime host did not take the deployment: runtime host socket is unavailable");
+    flushSync(() => root!.unmount());
+    el = render(snapshot(), { error: actionError(403, { error: "this is an operator-only action" } as never) });
+    expect(text(el.querySelector('[data-error="action"]'))).toBe("Only the operator can update or restart the Viewer.");
+    flushSync(() => root!.unmount());
+    el = render(snapshot(), { error: actionError(502, null) });
+    expect(text(el.querySelector('[data-error="action"]'))).toBe("The request failed (HTTP 502).");
+  });
+
+  test("Ukrainian: a memory-guard failure and a 409 refusal carry no English sentence", () => {
+    setLocale("uk");
+    const failedSteps = steps(["done", "done", "failed"], { 2: { tail: [], exitCode: null, failure: { kind: "memory", availableMb: 2048, neededMb: 4096 } } });
+    const el = render(snapshot({
+      ...available(),
+      update: { ...idleUpdate(CHECKOUT_STEPS), state: "failed", target: NEW, targetShort: "a1b2c3d", targetVersion: "1.2.3", startedAt: new Date(NOW - 5_000).toISOString(), finishedAt: new Date(NOW).toISOString(), steps: failedSteps },
+    }), { error: actionError(409, { code: "no-update" }) });
+    const outcome = text(el.querySelector('[data-outcome="failed"]'));
+    expect(text(el.querySelector("[data-cause]"))).toBe("Замало вільної пам'яті: доступно 2048 МБ, потрібно 4096 МБ.");
+    expect(text(el.querySelector('[data-error="action"]'))).toBe("Оновлення немає: спершу запустіть перевірку.");
+    /* No run of three Latin words anywhere in what the failure and the refusal say. */
+    const english = /[A-Za-z]{2,}\s+[A-Za-z]{2,}\s+[A-Za-z]{2,}/;
+    expect(english.test(outcome)).toBe(false);
+    expect(english.test(text(el.querySelector('[data-error="action"]')))).toBe(false);
+    /* The memory guard failed before any command ran: there is no log to show. */
+    expect(el.querySelector('[data-step="install"] [data-action="toggle-log"]')).toBeNull();
+  });
+
+  test("Ukrainian: our own check and step failures are worded, a silent host too", () => {
+    setLocale("uk");
+    let el = render(snapshot({ mode: "managed", check: { ...idleCheck(), state: "failed", at: AT, nextPollAt: NEXT, errorCode: "no-release-target" } }));
+    expect(text(el.querySelector('[data-error="check"]'))).toBe("Не вдалося прочитати ціль релізу Viewer, тож установлена ревізія невідома.");
+    flushSync(() => root!.unmount());
+    el = render(snapshot({ processes: { web: proc("web"), runtimeHost: proc("runtimeHost", { state: "failed", error: { kind: "no-answer" } }) } }));
+    expect(text(section(el, "host")!.querySelector('[data-error="process"]'))).toBe("Runtime host не відповів");
+    flushSync(() => root!.unmount());
+    const moved = steps(["failed"], { 0: { tail: ["From /var/tmp/remote", "   a1b2c3d..f7e6ce4  main -> refs/self-update/tip"], exitCode: null, failure: { kind: "remote-moved", expected: "a1b2c3d", fetched: "f7e6ce4" } } });
+    el = render(snapshot({ ...available(), update: { ...idleUpdate(CHECKOUT_STEPS), state: "failed", target: NEW, targetShort: "a1b2c3d", steps: moved, startedAt: new Date(NOW - 1_000).toISOString(), finishedAt: new Date(NOW).toISOString() } }));
+    expect(text(el.querySelector("[data-cause]"))).toBe("Віддалена гілка змінилася після перевірки (a1b2c3d → f7e6ce4). Перевірте знову.");
   });
 
   test("Ukrainian", () => {

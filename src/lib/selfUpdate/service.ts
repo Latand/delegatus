@@ -15,7 +15,7 @@ import type { RuntimeHostHealth } from "@/lib/runtime/client";
 import type { ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 
 import { applyCheck, initialCheck, type CheckSlice } from "./checkState";
-import type { CheckInput, CheckOutcome } from "./git";
+import { CheckError, type CheckInput, type CheckOutcome } from "./git";
 import { readLauncherRecord, type LauncherProcess, type LauncherRecord, type LauncherRole } from "./launcher";
 import {
   DeploymentBusyError,
@@ -41,6 +41,7 @@ import {
   type CheckoutStepName,
   type ProcessStatus,
   type ProcessView,
+  type RefusalCode,
   type Revision,
   type Snapshot,
   type UpdateState,
@@ -78,7 +79,18 @@ export interface ServiceDeps {
   web: { pid: number; port: number | null; startedAt: string };
 }
 
-export type ActionResult = { ok: true } | { ok: false; status: number; error: string };
+/** A refusal carries a code the client words; `error` is the same in
+    English for API readers and logs, and `detail` is machine output (the
+    runtime host's own refusal). */
+export type ActionResult = { ok: true } | { ok: false; status: number; code: RefusalCode; error: string; detail?: string };
+
+export function refuse(status: number, code: RefusalCode, error: string, detail?: string): ActionResult {
+  return { ok: false, status, code, error, ...(detail ? { detail } : {}) };
+}
+
+function busy(state: Exclude<Busy, null>): ActionResult {
+  return refuse(409, `busy-${state}`, `Busy: ${state}`);
+}
 
 const MODE_TTL_MS = 30_000;
 const PENDING_RESTART_MS = 60_000;
@@ -217,10 +229,15 @@ export class SelfUpdateService {
         const input = await this.checkInput(decision);
         const outcome: CheckOutcome = input
           ? await this.deps.check(input)
-          : { ok: false, error: "This install cannot check for updates", installed: null };
+          : { ok: false, error: "This install cannot check for updates", code: "cannot-check", installed: null };
         this.slice = applyCheck(this.slice, outcome, new Date(this.deps.now()), this.deps.pollMinutes);
       } catch (error) {
-        const failed: CheckOutcome = { ok: false, error: error instanceof Error ? error.message : String(error), installed: null };
+        const failed: CheckOutcome = {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          ...(error instanceof CheckError ? { code: error.code } : {}),
+          installed: null,
+        };
         this.slice = applyCheck(this.slice, failed, new Date(this.deps.now()), this.deps.pollMinutes);
       } finally {
         this.checking = null;
@@ -240,7 +257,7 @@ export class SelfUpdateService {
     }
     if (decision.mode === "managed") {
       const target = this.deps.releaseTarget();
-      if (!target) throw new Error("The Viewer release target is not readable, so the installed revision is unknown");
+      if (!target) throw new CheckError("no-release-target", "The Viewer release target is not readable, so the installed revision is unknown");
       return { repo: await this.deps.prepareCheckRepo(), remote, branch, installed: target.revision, fetchInstalled: true };
     }
     return null;
@@ -296,16 +313,16 @@ export class SelfUpdateService {
   async startUpdate(clientKey: string): Promise<ActionResult> {
     const decision = await this.decide();
     const snapshot = await this.snapshot();
-    if (snapshot.busy) return { ok: false, status: 409, error: `Busy: ${snapshot.busy}` };
+    if (snapshot.busy) return busy(snapshot.busy);
     const available = this.slice.available;
-    if (this.slice.check.state !== "update-available" || !available) return { ok: false, status: 409, error: "No update is available; run a check first" };
+    if (this.slice.check.state !== "update-available" || !available) return refuse(409, "no-update", "No update is available; run a check first");
     if (decision.mode === "checkout" && decision.record) {
       const runner = this.runnerFor(decision.record);
       void runner.start(available.sha, { short: available.short, version: available.version }).catch(() => {}).finally(() => this.afterUpdate());
       return { ok: true };
     }
     if (decision.mode === "managed") return this.deploy(available, clientKey);
-    return { ok: false, status: 409, error: "This install cannot update itself" };
+    return refuse(409, "cannot-update", "This install cannot update itself");
   }
 
   async retry(clientKey: string): Promise<ActionResult> {
@@ -313,22 +330,22 @@ export class SelfUpdateService {
     if (decision.mode === "checkout" && decision.record) {
       const runner = this.runnerFor(decision.record);
       const snapshot = await this.snapshot();
-      if (snapshot.busy) return { ok: false, status: 409, error: `Busy: ${snapshot.busy}` };
-      if (runner.state.state !== "failed") return { ok: false, status: 409, error: "Only a failed update can be retried" };
+      if (snapshot.busy) return busy(snapshot.busy);
+      if (runner.state.state !== "failed") return refuse(409, "not-failed", "Only a failed update can be retried");
       void runner.retry().catch(() => {}).finally(() => this.afterUpdate());
       return { ok: true };
     }
     if (decision.mode === "managed") {
       const record = this.managed;
-      if (!record || managedActive(record) || record.phase === "succeeded") return { ok: false, status: 409, error: "Only a failed deployment can be retried" };
+      if (!record || managedActive(record) || record.phase === "succeeded") return refuse(409, "not-failed", "Only a failed deployment can be retried");
       const described = this.described.get(record.target);
       return this.deploy(described ?? { version: record.targetVersion ?? "", sha: record.target, short: record.targetShort, date: "" }, clientKey);
     }
-    return { ok: false, status: 409, error: "This install cannot update itself" };
+    return refuse(409, "cannot-update", "This install cannot update itself");
   }
 
   private async deploy(target: Revision, clientKey: string): Promise<ActionResult> {
-    if (managedActive(this.managed)) return { ok: false, status: 409, error: "Busy: update" };
+    if (managedActive(this.managed)) return busy("update");
     try {
       this.managed = await requestManagedUpdate(target, clientKey, this.deps.requestDeployment, this.deps.now);
       writeManagedRecord(this.managedFile, this.managed);
@@ -336,8 +353,9 @@ export class SelfUpdateService {
       this.changes.emit();
       return { ok: true };
     } catch (error) {
-      if (error instanceof DeploymentBusyError) return { ok: false, status: 409, error: error.message };
-      return { ok: false, status: 503, error: error instanceof Error ? error.message : "The runtime host did not take the deployment" };
+      if (error instanceof DeploymentBusyError) return refuse(409, "deployment-busy", error.message);
+      const detail = error instanceof Error ? error.message : undefined;
+      return refuse(503, "deployment-refused", "The runtime host did not take the deployment", detail);
     }
   }
 
@@ -350,10 +368,12 @@ export class SelfUpdateService {
   async restart(role: LauncherRole): Promise<ActionResult> {
     const decision = await this.decide();
     if (decision.mode !== "checkout" || !decision.record) {
-      return { ok: false, status: 409, error: decision.mode === "managed" ? "A managed install restarts its processes through a deployment" : "This install cannot restart its processes" };
+      return decision.mode === "managed"
+        ? refuse(409, "managed-restart", "A managed install restarts its processes through a deployment")
+        : refuse(409, "cannot-restart", "This install cannot restart its processes");
     }
     const snapshot = await this.snapshot();
-    if (snapshot.busy) return { ok: false, status: 409, error: `Busy: ${snapshot.busy}` };
+    if (snapshot.busy) return busy(snapshot.busy);
     const requestId = this.deps.requestRestart(decision.record, role);
     this.pendingRestart = { role, requestId, at: this.deps.now() };
     this.changes.emit();
@@ -520,7 +540,7 @@ export class SelfUpdateService {
       const revision = health?.generation?.revision ? shortSha(health.generation.revision) : null;
       host = health
         ? { ...stoppedProcess(), state: running("handoff") ? "starting" : "healthy", pid: health.pid, lastHealthAt: at, lastHealthOk: true, revision, tail: [] }
-        : { ...stoppedProcess(), state: "failed", error: { kind: "message", text: "The runtime host did not answer" }, tail: [] };
+        : { ...stoppedProcess(), state: "failed", error: { kind: "no-answer" }, tail: [] };
     } catch (error) {
       host = { ...stoppedProcess(), state: running("handoff") ? "starting" : "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: error instanceof Error ? error.message : String(error) }, tail: [] };
     }

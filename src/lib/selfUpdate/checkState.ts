@@ -18,7 +18,9 @@ export function applyCheck(previous: CheckSlice, outcome: CheckOutcome, now: Dat
     return {
       installed: outcome.installed ?? previous.installed,
       available: previous.available,
-      check: { ...previous.check, state: "failed", at, error: outcome.error, nextPollAt },
+      /* A reason of ours travels as a code the client words; git's own
+         line travels as it was printed. */
+      check: { ...previous.check, state: "failed", at, error: outcome.code ? null : outcome.error, errorCode: outcome.code ?? null, nextPollAt },
     };
   }
   const available = outcome.relation === "behind" || outcome.relation === "diverged" ? outcome.available : null;
@@ -29,6 +31,7 @@ export function applyCheck(previous: CheckSlice, outcome: CheckOutcome, now: Dat
       state: available ? "update-available" : "up-to-date",
       at,
       error: null,
+      errorCode: null,
       nextPollAt,
       relation: outcome.relation,
       ahead: outcome.ahead,

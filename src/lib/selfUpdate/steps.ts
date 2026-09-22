@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { runGit, TIP_REF } from "./git";
 import { readStartIdentity, signalGroup, type RecordedPid } from "./pid";
 import { releaseDirFor, type Release } from "./release";
-import { CHECKOUT_STEPS, idleUpdate, pendingSteps, shortSha, type CheckoutStepName, type Step, type UpdateState } from "./types";
+import { CHECKOUT_STEPS, idleUpdate, pendingSteps, shortSha, type CheckoutStepName, type Step, type StepFailure, type UpdateState } from "./types";
 
 export const TAIL_LINES = 40;
 export const MIN_AVAILABLE_MB = 4_096;
@@ -42,8 +42,14 @@ export interface RunnerConfig {
 }
 
 /* A command that exited non-zero; its output is already in the log. */
-class StepFailure extends Error {
+class CommandFailure extends Error {
   constructor(readonly code: number) { super(`exit ${code}`); }
+}
+
+/* A step that failed for a reason of ours: the fact travels to the surface,
+   which words it; the log file gets the same fact as a line. */
+class StepError extends Error {
+  constructor(readonly failure: StepFailure, line: string) { super(line); }
 }
 
 export class UpdateRunner {
@@ -69,8 +75,8 @@ export class UpdateRunner {
       state: "failed",
       finishedAt: saved.finishedAt ?? new Date(this.ports.now()).toISOString(),
       steps: saved.steps.map((step) => step.state === "running"
-        ? { ...step, state: "failed", tail: [...step.tail, "The Viewer restarted while this step ran."].slice(-TAIL_LINES) }
-        : step),
+        ? { ...step, state: "failed", failure: { kind: "interrupted" } }
+        : { ...step, failure: step.failure ?? null }),
     };
   }
 
@@ -118,7 +124,7 @@ export class UpdateRunner {
     for (let index = from; index < CHECKOUT_STEPS.length; index += 1) {
       const name = CHECKOUT_STEPS[index]!;
       const started = this.ports.now();
-      this.patch(index, { state: "running", startedAt: this.iso(), durationMs: null, exitCode: null, tail: [] });
+      this.patch(index, { state: "running", startedAt: this.iso(), durationMs: null, exitCode: null, tail: [], failure: null });
       const fd = openSync(this.logPath(name), "w");
       const tail: string[] = [];
       const push = (line: string, toTail = true) => {
@@ -129,21 +135,32 @@ export class UpdateRunner {
         this.patch(index, { tail: tail.slice() });
       };
       let exitCode: number | null = null;
-      let ok = false;
+      let failure: StepFailure | null = null;
       try {
         exitCode = await this.runStep(name, push);
-        ok = true;
       } catch (error) {
-        if (error instanceof StepFailure) exitCode = error.code;
-        else push(error instanceof Error ? error.message : String(error));
+        if (error instanceof CommandFailure) {
+          exitCode = error.code;
+          failure = { kind: "exit", code: error.code };
+        } else if (error instanceof StepError) {
+          push(error.message, false);
+          failure = error.failure;
+        } else {
+          /* Unexpected: its text is machine output, shown as it came. */
+          const text = error instanceof Error ? error.message : String(error);
+          push(text);
+          failure = { kind: "error", text };
+        }
       } finally {
         closeSync(fd);
       }
+      const ok = failure === null;
       this.patch(index, {
         state: ok ? "done" : "failed",
         durationMs: this.ports.now() - started,
         exitCode,
         tail: tail.slice(),
+        failure,
       });
       if (!ok) {
         this.state = { ...this.state, state: "failed", finishedAt: this.iso() };
@@ -156,7 +173,7 @@ export class UpdateRunner {
   }
 
   /* Answers the exit code of a command step (null for the check-only step).
-     A StepFailure means the command's own output explains it; any other
+     A CommandFailure means the command's own output explains it; any other
      error's message is pushed as the step's last line. */
   private async runStep(name: CheckoutStepName, push: (line: string, toTail?: boolean) => void): Promise<number | null> {
     const { checkout, remote, branch, bun, env } = this.config;
@@ -166,18 +183,22 @@ export class UpdateRunner {
       push(`$ ${argv.join(" ")}   (in ${cwd})`, false);
       const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line) });
       push(`exit ${code}`, false);
-      if (code !== 0) throw new StepFailure(code);
+      if (code !== 0) throw new CommandFailure(code);
       return code;
     };
     const guardMemory = () => {
       const available = Math.floor(this.ports.memAvailableMb());
-      if (available < MIN_AVAILABLE_MB) throw new Error(`Not enough free memory (${available} MB available, ${MIN_AVAILABLE_MB} needed)`);
+      if (available < MIN_AVAILABLE_MB) {
+        throw new StepError({ kind: "memory", availableMb: available, neededMb: MIN_AVAILABLE_MB }, `Not enough free memory (${available} MB available, ${MIN_AVAILABLE_MB} needed)`);
+      }
     };
     switch (name) {
       case "fetch": {
         const code = await command(["git", "fetch", "--no-tags", remote, `+refs/heads/${branch}:${TIP_REF}`], checkout);
         const fetched = (await this.ports.revParse(TIP_REF, checkout)).trim();
-        if (fetched !== target) throw new Error("The remote moved since the last check. Check again.");
+        if (fetched !== target) {
+          throw new StepError({ kind: "remote-moved", expected: shortSha(target), fetched: shortSha(fetched) }, `The remote moved since the last check (${shortSha(target)} → ${shortSha(fetched)}). Check again.`);
+        }
         return code;
       }
       case "checkout":
@@ -192,10 +213,10 @@ export class UpdateRunner {
         return command([bun, "run", "build"], release);
       case "ready": {
         const head = (await this.ports.revParse("HEAD", release)).trim();
-        if (head !== target) throw new Error(`HEAD is ${shortSha(head)}, expected ${shortSha(target)}`);
-        if (!this.ports.buildIdReadable(release)) throw new Error(".next/BUILD_ID is missing after the build");
+        if (head !== target) throw new StepError({ kind: "head-mismatch", head: shortSha(head), expected: shortSha(target) }, `HEAD is ${shortSha(head)}, expected ${shortSha(target)}`);
+        if (!this.ports.buildIdReadable(release)) throw new StepError({ kind: "build-id-missing" }, ".next/BUILD_ID is missing after the build");
         this.ports.publish({ sha: target, dir: release });
-        push(`${shortSha(target)} is built in ${release}; the next restart runs it`);
+        push(`${shortSha(target)} is built in ${release}; the next restart runs it`, false);
         return null;
       }
     }

@@ -102,6 +102,7 @@ describe("UpdateRunner", () => {
     expect(states).toEqual({ fetch: "done", checkout: "done", install: "done", build: "failed", ready: "pending" });
     const build = runner.state.steps.find((step) => step.name === "build")!;
     expect(build.exitCode).toBe(1);
+    expect(build.failure).toEqual({ kind: "exit", code: 1 });
     expect(build.tail).toEqual(["Type error: nope"]);
     expect(calls).toHaveLength(4);
   });
@@ -136,11 +137,14 @@ describe("UpdateRunner", () => {
   });
 
   test("the memory guard fails install without spawning it", async () => {
-    const { runner, calls } = harness({}, { memAvailableMb: () => 2_048 });
+    const { runner, calls, logDir } = harness({}, { memAvailableMb: () => 2_048 });
     await runner.start(TARGET);
     const install = runner.state.steps.find((step) => step.name === "install")!;
     expect(install.state).toBe("failed");
-    expect(install.tail).toEqual(["Not enough free memory (2048 MB available, 4096 needed)"]);
+    expect(install.failure).toEqual({ kind: "memory", availableMb: 2048, neededMb: 4096 });
+    /* The sentence is for the log file; the surface words the fact. */
+    expect(install.tail).toEqual([]);
+    expect(readFileSync(join(logDir, "install.log"), "utf8")).toContain("Not enough free memory (2048 MB available, 4096 needed)");
     expect(calls.map(stepOf)).toEqual(["fetch", "checkout"]);
   });
 
@@ -149,7 +153,8 @@ describe("UpdateRunner", () => {
     await runner.start(TARGET);
     const fetch = runner.state.steps.find((step) => step.name === "fetch")!;
     expect(fetch.state).toBe("failed");
-    expect(fetch.tail.at(-1)).toBe("The remote moved since the last check. Check again.");
+    expect(fetch.failure).toEqual({ kind: "remote-moved", expected: TARGET.slice(0, 7), fetched: "fffffff" });
+    expect(fetch.tail).toEqual(["fetch ok"]);
     expect(calls).toHaveLength(1);
   });
 
@@ -158,7 +163,7 @@ describe("UpdateRunner", () => {
     await runner.start(TARGET);
     const ready = runner.state.steps.find((step) => step.name === "ready")!;
     expect(ready.state).toBe("failed");
-    expect(ready.tail.at(-1)).toBe(".next/BUILD_ID is missing after the build");
+    expect(ready.failure).toEqual({ kind: "build-id-missing" });
     expect(published).toEqual([]);
   });
 
@@ -169,7 +174,7 @@ describe("UpdateRunner", () => {
     expect(runner.state.state).toBe("failed");
     const build = runner.state.steps.find((step) => step.name === "build")!;
     expect(build.state).toBe("failed");
-    expect(build.tail.at(-1)).toBe("The Viewer restarted while this step ran.");
+    expect(build.failure).toEqual({ kind: "interrupted" });
   });
 
   test("marks the running step while its command runs", async () => {
