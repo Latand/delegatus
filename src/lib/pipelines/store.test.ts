@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 
@@ -601,12 +601,14 @@ test("v3 validation: acyclic pass edges, valid fail edges, 1–8 stage bounds (#
     expect(() => savePipelines([buildPipeline({ id: "wide0008", task: "task", project: "viewer", repoDir: "/repo", stages: wide(8), srcPath: null, srcConversationId: null, now: "now" })])).not.toThrow();
     expect(() => savePipelines([buildPipeline({ id: "wide0009", task: "task", project: "viewer", repoDir: "/repo", stages: wide(9), srcPath: null, srcConversationId: null, now: "now" })])).toThrow("malformed pipeline record");
 
-    /* A review-loop must stay pass-reachable from a run stage. */
+    /* A legacy review-loop no run reaches is still decoded (retire-flows §3):
+       the store never drops a stored definition; every edit and start refuse it. */
     const orphanReview = buildPipeline({ id: "bad00004", task: "task", project: "viewer", repoDir: "/repo", stages: [
       { id: "review", kind: "review-loop", prompt: "review", next: null, effectiveRole: { ...v3Role, access: "read-only" } },
       { id: "build", kind: "run", prompt: "build", next: null, effectiveRole: { ...v3Role } },
     ], srcPath: null, srcConversationId: null, now: "now" });
-    expect(() => savePipelines([orphanReview])).toThrow("malformed pipeline record");
+    expect(() => savePipelines([orphanReview])).not.toThrow();
+    expect(pipelineGraphError(orphanReview.stages)).toContain("review-loop stage review is unreachable");
 
     /* Review verdict recovery belongs to the bound flow, so a persisted
        review-loop fail edge is rejected before it can become unreachable. */
