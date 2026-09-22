@@ -19,6 +19,16 @@ import {
   viewerChildProcessOptions,
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
+import {
+  createLauncherRecord,
+  exitError,
+  hostEntrypoint,
+  installedRelease,
+  isGitCheckout,
+  probePageAndChunk,
+  selfUpdatePaths,
+  watchRestartRequests,
+} from "./self-update-supervisor.mjs";
 
 discardWakatimeEnvironmentCredential();
 
@@ -43,6 +53,9 @@ const RUNTIME_HOST_READINESS_INTERVAL_MS = 100;
 const RUNTIME_HOST_RESTART_BASE_MS = 500;
 const RUNTIME_HOST_RESTART_MAX_MS = 10_000;
 const RUNTIME_HOST_STABLE_UPTIME_MS = 30_000;
+/* A restart onto a freshly built release starts `next start` cold, which
+   takes 10–30 s on a full checkout (#2007); the first start keeps its budget. */
+const RESTART_READINESS_TIMEOUT_MS = 90_000;
 
 const cliPath = fileURLToPath(import.meta.url);
 const cliDir = dirname(cliPath);
@@ -299,9 +312,10 @@ function resolveServer(packageRoot, hostname) {
   };
 }
 
-function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment) {
+function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment, extraEnv = {}) {
   const env = {
     ...runtimeHostEnvironment,
+    ...extraEnv,
     /* This child IS the serving Viewer: it alone may run the state-mutating
        startup steps (imports, migrations, backups) that #1905 fenced off. */
     LLV_STATE_OWNER: "viewer",
@@ -353,16 +367,20 @@ function buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment) {
   return env;
 }
 
-function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostSupervisor, packageRoot, runtimeHostEnvironment) {
+/* `launch.restarting` marks a web process started by a self-update restart
+   (#2007): until it is ready, its exit is the restart's failure to handle,
+   never a reason to stop the whole launcher. */
+function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostSupervisor, packageRoot, runtimeHostEnvironment, launch = {}) {
   const child = spawn(server.command, server.args, viewerChildProcessOptions({
     cwd: server.cwd,
-    env: buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment),
+    env: buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment, launch.extraEnv),
     stdio: ["ignore", "inherit", "pipe"],
   }));
 
   const state = {
     sawAddressInUse: false,
     stopping: false,
+    restarting: launch.restarting === true,
   };
 
   child.stderr.on("data", (chunk) => {
@@ -388,9 +406,10 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
   });
 
   child.on("exit", async (code, signal) => {
-    if (state.stopping) {
+    if (state.stopping || state.restarting) {
       return;
     }
+    launch.onUnexpectedExit?.(child);
 
     // The server dying on its own (crash, EADDRINUSE) still leaves `tailscale
     // serve` running as our child; stop it through the bounded path (SIGTERM,
@@ -488,11 +507,16 @@ async function waitForRuntimeHost(socketPath, fencePath, processHandle = null) {
   throw new Error(m.runtimeHostTimeout(socketPath));
 }
 
-function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoot) {
+/* `hooks.release()` names the release each launch runs from (#2007): the
+   installed self-update release, or the package root. The other hooks report
+   to the self-update record; none of them decides anything. */
+function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoot, hooks = {}) {
   let current = null;
+  let currentRelease = null;
   let restartTimer = null;
   let restartFailures = 0;
   let stopping = false;
+  const releaseFor = () => hooks.release?.() ?? { dir: packageRoot, sha: null };
 
   const scheduleRestart = (detail, uptimeMs = 0) => {
     if (stopping || restartTimer) return;
@@ -513,21 +537,25 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     }, delay);
   };
 
-  const spawnHost = () => {
-    const child = spawn(bunRuntime, ["--bun", config.entrypoint], viewerChildProcessOptions({
-      cwd: packageRoot,
+  const spawnHost = (release) => {
+    const packaged = release.dir === packageRoot;
+    const child = spawn(bunRuntime, ["--bun", packaged ? config.entrypoint : hostEntrypoint(release.dir)], viewerChildProcessOptions({
+      cwd: release.dir,
       env: environment,
       stdio: ["ignore", "inherit", "pipe"],
     }));
     const state = {
       command: bunRuntime,
       readyAt: null,
+      spawnedAt: Date.now(),
       spawnError: null,
       stderrTail: "",
       stopping: false,
     };
     const processHandle = { child, state };
     current = processHandle;
+    currentRelease = release;
+    hooks.onStarted?.(child, release);
     child.stderr.on("data", (chunk) => {
       state.stderrTail = `${state.stderrTail}${chunk}`.slice(-8_192);
       process.stderr.write(chunk);
@@ -537,19 +565,21 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     });
     child.once("exit", () => {
       if (current !== processHandle || stopping || state.stopping || state.readyAt === null) return;
+      hooks.onExit?.(child, state.spawnedAt);
       scheduleRestart(runtimeHostExitDetail(processHandle), Date.now() - state.readyAt);
     });
     return processHandle;
   };
 
-  const launch = async (initial) => {
-    const processHandle = spawnHost();
+  const launch = async (initial, release = releaseFor()) => {
+    const processHandle = spawnHost(release);
     try {
       await waitForRuntimeHost(config.socketPath, config.fencePath, processHandle);
       processHandle.state.readyAt = Date.now();
       if (processHandle.child.exitCode !== null || processHandle.child.signalCode !== null) {
         throw new Error(m.runtimeHostExited(runtimeHostExitDetail(processHandle)));
       }
+      hooks.onReady?.(processHandle.child);
     } catch (error) {
       await stopChild(processHandle);
       if (initial) throw error;
@@ -569,6 +599,34 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
         restartTimer = null;
       }
       if (current) await stopChild(current);
+    },
+    /* A restart the operator asked for from the Update surface (#2007): stop
+       the host this supervisor started, start it from the installed release,
+       and when that one does not become ready, start the release it replaced
+       so the install is never left without a host. Resolves with the release
+       that failed and why when the fallback ran, else null. */
+    async restart() {
+      if (stopping) return null;
+      if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+      }
+      const previous = current;
+      const previousRelease = currentRelease ?? { dir: packageRoot, sha: null };
+      if (previous) {
+        hooks.onStopping?.();
+        await stopChild(previous);
+      }
+      const attempted = releaseFor();
+      try {
+        await launch(false, attempted);
+        restartFailures = 0;
+        return null;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        await launch(false, previousRelease);
+        return { sha: attempted.sha, detail };
+      }
     },
   };
 }
@@ -595,11 +653,16 @@ async function portAlreadyResponds(port) {
   return probe(`http://127.0.0.1:${port}/api/files`);
 }
 
-async function waitForReadiness(port) {
-  const deadline = Date.now() + READINESS_TIMEOUT_MS;
+/* `processHandle`, when given, is the child the readiness belongs to: its exit
+   ends the wait at once, since a port answered by anyone else is no proof. */
+async function waitForReadiness(port, timeoutMs = READINESS_TIMEOUT_MS, processHandle = null) {
+  const deadline = Date.now() + timeoutMs;
   const url = `http://127.0.0.1:${port}/api/files`;
 
   while (Date.now() < deadline) {
+    if (processHandle && (processHandle.child.exitCode !== null || processHandle.child.signalCode !== null)) {
+      throw new Error(`exited before it answered (${processHandle.child.signalCode ? `signal ${processHandle.child.signalCode}` : `exit code ${processHandle.child.exitCode}`})`);
+    }
     if (await probe(url)) {
       return;
     }
@@ -607,7 +670,7 @@ async function waitForReadiness(port) {
     await wait(READINESS_INTERVAL_MS);
   }
 
-  throw new Error(m.serverTimeout(READINESS_TIMEOUT_MS / 1000));
+  throw new Error(m.serverTimeout(timeoutMs / 1000));
 }
 
 function localUrl(options) {
@@ -694,9 +757,12 @@ async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor) {
   ]);
 }
 
-function installSignalHandlers(serverProcess, tailscaleProcessRef, runtimeHostSupervisor) {
+/* `serverRef.current` is whichever web process runs at shutdown: a
+   self-update restart (#2007) replaces the one startup launched. */
+function installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, onShutdown = () => {}) {
   const shutdown = async () => {
-    await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor);
+    onShutdown();
+    await stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
     process.exit(0);
   };
 
@@ -849,33 +915,82 @@ async function main() {
     }
   }
 
-  const server = resolveServer(packageRoot, options.hostname);
   const runtimeHostConfig = cliRuntimeHostConfig(packageRoot);
   const runtimeHostEnvironment = cliRuntimeHostEnvironment(process.env, runtimeHostConfig);
+
+  /* Self-update (#2007). A git checkout starts each child from the release
+     the Viewer's Update surface last published (or from the package root),
+     records what it started, and restarts one child when the surface asks.
+     A packaged install records its children too, and the surface reads the
+     record's missing checkout as "updates come from the package manager". */
+  const checkout = isGitCheckout(packageRoot);
+  const selfUpdate = selfUpdatePaths({
+    stateDirectory: runtimeHostConfig.stateDirectory,
+    cacheDirectory: process.env.XDG_CACHE_HOME?.trim() || join(homedir(), ".cache"),
+    installId: runtimeHostConfig.installId,
+  });
+  const releaseNow = () => (checkout
+    ? installedRelease(selfUpdate.releasePointer, packageRoot)
+    : { dir: packageRoot, sha: null, published: false });
+  const record = createLauncherRecord(selfUpdate.record, {
+    checkout: checkout ? packageRoot : null,
+    releasesDir: selfUpdate.releasesDir,
+    releasePointer: selfUpdate.releasePointer,
+    requestFile: selfUpdate.request,
+    port: options.port,
+    socket: runtimeHostConfig.socketPath,
+  });
+
   const runtimeHostSupervisor = createRuntimeHostSupervisor(
     runtimeHostConfig,
     viewerServerBunRuntime(),
     runtimeHostEnvironment,
     packageRoot,
+    {
+      release: releaseNow,
+      onStarted: (child, release) => record.started("runtimeHost", child, release),
+      onReady: () => record.set("runtimeHost", { state: "healthy", error: null }),
+      onStopping: () => record.set("runtimeHost", { state: "stopping" }),
+      onExit: (child, spawnedAt) => record.set("runtimeHost", { state: "failed", error: exitError(child, spawnedAt) }),
+    },
   );
   try {
     await runtimeHostSupervisor.start();
   } catch (error) {
     await runtimeHostSupervisor.stop();
+    record.remove();
     fail(m.runtimeHostStartFail(error instanceof Error ? error.message : String(error)));
   }
 
   const tailscaleProcessRef = { current: null };
-  const serverProcess = startServer(
-    server,
-    options,
-    runtime,
-    tailscaleProcessRef,
-    runtimeHostSupervisor,
-    packageRoot,
-    runtimeHostEnvironment,
-  );
-  installSignalHandlers(serverProcess, tailscaleProcessRef, runtimeHostSupervisor);
+  const serverRef = { current: null, release: releaseNow() };
+  const launchWeb = (release, restarting) => {
+    const handle = startServer(
+      resolveServer(release.dir, options.hostname),
+      options,
+      runtime,
+      tailscaleProcessRef,
+      runtimeHostSupervisor,
+      release.dir,
+      runtimeHostEnvironment,
+      {
+        restarting,
+        extraEnv: { LLV_SELF_UPDATE_RECORD: selfUpdate.record },
+        onUnexpectedExit: (child) => record.set("web", { state: "failed", error: exitError(child, handle.startedAt) }),
+      },
+    );
+    handle.startedAt = Date.now();
+    serverRef.current = handle;
+    serverRef.release = release;
+    record.started("web", handle.child, release);
+    return handle;
+  };
+  const serverProcess = launchWeb(serverRef.release, false);
+  let restartRequests = null;
+  installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, () => {
+    restartRequests?.stop();
+    record.remove();
+  });
 
   if (options.tailscale && runtime.tailscalePath) {
     tailscaleProcessRef.current = serveTailscale(runtime.tailscalePath, options.port);
@@ -918,6 +1033,65 @@ async function main() {
     serverProcess.child.signalCode !== null
   ) {
     process.exit(serverProcess.state.sawAddressInUse ? 1 : (serverProcess.child.exitCode ?? 1));
+  }
+  record.set("web", { state: "healthy", error: null });
+
+  /* Restart requests are taken only once startup has finished, and only from
+     a checkout: a packaged install is updated by its package manager. */
+  if (checkout) {
+    const restartWeb = async () => {
+      const previous = serverRef.current;
+      const previousRelease = serverRef.release;
+      record.set("web", { state: "stopping" });
+      await stopChild(previous);
+      const attempt = async (release) => {
+        const handle = launchWeb(release, true);
+        try {
+          await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
+          const page = await probePageAndChunk(options.port);
+          if (page) throw new Error(page);
+          handle.state.restarting = false;
+          if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");
+          return null;
+        } catch (error) {
+          await stopChild(handle);
+          return error instanceof Error ? error.message : String(error);
+        }
+      };
+      const next = releaseNow();
+      const failure = await attempt(next);
+      if (failure === null) {
+        record.set("web", { state: "healthy", error: null });
+        return;
+      }
+      /* The web process is the page the operator restarts from: a release
+         that does not come up gives way to the one it replaced. */
+      const fallbackFailure = await attempt(previousRelease);
+      if (fallbackFailure === null) {
+        record.set("web", { state: "healthy", error: { kind: "fell-back", revision: next.sha ? next.sha.slice(0, 7) : null, detail: failure } });
+        return;
+      }
+      record.set("web", { state: "failed", error: { kind: "message", text: fallbackFailure } });
+      restartRequests?.stop();
+      await stopAll(null, tailscaleProcessRef.current, runtimeHostSupervisor);
+      fail(fallbackFailure);
+    };
+    const restartHost = async () => {
+      try {
+        const fellBack = await runtimeHostSupervisor.restart();
+        if (fellBack) {
+          record.set("runtimeHost", { state: "healthy", error: { kind: "fell-back", revision: fellBack.sha ? fellBack.sha.slice(0, 7) : null, detail: fellBack.detail } });
+        }
+      } catch (error) {
+        record.set("runtimeHost", { state: "failed", error: { kind: "message", text: error instanceof Error ? error.message : String(error) } });
+      }
+    };
+    restartRequests = watchRestartRequests(selfUpdate.request, async ({ requestId, role }) => {
+      const key = role === "web" ? "web" : "runtimeHost";
+      record.set(key, { requestId });
+      if (role === "web") await restartWeb();
+      else await restartHost();
+    });
   }
 
   printBanner(version, options);

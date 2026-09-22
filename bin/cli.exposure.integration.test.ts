@@ -162,6 +162,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
       ? copyFile(path.resolve("bin/server-runtime.mjs"), path.join(bin, "server-runtime.mjs"))
       : writeFile(path.join(bin, "server-runtime.mjs"), unevaluableProbeModule(options.unevaluableAddress)),
     copyFile(path.resolve("bin/tailscale.mjs"), path.join(bin, "tailscale.mjs")),
+    copyFile(path.resolve("bin/self-update-supervisor.mjs"), path.join(bin, "self-update-supervisor.mjs")),
     writeFile(path.join(fixture, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" })),
     writeFile(path.join(nextBin, "next"), `
 const hostnameIndex = process.argv.indexOf("--hostname");
