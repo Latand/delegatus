@@ -12,6 +12,7 @@ import type { FileEntry } from "@/lib/types";
 import { pipelineReviewHeads, stageCardLabel, stageLatestAttemptPlace } from "../pipelines/pipelineModel";
 import { formatResetClock } from "../rateLimit";
 import { clockDuration, humanizeDuration } from "../turnDuration";
+import { fileModelLabel } from "../utils";
 
 import {
   buildMobileBoard,
@@ -197,7 +198,7 @@ function ConversationRow({ row, quiet, now, onOpen, catalogPath }: {
               <span data-mobile2-engine={row.file.engine} className="inline-flex shrink-0">
                 <EngineMark engine={row.file.engine} size={16} />
               </span>
-              <span data-mobile2-model className="shrink-0">{row.file.model}</span>
+              <span data-mobile2-model className="shrink-0">{fileModelLabel(row.file)}</span>
             </>
           ) : null}
           {row.launchedAt === null ? null : (

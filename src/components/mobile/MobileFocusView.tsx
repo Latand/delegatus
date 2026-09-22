@@ -30,7 +30,7 @@ import { ChatEngineMark } from "./chatEngineMark";
 import { paneState, type PaneState } from "@/components/paneState";
 import type { BranchGroup } from "@/components/projectModel";
 import { draftWorkingDirectory } from "@/components/projectModel";
-import { cleanTitle, engineBadge, effortTitle } from "@/components/utils";
+import { cleanTitle, engineBadge, effortTitle, fileModelLabel } from "@/components/utils";
 
 import { compactPipelineLayoutFlows } from "@/components/pipelines/pipelineModel";
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -754,8 +754,9 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 function ChatIdentity({ file }: { file: FileEntry }) {
   const { t } = useLocale();
   const badge = engineBadge(file);
-  const model = file.model
-    ? file.effort ? t("mobile2.chat.identity", { model: file.model, effort: file.effort }) : file.model
+  const modelName = fileModelLabel(file);
+  const model = modelName
+    ? file.effort ? t("mobile2.chat.identity", { model: modelName, effort: file.effort }) : modelName
     : badge.label;
   return (
     <>

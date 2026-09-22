@@ -13,9 +13,10 @@ const { GET } = routeModule;
 const {
   readReplySuggestionsFile,
   recordReplySuggestions,
-  replySuggestionsFile,
   retireReplySuggestionsOnOperatorMessage,
 } = await import("@/lib/suggestions/store");
+const { setLegacyDocumentWriteHookForTests } = await import("@/lib/state/legacyDocumentStore");
+const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -68,12 +69,11 @@ test("drafts the operator has answered stay off the read even when the clear cou
     at: new Date(Date.now() - 60_000),
   });
 
-  /* Every write to the record blocked at the shared file transaction's own
-     queue: a plain file where it enqueues refuses the mkdir, which is how a
-     busy lock, a full disk and a read-only state dir all arrive. */
-  const queuePath = `${replySuggestionsFile()}.write-locks`;
-  fs.rmSync(queuePath, { recursive: true, force: true });
-  fs.writeFileSync(queuePath, "blocked", "utf8");
+  /* Every write to the record blocked at the store's write seam, which is how
+     a busy database, a full disk and a read-only state dir all arrive. */
+  setLegacyDocumentWriteHookForTests(() => {
+    throw new FileTransactionBusyError("reply suggestions are busy");
+  });
 
   const retirement = retireReplySuggestionsOnOperatorMessage(conversationId, new Date(), "operator-answer-unwritable");
   /* The operator's message is never held hostage by this record. */
@@ -83,7 +83,7 @@ test("drafts the operator has answered stay off the read even when the clear cou
   expect(blocked.set).toBeNull();
   expect(readReplySuggestionsFile().sets.some((set) => set.conversationId === conversationId)).toBe(true);
 
-  fs.rmSync(queuePath);
+  setLegacyDocumentWriteHookForTests(null);
   const recovered = await GET(request(`?conversationId=${conversationId}`)).json() as { set: unknown };
   expect(recovered.set).toBeNull();
   /* The retry rode the read: nothing had to send a second message for the

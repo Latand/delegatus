@@ -7,7 +7,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { hueFromId } from "./scheme/agentLinks";
 import { EngineBadge } from "./EngineMark";
-import { effortTint, effortTitle, engineBadge } from "./utils";
+import { effortTint, effortTitle, engineBadge, fileModelLabel } from "./utils";
 
 /**
  * Fixed card anatomy (issue #964): every compact conversation card reads in the
@@ -142,7 +142,7 @@ export function CardIdentityChip({ file, fontClassName = "text-[9.5px]" }: { fil
         style={{ backgroundColor: effortTint(file).soft, color: effortTint(file).color }}
         title={[badge.label, effortTitle(file)].filter(Boolean).join(" · ")}
       >
-        {file.model}
+        {fileModelLabel(file)}
       </span>
     );
   }

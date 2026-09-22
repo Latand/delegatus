@@ -10,7 +10,7 @@ import { useLocale } from "@/lib/i18n";
 import type { AttentionItem } from "../attention";
 import { pipelineReviewHeads, stageCardLabel, stageLatestAttemptPlace } from "../pipelines/pipelineModel";
 import { humanizeDuration } from "../turnDuration";
-import { cleanTitle } from "../utils";
+import { cleanTitle, fileModelLabel } from "../utils";
 import { nextMobileAttention, type MobileAttentionEntry } from "./attentionQueue";
 import { decisionLine } from "./decision";
 
@@ -130,7 +130,7 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
             <>
               {SEP}
               <ChatEngineMark file={item.file} />
-              <span className="min-w-0 truncate">{item.file.model}</span>
+              <span className="min-w-0 truncate">{fileModelLabel(item.file)}</span>
             </>
           ) : null}
         </span>

@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import { resetLegacyDocumentStoresForTests, setLegacyDocumentWriteHookForTests } from "@/lib/state/legacyDocumentStore";
+import { readStateImport } from "@/lib/state/sqliteStateStore";
+
 import {
   clearReplySuggestions,
   readReplySuggestions,
@@ -21,8 +25,8 @@ import {
 /*
  * The durable half of #1202: one reply-draft set per conversation, replaced by
  * the next call and cleared the moment the operator sends. Modelled on the
- * attention record — schema version, revision, atomic write under the shared
- * file transaction — because the pills have to survive a page reload and a
+ * attention record — schema version, revision, one serialized write (in
+ * `state.sqlite` since #1870 slice 5) — because the pills have to survive a page reload and a
  * viewer restart exactly like every other viewer-side record.
  */
 
@@ -35,6 +39,8 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = sandbox;
 });
 afterEach(() => {
+  setLegacyDocumentWriteHookForTests(null);
+  resetLegacyDocumentStoresForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -47,15 +53,15 @@ function record(conversationId: string, replies: { label: string; text: string }
 }
 
 /**
- * Every write to the record blocked, at the shared file transaction's own
- * queue: the lock enqueues under a directory beside the record, and a plain
- * file in its place refuses the mkdir. Answers the path to unblock with.
+ * Every write to the record blocked, at the store's own write seam: a busy
+ * database, a full disk and a read-only state dir all arrive there the same
+ * way. Answers the function that unblocks it.
  */
-function blockWrites(): string {
-  const queuePath = `${replySuggestionsFile()}.write-locks`;
-  fs.rmSync(queuePath, { recursive: true, force: true });
-  fs.writeFileSync(queuePath, "blocked", "utf8");
-  return queuePath;
+function blockWrites(): () => void {
+  setLegacyDocumentWriteHookForTests(() => {
+    throw new FileTransactionBusyError("reply suggestions are busy");
+  });
+  return () => setLegacyDocumentWriteHookForTests(null);
 }
 
 test("a recorded set is readable back for its conversation and nobody else's", () => {
@@ -165,10 +171,7 @@ test("only the recent message keys are kept: the record is a replay window, not 
 
 test("a retirement that cannot be written hides the answered set and lands on the next read", () => {
   record("conversation_a", [{ label: "yes", text: "Yes." }], "2026-08-26T10:00:00.000Z");
-  /* The shared file transaction queues under a directory beside the record; a
-     file sitting in its place is a write the store cannot take — a busy lock,
-     a full disk and a read-only state dir all arrive here the same way. */
-  const queuePath = blockWrites();
+  const unblock = blockWrites();
 
   const retirement = retireReplySuggestionsOnOperatorMessage("conversation_a", new Date("2026-08-26T10:02:00.000Z"), "blocked-1");
   expect(retirement).toEqual({ cleared: false, pending: true });
@@ -177,7 +180,7 @@ test("a retirement that cannot be written hides the answered set and lands on th
   expect(readReplySuggestions("conversation_a")).toBeNull();
   expect(readReplySuggestionsFile().sets).toHaveLength(1);
 
-  fs.rmSync(queuePath);
+  unblock();
   /* The retry rides the next read: the record catches up without anyone
      sending a second message. */
   expect(readReplySuggestions("conversation_a")).toBeNull();
@@ -186,9 +189,9 @@ test("a retirement that cannot be written hides the answered set and lands on th
 
 test("a set offered after a retirement the record could not write is still shown", () => {
   record("conversation_a", [{ label: "yes", text: "Yes." }], "2026-08-26T10:00:00.000Z");
-  const queuePath = blockWrites();
+  const unblock = blockWrites();
   expect(retireReplySuggestionsOnOperatorMessage("conversation_a", new Date("2026-08-26T10:02:00.000Z"), "blocked-2").pending).toBe(true);
-  fs.rmSync(queuePath);
+  unblock();
 
   /* Held retirements answer one question, not the conversation: the manager's
      next offer is not covered by them. */
@@ -201,14 +204,17 @@ test("retiring is quiet about a conversation with nothing to retire", () => {
   expect(retireReplySuggestionsOnOperatorMessage("", new Date())).toEqual({ cleared: false, pending: false });
 });
 
-test("the record survives on disk under the state dir", () => {
+test("the record survives in the state dir's database", () => {
   record("conversation_a", [{ label: "yes", text: "Yes." }]);
 
-  const onDisk = JSON.parse(fs.readFileSync(replySuggestionsFile(), "utf8")) as { schemaVersion: number; revision: number; sets: unknown[] };
+  /* #1870 slice 5: the record is the `reply_suggestions` collection of the
+     `state.sqlite` beside where the file lived. */
   expect(replySuggestionsFile().startsWith(sandbox)).toBe(true);
-  expect(onDisk.schemaVersion).toBe(1);
-  expect(onDisk.revision).toBe(1);
-  expect(onDisk.sets).toHaveLength(1);
+  expect(readStateImport(path.join(sandbox, "state.sqlite"), "reply_suggestions")).not.toBeNull();
+  const stored = readReplySuggestionsFile();
+  expect(stored.schemaVersion).toBe(1);
+  expect(stored.revision).toBe(1);
+  expect(stored.sets).toHaveLength(1);
 });
 
 test("labels and texts are trimmed, bounded and secret-redacted before anything durable exists", () => {
@@ -232,6 +238,7 @@ test("an empty, oversized or malformed set is refused with a named code and writ
     expect(() => record("conversation_a", replies)).toThrow(ReplySuggestionValidationError);
   }
   expect(fs.existsSync(replySuggestionsFile())).toBe(false);
+  expect(fs.existsSync(path.join(sandbox, "state.sqlite"))).toBe(false);
 });
 
 test("a label longer than the pill can carry is refused rather than silently truncated", () => {

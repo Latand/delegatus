@@ -319,6 +319,10 @@ export type PipelineStageAttempt = {
   decisionAnswerId?: string;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
   historical?: boolean;
+  /** A review-loop attempt kept, with `historical`, when its stage was
+      converted to a run stage: history of the legacy flow, never this stage's
+      own attempt, so its verdict passes nothing. */
+  legacyReview?: true;
   state: PipelineAttemptState;
   /** Durable custody across the pipeline/registry boundary. Rollback keeps draining these. */
   activation?: {
@@ -528,6 +532,36 @@ export type PipelineReviewGrant = {
   at: string;
 };
 
+/** Where a converted review's round limit came from: the caller's edit, the
+    limit recorded on the stage's review flow, or the limit every review flow
+    the pipeline engine created carried. */
+export type PipelineLegacyReviewLimitSource = "request" | "flow" | "default";
+
+/** One explicit conversion of a legacy review-loop stage into run stages,
+    append-only. `original` is the definition as it was, kept immutable so the
+    conversion can be reverted while nothing has run under it. */
+export type PipelineLegacyReviewConversion = {
+  clientRequestId: string;
+  expectedRevision: string;
+  stageId: string;
+  fixerStageId: string;
+  implementerStageId: string;
+  reviewLimit: number;
+  reviewLimitSource: PipelineLegacyReviewLimitSource;
+  original: {
+    stages: PipelineStage[];
+    run: PipelineStageRun;
+    cursor: Pipeline["cursor"];
+    /** Absent on conversions that did not rewrite it. */
+    stateDetail?: string | null;
+  };
+  /** `graphDigest` of the stages the conversion wrote; a revert requires it. */
+  convertedGraphDigest: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor;
+  at: string;
+  reverted?: { clientRequestId: string; actor: import("@/lib/pauseResumeActor").PauseResumeActor; at: string };
+};
+
 /** A stage host a close asked the runtime to kill without confirming that it
     died (#670). Durable, so the possible survivor stays addressable: the board
     keeps showing the closed lane until a later close settles it. */
@@ -733,6 +767,8 @@ export type Pipeline = {
   reviewPending?: PipelineReviewPending;
   /** Accepted continue-review grants, oldest first (#1938). */
   reviewGrants?: PipelineReviewGrant[];
+  /** Explicit legacy review-loop conversions, oldest first. */
+  legacyReviewConversions?: PipelineLegacyReviewConversion[];
   /** Accepted stage completion calls, oldest first, at most
       MAX_PIPELINE_STAGE_REPORTS (graph slice 2). */
   stageReports?: PipelineStageReportEntry[];
@@ -774,6 +810,9 @@ export const PIPELINE_ACTIONS = [
   "retry-stage",
   "resolve-decision",
   "continue-review",
+  "preview-legacy-review",
+  "convert-legacy-review",
+  "revert-legacy-review",
   "skip-stage",
   "override-stage",
   "link-task",
@@ -796,6 +835,12 @@ export type PatchPipelineRequest = {
   answer?: string;
   /** for continue-review (#1938): review rounds to add, 1..MAX_FAIL_EDGE_ROUNDS. */
   addRounds?: number;
+  /** for preview/convert-legacy-review: the finite review limit to convert to,
+      1..MAX_FAIL_EDGE_ROUNDS; absent, the stage's recorded limit is used. */
+  reviewLimit?: number;
+  /** for preview/convert-legacy-review: the run stage whose role the fixer
+      copies, when more than one run passes into the review. */
+  implementerStageId?: string;
   expectedOwner?: string;
   expectedEpoch?: number;
   acceptedSha?: string;
