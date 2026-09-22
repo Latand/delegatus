@@ -4,7 +4,8 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import { resetLegacyDocumentStoresForTests, setLegacyDocumentWriteHookForTests } from "@/lib/state/legacyDocumentStore";
 import { stateImportIncidents } from "@/lib/state/legacyImport";
 import { readStateCollectionRevision, readStateImport } from "@/lib/state/sqliteStateStore";
 
@@ -37,6 +38,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
+  setLegacyDocumentWriteHookForTests(null);
   resetLegacyDocumentStoresForTests();
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
@@ -140,6 +142,43 @@ describe("replay dedupe", () => {
     expect(replay.request.id).toBe("attention_seed");
     expect(readAttentionFile().requests).toHaveLength(1);
     expect(readAttentionFile().revision).toBe(57);
+  });
+});
+
+describe("busy", () => {
+  /* The attention routes answer FileTransactionBusyError as a retryable 503
+     and AttentionStoreError as an unavailable record, so a busy collection
+     must keep the busy class, as the file lock it replaced did. */
+  test("a busy collection reaches the caller as FileTransactionBusyError, never as AttentionStoreError", () => {
+    readAttentionFile();
+    setLegacyDocumentWriteHookForTests(() => {
+      throw new FileTransactionBusyError("attention state is busy");
+    });
+
+    let thrown: unknown = null;
+    try {
+      createAttentionRequest(input(), { now: T0, id: "attention_busy" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(FileTransactionBusyError);
+    expect(thrown).not.toBeInstanceOf(AttentionStoreError);
+  });
+
+  test("a release still waiting for promotion answers busy too", () => {
+    fs.writeFileSync(path.join(sandbox, "viewer-release.json"), JSON.stringify({
+      endpoint: "http://127.0.0.1:19074",
+      revision: "7".repeat(40),
+      hotStateBackend: "sqlite-v1",
+    }));
+    const port = process.env.PORT;
+    process.env.PORT = "19074";
+    try {
+      expect(() => createAttentionRequest(input(), { now: T0, id: "attention_early" })).toThrow(FileTransactionBusyError);
+    } finally {
+      if (port === undefined) delete process.env.PORT;
+      else process.env.PORT = port;
+    }
   });
 });
 

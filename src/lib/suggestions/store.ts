@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
-import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
 import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -183,7 +182,7 @@ const suggestionsStore = new LegacyDocumentStore<ReplySuggestionsFileV1>({
     return theirs.revision > ours.revision ? theirs : ours;
   },
   readLegacy: (filePath) => readLegacySuggestionsFile(filePath, new Date()),
-  error: (message) => new FileTransactionBusyError(message),
+  error: (message, cause) => new Error(message, { cause }),
 });
 
 /** The store's legacy import spec, for the import driver and its tests. */

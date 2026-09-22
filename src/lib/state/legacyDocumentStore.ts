@@ -54,7 +54,9 @@ export interface LegacyDocumentOptions<D> {
   mergeRow?(key: string, held: unknown, incoming: unknown): unknown;
   /** The store's read of a legacy file, for a release that may not import yet. */
   readLegacy(filePath: string): D;
-  /** The store's own error for a busy collection or an unpromoted release. */
+  /** The store's own error for a row that does not decode. A busy collection
+      and a release waiting for promotion are always `FileTransactionBusyError`,
+      which callers answer as retryable. */
   error(message: string, cause?: unknown): Error;
 }
 
@@ -238,25 +240,22 @@ export class LegacyDocumentStore<D> {
     try {
       return operation();
     } catch (error) {
-      if (error instanceof FileTransactionBusyError || isBusyError(error)) {
-        throw this.options.error(this.options.busyMessage, error);
-      }
+      if (error instanceof FileTransactionBusyError) throw error;
+      if (isBusyError(error)) throw new FileTransactionBusyError(this.options.busyMessage);
       throw error;
     }
   }
 
   private readMarker(database: string): StateImportRecord | null {
-    let busy: unknown = null;
     for (let attempt = 0; attempt < BUSY_ATTEMPTS; attempt += 1) {
       try {
         return readStateImport(database, this.options.collection);
       } catch (error) {
         if (!isBusyError(error)) throw error;
-        busy = error;
         Atomics.wait(BUSY_SLEEP, 0, 0, BUSY_WAIT_MS);
       }
     }
-    throw this.options.error(this.options.busyMessage, busy);
+    throw new FileTransactionBusyError(this.options.busyMessage);
   }
 
   private open(database: string): SqliteStateCollection<DocumentRow> {
@@ -284,7 +283,7 @@ export class LegacyDocumentStore<D> {
     if (!this.readMarker(database)) {
       if (!legacyImportAllowed(filePath)) {
         if (purpose === "read") return null;
-        throw this.options.error(`${this.options.collection} state is waiting for release promotion`);
+        throw new FileTransactionBusyError(`${this.options.collection} state is waiting for release promotion`);
       }
       this.importLegacy(filePath, { reconcile: lazyReconcileAllowed(filePath) });
     }

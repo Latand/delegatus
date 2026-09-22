@@ -1,7 +1,6 @@
 import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
-import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
 import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
 
@@ -270,7 +269,7 @@ const settingsStore = new LegacyDocumentStore<SeatTickSettingsFile>({
   }),
   toFile: (file) => file,
   readLegacy: readLegacySettingsFile,
-  error: (message) => new FileTransactionBusyError(message),
+  error: (message, cause) => new Error(message, { cause }),
 });
 
 /** The store's legacy import spec, for the import driver and its tests. */
