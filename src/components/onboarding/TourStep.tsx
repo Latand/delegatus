@@ -75,8 +75,10 @@ function StartBand({ projects, initialProject, claudeConnected, onCreated, phone
           <p data-tour-no-projects="" className="text-ui leading-[1.45] text-warning">{t("onboarding.tour.noProjects")}</p>
         ) : (
           <>
-            <div className={`flex gap-2 ${phone ? "flex-col" : "flex-wrap items-end"}`}>
-              <label className={`flex flex-col gap-1 ${phone ? "" : "min-w-[140px] max-w-[240px] flex-1"}`}>
+            <div className={`flex gap-2 ${phone ? "flex-col" : "items-end"}`}>
+              {/* One row on the desktop: the project select gives up width
+                  before the effort or Create does. */}
+              <label className={`flex flex-col gap-1 ${phone ? "" : "min-w-0 max-w-[240px] flex-1"}`}>
                 <span className="text-label font-semibold text-muted">{t("onboarding.tour.project")}</span>
                 <select
                   data-tour-project=""
@@ -88,7 +90,7 @@ function StartBand({ projects, initialProject, claudeConnected, onCreated, phone
                 </select>
               </label>
               {held ? null : (
-                <div className="flex flex-col gap-1">
+                <div className="flex shrink-0 flex-col gap-1">
                   <span id="tour-effort-label" className="text-label font-semibold text-muted">{t("onboarding.tour.effort")}</span>
                   <div role="radiogroup" aria-labelledby="tour-effort-label" className="flex rounded-[8px] border border-border bg-card p-0.5">
                     {(["high", "medium"] as const).map((value) => (
@@ -117,7 +119,7 @@ function StartBand({ projects, initialProject, claudeConnected, onCreated, phone
                   data-tour-create=""
                   disabled={!claudeConnected}
                   onClick={create}
-                  className={`${control} whitespace-nowrap bg-accent px-3.5 text-white hover:opacity-90 disabled:opacity-50`}
+                  className={`${control} shrink-0 whitespace-nowrap bg-accent px-3.5 text-white hover:opacity-90 disabled:opacity-50`}
                 >
                   {t("onboarding.tour.create")}
                 </button>
