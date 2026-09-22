@@ -128,6 +128,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   /* The phone state on screen, for who holds the one filled button. */
   const [phoneState, setPhoneState] = useState<PhoneStepOutcome | null>(null);
   const tourRef = useRef<TourHandle>(null);
+  const [tourAtEnd, setTourAtEnd] = useState(false);
   /* Every step the guide showed; finishing marks the ones never left by
      Continue as done, since the user has seen them. */
   const visited = useRef(new Set<OnboardingStepId>());
@@ -267,6 +268,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
       claudeConnected={statuses.claude.connected}
       checkMinutes={checkMinutes}
       onCreated={tourCreated}
+      onAtEnd={setTourAtEnd}
     />
   ) : (
     <EnginesStep claude={claude} codex={codex} cli={cli} now={now} onRecheck={recheckAll} />
@@ -305,12 +307,12 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   /* The Check step's rows open in place with a failure; the dialog takes the height it needs, up to the viewport. */
   const checkTall = view === "guide" && (current === "check" || current === "tour");
   /* One filled button at a time: while a step's own action is the next thing
-     to press (Run the check, Turn on phone access, Create the orchestrator),
+     to press (Run the check, Turn on phone access, the tour's draft button),
      Continue steps back to a border. On the phone Continue turns the tour's
-     pages, so it keeps its fill there. */
+     pages, so it keeps its fill until the last page, where the band is. */
   const stepOwnsPrimary = (current === "check" && checkOwnsPrimary)
     || (current === "phone" && (phoneState === "ready" || phoneState === "serving-other"))
-    || (current === "tour" && !isMobile);
+    || (current === "tour" && (!isMobile || tourAtEnd));
   const counter = t("onboarding.stepCounter", { n: step + 1, total: STEPS.length });
   const footerButtons = view !== "guide" ? null : (
     <>

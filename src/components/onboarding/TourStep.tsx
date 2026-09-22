@@ -13,9 +13,10 @@ import { BoardSchematic, NeedsYouSchematic, PipelineSchematic, SeatSchematic, St
  * Step 5, Tour (#1876 slice 3, design §2.4): one screen that says what Agent
  * Log Viewer is, in the product's own words, and ends on the first action.
  * Four cards and a "Start here" band on the desktop; a horizontal pager of
- * five pages on the phone. The band's Create opens the chosen project's
- * orchestrator draft on Claude Opus at the chosen effort and closes the guide;
- * it spawns nothing, since the draft's own Confirm is the paid action.
+ * five pages on the phone. The band's button opens the chosen project's
+ * orchestrator draft on Claude Opus at the chosen effort and closes the guide,
+ * and says so: it spawns nothing, since the draft's own Create is the paid
+ * action.
  */
 
 export type TourProject = { project: string; name: string };
@@ -139,7 +140,7 @@ function StartBand({ projects, initialProject, claudeConnected, onCreated, phone
   );
 }
 
-export function TourStep({ projects, initialProject, claudeConnected, checkMinutes, onCreated, handle }: {
+export function TourStep({ projects, initialProject, claudeConnected, checkMinutes, onCreated, onAtEnd, handle }: {
   projects: readonly TourProject[];
   /** The project the guide was opened over, preselected when listed. */
   initialProject: string | null;
@@ -148,6 +149,9 @@ export function TourStep({ projects, initialProject, claudeConnected, checkMinut
   checkMinutes: number;
   /** Create or Open it handed the operator to the draft: the guide closes. */
   onCreated: () => void;
+  /** Whether the phone pager shows its last page, where Continue stops
+      turning pages and the band's button is the next press. */
+  onAtEnd?: (atEnd: boolean) => void;
   handle?: Ref<TourHandle>;
 }) {
   const { t } = useLocale();
@@ -156,6 +160,10 @@ export function TourStep({ projects, initialProject, claudeConnected, checkMinut
   const [page, setPage] = useState(0);
   const [pageHeight, setPageHeight] = useState<number | null>(null);
   const total = CARDS.length + 1;
+  const atEnd = phone && page >= total - 1;
+  const onAtEndRef = useRef(onAtEnd);
+  useEffect(() => { onAtEndRef.current = onAtEnd; });
+  useEffect(() => { onAtEndRef.current?.(atEnd); }, [atEnd]);
 
   /* The pager is as tall as the page on screen, so a short card is not
      followed by the empty height of the tallest one. */

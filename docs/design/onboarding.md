@@ -695,23 +695,26 @@ Viewer already lists. README keeps the depth and the tour links to it.
 One screen. Four cards in a row on desktop and one "Start here" band under
 them; on the phone a horizontal snap pager whose last page is the band. Each
 card: a 16:10 schematic drawn with the app's own tokens (inline SVG, no
-screenshots, no animation), a title, at most four lines of body. No overlays
+screenshots, no animation), a title, at most four lines of body. The bodies
+below are held to 150 characters in both locales (`TourStep.dom.test.tsx`),
+which is what keeps the Ukrainian tour, links included, inside one screen at
+1280. No overlays
 on the live UI, no coach marks. Cards 1–4 are static and work offline; card
 5 reads the project list the rail already holds.
 
 | # | Title EN / UK | Body EN | Body UK |
 |---|---|---|---|
-| 1 | An orchestrator for coding agents / Оркестратор для агентів-розробників | Agent Log Viewer runs coding agents on this computer for you. The work is tasks on each project's board (issues, features, bugs). Agents, pipelines and reviews attach to a task, so the board shows where every piece of work stands. | Agent Log Viewer запускає агентів-розробників на цьому комп'ютері замість вас. Робота — це завдання на дошці кожного проєкту (issues, функції, помилки). До завдання прикріплюються агенти, конвеєри й рев'ю, тож дошка показує, де перебуває кожна частина роботи. |
-| 2 | The orchestrator seat / Місце оркестратора | One agent per project holds the seat. You tell it what to ship; it writes the tasks, opens pipelines, starts and watches the agents, and brings you what needs a decision. It sleeps between steps: the Viewer checks every {check} minutes and wakes it when a stage finishes or something stalls, and you can always just write to it. | Один агент на проєкт займає це місце. Ви кажете, що треба зробити; він пише завдання, відкриває конвеєри, запускає й наглядає за агентами та приносить вам те, що потребує рішення. Між кроками він спить: Viewer перевіряє кожні {check} хвилин і будить його, коли етап завершився або щось застрягло, а ви завжди можете просто йому написати. |
-| 3 | Pipelines and review rounds / Конвеєри й раунди рев'ю | A pipeline takes one task through stages in its own worktree: build, review, verify. Each stage is a fresh agent that ends with a verdict. Pass moves on. Fail sends the work back to the builder for another round, within a budget. Needs-decision stops and asks you. | Конвеєр проводить одне завдання через етапи у власному worktree: розробка, рев'ю, перевірка. Кожен етап — новий агент, що завершується вердиктом. «Пройдено» рухає далі. «Не пройдено» повертає роботу розробнику на ще один раунд, у межах бюджету. «Потрібне рішення» зупиняє й питає вас. |
-| 4 | Where things wait for you / Де щось чекає на вас | "Needs you" in the corner counts everything waiting for your answer: a stage that needs a decision, a review budget that ran out, an agent's question. Press it to jump there. Everything else runs without you. | «Потрібні ви» в кутку рахує все, що чекає на вашу відповідь: етап, якому потрібне рішення, вичерпаний бюджет рев'ю, запитання агента. Натисніть, щоб перейти. Решта працює без вас. |
-| 5 | Start here: the first orchestrator / Почніть тут: перший оркестратор | Create the first orchestrator in a project. Pick one the Viewer already lists, choose the effort, and press Create: the seat opens with its instructions already written, and you tell it what to ship. | Створіть першого оркестратора в проєкті. Виберіть той, що Viewer уже показує, оберіть рівень зусилля й натисніть «Створити»: місце відкриється з готовими інструкціями, і ви скажете йому, що зробити. |
+| 1 | An orchestrator for coding agents / Оркестратор для агентів-розробників | It runs coding agents on this computer. The work is tasks on each project's board; agents, pipelines and reviews attach to a task. | Запускає агентів-розробників на цьому комп'ютері. Робота — це завдання на дошці проєкту; агенти, конвеєри й рев'ю прикріплюються до завдання. |
+| 2 | The orchestrator seat / Місце оркестратора | One agent per project runs tasks, pipelines and agents. It sleeps; the Viewer wakes it every {check} minutes, when a stage ends, or when you write. | Один агент на проєкт веде завдання, конвеєри й агентів. Між кроками він спить; Viewer будить його кожні {check} хв, коли етап завершився або ви написали. |
+| 3 | Pipelines and review rounds / Конвеєри й раунди рев'ю | A pipeline takes a task through stages: build, review, verify. Fail sends it back for another round; needs-decision stops and asks you. | Конвеєр веде завдання етапами: розробка, рев'ю, перевірка. «Не пройдено» повертає на ще один раунд; «Потрібне рішення» питає вас. |
+| 4 | Where things wait for you / Де щось чекає на вас | "Needs you" in the corner counts what waits for your answer. Press it to jump there; everything else runs without you. | «Потрібні ви» в кутку рахує все, що чекає на вашу відповідь. Натисніть, щоб перейти; решта працює без вас. |
+| 5 | Start here: the first orchestrator / Почніть тут: перший оркестратор | Pick a project and the effort. The seat's draft opens with its instructions written; its own Create starts the orchestrator. | Виберіть проєкт і рівень зусилля. Відкриється чернетка місця з готовими інструкціями; її власне «Створити» запускає оркестратора. |
 
 Card 2's `{check}` is `DEFAULT_SEAT_TICK_POLICY.checkIntervalMs`
 (`seatTick.ts:129`) at render, as before; the hourly and 15-minute bounds
 (`seatTick.ts:105, 126`) are left to the README, since the card's job is the
-mechanism, not the schedule. Card 3 says "within a budget" because
-`maxRounds` on the fail edge is that budget (`types.ts:82`). Card 4 uses the
+mechanism, not the schedule. Card 3 leaves the round budget
+(`maxRounds` on the fail edge, `types.ts:82`) to the README. Card 4 uses the
 attention island's own word (`attention.needsYou`), so the word on the card
 is the word on the screen.
 
@@ -730,7 +733,7 @@ Links, under the cards, 12 px `text-secondary` with the arrow glyph:
 | Select, no projects | No projects yet. Open a folder with a repository first: the board's "Create a project". | Проєктів ще немає. Спершу відкрийте теку з репозиторієм: «Створити проєкт» на дошці. |
 | Effort segment | High (recommended) · Medium | High (рекомендовано) · Medium |
 | Effort note | Opus at high effort thinks longer per step; medium is cheaper and fine for small projects. | Opus на high думає довше на кожному кроці; medium дешевший і достатній для невеликих проєктів. |
-| Button | Create the orchestrator | Створити оркестратора |
+| Button | Open the orchestrator draft | Відкрити чернетку оркестратора |
 | Already has one | {project} already has an orchestrator. Open it | У проєкту {project} уже є оркестратор. Відкрити |
 | Claude not connected | The orchestrator runs on Claude, which is not connected (step 1). | Оркестратор працює на Claude, який не підключено (крок 1). |
 
@@ -1099,7 +1102,7 @@ sentence, the tour with and without projects, the engines step with three
 accounts on one engine, and the two new menu rows. Measured in the live DOM
 at 1440, 1280 and 390: no horizontal overflow, the longest Ukrainian
 controls unclipped («Увімкнути доступ із телефона», «Перенаправити на
-Viewer», «Перевірити диктування», «Створити оркестратора»), the four tour
+Viewer», «Перевірити диктування», «Відкрити чернетку оркестратора»), the four tour
 cards in one row at 1280, and 44 px targets on the phone.
 
 ## 4. The agent-mapping model

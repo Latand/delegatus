@@ -68,8 +68,8 @@ test("four cards say what the product is, in its own words, each with a picture"
   expect(cards.every((element) => element.querySelector("svg"))).toBe(true);
   expect(cards[0]!.textContent).toContain("An orchestrator for coding agents");
   expect(cards[0]!.textContent).toContain("The work is tasks on each project's board");
-  expect(cards[1]!.textContent).toContain("the Viewer checks every 5 minutes and wakes it");
-  expect(cards[2]!.textContent).toContain("Fail sends the work back to the builder for another round, within a budget.");
+  expect(cards[1]!.textContent).toContain("the Viewer wakes it every 5 minutes");
+  expect(cards[2]!.textContent).toContain("Fail sends it back for another round");
   /* The corner's own word, so the card and the screen say the same thing. */
   expect(cards[3]!.textContent).toContain("“Needs you” in the corner");
   expect(host.querySelector("[data-tour-start] svg")).not.toBeNull();
@@ -93,6 +93,8 @@ test("Create opens the chosen project's draft on Opus at the chosen effort, and 
     /* High is the recommended default. */
     expect(host.querySelector("[data-tour-effort=high]")?.getAttribute("aria-checked")).toBe("true");
     await click(host.querySelector("[data-tour-effort=medium]"));
+    /* The press opens the draft; the draft's own Create is the paid action. */
+    expect(host.querySelector("[data-tour-create]")?.textContent).toBe("Open the orchestrator draft");
     await click(host.querySelector("[data-tour-create]"));
 
     expect(requests).toEqual([{ project: "repo-beta", launch: { engine: "claude", model: "opus", effort: "medium" } }]);
@@ -134,4 +136,17 @@ test("with no projects the band says where to start, and without Claude it says 
   host = await mount({ claudeConnected: false });
   expect(host.textContent).toContain("The orchestrator runs on Claude, which is not connected (step 1).");
   expect(host.querySelector<HTMLButtonElement>("[data-tour-create]")?.disabled).toBe(true);
+});
+
+test("each card body stays short enough for one screen, in English and in Ukrainian", async () => {
+  const { en } = await import("@/lib/i18n/en");
+  const { uk } = await import("@/lib/i18n/uk");
+  /* Design §2.4 bounds a body at four lines of a narrow column; 150
+     characters is what the Ukrainian 1280 layout holds above the links. */
+  for (const dict of [en, uk]) {
+    for (const id of ["1", "2", "3", "4", "5"] as const) {
+      const text = String(dict[`onboarding.tour.card${id}.body` as keyof typeof en]).replace("{check}", "5").replace("{needsYou}", "Потрібні ви");
+      expect({ id, length: text.length <= 150 }).toEqual({ id, length: true });
+    }
+  }
 });
