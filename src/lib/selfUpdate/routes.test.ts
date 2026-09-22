@@ -363,6 +363,38 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect(s.installed.version).toBe("1.0.0");
   });
 
+  test("a recorded deployment the host no longer knows stops blocking the next update", async () => {
+    const dir = mkdtempSync(join(root, "managed-lost-"));
+    let clock = Date.now();
+    let known = true;
+    phase = null;
+    setDeploymentRuntimeForTests(async (request) => { phase = "building"; return { state: "accepted", deploymentId: `deployment-${clock}`, revision: request.revision!, replayed: false }; });
+    setSelfUpdateServiceForTests(new SelfUpdateService(baseDeps(dir, {
+      now: () => clock,
+      mode: async () => ({ mode: "managed", reason: null, record: null }),
+      releaseTarget: () => ({ revision: firstSha }),
+      prepareCheckRepo: () => prepareManagedCheckRepo(join(dir, "check.git"), join(dir, "no-mirror", "objects")),
+      /* The host answers; after its journal was reset it knows no such deployment. */
+      readDeployment: async (id) => (known ? status(id) : null),
+      hostHealth: async () => ({ pid: 4242, startIdentity: "1", hostEpoch: 3 }),
+    })));
+    await postCheck(post("/check"));
+    await until((next) => next.check.state === "update-available");
+    await postUpdate(post("/update", { key: "press-1" }));
+    expect((await snapshot()).busy).toBe("update");
+    known = false;
+    await snapshot();
+    clock += 60_000;
+    expect((await snapshot()).busy).toBe("update");
+    clock += 61_000;
+    const s = await snapshot();
+    expect(s.busy).toBeNull();
+    expect(s.update.state).toBe("failed");
+    expect(s.update.steps.find((step) => step.state === "failed")?.failure).toEqual({ kind: "deployment-lost" });
+    known = true;
+    expect((await postUpdate(post("/update", { key: "press-2", retry: true }))).status).toBe(202);
+  });
+
   test("a deployment is followed while nobody has the surface open", async () => {
     const service = managedService();
     setSelfUpdateServiceForTests(service);

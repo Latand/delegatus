@@ -33,6 +33,12 @@ export interface ManagedRecord {
       failure or rollback is reported at it. */
   lastStep: ManagedStepName | null;
   finishedAt: string | null;
+  /** Since when the host has answered "no such deployment" (a reset journal,
+      another install); null while it knows it. */
+  missingSince?: string | null;
+  /** The host stopped knowing this deployment long enough that it is no
+      longer waited for. */
+  lost?: boolean;
   phase: ViewerDeploymentPhase | null;
   error: string | null;
   servingProgress: string | null;
@@ -106,9 +112,24 @@ function later(a: ManagedStepName | null, b: ManagedStepName): ManagedStepName {
   return a && MANAGED_STEPS.indexOf(a) > MANAGED_STEPS.indexOf(b) ? a : b;
 }
 
+/** How long the host may answer "no such deployment" before the surface
+    stops waiting for it. A host that does not answer at all is not this: it
+    is being replaced, and the deployment is waited for. */
+export const LOST_AFTER_MS = 120_000;
+
+/** The host answered that it knows no such deployment. */
+export function observeMissing(record: ManagedRecord, now: number): ManagedRecord {
+  if (!managedActive(record)) return record;
+  const since = record.missingSince ? Date.parse(record.missingSince) : null;
+  if (since === null) return { ...record, missingSince: new Date(now).toISOString() };
+  if (now - since < LOST_AFTER_MS) return record;
+  return { ...record, lost: true, phase: "failed", finishedAt: new Date(now).toISOString() };
+}
+
 /** Folds one read of the deployment into the record. */
 export function observeDeployment(record: ManagedRecord, status: ViewerDeploymentStatus | null): ManagedRecord {
   if (!status) return record;
+  if (record.missingSince) record = { ...record, missingSince: null };
   const step = stepForPhase(status.phase);
   const observed = { ...record.observed };
   if (step && !observed[step]) observed[step] = status.updatedAt;
@@ -163,6 +184,7 @@ export function managedUpdateState(record: ManagedRecord, now: number): UpdateSt
         startedAt,
         durationMs: start !== null ? Math.max(0, end - start) : null,
         tail,
+        failure: record.lost ? { kind: "deployment-lost" } : null,
       };
     }
   });

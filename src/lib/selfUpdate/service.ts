@@ -22,6 +22,7 @@ import {
   managedActive,
   managedUpdateState,
   observeDeployment,
+  observeMissing,
   readManagedRecord,
   requestManagedUpdate,
   writeManagedRecord,
@@ -420,7 +421,7 @@ export class SelfUpdateService {
     if (!managedActive(this.managed)) return;
     try {
       const status = await this.deps.readDeployment(this.managed!.deploymentId);
-      const next = observeDeployment(this.managed!, status);
+      const next = status ? observeDeployment(this.managed!, status) : observeMissing(this.managed!, this.deps.now());
       if (JSON.stringify(next) !== JSON.stringify(this.managed)) {
         this.managed = next;
         writeManagedRecord(this.managedFile, next);

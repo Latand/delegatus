@@ -78,6 +78,8 @@ export type StepFailure =
   | { kind: "head-mismatch"; head: string; expected: string }
   | { kind: "build-id-missing" }
   | { kind: "interrupted" }
+  /** The runtime host kept answering that it knows no such deployment. */
+  | { kind: "deployment-lost" }
   | { kind: "exit"; code: number }
   | { kind: "error"; text: string };
 

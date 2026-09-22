@@ -4097,6 +4097,7 @@ export const en = {
   "selfUpdate.stepFailure.headMismatch": "The release directory is at {head}; {expected} was expected.",
   "selfUpdate.stepFailure.buildIdMissing": "The build left no .next/BUILD_ID.",
   "selfUpdate.stepFailure.interrupted": "The Viewer restarted while this step ran.",
+  "selfUpdate.stepFailure.deploymentLost": "The runtime host no longer knows this deployment, so the surface stopped waiting for it. The header shows what runs now.",
   "selfUpdate.unit.seconds": "{value} s",
   "selfUpdate.unit.minutesSeconds": "{m} m {s} s",
   "selfUpdate.unit.hoursMinutes": "{h} h {m} m",

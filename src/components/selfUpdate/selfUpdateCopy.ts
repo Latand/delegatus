@@ -189,6 +189,7 @@ export function stepFailureText(step: Step, t: TFunction): string | null {
     case "head-mismatch": return t("selfUpdate.stepFailure.headMismatch", { head: failure.head, expected: failure.expected });
     case "build-id-missing": return t("selfUpdate.stepFailure.buildIdMissing");
     case "interrupted": return t("selfUpdate.stepFailure.interrupted");
+    case "deployment-lost": return t("selfUpdate.stepFailure.deploymentLost");
     case "error": return failure.text;
   }
 }

@@ -7,7 +7,9 @@ import {
   managedActive,
   managedIdempotencyKey,
   managedUpdateState,
+  LOST_AFTER_MS,
   observeDeployment,
+  observeMissing,
   requestManagedUpdate,
   stepForPhase,
   stepReachedBy,
@@ -147,6 +149,24 @@ describe("phases → steps", () => {
     record = observeDeployment(record, status("candidate-health", T0 + 5_000));
     record = observeDeployment(record, status("rolled-back", T0 + 9_000));
     expect(managedUpdateState(record, T0 + 10_000).steps.find((step) => step.state === "failed")?.name).toBe("health");
+  });
+
+  test("a deployment the host keeps not knowing stops being waited for after a while", async () => {
+    let { record } = await requested();
+    record = observeDeployment(record, status("building", T0 + 1_000));
+    record = observeMissing(record, T0 + 10_000);
+    expect(managedActive(record)).toBe(true);
+    record = observeMissing(record, T0 + 10_000 + LOST_AFTER_MS - 1);
+    expect(managedActive(record)).toBe(true);
+    /* The host knows it again: the clock starts over. */
+    record = observeDeployment(record, status("building", T0 + 20_000));
+    expect(record.missingSince).toBeNull();
+    record = observeMissing(record, T0 + 30_000);
+    record = observeMissing(record, T0 + 30_000 + LOST_AFTER_MS);
+    expect(managedActive(record)).toBe(false);
+    const update = managedUpdateState(record, T0 + 200_000);
+    expect(update.state).toBe("failed");
+    expect(update.steps.find((step) => step.state === "failed")).toMatchObject({ name: "image", failure: { kind: "deployment-lost" } });
   });
 
   test("no read yet: the deployment is admitted and running", async () => {

@@ -4000,6 +4000,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.stepFailure.headMismatch": "Тека релізу на {head}, а очікувалася {expected}.",
   "selfUpdate.stepFailure.buildIdMissing": "Збірка не залишила .next/BUILD_ID.",
   "selfUpdate.stepFailure.interrupted": "Viewer перезапустився, поки виконувався цей крок.",
+  "selfUpdate.stepFailure.deploymentLost": "Runtime host більше не знає цього розгортання, тож сторінка перестала на нього чекати. Що працює зараз, видно в заголовку.",
   "selfUpdate.unit.seconds": "{value} с",
   "selfUpdate.unit.minutesSeconds": "{m} хв {s} с",
   "selfUpdate.unit.hoursMinutes": "{h} год {m} хв",

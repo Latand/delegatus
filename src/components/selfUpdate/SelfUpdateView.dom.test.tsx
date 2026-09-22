@@ -453,6 +453,13 @@ describe("the rest of the surface", () => {
     expect(text(el.querySelector("[data-cause]"))).toBe("Віддалена гілка змінилася після перевірки (a1b2c3d → f7e6ce4). Перевірте знову.");
   });
 
+  test("a deployment the host no longer knows says so, and offers to deploy again", () => {
+    const lost = MANAGED_STEPS.map((name, at) => ({ ...pendingSteps(MANAGED_STEPS)[at]!, state: at === 0 ? "done" as const : at === 1 ? "failed" as const : "pending" as const, failure: at === 1 ? { kind: "deployment-lost" as const } : null }));
+    const el = render(snapshot({ mode: "managed", ...available(), update: { ...idleUpdate(MANAGED_STEPS), state: "failed", target: NEW, targetShort: "a1b2c3d", steps: lost, startedAt: new Date(NOW - 200_000).toISOString(), finishedAt: new Date(NOW).toISOString() } }));
+    expect(text(el.querySelector("[data-cause]"))).toBe("The runtime host no longer knows this deployment, so the surface stopped waiting for it. The header shows what runs now.");
+    expect(text(button(el, "retry"))).toBe("Deploy again");
+  });
+
   test("Ukrainian", () => {
     setLocale("uk");
     const el = render(snapshot(available()));
