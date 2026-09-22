@@ -1475,11 +1475,13 @@ async function captureOnboarding(): Promise<void> {
                 const block = document.querySelector("[data-orchestrator-launch-choices]");
                 const scroller = block?.closest(".overflow-y-auto");
                 if (!block || !scroller) return null;
-                const a = block.getBoundingClientRect();
+                /* The last row, Reasoning, holds the model and effort the tour chose. */
+                const reasoning = block.firstElementChild?.lastElementChild ?? block;
+                const a = reasoning.getBoundingClientRect();
                 const b = scroller.getBoundingClientRect();
                 return { inView: a.top >= b.top - 1 && a.bottom <= b.bottom + 1, top: a.top, bottom: a.bottom, viewTop: b.top, viewBottom: b.bottom };
               });
-              must(choices?.inView === true, `${tag}: the draft's launch choices are out of view after the hand-off (${JSON.stringify(choices)})`);
+              must(choices?.inView === true, `${tag}: the draft's Reasoning row is out of view after the hand-off (${JSON.stringify(choices)})`);
             }
             const prefill = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([key]) => key.startsWith("llvOrchestratorDraft:"))));
             const values = Object.entries(prefill).map(([key, value]) => `${key.split(":").at(-1)}=${value}`).sort();

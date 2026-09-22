@@ -100,13 +100,13 @@ test("the tour's hand-off scrolls the draft's launch choices into view, once and
   requestOrchestratorDraft({ project: "repo-delta", launch: { engine: "claude", model: "opus", effort: "high" } });
   const scrolled = await mountRevealed("repo-delta");
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
-  expect(scrolled).toEqual(["nearest"]);
+  expect(scrolled).toEqual(["end"]);
   await act(async () => requestOrchestratorDraft({ project: "repo-other", launch: { engine: "claude", model: "opus", effort: "high" } }));
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
-  expect(scrolled).toEqual(["nearest"]);
+  expect(scrolled).toEqual(["end"]);
   await act(async () => requestOrchestratorDraft({ project: "repo-delta", launch: { engine: "claude", model: "opus", effort: "medium" } }));
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
-  expect(scrolled).toEqual(["nearest", "nearest"]);
+  expect(scrolled).toEqual(["end", "end"]);
 });
 
 test("a draft opened without a hand-off does not scroll", async () => {

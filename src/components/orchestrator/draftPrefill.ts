@@ -88,12 +88,14 @@ export function useOrchestratorDraftPrefill(project: string, launch: Pick<AgentL
 export function useOrchestratorDraftReveal(project: string, target: RefObject<HTMLElement | null>): void {
   useEffect(() => {
     let frame: ReturnType<typeof setTimeout> | null = null;
-    /* After the prefill's state has rendered, so the rows are the ones shown. */
+    /* After the prefill's state has rendered, so the rows are the ones shown.
+       Aligned by the end: the dock's body can be shorter than the choices, and
+       the last row, Reasoning, carries the model and effort the tour chose. */
     const reveal = () => {
       if (frame !== null) clearTimeout(frame);
       frame = setTimeout(() => {
         frame = null;
-        target.current?.scrollIntoView({ block: "nearest" });
+        target.current?.scrollIntoView({ block: "end" });
       }, 0);
     };
     if (pendingReveal === project) {
