@@ -96,6 +96,7 @@ const MODE_TTL_MS = 30_000;
 const PENDING_RESTART_MS = 60_000;
 const SAVE_DELAY_MS = 1_000;
 const DEPLOYMENT_WATCH_MS = 1_000;
+const UNDESCRIBABLE_HOLD_MS = 30_000;
 
 interface Persisted { slice: CheckSlice; update: UpdateState | null }
 
@@ -122,6 +123,7 @@ export class SelfUpdateService {
   private decision: { value: ModeDecision; at: number } | null = null;
   private pendingRestart: { role: LauncherRole; requestId: string; at: number } | null = null;
   private readonly described = new Map<string, Revision>();
+  private readonly undescribable = new Map<string, number>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private deploymentWatch: ReturnType<typeof setInterval> | null = null;
 
@@ -241,6 +243,7 @@ export class SelfUpdateService {
         this.slice = applyCheck(this.slice, failed, new Date(this.deps.now()), this.deps.pollMinutes);
       } finally {
         this.checking = null;
+        this.undescribable.clear();
         this.schedulePoll();
         this.saveNow();
         this.changes.emit();
@@ -382,15 +385,24 @@ export class SelfUpdateService {
 
   /* ---------- the snapshot ---------- */
 
+  /* A revision the repository cannot describe yet (the managed check
+     repository before its first fetch) is not asked about again on every
+     snapshot: the answer is held for a while, and a finished check, which
+     may have brought the objects, clears it. */
   private async describe(repo: string, sha: string): Promise<Revision> {
     const known = this.described.get(sha);
     if (known) return known;
+    const unknown = { ...UNKNOWN_REVISION, sha, short: shortSha(sha) };
+    const heldUntil = this.undescribable.get(sha);
+    if (heldUntil !== undefined && this.deps.now() < heldUntil) return unknown;
     try {
       const revision = await this.deps.describe(repo, sha);
       this.described.set(sha, revision);
+      this.undescribable.delete(sha);
       return revision;
     } catch {
-      return { ...UNKNOWN_REVISION, sha, short: shortSha(sha) };
+      this.undescribable.set(sha, this.deps.now() + UNDESCRIBABLE_HOLD_MS);
+      return unknown;
     }
   }
 

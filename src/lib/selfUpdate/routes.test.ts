@@ -327,6 +327,42 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect(s.update.state).toBe("done");
   });
 
+  test("a revision the check repository cannot describe yet is not asked about on every snapshot", async () => {
+    const dir = mkdtempSync(join(root, "managed-describe-"));
+    let clock = Date.now();
+    const asked: string[] = [];
+    let ready = false;
+    setSelfUpdateServiceForTests(new SelfUpdateService(baseDeps(dir, {
+      now: () => clock,
+      mode: async () => ({ mode: "managed", reason: null, record: null }),
+      releaseTarget: () => ({ revision: firstSha }),
+      prepareCheckRepo: () => prepareManagedCheckRepo(join(dir, "check.git"), join(dir, "no-mirror", "objects")),
+      describe: async (repo, sha) => {
+        asked.push(sha);
+        if (!ready) throw new Error("fatal: bad object");
+        return readRevision(checkout, sha);
+      },
+      check: async () => ({ ok: false, error: "fixture", installed: null }),
+      hostHealth: async () => ({ pid: 4242, startIdentity: "1", hostEpoch: 3 }),
+    })));
+    /* Read by an agent, which starts no check (a finished check clears the hold). */
+    setCallerConversationResolverForTests(() => "conversation_some_worker");
+    const other = { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) };
+    for (let index = 0; index < 5; index += 1) await snapshot(other);
+    expect(asked).toEqual([firstSha]);
+    /* Held for a while, then asked again. */
+    clock += 31_000;
+    await snapshot(other);
+    expect(asked).toHaveLength(2);
+    /* A finished check may have brought the objects: it clears the hold. */
+    setCallerConversationResolverForTests(null);
+    ready = true;
+    await postCheck(post("/check"));
+    const s = await until((next) => next.check.state === "failed");
+    expect(asked).toHaveLength(3);
+    expect(s.installed.version).toBe("1.0.0");
+  });
+
   test("a deployment is followed while nobody has the surface open", async () => {
     const service = managedService();
     setSelfUpdateServiceForTests(service);
