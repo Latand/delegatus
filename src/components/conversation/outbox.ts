@@ -316,6 +316,179 @@ export function outboxReceiptPatch(
   return Object.entries(patch).some(([key, value]) => JSON.stringify(entry[key as keyof OutboxEntry]) !== JSON.stringify(value)) ? patch : null;
 }
 
+/** How long an operation may sit unsettled before the composer reads it back by id. */
+export const OPERATION_RECONCILE_GRACE_MS = 15_000;
+/** The shortest spacing between two reads of the same operation. */
+export const OPERATION_RECONCILE_INTERVAL_MS = 30_000;
+/** Reads one pass may start, oldest operation first. */
+export const OPERATION_RECONCILE_BATCH = 8;
+/** A receipt the tail still carries in a moving state is read back once it is
+    older than this: the server's send settlement window, past which a read
+    ends a send whose executor never settled it. */
+export const OPERATION_RECONCILE_MOVING_AFTER_MS = 10 * 60_000;
+const MOVING_RECEIPT_STATUSES: ReadonlySet<ReceiptStatus> = new Set<ReceiptStatus>(["pending", "queued", "delivering", "applying"]);
+
+/** One operation the composer shows as unsettled, with the receipt it holds for it. */
+export interface OperationReconciliation {
+  operationId: string;
+  idempotencyKey: string;
+  original: RuntimeReceipt;
+}
+
+/**
+ * The operations this composer shows as unsettled and has to read back BY ID.
+ *
+ * The session's receipt tail is short, so a busy conversation evicts the
+ * receipt of an older message long before that message is answered for.
+ * Once it is gone, nothing in the tail can ever move the row: a reload, a
+ * re-host or Check status only reloads the same tail. The operation's own
+ * record still answers under the original id (`GET /api/runtime/operations/:id`),
+ * and past its settlement deadline that read is also what ends a send its
+ * executor never settled. The read sends nothing.
+ *
+ * A row counts when it is unsettled — an outbox entry still `delivering`
+ * (uncertain included), or a shown receipt that neither arrived nor ended
+ * provably — and the live tail cannot move it: the tail no longer carries the
+ * operation at all, or carries it in a moving state older than the server's
+ * settlement window, which only a read can end once its executor is gone. A
+ * receipt the tail still carries otherwise is left to the stream.
+ * Local placeholders carry a `:` and name no server operation, which the
+ * route refuses anyway. `readDue` spaces the reads of one operation (see
+ * {@link operationReadDue}); nothing is read before the grace period, and one
+ * pass reads a bounded batch.
+ */
+export function operationsToReconcile(
+  queue: readonly OutboxEntry[],
+  receipts: readonly RuntimeReceipt[],
+  tail: readonly RuntimeReceipt[],
+  readDue: (operationId: string) => boolean,
+  nowMs: number,
+): OperationReconciliation[] {
+  const shown = new Map(receipts.map((receipt) => [receipt.operationId, receipt]));
+  const live = new Map(tail.map((receipt) => [receipt.operationId, receipt]));
+  const leftToStream = (operationId: string) => {
+    const carried = live.get(operationId);
+    if (!carried) return false;
+    if (!MOVING_RECEIPT_STATUSES.has(carried.status)) return true;
+    const since = Date.parse(carried.admittedAt ?? carried.at);
+    return !Number.isFinite(since) || nowMs - since < OPERATION_RECONCILE_MOVING_AFTER_MS;
+  };
+  const candidates = new Map<string, OperationReconciliation & { since: number }>();
+  const unsettled = (receipt: RuntimeReceipt) => !receiptHasAbsorbingOutcome(receipt)
+    && (!receiptIsTerminal(receipt.status) || receiptHasUnknownFate(receipt));
+  const consider = (receipt: RuntimeReceipt, since: number) => {
+    const operationId = receipt.operationId;
+    if (!operationId || operationId.includes(":") || /\s/.test(operationId) || candidates.has(operationId)) return;
+    if (leftToStream(operationId) || !readDue(operationId)) return;
+    if (!Number.isFinite(since) || nowMs - since < OPERATION_RECONCILE_GRACE_MS) return;
+    candidates.set(operationId, { operationId, idempotencyKey: receipt.idempotencyKey, original: receipt, since });
+  };
+  for (const entry of queue) {
+    if (entry.launchOwned || entry.state !== "delivering") continue;
+    const operationId = entry.deliveryReceipt?.operationId ?? entry.operationId;
+    if (!operationId) continue;
+    const receipt = shown.get(operationId) ?? entry.deliveryReceipt;
+    if (receipt && !unsettled(receipt)) continue;
+    const original: RuntimeReceipt = receipt ?? {
+      operationId, idempotencyKey: entry.id, conversationId: "", kind: "send",
+      status: "pending", at: new Date(entry.at).toISOString(), revision: 0,
+    };
+    consider(original, entry.dispatchedAt ?? entry.at);
+  }
+  for (const receipt of receipts) {
+    if (!unsettled(receipt)) continue;
+    consider(receipt, Date.parse(receipt.admittedAt ?? receipt.at));
+  }
+  return [...candidates.values()]
+    .sort((left, right) => left.since - right.since || left.operationId.localeCompare(right.operationId))
+    .slice(0, OPERATION_RECONCILE_BATCH)
+    .map(({ operationId, idempotencyKey, original }) => ({ operationId, idempotencyKey, original }));
+}
+
+/** How long one operation read may take before it is abandoned. */
+export const OPERATION_READ_TIMEOUT_MS = 10_000;
+/** The longest spacing a run of failed reads backs off to. */
+const OPERATION_READ_MAX_SPACING_MS = 5 * 60_000;
+
+interface SharedOperationRead {
+  startedAt: number;
+  failures: number;
+  inFlight: { result: Promise<RuntimeReceipt | null>; controller: AbortController; holders: number; cancelled: boolean } | null;
+}
+
+/** Operation reads shared by every composer in this tab, keyed by the original
+    operation: two mounts of one conversation, or two cards that show the same
+    message, cause one read per interval. */
+const operationReads = new Map<string, SharedOperationRead>();
+
+/** Whether a read of this operation may start (or be joined) now: one per
+    interval, backing off after reads that learned nothing. */
+export function operationReadDue(operationId: string, nowMs: number): boolean {
+  const read = operationReads.get(operationId);
+  if (!read || read.inFlight) return true;
+  const spacing = Math.min(OPERATION_RECONCILE_INTERVAL_MS * 2 ** read.failures, OPERATION_READ_MAX_SPACING_MS);
+  return nowMs - read.startedAt >= spacing;
+}
+
+/**
+ * Start, or join, the one read of an original operation.
+ *
+ * Answers the operation's TERMINAL receipt, or null when the read learned
+ * nothing that could settle a row: a failed or timed-out request, an answer
+ * for another operation, or one still moving. Returns null instead of a read
+ * when the operation is not due (see {@link operationReadDue}) unless `force`
+ * is set, which is the operator's own Check status. Each holder releases its
+ * share; the request is aborted when the last one lets go, which is what an
+ * unmount, a hidden tab or an inactive composer does. It only ever GETs.
+ */
+export function readOperationShared(
+  operationId: string,
+  nowMs: number,
+  options: { force?: boolean; fetchImpl?: typeof fetch } = {},
+): { result: Promise<RuntimeReceipt | null>; release(): void } | null {
+  const existing = operationReads.get(operationId);
+  if (!existing?.inFlight && !options.force && !operationReadDue(operationId, nowMs)) return null;
+  const read: SharedOperationRead = existing ?? { startedAt: nowMs, failures: 0, inFlight: null };
+  operationReads.set(operationId, read);
+  if (!read.inFlight) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), OPERATION_READ_TIMEOUT_MS);
+    read.startedAt = nowMs;
+    const result = (async (): Promise<RuntimeReceipt | null> => {
+      const response = await (options.fetchImpl ?? fetch)(`/api/runtime/operations/${encodeURIComponent(operationId)}`, { signal: controller.signal });
+      if (!response.ok) return null;
+      const body = (await response.json().catch(() => ({}))) as { receipt?: RuntimeReceipt };
+      const receipt = body.receipt;
+      return receipt && receipt.operationId === operationId && receiptIsTerminal(receipt.status) ? receipt : null;
+    })().catch(() => null).then((receipt) => {
+      clearTimeout(timeout);
+      const current = read.inFlight?.controller === controller ? read.inFlight : null;
+      /* Cancelled by its holders (unmount, hidden tab, inactive composer): not
+         a failed read, and due again as soon as someone asks. */
+      if (current?.cancelled) read.startedAt = Number.NEGATIVE_INFINITY;
+      else read.failures = receipt ? 0 : read.failures + 1;
+      if (current) read.inFlight = null;
+      return receipt;
+    });
+    read.inFlight = { result, controller, holders: 0, cancelled: false };
+  }
+  const inFlight = read.inFlight!;
+  inFlight.holders += 1;
+  let released = false;
+  return {
+    result: inFlight.result,
+    release() {
+      if (released) return;
+      released = true;
+      inFlight.holders -= 1;
+      if (inFlight.holders <= 0 && read.inFlight === inFlight) {
+        inFlight.cancelled = true;
+        inFlight.controller.abort();
+      }
+    },
+  };
+}
+
 /** The journal emits UTC ISO transition stamps. Reject malformed, future, or
     causally stale times; admission is only a lower bound, never delivery proof.
     Old but valid terminal evidence is retained verbatim, even beyond the TTL. */
@@ -1980,6 +2153,7 @@ export function useOutbox(cardId: string): readonly OutboxEntry[] {
 /** Test seam: drops in-memory state so each case starts from a clean queue. */
 export function resetOutboxForTests(): void {
   queues.clear();
+  operationReads.clear();
   listeners.clear();
   echoSnapshots.clear();
   echoListeners.clear();
