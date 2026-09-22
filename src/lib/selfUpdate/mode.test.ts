@@ -36,9 +36,9 @@ function ports(overrides: Partial<ModePorts>): ModePorts {
 
 describe("detectMode", () => {
   test("a live launcher record naming a checkout is a checkout install", async () => {
-    const decision = await detectMode(ports({ env: { [LAUNCHER_RECORD_ENV]: "/s/launcher.json" }, readRecord: () => record("/home/someone/viewer") }));
+    const decision = await detectMode(ports({ env: { [LAUNCHER_RECORD_ENV]: "/s/launcher.json" }, readRecord: () => record("/srv/viewer-checkout") }));
     expect(decision.mode).toBe("checkout");
-    expect(decision.record?.checkout).toBe("/home/someone/viewer");
+    expect(decision.record?.checkout).toBe("/srv/viewer-checkout");
   });
 
   test("a live launcher record without a checkout is a packaged install", async () => {
@@ -49,7 +49,7 @@ describe("detectMode", () => {
   test("a record left by a launcher that is gone is ignored, and the runtime host decides", async () => {
     const decision = await detectMode(ports({
       env: { [LAUNCHER_RECORD_ENV]: "/s/launcher.json" },
-      readRecord: () => record("/home/someone/viewer"),
+      readRecord: () => record("/srv/viewer-checkout"),
       alive: () => false,
       deploymentsEnabled: async () => true,
     }));
