@@ -16,6 +16,7 @@ import { FolderPlus, Search } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
+import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { openOnboarding } from "./onboarding/useOnboarding";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
@@ -189,6 +190,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
           { kind: "divider", key: "d-setup" },
           ...onboardingMobileMenuEntries(t, close),
+          selfUpdateMobileMenuEntry(t, close),
         ];
         return <MobileMenuSheet title={t("rail.overview")} entries={entries} onClose={close} />;
       }

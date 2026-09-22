@@ -56,6 +56,7 @@ import { MobileFocusView } from "./mobile/MobileFocusView";
 import { MobileHostSheet } from "./mobile/MobileHostSheet";
 import { MobileSeatCard } from "./mobile/MobileSeatCard";
 import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
+import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
@@ -1980,6 +1981,7 @@ function ProjectDashboardView({
       { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
       { kind: "divider", key: "d-setup" },
       ...onboardingMobileMenuEntries(t, () => mobileNav.closeSheet()),
+      selfUpdateMobileMenuEntry(t, () => mobileNav.closeSheet()),
     );
     if (archived) {
       entries.push({ kind: "divider", key: "d4" }, {

@@ -80,6 +80,10 @@ export function cliRuntimeHostConfig(packageRoot, options = {}) {
     ...cliRuntimeHostEndpoint(stateDirectory, installId, platform),
     journalPath: join(stateDirectory, `runtime-events-${installId}.sqlite`),
     entrypoint: existsSync(bundled) ? bundled : source,
+    /* Self-update (#2007) keys its launcher record and release pointer by the
+       same install. */
+    stateDirectory,
+    installId,
   };
 }
 

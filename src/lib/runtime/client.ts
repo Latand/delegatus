@@ -126,6 +126,16 @@ export interface RuntimeHostClient {
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
   listViewerDeployments?(options?: ViewerDeploymentListOptions): Promise<ViewerDeploymentList>;
   admitMcpHealthProbe?(capability: string): Promise<boolean>;
+  /** The host's own startup evidence: its PID and the generation (image and
+      revision) it booted from. Read by the Update surface (#2007). */
+  runtimeHostHealth?(): Promise<RuntimeHostHealth>;
+}
+
+export interface RuntimeHostHealth {
+  pid: number;
+  startIdentity: string;
+  hostEpoch: number;
+  generation?: { image?: string; revision?: string; container?: string };
 }
 
 type DeploymentListCapability = { generation: string; supported?: boolean; probe?: Promise<void> };
@@ -210,6 +220,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs) as Promise<ViewerDeploymentReceipt>; }
   cancelViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-cancel", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-read", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
+  runtimeHostHealth(): Promise<RuntimeHostHealth> { return this.call("runtime-host-health") as Promise<RuntimeHostHealth>; }
   startupGeneration(): Promise<string | null> { return this.deploymentListGeneration(); }
   private async deploymentListGeneration(): Promise<string | null> {
     try {
