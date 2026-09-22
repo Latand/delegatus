@@ -248,8 +248,10 @@ export interface RuntimeOperationReceipt {
   resend?: "not-needed" | "safe" | "verify-first";
   /** How a delivered message reached the engine, when it took more than a
       plain send. Never `steered`: an engine without steer (Copilot) delivers
-      a message for a running turn by interrupt-and-resend. */
-  delivery?: RuntimeDeliveryMode;
+      a message for a running turn by interrupt-and-resend. Recorded with the
+      `delivering` transition that precedes the interrupt; null once withdrawn
+      because the interrupt did not happen. */
+  delivery?: RuntimeDeliveryMode | null;
   /** The running turn the delivery interrupted to make room for this one. */
   interruptedTurnId?: string | null;
   revision: number;
@@ -265,7 +267,8 @@ export interface RuntimeTransitionDetails {
   turnId?: string | null;
   queuePosition?: number | null;
   reason?: string | null;
-  delivery?: RuntimeDeliveryMode;
+  /** null withdraws a route recorded by an earlier transition. */
+  delivery?: RuntimeDeliveryMode | null;
   interruptedTurnId?: string | null;
 }
 

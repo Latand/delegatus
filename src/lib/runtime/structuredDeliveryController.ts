@@ -27,7 +27,7 @@ import {
 import { reapSeveredStructuredHost } from "./registry";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { journalVerdict, sendIsSettled } from "./sendSettlement";
+import { deliveryRouteOf, journalVerdict, sendIsSettled } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -253,6 +253,8 @@ interface TerminalDeliveryOutcome {
   /** The durable operation the journal answered for — the retry leaf, where a
       retry created one. Its retention is what the acknowledgement releases. */
   receiptOperationId: string;
+  /** How a delivered send reached a running turn, when the journal recorded it. */
+  route: ReturnType<typeof deliveryRouteOf>;
 }
 
 /**
@@ -267,7 +269,7 @@ interface TerminalDeliveryOutcome {
  */
 function terminalDeliveryOutcome(
   registry: AgentRegistry,
-  result: { operationId: string; receipt: { status: RuntimeOperationReceipt["status"]; reason?: string | null; conversationId: string; presentationOperationId?: string } },
+  result: { operationId: string; receipt: Pick<RuntimeOperationReceipt, "delivery" | "interruptedTurnId"> & { status: RuntimeOperationReceipt["status"]; reason?: string | null; conversationId: string; presentationOperationId?: string } },
   /** The reservation this receipt is being read for. `conversationId` is the
       target it must agree with, and null where the caller came from the receipt
       rather than from a reservation — there the registry's own (conversation,
@@ -305,6 +307,7 @@ function terminalDeliveryOutcome(
     error: verdict.disposition === "unverified" ? verdict.reason : result.receipt.reason ?? null,
     disposition: verdict.disposition,
     receiptOperationId: result.operationId,
+    route: verdict.state === "delivered" ? deliveryRouteOf(result.receipt) : null,
   };
 }
 
@@ -378,6 +381,7 @@ async function projectLostTerminalAcknowledgement(
       outcome.state,
       outcome.error,
       outcome.disposition,
+      outcome.route,
     );
   } catch (error) {
     console.error("[structured delivery] lost terminal acknowledgement could not be projected", {
@@ -753,6 +757,9 @@ export async function bindStructuredDeliveryQueue(
              means the send never reached the engine and proves nothing on its
              own, so it carries none. */
           status === "uncertain" ? "unverified" : undefined,
+          /* The journal receipt, not these details: it carries the route the
+             delivering transition recorded, whichever executor began it. */
+          status === "delivered" ? deliveryRouteOf(result.receipt) : null,
         );
         await acknowledgeTerminalProjection(client, [result.operationId]);
         if (status === "delivered" && operationId.startsWith("spawn_message_")) {

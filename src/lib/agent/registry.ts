@@ -90,6 +90,7 @@ import {
 } from "./sqliteRegistryStore";
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
+import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin } from "@/lib/runtime/messageOrigin";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
@@ -653,6 +654,34 @@ export interface DeliveryOperationOwner {
   terminalDisposition: DeliveryTerminalDisposition | null;
   terminalReason: string | null;
   settledAt: string | null;
+  /** How a delivered send reached a running turn when it took more than a
+      plain send: `interrupt-then-turn-started` on an engine without steer
+      (Copilot), whose message interrupted the running turn and started the
+      next one. Kept here, beside the settlement, so `message_receipt` still
+      answers it once the journal receipt has been compacted. Absent on every
+      other delivery. */
+  delivery?: RuntimeDeliveryMode;
+  /** The turn that delivery interrupted. */
+  interruptedTurnId?: string;
+}
+
+/** The delivery route a settled send is recorded with (see `delivery` above). */
+export interface DeliveryRoute {
+  delivery: RuntimeDeliveryMode;
+  interruptedTurnId: string | null;
+}
+
+/** The owner row a reservation writes for itself, when it is still that reservation's. */
+function deliveryOwner(file: RegistryFile, delivery: HeldDelivery): DeliveryOperationOwner | undefined {
+  const owner = file.deliveryOperationOwners[delivery.command.operationId];
+  return owner?.deliveryId === delivery.id ? owner : undefined;
+}
+
+function recordDeliveryRoute(owner: DeliveryOperationOwner | undefined, route: DeliveryRoute | null | undefined): void {
+  if (!owner || !route) return;
+  owner.delivery = route.delivery;
+  if (route.interruptedTurnId) owner.interruptedTurnId = route.interruptedTurnId;
+  else delete owner.interruptedTurnId;
 }
 
 /**
@@ -2463,6 +2492,10 @@ function normalizeDeliveryOperationOwners(
         settledAt: typeof owner.settledAt === "string"
           ? owner.settledAt
           : referencedDelivery?.deliveredAt ?? settledDelivery?.deliveredAt ?? null,
+        ...(owner.delivery === "interrupt-then-turn-started" ? { delivery: owner.delivery } : {}),
+        ...(owner.delivery === "interrupt-then-turn-started" && typeof owner.interruptedTurnId === "string" && owner.interruptedTurnId
+          ? { interruptedTurnId: owner.interruptedTurnId }
+          : {}),
       };
     }
   }
@@ -8410,6 +8443,7 @@ export class AgentRegistry {
     state: Extract<HeldDelivery["state"], "delivered" | "failed">,
     error: string | null = null,
     disposition?: DeliveryTerminalDisposition,
+    route?: DeliveryRoute | null,
   ): DeliveryOperationOwner | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
@@ -8418,6 +8452,7 @@ export class AgentRegistry {
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
       owner.terminalReason = error?.slice(0, 240) ?? null;
       owner.settledAt = now();
+      if (state === "delivered") recordDeliveryRoute(owner, route);
       return clone(owner);
     });
   }
@@ -8429,6 +8464,8 @@ export class AgentRegistry {
     /** What the settling caller PROVED. Omitted where it proved nothing, which
         the receipt reads as an unverified fate rather than a safe resend. */
     disposition?: DeliveryTerminalDisposition,
+    /** How a delivered send reached the engine, when the journal recorded it. */
+    route?: DeliveryRoute | null,
   ): HeldDelivery {
     return this.mutate((file) => {
       const delivery = file.heldDeliveries[id];
@@ -8446,6 +8483,7 @@ export class AgentRegistry {
       if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       syncDeliveryOperationOwnerState(file, delivery, disposition);
+      if (state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), route);
       const settled = clone(delivery);
       if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
       return settled;
@@ -8458,6 +8496,7 @@ export class AgentRegistry {
     state: Extract<HeldDelivery["state"], "delivered" | "failed">,
     error: string | null = null,
     disposition?: DeliveryTerminalDisposition,
+    route?: DeliveryRoute | null,
   ): HeldDelivery | null {
     return this.recordDeliveryOutcomesForOperations([{
       conversationId,
@@ -8465,6 +8504,7 @@ export class AgentRegistry {
       state,
       error,
       ...(disposition ? { disposition } : {}),
+      ...(route ? { route } : {}),
     }])[0] ?? null;
   }
 
@@ -8478,6 +8518,7 @@ export class AgentRegistry {
       state: Extract<HeldDelivery["state"], "delivered" | "failed">;
       error?: string | null;
       disposition?: DeliveryTerminalDisposition;
+      route?: DeliveryRoute | null;
     }[],
   ): (HeldDelivery | null)[] {
     return this.mutate((file) => {
@@ -8507,6 +8548,7 @@ export class AgentRegistry {
         if (outcome.state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
         if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
         syncDeliveryOperationOwnerState(file, delivery, outcome.disposition);
+        if (outcome.state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), outcome.route);
         compactConversations.add(delivery.conversationId);
         return clone(delivery);
       });

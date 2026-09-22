@@ -516,6 +516,15 @@ export class CopilotAcpHost implements EngineHost {
     if (this.unavailable()) throw new Error("Copilot host is unavailable");
     this.cancelledTurns.add(running.turnId);
     this.notify("session/cancel", { sessionId: this.identity.sessionId });
+    /* ACP: after `session/cancel` the client answers every pending
+       `session/request_permission` with `cancelled`. The CLI returned without
+       it in 1.0.87, but only the answer is what the protocol promises. One
+       session runs one turn, so every open request belongs to this one. */
+    for (const [attentionId, open] of this.attentions) {
+      this.write({ jsonrpc: "2.0", id: open.rpcId, result: { outcome: { outcome: "cancelled" } } });
+      this.emit({ kind: "attention-resolved", id: attentionId, resolution: "turn-ended" });
+    }
+    this.attentions.clear();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stopped = await Promise.race([
       running.settled.then(() => true),

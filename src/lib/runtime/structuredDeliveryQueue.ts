@@ -32,6 +32,10 @@ interface StructuredOperationStatus {
   /** Immutable admission time on current receipts; `at` supports older rows. */
   admittedAt?: string;
   at?: string;
+  /** The interrupt-and-resend route recorded when this send's delivery began,
+      so an executor that did not issue the interrupt still reports it. */
+  delivery?: string | null;
+  interruptedTurnId?: string | null;
 }
 
 export interface StructuredDeliveryQueuePort {
@@ -632,9 +636,6 @@ export class StructuredDeliveryQueue {
       which is what a recovered row has to be able to tell (#1131). */
   private readonly executorId = crypto.randomUUID();
   private readonly interruptAcknowledged = new Set<string>();
-  /** The turn an operation's interrupt ended, kept until that operation's
-      message settles so its receipt can name what it interrupted. */
-  private readonly interruptedTurns = new Map<string, string>();
   /** An interrupt can need several drain passes before any message is handed
    * over. Keep that first-dispatch evidence only in this executor and claim;
    * eviction or restart returns to the conservative recovery path. */
@@ -1139,6 +1140,13 @@ export class StructuredDeliveryQueue {
         && (effect.turnId === undefined || effect.turnId === health.activeTurnRef)
         && !this.interruptAcknowledged.has(effect.operationId);
       const steersIntoTurn = maySteer && !steerByInterrupt;
+      /* An engine without steer (Copilot) reports a message that interrupted
+         the running turn as interrupt-then-turn-started. The route is written
+         with the `delivering` transition that precedes the interrupt, so it is
+         durable before the interrupt is issued and a successor executor reads
+         it back from the receipt; Claude and Codex receipts carry no route. */
+      const recordsRoute = host.steerFallback === "interrupt";
+      const clearedRoute: RuntimeTransitionDetails = recordsRoute ? { delivery: null, interruptedTurnId: null } : {};
       if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt) return true;
       if (health.status === "idle") this.interruptAcknowledged.delete(effect.operationId);
       const deliveryFence = shouldInterrupt
@@ -1174,10 +1182,15 @@ export class StructuredDeliveryQueue {
         ? {operationId: effect.operationId, writerClaim: claim.value, firstDispatch: true}
         : undefined;
       if (!firstDispatch) this.firstDispatches.delete(effect.operationId);
+      const routedTurnId = recordsRoute && shouldInterrupt ? health.activeTurnRef! : null;
       if (!await this.transitionUnlessSettled(
         effect.operationId,
         "delivering",
-        { turnId: deliveryFence, reason: deliveringOwnershipReason(this.executorId, claim) },
+        {
+          turnId: deliveryFence,
+          reason: deliveringOwnershipReason(this.executorId, claim),
+          ...(routedTurnId ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId: routedTurnId } : {}),
+        },
       )) continue;
       if (firstDispatch) {
         this.firstDispatches.set(effect.operationId, firstDispatch);
@@ -1187,8 +1200,6 @@ export class StructuredDeliveryQueue {
         try {
           await host.interrupt(health.activeTurnRef!);
           this.interruptAcknowledged.add(effect.operationId);
-          this.interruptedTurns.set(effect.operationId, health.activeTurnRef!);
-          while (this.interruptedTurns.size > 128) this.interruptedTurns.delete(this.interruptedTurns.keys().next().value!);
         } catch (error) {
           this.interruptAcknowledged.delete(effect.operationId);
           const reason = failureReason(error);
@@ -1198,13 +1209,15 @@ export class StructuredDeliveryQueue {
              state is grouped with the one that waits rather than retries. No
              branch here converts it into a claim about the host. */
           const afterFailure = await this.readHealth(host);
+          /* The interrupt did not happen, so the route written with
+             `delivering` is withdrawn with it. */
           if (!afterFailure.readable
             || afterFailure.value.status === "dead"
             || afterFailure.value.status === "unhosted") {
-            await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
+            await this.transitionUnlessSettled(effect.operationId, "queued", { reason, ...clearedRoute });
             return true;
           }
-          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "interrupt-auto-retry" });
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "interrupt-auto-retry", ...clearedRoute });
           this.retrySoon();
           return true;
         }
@@ -1295,14 +1308,18 @@ export class StructuredDeliveryQueue {
         await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
         return true;
       }
-      const interruptedTurnId = this.interruptedTurns.get(effect.operationId);
-      this.interruptedTurns.delete(effect.operationId);
+      /* The route this pass recorded, or the one an earlier pass or executor
+         recorded before this message went back to the queue. */
+      const interruptedTurnId = routedTurnId
+        ?? (recordsRoute && durable?.delivery === "interrupt-then-turn-started" ? durable.interruptedTurnId ?? null : null);
       await this.transitionUnlessSettled(effect.operationId, "delivered", {
         turnId: receipt.turnId,
         /* A message that ended a running turn to start its own says so; the
            Copilot path never reads `steered`. */
-        ...(interruptedTurnId && receipt.outcome === "turn-started"
-          ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId }
+        ...(interruptedTurnId
+          ? receipt.outcome === "turn-started"
+            ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId }
+            : clearedRoute
           : {}),
       });
     }

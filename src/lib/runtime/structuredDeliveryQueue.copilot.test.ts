@@ -170,3 +170,93 @@ test("the Claude broker's steering refusal is unchanged: no fallback, no write, 
   expect(actions).toEqual([]);
   expect(transitions.map(([, status, details]) => `${status}:${details?.reason}`)).toEqual(["failed:unsupported-steering"]);
 });
+
+test("the interrupt route is durable before the interrupt is issued", async () => {
+  const actions: string[] = [];
+  const target = copilotHost(actions);
+  const interrupt = target.interrupt.bind(target);
+  const transitions: Transition[] = [];
+  target.interrupt = async (turnId) => {
+    /* What a successor executor would read if this one died right here. */
+    expect(transitions.at(-1)).toEqual(["op-durable", "delivering", expect.objectContaining({
+      delivery: "interrupt-then-turn-started",
+      interruptedTurnId: "copilot:1-turn",
+    })]);
+    await interrupt(turnId);
+  };
+  let pending = true;
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => pending ? [{ id: "effect:op-durable", eventSeq: 1, kind: "runtime.send", payload: {
+      operationId: "op-durable", conversationId: "copilot-conversation", text: "change course", policy: "interrupt-active",
+    } }] : [],
+    transition: async (operationId, status, details) => {
+      transitions.push([operationId, status, details]);
+      if (status === "delivered") pending = false;
+    },
+  }, () => target);
+  await queue.drain();
+  expect(actions).toEqual(["interrupt:copilot:1-turn", "send:change course:null"]);
+  expect(transitions.at(-1)?.[2]).toMatchObject({ delivery: "interrupt-then-turn-started", interruptedTurnId: "copilot:1-turn" });
+});
+
+test("a successor executor reports the interrupt an earlier executor recorded", async () => {
+  const actions: string[] = [];
+  const target = copilotHost(actions);
+  /* The earlier executor interrupted the turn and the message went back to
+     the queue; this executor finds the host idle and only has to send. */
+  target.running = null;
+  const transitions: Transition[] = [];
+  let pending = true;
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => pending ? [{ id: "effect:op-successor", eventSeq: 1, kind: "runtime.send", payload: {
+      operationId: "op-successor", conversationId: "copilot-conversation", text: "change course", policy: "interrupt-active",
+    } }] : [],
+    status: async () => ({
+      status: "queued",
+      revision: 3,
+      reason: "interrupt-requested",
+      delivery: "interrupt-then-turn-started",
+      interruptedTurnId: "copilot:1-turn",
+    }),
+    transition: async (operationId, status, details) => {
+      transitions.push([operationId, status, details]);
+      if (status === "delivered") pending = false;
+    },
+  }, () => target);
+  await queue.drain();
+  expect(actions).toEqual(["send:change course:null"]);
+  expect(transitions.at(-1)).toEqual(["op-successor", "delivered", {
+    turnId: "copilot:2-turn",
+    delivery: "interrupt-then-turn-started",
+    interruptedTurnId: "copilot:1-turn",
+  }]);
+});
+
+test("an interrupt that failed withdraws the route it recorded", async () => {
+  const actions: string[] = [];
+  const target = copilotHost(actions);
+  target.interrupt = async () => { throw new Error("Copilot turn did not stop within 10000ms of session/cancel"); };
+  const transitions: Transition[] = [];
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:op-withdrawn", eventSeq: 1, kind: "runtime.send", payload: {
+      operationId: "op-withdrawn", conversationId: "copilot-conversation", text: "change course", policy: "interrupt-active",
+    } }],
+    transition: async (operationId, status, details) => { transitions.push([operationId, status, details]); },
+  }, () => target);
+  await queue.drain();
+  expect(transitions.at(-1)).toEqual(["op-withdrawn", "queued", { reason: "interrupt-auto-retry", delivery: null, interruptedTurnId: null }]);
+});
+
+test("a Codex-shaped host's interrupt-active send carries no route", async () => {
+  const actions: string[] = [];
+  const codex: EngineHost & { running: string | null } = { ...copilotHost(actions), supportsSteer: true, steerFallback: undefined };
+  const transitions = await drainOne(codex, { kind: "runtime.send", payload: {
+    operationId: "op-codex", conversationId: "codex-conversation", text: "change course", policy: "interrupt-active",
+  } });
+  expect(actions).toEqual(["interrupt:copilot:1-turn", "send:change course:null"]);
+  for (const [, , details] of transitions) {
+    expect(details?.delivery).toBeUndefined();
+    expect(details?.interruptedTurnId).toBeUndefined();
+  }
+  expect(transitions.at(-1)).toEqual(["op-codex", "delivered", { turnId: "copilot:2-turn" }]);
+});

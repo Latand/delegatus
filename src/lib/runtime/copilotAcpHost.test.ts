@@ -316,6 +316,28 @@ describe("CopilotAcpHost", () => {
     await host.release();
   });
 
+  test("interrupt during an open permission request answers it cancelled after session/cancel", async () => {
+    const child = new FakeCopilot();
+    const opts = options(child);
+    const host = await CopilotAcpHost.start(opts);
+    const receipt = await host.send({ id: "entry-1", text: "run a command" }) as { turnId: string };
+    await until(() => child.prompts.length === 1, "the prompt");
+    child.send({ jsonrpc: "2.0", id: 9, method: "session/request_permission", params: { toolCall: { title: "rm -rf build" }, options: [{ optionId: "allow_once", kind: "allow_once" }] } });
+    await until(async () => (await host.health()).status === "attention", "attention");
+    await host.interrupt(receipt.turnId);
+    const cancelAt = child.inputs.findIndex((input) => input.method === "session/cancel");
+    const answerAt = child.inputs.findIndex((input) => input.id === 9 && input.method === undefined);
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(answerAt).toBeGreaterThan(cancelAt);
+    expect(child.inputs[answerAt]).toEqual({ jsonrpc: "2.0", id: 9, result: { outcome: { outcome: "cancelled" } } });
+    expect(await host.health()).toMatchObject({ status: "idle", pendingAttention: [], activeTurnRef: null });
+    const events = (opts.eventStore as MemoryEventStore).events.get(child.sessionId)!;
+    expect(events.filter((event) => event.kind === "attention-resolved")).toEqual([
+      expect.objectContaining({ id: "copilot-permission:9", resolution: "turn-ended" }),
+    ]);
+    await host.release();
+  });
+
   test("a permission request becomes attention and the answer carries the chosen option", async () => {
     const child = new FakeCopilot();
     const opts = options(child);
