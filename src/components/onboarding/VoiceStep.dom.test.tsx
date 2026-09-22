@@ -183,3 +183,10 @@ test("Keep the local default skips the step and leaves the backend alone", async
   expect(skipped).toEqual(["skip"]);
   expect(harness.calls.some((call) => call.method === "POST")).toBe(false);
 });
+
+test("Keep the local default is offered only while local is the chosen backend", async () => {
+  harness.setRoute((url) => url.endsWith("/api/transcribe/backend") ? jsonResponse(info("soniox")) : undefined);
+  const host = await mount(() => {});
+  expect(host.querySelector("[data-voice-backend='soniox'][data-selected]")).not.toBeNull();
+  expect(host.querySelector("[data-voice-skip]")).toBeNull();
+});

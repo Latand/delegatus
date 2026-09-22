@@ -194,7 +194,9 @@ function KeyArea({ provider, option, note, onSaved, onNote }: {
 }
 
 export function VoiceStep({ onSkip, onGoEngines }: {
-  /** In the guide: "Keep the local default" marks the step skipped and moves on. */
+  /** In the guide: "Keep the local default" marks the step skipped and moves on.
+   *  Offered only while local is selected: a pick of another backend is saved at
+   *  once, so the label would promise what the press no longer does. */
   onSkip?: () => void;
   /** In the guide: the ChatGPT row's "sign in to Codex first" points at step 1. */
   onGoEngines?: () => void;
@@ -332,7 +334,7 @@ export function VoiceStep({ onSkip, onGoEngines }: {
           <p data-voice-check-result="" data-tone={result.tone} role="status" className={`min-w-0 flex-1 basis-[16rem] text-body ${result.tone === "success" ? "text-success" : "text-danger"}`}>{result.text}</p>
         ) : null}
       </div>
-      {onSkip ? (
+      {onSkip && info.backend === "local" ? (
         <button type="button" data-voice-skip="" onClick={onSkip} className="self-start rounded-[6px] text-ui font-semibold text-secondary hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">
           {t("onboarding.voice.skip")}
         </button>

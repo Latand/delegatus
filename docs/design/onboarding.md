@@ -918,7 +918,9 @@ and becomes more so; the build rewrites that paragraph.
 Controls per row are 44 px on the phone and the key field is 16 px there
 (the iOS no-zoom rule `MobileAddAccountRow` already follows). Skipped when:
 never auto-skipped; "Keep the local default" marks it skipped and continues,
-and the local row stays selected.
+and the local row stays selected. The control is shown only while local is
+the selected row: picking another backend saves it at once, and Continue is
+then the way on.
 
 ## 3. Layout
 
