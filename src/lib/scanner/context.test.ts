@@ -5,6 +5,7 @@ import path from "node:path";
 
 import type { FileEntry } from "../types";
 import { contextUsage, ctxFor } from "./context";
+import { MODEL_REGISTRY_VERSION } from "./modelRegistry";
 
 const OBSERVED_AT = "2026-07-12T10:00:00.000Z";
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-context-test-"));
@@ -60,7 +61,14 @@ describe("ctxFor", () => {
       { type: "system", subtype: "compact_boundary", compactMetadata: { preTokens: 180_000 } },
       assistant("claude-opus-4-8", 12_000, OBSERVED_AT),
     ], "claude-projects");
-    expect(ctxFor(file)).toMatchObject({ usedTokens: 12_000, windowTokens: 1_000_000, pct: 1, source: "registry", registryVersion: "2026-07-10", observedAt: OBSERVED_AT });
+    expect(ctxFor(file)).toMatchObject({ usedTokens: 12_000, windowTokens: 1_000_000, pct: 1, source: "registry", registryVersion: MODEL_REGISTRY_VERSION, observedAt: OBSERVED_AT });
+  });
+
+  test("an Opus 5.5 transcript gets the registry's 1M window, 1M-tagged or not", () => {
+    for (const model of ["claude-opus-5-5", "claude-opus-5-5[1m]", "claude-opus-5"]) {
+      const file = entry([{ type: "assistant", timestamp: OBSERVED_AT, message: { model, usage: { input_tokens: 250_000 } } }], "claude-projects");
+      expect(ctxFor(file)).toMatchObject({ usedTokens: 250_000, windowTokens: 1_000_000, pct: 25, source: "registry", registryVersion: MODEL_REGISTRY_VERSION });
+    }
   });
 
   test("preserves raw tokens for an unknown Claude model", () => {

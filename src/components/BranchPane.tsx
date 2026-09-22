@@ -37,7 +37,7 @@ import { TaskRelationStrip } from "./tasks/TaskRelationStrip";
 import type { TaskRelation } from "./tasks/taskRelations";
 import { WakeupChip, wakeupChipKey } from "./WakeupChip";
 import { EngineBadge } from "./EngineMark";
-import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, fmtAge } from "./utils";
+import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, fileModelLabel, fmtAge } from "./utils";
 
 const noop = () => undefined;
 
@@ -366,7 +366,7 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
                     style={{ backgroundColor: effortTint(file).soft, color: effortTint(file).color }}
                     title={[badge.label, effortTitle(file)].filter(Boolean).join(" · ")}
                   >
-                    {file.model}
+                    {fileModelLabel(file)}
                   </span>
                 ) : (
                   <EngineBadge engine={file.engine} className="px-2 py-0.5 text-[10px] font-bold" title={effortTitle(file)} />

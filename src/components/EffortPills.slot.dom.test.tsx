@@ -138,7 +138,7 @@ test("desktop pane header: the bars ride the wrapping meta row beside the model 
   // wrapping row, so a narrow pane wraps the row instead of overlapping
   const row = pills.parentElement as HTMLElement;
   expect(row.className).toContain("flex-wrap");
-  expect(row.textContent).toContain("fable-5");
+  expect(row.textContent).toContain("Fable 5");
   // accessibility: the tier reads out through the localized tooltip label
   expect(pills.getAttribute("role")).toBe("img");
   expect(pills.getAttribute("aria-label")).toBe("Reasoning effort: low");
@@ -229,7 +229,7 @@ test("390px MobileFocusView: reasoning telemetry is the merged model · reasonin
      line under the conversation title — the pane header it used to fold behind
      does not exist any more. It renders ONCE, in flow, and the vertical effort
      bars never render, so nothing can overlay the 390 px bar. */
-  const chips = [...host.querySelectorAll<HTMLElement>("span")].filter((el) => el.textContent === "fable-5 · low");
+  const chips = [...host.querySelectorAll<HTMLElement>("span")].filter((el) => el.textContent === "Fable 5 · low");
   expect(chips.length).toBe(1);
   const chip = chips[0]!;
   expect(host.querySelector("[data-effort-pills]")).toBeNull();
@@ -269,7 +269,7 @@ test("SwitchCard: fixed-width cards declare the reasoning-host container so the 
     expect(pills).not.toBeNull();
     expectInFlow(pills);
     // telemetry survives the collapse: the model chip tooltip carries the tier
-    const chip = [...card.querySelectorAll<HTMLElement>("span")].find((el) => el.textContent === "fable-5");
+    const chip = [...card.querySelectorAll<HTMLElement>("span")].find((el) => el.textContent === "Fable 5");
     expect(chip?.getAttribute("title") ?? "").toContain("Reasoning effort: low");
   }
 });

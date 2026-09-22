@@ -8,12 +8,13 @@ import {
   codexModelSupportsImages,
   defaultModelFor,
   ENGINE_MODELS,
+  modelDisplayName,
   modelFromBody,
   normalizeClaudeLaunchModel,
   validateLaunchModel, claudeSpawnTier, claudeTierDisplayName } from "./models";
 
-test("the model catalog exposes Opus 5 as the Claude default and GPT-6-Astra as the Codex one", () => {
-  expect(ENGINE_MODELS.claude[0]).toEqual({ id: "opus", label: "Opus 5", shortLabel: "Opus 5", use: "review" });
+test("the model catalog exposes Opus 5.5 as the Claude default and GPT-6-Astra as the Codex one", () => {
+  expect(ENGINE_MODELS.claude[0]).toEqual({ id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" });
   expect(ENGINE_MODELS.codex).toEqual([
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
     { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review" },
@@ -55,6 +56,26 @@ test("Claude transcript model families normalize to stable launch aliases", () =
   expect(normalizeClaudeLaunchModel("claude-opus-4-8-20260630")).toBe("opus");
   expect(normalizeClaudeLaunchModel("claude-sonnet-5-20260701")).toBe("sonnet");
   expect(normalizeClaudeLaunchModel("claude-3-5-haiku-20241022")).toBe("haiku");
+});
+
+test("Opus 5.5 transcripts, 1M and provider ids included, resume on the opus family", () => {
+  for (const model of ["claude-opus-5-5", "claude-opus-5-5[1m]", "us.anthropic.claude-opus-5-5", "anthropic.claude-opus-5-5", "claude-opus-5"]) {
+    expect(normalizeClaudeLaunchModel(model)).toBe("opus");
+    expect(claudeSpawnTier(model)).toBe("opus");
+  }
+});
+
+test("a card names a Claude model by its CLI display name and leaves other ids as stored", () => {
+  expect(modelDisplayName("claude", "opus-5-5")).toBe("Opus 5.5");
+  expect(modelDisplayName("claude", "claude-opus-5-5")).toBe("Opus 5.5");
+  expect(modelDisplayName("claude", "opus-5-5[1m]")).toBe("Opus 5.5 (1M)");
+  // An Opus 5 conversation keeps reading as Opus 5.
+  expect(modelDisplayName("claude", "opus-5")).toBe("Opus 5");
+  expect(modelDisplayName("claude", "fable-5-1")).toBe("Fable 5.1");
+  expect(modelDisplayName("claude", "haiku-4-5")).toBe("Haiku 4.5");
+  expect(modelDisplayName("claude", "3-7-sonnet")).toBe("3-7-sonnet");
+  expect(modelDisplayName("claude", "opus-next-9")).toBe("opus-next-9");
+  expect(modelDisplayName("codex", "gpt-5.6-sol")).toBe("gpt-5.6-sol");
 });
 
 test("unknown or unsafe Claude transcript model ids omit the launch override", () => {
