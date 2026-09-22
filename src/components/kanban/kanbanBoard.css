@@ -7,6 +7,11 @@
 .kb {
   --shelf-w: 264px;
   --work-min: 520px;
+  /* A balanced shelf on a large screen: 264 px plus a third of 35 % of what
+     Assigned would hold beside three 264 px shelves and their three 16 px
+     gaps. Assigned keeps the other 65 %. `100%` is the board's content width:
+     the value is substituted where the board's grid reads it. */
+  --shelf-balanced: calc(var(--shelf-w) + (100% - 3 * var(--shelf-w) - 3 * 16px) * 0.35 / 3);
   --target: 28px;
   --kb-grid-dot: color-mix(in srgb, var(--color-primary) 9%, transparent);
   position: relative;
@@ -118,12 +123,12 @@
 /* ── Board / columns ──────────────────────────────────────────────────────── */
 .kb .board {
   flex: 1 1 auto; min-height: 0; display: grid; gap: 16px; padding: 16px 20px 20px;
-  --c-inbox: minmax(232px, var(--shelf-w)); --c-assigned: minmax(var(--work-min), 1fr); --c-blocked: minmax(232px, var(--shelf-w)); --c-done: minmax(232px, var(--shelf-w));
+  /* The tracks come from `kanbanColumnTracks` in KanbanBoard.tsx, one per
+     column: balanced shelves wide, 220 px shelves narrow (1200–1399), the
+     Overview's capped shelves, reading widths and the wide share (#1841). */
   grid-template-columns: var(--c-inbox) var(--c-assigned) var(--c-blocked) var(--c-done);
   grid-template-areas: "inbox assigned blocked done";
 }
-/* 1200–1399: shelves at 220, the workspace keeps at least 440. */
-.kb .board.narrow { --c-inbox: 220px; --c-assigned: minmax(440px, 1fr); --c-blocked: 220px; --c-done: 220px; }
 .kb .board.scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 12px; padding: 12px 16px 16px; }
 .kb .board.scroll .column { flex: 0 0 280px; scroll-snap-align: start; }
 .kb .board.scroll .column[data-status="assigned"] { flex-basis: 480px; }
@@ -159,12 +164,28 @@
 .kb .board.scroll .column[data-status="assigned"].shelf { flex-basis: 280px; }
 .kb .col-head .icon-btn.col-pin[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent); }
 
-.kb .col-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px 14px; position: sticky; top: 0; z-index: 2; }
-.kb .col-head h2 { margin: 0; font-size: var(--text-body); font-weight: 600; }
+/* The head is one line from a 220 px shelf up: the title, its count and the
+   buttons keep their size, and the «working» and «waiting on you» counters
+   end in an ellipsis before anything wraps; under 300 px they shorten to a
+   dot and their number. Each carries its full text as a title. */
+.kb .col-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px 14px; position: sticky; top: 0; z-index: 2; white-space: nowrap; container: col-head / inline-size; }
+.kb .col-head > * { flex-shrink: 0; }
+.kb .col-head h2 { margin: 0; font-size: var(--text-body); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .kb .col-head .n { color: var(--color-muted); font-size: var(--text-ui); }
 .kb .col-head .live { display: inline-flex; align-items: center; gap: 5px; color: var(--color-success); font-size: var(--text-label); font-weight: 600; }
-.kb .col-head .live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.kb .col-head .needs { color: var(--color-warning); font-size: var(--text-label); font-weight: 600; }
+.kb .col-head .live::before { content: ""; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.kb .col-head .needs { display: inline-flex; align-items: center; gap: 5px; color: var(--color-warning); font-size: var(--text-label); font-weight: 600; }
+.kb .col-head > :is(.live, .needs) { flex-shrink: 1; min-width: 0; }
+.kb .col-head :is(.live, .needs) > .ct { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@container col-head (max-width: 299.98px) {
+  /* Shortened, the counters keep their number, and the title is what gives way last. */
+  .kb .col-head { gap: 6px; }
+  .kb .col-head > :is(.live, .needs) { flex-shrink: 0; }
+  .kb .col-head > h2 { flex-shrink: 1; }
+  .kb .col-head :is(.live, .needs) > .ct { display: none; }
+  .kb .col-head :is(.live, .needs)::after { content: attr(data-count); }
+  .kb .col-head .needs::before { content: ""; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+}
 .kb .col-head .spacer { flex: 1; }
 .kb .col-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 12px 12px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; }
 .kb .empty { border: 1px dashed var(--border-strong); border-radius: var(--radius-surface); padding: 20px 14px; text-align: center; color: var(--color-muted); font-size: var(--text-ui); }
@@ -309,7 +330,8 @@
 .kb .stage-section .sec-head { display: flex; align-items: center; gap: 6px; font-size: var(--text-label); color: var(--color-secondary); min-height: 28px; }
 .kb .stage-section .sec-head .kind { flex-shrink: 0; padding: 0 6px; height: 18px; display: inline-flex; align-items: center; border-radius: 999px; background: var(--surface-card); border: 1px solid var(--border-default); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
 .kb .stage-section .sec-head .ptitle { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--color-primary); }
-.kb .stage-section .sec-head .progress { color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* The note beside the badge is only the stage's name; it gives way before the pipeline's title does. */
+.kb .stage-section .sec-head .progress { flex: 0 4 auto; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .stage-section .sec-head .grow { flex: 1; }
 .kb .stage-section .graph-edit { margin: 2px 0 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .stage-section .stage-report { margin: 2px 0 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -330,11 +352,22 @@
 .kb .pstate-chip[data-pstate="provisioning"] { color: var(--color-accent); border-style: dashed; }
 .kb .pstate-chip[data-pstate="completed"] { color: var(--color-secondary); }
 .kb .psummary { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 4px; margin-top: 4px; }
-.kb .pchip-wrap { display: inline-flex; align-items: center; gap: 4px; }
+/* A stage pill is one line at any column width: the arrow, the dot, the engine
+   mark, the model and the effort bars keep their size, and only the stage name
+   gives way, to an ellipsis; the pill's title carries the full name. A name
+   that wrapped painted its second line outside the 24 px pill and squeezed the
+   model to one letter in a 264 px shelf. */
+.kb .pchip-wrap { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.kb .pchip-wrap > .parrow { flex-shrink: 0; }
 .kb .pchip {
   display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 999px;
   border: 1px solid var(--border-default); background: var(--surface-card); font-size: var(--text-label); font-weight: 600; color: var(--color-primary);
+  min-width: 0; max-width: 100%; white-space: nowrap;
 }
+.kb .pchip > .pdot { flex-shrink: 0; }
+.kb .pchip > .pident { min-width: 0; }
+.kb .pchip .pident.d-chip .imodel { flex-shrink: 0; }
+.kb .pchip .pident.d-chip .pname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1; min-width: 3ch; }
 .kb button.pchip:hover { border-color: var(--border-strong); }
 .kb .pchip.side { border-style: dashed; }
 

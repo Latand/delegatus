@@ -143,6 +143,23 @@ export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: 
   return pipelineStateLabel(t, pipeline.state);
 }
 
+/** What a pipeline header says beside its state badge: only what the badge
+    does not. The badge is the state, so the note is the name of the stage the
+    work stands on, with no state word, attempt count or suffix after it, and
+    nothing at all when there is nothing to add — a draft, a pipeline
+    preparing its worktree, a completed or a closed one. The stage is the one
+    parked on the operator, else the running one, else the failed one.
+    `pipelineProgress` stays the full sentence, for the header's label and the
+    Stages sheet, which draw no badge beside it. */
+export function pipelineHeadNote(summary: KanbanPipeline, nameOf: (stage: PipelineStage) => string): string | null {
+  const { pipeline, chips } = summary;
+  if (pipeline.state === "draft" || pipeline.state === "provisioning" || pipeline.state === "completed" || pipeline.state === "closed") return null;
+  const at = chips.find((chip) => chip.state === "needs_decision")
+    ?? chips.find((chip) => LIVE_CHIP_STATES.has(chip.state))
+    ?? chips.find((chip) => chip.state === "failed");
+  return at ? nameOf(at.stage) : null;
+}
+
 export const graphStateWord = (t: TFunction, state: StageChipState) => t(`kanban.graphState.${state}`);
 
 export function stageRoleId(stage: PipelineStage): string {
@@ -171,6 +188,7 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
      supersedes the prototype's graph-by-default rule for active pipelines). */
   const showGraph = open ?? false;
   const progress = pipelineProgress(t, summary, nameOf);
+  const note = pipelineHeadNote(summary, nameOf);
   /* What this pipeline is, in its own words (#1765): several pipelines on one
      card used to draw the same generic chip, so nothing told them apart. */
   const title = pipelineTitle(t, pipeline);
@@ -196,7 +214,7 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
       <div className="sec-head">
         <span className="ptitle" data-pipeline-title={pipeline.id} title={pipeline.task || title}>{title}</span>
         <span className="pstate-chip" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
-        <span className="progress">{progress}</span>
+        {note ? <span className="progress" title={note}>{note}</span> : null}
         {acting ? <span className="acting" role="status" data-pipeline-acting={acting}>{t(`kanban.pipelineAct.pending.${acting}`)}</span> : null}
         <span className="grow" />
         <button
