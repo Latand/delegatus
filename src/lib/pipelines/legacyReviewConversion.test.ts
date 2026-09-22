@@ -336,6 +336,45 @@ test("the paused unsafe-relay lane, unresolved delivery and live ownership refus
   expect(JSON.stringify(await convert(closed, {}, h.ports))).toContain("pipeline-settled");
 });
 
+test("a lane whose review flow rested in needs_decision after its rounds converts; paused and unreadable flows still refuse", async () => {
+  const h = harness();
+  const draft = await legacyDraft(h.ports);
+  h.flows.set("flow-old", { id: "flow-old", state: "needs_decision", stateDetail: "round limit reached", roundLimit: 4, rounds: [{ n: 1 }] } as unknown as Flow);
+  const lane = parkedLegacyLane(draft, {});
+  const flowsBefore = JSON.stringify([...h.flows]);
+  const preview = await patchPipeline(lane.id, { action: "preview-legacy-review" } as never, h.ports);
+  expect(preview.legacyReviewPreview).toMatchObject({ ok: true, reviewLimit: 4, reviewLimitSource: "flow" });
+  expect((await convert(lane, {}, h.ports)).legacyReviewConversion).toMatchObject({ stageId: "reviewer", reviewLimit: 4 });
+  expect(attemptsOf("reviewer")[0]).toMatchObject({ flowId: "flow-old", historical: true, legacyReview: true });
+  expect(JSON.stringify([...h.flows])).toBe(flowsBefore);
+  expect(h.flowCalls).toEqual([]);
+
+  for (const flow of [{ id: "flow-old", state: "paused", pausedState: "relaying", roundLimit: 5, rounds: [] }, null]) {
+    if (flow) h.flows.set("flow-old", flow as unknown as Flow);
+    else h.flows.delete("flow-old");
+    const frozen = parkedLegacyLane(draft, {});
+    const before = rawRow(frozen.id);
+    expect(JSON.stringify(await convert(frozen, { clientRequestId: "convert-frozen" }, h.ports))).toContain("live-flow");
+    expect(rawRow(frozen.id)).toBe(before);
+  }
+});
+
+test("conversion history refuses at its cap with a 409 instead of failing the store write", async () => {
+  const h = harness();
+  const draft = await legacyDraft(h.ports);
+  const full = structuredClone(current());
+  const entry = { clientRequestId: "old", expectedRevision: "a".repeat(64), stageId: "reviewer", fixerStageId: "reviewer-fix", implementerStageId: "builder", reviewLimit: 5, reviewLimitSource: "default" as const,
+    original: { stages: structuredClone(full.stages), run: { stageId: "reviewer", attempts: [] }, cursor: null }, convertedGraphDigest: "d", actor: { kind: "operator" as const }, at: "t",
+    reverted: { clientRequestId: "old-revert", actor: { kind: "operator" as const }, at: "t" } };
+  full.legacyReviewConversions = Array.from({ length: legacy.MAX_LEGACY_REVIEW_CONVERSIONS }, (_, index) => ({ ...entry, clientRequestId: `old-${index}`, reverted: { ...entry.reverted, clientRequestId: `old-revert-${index}` } }));
+  savePipelines([full]);
+  const before = rawRow(draft.id);
+  const refused = await convert(draft, {}, h.ports);
+  expect(refused.status).toBe(409);
+  expect(refused.error).toContain(`${legacy.MAX_LEGACY_REVIEW_CONVERSIONS} legacy review conversions`);
+  expect(rawRow(draft.id)).toBe(before);
+});
+
 test("an unlimited flow limit is refused with an editable recommendation, then converts at the chosen finite limit", async () => {
   const h = harness();
   const draft = await legacyDraft(h.ports);

@@ -6699,8 +6699,6 @@ export function legacyReviewActorRefusal(pipeline: Pipeline, actor: PauseResumeA
   return null;
 }
 
-const SETTLED_FLOW_STATES = new Set(["closed", "approved", "done_comment"]);
-
 /** Why this record may not be converted now, whatever its definition says:
     settled records stay as recorded, and nothing converts under live
     execution, an unresolved delivery or a review flow that has not settled.
@@ -6727,7 +6725,9 @@ function legacyReviewOwnershipRefusals(pipeline: Pipeline, ports: PipelinePorts)
     for (const attempt of run.attempts) {
       if (!attempt.flowId) continue;
       const flow = ports.getFlow(attempt.flowId);
-      if (!flow || !SETTLED_FLOW_STATES.has(flow.state)) {
+      /* The review flow's own terminal set: a flow that exhausted its rounds
+         rests in needs_decision and runs nothing further. */
+      if (!flow || !TERMINAL_REVIEW_FLOW_STATES.has(flow.state)) {
         refusals.push({ code: "live-flow", message: `review flow ${attempt.flowId} of stage ${run.stageId} is ${flow ? flow.state : "unreadable"}; a lane holding an unsettled flow is left exactly as it is` });
         return refusals;
       }
@@ -6799,6 +6799,9 @@ function convertLegacyReview(
   if (process.env.LLV_PIPELINE_LEGACY_REVIEW_CONVERSION === "0") return { error: "convert-legacy-review is disabled", status: 409 };
   if (pipelineRevision(pipeline) !== req.expectedRevision) {
     return { error: "the pipeline changed since it was read; read it again and preview before converting", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
+  }
+  if ((pipeline.legacyReviewConversions?.length ?? 0) >= legacyReview.MAX_LEGACY_REVIEW_CONVERSIONS) {
+    return { error: `this pipeline already records ${legacyReview.MAX_LEGACY_REVIEW_CONVERSIONS} legacy review conversions; repair it forward instead of converting again`, status: 409 };
   }
   const preview = previewLegacyReview(pipeline, req, ports);
   if (!preview.ok) {

@@ -27,6 +27,9 @@ export const LEGACY_REVIEW_LOOP_KIND = "review-loop" as const;
 /** The round limit every review flow the pipeline engine created carried. */
 export const LEGACY_REVIEW_FLOW_ROUND_LIMIT = 5;
 
+/** Conversion history a record keeps; the store refuses more, so the action refuses first. */
+export const MAX_LEGACY_REVIEW_CONVERSIONS = 32;
+
 /** The finite limit a refused preview offers in place of the recorded one. */
 export const RECOMMENDED_REVIEW_LIMIT = 5;
 

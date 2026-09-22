@@ -12,7 +12,7 @@ import { initializeStateCollections, readStateCollectionsRows, SqliteStateCollec
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
-import { isLegacyReviewLoopStage, legacyReviewLoopReachable, legacyReviewLoopShapeValid } from "./legacyReviewDefinition";
+import { isLegacyReviewLoopStage, legacyReviewLoopReachable, legacyReviewLoopShapeValid, MAX_LEGACY_REVIEW_CONVERSIONS } from "./legacyReviewDefinition";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
@@ -557,8 +557,6 @@ function isReviewGrant(value: unknown): boolean {
     && typeof grant.currentHead === "string"
     && isActor(grant.actor) && typeof grant.at === "string";
 }
-
-const MAX_LEGACY_REVIEW_CONVERSIONS = 32;
 
 /** An explicit legacy review-loop conversion and the definition it replaced. */
 function isLegacyReviewConversion(value: unknown): boolean {
