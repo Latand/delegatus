@@ -686,6 +686,13 @@ function measureOnboarding(phone: boolean) {
       rows: el.querySelectorAll("[data-mobile2-account]").length,
       addRow: el.querySelector("[data-mobile2-account-add]") !== null,
     }])),
+    filledButtons: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => el.classList.contains("bg-accent") && el.getBoundingClientRect().width > 0).map((el) => (el.textContent ?? "").trim()),
+    tourStartInView: (() => {
+      const band = dialog.querySelector("[data-tour-start]");
+      const body = band?.closest<HTMLElement>(".overflow-y-auto");
+      if (!band || !body) return null;
+      return band.getBoundingClientRect().bottom <= body.getBoundingClientRect().bottom + 1;
+    })(),
     stepCounter: dialog.querySelector("footer span")?.textContent ?? dialog.querySelector("[data-onboarding-step-list-toggle]")?.textContent ?? null,
     phone: dialog.querySelector("[data-phone-state]") ? {
       state: dialog.querySelector<HTMLElement>("[data-phone-state]")!.dataset.phoneState ?? null,
@@ -1237,6 +1244,10 @@ async function captureOnboarding(): Promise<void> {
             }
             await route.fulfill({ response, json: body });
           });
+          /* The accounts store reads once per page: reload so the three rows land. */
+          await page.reload({ waitUntil: "domcontentloaded" });
+          if (viewport.phone) await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
+          else await page.waitForSelector("[data-rail-menu]", { timeout: 60_000 });
           await openGuide("setup-guide");
           await page.waitForSelector('[data-onboarding-dialog="guide"]');
           await openStep("engines");
@@ -1276,6 +1287,7 @@ async function captureOnboarding(): Promise<void> {
           tailscale.setServeMode("ok");
           await phoneFrame("phone-ready", "ready", (r) => {
             must(r.phone?.buttons[0] === (uk ? "Увімкнути доступ із телефона" : "Turn on phone access"), `${tag}: the ready step's button reads ${JSON.stringify(r.phone?.buttons)}`);
+            must(r.filledButtons.length === 1, `${tag}: ${r.filledButtons.length} filled buttons on the ready step (${r.filledButtons.join(", ")})`);
           });
           tailscale.setServing(3000);
           await phoneFrame("phone-serving-other", "serving-other", (r) => {
@@ -1401,14 +1413,18 @@ async function captureOnboarding(): Promise<void> {
             must(r.tour?.pictures === 4 && r.tour.start, `${tag}: the tour draws ${r.tour?.pictures} pictures, start band ${r.tour?.start}`);
             if (!viewport.phone) must(new Set(r.tour?.cardTops).size === 1, `${tag}: the four cards are not in one row (${r.tour?.cardTops.join(", ")})`);
             must((r.tour?.projects ?? []).includes(PROJECT_NAME), `${tag}: the project select lists ${JSON.stringify(r.tour?.projects)}`);
+            if (!viewport.phone) must(r.filledButtons.length === 1, `${tag}: ${r.filledButtons.length} filled buttons on the tour (${r.filledButtons.join(", ")})`);
           });
           if (viewport.phone) {
             for (let page_ = 0; page_ < 4; page_ += 1) await page.click("[data-onboarding-primary]");
             await page.waitForTimeout(600);
             await shot("tour-start", (r) => common("tour-start", r));
           } else {
-            await page.locator("[data-tour-start]").scrollIntoViewIfNeeded();
-            await shot("tour-start", (r) => common("tour-start", r));
+            /* The first action is on screen without scrolling. */
+            await shot("tour-start", (r) => {
+              common("tour-start", r);
+              must(r.tourStartInView === true, `${tag}: the Start here band is below the fold`);
+            });
           }
           await page.click('[data-tour-effort="medium"]');
           await page.click("[data-tour-create]");
@@ -1419,6 +1435,11 @@ async function captureOnboarding(): Promise<void> {
           const values = Object.entries(prefill).map(([key, value]) => `${key.split(":").at(-1)}=${value}`).sort();
           must(values.includes("effort=medium") && values.includes("model=opus") && values.includes("engine=claude"), `${tag}: the tour left the draft at ${values.join(", ")}`);
           report[`${tag}-tour-prefill`] = values;
+          /* The draft the hand-off opened is a sheet on the phone; a reload
+             returns to the board with it closed. */
+          await page.reload({ waitUntil: "domcontentloaded" });
+          if (viewport.phone) await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
+          else await page.waitForSelector("[data-rail-menu]", { timeout: 60_000 });
 
           /* The Dictation menu row opens the Voice step alone. */
           await openGuide("dictation");
