@@ -1,5 +1,5 @@
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
-import { RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse } from "@/lib/runtime/contracts";
+import { isStructuredHostKind, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { consumeRuntimeEvent, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
@@ -126,7 +126,7 @@ export class RuntimeHost {
         const durableEnginePublication = request.method === "append"
           && event.effect === undefined && event.operationId === undefined
           && appended.scope.type === "session"
-          && (appended.producer.kind === "codex-app-server" || appended.producer.kind === "claude-broker")
+          && isStructuredHostKind(appended.producer.kind)
           && appended.producer.eventKey?.startsWith("engine-host:") === true
           && DURABLE_ENGINE_PUBLICATIONS.has(appended.kind);
         if (!durableEnginePublication) await consumption;
@@ -236,7 +236,7 @@ export class RuntimeHost {
         result = this.journal.transitionOperation(
           String(request.params?.operationId ?? ""),
           status as Exclude<RuntimeReceiptStatus, "pending">,
-          details && typeof details === "object" ? details as { turnId?: string | null; queuePosition?: number | null; reason?: string | null } : {},
+          details && typeof details === "object" ? details as RuntimeTransitionDetails : {},
           {
             ...(fromStatuses ? { fromStatuses: fromStatuses as RuntimeReceiptStatus[] } : {}),
             ...(awaitProjection === true ? { awaitProjection: true } : {}),

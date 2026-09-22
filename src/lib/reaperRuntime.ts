@@ -461,7 +461,7 @@ async function authorshipEvidence(
      board-exempt regardless and its mtime advances every write, so scanning it
      would churn without ever producing a usable stamp. */
   const fileByPath = new Map<string, FileEntry>();
-  const targets = new Map<string, "claude" | "codex">();
+  const targets = new Map<string, "claude" | "codex" | "copilot">();
   await forEachCooperatively(files, (file) => {
     fileByPath.set(file.path, file);
   });
@@ -469,7 +469,7 @@ async function authorshipEvidence(
     if (host.primaryPath) targets.set(host.primaryPath, host.engine);
   });
   await forEachCooperatively(files, (file) => {
-    if (file.engine !== "claude" && file.engine !== "codex") return;
+    if (file.engine !== "claude" && file.engine !== "codex" && file.engine !== "copilot") return;
     if (file.activity === "live" || targets.has(file.path)) return;
     /* Already clean-stamped at or past the current mtime — no need to re-scan;
        the persisted stamp still stands (the caller keeps prior state entries). */

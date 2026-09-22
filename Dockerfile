@@ -105,6 +105,7 @@ WRAPPER
 }
 make_nsenter_shim claude '$HOME/.bun/bin/claude'
 make_nsenter_shim codex '$HOME/.bun/bin/codex'
+make_nsenter_shim copilot '$HOME/.bun/bin/copilot'
 make_nsenter_shim bun '$HOME/.bun/bin/bun'
 make_nsenter_shim uv '$HOME/.local/bin/uv'
 make_nsenter_shim just /usr/bin/just

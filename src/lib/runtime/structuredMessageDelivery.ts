@@ -22,6 +22,7 @@ import {
 import type { MessageOrigin } from "./messageOrigin";
 import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
 import {
+  isStructuredHostKind,
   RUNTIME_IDEMPOTENCY_KEY_LIMIT,
   runtimeIdempotencyKeyAdmissible,
   type RuntimeOperationReceipt,
@@ -495,7 +496,7 @@ function recordStructuredRuntimeRecovery(
   session: RuntimeSession | null,
   recovered: () => void,
 ): void {
-  if (session && (session.hostKind === "codex-app-server" || session.hostKind === "claude-broker")) {
+  if (session && isStructuredHostKind(session.hostKind)) {
     recovered();
   }
 }
@@ -753,7 +754,7 @@ export async function deliverHeldStructuredMessage(
     return "delivery-uncertain";
   }
   if (session.hostKind === "tmux-legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
-  if (session.hostKind !== "codex-app-server" && session.hostKind !== "claude-broker") return "delivery-uncertain";
+  if (!isStructuredHostKind(session.hostKind)) return "delivery-uncertain";
   try {
     const refs = request.imageRefs ?? [];
     const imageCapability = session.capabilities.imageInput
@@ -852,7 +853,7 @@ export async function enqueueStructuredMessage(
     );
   }
   if (session.hostKind === "tmux-legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
-  if (session.hostKind !== "codex-app-server" && session.hostKind !== "claude-broker") {
+  if (!isStructuredHostKind(session.hostKind)) {
     const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,

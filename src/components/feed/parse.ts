@@ -257,7 +257,7 @@ export interface ReasoningMember {
 export type TurnErrorReason = "auth" | "other";
 
 export type Item = (
-  | { kind: "prose"; ts: unknown; text: string; engine: "codex" | "claude" | "openclaw"; sourceId?: string }
+  | { kind: "prose"; ts: unknown; text: string; engine: FeedEngine; sourceId?: string }
   | { kind: "user"; ts: unknown; text: string; selectedContext?: SelectedContextRef }
   | MandateItem
   | VoiceTurnItem
@@ -426,7 +426,47 @@ const OPENCLAW_SYNTHETIC_PROVIDER = "openclaw";
 function feedEngine(engine: string): FeedEngine {
   if (engine === "codex") return "codex";
   if (engine === "openclaw") return "openclaw";
+  if (engine === "copilot") return "copilot";
   return "claude";
+}
+
+/* Copilot CLI tool names mapped onto the feed's shared tool vocabulary, so a
+   Copilot card gets the same family, icon and summary as its Claude
+   counterpart. A tool the table does not know keeps its own name. Tool names
+   are CLI-version data (1.0.87 renamed `grep` to `rg`), so this only chooses
+   presentation and nothing depends on it. */
+const COPILOT_TOOL_NAMES: Readonly<Record<string, string>> = {
+  bash: "Bash",
+  view: "Read",
+  create: "Write",
+  edit: "Edit",
+  str_replace_editor: "Edit",
+  rg: "Grep",
+  grep: "Grep",
+  glob: "Glob",
+  web_fetch: "WebFetch",
+};
+
+/** A Copilot tool name as the feed presents it. Copilot names MCP tools
+    `<server>-<tool>`; `viewer-<tool>` is the Viewer MCP and reads as
+    `mcp__viewer__<tool>`, the Claude spelling, so one path presents both. */
+export function copilotFeedToolName(name: string): string {
+  if (name.startsWith("viewer-") && name.length > "viewer-".length) return `mcp__viewer__${name.slice("viewer-".length)}`;
+  return COPILOT_TOOL_NAMES[name] ?? name;
+}
+
+/** Copilot's argument names mapped onto the ones the shared summaries read. */
+function copilotToolArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (name === "view" || name === "create" || name === "edit" || name === "str_replace_editor") {
+    return {
+      ...args,
+      ...(args.path !== undefined && args.file_path === undefined ? { file_path: args.path } : {}),
+      ...(args.old_str !== undefined ? { old_string: args.old_str } : {}),
+      ...(args.new_str !== undefined ? { new_string: args.new_str } : {}),
+      ...(args.file_text !== undefined ? { content: args.file_text } : {}),
+    };
+  }
+  return args;
 }
 
 function rec(value: unknown): Record<string, unknown> {
@@ -1432,7 +1472,7 @@ function sameCodexTextAtTime(leftTs: unknown, leftText: unknown, rightTs: unknow
  */
 export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const { showSvc, lineFilter } = cfg;
-  const jsonl = cfg.fmt === "claude" || cfg.fmt === "codex" || cfg.fmt === "openclaw";
+  const jsonl = cfg.fmt === "claude" || cfg.fmt === "codex" || cfg.fmt === "openclaw" || cfg.fmt === "copilot";
 
   const entries: StoredEntry[] = [];
   let conversationCwd = cfg.cwd ?? "";
@@ -3048,6 +3088,59 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
     }
   };
+  /* GitHub Copilot CLI `events.jsonl` (docs/design/copilot-engine.md 3.2):
+     `{type, data, id, timestamp}` records. The schema is unpublished and moves
+     between CLI releases, so an unknown type renders nothing and a missing
+     field degrades one row. `system.message` is the system prompt and turn
+     boundaries are bookkeeping; neither is a row. */
+  const registerCopilotCall = (ts: unknown, callId: string, name: string, rawArgs: unknown) => {
+    if (!callId || calls.has(callId)) return;
+    const tool = copilotFeedToolName(name || "tool");
+    const args = copilotToolArgs(name, rec(rawArgs));
+    const family = familyOf(tool);
+    const command = family === "shell" ? textPart(args.command) || undefined : undefined;
+    const lang = family === "read" ? extLang(textPart(args.file_path)) : undefined;
+    const mcpIdentity = viewerMcpToolUse(tool);
+    const mcp = mcpIdentity ? { ...mcpIdentity, args, result: null } : undefined;
+    registerCall(newToolEvent({ ts, id: callId, tool, args, engine: "copilot", command, lang, mcp }));
+  };
+  const renderCopilot = (obj: Record<string, unknown>) => {
+    const ts = obj.timestamp;
+    const data = rec(obj.data);
+    const type = textPart(obj.type);
+    if (type === "user.message") {
+      /* `content` is what was sent; `transformedContent` adds the CLI's own
+         datetime preamble and is not shown. */
+      return addUserText(ts, textPart(data.content));
+    }
+    if (type === "assistant.message") {
+      const content = textPart(data.content);
+      if (content.trim()) addProse(ts, content, textPart(data.messageId) || textPart(obj.id) || undefined);
+      for (const request of arr(data.toolRequests)) {
+        registerCopilotCall(ts, textPart(request.toolCallId), textPart(request.name), request.arguments);
+      }
+      return;
+    }
+    if (type === "tool.execution_start") {
+      return registerCopilotCall(ts, textPart(data.toolCallId), textPart(data.toolName), data.arguments);
+    }
+    if (type === "tool.execution_complete") {
+      const result = rec(data.result);
+      const exitCode = num(rec(data.shellExecution).exitCode);
+      const failed = data.success === false || (exitCode !== undefined && exitCode !== 0);
+      const text = textPart(result.content) || textPart(result.detailedContent) || textPart(data.error);
+      return addOutput(textPart(data.toolCallId), text, failed, undefined, ts);
+    }
+    if (type === "abort") return void push({ kind: "note", text: tr("render.turnInterrupted") });
+    if (type === "session.model_change") {
+      const label = [textPart(data.newModel), textPart(data.reasoningEffort)].filter(Boolean).join(" · ");
+      return addSvc(label ? `model · ${label}` : "model_change");
+    }
+    if (type === "session.start" || type === "session.resume") {
+      const label = [textPart(data.selectedModel), textPart(data.reasoningEffort)].filter(Boolean).join(" · ");
+      return addSvc(`${type === "session.start" ? "Copilot session" : "Copilot resumed"}${label ? ` · ${label}` : ""}`);
+    }
+  };
   /* Job .output logs echo the final review/citation block as bare lines after the
      [codex] stream ends; collect that run so it renders as one structured card
      instead of per-line raw rows. Falls back to the old raw rows when the block
@@ -3136,6 +3229,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           }
           if (cfg.fmt === "claude") renderClaude(obj);
           else if (cfg.fmt === "openclaw") renderOpenclaw(obj);
+          else if (cfg.fmt === "copilot") renderCopilot(obj);
           else renderCodex(obj);
           if (facts?.fails) finishTurn(true);
           else if (facts?.closes) finishTurn(false);

@@ -18,7 +18,7 @@ import {
     including one with structured registry state — must take the legacy path. */
 function structuredSessionOf(rv: RuntimeSessionView | null): RuntimeSessionView | null {
   if (!rv?.structuredControlsEnabled || rv.legacy) return null;
-  return rv.session.hostKind === "codex-app-server" || rv.session.hostKind === "claude-broker" ? rv : null;
+  return rv.session.hostKind === "codex-app-server" || rv.session.hostKind === "claude-broker" || rv.session.hostKind === "copilot-acp" ? rv : null;
 }
 
 export interface AgentCapabilities {

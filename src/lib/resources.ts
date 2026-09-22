@@ -165,7 +165,7 @@ export type KillTargetRef = TmuxAttachReference | StructuredHostKillRef;
 export interface StructuredHostRecord {
   /** Session key id (`<engine>:<sessionId>`), the row's stable target suffix. */
   id: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   sessionId: string | null;
   pid: number;
   /** Kernel start-time token captured with the pid; a recycled pid fails it. */
@@ -203,7 +203,7 @@ export interface StructuredHostKillRef {
   pid: number;
   startIdentity: string;
   bootEpoch: string | null;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   sessionId: string | null;
   conversationId: string | null;
   seat: boolean | null;

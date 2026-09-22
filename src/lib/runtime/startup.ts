@@ -732,10 +732,10 @@ async function interruptedCodexContinuations(
 
 function persistedTurnState(
   records: Record<string, unknown>[],
-  engine: "codex" | "claude",
+  engine: "codex" | "claude" | "copilot",
   prefixTruncated: boolean,
 ) {
-  if (engine === "claude") return turnStateFromRecords(records, "claude");
+  if (engine === "claude" || engine === "copilot") return turnStateFromRecords(records, engine);
   if (!prefixTruncated) return turnStateFromRecords(records, "codex", true);
 
   const turnStartIndex = records.findLastIndex((record) => {
@@ -1500,7 +1500,12 @@ async function adoptStructuredHostsPass(
       registry,
       shouldAdopt,
       nextAdoptedHosts,
-      (key) => key.engine === "codex" ? dependencies.adopt === undefined : dependencies.adoptClaude === undefined,
+      /* Boot adopts Codex and Claude hosts. A Copilot host is never adopted at
+         boot (slice 1): its next message resumes it on demand, so it can never
+         hold startup waiting for a hand-over. */
+      (key) => key.engine === "codex" ? dependencies.adopt === undefined
+        : key.engine === "claude" ? dependencies.adoptClaude === undefined
+          : false,
       dependencies.hostClaimed,
     );
     reportProgress("reconciling structured hosts");

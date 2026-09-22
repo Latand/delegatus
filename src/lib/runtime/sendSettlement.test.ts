@@ -1417,3 +1417,114 @@ test("original-key payload checks survive delivery text removal and reservation 
     expect(lookupOriginalSend(delivered, { ...binding, text: "another payload" })).toEqual({ kind: "contradictory" });
   } finally { active.close(); }
 });
+
+/* ── INTERRUPT-AND-RESEND ROUTE (docs/design/copilot-engine.md 3.4) ─────── */
+
+/** A Copilot-shaped host: no steer, an interrupt fallback, one running turn. */
+function interruptingHost(sessionKey: string): { host: EngineHost; actions: string[] } {
+  const actions: string[] = [];
+  let running: string | null = "copilot:1-turn";
+  return {
+    actions,
+    host: {
+      supportsSteer: false,
+      steerFallback: "interrupt",
+      attach: () => ({ async *[Symbol.asyncIterator]() {} }),
+      send: async (entry: QueueEntry): Promise<DeliveryReceipt> => {
+        if (running) return { outcome: "rejected", reason: "stale-turn" };
+        actions.push(`send:${entry.text ?? ""}`);
+        running = "copilot:2-turn";
+        return { outcome: "turn-started", turnId: "copilot:2-turn" };
+      },
+      interrupt: async (turnId: string) => {
+        actions.push(`interrupt:${turnId}`);
+        if (running === turnId) running = null;
+      },
+      answer: async () => {},
+      health: async () => running
+        ? { ...idleState(sessionKey), status: "active", activeTurnRef: running }
+        : idleState(sessionKey),
+      release: async () => {},
+    },
+  };
+}
+
+function interruptActivePort(active: Fixture, operationId: string, text: string): StructuredDeliveryQueuePort {
+  return {
+    effects: async () => [{
+      id: `effect:${operationId}`,
+      kind: "runtime.send",
+      eventSeq: 1,
+      payload: { kind: "send", operationId, conversationId: active.conversationId, text, policy: "interrupt-active" },
+    }],
+    transition: async (id, status, details) => { await active.client.transitionOperation(id, status, details); },
+    status: async (id) => (await active.client.operationStatus(id))?.receipt ?? null,
+    settled: (id) => sendIsSettled(active.registry.readOnlySnapshot(), id),
+  };
+}
+
+test("message_receipt says a message interrupted the running turn, in flight and after it settles", async () => {
+  const active = fixture("interrupt-route");
+  try {
+    const { operationId, deliveryId } = acceptSend(active, { clientMessageId: "interrupt-route-key", text: "change course" });
+    const { host, actions } = interruptingHost(active.generationId);
+    /* In flight: the interrupt was issued and the message is not handed over
+       yet. The route is what the `delivering` transition recorded. */
+    let inFlight = null as Awaited<ReturnType<typeof resolveSendReceipt>>;
+    const observing: EngineHost = {
+      ...host,
+      interrupt: async (turnId) => {
+        inFlight = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client });
+        await host.interrupt(turnId);
+      },
+    };
+    await new StructuredDeliveryQueue(interruptActivePort(active, operationId, "change course"), () => observing).drain();
+    expect(actions).toEqual(["interrupt:copilot:1-turn", "send:change course"]);
+    expect(inFlight).toMatchObject({
+      state: "in-flight",
+      delivery: "interrupt-then-turn-started",
+      interruptedTurnId: "copilot:1-turn",
+    });
+
+    /* Settled, reconciled from the journal onto the delivery record. */
+    const settled = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client });
+    expect(settled).toMatchObject({
+      state: "delivered",
+      delivery: "interrupt-then-turn-started",
+      interruptedTurnId: "copilot:1-turn",
+    });
+    expect(active.registry.readOnlySnapshot().heldDeliveries[deliveryId]?.state).toBe("delivered");
+    /* The record answers alone, and still does after a reload from disk, so
+       the route outlives the journal receipt. */
+    expect(receiptOf(active, operationId)).toMatchObject({
+      state: "delivered",
+      evidence: "delivery-record",
+      delivery: "interrupt-then-turn-started",
+      interruptedTurnId: "copilot:1-turn",
+    });
+    const reloaded = new AgentRegistry(active.registryPath);
+    expect(sendReceiptFor(reloaded.readOnlySnapshot(), operationId)).toMatchObject({
+      delivery: "interrupt-then-turn-started",
+      interruptedTurnId: "copilot:1-turn",
+    });
+    expect(runtimeReceiptForSend(settled!)).toMatchObject({ delivery: "interrupt-then-turn-started", interruptedTurnId: "copilot:1-turn" });
+  } finally {
+    active.close();
+  }
+});
+
+test("a send that reached the engine without interrupting anything carries no route", async () => {
+  const active = fixture("plain-route");
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "plain-route-key" });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "delivered", { turnId: "turn-plain" });
+    const settled = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client });
+    expect(settled?.state).toBe("delivered");
+    expect(settled).not.toHaveProperty("delivery");
+    expect(settled).not.toHaveProperty("interruptedTurnId");
+    expect(receiptOf(active, operationId)).not.toHaveProperty("delivery");
+  } finally {
+    active.close();
+  }
+});

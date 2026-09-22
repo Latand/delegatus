@@ -10,6 +10,7 @@ import { effectiveQuota, LIMITS_FRESHNESS_S, quotaAsEngineLimits, quotaReadingFr
 import { LIMITS_RATE_LIMITED_REASON, LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits, type LimitsPayload, type LimitsProvenance, type LimitWindow } from "@/lib/types";
 
 import { AccountsPanel } from "./AccountsPanel";
+import { CopilotFooterRow } from "./CopilotFooterRow";
 import { BurndownPanel } from "./BurndownPanel";
 import { TelegramFooterRow } from "./TelegramConnect";
 import { ChevronDown, Loader2 } from "./icons";
@@ -418,6 +419,9 @@ export function LimitsFooter() {
     <div className="shrink-0 border-t border-border empty:hidden">
       <EngineLimitsBlock engine="claude" label="Claude" limits={snap?.data.claude ?? null} payloadAccountId={snap?.data.claudeAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.claude ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} />
       <EngineLimitsBlock engine="codex" label="Codex" limits={snap?.data.codex ?? null} payloadAccountId={snap?.data.codexAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.codex ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} />
+      {/* GitHub Copilot (docs/design/copilot-engine.md 3.9): accounts and their
+          sign-in command; no limits are reported yet. */}
+      <CopilotFooterRow />
       {/* The personal Telegram connector row (issue #1059) sits beside the
           account controls; the entry point never disappears. */}
       <TelegramFooterRow />

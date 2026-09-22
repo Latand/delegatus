@@ -12,7 +12,7 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
-import { runtimeSettingsCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
+import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
@@ -27,7 +27,7 @@ import {
 import { reapSeveredStructuredHost } from "./registry";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { journalVerdict, sendIsSettled } from "./sendSettlement";
+import { deliveryRouteOf, journalVerdict, sendIsSettled } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -253,6 +253,8 @@ interface TerminalDeliveryOutcome {
   /** The durable operation the journal answered for — the retry leaf, where a
       retry created one. Its retention is what the acknowledgement releases. */
   receiptOperationId: string;
+  /** How a delivered send reached a running turn, when the journal recorded it. */
+  route: ReturnType<typeof deliveryRouteOf>;
 }
 
 /**
@@ -267,7 +269,7 @@ interface TerminalDeliveryOutcome {
  */
 function terminalDeliveryOutcome(
   registry: AgentRegistry,
-  result: { operationId: string; receipt: { status: RuntimeOperationReceipt["status"]; reason?: string | null; conversationId: string; presentationOperationId?: string } },
+  result: { operationId: string; receipt: Pick<RuntimeOperationReceipt, "delivery" | "interruptedTurnId"> & { status: RuntimeOperationReceipt["status"]; reason?: string | null; conversationId: string; presentationOperationId?: string } },
   /** The reservation this receipt is being read for. `conversationId` is the
       target it must agree with, and null where the caller came from the receipt
       rather than from a reservation — there the registry's own (conversation,
@@ -305,6 +307,7 @@ function terminalDeliveryOutcome(
     error: verdict.disposition === "unverified" ? verdict.reason : result.receipt.reason ?? null,
     disposition: verdict.disposition,
     receiptOperationId: result.operationId,
+    route: verdict.state === "delivered" ? deliveryRouteOf(result.receipt) : null,
   };
 }
 
@@ -378,6 +381,7 @@ async function projectLostTerminalAcknowledgement(
       outcome.state,
       outcome.error,
       outcome.disposition,
+      outcome.route,
     );
   } catch (error) {
     console.error("[structured delivery] lost terminal acknowledgement could not be projected", {
@@ -491,7 +495,7 @@ function registrySessionProjection(
     cwd: entry?.cwd ?? generation.launchProfile.cwd,
     artifactPath: generation.path,
     capabilities: {
-      steer: structuredKind === "codex-app-server",
+      ...(structuredKind ? runtimeSteerCapability(sessionKey.engine) : { steer: false }),
       structuredAttention: structuredKind !== null,
       /* This projection is derived from the registry with no live host behind
          it, so it has observed nothing about injection and says so (#1560). */
@@ -558,7 +562,7 @@ async function publishHostState(
     scope: { type: "session", id: conversationId },
     kind: "session-status",
     producer: {
-      kind: adopted.key.engine === "codex" ? "codex-app-server" : "claude-broker",
+      kind: runtimeHostKindForEngine(adopted.key.engine),
       eventKey: [
         "structured-host",
         sessionKeyId(adopted.key),
@@ -573,7 +577,7 @@ async function publishHostState(
     payload: {
       conversationId,
       sessionKey: adopted.key,
-      hostKind: adopted.key.engine === "codex" ? "codex-app-server" : "claude-broker",
+      hostKind: runtimeHostKindForEngine(adopted.key.engine),
       host,
       turn,
       provenance: "structured",
@@ -583,7 +587,7 @@ async function publishHostState(
       cwd: entry.cwd,
       artifactPath: entry.artifactPath,
       capabilities: {
-        steer: adopted.key.engine === "codex",
+        ...runtimeSteerCapability(adopted.key.engine),
         nativeQueue: adopted.key.engine === "codex" && state.activeFlags.includes("native-queue"),
         /* #1560: OBSERVED, never inferred. The flag comes from the running
            executable's negotiated protocol, and a host that has not resolved it
@@ -753,6 +757,9 @@ export async function bindStructuredDeliveryQueue(
              means the send never reached the engine and proves nothing on its
              own, so it carries none. */
           status === "uncertain" ? "unverified" : undefined,
+          /* The journal receipt, not these details: it carries the route the
+             delivering transition recorded, whichever executor began it. */
+          status === "delivered" ? deliveryRouteOf(result.receipt) : null,
         );
         await acknowledgeTerminalProjection(client, [result.operationId]);
         if (status === "delivered" && operationId.startsWith("spawn_message_")) {
@@ -1093,7 +1100,7 @@ export async function bindStructuredDeliveryQueue(
          saturate the Viewer loop and keep the runtime response unread. */
       try {
         acknowledgedEventCursor = await client.producerCursor(
-          item.key.engine === "codex" ? "codex-app-server" : "claude-broker",
+          runtimeHostKindForEngine(item.key.engine),
           `engine-host:${key}:`,
         );
       } catch (error) {
@@ -1530,6 +1537,9 @@ export async function recordDemotionInterruption(
   const conversation = Object.values(snapshot.conversations).find((candidate) =>
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
   if (!entry || !conversation || conversation.supersededBy) return;
+  /* Interruption obligations re-drive Claude and Codex turns a release cut;
+     a Copilot turn cut the same way is resumed by the operator (slice 1). */
+  if (conversation.engine === "copilot") return;
   const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
   if (turnRef === null && conversation.turn.state !== "busy") return;
   const conversationId = registry.canonicalConversationId(conversation.id);

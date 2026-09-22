@@ -588,7 +588,7 @@ async function recoverHostedTranscripts(
   }));
   return {
     entries: described.filter((entry): entry is LivenessTranscript => entry !== null
-      && (entry.engine === "claude" || entry.engine === "codex")
+      && (entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
       && (!project || entry.project === project)),
     truncated,
   };
@@ -748,7 +748,7 @@ export async function agentLivenessSnapshot(
   const inventorySelectionMs = performance.now() - selectionStartedAt;
   if (signal?.aborted) throw livenessAbortError(signal.reason);
 
-  const hydratable = entries.filter((entry) => entry.engine === "claude" || entry.engine === "codex");
+  const hydratable = entries.filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot");
   const evidenceStartedAt = performance.now();
   const deadlineMs = Number.isFinite(request.evidenceDeadlineMs) && (request.evidenceDeadlineMs as number) > 0
     ? Math.floor(request.evidenceDeadlineMs as number)
