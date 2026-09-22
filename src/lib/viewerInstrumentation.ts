@@ -786,8 +786,30 @@ export async function checkStateDatabasesBeforeStores(
 }
 
 /** The full node-runtime startup sequence `src/instrumentation.ts` defers to. */
+/**
+ * The remembered phone-access choice gates this process before it serves a
+ * single request (#2024): a Docker release container is started by
+ * `next start` with no launcher in front of it, while the tailnet mapping
+ * stays live in tailscaled across every deploy and restart. A gate that
+ * cannot be put in place stops the process instead of serving ungated.
+ */
+export async function gatePhoneAccessBeforeServing(
+  exit: (code: number) => never = process.exit,
+  log: (line: string) => void = console.error,
+): Promise<void> {
+  const { PhoneGateRefusal, restorePhoneAccessGate } = await import("@/lib/access/phoneAccess");
+  try {
+    await restorePhoneAccessGate();
+  } catch (error) {
+    if (!(error instanceof PhoneGateRefusal)) throw error;
+    log(`[phone access] phone access is on and the access key cannot be put in place (${error.message}); refusing to serve the tailnet ungated. Fix the key file, or remove the phone-access file beside it to turn phone access off.`);
+    exit(78);
+  }
+}
+
 export async function registerViewerRuntime(): Promise<void> {
   discardWakatimeEnvironmentCredential();
+  await gatePhoneAccessBeforeServing();
   const isCurrent = () => viewerReleaseOwnsTraffic();
   const hotStateDirectory = path.dirname(statePath("state.sqlite"));
   const releaseRevision = () => hotStateWriterRevision(hotStateDirectory);

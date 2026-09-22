@@ -10,7 +10,7 @@ The Docker image pins Node 22 and builds the Next.js app inside the image from a
 
 Runtime tools are split by coupling. The image owns stable runtimes: Node 22, Git, GitHub CLI, OpenSSH client, curl, CA certificates, Python 3, and a faster-whisper venv at `/opt/llv-whisper-venv`. Compose mounts the full host home at `/home/user`, so SSH keys, Git config, GitHub CLI auth, Claude/Codex state, app cache, Hugging Face cache, and workspace roots line up with host paths. `GIT_SSH_COMMAND` points image Git/OpenSSH at the mounted host SSH config, known hosts, and default GitHub identity.
 
-Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount and PID namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, and `bun` from `/home/user/.bun/bin`; `uv` from `/home/user/.local/bin`; `just` and `tmux` from `/usr/bin`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
+Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount and PID namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, and `bun` from `/home/user/.bun/bin`; `uv` from `/home/user/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
 
 ## Production instance
 
@@ -224,6 +224,45 @@ Under the Bun the image pins (1.4.0) the local entry relays Upgrade requests
 and tears down a Viewer stream whose reader went away; Bun 1.3.3's node:http
 does neither, which is one more reason the runtime host runs only under the
 pin. On a shared host, leave the file absent.
+
+### Phone access from the Setup guide
+
+The Setup guide's phone step runs the host's own `tailscale` through the
+`/usr/local/bin/tailscale` shim, so it reads the host's tailscaled and its
+button publishes with `tailscale serve --bg` the way it does on a plain
+checkout. Three things differ, because the Viewer here is a release container
+on a per-deploy candidate port behind the runtime host:
+
+- The tailnet is pointed at the runtime host's entry, which outlives every
+  deploy: the gateway's remote entry when one is bound, otherwise the stable
+  port. The ports come from `state/viewer-entries.json`, which the runtime host
+  writes once its listeners are up, so a moved stable port or a gateway file
+  edited after the host booted never sends the tailnet to a port nothing
+  listens on. A stable port that is a trusted local entry with no bound remote
+  entry is refused with `TRUSTED_ENTRY`: that port vouches for
+  loopback-addressed requests, and the tailnet is never pointed at it.
+- A key the container already holds (`LLV_TOKEN` from `service.env`) is the
+  key the link carries, and turning phone access off keeps it. The trusted
+  local entry and the MCP clients vouch with that same key.
+- With no key in `service.env`, a release gates on the key file once phone
+  access is on. The deploy adapter's health probes, the staging deploy's
+  probes and the trusted local entry then carry the key file's key, so
+  deploys keep passing their probes.
+- A staging Viewer (`LLV_STAGING=1`) shares the flag, the key file and the
+  host's tailscaled with production, so its phone step only reads: turning
+  phone access on or off there is refused with `STAGING`.
+- Turning phone access off while Tailscale publishes a different port keeps
+  the remembered choice (`SERVING_OTHER`): the Viewer on that port shares the
+  flag and would otherwise start ungated under its live mapping.
+- Nothing like the launcher runs before `next start`, so the Viewer puts the
+  gate back itself at boot, before its first request, whenever the
+  `phone-access` file is present: it keeps the key the environment set or
+  reads the key file beside the flag, then restores the link if Tailscale runs
+  and the mapping points at this install. Any `phone-access` file counts,
+  whatever it holds, and the press writes it with a rename, so it is never
+  seen half-written. If the key cannot be put in place,
+  the Viewer exits with status 78 rather than serve the live mapping ungated;
+  fix the key file or remove the `phone-access` file to turn phone access off.
 
 ## Legacy tmux supervisor migration
 

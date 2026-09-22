@@ -109,6 +109,7 @@ make_nsenter_shim bun '$HOME/.bun/bin/bun'
 make_nsenter_shim uv '$HOME/.local/bin/uv'
 make_nsenter_shim just /usr/bin/just
 make_nsenter_shim tmux /usr/bin/tmux
+make_nsenter_shim tailscale /usr/bin/tailscale
 cat > /usr/local/bin/docker <<'WRAPPER'
 #!/bin/sh
 wd=$PWD

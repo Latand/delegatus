@@ -133,4 +133,10 @@ describe("SQLite registry Viewer runtime (#187)", () => {
     expect(dockerfile).toContain("make_nsenter_shim claude '$HOME/.bun/bin/claude'");
     expect(dockerfile).toContain('"$HOME"|"$HOME"/*');
   });
+
+  test("the phone step reaches the host's own Tailscale through a shim (#2024)", () => {
+    /* The container has no tailscaled; without this shim the Setup guide
+       reads a running host Tailscale as not installed. */
+    expect(dockerfile).toContain("make_nsenter_shim tailscale /usr/bin/tailscale");
+  });
 });

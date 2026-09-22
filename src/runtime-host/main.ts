@@ -30,6 +30,7 @@ const {
   VIEWER_GATEWAY_FILE,
   viewerReleaseCredentialResolver,
 } = await import("./deploymentProxy");
+const { recordViewerEntries, VIEWER_ENTRIES_FILE } = await import("./viewerEntries");
 const { ReceiptSweepReporter, receiptSweepDebugEnabled } = await import("./receiptSweep");
 const { registryConversationRetentionStates } = await import("./journalRetention");
 const {
@@ -248,6 +249,24 @@ const remoteEntryProxy = viewerGatewayConfig?.remoteEntryPort
 remoteEntryProxy?.on("error", (error) => {
   console.error(`[runtime host] viewer gateway remote entry 127.0.0.1:${viewerGatewayConfig?.remoteEntryPort} is unavailable, tailnet access fails closed: ${error.message}`);
 });
+/* What actually listens, for whoever points something at these entries (the
+   phone step's tailnet mapping, #2024): a release container is told neither
+   port, and the gateway file may change after this read. Rewritten as each
+   listener comes up; a remote entry that never binds is recorded as absent. */
+const recordBoundViewerEntries = () => {
+  if (!deploymentProxy?.listening) return;
+  try {
+    recordViewerEntries(statePath(VIEWER_ENTRIES_FILE), {
+      stablePort: viewerFrontPort,
+      stableEntry: viewerGatewayConfig ? "local-entry" : "pipe",
+      remoteEntryPort: remoteEntryProxy?.listening ? viewerGatewayConfig?.remoteEntryPort ?? null : null,
+    });
+  } catch (error) {
+    console.error(`[runtime host] could not record the bound viewer entries: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+deploymentProxy?.once("listening", recordBoundViewerEntries);
+remoteEntryProxy?.once("listening", recordBoundViewerEntries);
 if (viewerGatewayConfig) {
   console.error(`[runtime host] viewer gateway: local entry 127.0.0.1:${viewerFrontPort} is ${viewerGatewayConfig.localEntry} at boot (re-read per request); remote entry ${viewerGatewayConfig.remoteEntryPort ? `127.0.0.1:${viewerGatewayConfig.remoteEntryPort}` : "none"}`);
 }
