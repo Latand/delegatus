@@ -8,9 +8,9 @@ import { messageOriginRole, type MessageOrigin } from "./messageOrigin";
 /**
  * The marker line that makes a Codex app-server user record recognisably OURS.
  *
- * New deliveries carry `ctx` (a durable metadata handle) and `origin`.
- * The d-prefixed handle contains the full delivery hash, so browser rows
- * retain their submission identity before metadata is fetched. The server
+ * New deliveries carry `ctx` (a durable metadata handle). Its prefix records
+ * origin, followed by the full delivery hash and a metadata fingerprint, so
+ * browser rows retain their submission identity before metadata is fetched. The server
  * record holds the selected card, sender role and image content digest.
  *
  * Legacy attributes remain independent: `sha256`, base64 JSON `ctx`, `origin`,
@@ -41,11 +41,12 @@ const SHA256 = /^[a-f0-9]{64}$/;
 /** A full 256-bit delivery key, encoded compactly. The prefix distinguishes
  * durable references from every legacy base64 JSON context token. */
 export function structuredUserReferenceKey(value: string): string | null {
-  if (!/^[dh]\.[A-Za-z0-9_-]{43}$/.test(value)) return null;
+  if (!/^(?:[oad]\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{16}|[dh]\.[A-Za-z0-9_-]{43})$/.test(value)) return null;
   try {
-    const binary = atob(value.slice(2).replace(/-/g, "+").replace(/_/g, "/") + "=");
+    const encodedKey = value.split(".")[1]!;
+    const binary = atob(encodedKey.replace(/-/g, "+").replace(/_/g, "/") + "=");
     const key = Array.from(binary, (byte) => byte.charCodeAt(0).toString(16).padStart(2, "0")).join("");
-    return binary.length === 32 && structuredUserReference(key, value[0] === "d") === value ? key : null;
+    return binary.length === 32 && structuredUserReference(key, true).slice(2) === encodedKey ? key : null;
   } catch { return null; }
 }
 
@@ -81,7 +82,8 @@ export function encodeCodexStructuredUserText(
   origin?: MessageOrigin | null,
 ): string {
   if (!structuredUserReferenceKey(metadataRef)) throw new Error("invalid structured-user reference");
-  return `<!-- llv:structured-user ctx=${metadataRef}${origin ? ` origin=${origin.kind}` : ""} -->\n${text}`;
+  const originAttribute = metadataRef.split(".").length === 2 && origin ? ` origin=${origin.kind}` : "";
+  return `<!-- llv:structured-user ctx=${metadataRef}${originAttribute} -->\n${text}`;
 }
 
 export function decodeCodexStructuredUserText(value: string): DecodedCodexStructuredUserText {
@@ -99,7 +101,9 @@ export function decodeCodexStructuredUserText(value: string): DecodedCodexStruct
         const key = structuredUserReferenceKey(attribute!);
         if (key) {
           metadataRef = attribute!;
-          if (attribute!.startsWith("d.")) deliveryDedup = key;
+          if (!attribute!.startsWith("h.")) deliveryDedup = key;
+          if (attribute!.startsWith("o.")) originKind = "operator";
+          if (attribute!.startsWith("a.")) originKind = "agent";
         } else selectedContext = decodeSelectedContextRef(attribute!);
       }
       if (name === "origin" && (attribute === "operator" || attribute === "agent")) originKind = attribute;

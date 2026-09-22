@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, unlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -42,7 +42,7 @@ test("production delivery markers fit 96 characters with selected, empty, absent
   ] as const) {
     const wire = encode("Fixture message", undefined, context, origin, dedup(name));
     expect(wire.split("\n")[0]!.length).toBeLessThanOrEqual(96);
-    expect(decodeWire(wire).metadataRef).toMatch(/^d\.[A-Za-z0-9_-]{43}$/);
+    expect(decodeWire(wire).metadataRef).toMatch(/^[oad]\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{16}$/);
     expect(wire).not.toContain("fixture_card");
     expect(decode(wire)).toMatchObject({ text: "Fixture message", selectedContext: context, origin, deliveryDedup: dedup(name) });
     expect(decodeWire(wire).deliveryDedup).toBe(dedup(name));
@@ -63,6 +63,18 @@ test("an image-only operator delivery preserves its content digest after trimmin
   expect(decode(wire.trimEnd())).toMatchObject({ text: "", structured: true, contentDigest: "b".repeat(64), origin: { kind: "operator" } });
 });
 
+test("recipient-scoped queue ids can coexist with different image metadata", () => {
+  const identity = dedup("shared-native-entry-v1");
+  const first = encode("queued input", "a".repeat(64), selected, { kind: "operator" }, identity);
+  const second = encode("queued input", "b".repeat(64), selected, { kind: "operator" }, identity);
+  expect(decodeWire(first).metadataRef).not.toBe(decodeWire(second).metadataRef);
+  expect(decodeWire(first).deliveryDedup).toBe(identity);
+  expect(decodeWire(second).deliveryDedup).toBe(identity);
+  expect(decode(first).contentDigest).toBe("a".repeat(64));
+  expect(decode(second).contentDigest).toBe("b".repeat(64));
+  expect(second.split("\n")[0]!.length).toBeLessThanOrEqual(96);
+});
+
 test("a fresh process resolves the exact admitted card from the shared state directory", () => {
   const wire = encode("Fixture message", undefined, selected, { kind: "operator" }, dedup("restart"));
   const ref = decodeWire(wire).metadataRef!;
@@ -75,13 +87,19 @@ test("a fresh process resolves the exact admitted card from the shared state dir
   expect(selectedContextArg(ref)).toEqual(selected);
 });
 
-test("a missing handle refuses and an operation cannot be rebound to another card", () => {
+test("a missing or corrupted handle refuses while another card with the same recipient-scoped id remains readable", () => {
   const wire = encode("Fixture message", undefined, selected, { kind: "operator" }, dedup("immutable"));
   const ref = decodeWire(wire).metadataRef!;
-  expect(() => encode("Fixture message", undefined, { ...selected, conversationId: "conversation_other_fixture" },
-    { kind: "operator" }, dedup("immutable"))).toThrow("different metadata");
+  const other = encode("Fixture message", undefined, { ...selected, conversationId: "conversation_other_fixture" },
+    { kind: "operator" }, dedup("immutable"));
+  const otherRef = decodeWire(other).metadataRef!;
+  expect(otherRef).not.toBe(ref);
   expect(readStructuredUserMetadata(ref).selectedContext).toEqual(selected);
-  unlinkSync(join(directory, "structured-user-metadata", `d-${structuredUserReferenceKey(ref)}.json`));
+  const file = (handle: string) => join(directory, "structured-user-metadata", `${handle[0]}-${structuredUserReferenceKey(handle)}-${handle.split(".")[2]}.json`);
+  writeFileSync(file(ref), readFileSync(file(otherRef)));
+  expect(() => selectedContextArg(ref)).toThrow("unavailable");
+  unlinkSync(file(ref));
   expect(() => selectedContextArg(ref)).toThrow("unavailable");
   expect(() => decode(wire)).toThrow("unavailable");
+  expect(selectedContextArg(otherRef)?.state === "selected" && decode(other).selectedContext).toMatchObject({ conversationId: "conversation_other_fixture" });
 });

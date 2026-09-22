@@ -41,7 +41,8 @@ export function readStructuredUserProvenance(refs: string[]): Record<string, Del
 function filename(ref: string): string {
   const key = structuredUserReferenceKey(ref);
   if (!key) throw new Error("invalid structured-user metadata reference");
-  return join(directory(), `${ref[0]}-${key}.json`);
+  const fingerprint = ref.split(".")[2];
+  return join(directory(), `${ref[0]}-${key}${fingerprint ? `-${fingerprint}` : ""}.json`);
 }
 
 export function readStructuredUserMetadata(ref: string): StructuredUserMetadata {
@@ -54,12 +55,12 @@ export function readStructuredUserMetadata(ref: string): StructuredUserMetadata 
     if (value.version !== 1 || (value.selectedContext !== null && !selectedContext)
       || (value.origin !== null && !origin)
       || (value.contentDigest !== null && (typeof value.contentDigest !== "string" || !SHA256.test(value.contentDigest)))
-      || (ref.startsWith("d.") ? value.deliveryDedup !== structuredUserReferenceKey(ref) : value.deliveryDedup !== undefined)) {
+      || (!ref.startsWith("h.") ? value.deliveryDedup !== structuredUserReferenceKey(ref) : value.deliveryDedup !== undefined)) {
       throw new Error("invalid record");
     }
     const record: StructuredUserMetadata = { version: 1, contentDigest: value.contentDigest, selectedContext, origin,
       ...(value.deliveryDedup ? { deliveryDedup: value.deliveryDedup } : {}) };
-    if (ref.startsWith("h.") && metadataReference(record) !== ref) throw new Error("record mismatch");
+    if ((ref.startsWith("h.") || ref.split(".").length === 3) && metadataReference(record) !== ref) throw new Error("record mismatch");
     return record;
   } catch {
     throw new Error("structured-user metadata reference is unavailable; the delivery context cannot be recovered");
@@ -67,11 +68,18 @@ export function readStructuredUserMetadata(ref: string): StructuredUserMetadata 
 }
 
 function metadataReference(record: StructuredUserMetadata): string {
-  return structuredUserReference(record.deliveryDedup ?? createHash("sha256").update(JSON.stringify(record)).digest("hex"), Boolean(record.deliveryDedup));
+  const hash = createHash("sha256").update(JSON.stringify(record)).digest();
+  if (!record.deliveryDedup) return structuredUserReference(hash.toString("hex"), false);
+  const origin = record.origin?.kind === "operator" ? "o" : record.origin?.kind === "agent" ? "a" : "d";
+  // Delivery ids are recipient-scoped. Bind the shared record to its metadata
+  // as well, while retaining the entire delivery hash for existing joins.
+  // A 96-bit fingerprint keeps the line at 95 characters; immutable publication
+  // and the body comparison below refuse a fingerprint collision.
+  return `${origin}.${structuredUserReference(record.deliveryDedup, true).slice(2)}.${hash.toString("base64url").slice(0, 16)}`;
 }
 
 /** Immutable, durable-before-send publication. A retry may reuse identical
- * metadata, but cannot replace a delivery's selected card or image digest.
+ * metadata, but cannot replace the selected card or image digest of a handle.
  * Files live in the shared state volume, independent of checkout and process. */
 export function persistStructuredUserMetadata(record: StructuredUserMetadata): string {
   const ref = metadataReference(record);
