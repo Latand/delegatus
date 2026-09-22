@@ -5309,3 +5309,133 @@ test("a lane that never ran a stage tells its creator the provisioning failed, a
      away: it is offered until the seat closes the lane out. */
   expect(rig.written.at(-1)!.announcedLanes).toEqual([]);
 });
+
+/* ------------------------------------------------------------------------- *
+ * One standing card per project, and a refusal that ends the attempt.
+ *
+ * Observed in production: a seat whose host had been gone for a fortnight was
+ * sent a wake every check, the re-dispatch was refused with "conversation
+ * migration prevents resume succession", the attempt fenced the project for its
+ * whole age bound, retired, and the next check raised a fresh one — minting a
+ * new "wake unresolved" card per attempt, 35 of them on one board. These drive
+ * the production controller with the real card writer over a board file.
+ * ------------------------------------------------------------------------- */
+
+const STANDING_BOARD = () => path.join(process.env.LLV_STATE_DIR!, "tasks.json");
+
+async function unresolvedCardsOn(project: string): Promise<{ id: string; text: string }[]> {
+  const { loadTasks } = await import("@/lib/tasks/store");
+  return loadTasks(STANDING_BOARD())
+    .filter((task) => task.project === project && task.status !== "done" && task.text.includes("monitor-ref: seat-tick-wake-unresolved"))
+    .map((task) => ({ id: task.id, text: task.text }));
+}
+
+/** One project's checks over one durable row, each at its own instant. */
+function standingProject(label: string) {
+  const project = `${label}-${crypto.randomUUID().slice(0, 8)}`;
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "standing-")), "seat-tick.json");
+  writeSeatTickState(project, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, accounting: undefined }, stateFile);
+  const lane = [{ ...OPEN_LANE[0]!, project }];
+  const check = async (at: number, over: Parameters<typeof harness>[0] = {}) => {
+    const rig = harness({ pipelines: lane, settings: defaultSeatTickSettings(project), stateFile, now: at, ...over });
+    const record = await runSeatTickCheck(project, { ...rig.deps, ensureCard: undefined });
+    return { rig, record: record!, row: readSeatTickState(project, stateFile) };
+  };
+  return { project, stateFile, check };
+}
+
+const MIGRATION_REFUSAL: DeliveryOutcome = { ok: false, outcome: "failed", error: "conversation migration prevents resume succession", status: 503 };
+
+test("two unresolved attempts of one project share one standing card, updated in place", async () => {
+  const { project, check } = standingProject("standing-card");
+  const kept = { wakeState: "unknown" as const,
+    delivery: { ok: true, target: null, outcome: "queued", operationId: "op-standing", receipt: {} as never, structured: true } as DeliveryOutcome };
+
+  const first = await check(NOW, kept);
+  expect(first.rig.sent).toHaveLength(1);
+  const firstKey = first.rig.sent[0]!.clientMessageId!;
+  /* Past the interval: the first attempt is carded. */
+  await check(NOW + 61 * MINUTE, kept);
+  expect(await unresolvedCardsOn(project)).toHaveLength(1);
+  /* Past the age bound: it retires, and a second attempt goes out. */
+  const third = await check(NOW + 121 * MINUTE, kept);
+  expect(third.rig.sent).toHaveLength(1);
+  const secondKey = third.rig.sent[0]!.clientMessageId!;
+  expect(secondKey).not.toBe(firstKey);
+  /* Past the second attempt's interval: it is unresolved too. */
+  await check(NOW + 182 * MINUTE, kept);
+
+  const cards = await unresolvedCardsOn(project);
+  expect(cards).toHaveLength(1);
+  expect(cards[0]!.text).toContain(secondKey);
+  expect(cards[0]!.text).toContain("Attempts on this card: 2");
+
+  /* A check that changes nothing leaves it exactly as it stands. */
+  await check(NOW + 187 * MINUTE, kept);
+  expect(await unresolvedCardsOn(project)).toEqual(cards);
+});
+
+test("a permanent refusal of the re-dispatch releases the attempt at once instead of fencing for the age bound", async () => {
+  const { project, check } = standingProject("permanent-refusal");
+  const refusing = { wakeState: "absent" as const, delivery: MIGRATION_REFUSAL };
+
+  const first = await check(NOW, refusing);
+  expect(first.rig.sent).toHaveLength(1);
+  const firstKey = first.rig.sent[0]!.clientMessageId!;
+  expect(first.row.outstandingWake?.clientMessageId).toBe(firstKey);
+
+  /* Five minutes later, well inside the two-hour bound. */
+  const second = await check(NOW + 5 * MINUTE, refusing);
+  const released = second.rig.journal.find((line) => line.delivery?.clientMessageId === firstKey && line.delivery.outcome === "refused");
+  expect(released).toBeDefined();
+  expect(released!.detail).toContain("conversation migration prevents resume succession");
+  /* The fence lifted: this check's own wake was not deferred behind the old one. */
+  expect(second.record.delivery?.outcome).not.toBe("deferred-outstanding");
+  expect(second.row.outstandingWake?.clientMessageId).not.toBe(firstKey);
+  expect(second.row.releasedWake?.clientMessageId).toBe(firstKey);
+
+  const cards = await unresolvedCardsOn(project);
+  expect(cards).toHaveLength(1);
+  expect(cards[0]!.text).toContain("rotate the seat");
+});
+
+test("three consecutive permanent refusals open the circuit: the fourth check prepares no wake", async () => {
+  const { project, check } = standingProject("refusal-circuit");
+  const refusing = { wakeState: "absent" as const, delivery: MIGRATION_REFUSAL };
+  let sent = 0;
+  for (let index = 0; index < 3; index++) sent += (await check(NOW + index * 5 * MINUTE, refusing)).rig.sent.length;
+  expect(sent).toBe(5);
+
+  const fourth = await check(NOW + 15 * MINUTE, refusing);
+  /* The third attempt's re-dispatch, and nothing new. */
+  expect(fourth.rig.sent).toHaveLength(1);
+  expect(fourth.row.outstandingWake).toBeNull();
+  expect(fourth.record.delivery?.outcome).toBe("refusal-circuit");
+  expect(fourth.record.detail).toContain("3 consecutive attempts");
+  const cards = await unresolvedCardsOn(project);
+  expect(cards).toHaveLength(1);
+  expect(cards[0]!.text).toContain("Attempts on this card: 3");
+  expect(cards[0]!.text).toContain("prepares no new wake");
+
+  /* Held: the next check sends nothing and rewrites nothing. */
+  const fifth = await check(NOW + 20 * MINUTE, refusing);
+  expect(fifth.rig.sent).toHaveLength(0);
+  expect(fifth.record.delivery?.outcome).toBe("refusal-circuit");
+  expect(await unresolvedCardsOn(project)).toEqual(cards);
+
+  /* An operator's settings write for the project resets it, without the tick
+     having touched the settings or the seat. */
+  const written = { ...defaultSeatTickSettings(project), updatedAt: new Date(NOW + 21 * MINUTE).toISOString(), setBy: { kind: "operator" } as never };
+  const reset = await check(NOW + 25 * MINUTE, { ...refusing, settings: written });
+  expect(reset.rig.sent).toHaveLength(1);
+  expect(reset.row.outstandingWake).not.toBeNull();
+});
+
+test("a seat rotation resets the refusal circuit", async () => {
+  const { check } = standingProject("refusal-rotation");
+  const refusing = { wakeState: "absent" as const, delivery: MIGRATION_REFUSAL };
+  for (let index = 0; index < 4; index++) await check(NOW + index * 5 * MINUTE, refusing);
+  expect((await check(NOW + 20 * MINUTE, refusing)).rig.sent).toHaveLength(0);
+  const rotated = await check(NOW + 25 * MINUTE, { ...refusing, seat: { conversationId: SUCCESSOR, seatEpoch: 8, path: null } });
+  expect(rotated.rig.sent.map((message) => message.conversationId)).toContain(SUCCESSOR);
+});
