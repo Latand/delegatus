@@ -159,6 +159,21 @@ test.each(["high", "max"])("switching a stage at %s to an unresolved model keeps
   host.remove();
 });
 
+test.each(["gpt-6-sol", "gpt-6-luna"])("a codex stage on %s offers both GPT-6 models and that model's own tiers", (model) => {
+  const effectiveRole = { ...stage().effectiveRole, engine: "codex" as const, model, effort: "max" };
+  const { host, root } = mount(<StagePlaceholderPane slot={slot({ stage: { effectiveRole } })} interactive />);
+  openConfig(host);
+  const [, modelSelect, effortSelect] = [...host.querySelectorAll("select")] as HTMLSelectElement[];
+  expect(modelSelect!.value).toBe(model);
+  const labels = [...modelSelect!.options].map((option) => option.textContent);
+  expect(labels).toContain("GPT-6-Sol");
+  expect(labels).toContain("GPT-6-Luna");
+  expect(effortSelect!.value).toBe("max");
+  expect(Boolean(effortSelect!.querySelector('option[value="ultra"]'))).toBe(model === "gpt-6-sol");
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
 test("editing the prompt saves on blur with ONLY the prompt", async () => {
   const patches: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (url: string, init?: { method?: string; body?: string }) => {

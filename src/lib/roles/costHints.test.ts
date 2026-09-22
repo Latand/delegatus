@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { ROLE_DEFAULTS } from "./defaults";
-import { costClass, costWeight, tightestHeadroom } from "./costHints";
+import { costClass, costWeight, modelSizeClass, tightestHeadroom } from "./costHints";
 
 test("cost classes of the shipped defaults match the design's worked examples", () => {
   const byRole = Object.fromEntries(ROLE_DEFAULTS.map((role) => [role.id, costClass(role.config)]));
@@ -13,6 +13,13 @@ test("cost classes of the shipped defaults match the design's worked examples", 
   expect(costClass({ model: "haiku", effort: "low" })).toBe("light");
   /* An uncatalogued model counts as large. */
   expect(costWeight({ model: "gpt-9-unknown", effort: "low" })).toBe(6);
+});
+
+test("GPT-6-Sol weighs as large and GPT-6-Luna as small, like their 5.6 namesakes", () => {
+  expect(modelSizeClass("gpt-6-sol")).toBe(3);
+  expect(modelSizeClass("gpt-6-luna")).toBe(1);
+  expect(modelSizeClass("gpt-6-sol")).toBe(modelSizeClass("gpt-5.6-sol"));
+  expect(modelSizeClass("gpt-6-luna")).toBe(modelSizeClass("gpt-5.6-luna"));
 });
 
 test("headroom reads the tightest window the model draws on", () => {

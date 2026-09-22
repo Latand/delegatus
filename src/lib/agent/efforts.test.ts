@@ -18,6 +18,14 @@ describe("effortScale", () => {
     expect(effortScale("codex", "gpt-6-astra")).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 
+  test("codex gpt-6-sol carries the max and ultra tiers", () => {
+    expect(effortScale("codex", "gpt-6-sol")).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+  });
+
+  test("codex gpt-6-luna tops out at max and offers no ultra", () => {
+    expect(effortScale("codex", "gpt-6-luna")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
   test("other gpt-5.6 models top out at max", () => {
     expect(effortScale("codex", "gpt-5.6-luna")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(effortScale("codex", "gpt-5.6")).toEqual(["low", "medium", "high", "xhigh", "max"]);
@@ -69,6 +77,7 @@ describe("effortMeter", () => {
     // A tier above the known scale appears at the top.
     expect(effortMeter("codex", "gpt-5.5", "max")).toEqual({ level: 4, slots: 4 });
     expect(effortMeter("codex", "gpt-5.6-luna", "ultra")).toEqual({ level: 5, slots: 5 });
+    expect(effortMeter("codex", "gpt-6-luna", "ultra")).toEqual({ level: 5, slots: 5 });
   });
 
   test("hides on unknown, absent, or unscaled input", () => {
@@ -80,12 +89,14 @@ describe("effortMeter", () => {
   });
 });
 
-test("spawn reasoning admits model-specific top tiers for Astra and Sol", async () => {
+test("spawn reasoning admits model-specific top tiers for Astra and both Sols", async () => {
   const { reasoningFromBody } = await import("./efforts");
-  for (const model of ["gpt-6-astra", "gpt-5.6-sol"]) {
+  for (const model of ["gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol"]) {
     for (const effort of ["max", "ultra"]) {
       expect(reasoningFromBody("codex", { model, effort })).toEqual({ effort, fast: null });
     }
   }
   expect(reasoningFromBody("codex", { model: "gpt-5.6-luna", effort: "ultra" }).error).toBeDefined();
+  expect(reasoningFromBody("codex", { model: "gpt-6-luna", effort: "max" })).toEqual({ effort: "max", fast: null });
+  expect(reasoningFromBody("codex", { model: "gpt-6-luna", effort: "ultra" }).error).toBeDefined();
 });
