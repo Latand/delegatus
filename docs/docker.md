@@ -264,6 +264,57 @@ on a per-deploy candidate port behind the runtime host:
   the Viewer exits with status 78 rather than serve the live mapping ungated;
   fix the key file or remove the `phone-access` file to turn phone access off.
 
+## Agents reach the Viewer MCP tools over HTTP
+
+By default every spawned agent starts its own `bin/mcp-server.mjs` over stdio,
+a Bun process (plus a file-scan worker once it reads transcripts) per agent.
+The Viewer also serves the same tools at `/api/mcp` on its own port, over
+Streamable HTTP, statelessly. Each agent is identified by the per-launch spawn
+capability the Viewer already gives it (`LLV_SPAWN_CAPABILITY`), presented in
+the `x-llv-spawn-capability` header; the registry holds only its digest, and a
+relaunch rotates it. A request without a capability the registry recognises is
+refused. The capability is identity only: reaching `/api/mcp` takes what every
+other route takes, so with `LLV_TOKEN` configured an agent gets through only by
+way of the stable local entry on 8898 while `viewer-gateway.json` trusts it
+(the entry supplies the key for loopback callers).
+
+To move new spawns to the shared endpoint, set the flag in `service.env` and
+remove the Viewer-managed Codex accounts' own `viewer` registration:
+
+```sh
+echo 'LLV_MCP_TRANSPORT=http' >> ~/.config/agent-log-viewer/service.env
+LLV_MCP_TRANSPORT=http scripts/install-mcp.sh
+```
+
+Claude spawns need nothing else: the Viewer writes their whole `--mcp-config`,
+pointing `viewer` at `http://127.0.0.1:8898/api/mcp` with the header taken from
+the agent's own environment, so the file holds no secret. Codex layers a
+thread's configuration over `config.toml` key by key, so whatever an account
+registers wins: a registered `command` cannot take a `url`, and a registered
+`url` cannot be turned back into a launcher. The script therefore removes the
+registration from the Viewer-managed Codex accounts, and the Viewer writes the
+`viewer` server into each thread itself, over HTTP or as the stdio launcher
+per launch. The URL is the stable listener, so a deploy changes nothing on the
+agent side: a call made while the releases swap fails, and the next one
+reaches the new release. Agents already running keep the transport they were
+launched with. Removing the flag alone takes new spawns back to stdio; run the
+script with `LLV_MCP_TRANSPORT=stdio` to register the launcher again for Codex
+sessions started outside the Viewer.
+
+A Viewer launch stays on stdio whatever the flag says when the shared endpoint
+could not serve it: its environment carries no capability (a Claude command
+pasted into a terminal by the attach/resume flow, a host the registry cannot
+match), or `LLV_TOKEN` is configured and the local entry is not trusted. A Codex
+session started outside the Viewer with an account whose registration the
+script removed has no Viewer tools until the script is run with
+`LLV_MCP_TRANSPORT=stdio`.
+
+The gate is read at each launch from the running Viewer, so a key put in place
+later — phone access turning on the key file — sends the next launches back to
+stdio unless the local entry is trusted. An agent already running over HTTP at
+that moment reaches the Viewer only through a trusted local entry, which on the
+Docker shape is what carries the key file's key.
+
 ## Legacy tmux supervisor migration
 
 The Viewer listens on `127.0.0.1:8898`. Legacy tmux panes acquire a separate user-service owner only after the explicitly approved migration. The service runs a foreground tmux server at `/run/user/1000/agent-log-viewer`, then bootstraps the canonical `agents` session.

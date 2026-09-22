@@ -27,6 +27,7 @@ import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { currentMcpHttpCaller } from "./callerContext";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
@@ -932,13 +933,24 @@ const productionCanonicalSeatConversationId = seatIdentityResolver(
   (conversationId) => agentRegistry().canonicalConversationId(conversationId),
 );
 
+/** The spawn capability that names the current caller: the one an HTTP
+    request presented (see `./callerContext`), else the one this stdio process
+    inherited from the agent that launched it. */
+function callerCapability(): string | undefined {
+  return currentMcpHttpCaller()?.capability ?? process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+}
+
 function attentionCallerSources(): AttentionCallerSources {
+  const httpCaller = currentMcpHttpCaller();
   return {
-    ancestry: () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
+    /* An HTTP call is served from the Viewer's own process, whose ancestry
+       leads to no agent host; the capability alone names that caller, exactly
+       as it does for a stdio agent whose host pids were never recorded. */
+    ancestry: httpCaller ? () => [] : () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
     rootConversationId: () => liveRootSession(rootSessionSource())?.conversationId ?? null,
     hosted: () => hostedConversationsFromSnapshot(agentRegistry().readOnlySnapshot()),
     capabilityCallerConversationId: capabilityConversationResolver(
-      process.env[VIEWER_SPAWN_CAPABILITY_ENV],
+      callerCapability(),
       (digest) => agentRegistry().conversationIdForSpawnCapabilityDigest(digest),
     ),
   };
@@ -2604,7 +2616,7 @@ function spawnControlHeaders(): Record<string, string> {
  * operator told to rotate performs it here and the shell fallback is gone.
  */
 function callerCapabilityHeaders(): Record<string, string> {
-  const capability = process.env[VIEWER_SPAWN_CAPABILITY_ENV]?.trim() ?? "";
+  const capability = callerCapability()?.trim() ?? "";
   return {
     ...internalServiceHeaders("mcp"),
     ...(/^[A-Za-z0-9_-]{43}$/.test(capability) ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {}),

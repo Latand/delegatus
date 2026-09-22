@@ -645,3 +645,29 @@ test("a host-terminal resume spec resolves the CLI as the host, not the containe
     else process.env.LLV_DOCKER_NSENTER_SHIMS = previous;
   }
 });
+
+test("with the HTTP flag, a terminal attach/resume command keeps the stdio Viewer server", async () => {
+  const { resumeSpecForSession } = await import("./cli");
+  const account = createManagedClaudeAccount("attach-http-probe");
+  const previous = { transport: process.env.LLV_MCP_TRANSPORT, capability: process.env.LLV_SPAWN_CAPABILITY, token: process.env.LLV_TOKEN };
+  process.env.LLV_MCP_TRANSPORT = "http";
+  /* Even with a capability in the Viewer's own environment: a command pasted
+     into a terminal carries none, so the shared endpoint could name nobody. */
+  process.env.LLV_SPAWN_CAPABILITY = "c".repeat(43);
+  delete process.env.LLV_TOKEN;
+  try {
+    const sessionId = ["23456789", "2345", "4345", "8345", "23456789abcd"].join("-");
+    const spec = resumeSpecForSession("claude", sessionId, SANDBOX, account.home, { hostTerminal: true });
+    const configPath = path.join(account.home, ".llv", "spawn-mcp", `resume-${sessionId}.json`);
+    expect(spec!.command).toContain(configPath);
+    const viewer = (JSON.parse(fs.readFileSync(configPath, "utf8")) as { mcpServers: Record<string, Record<string, unknown>> }).mcpServers.viewer!;
+    expect(viewer.type).toBe("stdio");
+    expect(String((viewer.args as string[])[0])).toEndWith(path.join("bin", "mcp-server.mjs"));
+    expect(viewer).not.toHaveProperty("url");
+  } finally {
+    for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_SPAWN_CAPABILITY", previous.capability], ["LLV_TOKEN", previous.token]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
