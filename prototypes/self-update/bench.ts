@@ -3,6 +3,7 @@
 
      bun prototypes/self-update/bench.ts start [--at <sha|tag>] [--root <dir>]
      bun prototypes/self-update/bench.ts status [--root <dir>]
+     bun prototypes/self-update/bench.ts restart-prototype [--root <dir>]
      bun prototypes/self-update/bench.ts stop [--purge] [--root <dir>]
 
    Run it with the pinned Bun (~/.cache/llv-bun-1.4.0/bin/bun): it passes its
@@ -125,6 +126,34 @@ async function waitHttp(url: string, ms: number): Promise<void> {
   throw new Error(`${url} did not answer 200 within ${Math.round(ms / 1000)} s`);
 }
 
+function startPrototype(bench: BenchFile): Recorded {
+  const logFd = openSync(join(bench.root, "logs", "prototype.log"), "a");
+  const prototype = spawn(bench.bun, [
+    SERVER, "--checkout", bench.checkout, "--config-root", bench.configRoot, "--web-port", String(bench.ports.web),
+    "--port", String(bench.ports.prototype), "--bun", bench.bun,
+    "--processes", join(bench.configRoot, "self-update", "processes.json"),
+  ], { cwd: import.meta.dir, env: process.env, detached: true, stdio: ["ignore", logFd, logFd] });
+  closeSync(logFd);
+  if (!prototype.pid) throw new Error("the prototype did not start");
+  prototype.unref();
+  say(`prototype started, PID ${prototype.pid}`);
+  return { pid: prototype.pid, startIdentity: readStartIdentity(prototype.pid) ?? "" };
+}
+
+/* Replaces the prototype process alone (after an edit to its code). The web
+   process and the runtime host keep running; the new prototype adopts them
+   from processes.json. */
+async function restartPrototype(argv: string[]): Promise<void> {
+  const root = resolve(flag(argv, "--root") ?? DEFAULT_ROOT);
+  const bench = readBench(root);
+  if (!bench) throw new Error(`no bench.json under ${root}`);
+  if (bench.pids.prototype) await stopRecorded("prototype", bench.pids.prototype);
+  bench.pids.prototype = startPrototype(bench);
+  writeBench(root, bench);
+  await waitHttp(`${bench.urls.prototype}api/state`, 20_000);
+  say(`Self-update ${bench.urls.prototype}`);
+}
+
 async function start(argv: string[]): Promise<void> {
   const root = resolve(flag(argv, "--root") ?? DEFAULT_ROOT);
   const at = flag(argv, "--at");
@@ -210,16 +239,8 @@ async function start(argv: string[]): Promise<void> {
     if (web.status.state !== "healthy") throw new Error(`web did not become healthy: ${web.status.error}\n${web.lines().slice(-20).join("\n")}`);
     say(`web healthy, PID ${web.status.pid}, port ${webPort}`);
 
-    const logFd = openSync(join(logs, "prototype.log"), "w");
-    const prototype = spawn(bun, [
-      SERVER, "--checkout", checkout, "--config-root", configRoot, "--web-port", String(webPort),
-      "--port", String(prototypePort), "--bun", bun, "--processes", config.processesFile,
-    ], { cwd: import.meta.dir, env: process.env, detached: true, stdio: ["ignore", logFd, logFd] });
-    closeSync(logFd);
-    if (!prototype.pid) throw new Error("the prototype did not start");
-    bench.pids.prototype = { pid: prototype.pid, startIdentity: readStartIdentity(prototype.pid) ?? "" };
+    bench.pids.prototype = startPrototype(bench);
     writeBench(root, bench);
-    prototype.unref();
     await waitHttp(`http://127.0.0.1:${prototypePort}/api/state`, 20_000);
   } catch (error) {
     say("start failed; stopping what this run started");
@@ -287,8 +308,9 @@ try {
   if (command === "start") await start(rest);
   else if (command === "stop") await stop(rest);
   else if (command === "status") status(rest);
+  else if (command === "restart-prototype") await restartPrototype(rest);
   else {
-    console.log("Usage: bun prototypes/self-update/bench.ts start [--at <sha|tag>] [--root <dir>] | status | stop [--purge]");
+    console.log("Usage: bun prototypes/self-update/bench.ts start [--at <sha|tag>] [--root <dir>] | status | restart-prototype | stop [--purge]");
     process.exit(command ? 2 : 0);
   }
 } catch (error) {

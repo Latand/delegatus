@@ -2,14 +2,18 @@
 
      CHROME_BIN=google-chrome-stable bun prototypes/self-update/capture.ts \
        --url http://127.0.0.1:<port>/ --out <dir> --name <state> [--click <action>]... [--open-logs]
+       [--post '<path>|<json body>' [--post-wait-ms <n>]]
 
    Writes <out>/<name>-1440.png and <name>-390.png and appends one entry per
    viewport to <out>/geometry.json: horizontal overflow of the page, buttons
    whose box leaves the viewport, and pairs of text runs whose ink overlaps
    (text rects clipped by every overflow ancestor, so a truncated title is
    measured as drawn). `--click` presses a UI-only control before the capture
-   (arm-host arms the runtime-host confirm); `--open-logs` expands every log
-   disclosure. Mutating actions go through the API, not through this driver. */
+   (arm-host arms the runtime-host confirm; a value starting with `[` is a
+   selector, e.g. '[data-log="step-build"]'); `--open-logs` expands every log
+   disclosure. `--post` fires one API action after both viewports are open and
+   shoots them `--post-wait-ms` later, which is how a transient state such as
+   a restart's "starting" is caught. */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
@@ -35,6 +39,8 @@ const out = resolve(flags(argv, "--out")[0] ?? "/var/tmp/llv-self-update-frames"
 const name = flags(argv, "--name")[0];
 const clicks = flags(argv, "--click");
 const openLogs = argv.includes("--open-logs");
+const post = flags(argv, "--post")[0];
+const postWaitMs = Number(flags(argv, "--post-wait-ms")[0] ?? 1_500);
 if (!url || !name) {
   console.error("Usage: capture.ts --url <url> --out <dir> --name <state> [--click <action>]... [--open-logs]");
   process.exit(2);
@@ -89,24 +95,37 @@ function measure(): Measure {
   return { overflowX: doc.scrollWidth > doc.clientWidth, scrollWidth: doc.scrollWidth, clientWidth: doc.clientWidth, clippedButtons: clipped, overlaps, height: doc.scrollHeight };
 }
 
-const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN ?? "google-chrome-stable", headless: true });
+const chrome = process.env.CHROME_BIN ?? "google-chrome-stable";
+const browser = await chromium.launch({ executablePath: Bun.which(chrome) ?? chrome, headless: true });
 const report = join(out, "geometry.json");
 let entries: Record<string, unknown>[] = [];
 try { entries = JSON.parse(readFileSync(report, "utf8")) as Record<string, unknown>[]; } catch { /* first capture */ }
 let failed = false;
+const viewports = [[1440, 900, false], [390, 844, true]] as const;
+const pages: { width: number; page: import("playwright-core").Page }[] = [];
 try {
-  for (const [width, height, mobile] of [[1440, 900, false], [390, 844, true]] as const) {
+  for (const [width, height, mobile] of viewports) {
     const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: mobile ? 2 : 1, hasTouch: mobile, isMobile: mobile });
     const page = await context.newPage();
     await page.goto(url, { waitUntil: "load" });
     await page.waitForFunction(() => document.querySelector("#footer")?.textContent?.includes("Live") ?? false, undefined, { timeout: 10_000 });
-    for (const action of clicks) {
-      await page.locator(`[data-action="${action}"]`).first().click();
-    }
+    for (const action of clicks) await page.locator(action.startsWith("[") ? action : `[data-action="${action}"]`).first().click();
+    pages.push({ width, page });
+  }
+  /* A transient state (stopping, starting) is caught by firing the action once,
+     after both viewports are open, and shooting both right after. */
+  if (post) {
+    const [path, body] = post.split("|");
+    const response = await fetch(new URL(path!, url), { method: "POST", headers: body ? { "content-type": "application/json" } : {}, body });
+    console.log(`POST ${path} → ${response.status}`);
+    await Bun.sleep(postWaitMs);
+  }
+  for (const { width, page } of pages) {
     if (openLogs) {
-      for (const toggle of await page.locator('[data-action="toggle-log"][aria-expanded="false"]').all()) await toggle.click();
+      const closed = page.locator('[data-action="toggle-log"][aria-expanded="false"]');
+      for (let guard = 0; guard < 12 && await closed.count() > 0; guard += 1) await closed.first().click();
     }
-    await page.waitForTimeout(400);
+    if (!post) await page.waitForTimeout(300);
     const file = join(out, `${name}-${width}.png`);
     await page.screenshot({ path: file, fullPage: true });
     const measured = await page.evaluate(measure);
@@ -116,7 +135,6 @@ try {
     entries.push({ name, width, file, capturedAt: new Date().toISOString(), ...measured });
     console.log(`${bad ? "FAIL" : "ok  "} ${name} @${width}: overflowX=${measured.overflowX} clipped=${measured.clippedButtons.length} overlaps=${measured.overlaps.length} height=${measured.height} → ${file}`);
     for (const line of [...measured.clippedButtons, ...measured.overlaps]) console.log(`       ${line}`);
-    await context.close();
   }
 } finally {
   await browser.close();
