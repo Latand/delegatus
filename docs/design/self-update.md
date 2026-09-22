@@ -1,4 +1,4 @@
-# Self-update prototype — design (#2007)
+# Self-update — design (#2007)
 
 ## Originating requirement
 
@@ -14,6 +14,121 @@ specification for issue #2007:
 
 Everything below is validated against that requirement. What the requirement
 does not demand is kept in "Deferred" at the end.
+
+## Viewer integration (the integration lane)
+
+The operator accepted the prototype's design and look on 2026-09-22 and asked
+for it to be built into the Viewer directly, with no further critique of the
+prototype. The standalone prototype (`prototypes/self-update/`) is removed by
+the integration; the sections after this one describe it as it was accepted
+and remain the reference for the layout, the copy and the honesty rules the
+integration keeps. Its measured geometry stays as a record in
+`evidence/self-update-prototype/geometry.json`.
+
+**Prior work consulted.** `search_transcripts` for "self-update", "runtime
+deployments", "deploy from the UI" and "runtime deployments operator
+capability header", project-scoped and unscoped. The relevant hits were this
+design's own lanes (the design stage, the build stage, the critique) and the
+orchestrator's summary to the operator before the build, which already named
+the one open point: on the Docker install "restart runtime host" is not a
+SIGTERM. The operator's original request, paraphrased: an update button that
+pulls the new version, separate restarts for web and the runtime host because
+the latter drops the agents it supervises, visible status while each one
+builds and restarts, and a short summary of what changed. Nothing in the
+transcripts decided the seams below; they are read from the code.
+
+**What the code says (observed, not assumed).**
+
+| fact | where |
+| --- | --- |
+| Mutating operator routes gate on `rejectCrossOrigin` (the loopback perimeter) and then `requireOperatorAuthority`, which refuses any caller presenting the conversation capability the registry issued it | `src/lib/sameOrigin.ts`, `src/lib/agent/operatorAuthority.ts`, e.g. `src/app/api/onboarding/health/route.ts` |
+| `POST /api/runtime/deployments` itself checks only same-origin, and admits `{revision}` (40-hex) or `{ref}` plus an `idempotencyKey` through `requestViewerDeployment` | `src/app/api/runtime/deployments/route.ts`, `src/lib/runtime/deploymentRuntime.ts` |
+| The runtime host runs deployments only with `LLV_VIEWER_DEPLOYMENTS=1`; without them it answers `viewer-deployment-read` with `viewer deployments are disabled`, and with them it answers `null` for an unknown id | `src/runtime-host/main.ts`, `src/runtime-host/host.ts` |
+| Every deployment transition is journalled as a `deployment.state` event carrying the whole status; the phases run admitted → building → candidate-starting → candidate-health → promoting → post-promotion-health → host-handoff → succeeded, or into rolling-back / rolled-back / failed | `src/runtime-host/journal.ts` (`updateViewerDeployment`), `src/runtime-host/deployment.ts`, `src/lib/runtime/contracts.ts` |
+| The host hands itself over to a successor only when its own generation drifted from the candidate's | `stageDriftedHostSuccessor` in `src/runtime-host/deployment.ts` |
+| `bin/cli.mjs` stops everything and exits when its web child exits, and restarts a runtime host that died after it was ready, from the package root | `startServer`, `createRuntimeHostSupervisor` |
+| `git` in the image is the real one (the nsenter shims are claude, codex, bun, uv, just, tmux, docker) | `Dockerfile` |
+
+**Mode detection, server-side** (`src/lib/selfUpdate/mode.ts`). A web
+process started by `bin/cli.mjs` receives `LLV_SELF_UPDATE_RECORD`, the path
+of the launcher record. A record whose launcher PID still carries its
+recorded start identity makes this a **checkout** install (or a packaged one
+when the record names no checkout, which the surface sends to its package
+manager). Otherwise the runtime host is asked for a deployment that cannot
+exist: `null` makes this the **managed** install, the refusal or no answer
+makes it **unsupported**, and the surface says which and offers nothing.
+
+**Managed install** (`src/lib/selfUpdate/managed.ts`). The check is the
+prototype's check against a bare repository the Viewer keeps at
+`<state>/self-update/check.git`, whose object store borrows the deploy
+adapter's canonical mirror through git alternates (read-only; nothing is
+written into the mirror). The installed revision is the release target
+(`viewer-release.json`). "Update" makes the request
+`POST /api/runtime/deployments` makes, with the exact revision the check
+showed (`{revision, idempotencyKey: "self-update-<sha12>-<press id>"}`), so
+what ships is what the changelog described; a remote that moved since is not
+deployed silently. The request id is written to
+`<state>/self-update/managed.json`, because the web process that asked is
+replaced during the deployment and the next one carries on reading the same
+deployment. Progress is the deployment record, read the way
+`GET /api/runtime/deployments/:id` reads it, once a second while the surface
+is open. The runtime event stream was not used: a new subscriber has no cheap
+head cursor (the journal answers `reset` for a cursor past its published
+seq), so catching up would replay the retained window. The six phases map to
+six steps (resolve, build image, start candidate, health check, switch web,
+hand over runtime host). The web block shows "switching" while web is
+promoted and the host block shows "handing over" during the fence handoff.
+Neither block has a restart button: in this install a restart is what a
+deployment does, never a signal. A failed deployment says whether it was
+rolled back, and "Deploy again" makes a new deployment of the same revision.
+
+**Checkout install** (`src/lib/selfUpdate/steps.ts`, `release.ts`,
+`launcher.ts`, `bin/self-update-supervisor.mjs`). The step runner is the
+prototype's, unchanged in behaviour: fetch into `refs/self-update/tip`, a
+worktree per release under the cache
+(`~/.cache/agent-log-viewer/self-update/<installId>/releases/<sha12>`),
+install, build, then publish `<state>/self-update/release-<installId>.json`,
+with the 4 GB memory guard before install and build and the remote-moved
+check after fetch. The build runs with the serving install's `LLV_*`,
+`NEXT_*`/`__NEXT_*`, `NODE_ENV`, `PORT`, `HOSTNAME` and `TMPDIR` dropped and a
+scratch `LLV_STATE_DIR` of its own (#1905: a script that needs *a* state
+directory sets one; it never claims an owner token).
+
+The prototype's process supervisor could not move into the Viewer as it was:
+the web process is the page the operator restarts from, and the CLI exits
+when its web child exits. So the supervisor's rules move into the launcher,
+which already owns both children:
+
+- it records each child's PID, `/proc` start identity, start time and release
+  (`<state>/self-update/launcher-<installId>.json`), and the Viewer reads that
+  record and never signals a process itself;
+- every start and restart reads the published release and runs from it only
+  while its directory holds a build of the named commit and the package root
+  has not moved since it was published (a checkout updated by hand wins);
+- a restart is requested by writing `request-<installId>.json`; the launcher
+  polls for it, stops that one child through the handle it spawned (SIGTERM,
+  then SIGKILL after 2 s, as `stopChild` always did), starts it from the
+  installed release, and waits for readiness: for the host the fence names the
+  new PID and the socket answers; for web `/api/files` answers, then `GET /`
+  is 200 and so is the first script chunk that page references;
+- a new web process that does not become ready gives way to the release it
+  replaced, and the record says so; the host does the same.
+
+"Restart runtime host" keeps the inline confirmation. "Restart web" takes the
+page's own server away: the surface says it reconnects, polls until a server
+answers, and offers to reload once a different web process is healthy.
+
+**Routes.** `GET /api/self-update` (Snapshot), `GET /api/self-update/events`
+(SSE, polling fallback in the client), `POST /api/self-update/check`,
+`POST /api/self-update/update` (`{key, retry?}`), `POST
+/api/self-update/restart` (`{role, confirm}`, `confirm:true` required for the
+runtime host), `GET /api/self-update/steps/:step/log`. Every POST passes the
+operator gate above: only the operator may update or restart.
+
+**Surface.** One dialog (full screen on the phone) mounted once in the Viewer,
+opened from the rail menu and from both phone board menus beside the setup
+guide's rows. It keeps the prototype's layout, sections, states and copy,
+worded through `src/lib/i18n` in English and Ukrainian.
 
 ## Prior work
 
@@ -696,26 +811,21 @@ the bench for the operator afterwards.
 
 ## Deferred — not currently justified by the requirement
 
-- **Viewer integration.** On a Docker install the same UI would not build in
-  place: it would `POST /api/runtime/deployments` with `{"ref":
-  "refs/heads/main","idempotencyKey":…}` (or a pinned `revision`) carrying the
-  operator spawn capability header the route requires, then follow `GET
-  /api/runtime/deployments/:id` and the runtime SSE stream for the phases the
-  host journals (build candidate, verify, promote, host handoff), and the
-  "restart runtime host" action would be the fence handoff the host already
-  performs rather than a `SIGTERM`. The check (`ls-remote` against the
-  canonical remote), the changelog delta and the status blocks lift as they
-  are; the step runner and the process supervisor do not. That needs the
-  settings surface, the capability plumbing and a decision on who may trigger
-  a deploy from the UI.
-- **Automatic restart after update** and the CLI's crash-restart backoff.
-- **i18n** (the Viewer is en + uk; the prototype is English only).
-- **Auth.** The prototype binds loopback and has no token. Anything reachable
-  over a tailnet needs the Viewer's operator capability.
-- **Docker installs** (the runtime-host container, candidate containers) and
-  **Windows** (named pipes, no `/proc`, no process groups).
+Delivered by the integration and so no longer deferred: Viewer integration,
+i18n, operator-only authority, the Docker install. Still deferred:
+
+- **Automatic restart after update.** The CLI's crash-restart backoff for the
+  runtime host is unchanged; a web process that dies unexpectedly still stops
+  the launcher, as before.
+- **Process output in the surface.** The launcher's children write to the
+  launching terminal; the checkout install's process blocks carry no "last
+  output" disclosure.
+- **A standalone runtime-host restart on the managed install.** The host
+  hands itself over within a deployment, only when its generation drifted;
+  there is no request that asks for a handover alone.
+- **Windows** (named pipes, no `/proc`, no process groups).
 - **Rollback** to the previous release (its directory is still on disk).
 - **Pruning** release directories no process runs and no pointer names; each
   holds its own `node_modules` and `.next` (about 1.8 GB on this repository).
-- **A shared helper** between the prototype and `bin/cli.mjs` for the child
-  environment, the fence-owner parse and port allocation.
+- **The launcher updating itself.** `bin/cli.mjs` keeps running the version it
+  was started as until the operator restarts it.

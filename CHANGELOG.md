@@ -8,17 +8,23 @@ guarantees for the 1.x series.
 ## [Unreleased]
 
 ### Added
-- A standalone self-update prototype under `prototypes/self-update/`, not
-  wired into the Viewer yet. Against one managed install (a checkout, its own
-  config root, its web process and its runtime host) it checks the remote for
-  a newer revision and summarises the commits and changelog entries between
-  the two, builds the new revision in its own release directory through five
-  live steps (fetch, check out, install, build, ready) that stop at the first
-  failure and never write where the running processes serve from, and
-  restarts web and the runtime host onto it as two separate actions, the
-  second behind an inline confirmation. `bench.ts start`
-  builds a duplicate install pinned to an older commit under `/var/tmp` to try
-  it on; `bench.ts stop` stops every process it recorded (#2007).
+- An **Update** surface, reached from the rail menu and the phone's board
+  menus beside the setup guide. It checks the canonical repository for a newer
+  `main`, shows the commits and changelog entries between the running release
+  and the new one, and updates the install in one of two ways, decided by the
+  server from what the install says about itself. A managed Docker install
+  (runtime host with Viewer deployments on) deploys the exact revision the
+  check showed through the runtime host's own deployment, and the surface
+  follows its phases until web has switched and the runtime host has handed
+  itself over. A git checkout started by `agent-log-viewer` builds the new
+  revision in a release directory of its own through five live steps (fetch,
+  check out, install, build, ready), never where the running processes serve
+  from, and then restarts web and the runtime host onto it as two separate
+  actions, the second behind an inline confirmation. The launcher performs
+  those restarts from PIDs it recorded, and falls back to the release it
+  replaced when the new one does not start. Only the operator can update or
+  restart: an agent presenting its capability is refused. English and
+  Ukrainian (#2007).
 
 ### Changed
 - Board placements are stored in SQLite (`state.sqlite`, collection `board`),
