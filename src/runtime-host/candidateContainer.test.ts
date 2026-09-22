@@ -9,8 +9,8 @@ import { WAKATIME_CREDENTIAL_ENV, withoutWakatimeCredential } from "@/lib/wakati
 import {
   AGENT_REGISTRY_SQLITE_ENV,
   obsoleteManagedViewerContainers,
-  viewerAuthenticationTokenFromConfig,
   viewerCandidateDockerArgs,
+  viewerCandidateGateKey,
   viewerCandidateTmuxEnvironment,
   viewerComposeSnapshotWithoutWakatimeCredential,
   viewerComposeServiceFromConfig,
@@ -350,13 +350,13 @@ test("candidate authentication requirement comes from its persisted Compose conf
     ...composeService,
     environment: { ...composeService.environment, LLV_TOKEN: "candidate-token" },
   };
-  expect(viewerAuthenticationTokenFromConfig(JSON.stringify({ services: { viewer: authenticated } }))).toBe("candidate-token");
-  expect(viewerAuthenticationTokenFromConfig(JSON.stringify({ services: { viewer: composeService } }))).toBeNull();
-  expect(viewerAuthenticationTokenFromConfig(JSON.stringify({
+  expect(viewerCandidateGateKey(JSON.stringify({ services: { viewer: authenticated } }))).toBe("candidate-token");
+  expect(viewerCandidateGateKey(JSON.stringify({ services: { viewer: composeService } }))).toBeNull();
+  expect(viewerCandidateGateKey(JSON.stringify({
     services: { viewer: { ...composeService, environment: { ...composeService.environment, LLV_TOKEN: "" } } },
   }))).toBeNull();
-  expect(viewerAuthenticationTokenFromConfig(JSON.stringify({
+  expect(viewerCandidateGateKey(JSON.stringify({
     services: { viewer: { ...composeService, environment: { ...composeService.environment, LLV_TOKEN: "token with spaces" } } },
   }))).toBe("token with spaces");
-  expect(() => viewerAuthenticationTokenFromConfig("{broken")).toThrow();
+  expect(() => viewerCandidateGateKey("{broken")).toThrow();
 });

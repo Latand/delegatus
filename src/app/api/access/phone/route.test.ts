@@ -5,8 +5,17 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
-import type { AccessResponse, PhoneActionFailure } from "@/lib/access/phoneAccess";
+import { PhoneGateRefusal, restorePhoneAccessGate, type AccessResponse, type PhoneActionFailure } from "@/lib/access/phoneAccess";
+import { statePath } from "@/lib/configDir";
+import { gatePhoneAccessBeforeServing } from "@/lib/viewerInstrumentation";
+import { proxy } from "@/proxy";
+import { viewerCandidateGateKey } from "@/runtime-host/candidateContainer";
+import { viewerHealthRequestPlan } from "@/runtime-host/deploymentHealth";
+import { VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
+import { recordViewerEntries, VIEWER_ENTRIES_FILE } from "@/runtime-host/viewerEntries";
 import { createTailscaleStub, STUB_DNS_NAME, type TailscaleStub } from "@/test-helpers/tailscaleStub";
+
+import { detectTailscale } from "../../../../../bin/tailscale.mjs";
 
 import { GET } from "../route";
 import { POST } from "./route";
@@ -19,11 +28,20 @@ import { POST } from "./route";
 
 const PORT = 4310;
 const GATE = ["LLV_TOKEN", "LLV_TS_HOST", "LLV_TS_URL"] as const;
-const SAVED = ["PATH", "XDG_CONFIG_HOME", "PORT", "HOSTNAME", ...GATE] as const;
+const SAVED = ["PATH", "XDG_CONFIG_HOME", "PORT", "HOSTNAME", "LLV_DOCKER_NSENTER_SHIMS", "LLV_DOCKER_TAILSCALE_SHIM", "LLV_VIEWER_PORT", "LLV_STAGING", ...GATE] as const;
 const saved: Record<string, string | undefined> = {};
 
 let stub: TailscaleStub;
 let config: string;
+let canary: string;
+
+/* Where a Docker install's shim resolves when a test forgets to point it at
+   the stand-in. The real default is the host's own tailscaled wherever
+   `/usr/local/bin/tailscale` exists (this image, the macOS app's CLI, Intel
+   Homebrew), so it is never left in place: this one records the call and
+   refuses, and every test fails if it ran. */
+const canaryShim = () => path.join(canary, "tailscale");
+const canaryLog = () => path.join(canary, "called");
 
 /* Name-indexed on purpose: the three gate variables are credentials, and a
    literal assignment to one reads as a leak to the publication gate. */
@@ -36,18 +54,32 @@ beforeEach(() => {
   for (const name of SAVED) saved[name] = process.env[name];
   stub = createTailscaleStub();
   config = fs.mkdtempSync(path.join(os.tmpdir(), "llv-phone-access-config-"));
+  canary = fs.mkdtempSync(path.join(os.tmpdir(), "llv-phone-access-canary-"));
+  fs.writeFileSync(canaryShim(), `#!/bin/sh\necho "$*" >> "${canaryLog()}"\nexit 97\n`, { mode: 0o755 });
+  setEnv("LLV_DOCKER_TAILSCALE_SHIM", canaryShim());
+  setEnv("LLV_STAGING", undefined);
   setEnv("XDG_CONFIG_HOME", config);
   setEnv("PATH", stub.dir);
   setEnv("PORT", undefined);
   setEnv("HOSTNAME", "127.0.0.1");
+  setEnv("LLV_DOCKER_NSENTER_SHIMS", undefined);
+  setEnv("LLV_VIEWER_PORT", undefined);
   for (const name of GATE) setEnv(name, undefined);
 });
 
 afterEach(() => {
+  const canaryCalls = fs.existsSync(canaryLog()) ? fs.readFileSync(canaryLog(), "utf8") : "";
   for (const name of SAVED) setEnv(name, saved[name]);
   stub.cleanup();
+  fs.rmSync(canary, { recursive: true, force: true });
   fs.rmSync(config, { recursive: true, force: true });
+  fs.rmSync(gatewayFile(), { force: true });
+  fs.rmSync(entriesFile(), { force: true });
+  expect(canaryCalls).toBe("");
 });
+
+const gatewayFile = () => statePath(VIEWER_GATEWAY_FILE);
+const entriesFile = () => statePath(VIEWER_ENTRIES_FILE);
 
 const appDir = () => path.join(config, "agent-log-viewer");
 const flagFile = () => path.join(appDir(), "phone-access");
@@ -284,5 +316,359 @@ describe("POST /api/access/phone disable", () => {
       body: JSON.stringify({ action: "rotate" }),
     }));
     expect(response.status).toBe(400);
+  });
+});
+
+/*
+ * A managed Docker install (#2024). The Viewer runs `next start` in a release
+ * container on a per-deploy candidate port behind the runtime host, reaches
+ * the host's Tailscale through the nsenter shim, and is started with no
+ * launcher in front of it.
+ */
+const CANDIDATE_PORT = 18_965;
+const STABLE_PORT = 8898;
+
+function dockerInstall(): void {
+  setEnv("LLV_DOCKER_NSENTER_SHIMS", "1");
+  setEnv("LLV_DOCKER_TAILSCALE_SHIM", path.join(stub.dir, "tailscale"));
+  setEnv("PORT", String(CANDIDATE_PORT));
+}
+
+function writeGateway(config: Record<string, unknown>): void {
+  fs.mkdirSync(path.dirname(gatewayFile()), { recursive: true });
+  fs.writeFileSync(gatewayFile(), JSON.stringify(config));
+}
+
+function rememberChoice(key: string): void {
+  fs.mkdirSync(appDir(), { recursive: true });
+  fs.writeFileSync(flagFile(), "tailscale\n", { mode: 0o600 });
+  fs.writeFileSync(tokenFile(), key, { mode: 0o600 });
+}
+
+describe("on a Docker install the phone step drives the host's Tailscale (#2024)", () => {
+  test("the Tailscale CLI resolves to the nsenter shim", async () => {
+    const shim = path.join(stub.dir, "tailscale");
+    setEnv("PATH", stub.emptyDir);
+    await expect(detectTailscale({ dockerShim: shim })).rejects.toThrow();
+    setEnv("LLV_DOCKER_NSENTER_SHIMS", "1");
+    expect(await detectTailscale({ dockerShim: shim })).toBe(shim);
+  });
+
+  test("the shim location is the override when one is set, so a test never reaches the default", async () => {
+    /* The override replaces the default outright: with an executable shim at
+       the default location, a test that redirected it still runs only its
+       stand-in, and one that forgot finds this file's canary. */
+    setEnv("LLV_DOCKER_NSENTER_SHIMS", "1");
+    expect(await detectTailscale()).toBe(canaryShim());
+    dockerInstall();
+    expect(await detectTailscale()).toBe(path.join(stub.dir, "tailscale"));
+    await read();
+    expect(stub.calls().length).toBeGreaterThan(0);
+  });
+
+  test("it points the tailnet at the runtime host's stable port, never the release's candidate port", async () => {
+    dockerInstall();
+    expect((await read()).phone).toMatchObject({ state: "ready", viewerPort: STABLE_PORT });
+    expect((await press("enable")).status).toBe(200);
+    expect(stub.calls()).toContain(`serve --bg ${STABLE_PORT}`);
+    expect(stub.calls().some((call) => call.includes(String(CANDIDATE_PORT)))).toBe(false);
+    expect((await read()).phone).toMatchObject({ state: "serving", servingPort: STABLE_PORT });
+    expect((await press("disable")).status).toBe(200);
+    expect(stub.calls()).toContain(`serve --https=443 ${STABLE_PORT} off`);
+  });
+
+  test("the ports the runtime host recorded as bound win over configuration", async () => {
+    /* A release container is never told the stable port, and the gateway
+       file can change after the host read it: the record is what listens. */
+    dockerInstall();
+    recordViewerEntries(entriesFile(), { stablePort: 8890, stableEntry: "pipe", remoteEntryPort: null });
+    expect((await read()).phone?.viewerPort).toBe(8890);
+
+    /* A remote entry named in the file after the host booted is not bound. */
+    writeGateway({ remoteEntryPort: 8897, localEntry: "authenticated" });
+    expect((await read()).phone?.viewerPort).toBe(8890);
+
+    recordViewerEntries(entriesFile(), { stablePort: 8890, stableEntry: "local-entry", remoteEntryPort: 8896 });
+    expect((await press("enable")).status).toBe(200);
+    expect(stub.calls()).toContain("serve --bg 8896");
+    expect(stub.calls().some((call) => call.includes("8897"))).toBe(false);
+  });
+
+  test("a trusted local entry whose remote entry never bound is not published", async () => {
+    dockerInstall();
+    writeGateway({ remoteEntryPort: 8897, localEntry: "trusted" });
+    recordViewerEntries(entriesFile(), { stablePort: STABLE_PORT, stableEntry: "local-entry", remoteEntryPort: null });
+    const response = await press("enable");
+    expect(response.status).toBe(409);
+    expect((await response.json() as PhoneActionFailure).code).toBe("TRUSTED_ENTRY");
+    expect(stub.calls().some((call) => call.startsWith("serve --bg"))).toBe(false);
+  });
+
+  test("a gateway's remote entry is the one the tailnet reaches", async () => {
+    dockerInstall();
+    writeGateway({ remoteEntryPort: 8897, localEntry: "trusted" });
+    expect((await press("enable")).status).toBe(200);
+    expect(stub.calls()).toContain("serve --bg 8897");
+    expect((await read()).phone).toMatchObject({ state: "serving", servingPort: 8897 });
+  });
+
+  test("a trusted local entry with no remote entry is never published", async () => {
+    dockerInstall();
+    writeGateway({ localEntry: "trusted" });
+    const response = await press("enable");
+    expect(response.status).toBe(409);
+    expect((await response.json() as PhoneActionFailure).code).toBe("TRUSTED_ENTRY");
+    expect(stub.calls().some((call) => call.startsWith("serve --bg"))).toBe(false);
+    expect(fs.existsSync(flagFile())).toBe(false);
+    expect(gateUntouched()).toBe(true);
+  });
+
+  test("a key the container already holds is reused, and turning off keeps it", async () => {
+    /* service.env set this key; the runtime host's trusted local entry and the
+       MCP clients vouch with it, so the press must not swap it for another. */
+    dockerInstall();
+    const configured = "c".repeat(32);
+    fs.mkdirSync(appDir(), { recursive: true });
+    fs.writeFileSync(tokenFile(), "d".repeat(32), { mode: 0o600 });
+    setEnv("LLV_TOKEN", configured);
+
+    const response = await press("enable");
+    expect(response.status).toBe(200);
+    expect((await response.json() as AccessResponse).tailnetUrl).toBe(`https://${STUB_DNS_NAME}/?k=${configured}`);
+    expect(process.env.LLV_TOKEN).toBe(configured);
+    expect(response.headers.get("set-cookie") ?? "").toContain(`llv_auth=${configured}`);
+
+    expect((await press("disable")).status).toBe(200);
+    expect(process.env.LLV_TOKEN).toBe(configured);
+    expect(process.env.LLV_TS_URL).toBeUndefined();
+    expect(process.env.LLV_TS_HOST).toBeUndefined();
+  });
+});
+
+describe("a Viewer booting with phone access remembered comes up gated (#2024)", () => {
+  const key = "e".repeat(32);
+  const unauthenticated = () => proxy(new NextRequest(`http://127.0.0.1:${STABLE_PORT}/`, { headers: { host: `${STUB_DNS_NAME}` } }));
+
+  test("a container restarted under a live mapping gates on the same key file and restores the link", async () => {
+    dockerInstall();
+    rememberChoice(key);
+    stub.setServing(STABLE_PORT);
+    /* This is the window the boot closes: a fresh process with no key while
+       tailscaled still proxies the tailnet into it. */
+    expect((await read()).phone?.state).toBe("exposed");
+    expect(unauthenticated().status).toBe(200);
+
+    expect(await restorePhoneAccessGate()).toBe("linked");
+    expect(process.env.LLV_TOKEN).toBe(key);
+    expect(process.env.LLV_TS_HOST).toBe(STUB_DNS_NAME);
+    expect(process.env.LLV_TS_URL).toBe(`https://${STUB_DNS_NAME}/?k=${key}`);
+    expect(fs.readFileSync(tokenFile(), "utf8")).toBe(key);
+    expect((await read()).phone).toMatchObject({ state: "serving", persisted: true });
+    expect(unauthenticated().status).toBe(403);
+    expect(proxy(new NextRequest(`http://127.0.0.1:${STABLE_PORT}/?k=${key}`)).status).toBe(307);
+    /* The boot only reads Tailscale; it never publishes or takes anything down. */
+    expect(stub.calls().some((call) => call.startsWith("serve --") || call.endsWith(" off"))).toBe(false);
+  });
+
+  test("the gate goes on even when Tailscale cannot be read, and no link is advertised", async () => {
+    dockerInstall();
+    rememberChoice(key);
+    stub.setStatus(null);
+    expect(await restorePhoneAccessGate()).toBe("gated");
+    expect(process.env.LLV_TOKEN).toBe(key);
+    expect(process.env.LLV_TS_URL).toBeUndefined();
+    expect(unauthenticated().status).toBe(403);
+  });
+
+  test("a mapping to another port gates without claiming the link", async () => {
+    dockerInstall();
+    rememberChoice(key);
+    stub.setServing(3000);
+    expect(await restorePhoneAccessGate()).toBe("gated");
+    expect(process.env.LLV_TOKEN).toBe(key);
+    expect(process.env.LLV_TS_URL).toBeUndefined();
+  });
+
+  test("a key the environment set is kept and carried into the link", async () => {
+    dockerInstall();
+    rememberChoice(key);
+    stub.setServing(STABLE_PORT);
+    const configured = "c".repeat(32);
+    setEnv("LLV_TOKEN", configured);
+    expect(await restorePhoneAccessGate()).toBe("linked");
+    expect(process.env.LLV_TOKEN).toBe(configured);
+    expect(process.env.LLV_TS_URL).toBe(`https://${STUB_DNS_NAME}/?k=${configured}`);
+  });
+
+  test("a key that cannot be put in place refuses the boot, and the step says exposed", async () => {
+    dockerInstall();
+    fs.mkdirSync(appDir(), { recursive: true });
+    fs.writeFileSync(flagFile(), "tailscale\n", { mode: 0o600 });
+    fs.mkdirSync(tokenFile(), { recursive: true });
+    stub.setServing(STABLE_PORT);
+    await expect(restorePhoneAccessGate()).rejects.toBeInstanceOf(PhoneGateRefusal);
+    expect(gateUntouched()).toBe(true);
+    expect((await read()).phone?.state).toBe("exposed");
+
+    const exits: number[] = [];
+    const lines: string[] = [];
+    await gatePhoneAccessBeforeServing(((code: number) => { exits.push(code); return undefined as never; }), (line) => { lines.push(line); });
+    expect(exits).toEqual([78]);
+    expect(lines.join("\n")).toContain("refusing to serve the tailnet ungated");
+  });
+
+  test("a flag that exists and cannot be read counts as set", async () => {
+    dockerInstall();
+    fs.mkdirSync(flagFile(), { recursive: true });
+    expect(await restorePhoneAccessGate()).not.toBe("off");
+    expect(process.env.LLV_TOKEN).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  test("an empty flag file under a live mapping counts as set, and the gate goes on", async () => {
+    /* A flag write cut short leaves the file empty; the mapping it stood for
+       may be live, so the boot must not read it as off. */
+    dockerInstall();
+    fs.mkdirSync(appDir(), { recursive: true });
+    fs.writeFileSync(flagFile(), "", { mode: 0o600 });
+    fs.writeFileSync(tokenFile(), key, { mode: 0o600 });
+    stub.setServing(STABLE_PORT);
+    expect(await restorePhoneAccessGate()).toBe("linked");
+    expect(process.env.LLV_TOKEN).toBe(key);
+    expect(unauthenticated().status).toBe(403);
+    expect((await read()).phone).toMatchObject({ state: "serving", persisted: true });
+  });
+
+  test("the flag is written whole: a press leaves no temporary file beside it", async () => {
+    expect((await press("enable")).status).toBe(200);
+    expect(fs.readFileSync(flagFile(), "utf8")).toBe("tailscale\n");
+    expect(fs.readdirSync(appDir()).filter((name) => name.startsWith("phone-access"))).toEqual(["phone-access"]);
+  });
+
+  test("with nothing remembered the boot touches neither the gate nor Tailscale", async () => {
+    dockerInstall();
+    stub.setServing(STABLE_PORT);
+    expect(await restorePhoneAccessGate()).toBe("off");
+    expect(gateUntouched()).toBe(true);
+    expect(stub.calls()).toEqual([]);
+  });
+
+  test("a plain checkout's launcher start keeps the launcher's gate and link", async () => {
+    setEnv("PORT", String(PORT));
+    rememberChoice(key);
+    setEnv("LLV_TOKEN", key);
+    setEnv("LLV_TS_URL", `https://${STUB_DNS_NAME}/?k=${key}`);
+    expect(await restorePhoneAccessGate()).toBe("linked");
+    expect(stub.calls()).toEqual([]);
+  });
+});
+
+describe("a staging Viewer only reads phone access (#2024)", () => {
+  test("enable and disable are refused and nothing is published, taken down or forgotten", async () => {
+    /* Staging shares production's config root and the host's tailscaled:
+       a press here would move production's tailnet root or forget its gate. */
+    dockerInstall();
+    setEnv("LLV_STAGING", "1");
+    setEnv("LLV_VIEWER_PORT", "8899");
+    rememberChoice("e".repeat(32));
+    stub.setServing(STABLE_PORT);
+
+    const state = await read();
+    expect(state.phone).toMatchObject({ state: "serving-other", servingPort: STABLE_PORT, persisted: true });
+
+    for (const action of ["enable", "disable"] as const) {
+      const response = await press(action);
+      expect(response.status).toBe(409);
+      const body = await response.json() as PhoneActionFailure;
+      expect(body.code).toBe("STAGING");
+      expect(body.phone).toMatchObject({ state: "serving-other", servingPort: STABLE_PORT });
+    }
+    expect(stub.calls().some((call) => call.startsWith("serve --") || call.endsWith(" off"))).toBe(false);
+    expect(fs.existsSync(flagFile())).toBe(true);
+    expect(gateUntouched()).toBe(true);
+  });
+});
+
+describe("turning off keeps the choice while another port is published (#2024)", () => {
+  test("a mapping to another Viewer keeps the flag and this Viewer's gate", async () => {
+    /* Two Viewers sharing a config root share the flag; forgetting it here
+       would start the published one ungated under its live mapping. */
+    const key = "e".repeat(32);
+    rememberChoice(key);
+    setEnv("LLV_TOKEN", key);
+    stub.setServing(STABLE_PORT);
+
+    const response = await press("disable");
+    expect(response.status).toBe(409);
+    const body = await response.json() as PhoneActionFailure;
+    expect(body).toMatchObject({ code: "SERVING_OTHER", detail: String(STABLE_PORT), keyKept: true });
+    expect(fs.existsSync(flagFile())).toBe(true);
+    expect(process.env.LLV_TOKEN).toBe(key);
+    expect(stub.calls().some((call) => call.endsWith(" off"))).toBe(false);
+  });
+
+  test("with nothing remembered, a mapping to another port does not block turning off", async () => {
+    stub.setServing(STABLE_PORT);
+    expect((await press("disable")).status).toBe(200);
+    expect(stub.calls().some((call) => call.endsWith(" off"))).toBe(false);
+  });
+});
+
+describe("a deploy's probes authenticate against a release gated by phone access (#2024)", () => {
+  test("a candidate booted with the flag and key file and no Compose key passes the root and authenticated probes", async () => {
+    const key = "e".repeat(32);
+    rememberChoice(key);
+    stub.setServing(STABLE_PORT);
+    /* The Compose config service.env left without a key, as the deploy
+       adapter reads it from the candidate's snapshot. */
+    const composeConfig = JSON.stringify({
+      services: {
+        viewer: {
+          build: null, command: null, entrypoint: null,
+          environment: { HOME: path.dirname(config), XDG_CONFIG_HOME: config, LLV_DOCKER_NSENTER_SHIMS: "1" },
+          image: "agent-log-viewer:node22", network_mode: "host", pid: "host", privileged: true,
+          restart: "unless-stopped", user: "1000:1000", volumes: [], working_dir: "/app",
+        },
+      },
+    });
+
+    /* The candidate boots: no key in its environment, so it gates on the file. */
+    dockerInstall();
+    expect(await restorePhoneAccessGate()).toBe("linked");
+    expect(process.env.LLV_TOKEN).toBe(key);
+
+    const endpoint = `http://127.0.0.1:${CANDIDATE_PORT}`;
+    const probe = (request: { url: string; headers: Record<string, string> }) => proxy(new NextRequest(request.url, { headers: request.headers })).status;
+
+    /* The Compose key alone is what refused every deploy. */
+    const composeOnly = viewerHealthRequestPlan(endpoint, null);
+    expect(probe(composeOnly.root)).toBe(403);
+
+    const token = viewerCandidateGateKey(composeConfig);
+    expect(token).toBe(key);
+    const plan = viewerHealthRequestPlan(endpoint, token);
+    expect(probe(plan.root)).toBe(200);
+    expect(plan.authenticated).not.toBeNull();
+    expect(probe(plan.authenticated!)).toBe(200);
+    expect(plan.unauthorized).not.toBeNull();
+    expect(probe(plan.unauthorized!)).toBe(403);
+    expect(probe(plan.capability)).toBe(200);
+  });
+
+  test("without the flag the candidate gates on nothing and the probe carries no key", async () => {
+    fs.mkdirSync(appDir(), { recursive: true });
+    fs.writeFileSync(tokenFile(), "e".repeat(32), { mode: 0o600 });
+    const composeConfig = JSON.stringify({
+      services: {
+        viewer: {
+          build: null, command: null, entrypoint: null,
+          environment: { XDG_CONFIG_HOME: config },
+          image: "agent-log-viewer:node22", network_mode: "host", pid: "host", privileged: true,
+          restart: "unless-stopped", user: "1000:1000", volumes: [], working_dir: "/app",
+        },
+      },
+    });
+    dockerInstall();
+    expect(await restorePhoneAccessGate()).toBe("off");
+    expect(viewerCandidateGateKey(composeConfig)).toBeNull();
   });
 });

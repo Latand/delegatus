@@ -332,6 +332,16 @@ test("the release credential comes from the release container's Compose snapshot
     // A release that names no token is a Viewer without a gate: nothing to vouch with.
     await fs.writeFile(snapshot, JSON.stringify({ services: { viewer: { environment: {} } } }));
     expect(viewerReleaseCredentialResolver(stateDir, { LLV_TOKEN: "from-environment" })(target)).toBeNull();
+    /* Phone access remembered (#2024): the release gates on the key file its
+       boot put in place, so that key is the one to vouch with. */
+    const configRoot = path.join(stateDir, "config");
+    await fs.writeFile(snapshot, JSON.stringify({ services: { viewer: { environment: { XDG_CONFIG_HOME: configRoot } } } }));
+    expect(viewerReleaseCredentialResolver(stateDir, {})(target)).toBeNull();
+    await fs.mkdir(path.join(configRoot, "agent-log-viewer"), { recursive: true });
+    await fs.writeFile(path.join(configRoot, "agent-log-viewer", "token"), "f".repeat(32));
+    expect(viewerReleaseCredentialResolver(stateDir, {})(target)).toBeNull();
+    await fs.writeFile(path.join(configRoot, "agent-log-viewer", "phone-access"), "tailscale\n");
+    expect(viewerReleaseCredentialResolver(stateDir, {})(target)).toBe("f".repeat(32));
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
   }

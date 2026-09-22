@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 
+import { viewerBootGateKey } from "@/lib/access/phoneAccessBootGate";
 import type { ViewerReleaseIdentity } from "@/lib/runtime/contracts";
 
 import { viewerComposeSnapshotPath } from "./deploymentArtifacts";
@@ -169,7 +170,8 @@ export function readViewerGatewayConfig(filename: string, localEntryPort: number
  * Compose snapshot — the same file the MCP control client reads (#1511). A
  * release published before snapshots existed has none, and then the host's
  * own `LLV_TOKEN` is the machine's one remaining statement of that credential.
- * A snapshot that names no token is a Viewer with no gate: nothing to vouch.
+ * A snapshot that names no token is a Viewer with no gate, nothing to vouch,
+ * unless phone access is remembered, which gates it on the key file.
  */
 export function viewerReleaseCredentialResolver(
   stateDir: string,
@@ -184,9 +186,14 @@ export function viewerReleaseCredentialResolver(
       return env.LLV_TOKEN?.trim() || null;
     }
     try {
-      const compose = JSON.parse(raw) as { services?: { viewer?: { environment?: { LLV_TOKEN?: unknown } } } };
-      const token = compose?.services?.viewer?.environment?.LLV_TOKEN;
-      return typeof token === "string" && token.trim() ? token : null;
+      const compose = JSON.parse(raw) as { services?: { viewer?: { environment?: Record<string, unknown> } } };
+      const environment = compose?.services?.viewer?.environment ?? {};
+      const token = environment.LLV_TOKEN;
+      if (typeof token === "string" && token.trim()) return token;
+      /* No Compose key: with phone access remembered the release still gates,
+         on the key file its boot put in place (#2024). */
+      return viewerBootGateKey(Object.fromEntries(Object.entries(environment)
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[0] !== "LLV_TOKEN")));
     } catch {
       return null;
     }
