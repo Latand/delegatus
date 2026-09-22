@@ -1996,13 +1996,20 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     rememberRuntimeReceipt({ ...answer, conversationId: cardId, idempotencyKey: item.idempotencyKey },
       { ...item.original, conversationId: cardId });
   };
+  /* Every share this composer holds, so hide, inactivity and unmount release
+     the forced Check status read as well as the periodic ones. */
+  const heldOperationReads = useRef(new Map<string, () => void>());
   const readOperationBack = (item: OperationReconciliation, force = false) => {
-    if (documentHidden()) return;
+    if (documentHidden() || heldOperationReads.current.has(item.operationId)) return;
     const read = readOperationShared(item.operationId, nowMs(), { force });
     if (!read) return;
+    const held = heldOperationReads.current;
+    held.set(item.operationId, read.release);
     void read.result.then((answer) => {
+      const current = held.get(item.operationId) === read.release;
+      if (current) held.delete(item.operationId);
       read.release();
-      if (answer) applyOperationReadRef.current(item, answer);
+      if (current && answer) applyOperationReadRef.current(item, answer);
     });
   };
   const liveTailRef = useRef(runtimeReceipts);
@@ -2012,28 +2019,23 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     applyOperationReadRef.current = applyOperationRead;
   });
   const operationReadsActive = viewActive && !pollPaused;
+  const readOperationBackRef = useRef(readOperationBack);
+  useLayoutEffect(() => {
+    readOperationBackRef.current = readOperationBack;
+  });
   useEffect(() => {
-    if (!operationReadsActive) return;
-    const held = new Map<string, () => void>();
-    let stopped = false;
+    const held = heldOperationReads.current;
     const releaseAll = () => {
       for (const release of held.values()) release();
       held.clear();
     };
+    if (!operationReadsActive) return releaseAll;
+    let stopped = false;
     const pass = () => {
       if (stopped || documentHidden()) return;
       const now = nowMs();
       for (const item of operationsToReconcile(readOutbox(cardId), displayedRuntimeReceiptsRef.current, liveTailRef.current,
-        (operationId) => !held.has(operationId) && operationReadDue(operationId, now), now)) {
-        const read = readOperationShared(item.operationId, now);
-        if (!read) continue;
-        held.set(item.operationId, read.release);
-        void read.result.then((answer) => {
-          if (held.get(item.operationId) === read.release) held.delete(item.operationId);
-          read.release();
-          if (!stopped && answer) applyOperationReadRef.current(item, answer);
-        });
-      }
+        (operationId) => !held.has(operationId) && operationReadDue(operationId, now), now)) readOperationBackRef.current(item);
     };
     const onVisibility = () => (documentHidden() ? releaseAll() : pass());
     document.addEventListener("visibilitychange", onVisibility);

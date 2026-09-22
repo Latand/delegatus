@@ -309,8 +309,52 @@ test("a stale delivering row reloaded after a release reads its delivered record
   }
 });
 
-test("a row left delivering by an executor the release replaced ends uncertain, never resent", async () => {
-  const delivery = admit("owner-replaced");
+test("a row whose journal operation was compacted settles from the delivery record alone", async () => {
+  /* The incident's exact shape: the operation was delivered and settled on
+     the delivery record, and the journal has since compacted its row. The
+     route then answers from the record (`runtimeReceiptForSend`, revision 1). */
+  const delivery = admit("compacted-journal");
+  const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+  await new StructuredDeliveryQueue(queuePort(journal, "claim-a:1"), () => new FakeEngineHost(delivery.ledger)).drain();
+  const admittedAt = journal.operationResult(delivery.operationId)!.receipt.admittedAt ?? new Date().toISOString();
+  await resolveSendReceipt(delivery.operationId, { client: journalClient(journal), registry: delivery.registry });
+  journal.close();
+  const compacted = { operationStatus: async () => null } as unknown as RuntimeHostClient;
+
+  seedStaleTab(delivery, admittedAt);
+  const answers: RuntimeReceipt[] = [];
+  const requests = serveOperations(async (operationId) => {
+    const response = await handleRuntimeOperationQuery(operationId, {
+      client: () => compacted,
+      rolledBack: () => false,
+      settle: (id, client) => resolveSendReceipt(id, { client, registry: delivery.registry }),
+    });
+    answers.push(((await response.clone().json()) as { receipt: RuntimeReceipt }).receipt);
+    return response;
+  });
+  const unmount = await mountComposer(delivery.conversationId);
+  try {
+    await waitFor(() => readOutbox(delivery.conversationId)[0]?.state === "delivered");
+    expect(answers[0]).toMatchObject({ operationId: delivery.operationId, idempotencyKey: delivery.key,
+      conversationId: delivery.conversationId, status: "delivered", revision: 1 });
+    expect(readOutbox(delivery.conversationId)[0]).toMatchObject({ id: delivery.key, state: "delivered" });
+    expect(touchesOperation(requests, delivery)).toEqual([]);
+    expect(delivery.ledger.writes).toHaveLength(1);
+  } finally {
+    await unmount();
+  }
+});
+
+/* The incident's case keeps the host claim across the release: the structured
+   host survived, so the claim still matched and the successor left the row to
+   an executor that was gone. A release that also replaced the host changes the
+   claim; the successor then ends the row unverified itself, and the read still
+   carries that answer to the tab. */
+test.each([
+  { name: "owner-replaced", successorClaim: "claim-a:1", successorLeaves: "delivering" },
+  { name: "owner-and-host-replaced", successorClaim: "claim-b:2", successorLeaves: "uncertain" },
+])("a row left delivering by an executor the release replaced ends uncertain, never resent (successor claim $successorClaim)", async ({ name, successorClaim, successorLeaves }) => {
+  const delivery = admit(name);
   /* Executor A hands the message to the engine and dies with the Viewer
      before it can record the answer: the row stays `delivering` under A. */
   const first = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
@@ -320,12 +364,11 @@ test("a row left delivering by an executor the release replaced ends uncertain, 
   expect(stuck.status).toBe("delivering");
   first.close();
 
-  /* The successor Viewer runs a new executor. The structured host kept its
-     writer claim across the release, so the claim still MATCHES and the
-     successor correctly leaves the row to its owner — who is gone. */
+  /* The successor Viewer runs a new executor. With the same claim it leaves
+     the row to its owner, who is gone; with a new claim it ends it. */
   const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
-  await new StructuredDeliveryQueue(queuePort(journal, "claim-a:1"), () => new FakeEngineHost(delivery.ledger)).drain();
-  expect(journal.operationResult(delivery.operationId)?.receipt.status).toBe("delivering");
+  await new StructuredDeliveryQueue(queuePort(journal, successorClaim), () => new FakeEngineHost(delivery.ledger)).drain();
+  expect(journal.operationResult(delivery.operationId)?.receipt.status).toBe(successorLeaves);
 
   /* The tab reloads after the settlement window. The only thing that can end
      the row now is a read of the operation by id. */

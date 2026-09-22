@@ -2430,6 +2430,30 @@ describe("readOperationShared", () => {
     }
   });
 
+  test("an unknown-fate answer backs off to the ceiling instead of being asked again every interval", async () => {
+    let answer: RuntimeReceipt = { ...delivered("op-unknown"), status: "failed", resend: "verify-first" };
+    const { requests, fetchImpl } = server(() => Response.json({ receipt: answer }));
+    let at = now;
+    const spacings: number[] = [];
+    for (let read = 0; read < 6; read += 1) {
+      const shared = readOperationShared("op-unknown", at, { fetchImpl })!;
+      expect(await shared.result).toMatchObject({ status: "failed", resend: "verify-first" });
+      shared.release();
+      let next = at + OPERATION_RECONCILE_INTERVAL_MS;
+      while (!operationReadDue("op-unknown", next)) next += OPERATION_RECONCILE_INTERVAL_MS;
+      spacings.push(next - at);
+      at = next;
+    }
+    expect(spacings).toEqual([60_000, 120_000, 240_000, 300_000, 300_000, 300_000]);
+    expect(requests).toHaveLength(6);
+    // An arrival resets the spacing; the row then leaves the candidates anyway.
+    answer = delivered("op-unknown");
+    const arrived = readOperationShared("op-unknown", at, { fetchImpl })!;
+    expect(await arrived.result).toMatchObject({ status: "delivered" });
+    arrived.release();
+    expect(operationReadDue("op-unknown", at + OPERATION_RECONCILE_INTERVAL_MS)).toBe(true);
+  });
+
   test("the last holder's release aborts the request, which is not counted as a failure", async () => {
     let signal: AbortSignal | null | undefined;
     const fetchImpl = ((_input: string, init?: RequestInit) => {

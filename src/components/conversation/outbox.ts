@@ -435,7 +435,8 @@ export function operationReadDue(operationId: string, nowMs: number): boolean {
  *
  * Answers the operation's TERMINAL receipt, or null when the read learned
  * nothing that could settle a row: a failed or timed-out request, an answer
- * for another operation, or one still moving. Returns null instead of a read
+ * for another operation, or one still moving. Every answer short of an
+ * arrival or a discard backs the next read off, up to five minutes. Returns null instead of a read
  * when the operation is not due (see {@link operationReadDue}) unless `force`
  * is set, which is the operator's own Check status. Each holder releases its
  * share; the request is aborted when the last one lets go, which is what an
@@ -466,7 +467,11 @@ export function readOperationShared(
       /* Cancelled by its holders (unmount, hidden tab, inactive composer): not
          a failed read, and due again as soon as someone asks. */
       if (current?.cancelled) read.startedAt = Number.NEGATIVE_INFINITY;
-      else read.failures = receipt ? 0 : read.failures + 1;
+      /* Only an arrival or a discard ends the row. An unknown-fate answer
+         (uncertain, or failed with verify-first) is absorbing on the server
+         until the operator retries or discards, so asking again at the
+         interval learns nothing: it backs off to the ceiling like a failure. */
+      else read.failures = receipt && receiptHasAbsorbingOutcome(receipt) ? 0 : read.failures + 1;
       if (current) read.inFlight = null;
       return receipt;
     });
