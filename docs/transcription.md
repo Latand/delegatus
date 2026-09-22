@@ -59,12 +59,20 @@ order:
 > valid fallbacks when no `agent-log-viewer` copy exists. Updates keep using a
 > resolved legacy config or cache file, so existing setups continue unchanged.
 
-The cloud backends stay off the UI on purpose. There is no in-app toggle to
-enable ChatGPT, ElevenLabs, or Soniox transcription; each one turns on only when
-you set the environment variable or write the override file on that specific
-machine.
-This keeps the on-by-default behaviour fully local and makes any audio leaving
-the machine a deliberate, per-machine choice.
+The default stays local, and any audio leaving the machine is a deliberate,
+per-machine choice. There are two places to make it in the Viewer: the setup
+guide's **Voice** step (reachable again from the **Dictation** menu row) and
+the microphone button's right-click menu. Both write the override file above
+(mode 600).
+
+The Voice step also takes the ElevenLabs or Soniox key: it is written to
+`elevenlabs-api-key` or `soniox-api-key` in the same directory, mode 600,
+through `PUT /api/transcribe/key`, and is never shown or returned again. A key
+set in `ELEVENLABS_API_KEY` or `SONIOX_API_KEY` wins over the file and cannot
+be replaced from the page. **Check dictation** asks the real path: for a live
+backend it requests a token from `POST /api/transcribe/token` (and discards
+it), and for local or ChatGPT it reads the backend's availability, then says
+in one sentence whether dictation works.
 
 Backend selection is read at request time, so switching the override file takes
 effect on the next dictation without restarting the server.
