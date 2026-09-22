@@ -89,32 +89,52 @@ export function useOrchestratorDraftReveal(project: string, target: RefObject<HT
   useEffect(() => {
     let frame: ReturnType<typeof setTimeout> | null = null;
     let settle: (() => void) | null = null;
-    /* After the prefill's state has rendered, so the rows are the ones shown.
-       Aligned by the end: the dock's body can be shorter than the choices, and
-       the last row, Reasoning, carries the model and effort the tour chose. */
-    const scroll = () => target.current?.scrollIntoView({ block: "end" });
-    /* The dock settles its height after it opens, which moves the rows again,
-       so the reveal holds through those resizes for a moment, and lets go as
-       soon as the operator touches the draft. */
+    /* The last row of the block, Reasoning, carries the model and effort the
+       tour chose; the dock's body can be shorter than the whole block, so it
+       is that row the reveal is about. */
+    const row = (): HTMLElement | null => {
+      const block = target.current;
+      const last = block?.firstElementChild?.lastElementChild;
+      return (last instanceof HTMLElement ? last : block) ?? null;
+    };
+    const scroll = () => row()?.scrollIntoView({ block: "end" });
+    const revealed = (): boolean => {
+      const node = row();
+      const scroller = target.current?.parentElement;
+      if (!node || !scroller) return true;
+      const inner = node.getBoundingClientRect();
+      const outer = scroller.getBoundingClientRect();
+      return inner.bottom <= outer.bottom + 1 && inner.top >= outer.top - 1;
+    };
+    /* One scroll is not enough: the dock opens the draft and then settles its
+       own height, which moves the rows again, and a draft that mounts into a
+       body of no height scrolls nothing at all. So the reveal is repeated
+       until the row is actually in view, for at most a moment, and it lets go
+       as soon as the operator touches the draft. */
     const hold = () => {
       settle?.();
       const scroller = target.current?.parentElement;
-      if (!scroller || typeof ResizeObserver === "undefined") return;
-      const observer = new ResizeObserver(scroll);
-      observer.observe(scroller);
+      if (!scroller) return;
+      const until = Date.now() + 1_500;
+      const tick = setInterval(() => {
+        if (revealed() || Date.now() > until) {
+          settle?.();
+          return;
+        }
+        scroll();
+      }, 50);
       const release = () => settle?.();
-      const timer = setTimeout(release, 1_500);
       const inputs = ["wheel", "pointerdown", "keydown", "touchstart"] as const;
       for (const name of inputs) scroller.addEventListener(name, release, { passive: true });
       settle = () => {
         settle = null;
-        observer.disconnect();
-        clearTimeout(timer);
+        clearInterval(tick);
         for (const name of inputs) scroller.removeEventListener(name, release);
       };
     };
     const reveal = () => {
       if (frame !== null) clearTimeout(frame);
+      /* After the prefill's state has rendered, so the rows are the ones shown. */
       frame = setTimeout(() => {
         frame = null;
         scroll();

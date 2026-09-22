@@ -114,3 +114,39 @@ test("a draft opened without a hand-off does not scroll", async () => {
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
   expect(scrolled).toEqual([]);
 });
+
+/* A dock that opens the draft and then settles its own height moves the rows
+   after the first scroll; one attempt leaves the row below the fold. */
+test("the reveal repeats until the row is in view, and stops once it is", async () => {
+  const scrolled: string[] = [];
+  let visible = false;
+  const rect = (top: number, bottom: number) => ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+  function Settling({ project }: { project: string }) {
+    const ref = useRef<HTMLDivElement>(null);
+    useOrchestratorDraftReveal(project, ref);
+    return (
+      <div
+        ref={(node) => {
+          ref.current = node;
+          if (!node) return;
+          node.getBoundingClientRect = () => visible ? rect(10, 20) : rect(200, 300);
+          node.scrollIntoView = ((options?: ScrollIntoViewOptions) => {
+            scrolled.push(String(options?.block));
+            if (scrolled.length >= 3) visible = true;
+          }) as typeof node.scrollIntoView;
+          const parent = node.parentElement;
+          if (parent) parent.getBoundingClientRect = () => rect(0, 100);
+        }}
+      />
+    );
+  }
+  requestOrchestratorDraft({ project: "repo-zeta", launch: { engine: "claude", model: "opus", effort: "high" } });
+  mounted = createRoot(document.createElement("div"));
+  await act(async () => mounted!.render(<Settling project="repo-zeta" />));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+  expect(scrolled.length).toBeGreaterThanOrEqual(3);
+  expect(new Set(scrolled)).toEqual(new Set(["end"]));
+  const settled = scrolled.length;
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 300)));
+  expect(scrolled.length).toBe(settled);
+});
