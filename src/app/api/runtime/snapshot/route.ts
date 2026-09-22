@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { runtimeEventsEnabled, structuredHostsEnabled, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { structuredStartupAxis } from "@/lib/runtime/startupStatus";
@@ -24,13 +25,20 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "runtime host socket is unavailable", code: RUNTIME_PLANE_ABSENT }, { status: 503 });
   }
   try {
-    return NextResponse.json({
+    const body = JSON.stringify({
       // The request signal reaches the runtime host, so a disconnected caller
       // cancels its socket wait instead of leaving late host work behind.
       ...await client.snapshot(request.signal, summary || voiceFor ? { voiceBodiesFor: voiceFor ? [voiceFor] : [] } : undefined),
       structuredHostsEnabled: structuredHostsEnabled(),
       structuredStartup: structuredStartupAxis(),
-    }, { headers: { "cache-control": "no-store" } });
+    });
+    const headers = { "content-type": "application/json", "cache-control": "no-store", vary: "accept-encoding" };
+    /* A cold open and every authoritative rejoin read the whole projection,
+       megabytes of it; compressed it is a fifth of that on the wire (#1994). */
+    if (acceptsGzip(request) && body.length >= 1024) {
+      return new NextResponse(await gzipBody(body) as BodyInit, { headers: { ...headers, "content-encoding": "gzip" } });
+    }
+    return new NextResponse(body, { headers });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "runtime host is unavailable" }, { status: 503 });
   }

@@ -48,6 +48,8 @@ export type FilesResponseRepresentation = {
   contentType: string;
   etag: string;
   timing: string;
+  /** Serialised delta from the scope's previous representation (#1994). */
+  delta?: { base: string; body: string };
 };
 
 export type FilesResponseWorkerRequest = {
@@ -56,6 +58,8 @@ export type FilesResponseWorkerRequest = {
   headers: Array<[string, string]>;
   snapshot?: FileCatalogScan;
   snapshotFile?: string;
+  /** Hash of the board scope; asks for a delta from its previous build. */
+  deltaScope?: string;
 };
 
 export interface FilesResponseWorkerRuntime {
@@ -83,8 +87,10 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type FilesResponseWorkerWireRepresentation = Omit<FilesResponseRepresentation, "body"> & {
+type FilesResponseWorkerWireRepresentation = Omit<FilesResponseRepresentation, "body" | "delta"> & {
   bodyFile: string;
+  deltaFile?: string;
+  deltaBase?: string;
 };
 
 function representation(value: unknown): FilesResponseWorkerWireRepresentation | null {
@@ -92,7 +98,9 @@ function representation(value: unknown): FilesResponseWorkerWireRepresentation |
     || typeof value.bodyFile !== "string"
     || typeof value.contentType !== "string"
     || typeof value.etag !== "string"
-    || typeof value.timing !== "string") return null;
+    || typeof value.timing !== "string"
+    || (value.deltaFile !== undefined && typeof value.deltaFile !== "string")
+    || (value.deltaBase !== undefined && typeof value.deltaBase !== "string")) return null;
   return value as unknown as FilesResponseWorkerWireRepresentation;
 }
 
@@ -385,8 +393,8 @@ function askWorker(
   });
 }
 
-function readBody(worker: ResidentWorker, result: FilesResponseWorkerWireRepresentation): string {
-  const bodyFile = path.resolve(result.bodyFile);
+function readBody(worker: ResidentWorker, file: string): string {
+  const bodyFile = path.resolve(file);
   if (path.dirname(bodyFile) !== worker.resultDirectory) {
     throw new Error("files response worker returned an invalid body path");
   }
@@ -402,9 +410,11 @@ async function dispatch(
   const worker = residentWorker(runtime);
   try {
     const result = await askWorker(worker, request, runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS);
-    const body = readBody(worker, result);
+    const { bodyFile, deltaFile, deltaBase, ...metadata } = result;
+    const body = readBody(worker, bodyFile);
+    const delta = deltaFile && deltaBase ? { base: deltaBase, body: readBody(worker, deltaFile) } : undefined;
     pool.__llvFilesResponseWorkerBuilds = (pool.__llvFilesResponseWorkerBuilds ?? 0) + 1;
-    return { ...result, body };
+    return { ...metadata, body, ...(delta ? { delta } : {}) };
   } finally {
     if (!worker.retired) {
       if (worker.rssBytes > residentLimitBytes()) retire(worker, "size");

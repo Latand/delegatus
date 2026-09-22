@@ -8,6 +8,8 @@ import { PIPELINES_CHANGED_EVENT, PIPELINES_PATCHED_EVENT } from "@/components/p
 import { SESSION_TITLES_CHANGED_EVENT } from "@/components/session/sessionTitleApi";
 import { TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
 import { WORKFLOWS_CHANGED_EVENT } from "@/components/workflows/workflowModel";
+import { applyFilesDelta, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER, type FilesDelta } from "@/lib/filesDelta";
+import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -28,6 +30,11 @@ const FILES_GENERATION_RETRY_MAX_MS = 1_000;
 /** Failed initial hydration: first retry, then doubling to the ceiling (#696). */
 const FILES_HYDRATE_RETRY_MS = 1_000;
 const FILES_HYDRATE_RETRY_MAX_MS = 30_000;
+/* A hidden desktop tab keeps its feed for the chimes and the title count, at
+   a slower cadence (#1994): revisions coalesce into one delta read at most
+   this often, and the fallback poll runs at most this often. */
+export const HIDDEN_REVISION_COALESCE_MS = 10_000;
+export const HIDDEN_POLL_MS = 30_000;
 
 export interface FilesData {
   files: FileEntry[];
@@ -79,13 +86,19 @@ export function filesApiUrl(_project?: string | null, pinnedPath?: string | null
 }
 
 type FilesFetcher = (input: string, init?: RequestInit) => Promise<Response>;
+/** The server's own representation, exactly as certified by its ETag — what a
+    delta applies to. Rows are shared with the published snapshot. */
+type RawFilesResponse = Record<string, unknown>;
+type Representation = { data: FilesData; etag?: string; raw?: RawFilesResponse };
 type CompletionRetry = {
   pinnedPath?: string | null;
   revision?: number;
   targetGeneration: number;
   logicalGeneration: number;
   attempt: number;
-  phase: "scheduled" | "queued" | "active" | "canceled";
+  /** `parked`: the tab is hidden. The retry keeps its target generation,
+      pin and attempt, and is rescheduled when the tab is shown (#1994). */
+  phase: "scheduled" | "queued" | "active" | "parked" | "canceled";
   timer?: ReturnType<typeof setTimeout>;
   controller?: AbortController;
 };
@@ -94,7 +107,7 @@ export interface FilesClientCache {
   read(): FilesData;
   /** Return only the representation previously certified for this request URL. */
   readScope(pinnedPath?: string | null): FilesData;
-  revalidate(pinnedPath?: string | null, revision?: number): Promise<FilesData>;
+  revalidate(pinnedPath?: string | null, revision?: number, signal?: AbortSignal): Promise<FilesData>;
   subscribe(
     listener: (data: FilesData, priority?: "background" | "urgent") => void,
     pinnedPath?: string | null,
@@ -119,6 +132,11 @@ export interface FilesClientCache {
       stale or reconnecting feed can only delay the confirmation, never orphan
       the launch. */
   applySpawnedConversation(file: FileEntry): void;
+  /** The tab hid: abort completion retries in flight and park every retry
+      chain until {@link resumeCompletionRetries}. Idempotent. */
+  pauseCompletionRetries(): void;
+  /** The tab is visible again: reschedule every parked retry chain. */
+  resumeCompletionRetries(): void;
   /** Cancel owned retries and detach subscribers. A disposed cache is inert. */
   dispose(): void;
 }
@@ -127,15 +145,24 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+/** A completion retry that reached the network while the tab was hidden. Not
+    a server failure, so it never counts against the catalog. */
+class ParkedRetry extends Error {
+  override name = "AbortError";
+}
+
 function equalValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function patchRows<T>(previous: readonly T[], incoming: readonly T[], keyOf: (value: T) => string): T[] {
+  if (previous === incoming) return previous as T[];
   const previousByKey = new Map(previous.map((value) => [keyOf(value), value] as const));
   const patched = incoming.map((value) => {
     const cached = previousByKey.get(keyOf(value));
-    return cached !== undefined && equalValue(cached, value) ? cached : value;
+    /* A delta carries unchanged rows over by reference; only the rows it
+       replaced need comparing. */
+    return cached !== undefined && (cached === value || equalValue(cached, value)) ? cached : value;
   });
   return patched.length === previous.length && patched.every((value, index) => value === previous[index])
     ? previous as T[]
@@ -209,7 +236,7 @@ function restoreNotModified(current: FilesData, representation: FilesData, reque
 export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache {
   let snapshot = EMPTY;
   let disposed = false;
-  const representations = new Map<string, { data: FilesData; etag?: string }>();
+  const representations = new Map<string, Representation>();
   const listeners = new Map<
     (data: FilesData, priority?: "background" | "urgent") => void,
     string
@@ -416,11 +443,23 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     }
   };
 
-  const rememberRepresentation = (url: string, data: FilesData, etag?: string) => {
+  const rememberRepresentation = (url: string, data: FilesData, etag?: string, raw?: RawFilesResponse) => {
     representations.delete(url);
-    representations.set(url, { data, etag });
+    representations.set(url, { data, etag, raw });
     trimRepresentations();
   };
+
+  /* The raw representation keeps the published rows (JSON-equal to what the
+     server sent) instead of a second copy of every row. */
+  const rawSharingRows = (parsed: RawFilesResponse, data: FilesData): RawFilesResponse => ({
+    ...parsed,
+    ...(Array.isArray(parsed.files) ? { files: data.files } : {}),
+    ...(Array.isArray(parsed.projectCatalog) ? { projectCatalog: data.projectCatalog } : {}),
+    ...(Array.isArray(parsed.flows) ? { flows: data.flows } : {}),
+    ...(Array.isArray(parsed.pipelines) ? { pipelines: data.pipelines } : {}),
+    ...(Array.isArray(parsed.workflows) ? { workflows: data.workflows } : {}),
+    ...(Array.isArray(parsed.tasks) ? { tasks: data.tasks } : {}),
+  });
 
   const performRevalidate = async (
     pinnedPath?: string | null,
@@ -429,9 +468,20 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     logicalGeneration?: number,
     completionRetryAttempt = 0,
     completionRetry?: CompletionRetry,
+    signal?: AbortSignal,
   ): Promise<FilesData> => {
     try {
-      const result = await runRevalidate(pinnedPath, revision, requiredGeneration, logicalGeneration, completionRetryAttempt, completionRetry);
+      let result: FilesData;
+      try {
+        result = await runRevalidate(pinnedPath, revision, requiredGeneration, logicalGeneration, completionRetryAttempt, completionRetry, signal);
+      } catch (error) {
+        if (!(error instanceof FilesDeltaMismatch)) throw error;
+        /* The delta did not fit what this tab certified. Forget the base and
+           take one full representation instead of guessing. */
+        const stale = representations.get(filesApiUrl(undefined, pinnedPath));
+        if (stale) stale.raw = undefined;
+        result = await runRevalidate(pinnedPath, revision, requiredGeneration, logicalGeneration, completionRetryAttempt, completionRetry, signal);
+      }
       noteCatalogOutcome(true);
       return result;
     } catch (error) {
@@ -449,19 +499,25 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     logicalGeneration?: number,
     completionRetryAttempt = 0,
     completionRetry?: CompletionRetry,
+    externalSignal?: AbortSignal,
   ): Promise<FilesData> => {
     if (disposed) return snapshot;
     const url = filesApiUrl(undefined, pinnedPath);
     if (completionRetry) {
       if (!ownsCompletionRetry(url, completionRetry)) return snapshot;
+      /* Queued before the tab hid: park instead of fetching. */
+      if (hiddenTrafficSuspended()) throw new ParkedRetry("completion retry parked while hidden");
       completionRetry.phase = "active";
       completionRetry.controller = new AbortController();
     }
     const generation = ++requestedGeneration;
     const representation = representations.get(url);
-    const headers = filesRequestHeaders(representation?.etag ?? "", revision, requiredGeneration);
-    const init = headers || completionRetry?.controller
-      ? { ...(headers ? { headers } : {}), ...(completionRetry?.controller ? { signal: completionRetry.controller.signal } : {}) }
+    /* Only a tab holding the server's exact representation can apply a delta
+       to it; otherwise the conditional request asks for the whole body. */
+    const headers = filesRequestHeaders(representation?.etag ?? "", revision, requiredGeneration, Boolean(representation?.raw));
+    const signal = completionRetry?.controller?.signal ?? externalSignal;
+    const init = headers || signal
+      ? { ...(headers ? { headers } : {}), ...(signal ? { signal } : {}) }
       : undefined;
     let response: Response;
     try {
@@ -488,7 +544,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
         snapshot = restoreNotModified(snapshot, representation.data, url);
       }
       appliedGeneration = generation;
-      rememberRepresentation(url, snapshot, representation.etag);
+      rememberRepresentation(url, snapshot, representation.etag, representation.raw);
       settleServerPipelines(logicalGeneration ?? generation, !generationIncomplete);
       // Generation-completion probes commonly return the same bodyless 304
       // for minutes while a large catalog scan is active. Keep React asleep
@@ -510,7 +566,15 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
       return snapshot;
     }
     if (!response.ok) throw new Error(`files request failed: ${response.status}`);
-    const parsed = JSON.parse(await response.text()) as FilesResponse | FileEntry[];
+    const etag = response.headers.get("ETag");
+    const text = await response.text();
+    const deltaBase = response.headers.get(FILES_DELTA_BASE_HEADER);
+    let parsed: FilesResponse | FileEntry[];
+    if (deltaBase !== null) {
+      parsed = appliedDeltas(representation, deltaBase, etag, text) as unknown as FilesResponse;
+    } else {
+      parsed = JSON.parse(text) as FilesResponse | FileEntry[];
+    }
     if (completionRetry && !ownsCompletionRetry(url, completionRetry)) return snapshot;
     if (generation < appliedGeneration) return snapshot;
     const incoming = parsedFilesData(parsed, url);
@@ -525,8 +589,9 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
       : incoming;
     snapshot = patchFilesData(snapshot, scopedIncoming);
     appliedGeneration = generation;
-    const etag = response.headers.get("ETag");
-    rememberRepresentation(url, snapshot, etag ?? undefined);
+    const raw = Array.isArray(parsed) ? undefined
+      : scopedIncoming === incoming ? rawSharingRows(parsed as unknown as RawFilesResponse, snapshot) : parsed as unknown as RawFilesResponse;
+    rememberRepresentation(url, snapshot, etag ?? undefined, etag ? raw : undefined);
     settleServerPipelines(logicalGeneration ?? generation, !generationIncomplete);
     publish(url);
     if (generationIncomplete && completionTargetGeneration !== undefined) {
@@ -552,6 +617,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     logicalGeneration?: number,
     completionRetryAttempt?: number,
     completionRetry?: CompletionRetry,
+    signal?: AbortSignal,
   ): Promise<FilesData> => {
     if (disposed) return Promise.resolve(snapshot);
     const result = requestQueue.then(() => performRevalidate(
@@ -561,6 +627,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
       logicalGeneration,
       completionRetryAttempt,
       completionRetry,
+      signal,
     ));
     requestQueue = result.then(() => undefined, () => undefined);
     return result;
@@ -607,6 +674,12 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     retry.attempt = attempt;
     retry.phase = "scheduled";
     if (!owner) completionRetries.set(url, retry);
+    /* A hidden tab owes this read but does not make it: the chain waits,
+       target and pin intact, for resumeCompletionRetries. */
+    if (hiddenTrafficSuspended()) {
+      retry.phase = "parked";
+      return;
+    }
     const delay = Math.min(
       FILES_GENERATION_RETRY_MAX_MS,
       FILES_GENERATION_RETRY_MS * 2 ** Math.min(attempt, 10),
@@ -615,6 +688,10 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
       retry.timer = undefined;
       if (!ownsCompletionRetry(url, retry)) {
         cancelCompletionRetry(url);
+        return;
+      }
+      if (hiddenTrafficSuspended()) {
+        retry.phase = "parked";
         return;
       }
       retry.phase = "queued";
@@ -640,8 +717,37 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     }, delay);
   };
 
-  const revalidate = (pinnedPath?: string | null, revision?: number): Promise<FilesData> =>
-    enqueueRevalidate(pinnedPath, revision);
+  const pauseCompletionRetries = () => {
+    for (const retry of completionRetries.values()) {
+      if (retry.timer !== undefined) {
+        clearTimeout(retry.timer);
+        retry.timer = undefined;
+        retry.phase = "parked";
+      }
+      /* In flight: the abort settles through the chain's own catch, which
+         reschedules it and parks it there. */
+      retry.controller?.abort();
+    }
+  };
+
+  const resumeCompletionRetries = () => {
+    if (disposed) return;
+    for (const [url, retry] of [...completionRetries]) {
+      if (retry.phase !== "parked") continue;
+      scheduleCompletionRetry(
+        url,
+        retry.pinnedPath,
+        retry.revision,
+        retry.targetGeneration,
+        retry.logicalGeneration,
+        retry.attempt,
+        retry,
+      );
+    }
+  };
+
+  const revalidate = (pinnedPath?: string | null, revision?: number, signal?: AbortSignal): Promise<FilesData> =>
+    enqueueRevalidate(pinnedPath, revision, undefined, undefined, undefined, undefined, signal);
 
   const applyPipeline = (pipeline: Pipeline, confirmed: boolean) => {
     if (disposed) return;
@@ -705,7 +811,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     listeners.clear();
   };
 
-  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, dispose };
+  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
@@ -757,6 +863,35 @@ export function applySpawnedConversationSnapshot(file: FileEntry): void {
   flushSync(() => filesClientCache.applySpawnedConversation(file));
 }
 
+class FilesDeltaMismatch extends Error {}
+
+/** The server's representation after the deltas in `text`, applied to the
+    one this tab certified under `base`. */
+function appliedDeltas(
+  representation: Representation | undefined,
+  base: string,
+  etag: string | null,
+  text: string,
+): RawFilesResponse {
+  if (!representation?.raw || representation.etag !== base || !etag) {
+    throw new FilesDeltaMismatch("files delta does not apply to the certified representation");
+  }
+  try {
+    const { deltas } = JSON.parse(text) as { deltas: FilesDelta[] };
+    let raw = representation.raw;
+    let at = base;
+    for (const delta of deltas) {
+      if (delta.base !== at) throw new Error("files delta chain is broken");
+      raw = applyFilesDelta(raw, delta);
+      at = delta.etag;
+    }
+    if (at !== etag) throw new Error("files delta chain ends elsewhere");
+    return raw;
+  } catch (error) {
+    throw new FilesDeltaMismatch(error instanceof Error ? error.message : "files delta is unreadable");
+  }
+}
+
 function responseGeneration(response: Response, name: string): number | undefined {
   const value = response.headers.get(name);
   if (value === null || !/^\d+$/.test(value)) return undefined;
@@ -768,9 +903,11 @@ export function filesRequestHeaders(
   etag: string,
   revision?: number,
   generation?: number,
+  acceptDelta = false,
 ): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
   if (etag) headers["If-None-Match"] = etag;
+  if (etag && acceptDelta) headers[FILES_DELTA_ACCEPT_HEADER] = "1";
   if (revision !== undefined) headers["x-llv-files-revision"] = String(revision);
   if (generation !== undefined) headers["x-llv-files-generation"] = String(generation);
   return Object.keys(headers).length > 0 ? headers : undefined;
@@ -785,7 +922,13 @@ export function filesPollCadence(connection: "live" | "reconnecting" | "degraded
   return connection === "live" ? "live" : "poll";
 }
 
-/** Polls /api/files. Keeps the last good list on transient fetch errors. */
+/** Polls /api/files. Keeps the last good list on transient fetch errors.
+ *
+ * A hidden tab asks for nothing (#1994): the recurring poll, revision
+ * hydrations and failed-hydration retries wait, and a request in flight when
+ * the tab hides is cancelled. What they would have fetched is remembered, and
+ * the tab revalidates once — conditionally, usually as a delta — the moment it
+ * is visible again. */
 export function useFiles(_project?: string | null, pinnedPath?: string | null): FilesData {
   const [data, setData] = useState<FilesData>(() => filesClientCache.readScope(pinnedPath));
   const requestScope = filesApiUrl(undefined, pinnedPath);
@@ -808,13 +951,23 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       }
       publishBackgroundData(next);
     }, pinnedPath);
+    /* Aborted when the tab hides, so a body still downloading for a board
+       nobody is looking at stops costing the phone. */
+    let inflight = new AbortController();
+    /* Work that came due while hidden and must run when the tab returns. */
+    let owedWhileHidden = false;
     const performLoad = async (revision?: number): Promise<boolean> => {
       if (!alive) return true;
+      if (hiddenTrafficSuspended()) {
+        owedWhileHidden = true;
+        return false;
+      }
       try {
-        await cache.revalidate(pinnedPath, revision);
+        await cache.revalidate(pinnedPath, revision, inflight.signal);
         return true;
       } catch {
-        /* keep previous list */
+        /* keep previous list; a read the hiding tab cancelled is owed */
+        if (hiddenTrafficSuspended()) owedWhileHidden = true;
         return false;
       }
     };
@@ -826,11 +979,19 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
     };
     let initialRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let hydrateAttempt = 0;
+    let hydrateOnVisible = false;
     const hydrateInitial = async () => {
       const hydrated = await load();
       if (!alive) return;
       if (hydrated) {
         hydrateAttempt = 0;
+        return;
+      }
+      /* Hidden: the visibility handler restarts hydration when the tab
+         returns instead of retrying into a tab nobody is looking at. */
+      if (hiddenTrafficSuspended()) {
+        owedWhileHidden = true;
+        hydrateOnVisible = true;
         return;
       }
       /* Bounded backoff (issue #696). The old flat 1s retry hammered a dead
@@ -856,11 +1017,18 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
      */
     let timer: ReturnType<typeof setInterval> | null = null;
     let mode: "poll" | "live" | null = null;
+    let lastPollAt = 0;
+    const pollTick = () => {
+      const now = Date.now();
+      if (documentHidden() && now - lastPollAt < HIDDEN_POLL_MS) return;
+      lastPollAt = now;
+      void load();
+    };
     const setCadence = (next: "poll" | "live") => {
       if (next === mode) return;
       mode = next;
       if (timer) clearInterval(timer);
-      timer = next === "poll" ? setInterval(load, POLL_MS) : null;
+      timer = next === "poll" ? setInterval(pollTick, POLL_MS) : null;
     };
 
     /* Flow, workflow and task mutations refresh out of band: strips and
@@ -905,7 +1073,8 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       revisionHydrating = false;
       if (!alive) return;
       if (hydrated && pendingRevision === requestedRevision) pendingRevision = null;
-      if (pendingRevision !== null) {
+      /* A hidden tab keeps the revision it owes and hydrates it on return. */
+      if (pendingRevision !== null && !hiddenTrafficSuspended()) {
         scheduleRevisionHydration(hydrated ? 0 : FILES_REVISION_RETRY_MS);
       }
     };
@@ -916,14 +1085,49 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       unsubBus = bus.subscribe(applyConnection);
       unsubFiles = bus.subscribeFilesRevision((revision) => {
         pendingRevision = pendingRevision === null ? revision : Math.max(pendingRevision, revision);
-        scheduleRevisionHydration(FILES_DEBOUNCE_MS);
+        /* Hidden desktop: a throttle, not a debounce — a busy board must not
+           postpone the read forever, and the first revision's read carries
+           every later one. */
+        if (!documentHidden()) scheduleRevisionHydration(FILES_DEBOUNCE_MS);
+        else if (!revisionTimer && !revisionHydrating) scheduleRevisionHydration(HIDDEN_REVISION_COALESCE_MS);
       });
     } else {
       setCadence("poll");
     }
 
+    const onVisibility = () => {
+      if (documentHidden()) {
+        /* A desktop keeps its (slower) feed while hidden. */
+        if (!hiddenTrafficSuspended()) return;
+        inflight.abort();
+        inflight = new AbortController();
+        cache.pauseCompletionRetries();
+        return;
+      }
+      cache.resumeCompletionRetries();
+      if (hydrateOnVisible) {
+        hydrateOnVisible = false;
+        owedWhileHidden = false;
+        hydrateAttempt = 0;
+        void hydrateInitial();
+        return;
+      }
+      if (pendingRevision !== null) {
+        owedWhileHidden = false;
+        scheduleRevisionHydration(0);
+        return;
+      }
+      if (owedWhileHidden) {
+        owedWhileHidden = false;
+        void load();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       alive = false;
+      document.removeEventListener("visibilitychange", onVisibility);
+      inflight.abort();
       if (timer) clearInterval(timer);
       if (initialRetryTimer) clearTimeout(initialRetryTimer);
       if (revisionTimer) clearTimeout(revisionTimer);
