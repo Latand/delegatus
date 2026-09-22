@@ -1797,6 +1797,29 @@ test("a lane that parked before it ran a stage carries why it never started (#17
   expect((await gather({ pipelines: [afterAStage] })).ownLanes).toMatchObject([{ settled: "needs_decision" }]);
 });
 
+/* #1938: a spent review budget whose last fix wrote a new head is its own
+   settlement, carrying both heads and the verdict, and its pull request is
+   never one "left open by a lane that finished". */
+const NEEDS_REVIEW = {
+  stageId: "review", attempt: 2, fixStageId: "build", fixAttempt: 3,
+  reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), verdict: "fail", findings: 2, at: "2026-08-28T11:30:00.000Z",
+};
+
+test("a lane parked in needs_review settles as needs_review with the reviewed head, the current head and the last verdict (#1938)", async () => {
+  const parked = lane({ srcConversationId: CONVERSATION, state: "needs_review", cursor: null, reviewPending: NEEDS_REVIEW });
+  expect((await gather({ pipelines: [parked] })).ownLanes).toMatchObject([{
+    id: "pipeline_a1",
+    settled: "needs_review",
+    review: { stageId: "review", reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), lastVerdict: "fail", findings: 2 },
+  }]);
+});
+
+test("a needs_review lane's pull request is not one a finished lane left open (#1938)", async () => {
+  const parked = finishedLane({ state: "needs_review", closedAt: null, reviewPending: NEEDS_REVIEW });
+  const input = await gather({ pipelines: [parked], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(input.pullRequests).toEqual([]);
+});
+
 /* ---------------------------------------------------------------------------
  * A seat is woken when an agent it spawned finishes (#1881)
  *

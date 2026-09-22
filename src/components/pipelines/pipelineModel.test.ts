@@ -4,7 +4,7 @@ import type { FileEntry } from "@/lib/types";
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import type { TFunction } from "@/lib/i18n";
+import { translate, type TFunction } from "@/lib/i18n";
 
 import {
   PIPELINE_TEMPLATES,
@@ -60,6 +60,9 @@ import {
   stagePaneTitle,
   stageRowCollapsible,
   stageOutcomeReason,
+  PIPELINE_ATTENTION_STATES,
+  pipelineReviewHeads,
+  pipelineStateLabel,
 } from "./pipelineModel";
 import { foldClaimedReviewers } from "../flows/flowModel";
 import type { Flow } from "@/lib/flows/types";
@@ -1719,4 +1722,33 @@ test("stageConfigurable: a stage is open to configuration only while it never ra
   expect(stageConfigurable({ ...running, state: "closed" } as Pipeline, "review")).toBe(false);
   /* A draft is all configuration. */
   expect(stageConfigurable({ ...running, state: "draft", runs: [] } as unknown as Pipeline, "build")).toBe(true);
+});
+
+/* #1938: needs_review is an attention state with its own label, and every card
+   reads one line carrying the last verdict and both heads. */
+describe("needs_review", () => {
+  const pending = {
+    stageId: "review", attempt: 2, fixStageId: "implement", fixAttempt: 3,
+    reviewedHead: "1111111111111111111111111111111111111111", currentHead: "2222222222222222222222222222222222222222",
+    verdict: "fail" as const, findings: 2, at: "2026-09-20T00:00:00.000Z",
+  };
+  const en = ((key: string, params?: Record<string, string | number>) => translate("en", key as never, params)) as TFunction;
+  const uk = ((key: string, params?: Record<string, string | number>) => translate("uk", key as never, params)) as TFunction;
+
+  test("the state is labelled in both locales and asks for the operator", () => {
+    expect(PIPELINE_ATTENTION_STATES.has("needs_review")).toBe(true);
+    expect(pipelineStateLabel(en, "needs_review")).toBe("needs review");
+    expect(pipelineStateLabel(uk, "needs_review")).not.toBe("pipelineState.needs_review");
+    expect(pipelineStateLabel(uk, "needs_review")).not.toBe(pipelineStateLabel(en, "needs_review"));
+  });
+
+  test("the heads line names the verdict, the reviewed head and the unreviewed current head", () => {
+    const lane = { state: "needs_review" as const, pausedState: null, reviewPending: pending };
+    expect(pipelineReviewHeads(en, lane)).toBe("last review fail on 11111111 · current head 22222222 unreviewed");
+    expect(pipelineReviewHeads(uk, lane)).toContain("22222222");
+    expect(pipelineReviewHeads(en, { ...lane, reviewPending: { ...pending, reviewedHead: null } })).toBe("last review fail on unknown · current head 22222222 unreviewed");
+    /* Closed out of needs_review, the record is history and the line is gone. */
+    expect(pipelineReviewHeads(en, { ...lane, state: "closed" })).toBeNull();
+    expect(pipelineReviewHeads(en, null)).toBeNull();
+  });
 });

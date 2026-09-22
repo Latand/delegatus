@@ -1481,6 +1481,24 @@ test("a lane whose provisioning failed names what stopped it (#1799)", () => {
   });
 });
 
+test("a needs_review lane's wake line says the last review failed and the head is unreviewed, with both heads (#1938)", () => {
+  const decision = seatTickDecision(input({
+    ownLanes: [ownLane({
+      settled: "needs_review",
+      review: { stageId: "review", reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), lastVerdict: "fail", findings: 2 },
+    })],
+    state: stateWith(OVERDUE_STATE),
+  }));
+  expect(reasonsOf(decision.verdict)).toEqual(["own-lane-settled"]);
+  const verdict = decision.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
+  expect(verdict.items[0]).toEqual({
+    kind: "pipeline",
+    id: "pipeline_a1",
+    label: `ship the exporter — lane you launched: last review failed, head unreviewed: review said fail with 2 findings on ${"1".repeat(12)}; current head ${"2".repeat(12)} was never reviewed. pipeline_action continue-review with addRounds resumes it`,
+  });
+  expect(verdict.items[0]!.label).not.toContain("completed");
+});
+
 test("only a landed wake records a provisioning announcement, and only for the lanes it named (#1799)", () => {
   const crowd = Array.from({ length: 7 }, (_, n) => ownLane({ id: `pipeline_z${n}`, title: `lane ${n}` }));
   const decision = seatTickDecision(input({ ownLanes: crowd, state: stateWith(OVERDUE_STATE) }));

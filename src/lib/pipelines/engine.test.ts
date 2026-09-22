@@ -25,11 +25,12 @@ const rawCreatePipelineFromRequest = engineModule.createPipelineFromRequest;
 const createPipelineFromRequest: typeof rawCreatePipelineFromRequest = async (request, ports, options) =>
   await rawCreatePipelineFromRequest({ src: "/codex/creator.jsonl", ...request }, ports, options);
 const { registerPipelineTick } = await import("./controllerSignal");
-const { loadPipelines, savePipelines, pipelineIdentity } = await import("./store");
+const { loadPipelines, savePipelines, pipelineIdentity, pipelineRevision } = await import("./store");
 const { durableStageTurnEvidence } = await import("./durableEvidence");
-const { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed } = await import("./failEdgeBudget");
+const { edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed } = await import("./failEdgeBudget");
 const { saveTasks } = await import("@/lib/tasks/store");
 type PipelinePorts = import("./engine").PipelinePorts;
+type Pipeline = import("./types").Pipeline;
 type PipelineStageStopResult = import("./engine").PipelineStageStopResult;
 type StageTurnEvidence = import("./durableEvidence").StageTurnEvidence;
 
@@ -8522,7 +8523,7 @@ const BUDGET_STAGES = (onFail: Record<string, unknown>, critiqueNext: string | n
 
 /** Runs build → critique, failing every critique with one finding, until the
     controller stops routing back to build or a round limit is hit. */
-async function failEveryCritique(h: ReturnType<typeof harness>, reviews: number): Promise<void> {
+async function failEveryCritique(h: ReturnType<typeof harness>, reviews: number, beforeBuildPass: () => void = () => {}): Promise<void> {
   for (let round = 1; round <= reviews + 1; round += 1) {
     await tickPipelines([], h.ports);
     let current = loadPipelines()[0]!;
@@ -8530,6 +8531,7 @@ async function failEveryCritique(h: ReturnType<typeof harness>, reviews: number)
     await tickPipelines([], h.ports);
     current = loadPipelines()[0]!;
     const build = current.runs.find((run) => run.stageId === "build")!.attempts.at(-1)!;
+    beforeBuildPass();
     await tickPipelines([h.finish(build.agentPath!, "pass", `built v${round}`)], h.ports);
     current = loadPipelines()[0]!;
     if (current.cursor?.stageId !== "critique") return;
@@ -8666,6 +8668,241 @@ test("onExhausted is validated and edited with the fail edge, and freezes with i
   expect(frozen.status).toBe(409);
   expect(frozen.error).toContain("frozen evidence");
   expect(loadPipelines()[0]!.stages[1]!.onFail).toEqual({ to: "build", maxRounds: 1, onExhausted: "advance" });
+});
+
+/* A spent review budget whose last fix wrote a NEW head (#1938): the lane ends
+   in needs_review, never completed, and never takes the reviewer's pass edge
+   for a head nobody reviewed. continue-review grants explicit extra rounds and
+   reviews the current head in the same pipeline. */
+const REVIEW_HEADS = ["1".repeat(40), "2".repeat(40), "3".repeat(40), "4".repeat(40), "5".repeat(40), "6".repeat(40)];
+
+/** The harness with a worktree HEAD the test moves: each build round `n`
+    commits REVIEW_HEADS[n - 1] unless `heads` says otherwise. */
+function movingHeadHarness(heads: (round: number) => string = (round) => REVIEW_HEADS[round - 1]!) {
+  const h = harness();
+  let head = ORIGIN_MAIN_SHA;
+  let builds = 0;
+  const baseExec = h.ports.exec;
+  h.ports.exec = (command, rawArgs, ...rest) => {
+    const args = command === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+    if (args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: `${head}\n`, stderr: "" };
+    return baseExec(command, rawArgs, ...rest);
+  };
+  const beforeBuildPass = () => { builds += 1; head = heads(builds); };
+  return Object.assign(h, { beforeBuildPass });
+}
+
+async function critiqueRound(h: ReturnType<typeof movingHeadHarness>, status: "pass" | "fail", label: string): Promise<void> {
+  await tickPipelines([], h.ports);
+  const current = loadPipelines()[0]!;
+  const critique = current.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
+  h.messages.set(critique.agentPath!, {
+    text: `${label}\n\n\`\`\`json\n{"status":"${status}"${status === "fail" ? `,"findings":["P1 ${label}"]` : ""}}\n\`\`\``,
+    ts: Date.now() + 100_000_000,
+  });
+  await tickPipelines([entry(critique.agentPath!)], h.ports);
+}
+
+async function buildRound(h: ReturnType<typeof movingHeadHarness>, label: string): Promise<void> {
+  await tickPipelines([], h.ports);
+  const current = loadPipelines()[0]!;
+  const build = current.runs.find((run) => run.stageId === "build")!.attempts.at(-1)!;
+  h.beforeBuildPass();
+  await tickPipelines([h.finish(build.agentPath!, "pass", label)], h.ports);
+}
+
+function continueReview(pipeline: Pipeline, clientRequestId: string, addRounds: unknown, expectedRevision = pipelineRevision(pipeline)) {
+  return patchPipeline(pipeline.id, { action: "continue-review", clientRequestId, addRounds: addRounds as number, expectedRevision }, movingHeadPorts!);
+}
+let movingHeadPorts: PipelinePorts | null = null;
+
+test("maxRounds 1: a final fix that writes a new head ends in needs_review with both heads and the last verdict, never completed (#1938)", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await tickPipelines([], h.ports);
+  await failEveryCritique(h, 1, h.beforeBuildPass);
+
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("needs_review");
+  expect(current.closedAt).toBeNull();
+  expect(current.cursor).toBeNull();
+  expect(current.lastPassedCommit).toBe(REVIEW_HEADS[1]);
+  expect(current.reviewPending).toMatchObject({
+    stageId: "critique",
+    attempt: 1,
+    fixStageId: "build",
+    fixAttempt: 2,
+    reviewedHead: REVIEW_HEADS[0],
+    currentHead: REVIEW_HEADS[1],
+    verdict: "fail",
+    findings: 1,
+  });
+  expect(current.stateDetail).toContain("last review failed");
+  expect(current.stateDetail).toContain("unreviewed");
+  /* No pass was recorded for the reviewer, and nothing completed. */
+  const critiques = current.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(critiques.map((attempt) => attempt.state)).toEqual(["failed"]);
+  expect(critiques[0]!.reviewedHead).toBe(REVIEW_HEADS[0]);
+  /* It survives a reload through the store unchanged. */
+  expect(loadPipelines()[0]!.state).toBe("needs_review");
+  /* Nothing ticks it forward on its own. */
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_review");
+  expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(1);
+  /* A pause and a resume bring it back to needs_review, still naming the head. */
+  expect((await patchPipeline(current.id, { action: "pause" }, h.ports)).pipeline?.pausedState).toBe("needs_review");
+  const resumed = await patchPipeline(current.id, { action: "resume" }, h.ports);
+  expect(resumed.pipeline?.state).toBe("needs_review");
+  expect(resumed.pipeline?.stateDetail).toBe(current.stateDetail);
+});
+
+test("a spent budget whose final fix wrote no new head keeps the #1868 behaviour (#1938)", async () => {
+  /* Round 1 writes H1 and the handoff fix leaves the tree at H1. */
+  const h = movingHeadHarness(() => REVIEW_HEADS[0]!);
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await tickPipelines([], h.ports);
+  await failEveryCritique(h, 1, h.beforeBuildPass);
+
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("completed");
+  expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(current.reviewPending).toBeUndefined();
+});
+
+test("continue-review resumes review of the current head with an explicit added budget, replays by clientRequestId and refuses a competing continuation (#1938)", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await tickPipelines([], h.ports);
+  await failEveryCritique(h, 1, h.beforeBuildPass);
+  const parked = loadPipelines()[0]!;
+  const revision = pipelineRevision(parked);
+
+  /* The budget has to be explicit. */
+  expect((await continueReview(parked, "grant-0", 0)).status).toBe(400);
+  expect((await continueReview(parked, "grant-0", undefined)).status).toBe(400);
+  expect((await continueReview(parked, "grant-0", 10)).status).toBe(400);
+  expect((await patchPipeline(parked.id, { action: "continue-review", addRounds: 1, expectedRevision: revision }, h.ports)).status).toBe(400);
+  expect((await continueReview(parked, "grant-stale", 1, "0".repeat(64))).code).toBe("STAGE_CHANGED");
+  expect(loadPipelines()[0]!.state).toBe("needs_review");
+
+  /* Rollback switch: admission off, the parked record untouched. */
+  process.env.LLV_PIPELINE_CONTINUE_REVIEW = "0";
+  try {
+    expect((await continueReview(parked, "grant-1", 1, revision)).error).toBe("continue-review is disabled");
+  } finally {
+    delete process.env.LLV_PIPELINE_CONTINUE_REVIEW;
+  }
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
+
+  const accepted = await continueReview(parked, "grant-1", 1, revision);
+  expect(accepted.error).toBeUndefined();
+  expect(accepted.replayed).toBe(false);
+  expect(accepted.reviewContinuation).toMatchObject({
+    clientRequestId: "grant-1",
+    stageId: "critique",
+    rounds: 1,
+    reviewedHead: REVIEW_HEADS[0],
+    currentHead: REVIEW_HEADS[1],
+  });
+  let current = loadPipelines()[0]!;
+  expect(current.state).toBe("running");
+  expect(current.reviewPending).toBeUndefined();
+  expect(current.cursor).toMatchObject({ stageId: "critique", state: "pending", activatedBy: { stageId: "build", attempt: 2, edge: "pass" } });
+  expect(current.cursor!.input).toContain("built v2");
+  expect(failEdgeMaxRounds(current, current.stages.find((stage) => stage.id === "critique")!)).toBe(2);
+
+  /* The same request replays its receipt and changes nothing; a competing one
+     read against the same revision is refused. */
+  const replay = await continueReview(parked, "grant-1", 1, revision);
+  expect(replay.replayed).toBe(true);
+  expect(replay.reviewContinuation?.clientRequestId).toBe("grant-1");
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(pipelineRevision(current));
+  const competing = await continueReview(parked, "grant-2", 1, revision);
+  expect(competing.status).toBe(409);
+  expect((await continueReview(current, "grant-3", 1)).status).toBe(409);
+  expect(loadPipelines()[0]!.reviewGrants).toHaveLength(1);
+
+  /* The fresh review of the current head passes, and only then does the lane complete. */
+  await critiqueRound(h, "pass", "approved v2");
+  current = loadPipelines()[0]!;
+  expect(current.state).toBe("completed");
+  expect(current.stateDetail).toBeNull();
+  const critiques = current.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(critiques.map((attempt) => attempt.state)).toEqual(["failed", "passed"]);
+  expect(current.lastPassedCommit).toBe(REVIEW_HEADS[1]);
+});
+
+test("maxRounds 2: added rounds run bounded fix loops, park again in needs_review on a new unreviewed head, and the review activation count stays exact across a retry (#1938)", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 2 }) as never);
+  await tickPipelines([], h.ports);
+  await failEveryCritique(h, 2, h.beforeBuildPass);
+
+  let current = loadPipelines()[0]!;
+  const critiqueStage = () => current.stages.find((stage) => stage.id === "critique")!;
+  const reviewActivations = () => edgeRoundsUsed(current, { from: "build", to: "critique", kind: "pass" });
+  expect(current.state).toBe("needs_review");
+  expect(current.reviewPending).toMatchObject({ attempt: 2, fixAttempt: 3, reviewedHead: REVIEW_HEADS[1], currentHead: REVIEW_HEADS[2] });
+  /* The reviewer's pass successor never ran for the unreviewed head. */
+  expect(current.runs.find((run) => run.stageId === "ship")!.attempts).toHaveLength(0);
+  expect(failEdgeRoundsUsed(current, critiqueStage())).toBe(2);
+  expect(reviewActivations()).toBe(2);
+
+  expect((await continueReview(current, "grant-a", 2)).error).toBeUndefined();
+  current = loadPipelines()[0]!;
+  expect(failEdgeMaxRounds(current, critiqueStage())).toBe(4);
+
+  /* The continued review's first spawn dies and the stage is retried: a fresh
+     attempt with the same activation, which is the same review, not another. */
+  await tickPipelines([], h.ports);
+  current = loadPipelines()[0]!;
+  const reviewThree = current.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(reviewThree.n).toBe(3);
+  reviewThree.state = "failed";
+  reviewThree.completedAt = h.ports.now();
+  reviewThree.error = "pipeline structured runtime host is unavailable";
+  current.runs.find((run) => run.stageId === "critique")!.attempts.push({
+    ...structuredClone(reviewThree),
+    n: 4, state: "running", completedAt: null, error: null,
+    launchId: "launch-review-retry", conversationId: "conversation_review_retry", sessionId: "session-review-retry",
+    agentPath: "/codex/review-retry.jsonl", paneId: null,
+  });
+  current.cursor = { stageId: "critique", state: "running", input: reviewThree.input, activatedBy: reviewThree.activatedBy };
+  savePipelines([current]);
+  current = loadPipelines()[0]!;
+  expect(reviewActivations()).toBe(3);
+  expect(failEdgeRoundsUsed(current, critiqueStage())).toBe(2);
+
+  /* That review fails: one granted loop is left, so the fix runs and is reviewed again. */
+  h.messages.set("/codex/review-retry.jsonl", { text: "round 3\n\n```json\n{\"status\":\"fail\",\"findings\":[\"P1 round 3\"]}\n```", ts: Date.now() + 100_000_000 });
+  await tickPipelines([entry("/codex/review-retry.jsonl")], h.ports);
+  current = loadPipelines()[0]!;
+  expect(current.cursor).toMatchObject({ stageId: "build", activatedBy: { stageId: "critique", attempt: 4, edge: "fail" } });
+  expect(current.cursor!.activatedBy!.budgetSpent).toBeUndefined();
+  await buildRound(h, "built v4");
+  await critiqueRound(h, "fail", "round 4");
+  current = loadPipelines()[0]!;
+  /* The grant's last review failed: its findings go to the fix once more. */
+  expect(current.cursor).toMatchObject({ stageId: "build", activatedBy: { stageId: "critique", attempt: 5, edge: "fail", budgetSpent: true } });
+  await buildRound(h, "built v5");
+  current = loadPipelines()[0]!;
+  expect(current.state).toBe("needs_review");
+  expect(current.reviewPending).toMatchObject({ attempt: 5, fixAttempt: 5, reviewedHead: REVIEW_HEADS[3], currentHead: REVIEW_HEADS[4] });
+  expect(failEdgeRoundsUsed(current, critiqueStage())).toBe(4);
+  expect(reviewActivations()).toBe(4);
+  expect(current.runs.find((run) => run.stageId === "ship")!.attempts).toHaveLength(0);
+
+  /* One more round, approved: the reviewer's own pass edge finally runs. */
+  expect((await continueReview(current, "grant-b", 1)).error).toBeUndefined();
+  await critiqueRound(h, "pass", "approved v5");
+  current = loadPipelines()[0]!;
+  expect(current.state).toBe("running");
+  expect(current.cursor).toMatchObject({ stageId: "ship", activatedBy: { stageId: "critique", attempt: 6, edge: "pass" } });
+  expect(current.reviewGrants?.map((grant) => grant.rounds)).toEqual([2, 1]);
+  expect(reviewActivations()).toBe(5);
 });
 
 /* A needs_decision that carries findings routes along the fail edge (#1785);
