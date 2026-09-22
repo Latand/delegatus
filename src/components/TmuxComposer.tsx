@@ -41,6 +41,7 @@ import {
   type RetainedQueueAdmission,
 } from "@/components/retainedQueueAdmissions";
 import { useNativeQueue, type NativeQueueMutation } from "@/hooks/useNativeQueue";
+import { documentHidden } from "@/lib/client/hiddenTraffic";
 
 import { DormantView } from "./conversation/DormantView";
 import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "./ComposerBar";
@@ -57,11 +58,16 @@ import {
   markOutboxResponded,
   outboxHistory,
   outboxCanAdmit,
+  OPERATION_RECONCILE_GRACE_MS,
+  operationReadDue,
+  operationsToReconcile,
   outboxReceiptPatch,
   receiptHasUnknownFate,
   receiptHasAbsorbingOutcome,
   receiptEvidenceOrder,
   type ObservedRuntimeReceipt,
+  type OperationReconciliation,
+  readOperationShared,
   readOutbox,
   rebindOutboxEchoText,
   releaseHeldOutbox,
@@ -1948,6 +1954,103 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   useLayoutEffect(() => {
     displayedRuntimeReceiptsRef.current = displayedRuntimeReceipts;
   }, [displayedRuntimeReceipts]);
+  const rememberRuntimeReceipt = (receipt: RuntimeReceipt, original: RuntimeReceipt, allowRetryLeaf = false, responseOperationId?: string) => {
+    const sameOperation = receipt.idempotencyKey === original.idempotencyKey && receipt.operationId === original.operationId;
+    const retryLeaf = allowRetryLeaf && !receiptHasUnknownFate(original)
+      && retryParentOperationId(receipt) === original.operationId;
+    if (receipt.conversationId !== original.conversationId || receipt.conversationId !== cardId
+      || (!sameOperation && !retryLeaf)
+      || (responseOperationId && responseOperationId !== receipt.operationId && !retryLeaf)) return false;
+    const stored = readRecoveryReceipts(cardId);
+    const observed: ObservedRuntimeReceipt = { ...receipt,
+      observationOrder: 1 + Math.max(0, ...[...stored, original].filter((candidate) => candidate.operationId === receipt.operationId)
+        .map((candidate) => (candidate as ObservedRuntimeReceipt).observationOrder ?? 0)),
+      text: receipt.text ?? original.text,
+      observedJournalRevision: Math.max(original.revision, (original as ObservedRuntimeReceipt).observedJournalRevision ?? 0,
+        ...runtimeReceipts.filter((candidate) => candidate.operationId === receipt.operationId).map((candidate) => candidate.revision)),
+    };
+    // Persist operation evidence even when the submission came from another
+    // tab or device and this composer has never owned a local outbox entry.
+    const persisted = mergeRuntimeReceipts(stored, [observed]);
+    writeRecoveryReceipts(cardId, persisted);
+    setImmediateRuntimeReceipts((current) => mergeRuntimeReceipts(current, persisted));
+    return true;
+  };
+
+  /* Unsettled rows the live tail cannot move are read back by their own
+     operation id (see `operationsToReconcile`). A reload or a re-host starts
+     with an empty tail, so this is what brings a row that already sits in
+     storage to its recorded answer. Only a terminal answer is taken: a moving
+     one says nothing the stream will not say, and it leaves every existing
+     revision and observation-order guard in charge.
+
+     Reads follow the hidden-traffic policy (#1994): only an active composer
+     in a visible tab reads, since a background tab keeps nothing but its
+     badge and chime path. One read per original operation is shared by every
+     composer in the tab (`readOperationShared`), and each share is released,
+     and the request aborted, on unmount, on hide and when the composer goes
+     inactive. */
+  const applyOperationRead = (item: OperationReconciliation, answer: RuntimeReceipt) => {
+    /* The operation id is the identity here: `readOperationShared` only answers
+       for the id it read. A record projected from a compacted operation may
+       carry an empty key or conversation, which is absence, not a mismatch. */
+    if ((answer.conversationId && answer.conversationId !== cardId)
+      || (answer.idempotencyKey && answer.idempotencyKey !== item.idempotencyKey)) return;
+    rememberRuntimeReceipt({ ...answer, conversationId: cardId, idempotencyKey: item.idempotencyKey },
+      { ...item.original, conversationId: cardId });
+  };
+  /* Every share this composer holds, so hide, inactivity and unmount release
+     the forced Check status read as well as the periodic ones. */
+  const heldOperationReads = useRef(new Map<string, () => void>());
+  const readOperationBack = (item: OperationReconciliation, force = false) => {
+    if (documentHidden() || heldOperationReads.current.has(item.operationId)) return;
+    const read = readOperationShared(item.operationId, nowMs(), { force });
+    if (!read) return;
+    const held = heldOperationReads.current;
+    held.set(item.operationId, read.release);
+    void read.result.then((answer) => {
+      const current = held.get(item.operationId) === read.release;
+      if (current) held.delete(item.operationId);
+      read.release();
+      if (current && answer) applyOperationReadRef.current(item, answer);
+    });
+  };
+  const liveTailRef = useRef(runtimeReceipts);
+  const applyOperationReadRef = useRef(applyOperationRead);
+  useLayoutEffect(() => {
+    liveTailRef.current = runtimeReceipts;
+    applyOperationReadRef.current = applyOperationRead;
+  });
+  const operationReadsActive = viewActive && !pollPaused;
+  const readOperationBackRef = useRef(readOperationBack);
+  useLayoutEffect(() => {
+    readOperationBackRef.current = readOperationBack;
+  });
+  useEffect(() => {
+    const held = heldOperationReads.current;
+    const releaseAll = () => {
+      for (const release of held.values()) release();
+      held.clear();
+    };
+    if (!operationReadsActive) return releaseAll;
+    let stopped = false;
+    const pass = () => {
+      if (stopped || documentHidden()) return;
+      const now = nowMs();
+      for (const item of operationsToReconcile(readOutbox(cardId), displayedRuntimeReceiptsRef.current, liveTailRef.current,
+        (operationId) => !held.has(operationId) && operationReadDue(operationId, now), now)) readOperationBackRef.current(item);
+    };
+    const onVisibility = () => (documentHidden() ? releaseAll() : pass());
+    document.addEventListener("visibilitychange", onVisibility);
+    pass();
+    const timer = setInterval(pass, OPERATION_RECONCILE_GRACE_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      releaseAll();
+    };
+  }, [cardId, operationReadsActive]);
   const receiptReconciliations = useRef<Map<string, AbortController>>(new Map());
   const legacyResponseEpoch = useRef<{ cardId: string; active: boolean }>({ cardId, active: true });
   useLayoutEffect(() => {
@@ -3381,29 +3484,6 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     void send(claimed.text, { clientMessageId: claimed.id }, claimed.id);
   };
 
-  const rememberRuntimeReceipt = (receipt: RuntimeReceipt, original: RuntimeReceipt, allowRetryLeaf = false, responseOperationId?: string) => {
-    const sameOperation = receipt.idempotencyKey === original.idempotencyKey && receipt.operationId === original.operationId;
-    const retryLeaf = allowRetryLeaf && !receiptHasUnknownFate(original)
-      && retryParentOperationId(receipt) === original.operationId;
-    if (receipt.conversationId !== original.conversationId || receipt.conversationId !== cardId
-      || (!sameOperation && !retryLeaf)
-      || (responseOperationId && responseOperationId !== receipt.operationId && !retryLeaf)) return false;
-    const stored = readRecoveryReceipts(cardId);
-    const observed: ObservedRuntimeReceipt = { ...receipt,
-      observationOrder: 1 + Math.max(0, ...[...stored, original].filter((candidate) => candidate.operationId === receipt.operationId)
-        .map((candidate) => (candidate as ObservedRuntimeReceipt).observationOrder ?? 0)),
-      text: receipt.text ?? original.text,
-      observedJournalRevision: Math.max(original.revision, (original as ObservedRuntimeReceipt).observedJournalRevision ?? 0,
-        ...runtimeReceipts.filter((candidate) => candidate.operationId === receipt.operationId).map((candidate) => candidate.revision)),
-    };
-    // Persist operation evidence even when the submission came from another
-    // tab or device and this composer has never owned a local outbox entry.
-    const persisted = mergeRuntimeReceipts(stored, [observed]);
-    writeRecoveryReceipts(cardId, persisted);
-    setImmediateRuntimeReceipts((current) => mergeRuntimeReceipts(current, persisted));
-    return true;
-  };
-
   const localRecoveryEntry = (receipt: RuntimeReceipt) => {
     if (!receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) return null;
     const entry = readOutbox(cardId).find(candidate => candidate.id === receipt.idempotencyKey);
@@ -3606,6 +3686,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       }
       startReceiptReconciliation(key);
       void runtimeDependencies.refreshRuntime();
+      /* The tail may no longer carry this row's receipt; its own record does. */
+      const receipt = entry?.deliveryReceipt;
+      if (receipt && !receipt.operationId.includes(":")) {
+        readOperationBack({ operationId: receipt.operationId, idempotencyKey: receipt.idempotencyKey, original: receipt }, true);
+      }
     },
     retryOperation: (key) => {
       const row = payloadRows.find((candidate) => candidate.ref.key === key);

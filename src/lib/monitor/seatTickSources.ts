@@ -562,9 +562,17 @@ export function defaultSeatTickSources(): SeatTickSources {
  * the one the operator had just refused to press. Records written from now on
  * settle properly (`discardDraft`); this clause is what retires the ones
  * already on disk.
+ *
+ * `dismissedAt` is there for the same reason, reversibly. A lane the operator
+ * dismissed off the board is still running or parked, but it is not work the
+ * seat is asked to act on, so it raises no stalled, interval or pull-request
+ * wake. {@link laneSettlement} already honoured it; the open set did not, and a
+ * dismissed parked lane woke the seat at every interval. `undismiss` clears the
+ * field and the lane is open evidence again.
  */
 function isOpen(pipeline: Pipeline): boolean {
-  return !pipeline.closedAt && !pipeline.hiddenAt && pipeline.state !== "completed" && pipeline.state !== "closed";
+  return !pipeline.closedAt && !pipeline.hiddenAt && !pipeline.dismissedAt
+    && pipeline.state !== "completed" && pipeline.state !== "closed";
 }
 
 /**

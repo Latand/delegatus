@@ -484,7 +484,9 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url.includes("/api/runtime/operations/")) {
-      calls.push({ url, method: init?.method, body: init?.body as string });
+      /* A bare read reconciles the row whose receipt left the tail; it answers
+         the same unknown fate and is not an action on the operation. */
+      if (init?.method) calls.push({ url, method: init?.method, body: init?.body as string });
       return new Response(JSON.stringify({ receipt: actionReceipt }), { status: 200 });
     }
     if (url.startsWith("/api/runtime/send?")) {
@@ -1214,6 +1216,9 @@ function capacityWire(sends: SendBody[], respond: (body: SendBody, index: number
   globalThis.fetch = (async (input: string | URL | Request, init?: { method?: string; body?: string }) => {
     const url = String(input);
     if (url.includes("/api/runtime/operations/")) {
+      /* A bare read of the operation is the composer reconciling a row whose
+         receipt left the tail; only an action on the operation is a call. */
+      if (!init?.method) return discardReceipt ? Response.json({ operationId: captured.operationId, receipt: discardReceipt() }) : new Response("{}", { status: 503 });
       calls.push({ url, method: init?.method });
       return Response.json({ operationId: captured.operationId, receipt: discardReceipt!() }, { status: 200 });
     }

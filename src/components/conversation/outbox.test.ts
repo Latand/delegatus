@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 
+import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
+
 import {
   adoptOutbox,
   cancelOutbox,
@@ -9,6 +11,14 @@ import {
   enqueueOutbox,
   markOutboxResponded,
   nextDispatch,
+  OPERATION_RECONCILE_BATCH,
+  OPERATION_RECONCILE_GRACE_MS,
+  OPERATION_RECONCILE_INTERVAL_MS,
+  OPERATION_RECONCILE_MOVING_AFTER_MS,
+  OPERATION_READ_TIMEOUT_MS,
+  operationReadDue,
+  operationsToReconcile,
+  readOperationShared,
   outboxHistory,
   OUTBOX_DELIVERED_TTL_MS,
   OUTBOX_LIMIT,
@@ -2301,4 +2311,185 @@ test("an unresolved identity is never claimed by text, even by a submission with
   expect([...transcriptEchoBindings(conversation, [foreign])]).toEqual([]);
   publishTranscriptEchoes(conversation, [foreign]);
   expect(readOutbox(conversation)[0]!.retiredEchoId).toBeUndefined();
+});
+
+describe("operationsToReconcile", () => {
+  const now = Date.parse("2026-09-22T05:00:00.000Z");
+  const old = now - 9 * 60 * 60_000;
+  const receipt = (operationId: string, overrides: Partial<RuntimeReceipt> = {}): RuntimeReceipt => ({
+    operationId, idempotencyKey: `${operationId}-key`, conversationId: "conv", kind: "send",
+    status: "delivering", at: new Date(old).toISOString(), admittedAt: new Date(old).toISOString(), revision: 2,
+    ...overrides,
+  });
+  const row = (id: string, overrides: Partial<OutboxEntry> = {}): OutboxEntry => ({
+    id, text: id, images: 0, at: old, state: "delivering", ...overrides,
+  });
+
+  test("an unsettled row whose receipt left the tail is read by its own operation id", () => {
+    const stale = receipt("op-stale", { idempotencyKey: "row-a" });
+    expect(operationsToReconcile([row("row-a", { deliveryReceipt: stale })], [], [], () => true, now))
+      .toEqual([{ operationId: "op-stale", idempotencyKey: "row-a", original: stale }]);
+    // An admitted row with only an operation id still names its key.
+    expect(operationsToReconcile([row("row-b", { operationId: "op-b" })], [], [], () => true, now))
+      .toMatchObject([{ operationId: "op-b", idempotencyKey: "row-b" }]);
+  });
+
+  test("settled, local and fresh rows are not read", () => {
+    const queue = [
+      row("delivered", { deliveryReceipt: receipt("op-delivered", { status: "delivered" }) }),
+      row("discarded", { deliveryReceipt: receipt("op-discarded", { status: "failed", reason: "delivery-discarded" }) }),
+      row("safe-failure", { deliveryReceipt: receipt("op-safe", { status: "failed", resend: "safe" }) }),
+      row("placeholder", { deliveryReceipt: receipt("composer-unconfirmed:placeholder") }),
+      row("launch", { launchOwned: true, operationId: "op-launch" }),
+      row("queued", { state: "queued", operationId: "op-queued" }),
+      row("fresh", { at: now - 1_000, operationId: "op-fresh" }),
+      row("no-operation"),
+    ];
+    expect(operationsToReconcile(queue, [], [], () => true, now)).toEqual([]);
+    // A tail that already carries the arrival settles the row without a read.
+    const arrived = receipt("op-arrived", { status: "delivered", revision: 1 });
+    expect(operationsToReconcile([row("arrived", { deliveryReceipt: receipt("op-arrived") })], [arrived], [], () => true, now)).toEqual([]);
+  });
+
+  test("a receipt the live tail still carries is left to the stream until a moving one outlives the settlement window", () => {
+    const uncertain = receipt("op-carried", { status: "uncertain" });
+    expect(operationsToReconcile([], [uncertain], [uncertain], () => true, now)).toEqual([]);
+    const moving = receipt("op-moving", { admittedAt: new Date(now - OPERATION_RECONCILE_MOVING_AFTER_MS + 60_000).toISOString() });
+    expect(operationsToReconcile([], [moving], [moving], () => true, now)).toEqual([]);
+    const abandoned = receipt("op-abandoned");
+    expect(operationsToReconcile([row("row-x", { deliveryReceipt: abandoned })], [abandoned], [abandoned], () => true, now)
+      .map((item) => item.operationId)).toEqual(["op-abandoned"]);
+  });
+
+  test("a shown receipt of unknown fate is read even without a local row", () => {
+    const uncertain = receipt("op-uncertain", { status: "uncertain" });
+    const verifyFirst = receipt("op-verify", { status: "failed", resend: "verify-first" });
+    expect(operationsToReconcile([], [uncertain, verifyFirst, receipt("op-done", { status: "delivered" })], [], () => true, now)
+      .map((item) => item.operationId)).toEqual(["op-uncertain", "op-verify"]);
+  });
+
+  test("an operation is read only when due, after the grace period, a bounded batch at a time", () => {
+    const tail = receipt("op-tail");
+    expect(operationsToReconcile([], [tail], [], () => false, now)).toEqual([]);
+    expect(operationsToReconcile([], [tail], [], () => true, now)).toHaveLength(1);
+    const recent = receipt("op-recent", { admittedAt: new Date(now - OPERATION_RECONCILE_GRACE_MS + 1).toISOString() });
+    expect(operationsToReconcile([], [recent], [], () => true, now)).toEqual([]);
+    const many = Array.from({ length: OPERATION_RECONCILE_BATCH + 3 }, (_, index) =>
+      receipt(`op-${String(index).padStart(2, "0")}`, { admittedAt: new Date(old + index).toISOString() }));
+    const batch = operationsToReconcile([], many.toReversed(), [], () => true, now);
+    expect(batch.map((item) => item.operationId)).toEqual(many.slice(0, OPERATION_RECONCILE_BATCH).map((item) => item.operationId));
+  });
+});
+
+describe("readOperationShared", () => {
+  beforeEach(() => resetOutboxForTests());
+  const now = Date.parse("2026-09-22T05:00:00.000Z");
+  const delivered = (operationId: string): RuntimeReceipt => ({
+    operationId, idempotencyKey: `${operationId}-key`, conversationId: "conv", kind: "send",
+    status: "delivered", at: new Date(now).toISOString(), revision: 1,
+  });
+  function server(answer: (operationId: string) => Response | Promise<Response>) {
+    const requests: { url: string; method: string; signal?: AbortSignal | null }[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method ?? "GET", signal: init?.signal });
+      return answer(decodeURIComponent(url.split("/").at(-1)!));
+    }) as typeof fetch;
+    return { requests, fetchImpl };
+  }
+
+  test("holders of one operation share one read, and it is spaced by the interval", async () => {
+    const { requests, fetchImpl } = server((operationId) => Response.json({ receipt: delivered(operationId) }));
+    const first = readOperationShared("op-one", now, { fetchImpl })!;
+    const second = readOperationShared("op-one", now, { fetchImpl })!;
+    expect(await first.result).toMatchObject({ operationId: "op-one", status: "delivered" });
+    expect(await second.result).toMatchObject({ operationId: "op-one", status: "delivered" });
+    first.release();
+    second.release();
+    expect(requests).toEqual([{ url: "/api/runtime/operations/op-one", method: "GET", signal: expect.anything() }]);
+    expect(readOperationShared("op-one", now + OPERATION_RECONCILE_INTERVAL_MS - 1, { fetchImpl })).toBeNull();
+    expect(operationReadDue("op-one", now + OPERATION_RECONCILE_INTERVAL_MS)).toBe(true);
+    // A distinct operation has its own read.
+    readOperationShared("op-two", now, { fetchImpl })!.release();
+    expect(requests.map((request) => request.url)).toEqual(["/api/runtime/operations/op-one", "/api/runtime/operations/op-two"]);
+  });
+
+  test("a read that learns nothing backs off, and only a terminal answer for the same operation counts", async () => {
+    const answers: Response[] = [
+      new Response("{}", { status: 503 }),
+      Response.json({ receipt: { ...delivered("op-slow"), status: "delivering" } }),
+      Response.json({ receipt: delivered("op-foreign") }),
+    ];
+    const { fetchImpl } = server(() => answers.shift()!);
+    for (let failures = 1; failures <= 3; failures += 1) {
+      const at = now + (failures - 1) * 10 * OPERATION_RECONCILE_INTERVAL_MS;
+      const read = readOperationShared("op-slow", at, { fetchImpl })!;
+      expect(await read.result).toBeNull();
+      read.release();
+      expect(operationReadDue("op-slow", at + OPERATION_RECONCILE_INTERVAL_MS * 2 ** failures - 1)).toBe(false);
+    }
+  });
+
+  test("an unknown-fate answer backs off to the ceiling instead of being asked again every interval", async () => {
+    let answer: RuntimeReceipt = { ...delivered("op-unknown"), status: "failed", resend: "verify-first" };
+    const { requests, fetchImpl } = server(() => Response.json({ receipt: answer }));
+    let at = now;
+    const spacings: number[] = [];
+    for (let read = 0; read < 6; read += 1) {
+      const shared = readOperationShared("op-unknown", at, { fetchImpl })!;
+      expect(await shared.result).toMatchObject({ status: "failed", resend: "verify-first" });
+      shared.release();
+      let next = at + OPERATION_RECONCILE_INTERVAL_MS;
+      while (!operationReadDue("op-unknown", next)) next += OPERATION_RECONCILE_INTERVAL_MS;
+      spacings.push(next - at);
+      at = next;
+    }
+    expect(spacings).toEqual([60_000, 120_000, 240_000, 300_000, 300_000, 300_000]);
+    expect(requests).toHaveLength(6);
+    // An arrival resets the spacing; the row then leaves the candidates anyway.
+    answer = delivered("op-unknown");
+    const arrived = readOperationShared("op-unknown", at, { fetchImpl })!;
+    expect(await arrived.result).toMatchObject({ status: "delivered" });
+    arrived.release();
+    expect(operationReadDue("op-unknown", at + OPERATION_RECONCILE_INTERVAL_MS)).toBe(true);
+  });
+
+  test("the last holder's release aborts the request, which is not counted as a failure", async () => {
+    let signal: AbortSignal | null | undefined;
+    const fetchImpl = ((_input: string, init?: RequestInit) => {
+      signal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+    }) as unknown as typeof fetch;
+    const one = readOperationShared("op-held", now, { fetchImpl })!;
+    const two = readOperationShared("op-held", now, { fetchImpl })!;
+    one.release();
+    expect(signal?.aborted).toBe(false);
+    two.release();
+    expect(signal?.aborted).toBe(true);
+    expect(await one.result).toBeNull();
+    expect(operationReadDue("op-held", now + 1)).toBe(true);
+    expect(OPERATION_READ_TIMEOUT_MS).toBeGreaterThan(0);
+  });
+
+  test("a caller after the last release starts a fresh read instead of joining the cancelled one", async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const fetchImpl = ((_input: string, init?: RequestInit) => {
+      signals.push(init?.signal);
+      if (signals.length === 1) {
+        return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+      }
+      return Promise.resolve(Response.json({ receipt: delivered("op-rejoin") }));
+    }) as unknown as typeof fetch;
+    const first = readOperationShared("op-rejoin", now, { fetchImpl })!;
+    first.release();
+    // Same tick: the abort has not settled yet.
+    const second = readOperationShared("op-rejoin", now, { fetchImpl })!;
+    expect(signals).toHaveLength(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(await second.result).toMatchObject({ operationId: "op-rejoin", status: "delivered" });
+    expect(await first.result).toBeNull();
+    second.release();
+    // The cancelled read counted as no failure; the arrival reset the spacing.
+    expect(operationReadDue("op-rejoin", now + OPERATION_RECONCILE_INTERVAL_MS)).toBe(true);
+  });
 });
