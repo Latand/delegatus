@@ -246,8 +246,12 @@ function renderHeader(s: Snapshot): Child[] {
     status = [icon("running"), span({ class: "status-text" }, `Checking ${branch}…`)];
   } else if (check.state === "up-to-date" && staleNames(s).length > 0) {
     /* Built is not running: green waits until every live process runs it. */
-    status = [icon("warning"), span({ class: "status-text" },
-      `${s.installed.short} is built and not running yet · restart ${staleNames(s).join(" and ")} to run it · checked ${clock(check.at)}`)];
+    const stale = staleNames(s);
+    const onIt = s.serving.web && !stale.includes("web") ? "Web" : s.serving.runtimeHost && !stale.includes("the runtime host") ? "The runtime host" : null;
+    const text = onIt
+      ? `${onIt} runs ${s.installed.short}; restart ${stale.join(" and ")} to run it there too`
+      : `${s.installed.short} is built and not running yet · restart ${stale.join(" and ")} to run it`;
+    status = [icon("warning"), span({ class: "status-text" }, `${text} · checked ${clock(check.at)}`)];
   } else if (check.state === "up-to-date") {
     status = [icon("done"), span({ class: "status-text" },
       `Up to date, checked at ${clock(check.at)}`,
