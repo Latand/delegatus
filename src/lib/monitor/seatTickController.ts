@@ -40,7 +40,17 @@ import {
   type SeatTickWakeEvidence,
   type SeatTickWakeState,
 } from "./seatTickSources";
-import { SEAT_TICK_RETIRED_WAKE_LIMIT } from "./types";
+import {
+  seatTickActiveRefusalRun,
+  seatTickNextRefusalRun,
+  seatTickPermanentRefusal,
+  seatTickRefusalCardDetail,
+  seatTickRefusalCircuitOpen,
+  seatTickRefusalCircuitSentence,
+  seatTickRefusalReleaseDetail,
+  type SeatTickRefusalBasis,
+} from "./seatTickRefusal";
+import { SEAT_TICK_RETIRED_WAKE_LIMIT, type SeatTickRefusalRun } from "./types";
 import type {
   SeatTickCard,
   SeatTickOutstandingWake,
@@ -118,43 +128,24 @@ export interface SeatTickControllerDependencies {
   reconcileSeat?: (project: string) => Promise<StillbornSeatRollback | null> | StillbornSeatRollback | null;
 }
 
-/** The family of refs for the card that says a prepared wake has been
-    unresolved for longer than the wake interval, or that its receipt ended
-    unverified (#1465). */
-export const SEAT_TICK_WAKE_UNRESOLVED_REF = "seat-tick-wake-unresolved";
-
 /**
- * The ref of ONE attempt's unresolved card (#1594).
+ * The ref of the ONE card a project carries for its unresolved wakes.
  *
- * This was a single project-wide ref while a project could only ever have one
- * unresolved attempt. Retirement ends that: a project can now carry retired
- * attempts beside an outstanding one, all unresolved at once, and a board card
- * is re-found by its ref alone — `instance` distinguishes only the create
- * receipt and never appears in the body. So one ref meant the first attempt to
- * be carded took the project's only slot and every later one wrote nothing,
- * leaving the board describing the wrong attempt: a retired card saying the
- * project's wakes are not held back, standing in front of an outstanding
- * attempt that is holding all of them.
+ * #1594 made this ref per attempt, because a board card is re-found by its ref
+ * alone and one project-wide slot let the first attempt carded shadow every
+ * later one — a retired attempt's card saying the project's wakes flowed,
+ * standing in front of the outstanding attempt that was holding all of them.
+ * The price was one card per attempt: a seat the delivery layer refused for a
+ * fortnight minted a card every two hours, 35 of them on one board.
  *
- * The attempt's own key is therefore the ref, hashed because
- * {@link monitorRefIn} reads back `[A-Za-z0-9_-]{4,64}` and a client message id
- * is neither colon-free nor bounded. The key itself goes in the body, where an
- * operator can read it. Cards per project stay bounded by
- * {@link SEAT_TICK_RETIRED_WAKE_LIMIT} plus the one outstanding attempt, and a
- * card re-raised for the SAME attempt still finds its own card and rewrites
- * nothing.
- *
- * One expected effect at the release that carries this: a card standing under
- * the old flat ref is no longer re-found — neither by the ref nor by the create
- * receipt, which is derived from it — so an attempt already carded is carded
- * once more under its own ref, and the old card stays open until an operator
- * closes it. One duplicate per attempt already unresolved at the deploy, and
- * none afterwards. Re-finding the old ref as well would mean carrying a lookup
- * for a shape that exists only in the board's past, which is a worse trade than
- * one stale card.
+ * The shadowing is answered here instead by what the card says. The controller
+ * decides once per check which attempt the card describes — the refusal run if
+ * one stands, else the attempt that fences the project, else the newest — and
+ * the card is kept in step with it, counting the attempts it has absorbed.
+ * Per-attempt cards left on a board by the earlier scheme carry the
+ * `-<hash>` suffix, and the standing card closes them when it is written.
  */
-export const seatTickWakeUnresolvedRef = (clientMessageId: string): string =>
-  `${SEAT_TICK_WAKE_UNRESOLVED_REF}-${crypto.createHash("sha256").update(clientMessageId).digest("hex").slice(0, 16)}`;
+export const SEAT_TICK_WAKE_UNRESOLVED_REF = "seat-tick-wake-unresolved";
 const CARD_TEXT_LIMIT = 5_000;
 
 /**
@@ -183,22 +174,27 @@ function seatTickChildrenGapCardText(project: string, detail: string, ref: strin
 }
 
 /**
- * The card for a prepared wake nobody can account for (#1465).
+ * The card for a project's prepared wakes nobody can account for (#1465).
  *
  * The issue this closes is a wake the layer failed to deliver going silent for
  * ever. The attempt keeps its identity — see {@link reconcileOutstandingWake} —
  * and this is where the wait is made visible: the operator sees which attempt,
- * since when, what its holder last said, and that the tick is deliberately
- * dispatching nothing else for the project until it settles.
+ * since when, what its holder last said, and whether the tick is holding the
+ * project's wakes behind it. It carries no check instant, so a check that
+ * changes nothing rewrites nothing.
  */
-function seatTickWakeUnresolvedCardText(project: string, detail: string, ref: string, at: string): string {
+function seatTickWakeUnresolvedCardText(project: string, detail: string, ref: string, attempts: number, key: string): string {
   return redactBounded(
     [
       "Seat tick wake unresolved under its original key",
       "",
+      /* Above the detail, so the bound on the body can never cut the line the
+         next write reads its count back from. */
+      `${ATTEMPTS_LINE} ${attempts}; newest key: ${key}`,
+      `Project ${project}.`,
+      "",
       `${detail}.`,
       "Nothing the wake carried is acknowledged: every outcome and lane event it named stays owed until a wake that lands names it.",
-      `Project ${project}. Observed ${at.slice(0, 16).replace("T", " ")} UTC.`,
       "",
       `${MONITOR_REF_PREFIX} ${ref}`,
     ].join("\n"),
@@ -206,14 +202,31 @@ function seatTickWakeUnresolvedCardText(project: string, detail: string, ref: st
   );
 }
 
-function cardText(project: string, card: SeatTickCard, at: string): string {
+const ATTEMPTS_LINE = "Attempts on this card:";
+
+/** How many attempts the standing card has absorbed once it names `key`: one
+    more than it says when the key is new to it, as many as it says otherwise. */
+function absorbedAttempts(existing: BoardTask | undefined, key: string): number {
+  if (!existing) return 1;
+  const line = existing.text.split("\n").find((entry) => entry.startsWith(ATTEMPTS_LINE));
+  const match = line?.match(/^Attempts on this card: (\d+); newest key: (.*)$/);
+  if (!match) return 1;
+  const count = Number(match[1]);
+  if (!Number.isSafeInteger(count) || count < 1) return 1;
+  return match[2] === redactBounded(key, CARD_TEXT_LIMIT) ? count : count + 1;
+}
+
+function cardText(project: string, card: SeatTickCard, at: string, existing?: BoardTask): string {
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "source-unreadable") {
     return card.ref === seatTickSourceGapRef("children")
       ? seatTickChildrenGapCardText(project, card.detail, card.ref, at)
       : seatTickSourceGapCardText(project, card.detail, card.ref, at);
   }
-  if (card.kind === "wake-unresolved") return seatTickWakeUnresolvedCardText(project, card.detail, card.ref, at);
+  if (card.kind === "wake-unresolved") {
+    const key = card.attempt ?? card.instance ?? "";
+    return seatTickWakeUnresolvedCardText(project, card.detail, card.ref, absorbedAttempts(existing, key), key);
+  }
   if (card.kind === "tick-settings") {
     return seatTickSettingsCardText({
       project,
@@ -266,29 +279,34 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
      and fingerprints every task under the lease (#1987). A card that changes
      between this read and a later check is simply seen by that check. */
   if (seatTickCardIsCurrent(project, card, at, loadTasks(file))) return true;
-  return mutateTasksFile<boolean>((state) => {
+  return mutateTasksFile<boolean>((loaded) => {
+    const absorbed = closeAttemptCards(loaded.tasks, project, card);
+    const state = { ...loaded, tasks: absorbed ?? loaded.tasks };
+    /* The per-attempt cards this write closed are a change of their own, kept
+       whatever the card itself turns out to need. */
+    const unchanged = absorbed ? { state, result: true } : { state: undefined, result: true };
     const existing = standingSeatTickCard(state.tasks, project, card);
     if (card.state === "resolved") {
-      if (!existing) return { state: undefined, result: true };
+      if (!existing) return unchanged;
       const closed = patchTask(state.tasks, existing.id, { status: "done" });
       return closed.ok
         ? { state: { tasks: closed.tasks, recentCreates: state.recentCreates }, result: true }
-        : { state: undefined, result: false };
+        : { state: absorbed ? state : undefined, result: false };
     }
-    const text = cardText(project, card, at);
+    const text = cardText(project, card, at, existing);
     if (existing) {
       /* A card for something that HAPPENED is left exactly as it stands: its
          body carries the instant it was observed, so rewriting it would churn
          the board once per check for as long as the condition holds. Only a
          card that tracks a standing state — the one kind that declares its
          `state` — is kept in step with what it describes. */
-      if (card.state !== "open") return { state: undefined, result: true };
-      if (existing.text === text) return { state: undefined, result: true };
+      if (card.state !== "open") return unchanged;
+      if (existing.text === text) return unchanged;
       const updated = patchTask(state.tasks, existing.id, { text });
       return updated.ok
         ? { state: { tasks: updated.tasks, recentCreates: state.recentCreates }, result: true }
         /* The condition is on the board either way; only its wording is stale. */
-        : { state: undefined, result: true };
+        : unchanged;
     }
     const created = createTask(state.tasks, {
       project,
@@ -299,8 +317,8 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
          card at all, once the first has been completed. */
       clientRequestId: monitorClientRequestId(card.instance ? `${card.ref}:${card.instance}` : card.ref),
     }, state.recentCreates);
-    if (!created.ok) return { state: undefined, result: false };
-    if (created.replay) return { state: undefined, result: true };
+    if (!created.ok) return { state: absorbed ? state : undefined, result: false };
+    if (created.replay) return unchanged;
     return { state: { tasks: created.tasks, recentCreates: created.recentCreates }, result: true };
   }, file);
 }
@@ -315,11 +333,32 @@ function standingSeatTickCard(tasks: readonly BoardTask[], project: string, card
 /** Whether the board already holds exactly what {@link ensureSeatTickCard}
     would leave there, so the check has nothing to write. */
 function seatTickCardIsCurrent(project: string, card: SeatTickCard, at: string, tasks: readonly BoardTask[]): boolean {
+  if (card.kind === "wake-unresolved" && tasks.some((task) => isAttemptCard(task, project))) return false;
   const existing = standingSeatTickCard(tasks, project, card);
   if (card.state === "resolved") return !existing;
   if (!existing) return false;
   if (card.state !== "open") return true;
-  return existing.text === cardText(project, card, at);
+  return existing.text === cardText(project, card, at, existing);
+}
+
+/** An open card the per-attempt scheme left for this project (#1594), whose
+    ref is the standing one with the attempt's hash after it. */
+function isAttemptCard(task: BoardTask, project: string): boolean {
+  if (task.status === "done" || canonicalOrchestratorProject(task.project) !== project) return false;
+  return monitorRefIn(task.text)?.startsWith(`${SEAT_TICK_WAKE_UNRESOLVED_REF}-`) === true;
+}
+
+/** Close the per-attempt cards the standing card replaces, or null when there
+    are none. Only a `wake-unresolved` write absorbs them. */
+function closeAttemptCards(tasks: BoardTask[], project: string, card: SeatTickCard): BoardTask[] | null {
+  if (card.kind !== "wake-unresolved") return null;
+  let next: BoardTask[] | null = null;
+  for (const task of tasks) {
+    if (!isAttemptCard(task, project)) continue;
+    const closed = patchTask(next ?? tasks, task.id, { status: "done" });
+    if (closed.ok) next = closed.tasks;
+  }
+  return next;
 }
 
 /**
@@ -693,6 +732,15 @@ function retiredAs(entry: SeatTickRetiredWake): string {
   return entry.supersededBy ? "retired to a superseded seat" : "retired unresolved on its age bound";
 }
 
+/** An attempt a reconcile found still unresolved past its interval, or ended
+    unverified. `fencing` is the attempt that holds this project's wakes back. */
+interface UnresolvedAttempt {
+  key: string;
+  preparedAt: string;
+  detail: string;
+  fencing: boolean;
+}
+
 /**
  * Ask, every check, what became of the attempts a superseded seat left behind
  * (#1594).
@@ -712,7 +760,9 @@ async function reconcileRetiredWakes(context: {
   sources: SeatTickSources;
   appendRecord: typeof appendSeatTickRecord;
   writeState: typeof writeSeatTickState;
-  ensureCard: (project: string, card: SeatTickCard, at: string) => boolean;
+  /** Where an attempt still unresolved past its interval is reported, for the
+      project's one standing card. */
+  unresolved: UnresolvedAttempt[];
   at: string;
   now: number;
   wakeIntervalMs: number;
@@ -783,11 +833,7 @@ async function reconcileRetiredWakes(context: {
           + ` is still unresolved under its original key; the layer holding it last ${holderAnswer(observation)}.`
           + " The attempt is never re-sent and nothing it named is credited, and it no longer holds back this project's wakes."
           + ` Check the delivery record under its client message id ${wake.clientMessageId}`;
-        try {
-          context.ensureCard(context.project, { ref: seatTickWakeUnresolvedRef(wake.clientMessageId), kind: "wake-unresolved", instance: wake.clientMessageId, detail }, context.at);
-        } catch (error) {
-          console.error("[seat tick] card write failed", error instanceof Error ? error.name : "unknown");
-        }
+        context.unresolved.push({ key: wake.clientMessageId, preparedAt: wake.preparedAt ?? entry.retiredAt, detail, fencing: false });
       }
       continue;
     }
@@ -851,10 +897,14 @@ async function reconcileOutstandingWake(context: {
   sources: SeatTickSources;
   appendRecord: typeof appendSeatTickRecord;
   writeState: typeof writeSeatTickState;
-  ensureCard: (project: string, card: SeatTickCard, at: string) => boolean;
+  /** See {@link reconcileRetiredWakes}. */
+  unresolved: UnresolvedAttempt[];
   /** The transport, for the same-key re-dispatch. Absent means this reconcile
       never re-dispatches — the one that follows a send in the same check. */
   deliver?: typeof deliverConversationMessage;
+  /** When the project's tick settings were last written, which a refusal run
+      is counted against. Only the re-dispatching reconcile needs it. */
+  settingsUpdatedAt?: string | null;
   at: string;
   now: number;
   wakeIntervalMs: number;
@@ -980,6 +1030,21 @@ async function reconcileOutstandingWake(context: {
       /* The layer now holds it: the next check asks that holder. */
       state = persist({ ...state, outstandingWake: { ...wake, operationId: outcome.operationId } });
       wake = state.outstandingWake!;
+    } else {
+      /* A refusal waiting cannot change, on a dispatch the accounting recorded
+         as refused with nothing actuated: the record holds nothing under this
+         key and the transport reserved nothing, which is the proof of
+         non-actuation that releases a key. Kept instead, the attempt would be
+         re-dispatched into the same refusal every check for its whole age
+         bound and then replaced by a fresh one that meets it again. */
+      const refusal = outcome && wake.dispatch?.state === "refused" ? seatTickPermanentRefusal(outcome) : null;
+      if (refusal) {
+        const run = seatTickNextRefusalRun(state,
+          { seatEpoch: wake.seatEpoch, lastWakeAt: state.lastWakeAt, settingsUpdatedAt: context.settingsUpdatedAt ?? null },
+          refusal, { clientMessageId: wake.clientMessageId, preparedAt: wake.preparedAt! }, context.at);
+        state = { ...state, refusals: run };
+        settlement = { verdict: "dropped", outcome: "refused", row: "clear", detail: seatTickRefusalReleaseDetail(refusal, run) };
+      }
     }
   }
   /* `retained` is the steady state between two checks; `unknown`, `absent` and
@@ -988,10 +1053,11 @@ async function reconcileOutstandingWake(context: {
      deferral, and the board carries the wait once it has outlived the interval. */
 
   /* Durable attention (#1465): an attempt kept past the project's wake interval,
-     and a receipt the host ended unverified the moment it is seen, go on the
-     board once each — the attempt's own key is the occurrence. The card says
-     what the holder last answered and what the operator can check; the tick
-     itself dispatches nothing new for this project until the attempt settles. */
+     and a receipt the host ended unverified the moment it is seen, are reported
+     for the project's one standing card, which the check writes once it knows
+     every attempt it found. The card says what the holder last answered and
+     what the operator can check; the tick itself dispatches nothing new for
+     this project until the attempt settles. */
   if (settlement?.row === "clear" && wake.dispatch?.state === "active") {
     settlement = { ...settlement, row: "keep", outcome: "unknown",
       detail: "the delivery record was fenced, but its admitted transport call has not returned; the original attempt remains outstanding until that call is accounted for" };
@@ -1034,11 +1100,7 @@ async function reconcileOutstandingWake(context: {
         : " The tick keeps the attempt and dispatches no replacement wake for this project until it lands or the delivery record proves it never actuated."
           + keptAttemptExits(observation.evidence, lapsesAt))
       + ` Check the seat's conversation for the wake and the delivery record under its client message id ${wake.clientMessageId}`;
-    try {
-      context.ensureCard(context.project, { ref: seatTickWakeUnresolvedRef(wake.clientMessageId), kind: "wake-unresolved", instance: wake.clientMessageId, detail }, context.at);
-    } catch (error) {
-      console.error("[seat tick] card write failed", error instanceof Error ? error.name : "unknown");
-    }
+    context.unresolved.push({ key: wake.clientMessageId, preparedAt: wake.preparedAt!, detail, fencing: !retired });
   }
   /* A retirement is worth a line even when the holder's answer was not: it is
      the instant this project's wakes started flowing again, and an operator
@@ -1167,15 +1229,28 @@ async function check(
   const opening = sources.now();
   const openingSeat = sources.seatFor(canonical).active ?? null;
   const openingInterval = wakeIntervalFor(canonical, opening, sources);
+  /* Every attempt this check finds unresolved, for the one card the project
+     carries for them; written once, after the send, from the final row. */
+  const unresolved: UnresolvedAttempt[] = [];
+  const openingRow = readState(canonical);
+  const opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
+  /* Whether the project came into this check with anything its card could be
+     describing — so a check that finds it all gone closes the card, and a
+     project that never had one asks nothing of the board. The refusal run is
+     read off the row BEFORE the epoch scoping, which drops it: a rotation is
+     one of the things that ends the run, and the check that sees the rotation
+     is the one that has to close the card the run left open. */
+  const openedRun = !!openingRow.refusals;
+  const openedStanding = !!(opened.outstandingWake || opened.retiredWakes?.length || openedRun);
   /* Retired attempts first (#1594), so an attempt this check is about to retire
      is asked of its holder by the NEXT check rather than twice by this one. */
   const drained = await reconcileRetiredWakes({
     project: canonical,
-    state: seatTickStateForEpoch(readState(canonical), openingSeat?.seatEpoch ?? null),
+    state: opened,
     sources,
     appendRecord,
     writeState,
-    ensureCard,
+    unresolved,
     at: new Date(opening).toISOString(),
     now: opening,
     wakeIntervalMs: openingInterval,
@@ -1188,8 +1263,9 @@ async function check(
     sources,
     appendRecord,
     writeState,
-    ensureCard,
+    unresolved,
     deliver,
+    settingsUpdatedAt: settingsUpdatedAtFor(canonical, sources),
     at: new Date(opening).toISOString(),
     now: opening,
     wakeIntervalMs: openingInterval,
@@ -1329,11 +1405,18 @@ async function check(
       eventsThrough: input.events.at(-1)?.seq ?? state.eventsThrough ?? 0,
       terminalChildren,
     });
+    /* The refusal circuit: attempts released one after another on the same
+       permanent refusal. A seat that cannot take a wake is not sent another
+       until something that could change that has happened. */
+    const refusals = seatTickActiveRefusalRun(state, refusalBasis(input.seat.seatEpoch, state, input.settings.updatedAt));
     if (rotated) {
       delivery = { clientMessageId, outcome: "seat-rotated" };
     } else if (withheld) {
       delivery = { clientMessageId, outcome: "deferred-outstanding" };
       fenceDetail = seatTickFenceSentence(fence!);
+    } else if (seatTickRefusalCircuitOpen(refusals)) {
+      delivery = { clientMessageId, outcome: "refusal-circuit" };
+      fenceDetail = seatTickRefusalCircuitSentence(refusals!);
     } else if (commit) {
       const wake = {
         clientMessageId, conversationId: input.seat.conversationId, seatEpoch: input.seat.seatEpoch,
@@ -1416,7 +1499,7 @@ async function check(
                follows a send inside the same check; the next check's opening
                reconcile is where a same-key recovery may happen (#1465). */
             state = await reconcileOutstandingWake({ project: input.project, state,
-              seat: sources.seatFor(input.project).active ?? null, sources, appendRecord, writeState, ensureCard, at, now: input.now,
+              seat: sources.seatFor(input.project).active ?? null, sources, appendRecord, writeState, unresolved, at, now: input.now,
               wakeIntervalMs: input.settings.wakeIntervalMs });
           }
         }
@@ -1425,6 +1508,16 @@ async function check(
   }
 
   writeState(input.project, state);
+  const standing = standingWakeCard(state,
+    seatTickActiveRefusalRun(state, input.seat ? refusalBasis(input.seat.seatEpoch, state, input.settings.updatedAt) : null),
+    unresolved, openedStanding, openedRun);
+  if (standing) {
+    try {
+      ensureCard(input.project, standing, at);
+    } catch (error) {
+      console.error("[seat tick] card write failed", error instanceof Error ? error.name : "unknown");
+    }
+  }
   const record: SeatTickRunRecord = {
     schemaVersion: 1,
     at,
@@ -1489,6 +1582,51 @@ async function reconcileProvisionalSeat(
 /** The project's wake interval as it stands, for the bound on an attempt
     (#1465): the settings row, expiry applied, and the default when the row
     cannot be read — the same interval the decision applies to every wake. */
+/** When the project's tick settings were last written, or null when they
+    never were or cannot be read. */
+function settingsUpdatedAtFor(project: string, sources: SeatTickSources): string | null {
+  try {
+    return sources.settings(project).updatedAt ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function refusalBasis(seatEpoch: number, state: SeatTickProjectState, settingsUpdatedAt: string | null): SeatTickRefusalBasis {
+  return { seatEpoch, lastWakeAt: state.lastWakeAt, settingsUpdatedAt };
+}
+
+/**
+ * The one card this check leaves for the project's unresolved wakes, or null
+ * when it has nothing to say.
+ *
+ * The attempt that holds the project's wakes back comes first, so nothing —
+ * a retired attempt, a released one — ever stands in front of it (#1594); a
+ * standing refusal run rides along, because it is the one thing only an
+ * operator can end. Then the run on its own, then the newest attempt. With
+ * nothing unresolved and no run, a project that came into the check with
+ * something standing has its card closed: a wake landed, or every attempt was
+ * released.
+ */
+function standingWakeCard(state: SeatTickProjectState, run: SeatTickRefusalRun | null, unresolved: readonly UnresolvedAttempt[], openedStanding: boolean, openedRun: boolean): SeatTickCard | null {
+  const ref = SEAT_TICK_WAKE_UNRESOLVED_REF;
+  const newest = [...unresolved].sort((left, right) => Number(right.fencing) - Number(left.fencing)
+    || Date.parse(right.preparedAt) - Date.parse(left.preparedAt))[0];
+  if (newest?.fencing) {
+    const detail = run ? `${newest.detail}. ${seatTickRefusalCardDetail(run)}` : newest.detail;
+    return { ref, kind: "wake-unresolved", state: "open", attempt: newest.key, instance: newest.key, detail };
+  }
+  if (run) return { ref, kind: "wake-unresolved", state: "open", attempt: run.clientMessageId, instance: run.clientMessageId, detail: seatTickRefusalCardDetail(run) };
+  if (newest) return { ref, kind: "wake-unresolved", state: "open", attempt: newest.key, instance: newest.key, detail: newest.detail };
+  if (openedStanding && !state.outstandingWake && !state.retiredWakes?.length) return { ref, kind: "wake-unresolved", state: "resolved", detail: "" };
+  /* A run that ended this check — a landing, a rotation, a settings write —
+     leaves a card telling the operator to act on a seat that no longer needs
+     it. It is closed even while a fresh attempt is in flight; that attempt
+     opens a card of its own if it is still unresolved past its interval. */
+  if (openedRun) return { ref, kind: "wake-unresolved", state: "resolved", detail: "" };
+  return null;
+}
+
 function wakeIntervalFor(project: string, now: number, sources: SeatTickSources): number {
   try {
     return effectiveSeatTickSettings(sources.settings(project), now, SEAT_TICK_WAKE_INTERVAL_MS).wakeIntervalMs;

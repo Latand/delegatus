@@ -988,6 +988,37 @@ export interface SeatTickProjectState {
    * settlements are unaffected, because they are different settlements.
    */
   announcedLanes: string[];
+  /** The project's unbroken run of attempts released on the same permanent
+      refusal, or null/absent when there is none. See
+      {@link SeatTickRefusalRun}. */
+  refusals?: SeatTickRefusalRun | null;
+}
+
+/**
+ * Consecutive attempts the delivery layer refused for one reason waiting cannot
+ * change. Each such attempt is released at once under its own key; after
+ * `SEAT_TICK_REFUSAL_CIRCUIT` of them the tick stops preparing wakes for the
+ * project. The run stands only while everything it was counted against still
+ * holds — the seat epoch, the last landed wake and the project's tick settings
+ * record — so a landing, a rotation or an operator settings write ends it
+ * without anyone clearing it. Nothing else does: an attempt between two
+ * permanent refusals that met a retryable refusal and retired on its age
+ * bound leaves the count where it was. That is deliberate and the safe
+ * direction — it only ever holds a seat that has refused this many times for
+ * a reason waiting cannot change.
+ */
+export interface SeatTickRefusalRun {
+  reason: string;
+  count: number;
+  /** The delivery layer's own words for the newest refusal, redacted. */
+  detail: string;
+  /** The newest refused attempt: its key and when it was prepared. */
+  clientMessageId: string;
+  preparedAt: string;
+  refusedAt: string;
+  seatEpoch: number;
+  lastWakeAt: string | null;
+  settingsUpdatedAt: string | null;
 }
 
 export interface SeatTickCheckInput {
@@ -1099,6 +1130,10 @@ export interface SeatTickCard {
    * one tick-settings state, and one guard per reason kind.
    */
   instance?: string;
+  /** The attempt a `wake-unresolved` card describes now. The card is one per
+      project, so this is what tells a newer attempt from the one it already
+      names, and what the card's attempt count moves on. */
+  attempt?: string;
 }
 
 export interface SeatTickDecision {

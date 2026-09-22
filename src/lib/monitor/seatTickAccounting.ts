@@ -760,7 +760,10 @@ export class SeatTickAccounting {
       /* A release carries the marker the next wake's identity is derived from
          (#1672); a landing has already cleared it in the commit. */
       row.state = { ...current, accounting: undefined, harvestedChildren: [], outstandingWake: null,
-        releasedWake: disposition === "landed" ? null : state.releasedWake ?? null };
+        releasedWake: disposition === "landed" ? null : state.releasedWake ?? null,
+        /* A release on a permanent refusal carries the project's refusal run
+           with it; every other release leaves the run as the row has it. */
+        ...(disposition === "unsent" && state.refusals !== undefined ? { refusals: state.refusals } : {}) };
       return true;
     });
   }
