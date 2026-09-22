@@ -1,3 +1,4 @@
+import { copilotTurnState } from "@/lib/scanner/copilotNative";
 import { openclawMessage, openclawProviderAssistant } from "@/lib/scanner/openclawNative";
 import { recordValue, recordsValue, stringValue } from "@/lib/scanner/json";
 import type { TranscriptEngine } from "@/lib/types";
@@ -165,6 +166,7 @@ function openclawTurnState(records: RecordLike[]): TurnState {
     record the provider authored. */
 export function turnStateFromRecords(records: RecordLike[], engine: TranscriptEngine, authoritative = false): TurnState {
   if (engine === "openclaw") return openclawTurnState(records);
+  if (engine === "copilot") return copilotTurnState(records);
   if (engine === "codex") {
     let turnOpen = false;
     let terminalAt: string | null = null;

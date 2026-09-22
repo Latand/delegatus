@@ -4,6 +4,7 @@ import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts } 
 import { activeClaudeAccountId, claudeAccountsMutationLocked, listClaudeAccounts } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
 import { engineCliPresence } from "@/lib/accounts/engineConnection";
+import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { accountProjectRows } from "@/lib/accounts/projectAccountsView";
 import {
@@ -19,6 +20,15 @@ import type { MigrationEngine } from "@/lib/accounts/migration/contracts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** Copilot accounts as the launch draft needs them. No credential is read, so
+    none is reported absent (docs/design/copilot-engine.md 3.9). */
+function copilotLaunchSection() {
+  return {
+    active: activeCopilotAccountId() ?? "",
+    accounts: listCopilotAccounts().map((account) => ({ id: account.id, label: account.label, kind: account.kind, authPresent: true })),
+  };
+}
 
 function migrationProjection(engine: MigrationEngine, snapshot: ReturnType<ReturnType<typeof agentRegistry>["snapshot"]>) {
   const intent = Object.values(snapshot.migrationIntents)
@@ -165,6 +175,8 @@ export async function GET() {
       migration: claudeMigration,
       autoBalance: claudeAuto,
     },
+    /* The launch draft reads this section to offer Copilot accounts. */
+    copilot: copilotLaunchSection(),
     mutationLocked: { codex: codexAccountsMutationLocked(), claude: claudeAccountsMutationLocked() },
     migration: { codex: codexMigration, claude: claudeMigration },
     autoBalance: { codex: codexAuto, claude: claudeAuto },

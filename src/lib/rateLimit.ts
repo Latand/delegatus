@@ -199,7 +199,7 @@ export interface RateLimitProjectionSnapshot {
   }>;
   conversations: Record<string, {
     id: string;
-    engine: HostedEngine;
+    engine: HostedEngine | "copilot";
     generations: Array<{ path: string; accountId: string | null }>;
   }>;
   quotaObservations: Record<HostedEngine, Record<string, DurableQuotaObservation>>;
@@ -270,10 +270,13 @@ export function projectRateLimitReadModel(
 ): { files: ProviderThrottleFileEntry[]; flows: Flow[] } {
   const hosts = new Map<string, { conversationId: string; engine: HostedEngine; accountId: string | null }>();
   for (const conversation of Object.values(snapshot.conversations)) {
+    /* Copilot reports no quota observation (design 3.11). */
+    if (conversation.engine === "copilot") continue;
+    const engine = conversation.engine;
     for (const generation of conversation.generations) {
       hosts.set(generation.path, {
         conversationId: conversation.id,
-        engine: conversation.engine,
+        engine,
         accountId: generation.accountId,
       });
     }

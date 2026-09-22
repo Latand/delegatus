@@ -6,7 +6,7 @@ import type { RuntimeRegistryConversationRetentionState } from "./journal";
 interface RegistryRetentionSnapshot {
   conversations: Record<string, {
     id: string;
-    engine: "codex" | "claude";
+    engine: "codex" | "claude" | "copilot";
     generations: Array<{ id: string }>;
     supersededBy: unknown | null;
   }>;

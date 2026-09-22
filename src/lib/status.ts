@@ -258,7 +258,9 @@ export type LaunchFailure = {
 };
 
 /** Fatal startup screens that cannot receive the launch prompt. */
-export function detectLaunchFailure(engine: "claude" | "codex", screen: string): LaunchFailure | null {
+export function detectLaunchFailure(engine: "claude" | "codex" | "copilot", screen: string): LaunchFailure | null {
+  /* Copilot has no tmux launch (docs/design/copilot-engine.md 3.3). */
+  if (engine === "copilot") return null;
   if (engine !== "claude") return null;
   if (BUSY_MARKERS.test(screen) || screenAtIdleComposer(screen)) return null;
   const tail = screen.split("\n").slice(-20).join("\n");
@@ -278,7 +280,8 @@ export function detectLaunchFailure(engine: "claude" | "codex", screen: string):
 }
 
 /** Positive evidence that the first prompt left the composer for a live turn. */
-export function launchPromptLanded(engine: "claude" | "codex", screen: string, prompt: string): boolean {
+export function launchPromptLanded(engine: "claude" | "codex" | "copilot", screen: string, prompt: string): boolean {
+  if (engine === "copilot") return false;
   if (detectLaunchFailure(engine, screen)) return false;
   const head = prompt.split("\n").map((line) => line.trim()).find(Boolean)?.slice(0, 32) ?? "";
   if (!head) return screenAtIdleComposer(screen);

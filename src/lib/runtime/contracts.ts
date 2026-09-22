@@ -22,8 +22,35 @@ export interface RuntimeScope {
 export type RuntimeScopeString = `${RuntimeScopeKind}:${string}`;
 export type RuntimeScopeInput = RuntimeScope | RuntimeScopeString;
 
-export type RuntimeEngine = "codex" | "claude";
-export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "tmux-legacy" | "unhosted";
+export type RuntimeEngine = "codex" | "claude" | "copilot";
+export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "tmux-legacy" | "unhosted";
+
+/** The structured host kind each engine runs under. */
+export function runtimeHostKindForEngine(engine: RuntimeEngine): Extract<RuntimeHostKind, "codex-app-server" | "claude-broker" | "copilot-acp"> {
+  return engine === "codex" ? "codex-app-server" : engine === "copilot" ? "copilot-acp" : "claude-broker";
+}
+
+/** Whether a host kind is a structured (pane-less) engine host. */
+export function isStructuredHostKind(kind: string | null | undefined): kind is "codex-app-server" | "claude-broker" | "copilot-acp" {
+  return kind === "codex-app-server" || kind === "claude-broker" || kind === "copilot-acp";
+}
+
+/** The engine a structured host kind belongs to, or null for a non-structured one. */
+export function runtimeEngineForHostKind(kind: string | null | undefined): RuntimeEngine | null {
+  return kind === "codex-app-server" ? "codex" : kind === "copilot-acp" ? "copilot" : kind === "claude-broker" ? "claude" : null;
+}
+
+/**
+ * How a message for a running turn reaches this engine (docs/design/copilot-engine.md 3.4).
+ * Codex steers into the turn. Copilot's ACP has no steer, so a steer is
+ * delivered by interrupt-and-resend. Claude's broker declares neither and
+ * refuses a steer.
+ */
+export function runtimeSteerCapability(engine: RuntimeEngine): { steer: boolean; steerMode?: "interrupt" } {
+  if (engine === "codex") return { steer: true };
+  if (engine === "copilot") return { steer: false, steerMode: "interrupt" };
+  return { steer: false };
+}
 export type RuntimeHostAxis = "registering" | "hosted" | "recovering" | "unhosted" | "conflict" | "dead";
 export type RuntimeTurnAxis = "unknown" | "idle" | "running" | "interrupt_requested";
 export type RuntimeProvenance = "structured" | "derived" | "replayed";
@@ -160,7 +187,7 @@ export interface RuntimeAttentionRequest {
     multiSelect?: boolean;
   }>;
   protocol?: {
-    engine: "codex" | "claude";
+    engine: RuntimeEngine;
     method: string;
     questionId?: string;
     questionIds?: string[];
@@ -219,9 +246,28 @@ export interface RuntimeOperationReceipt {
   /** Retry guidance from the durable delivery settlement. `verify-first`
       selects the explicit same-identity retry path for an unknown fate. */
   resend?: "not-needed" | "safe" | "verify-first";
+  /** How a delivered message reached the engine, when it took more than a
+      plain send. Never `steered`: an engine without steer (Copilot) delivers
+      a message for a running turn by interrupt-and-resend. */
+  delivery?: RuntimeDeliveryMode;
+  /** The running turn the delivery interrupted to make room for this one. */
+  interruptedTurnId?: string | null;
   revision: number;
 }
 export type RuntimeReceipt = RuntimeOperationReceipt;
+
+/** `interrupt-then-turn-started`: the running turn was interrupted and this
+    message started the next one (docs/design/copilot-engine.md 3.4). */
+export type RuntimeDeliveryMode = "interrupt-then-turn-started";
+
+/** What a receipt transition may record beside its status. */
+export interface RuntimeTransitionDetails {
+  turnId?: string | null;
+  queuePosition?: number | null;
+  reason?: string | null;
+  delivery?: RuntimeDeliveryMode;
+  interruptedTurnId?: string | null;
+}
 
 export interface RuntimeTransitionOptions {
   /** Compare-and-set fence evaluated inside the journal write transaction. */
@@ -400,6 +446,9 @@ export interface RuntimeControlCapability {
  * button that lies about the engine.
  */
 export function runtimeCompactCapability(engine: RuntimeEngine): RuntimeControlCapability {
+  if (engine === "copilot") {
+    return { control: "compact", engine, supported: false, reason: "the Copilot ACP host exposes no compact control" };
+  }
   return engine === "codex"
     ? { control: "compact", engine, supported: true, confirmation: "observed" }
     : { control: "compact", engine, supported: true, confirmation: "best-effort" };
@@ -500,7 +549,9 @@ export interface RuntimeSession {
   workflowId: string | null;
   cwd: string | null;
   artifactPath: string | null;
-  capabilities: { steer: boolean; structuredAttention: boolean; nativeQueue?: boolean; inject?: boolean; imageInput?: RuntimeImageCapability; runtimeSettings?: RuntimeSettingsCapability };
+  /** `steerMode: "interrupt"` marks an engine without steer whose steer is
+      delivered by interrupt-and-resend (Copilot). */
+  capabilities: { steer: boolean; steerMode?: "interrupt"; structuredAttention: boolean; nativeQueue?: boolean; inject?: boolean; imageInput?: RuntimeImageCapability; runtimeSettings?: RuntimeSettingsCapability };
   activeTurnId: string | null;
   pendingReconfigure?: RuntimePendingReconfigure | null;
   drift?: RuntimeDrift | null;

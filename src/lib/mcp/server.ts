@@ -3193,7 +3193,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
        own named violation, so that schema leaves the entries to it. */
     taskId: z.string().refine((value) => value.trim().length > 0, { message: "taskId must name a board task; omit the field to launch without one" }).optional()
       .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. An explicit id carries its own project, so an id from ANOTHER project is taken as given and binds the agent to that project's card — pass the id this project's board gave you. Omitting it, the launch joins every task held by the parent this call names (parentConversationId, src or parent — this tool never infers one from the caller) and by the conversation it reviews; when the call names neither, or neither holds a task, it is given a placeholder task of its own, which is a duplicate card. A reviewer that names a parent therefore joins that parent's card beside the reviewed work's, so pass taskId on reviewer spawns too — an explicit id wins over inheritance."),
-    engine: z.enum(["claude", "codex"]).optional(),
+    engine: z.enum(["claude", "codex", "copilot"]).optional()
+      .describe("Agent CLI. copilot runs the GitHub Copilot CLI over ACP on the structured transport; its account is named or the selected one (no automatic pick), model auto or an id the account offers, effort none…max."),
     model: z.string().optional(),
     effort: z.string().optional(),
     role: z.enum(ROLE_IDS).optional(),

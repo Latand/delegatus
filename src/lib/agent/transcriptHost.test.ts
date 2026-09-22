@@ -297,7 +297,7 @@ interface FakeHostState {
   panes: Map<number, PaneRef>;
   agents: AgentProcess[];
   ppids: Map<number, number>;
-  records: Map<string, { paneId: string; panePid: number; windowName: string; engine: "claude" | "codex" }>;
+  records: Map<string, { paneId: string; panePid: number; windowName: string; engine: "claude" | "codex" | "copilot" }>;
   delivered: string[];
   deliverAttempts: number;
   deliverError: unknown | null;

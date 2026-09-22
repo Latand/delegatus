@@ -15,7 +15,7 @@ const MAX_SCAN_BYTES = 16 * 1024 * 1024;
 const MAX_LINE_BYTES = 16 * 1024 * 1024;
 const MAX_RECENT_MESSAGES = 8;
 
-type SessionEngine = "claude" | "codex";
+type SessionEngine = "claude" | "codex" | "copilot";
 type CursorRepresentation = "e" | "r";
 
 interface CursorRecentMessage {

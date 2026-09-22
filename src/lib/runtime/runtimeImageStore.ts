@@ -29,7 +29,7 @@ export interface RuntimeImageUpload {
   mime: string;
 }
 
-export function runtimeImageCapability(engine: "claude" | "codex", protocolAdvertised: boolean): RuntimeImageCapability {
+export function runtimeImageCapability(engine: "claude" | "codex" | "copilot", protocolAdvertised: boolean): RuntimeImageCapability {
   const supported = protocolAdvertised;
   const reason = supported
     ? null

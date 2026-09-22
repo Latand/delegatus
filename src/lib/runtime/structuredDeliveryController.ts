@@ -12,7 +12,7 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
-import { runtimeSettingsCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
+import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
@@ -491,7 +491,7 @@ function registrySessionProjection(
     cwd: entry?.cwd ?? generation.launchProfile.cwd,
     artifactPath: generation.path,
     capabilities: {
-      steer: structuredKind === "codex-app-server",
+      ...(structuredKind ? runtimeSteerCapability(sessionKey.engine) : { steer: false }),
       structuredAttention: structuredKind !== null,
       /* This projection is derived from the registry with no live host behind
          it, so it has observed nothing about injection and says so (#1560). */
@@ -558,7 +558,7 @@ async function publishHostState(
     scope: { type: "session", id: conversationId },
     kind: "session-status",
     producer: {
-      kind: adopted.key.engine === "codex" ? "codex-app-server" : "claude-broker",
+      kind: runtimeHostKindForEngine(adopted.key.engine),
       eventKey: [
         "structured-host",
         sessionKeyId(adopted.key),
@@ -573,7 +573,7 @@ async function publishHostState(
     payload: {
       conversationId,
       sessionKey: adopted.key,
-      hostKind: adopted.key.engine === "codex" ? "codex-app-server" : "claude-broker",
+      hostKind: runtimeHostKindForEngine(adopted.key.engine),
       host,
       turn,
       provenance: "structured",
@@ -583,7 +583,7 @@ async function publishHostState(
       cwd: entry.cwd,
       artifactPath: entry.artifactPath,
       capabilities: {
-        steer: adopted.key.engine === "codex",
+        ...runtimeSteerCapability(adopted.key.engine),
         nativeQueue: adopted.key.engine === "codex" && state.activeFlags.includes("native-queue"),
         /* #1560: OBSERVED, never inferred. The flag comes from the running
            executable's negotiated protocol, and a host that has not resolved it
@@ -1093,7 +1093,7 @@ export async function bindStructuredDeliveryQueue(
          saturate the Viewer loop and keep the runtime response unread. */
       try {
         acknowledgedEventCursor = await client.producerCursor(
-          item.key.engine === "codex" ? "codex-app-server" : "claude-broker",
+          runtimeHostKindForEngine(item.key.engine),
           `engine-host:${key}:`,
         );
       } catch (error) {
@@ -1530,6 +1530,9 @@ export async function recordDemotionInterruption(
   const conversation = Object.values(snapshot.conversations).find((candidate) =>
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
   if (!entry || !conversation || conversation.supersededBy) return;
+  /* Interruption obligations re-drive Claude and Codex turns a release cut;
+     a Copilot turn cut the same way is resumed by the operator (slice 1). */
+  if (conversation.engine === "copilot") return;
   const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
   if (turnRef === null && conversation.turn.state !== "busy") return;
   const conversationId = registry.canonicalConversationId(conversation.id);

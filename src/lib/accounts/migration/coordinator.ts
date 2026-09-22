@@ -1,3 +1,4 @@
+import type { AgentEngine } from "@/lib/agent/cli";
 import crypto from "node:crypto";
 import fs from "node:fs";
 
@@ -178,7 +179,7 @@ function hostFencedTurn(observed: TranscriptTurnResult, hasActiveHost: boolean):
     host is exactly the case the transcript projection already governs. */
 function structuredHostTurnReleased(
   registry: AgentRegistry,
-  engine: MigrationEngine,
+  engine: AgentEngine,
   generation: { id: string; path: string },
 ): boolean {
   const entry = registry.readOnlySnapshot().entries[sessionKeyId({ engine, sessionId: generation.id })];
@@ -794,6 +795,10 @@ export async function advanceConversationMigration(
 ): Promise<RegistryConversation> {
   let conversation = registry.conversation(conversationId);
   if (!conversation?.migration) throw new Error("conversation has no migration");
+  /* The registry never opens a migration for a Copilot conversation; the
+     engine is narrowed here so every step below keeps the migration types. */
+  const engine = conversation.engine;
+  if (engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
   if (reconfigureOwnsMigration(conversation, options.reconfigureOperationId)) return conversation;
   let migration = conversation.migration;
   if (migration.phase === "waiting-turn") {
@@ -867,7 +872,7 @@ export async function advanceConversationMigration(
         launchProfile: migration.successorLaunchProfile!,
       };
       receipt = await successorProvider.create({
-        engine: conversation.engine,
+        engine,
         operationId: creationOwner.operationId,
         conversationId,
         source: successorSource,
@@ -887,7 +892,7 @@ export async function advanceConversationMigration(
     const successorProfile = migration.successorLaunchProfile
       ?? migrationSuccessorLaunchProfile(source.launchProfile);
     if (!receipt || receipt.operationId !== migration.operationId) throw new Error("persisted successor receipt operation does not match");
-    await successorProvider.verify(receipt, { engine: conversation.engine, targetAccountId: migration.targetId, launchProfile: successorProfile });
+    await successorProvider.verify(receipt, { engine, targetAccountId: migration.targetId, launchProfile: successorProfile });
     const publicationConversationId = conversation.id;
     const publicationReceipt = receipt;
     const publicationRevision = migration.revision;
@@ -919,7 +924,7 @@ export async function advanceConversationMigration(
       return registry.conversation(publicationConversationId) ?? publishOwner ?? conversation;
     }
     await successorProvider.publishHost?.(publicationReceipt, {
-      engine: conversation.engine,
+      engine,
       conversationId: publicationConversationId,
       targetAccountId: migration.targetId,
       launchProfile: successorProfile,
@@ -980,7 +985,7 @@ export async function advanceConversationMigration(
     }
     console.warn("[account-migration] recoverable successor provider failure", {
       conversationId: conversation.id,
-      engine: conversation.engine,
+      engine,
       phase: migration.phase,
       targetAccountId: migration.targetId,
       error: safeProviderDiagnostic(error),

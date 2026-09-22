@@ -2,7 +2,8 @@ import { accountForSpawn, activeCodexAccountId, codexAccountsMutationLocked, cod
 import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountsMutationLocked, claudeHomeOwningTranscript, claudeManagedEnvironment, CorruptClaudeAccountsError, createManagedClaudeAccount, listClaudeAccounts, setActiveClaudeAccount, UnknownClaudeAccountError } from "./claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "./claudeLogin";
 import { managedCodexRuntime } from "./codexRuntime";
-import type { AccountContext, AccountManager, AccountSummary, ProjectSpawnResolution } from "./contracts";
+import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, copilotHomeOwningSessionPath, copilotLoginCommand, createManagedCopilotAccount, listCopilotAccounts, setActiveCopilotAccount, UnknownCopilotAccountError } from "./copilot";
+import type { AccountContext, AccountEngineName, AccountManager, AccountSummary, CopilotAccountSummary, ProjectSpawnResolution } from "./contracts";
 import { unavailableLimits } from "./contracts";
 import { withAccountMutationLockAsync } from "./accountMutation";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
@@ -60,13 +61,17 @@ export type HealthySpawnAccountResolution = AccountContext & {
  * exhausted pool, and still refuses on a record this process cannot read.
  */
 export async function resolveHealthySpawnAccount(
-  engine: "claude" | "codex",
+  engine: AccountEngineName,
   requested?: string | null,
   /* The project the work belongs to; `null` is a project a caller genuinely
      cannot name, and resolves exactly as an unbound one always did. */
   project: string | null = null,
   model?: string | null,
 ): Promise<HealthySpawnAccountResolution> {
+  /* Copilot has no limit signal and no health probe yet (design 3.9, 3.11):
+     a launch names its account or uses the selected one, and nothing picks
+     automatically from a project pool. */
+  if (engine === "copilot") return copilotAccountForSpawn(requested ?? null);
   const named = requested === undefined || requested === null ? null : requested;
   /* A DAMAGED record means two different things to this seam's two callers. To
      the automatic pick it means "no pool can be seen", and nothing may be
@@ -285,7 +290,7 @@ export function resolveProjectSpawnAccount(
  *   project resolves to the engine's active account exactly as it always did.
  */
 export function resolveContinuityAccount(
-  engine: "claude" | "codex",
+  engine: AccountEngineName,
   accountId: string | null,
   /* Required, with no default: a caller that cannot name the project does not
      get to decide there is no pool. `null` is the project a caller genuinely
@@ -293,6 +298,8 @@ export function resolveContinuityAccount(
   project: string | null,
 ): AccountContext {
   if (accountId !== null) return accountManager.resolveSpawn(engine, accountId);
+  /* Copilot has no project pool: the selected account (design 3.9). */
+  if (engine === "copilot") return accountManager.resolveSpawn(engine, null);
   return resolveProjectSpawnAccount(engine, project);
 }
 
@@ -352,7 +359,25 @@ export function resolveResumeAccountId(
   return selection.accountId;
 }
 
-function summary(engine: "claude" | "codex", id: string): AccountSummary {
+function copilotSummary(id: string): CopilotAccountSummary {
+  const account = listCopilotAccounts().find((item) => item.id === id);
+  if (!account) throw new UnknownCopilotAccountError(id);
+  return {
+    id: account.id,
+    label: account.label,
+    kind: account.kind,
+    active: activeCopilotAccountId() === id,
+    /* Slice 1 reads no credential: the state is unknown until a launch
+       succeeds or fails on auth. */
+    auth: { state: "unknown", method: null, email: null, plan: null, checkedAt: null },
+    limits: unavailableLimits(),
+    login: null,
+    loginCommand: account.kind === "managed" ? copilotLoginCommand(account.home) : null,
+  };
+}
+
+function summary(engine: AccountEngineName, id: string): AccountSummary {
+  if (engine === "copilot") return copilotSummary(id);
   const account = (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).find((item) => item.id === id);
   if (!account) throw new Error(`unknown ${engine} account: ${id}`);
   return { id: account.id, label: account.label, kind: account.kind, active: (engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId()) === id, auth: { state: account.authPresent ? "authenticated" : "signed_out", method: null, email: null, plan: null, checkedAt: null }, limits: unavailableLimits(), login: null };
@@ -422,14 +447,25 @@ function selectAccountLocked(engine: "claude" | "codex", id: string, routing: Ro
   return summary(engine, id);
 }
 
-export async function selectAccount(engine: "claude" | "codex", id: string, routing: RoutingStore = agentRegistry()): Promise<AccountSummary> {
+export async function selectAccount(engine: AccountEngineName, id: string, routing: RoutingStore = agentRegistry()): Promise<AccountSummary> {
+  if (engine === "copilot") {
+    setActiveCopilotAccount(id);
+    return copilotSummary(id);
+  }
   return await withAccountMutationLockAsync(async () => selectAccountLocked(engine, id, routing));
 }
 
 /** Narrow boundary used by all launch paths. Filesystem account details remain behind it. */
 export const accountManager: AccountManager = {
-  async list() { return { claude: { active: activeClaudeAccountId(), accounts: listClaudeAccounts().map((item) => summary("claude", item.id)) }, codex: { active: activeCodexAccountId(), accounts: listCodexAccounts().map((item) => summary("codex", item.id)) } }; },
+  async list() {
+    return {
+      claude: { active: activeClaudeAccountId(), accounts: listClaudeAccounts().map((item) => summary("claude", item.id)) },
+      codex: { active: activeCodexAccountId(), accounts: listCodexAccounts().map((item) => summary("codex", item.id)) },
+      copilot: { active: activeCopilotAccountId() ?? "", accounts: listCopilotAccounts().map((item) => copilotSummary(item.id)) },
+    };
+  },
   async add(engine, label) {
+    if (engine === "copilot") return copilotSummary(createManagedCopilotAccount(label).id);
     return await withAccountMutationLockAsync(async () => {
       const item = engine === "claude" ? createManagedClaudeAccount(label) : createManagedCodexAccount(label);
       return summary(engine, item.id);
@@ -439,8 +475,14 @@ export const accountManager: AccountManager = {
   async status(engine, id) { return summary(engine, id); },
   async submitLoginInput() { throw new Error("login input is Claude-operation specific"); },
   async cancelLogin() { throw new Error("login cancellation is Claude-operation specific"); },
-  resolveSpawn(engine, requested) { return contextForSpawn(engine, requested ?? agentRegistry().engineRouting(engine).activeAccountId ?? undefined); },
+  resolveSpawn(engine, requested) {
+    if (engine === "copilot") return copilotAccountForSpawn(requested ?? null);
+    return contextForSpawn(engine, requested ?? agentRegistry().engineRouting(engine).activeAccountId ?? undefined);
+  },
   resolveHeadlessSpawn(engine, requested, excludedIds, project, model) {
+    /* No capacity signal exists for Copilot, so an automatic pick cannot be
+       honest (design 3.9). */
+    if (engine === "copilot") return { kind: "unavailable" };
     const selected = selectProjectAccount({
       project,
       engine,
@@ -470,6 +512,11 @@ export const accountManager: AccountManager = {
      else, and when all of them are out of capacity that is reported, never
      resolved by widening the set. */
   resolveProjectSpawn(engine, request) {
+    if (engine === "copilot") {
+      if (!request.requestedId) return { kind: "unavailable", allowedAccountIds: [] };
+      try { return { kind: "available", account: copilotAccountForSpawn(request.requestedId) }; }
+      catch { return { kind: "unavailable", allowedAccountIds: [] }; }
+    }
     const selected = selectProjectAccount({
       project: request.project,
       engine,
@@ -488,6 +535,15 @@ export const accountManager: AccountManager = {
     return { kind: "available", account: contextForSpawn(engine, selected.accountId ?? undefined) };
   },
   resolveTranscriptOwner(engine, transcript) {
+    if (engine === "copilot") {
+      const recorded = agentRegistry().transcriptAccountId("copilot", transcript);
+      const accounts = listCopilotAccounts();
+      const byRecord = recorded ? accounts.find((candidate) => candidate.id === recorded) : undefined;
+      if (byRecord) return copilotAccountContext(byRecord);
+      const home = copilotHomeOwningSessionPath(transcript);
+      const byHome = home ? accounts.find((candidate) => candidate.home === home) : undefined;
+      return byHome ? copilotAccountContext(byHome) : null;
+    }
     /* Registry first (issue #891, phase 0): the durable generation record
        names the owning account directly. Path-layout derivation below stays
        as recovery for artifacts the registry never saw — it collapses once

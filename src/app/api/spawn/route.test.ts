@@ -392,11 +392,11 @@ test("an explicit spawn account is durably pinned while an omitted account uses 
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
-      resolveSpawnAccount: (_engine: "claude" | "codex", id: string | null) => ({
+      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", id: string | null) => ({
         engine: "claude" as const, accountId: id ?? "selected", kind: "managed" as const,
         home: path.join(cwd, id ?? "selected"), transcriptRoot: path.join(cwd, "projects"), env: { NODE_ENV: "test" as const },
       }),
-      resolveHealthySpawnAccount: async (_engine: "claude" | "codex", requested?: string | null) => ({
+      resolveHealthySpawnAccount: async (_engine: "claude" | "codex" | "copilot", requested?: string | null) => ({
         engine: "claude" as const,
         accountId: requested ?? "selected",
         kind: "managed" as const,
@@ -808,7 +808,7 @@ test("a queued pinned account survives restart and launches exactly once on the 
       resolveHealthySpawnAccount: async () => {
         throw new NoHealthyClaudeAccountError(["account-a"]);
       },
-      resolveSpawnAccount: (_engine: "claude" | "codex", accountId: string | null) => account(accountId ?? "account-b"),
+      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", accountId: string | null) => account(accountId ?? "account-b"),
       resolvePinnedSpawnAdmission: async () => pinAdmissible
         ? {
             kind: "admissible" as const,
@@ -1248,7 +1248,7 @@ test("a pinned account without a retry deadline falls back and records the degra
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
-      resolveSpawnAccount: (_engine: "claude" | "codex", id: string | null) => ({
+      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", id: string | null) => ({
         engine: "claude" as const, accountId: id ?? "account-b", kind: "managed" as const,
         home: path.join(cwd, "account-b"), transcriptRoot: path.join(cwd, "account-b", "projects"), env: { NODE_ENV: "test" as const },
       }),
@@ -1412,7 +1412,7 @@ test("a legacy resolver mismatch also degrades the pin to a durable fallback", a
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
-      resolveSpawnAccount: (_engine: "claude" | "codex", id: string | null) => ({
+      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", id: string | null) => ({
         engine: "claude" as const, accountId: id ?? "selected-account", kind: "managed" as const,
         home: path.join(cwd, "selected-account"), transcriptRoot: path.join(cwd, "selected-account", "projects"), env: { NODE_ENV: "test" as const },
       }),
@@ -2834,7 +2834,7 @@ test("structured replay keeps its admitted account after routing changes", async
       accountResolutions.push(`healthy:${routedAccountId}`);
       return account(routedAccountId);
     },
-    resolveSpawnAccount: (_engine: "claude" | "codex", accountId: string | null) => {
+    resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", accountId: string | null) => {
       accountResolutions.push(`exact:${accountId ?? "null"}`);
       return account(accountId ?? routedAccountId);
     },
@@ -3961,7 +3961,7 @@ test("Astra and Sol orchestrator spawns carry top-tier effort and images into th
   const profiles: Array<{ model: string | null; effort: string | null }> = [];
   const deps: SpawnRouteTestDependencies = {
     ...base,
-    resolveSpawnAccount: (_engine: "claude" | "codex", id: string | null) => ({
+    resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", id: string | null) => ({
         engine: "codex" as const, accountId: id ?? "codex-test", kind: "managed" as const,
         home: path.join(cwd, "account"), transcriptRoot: path.join(cwd, "sessions"), env: { NODE_ENV: "test" as const },
       }),

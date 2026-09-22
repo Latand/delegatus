@@ -15,8 +15,8 @@ import { boundedToolArguments, SENSITIVE_RECORD_KEY } from "./toolRedaction";
 
 /** The engines a rendered row can be attributed to. Background-task job logs
     render Codex-shaped rows under the `shell` engine, so `shell` is not a
-    member: every row this taxonomy produces belongs to one of these three. */
-export type FeedEngine = "claude" | "codex" | "openclaw";
+    member: every row this taxonomy produces belongs to one of these. */
+export type FeedEngine = "claude" | "codex" | "openclaw" | "copilot";
 
 export type ToolFamily = "shell" | "read" | "write" | "edit" | "search" | "web" | "spawn" | "plan" | "mcp" | "other";
 

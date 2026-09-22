@@ -42,7 +42,7 @@ export interface HandoffRowInput {
   operationId: string;
   /** Conversation identity, preserved across the handoff. */
   conversationId: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   /** Engine session identity (native generation id). */
   engineSessionId: string;
   kind: HandoffKind;
@@ -432,7 +432,7 @@ export class HandoffQueue {
 export interface HandoffCandidateSnapshot {
   conversations: Record<string, {
     id: string;
-    engine: "claude" | "codex";
+    engine: "claude" | "codex" | "copilot";
     supersededBy: unknown | null;
     turn: { state: HandoffTurnState };
     generations: Array<{
@@ -456,7 +456,7 @@ export interface HandoffCandidateSnapshot {
 
 const HANDOFF_DELIVERY_STATES = new Set(["held", "assigned", "delivery-uncertain"]);
 
-function sessionEntryKey(engine: "claude" | "codex", sessionId: string): string {
+function sessionEntryKey(engine: "claude" | "codex" | "copilot", sessionId: string): string {
   return `${engine}:${sessionId}`;
 }
 

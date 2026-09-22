@@ -5,7 +5,7 @@ import { parseRuntimeCommand, parseRuntimeSendSettings } from "./commands";
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
-import type { RuntimeInjectionBinding, RuntimeSendSettings } from "./contracts";
+import type { RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { evidenceAgrees, readEvidence, readOptionalEvidence, type Evidence } from "./evidence";
 import type { CompactCapableHost, DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome } from "./engineHost";
 import { hostSupportsCompact, hostSupportsInject, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
@@ -53,7 +53,7 @@ export interface StructuredDeliveryQueuePort {
   transition(
     operationId: string,
     status: StructuredDeliveryTransition,
-    details?: { turnId?: string | null; reason?: string | null },
+    details?: RuntimeTransitionDetails,
   ): Promise<void>;
   /** The durable receipt state, when the port can read it. The compact control
       needs it to tell a control it must issue from one an earlier executor
@@ -632,6 +632,9 @@ export class StructuredDeliveryQueue {
       which is what a recovered row has to be able to tell (#1131). */
   private readonly executorId = crypto.randomUUID();
   private readonly interruptAcknowledged = new Set<string>();
+  /** The turn an operation's interrupt ended, kept until that operation's
+      message settles so its receipt can name what it interrupted. */
+  private readonly interruptedTurns = new Map<string, string>();
   /** An interrupt can need several drain passes before any message is handed
    * over. Keep that first-dispatch evidence only in this executor and claim;
    * eviction or restart returns to the conservative recovery path. */
@@ -1111,28 +1114,36 @@ export class StructuredDeliveryQueue {
         if (!await this.executeInjection(effect, host, health)) return true;
         continue;
       }
-      const maySteer = health.status === "active"
-        && (effect.kind === "steer" || effect.policy === "steer-if-active");
+      const steerRequested = effect.kind === "steer" || effect.policy === "steer-if-active";
+      const maySteer = health.status === "active" && steerRequested;
+      /* A host without steer that DECLARED an interrupt fallback (Copilot over
+         ACP) takes a steer the way `interrupt-active` takes a send: the running
+         turn is interrupted and the message starts the next one; a turn that
+         already ended leaves nothing to interrupt and the message simply starts
+         one. It is never delivered as `steered` (docs/design/copilot-engine.md 3.4). */
+      const steerByInterrupt = steerRequested && host.steerFallback === "interrupt";
       /* A host that DECLARED it cannot steer, which is the Claude broker: its
          write would land as an interrupt the operator never asked for, so the
          message is refused here rather than delivered as something else.
          An undeclared capability is unknown and is no refusal — a host that says
          nothing about steering keeps the delivery path it has always had. */
-      if (maySteer && host.supportsSteer === false) {
+      if (maySteer && host.supportsSteer === false && !steerByInterrupt) {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "unsupported-steering" });
         continue;
       }
-      const replacementIsActive = effect.policy === "interrupt-active"
+      const replacesTurn = effect.policy === "interrupt-active" || steerByInterrupt;
+      const replacementIsActive = replacesTurn
         && (health.status === "active" || health.status === "attention")
         && Boolean(health.activeTurnRef);
       const shouldInterrupt = replacementIsActive
         && (effect.turnId === undefined || effect.turnId === health.activeTurnRef)
         && !this.interruptAcknowledged.has(effect.operationId);
-      if (health.status !== "idle" && !maySteer && !shouldInterrupt) return true;
+      const steersIntoTurn = maySteer && !steerByInterrupt;
+      if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt) return true;
       if (health.status === "idle") this.interruptAcknowledged.delete(effect.operationId);
       const deliveryFence = shouldInterrupt
         ? effect.turnId ?? health.activeTurnRef
-        : effect.policy === "interrupt-active"
+        : replacesTurn
           ? effect.turnId ?? null
           : effect.turnId !== undefined
             ? effect.turnId
@@ -1143,7 +1154,7 @@ export class StructuredDeliveryQueue {
         contentDigest: effect.contentDigest,
         text: effect.content.text,
         images: effect.content.images,
-        expectedTurnId: effect.policy === "interrupt-active" ? null : deliveryFence,
+        expectedTurnId: replacesTurn ? null : deliveryFence,
         ...(effect.runtime ? { runtime: effect.runtime } : {}),
         ...(effect.selectedContext ? { selectedContext: effect.selectedContext } : {}),
         ...(effect.origin ? { origin: effect.origin } : {}),
@@ -1176,6 +1187,8 @@ export class StructuredDeliveryQueue {
         try {
           await host.interrupt(health.activeTurnRef!);
           this.interruptAcknowledged.add(effect.operationId);
+          this.interruptedTurns.set(effect.operationId, health.activeTurnRef!);
+          while (this.interruptedTurns.size > 128) this.interruptedTurns.delete(this.interruptedTurns.keys().next().value!);
         } catch (error) {
           this.interruptAcknowledged.delete(effect.operationId);
           const reason = failureReason(error);
@@ -1270,7 +1283,9 @@ export class StructuredDeliveryQueue {
       }
       if (receipt.outcome === "rejected") {
         if (receipt.reason === "stale-turn") {
-          if (effect.kind === "send" && effect.policy !== "steer-if-active") {
+          /* An interrupt-and-resend that lost a race with a new turn goes back
+             to the queue: the interrupt path is retried, nothing is dropped. */
+          if ((effect.kind === "send" && effect.policy !== "steer-if-active") || steerByInterrupt) {
             await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
             return true;
           }
@@ -1280,7 +1295,16 @@ export class StructuredDeliveryQueue {
         await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
         return true;
       }
-      await this.transitionUnlessSettled(effect.operationId, "delivered", { turnId: receipt.turnId });
+      const interruptedTurnId = this.interruptedTurns.get(effect.operationId);
+      this.interruptedTurns.delete(effect.operationId);
+      await this.transitionUnlessSettled(effect.operationId, "delivered", {
+        turnId: receipt.turnId,
+        /* A message that ended a running turn to start its own says so; the
+           Copilot path never reads `steered`. */
+        ...(interruptedTurnId && receipt.outcome === "turn-started"
+          ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId }
+          : {}),
+      });
     }
     return Boolean(switchDeferred) || nativeReceiptUnavailable;
   }
@@ -1445,7 +1469,7 @@ export class StructuredDeliveryQueue {
   private async transitionUnlessSettled(
     operationId: string,
     status: StructuredDeliveryTransition,
-    details?: { turnId?: string | null; reason?: string | null },
+    details?: RuntimeTransitionDetails,
   ): Promise<boolean> {
     try {
       await this.port.transition(operationId, status, details);
