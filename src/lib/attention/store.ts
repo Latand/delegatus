@@ -84,7 +84,9 @@ function isRequest(value: unknown): value is AttentionRequestV1 {
 
 /** Validate a parsed attention record. A record this build cannot read is an
     error, because losing an in-flight request silently is the failure this
-    whole record exists to prevent. */
+    whole record exists to prevent. Bytes that are not JSON at all are handled
+    by the import instead (#1870): they are kept as `attention.json.unreadable-*`
+    and an incident names them, so the loss is never silent. */
 function parseAttentionBody(raw: unknown, now: Date): AttentionFileV1 {
   const parsed = (raw ?? {}) as Partial<AttentionFileV1>;
   if (parsed.schemaVersion !== ATTENTION_SCHEMA_VERSION) throw new AttentionStoreError(`unsupported attention schema: ${String(parsed.schemaVersion)}`);
