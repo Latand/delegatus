@@ -618,10 +618,20 @@
 /* ── How tall an expanded agent conversation is ──────────────────────────── */
 /* The one rule for the orchestrator seat, a reader opened inside a task card
    and an agent draft on a card: most of the viewport below the board's bar.
-   The seat's default is capped at the 75% its drag already stops at
-   (`seatMaxHeight`); a height the operator dragged still wins. */
-.kb { --conv-expanded-h: max(360px, calc(100dvh - 160px)); --seat-default-h: min(var(--conv-expanded-h), 75dvh); }
-@media (max-width: 767px) { .kb { --conv-expanded-h: max(320px, calc(100dvh - 120px)); } }
+   The seat sits above the board and takes the viewport minus the bar, capped
+   at the 75% its drag already stops at (`seatMaxHeight`); a height the
+   operator dragged still wins. An in-card conversation lives inside a column
+   whose scroll area is about 100dvh - 144px (bar, board padding, sticky column
+   head, column padding) and sits under the card's own title and meta rows, so
+   it subtracts 260px: with the card's head at the top of its column, the
+   reader's header row and its composer are both on screen.
+   The phone does not use these: its conversation screen (MobileFocusView)
+   already fills the viewport. */
+.kb {
+  --conv-expanded-h: max(360px, calc(100dvh - 160px));
+  --seat-default-h: min(var(--conv-expanded-h), 75dvh);
+  --conv-in-card-h: max(320px, calc(100dvh - 260px));
+}
 
 /* ── Page: the orchestrator seat above the board (K3) ────────────────────── */
 /* The seat keeps its height and the board keeps a full page below it; the
@@ -792,7 +802,7 @@
 .kb .card.has-reader { content-visibility: visible; }
 /* An agent draft on a card (K9a): the draft pane at reading width, as tall as a reader. */
 .kb .agent-drafts { display: flex; flex-direction: column; gap: 8px; }
-.kb .agent-draft { display: flex; width: 100%; max-width: 780px; height: var(--conv-expanded-h); min-width: 0; }
+.kb .agent-draft { display: flex; width: 100%; max-width: 780px; height: var(--conv-in-card-h); min-width: 0; }
 /* `+ Task`'s inline card at the top of Inbox. */
 .kb .card.new-task { content-visibility: visible; gap: 6px; }
 .kb .readers { display: flex; flex-direction: column; gap: 8px; }
@@ -800,7 +810,7 @@
 .kb .reader-slot { width: 100%; min-width: 0; }
 .kb .reader-host { display: flex; width: 100%; max-width: 780px; min-width: 0; }
 .kb .reader.conv {
-  width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 10px; max-height: var(--conv-expanded-h); overflow: hidden;
+  width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 10px; max-height: var(--conv-in-card-h); overflow: hidden;
   border-radius: var(--radius-control); border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card);
   container-type: inline-size; text-align: left;
 }
