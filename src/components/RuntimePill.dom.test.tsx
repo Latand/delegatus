@@ -9,7 +9,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { RuntimePill } from "./RuntimePill";
 import type { RuntimeSession } from "./runtime/runtimeModel";
-import { sendRuntimeFrom } from "./runtimeProfile";
+import { resumeKey, sendRuntimeFrom } from "./runtimeProfile";
 
 const dom = new Window();
 installActEnv();
@@ -22,7 +22,11 @@ Object.assign(globalThis, {
 });
 let mobile = false;
 const requests: Array<Record<string, unknown>> = [];
+let copilotModelCatalogResponse: unknown = null;
 globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  if (String(_input).includes("/api/accounts/copilot/models")) {
+    return new Response(JSON.stringify(copilotModelCatalogResponse ?? { models: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  }
   requests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
   return new Response(JSON.stringify({
     ok: true,
@@ -49,7 +53,16 @@ const claudeFile: FileEntry = {
   path: "/claude.jsonl", root: "claude-projects", name: "claude.jsonl", fmt: "claude",
   engine: "claude", conversationId: "conversation_claude", model: "sonnet", effort: "high",
 };
+function copilotFile(model: string, effort: string): FileEntry {
+  return {
+    ...codexFile,
+    path: "/fixture/config/agent-log-viewer/accounts/copilot/copilot-fixture/session-state/session/events.jsonl",
+    root: "copilot-sessions", name: "events.jsonl", fmt: "copilot", engine: "copilot",
+    conversationId: "conversation_copilot", model, effort,
+  };
+}
 const key = "llvAgentRuntime:conversation_runtime";
+const copilotResumeKey = resumeKey(copilotFile("auto", "medium"));
 
 const CODEX_STRUCTURED: RuntimeSettingsCapability = { perTurnEffort: true, perTurnModel: false };
 const CLAUDE_STRUCTURED: RuntimeSettingsCapability = { perTurnEffort: false, perTurnModel: false };
@@ -124,6 +137,7 @@ afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
   requests.length = 0;
+  copilotModelCatalogResponse = null;
 });
 
 test("the pill face reads shortLabel · tier and opens a menu with the active tier checked", async () => {
@@ -419,6 +433,54 @@ test("the model drill-down keeps model rows available for turn-boundary reconfig
   expect(backRow.getAttribute("aria-label")).toBe("Back — Model");
   await click(backRow);
   expect(host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]').length).toBe(6);
+  await act(async () => root.unmount());
+});
+
+test("Copilot runtime effort rows refresh from the selected account model catalogue", async () => {
+  copilotModelCatalogResponse = {
+    accountId: "copilot-fixture",
+    capturedAt: "2026-09-23T00:00:00.000Z",
+    source: "acp-config",
+    models: [
+      { id: "auto", name: "Auto", efforts: null, pickerEnabled: true },
+      { id: "catalogue-specific-runtime-fixture", name: "Fixture Model", efforts: ["low", "high"], pickerEnabled: true },
+    ],
+  };
+  const file = copilotFile("catalogue-specific-runtime-fixture", "xhigh");
+  const { host, root } = await renderPill(<RuntimePill file={file} surface="resume" />);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  await click(host.querySelector("[data-runtime-pill]")!);
+  const tiers = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')];
+  expect(tiers.map((row) => row.textContent)).toEqual(["Light", "High"]);
+  expect(tiers.find((row) => row.getAttribute("aria-checked") === "true")?.textContent).toBe("Light");
+  await act(async () => root.unmount());
+});
+
+test("choosing a Copilot catalogue model clamps the saved effort to that model's ladder", async () => {
+  copilotModelCatalogResponse = {
+    accountId: "copilot-fixture",
+    capturedAt: "2026-09-23T00:00:00.000Z",
+    source: "acp-config",
+    models: [
+      { id: "auto", name: "Auto", efforts: null, pickerEnabled: true },
+      { id: "catalogue-specific-runtime-fixture", name: "Fixture Model", efforts: ["low", "high"], pickerEnabled: true },
+    ],
+  };
+  const file = copilotFile("auto", "xhigh");
+  const { host, root } = await renderPill(<RuntimePill file={file} surface="resume" />);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await click(host.querySelector("[data-runtime-pill]")!);
+  const modelMenu = [...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')]
+    .find((row) => row.getAttribute("data-runtime-value") === "model")!;
+  await click(modelMenu);
+  const model = [...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')]
+    .find((row) => row.getAttribute("data-runtime-value") === "catalogue-specific-runtime-fixture")!;
+  await click(model);
+
+  expect(JSON.parse(localStorage.getItem(copilotResumeKey)!)).toEqual({
+    model: "catalogue-specific-runtime-fixture", effort: "low", fast: false,
+  });
   await act(async () => root.unmount());
 });
 

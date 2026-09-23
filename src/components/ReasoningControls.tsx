@@ -5,6 +5,7 @@ import { Select } from "@/components/ui/Select";
 import { effortScale } from "@/lib/agent/efforts";
 import { ENGINE_MODELS } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
+import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
 
 /** Codex speed choice: empty string keeps the user's config.toml default. */
 export type SpeedChoice = "" | "fast" | "standard";
@@ -26,6 +27,7 @@ export function ReasoningControls({
   onModel,
   onEffort,
   onSpeed,
+  copilotModels,
 }: {
   engine: "claude" | "codex" | "copilot";
   model: string;
@@ -38,8 +40,15 @@ export function ReasoningControls({
   onModel: (value: string) => void;
   onEffort: (value: string) => void;
   onSpeed: (value: SpeedChoice) => void;
+  copilotModels?: readonly CopilotModelEntry[] | null;
 }) {
   const { t } = useLocale();
+  const availableModels = engine === "copilot" && copilotModels
+    ? copilotModels.map((option) => ({ id: option.id, label: option.name }))
+    : ENGINE_MODELS[engine];
+  const effortsFor = (value: string) => engine === "copilot"
+    ? copilotModels?.find((item) => item.id === value)?.efforts ?? effortScale(engine, value)!
+    : effortScale(engine, value)!;
   return (
     <>
       <Select
@@ -52,11 +61,11 @@ export function ReasoningControls({
           const nextModel = event.target.value;
           onModel(nextModel);
           // An unsupported tier returns to the CLI default; supported choices survive.
-          if (effort && !effortScale(engine, nextModel)!.includes(effort)) onEffort("");
+          if (effort && !effortsFor(nextModel).includes(effort)) onEffort("");
         }}
       >
-        <option value="">{t("draft.modelDefault")}</option>
-        {ENGINE_MODELS[engine].map((option) => (
+        {engine !== "copilot" ? <option value="">{t("draft.modelDefault")}</option> : null}
+        {availableModels.map((option) => (
           <option key={option.id} value={option.id}>
             {option.label}
           </option>
@@ -71,7 +80,7 @@ export function ReasoningControls({
         onChange={(event) => onEffort(event.target.value)}
       >
         <option value="">{t("draft.effortDefault")}</option>
-        {effortScale(engine, model)!.map((tier) => (
+        {effortsFor(model).map((tier) => (
           <option key={tier} value={tier}>
             {effortTierLabel(t, tier)}
           </option>

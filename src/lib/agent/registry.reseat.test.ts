@@ -460,6 +460,107 @@ test("an explicit account pin stays outside an active engine drain while an unpi
   });
 });
 
+for (const mode of ["off", "sqlite"] as const) {
+  test(`${mode === "off" ? "JSON" : "SQLite"}: a settling launch keeps the account the pool chose for its own first message, and nothing else does (#2051)`, () => {
+    const store = new AgentRegistry(registryFile(), undefined, undefined, { sqliteMode: mode });
+    store.setEngineRouting("codex", "routed");
+    const launch = (name: string) => {
+      const begun = beginLegacySpawnFixture(store, {
+        engine: "codex",
+        cwd: "/repo/checkout",
+        transport: "structured",
+        accountId: "pooled",
+        accountPin: false,
+      });
+      if (begun.kind !== "created") throw new Error("expected launch receipt");
+      const entry = {
+        key: { engine: "codex" as const, sessionId: `${name}-session` },
+        artifactPath: `/sessions/${name}-session.jsonl`,
+        cwd: "/repo/checkout",
+        accountId: "pooled",
+        status: "idle" as const,
+        host: null,
+        claimEpoch: 0,
+        claimOwner: null,
+        pendingAction: "spawn" as const,
+      };
+      return { launchId: begun.receipt.launchId, entry };
+    };
+    const staged = (name: string) => {
+      const { launchId, entry } = launch(name);
+      const result = store.stageStructuredSpawn(launchId, entry);
+      if (result.kind !== "settled") throw new Error("expected launch staging");
+      expect(result.receipt.state).toBe("path-pending");
+      return { launchId, conversationId: result.conversation.id };
+    };
+
+    /* The launch's own first message leaves the pool's choice standing. */
+    const own = staged("own");
+    expect(store.requestConversationMigrationToActiveAccount(own.conversationId, { launchId: own.launchId })).toMatchObject({
+      migration: null,
+      generations: [{ accountId: "pooled" }],
+    });
+
+    /* Another launch's id speaks for nobody else's conversation. */
+    const other = staged("other");
+    expect(store.requestConversationMigrationToActiveAccount(other.conversationId, { launchId: own.launchId }).migration)
+      .toMatchObject({ targetId: "routed", phase: "requested" });
+
+    /* Once the launch has settled, its conversation is ordinary work again. */
+    const done = launch("done");
+    const settled = store.settleSpawn(done.launchId, done.entry);
+    if (settled.kind !== "settled") throw new Error("expected launch settlement");
+    expect(settled.receipt.state).toBe("completed");
+    expect(store.requestConversationMigrationToActiveAccount(settled.conversation.id, { launchId: done.launchId }).migration)
+      .toMatchObject({ targetId: "routed", phase: "requested" });
+  });
+}
+
+for (const mode of ["off", "sqlite"] as const) {
+  test(`${mode === "off" ? "JSON" : "SQLite"}: an engine-wide drain committed while a launch awaits its first message takes it only once it settles (#2051)`, () => {
+    const store = new AgentRegistry(registryFile(), undefined, undefined, { sqliteMode: mode });
+    store.reconcileConversations([observation("/sessions/ordinary.jsonl", "pooled")]);
+    const ordinary = store.conversationForPath("/sessions/ordinary.jsonl")!.id;
+    const begun = beginLegacySpawnFixture(store, {
+      engine: "codex",
+      cwd: "/repo/checkout",
+      transport: "structured",
+      accountId: "pooled",
+      accountPin: false,
+    });
+    if (begun.kind !== "created") throw new Error("expected launch receipt");
+    const entry = {
+      key: { engine: "codex" as const, sessionId: "settling-session" },
+      artifactPath: "/sessions/settling-session.jsonl",
+      cwd: "/repo/checkout",
+      accountId: "pooled",
+      status: "idle" as const,
+      host: null,
+      claimEpoch: 0,
+      claimOwner: null,
+      pendingAction: "spawn" as const,
+    };
+    const staged = store.stageStructuredSpawn(begun.receipt.launchId, entry);
+    if (staged.kind !== "settled") throw new Error("expected launch staging");
+
+    const intent = store.commitMigrationIntent({
+      engine: "codex",
+      targetId: "routed",
+      origin: "manual",
+      requestId: `drain-after-staging-${mode}`,
+      expectedRevision: store.engineRouting("codex").revision,
+    });
+    expect(intent.state).toBe("draining");
+    expect(store.conversation(ordinary)?.migration).toMatchObject({ intentId: intent.id, targetId: "routed" });
+    expect(store.conversation(staged.conversation.id)?.migration).toBeNull();
+
+    const settled = store.settleSpawn(begun.receipt.launchId, entry);
+    if (settled.kind !== "settled") throw new Error("expected launch settlement");
+    expect(settled.receipt.state).toBe("completed");
+    expect(settled.conversation.migration).toMatchObject({ intentId: intent.id, targetId: "routed" });
+  });
+}
+
 test("resume generation rollover cannot revive delivery cancelled by Stop", () => {
   const { store, id } = seededRegistry("off", registryFile());
   const intent = store.commitMigrationIntent({

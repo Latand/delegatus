@@ -490,6 +490,7 @@ export async function reconcileStructuredSpawnReplay(
         conversationId: current.conversationId,
         clientMessageId: `spawn_${launchId}`,
         operationId: `spawn_message_${launchId}`,
+        launchId,
         text: prompt,
         imageRefs,
         ...(readmittedOrigin ? { origin: readmittedOrigin } : {}),
@@ -1386,6 +1387,7 @@ export async function recoverPendingStructuredSpawns(
         conversationId: receipt.conversationId,
         clientMessageId: `spawn_${receipt.launchId}`,
         operationId: `spawn_message_${receipt.launchId}`,
+        launchId: receipt.launchId,
         text: prompt,
         imageRefs,
         ...(origin ? { origin } : {}),
@@ -1519,6 +1521,7 @@ export function copilotHostOptions(
     binary: resolveCopilotBinary(process.env),
     cwd: input.spec.cwd,
     copilotHome: input.account.home,
+    accountId: input.account.accountId,
     model: profile.model ?? undefined,
     effort: profile.effort ?? undefined,
     /* The bypass mode is the only one that grants every tool up front; any
@@ -1655,6 +1658,7 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
     conversationId: input.receipt.conversationId,
     clientMessageId: `spawn_${input.receipt.launchId}`,
     operationId: `spawn_message_${input.receipt.launchId}`,
+    launchId: input.receipt.launchId,
     text: input.prompt,
     imageRefs: input.imageRefs,
     ...(origin ? { origin } : {}),
@@ -1869,7 +1873,7 @@ export async function recoverStagedStructuredLaunch(
         recovery = { ...recovery, phase: "uncertain" };
         writeStagedRecovery(registry, launchId, recovery);
         const result = await enqueueStructuredMessage({ path: receipt.artifactPath, conversationId: receipt.conversationId,
-          clientMessageId: `spawn_${launchId}`, operationId: `spawn_message_${launchId}`, text: effect.prompt, imageRefs: images,
+          clientMessageId: `spawn_${launchId}`, operationId: `spawn_message_${launchId}`, launchId, text: effect.prompt, imageRefs: images,
           ...(origin ? { origin } : {}),
         }, { client: () => client, registry: () => registry, enabled: () => true });
         if (!result?.ok) {

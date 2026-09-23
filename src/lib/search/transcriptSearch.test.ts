@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { beginProjectCatalogScan } from "@/lib/scanner/projectCatalog";
+import type { ConversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
+import { publishTranscriptIndexFeed } from "@/lib/scanner/discover";
 import { SNIPPET_MATCH_CLOSE, SNIPPET_MATCH_OPEN, snippetSegments } from "./snippet";
+import { scheduleTranscriptIndex, waitForTranscriptIndexIdleForTests } from "./transcriptFeed";
 import {
   indexTranscriptSources,
   InvalidTranscriptSearchCursorError,
@@ -22,7 +26,7 @@ const previousEnvironment = {
   TMPDIR: process.env.TMPDIR,
 };
 
-function source(pathname: string, engine: "claude" | "codex", project: string): TranscriptIndexSource {
+function source(pathname: string, engine: "claude" | "codex" | "copilot", project: string): TranscriptIndexSource {
   const stat = fs.statSync(pathname);
   return { path: pathname, engine, project, size: stat.size, mtimeMs: stat.mtimeMs };
 }
@@ -104,6 +108,52 @@ test("indexes Claude and Codex message bodies with jump metadata", async () => {
     fieldsSearched: ["message.body"],
     tokenizer: "FTS5 unicode61, remove_diacritics=0, tokenchars=#_",
   });
+});
+
+test("indexes only Copilot user and assistant message content", async () => {
+  const transcript = path.join(sandbox, "copilot-session.jsonl");
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ type: "user.message", timestamp: "2026-08-20T11:00:00.000Z", data: { content: "cobalt request from user" } }),
+    JSON.stringify({ type: "model.message", timestamp: "2026-08-20T11:00:01.000Z", data: { content: "hidden_private_model_marker" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: "2026-08-20T11:00:02.000Z", data: { content: [{ type: "text", text: "cobalt answer from assistant" }] } }),
+  ].join("\n") + "\n");
+
+  await indexTranscriptSources([source(transcript, "copilot", "copilot-project")], { complete: true });
+
+  const indexed = searchTranscripts({ query: "cobalt" });
+  expect(indexed.total).toBe(2);
+  expect(indexed.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ speaker: "user", engine: "copilot", transcriptPath: transcript }),
+    expect.objectContaining({ speaker: "assistant", engine: "copilot", transcriptPath: transcript }),
+  ]));
+  expect(searchTranscripts({ query: "hidden_private_model_marker" }).total).toBe(0);
+});
+
+test("production scanner feed publishes Copilot transcripts for body indexing", async () => {
+  const transcript = path.join(sandbox, "copilot-catalog-session", "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ type: "user.message", timestamp: "2026-08-20T11:00:00.000Z", data: { content: "feed_copilot_user_marker" } }),
+    JSON.stringify({ type: "model.message", timestamp: "2026-08-20T11:00:01.000Z", data: { content: "feed_copilot_private_model_marker" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: "2026-08-20T11:00:02.000Z", data: { content: "feed_copilot_assistant_marker" } }),
+  ].join("\n") + "\n");
+  const catalog: ConversationCatalogEntry[] = [{
+    path: transcript, root: "copilot-sessions", name: "session", project: "copilot-feed",
+    title: "Copilot fixture", firstPrompt: "feed_copilot_user_marker", engine: "copilot",
+    kind: "session", fmt: "copilot", mtime: Date.parse("2026-08-20T11:00:02.000Z") / 1_000,
+    size: fs.statSync(transcript).size,
+  }];
+  publishTranscriptIndexFeed(catalog, true, beginProjectCatalogScan(false), undefined,
+    (feed) => scheduleTranscriptIndex(feed, { force: true }));
+  await waitForTranscriptIndexIdleForTests();
+
+  expect(searchTranscripts({ query: "feed_copilot_user_marker" }).items).toMatchObject([
+    expect.objectContaining({ speaker: "user", engine: "copilot", transcriptPath: transcript }),
+  ]);
+  expect(searchTranscripts({ query: "feed_copilot_assistant_marker" }).items).toMatchObject([
+    expect.objectContaining({ speaker: "assistant", engine: "copilot", transcriptPath: transcript }),
+  ]);
+  expect(searchTranscripts({ query: "feed_copilot_private_model_marker" }).total).toBe(0);
 });
 
 test("matches Cyrillic hashtags and underscore tags as exact FTS tokens", async () => {
@@ -423,7 +473,7 @@ test("migrates a version-one index in bounded batches without reopening unchange
   }
 
   const migrated = new Database(filename, { readonly: true, strict: true });
-  expect(migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(3);
+  expect(migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(4);
   expect(migrated.query<{ count: number }, []>(
     "SELECT COUNT(*) AS count FROM transcript_messages WHERE body_hash IS NULL OR length(body_hash) != 64",
   ).get()?.count).toBe(0);
@@ -452,7 +502,7 @@ test("upgrades version two with file-time fallbacks and a persistent ID watermar
   expect(searchTranscripts({ query: "beryl" }).items[0].timestamp).toBe(12.345);
   const upgraded = new Database(filename, { readonly: true });
   try {
-    expect(upgraded.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+    expect(upgraded.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
     expect(upgraded.query("SELECT last_id FROM transcript_search_sequence").get()).toEqual({ last_id: 1 });
   } finally { upgraded.close(); }
 });

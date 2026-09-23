@@ -7,6 +7,7 @@ import { afterAll, beforeEach, expect, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { accountProjectOverrides } from "@/lib/accounts/accountOverrides";
+import { createManagedCopilotAccount } from "@/lib/accounts/copilot";
 import { bindAccountToProject } from "@/lib/accounts/projectBindings";
 import { procBackend } from "@/lib/proc";
 import { projectForCwd } from "@/lib/scanner/describe";
@@ -22,6 +23,7 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { BINDINGS_SOURCE, OVERRIDES_SOURCE, resetAccountCollectionsForTests } from "@/lib/accounts/accountsStore";
 import { clearAccountFixture, seedAccountSource } from "@/lib/accounts/accountsStoreFixture";
 import { accountProjectBindings } from "@/lib/accounts/projectBindings";
+import { writeCopilotModelCatalog } from "@/lib/agent/copilotModels";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-controls-"));
 
@@ -48,7 +50,8 @@ afterAll(() => {
 
 function structuredConversation(
   options: {
-    engine?: "claude" | "codex";
+    engine?: "claude" | "codex" | "copilot";
+    accountId?: string;
     parentConversationId?: `conversation_${string}`;
     registry?: AgentRegistry;
   } = {},
@@ -62,7 +65,7 @@ function structuredConversation(
     engine,
     cwd: sandbox,
     transport: "structured",
-    accountId: `${engine}-subscription`,
+    accountId: options.accountId ?? `${engine}-subscription`,
     ...(options.parentConversationId ? { parentConversationId: options.parentConversationId } : {}),
   });
   if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
@@ -70,11 +73,11 @@ function structuredConversation(
     key: { engine, sessionId: id },
     artifactPath: pathname,
     cwd: sandbox,
-    accountId: `${engine}-subscription`,
+    accountId: options.accountId ?? `${engine}-subscription`,
     status: "live",
     host: null,
     structuredHost: {
-      kind: engine === "codex" ? "codex-app-server" : "claude-broker",
+      kind: engine === "codex" ? "codex-app-server" : engine === "copilot" ? "copilot-acp" : "claude-broker",
       endpoint: "fake:stdio",
       process: { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) },
       eventCursor: 1,
@@ -269,6 +272,41 @@ test("structured reconfigure validates and enters the runtime command channel", 
   }, { registry: fixture.registry, client, enabled: () => true });
   expect(invalid).toEqual({ status: 400, body: { error: "model is not supported by codex" } });
   expect(commands).toHaveLength(1);
+});
+
+test("Copilot structured reconfigure validates effort tiers from the server-side account catalogue", async () => {
+  const account = createManagedCopilotAccount("Dynamic Effort");
+  const fixture = structuredConversation({ engine: "copilot", accountId: account.id });
+  writeCopilotModelCatalog(account.id, [
+    { id: "copilot-dynamic-model", name: "Dynamic fixture", efforts: ["ultra"], pickerEnabled: true },
+  ]);
+  const commands: unknown[] = [];
+  const client = {
+    command: async (command: unknown) => {
+      commands.push(command);
+      return { operationId: "reconfigure-copilot-dynamic", receipt: { operationId: "reconfigure-copilot-dynamic", status: "queued" }, replayed: false };
+    },
+  } as unknown as RuntimeHostClient;
+
+  const result = await dispatchStructuredControl({
+    path: fixture.path,
+    conversationId: fixture.conversationId,
+    action: "reconfigure",
+    reconfiguration: { model: "copilot-dynamic-model", effort: "ultra", fast: null },
+  }, {
+    registry: fixture.registry,
+    client,
+    operationId: () => "reconfigure-copilot-dynamic",
+    enabled: () => true,
+  });
+
+  expect(result).toMatchObject({ status: 202, body: { structured: true, receipt: { status: "queued" } } });
+  expect(commands).toEqual([expect.objectContaining({
+    kind: "reconfigure",
+    model: "copilot-dynamic-model",
+    effort: "ultra",
+    sessionKey: expect.objectContaining({ engine: "copilot" }),
+  })]);
 });
 
 test("an applying structured restart keeps a newer reconfigure on the durable command channel", async () => {

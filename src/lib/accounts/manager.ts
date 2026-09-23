@@ -2,7 +2,8 @@ import { accountForSpawn, activeCodexAccountId, codexAccountsMutationLocked, cod
 import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountsMutationLocked, claudeHomeOwningTranscript, claudeManagedEnvironment, CorruptClaudeAccountsError, createManagedClaudeAccount, listClaudeAccounts, setActiveClaudeAccount, UnknownClaudeAccountError } from "./claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "./claudeLogin";
 import { managedCodexRuntime } from "./codexRuntime";
-import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, copilotHomeOwningSessionPath, copilotLoginCommand, copilotSignedInUser, createManagedCopilotAccount, listCopilotAccounts, setActiveCopilotAccount, UnknownCopilotAccountError } from "./copilot";
+import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, copilotConfigCheckedAt, copilotHomeOwningSessionPath, copilotLoginCommand, copilotSignedInUser, createManagedCopilotAccount, listCopilotAccounts, setActiveCopilotAccount, UnknownCopilotAccountError } from "./copilot";
+import { copilotLoginSupervisor } from "./copilotLogin";
 import type { AccountContext, AccountEngineName, AccountManager, AccountSummary, CopilotAccountSummary, ProjectSpawnResolution } from "./contracts";
 import { unavailableLimits } from "./contracts";
 import { withAccountMutationLockAsync } from "./accountMutation";
@@ -385,9 +386,13 @@ function copilotSummary(id: string): CopilotAccountSummary {
     label: account.label,
     kind: account.kind,
     active: activeCopilotAccountId() === id,
-    /* Slice 1 reads no credential: the state is unknown until a launch
-       succeeds or fails on auth. */
-    auth: { state: "unknown", method: null, email: null, plan: null, checkedAt: null },
+    auth: {
+      state: account.auth === "signed_in" ? "authenticated" : account.auth === "signed_out" ? "signed_out" : "unknown",
+      method: null,
+      email: null,
+      plan: null,
+      checkedAt: copilotConfigCheckedAt(account.home),
+    },
     limits: observation?.limits ? {
       state: fresh ? "fresh" : "stale",
       session: observation.limits.session,
@@ -496,8 +501,14 @@ export const accountManager: AccountManager = {
   },
   async select(engine, id) { return selectAccount(engine, id); },
   async status(engine, id) { return summary(engine, id); },
-  async submitLoginInput() { throw new Error("login input is Claude-operation specific"); },
-  async cancelLogin() { throw new Error("login cancellation is Claude-operation specific"); },
+  async submitLoginInput(operationId, code) {
+    if (copilotLoginSupervisor.has(operationId)) throw new Error("Copilot device-code sign-in has no code input step");
+    return await claudeLoginSupervisor.input(operationId, code);
+  },
+  async cancelLogin(operationId) {
+    if (copilotLoginSupervisor.has(operationId)) return copilotLoginSupervisor.cancel(operationId);
+    return await claudeLoginSupervisor.cancel(operationId);
+  },
   resolveSpawn(engine, requested) {
     if (engine === "copilot") return copilotAccountForSpawn(requested ?? null);
     return contextForSpawn(engine, requested ?? agentRegistry().engineRouting(engine).activeAccountId ?? undefined);
