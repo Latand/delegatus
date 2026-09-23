@@ -1,5 +1,7 @@
 "use client";
 
+import { workLinkClause } from "@/components/workLinks/WorkLinkChips";
+import { useWorkLinks } from "@/components/workLinks/workLinksContext";
 import { ArrowLeft, ArrowRight, Check, Copy, MoreHorizontal, Pause, Play, RefreshCw, Settings2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -880,10 +882,12 @@ export function MobilePipelineRow({ pipeline, now, onOpen, quiet = false }: {
 }) {
   const { t } = useLocale();
   const row = mobilePipelineRowModel(t, pipeline, now);
+  const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
   const tone = MOBILE_ROW_TONE[row.state];
   const attention = row.state === "needs_decision";
   const meta = [
     t("mobile2.pipelines.rowStage", { stage: row.stage, total: row.total, name: row.stageName, state: row.stageState }),
+    workLinkClause(t, links),
     row.seconds === null ? null : t("mobile2.pipelines.rowStarted", { age: humanizeDuration(row.seconds) }),
   ].filter(Boolean).join(" · ");
   const Tag = onOpen ? "button" : "div";

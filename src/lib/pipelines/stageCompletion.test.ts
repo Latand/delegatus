@@ -699,3 +699,21 @@ test.each(["metadata", "unknown", "older-turn", "other-decision", "closed", "sup
   expect((await h.report(1, { verdict: "pass" })).code).toBe("STAGE_REPORT_SETTLED");
   expect(attemptsOf("review")[0]!.report).toBeUndefined();
 });
+
+test("the PR a report looked up reaches the board's forge cache with no second forge call (#2059)", async () => {
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  const lane = current();
+  savePipelines([{ ...lane, delivery: { ...lane.delivery!, target: { ...lane.delivery!.target, remote: "https://github.com/acme/widgets.git" } } }]);
+  h.worktree.pullRequest = '[{"url":"https://github.com/acme/widgets/pull/2059","number":2059,"state":"OPEN"}]';
+  const before = h.execCalls.length;
+
+  const accepted = await h.report(1, { verdict: "pass", summary: "Chips drawn." });
+  expect(accepted.error).toBeUndefined();
+  const { forgeCacheView } = await import("@/lib/forge/cache");
+  const { pipelineWorkLinks } = await import("@/lib/forge/resolve");
+  expect(forgeCacheView().repository("acme/widgets")?.pr(2059)).toMatchObject({ headRefName: current().branch, state: "open" });
+  expect(pipelineWorkLinks(current()).links).toEqual([expect.objectContaining({ number: 2059, kind: "pr", state: "open" })]);
+  /* The provenance read is the report's only forge call. */
+  expect(h.execCalls.slice(before).filter((call) => call.includes(" gh "))).toHaveLength(1);
+});

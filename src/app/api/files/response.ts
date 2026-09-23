@@ -29,6 +29,7 @@ import { isCanonicalProjectId, isRepositoryProjectId, projectIdentityFromReposit
 import { projectRestoredFlows } from "@/lib/reviewHistory/visibility";
 import { reconcileEmbeddedReviewFlows } from "@/lib/pipelines/engine";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { workLinksForBoard } from "@/lib/forge/resolve";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { projectSupersededTaskHandoffs } from "@/lib/tasks/supersedence";
 import { reportRunIdFromAttemptId, TELEGRAM_REPORT_PROJECT } from "@/lib/telegram/reportLineage";
@@ -895,6 +896,9 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     ...(summary ? { readProjection: "board-summary" as const } : {}),
     workflows,
     tasks: tasks.tasks,
+    /* #2059: map lookups against the forge cache only; the sweep, not this
+       request, talks to GitHub. */
+    workLinks: workLinksForBoard(pipelines, tasks.tasks),
     systemHealth: {
       tmux: routeDependencies.tmuxEndpointHealth(),
       registry: registryHealth,

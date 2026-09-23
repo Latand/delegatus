@@ -10,6 +10,7 @@ import { useAgentChimes } from "@/hooks/useAgentChimes";
 import { useArchivedProjects } from "@/hooks/useArchivedProjects";
 import { useProjectCuration } from "@/hooks/useProjectCuration";
 import { useEffectiveFlows } from "@/components/flows/flowModel";
+import { WorkLinksProvider } from "@/components/workLinks/workLinksContext";
 import { useFiles } from "@/hooks/useFiles";
 import { publishConversationAvailability } from "@/lib/mcp/availability";
 import { useBoardState } from "@/hooks/useBoardState";
@@ -138,7 +139,7 @@ export function Viewer() {
   const [project, setProject] = useState<string>(OVERVIEW);
   const [pendingHash, setPendingHash] = useState<ConversationHash | null>(null);
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
-  const { files: allFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, loaded, scopeCertified, catalogFailures } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  const { files: allFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, scopeCertified, catalogFailures } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
   /* Crown/create curation (server-durable): the optimistic client seam plus
      the overlay entries for projects created before the next catalog poll. */
   const { crownedProjects, toggleCrown, createProject, createdCatalog } = useProjectCuration(serverCrownedProjects, polledProjectCatalog);
@@ -1282,5 +1283,5 @@ export function Viewer() {
      unmounts every time the «⋯» menu closes — reads a controller that outlives
      the menu. `shell` is built above, so a status change re-renders this provider
      and its context consumers only, never the board. */
-  return <KeepAwakeProvider>{shell}</KeepAwakeProvider>;
+  return <KeepAwakeProvider><WorkLinksProvider value={workLinks}>{shell}</WorkLinksProvider></KeepAwakeProvider>;
 }

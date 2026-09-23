@@ -3646,3 +3646,36 @@ test("#1994: deltas are negotiated only within the exact summary scope that cert
   expect(unchanged.status).toBe(304);
   expect(await unchanged.text()).toBe("");
 });
+
+test("the board carries each record's resolved PR and issue links, and leaves out records with none (#2059)", async () => {
+  const lane = (id: string, remote: string, taskIds: string[]) => ({
+    id, task: id, project: "repo-fixture", state: "running", branch: `pipeline/${id}`, createdAt: "2026-09-21T00:00:00Z", taskIds, runs: [], stages: [],
+    delivery: { target: { repository: "repo-fixture", remote, branch: `refs/heads/pipeline/${id}` } },
+  });
+  fs.writeFileSync(path.join(stateDir, "forge-links.json"), JSON.stringify({ schemaVersion: 1, repositories: { "acme/widgets": {
+    canonical: "acme/widgets", completeSince: "2026-09-22T00:00:00Z", lastSweepAt: "2026-09-23T00:00:00Z", lastAttemptAt: null, lastError: null, issues: {},
+    prs: { 31: { url: "https://github.com/acme/widgets/pull/31", headRefName: "pipeline/with-pr", createdAt: "2026-09-22T00:00:00Z", state: "merged", closes: [30], checkedAt: "2026-09-23T00:00:00Z" } },
+  } } }));
+  pipelinesStore = () => [
+    lane("with-pr", "https://github.com/acme/widgets.git", ["task-a"]),
+    lane("no-pr", "https://github.com/acme/widgets.git", ["task-a"]),
+    lane("elsewhere", "/srv/git/local.git", []),
+  ];
+  pipelineVisibility = (pipelines) => pipelines;
+  boardTasksStore = () => [
+    { id: "task-a", project: "repo-fixture", text: "Chips", status: "assigned", placement: "unplaced", assignments: [], createdAt: "2026-09-21T00:00:00Z", updatedAt: "2026-09-21T00:00:00Z" },
+    { id: "task-b", project: "repo-fixture", text: "Chat", status: "inbox", placement: "unplaced", assignments: [], createdAt: "2026-09-21T00:00:00Z", updatedAt: "2026-09-21T00:00:00Z" },
+  ];
+  try {
+    const response = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+    const body = await response.json() as { workLinks: { pipelines: Record<string, { links: Array<{ number: number; state: string | null }>; noPr: boolean }>; tasks: Record<string, unknown> } };
+    expect(Object.keys(body.workLinks.pipelines).sort()).toEqual(["no-pr", "with-pr"]);
+    expect(body.workLinks.pipelines["with-pr"]!.links.map((link) => [link.number, link.state])).toEqual([[31, "merged"], [30, null]]);
+    expect(body.workLinks.pipelines["no-pr"]).toEqual({ links: [], noPr: true });
+    expect(Object.keys(body.workLinks.tasks)).toEqual(["task-a"]);
+  } finally {
+    pipelinesStore = () => [];
+    pipelineVisibility = () => [];
+    boardTasksStore = () => [];
+  }
+});

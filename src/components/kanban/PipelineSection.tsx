@@ -12,6 +12,9 @@ import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLab
 export { stageDisplayName, stageNames } from "@/components/pipelines/pipelineModel";
 import { fmtAge } from "@/components/utils";
 
+import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
+import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
+
 import type { KanbanPipeline } from "./kanbanModel";
 import { attemptArrivals, graphOrder, layoutGraph, operationalAttempts, routeEdge, STAGE_TONE, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
 import { edgeCount, stageIdentity, type EdgeCount } from "./stageIdentity";
@@ -169,7 +172,7 @@ export function stageRoleId(stage: PipelineStage): string {
   return stage.role?.roleId ?? (stage.kind === "review-loop" ? "reviewer" : "builder");
 }
 
-export function PipelineSection({ summary, open, selected, acting, onToggle, onOpenStage, onOpenSheet, onMenu }: {
+export function PipelineSection({ summary, open, selected, acting, onToggle, onOpenStage, onOpenSheet, onMenu, onWorkLinks }: {
   summary: KanbanPipeline;
   /** The operator's choice for this card, or null for the default: the summary. */
   open: boolean | null;
@@ -181,9 +184,12 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
   onOpenStage: (pipeline: Pipeline, stage: PipelineStage) => void;
   onOpenSheet: (pipeline: Pipeline) => void;
   onMenu: (pipeline: Pipeline, anchor: HTMLElement) => void;
+  /** Opens every PR and issue link of the pipeline, with the attach form (#2059). */
+  onWorkLinks?: (target: WorkLinkTarget, anchor: HTMLElement) => void;
 }) {
   const { t } = useLocale();
   const { pipeline } = summary;
+  const workLinks = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
   const names = useMemo(() => stageNames(t, pipeline), [t, pipeline]);
   const nameOf = (stage: PipelineStage) => names.get(stage.id) ?? stageChipLabel(t, stage);
   /* Every card starts on the compact summary; the detailed graph is one toggle
@@ -256,6 +262,15 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
           <MoreGlyph />
         </button>
       </div>
+      {/* #2059: its own line under the header, so no chip ever takes width
+          from the title, the state or the buttons, at any card width. */}
+      <WorkLinkRow
+        resolved={workLinks}
+        showNoPr
+        className="plinks"
+        testId={pipeline.id}
+        onMore={onWorkLinks ? (anchor) => onWorkLinks({ kind: "pipeline", id: pipeline.id }, anchor) : undefined}
+      />
       <div className="graph-slot" ref={slot} data-graph={pipeline.id} data-open={showGraph ? "1" : "0"}>
         {showGraph ? (
           available === null ? null : <PipelineGraph summary={summary} names={names} available={available} selected={selected} onOpenStage={onOpenStage} />

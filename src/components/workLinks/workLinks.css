@@ -1,0 +1,76 @@
+/* PR and issue chips (#2059, docs/design/pr-issue-chips.md §6): the kanban
+   card, the pipeline section and the phone's pipeline screen draw the same
+   chip. The project-chip recipe — 18 px, a pill, caption weight — in existing
+   tokens only; the glyph carries the state, the colour repeats it. */
+
+.wl-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.wl-item { display: inline-flex; min-width: 0; max-width: 100%; }
+
+.wl-chip {
+  --wl: var(--color-secondary);
+  position: relative; flex-shrink: 0; height: 18px; padding: 0 6px 0 5px;
+  display: inline-flex; align-items: center; gap: 3px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--wl) 40%, var(--border-default));
+  background: var(--surface-card); color: var(--wl);
+  font-size: var(--text-caption); font-weight: 600; line-height: 1; white-space: nowrap; text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--motion-fast, 120ms), background var(--motion-fast, 120ms);
+}
+.wl-chip:hover { border-color: var(--wl); background: color-mix(in srgb, var(--wl) 8%, var(--surface-card)); }
+.wl-chip:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.wl-chip .wl-glyph { flex-shrink: 0; }
+.wl-chip[data-tone="open"] { --wl: var(--color-success); }
+.wl-chip[data-tone="draft"] { --wl: var(--color-muted); border-style: dashed; }
+.wl-chip[data-tone="merged"] { --wl: var(--color-accent); }
+.wl-chip[data-tone="closed"] { --wl: var(--color-danger); }
+.wl-chip[data-tone="unknown"], .wl-chip[data-tone="issue"] { --wl: var(--color-secondary); }
+
+/* A coarse pointer gets a larger target without the chip growing: its hit
+   area reaches past it vertically. The phone's chip line is 44 px tall, so the
+   full 44 px fits inside it; on a card the reach stops short of the title
+   above, whose press renames the task. */
+@media (pointer: coarse) {
+  .wl-chip::after { content: ""; position: absolute; inset: -5px -2px; }
+  [data-mobile2-links] .wl-chip::after { inset: -13px -2px; }
+}
+
+.wl-more {
+  flex-shrink: 0; height: 18px; padding: 0 6px; display: inline-flex; align-items: center; border-radius: 999px;
+  border: 1px solid var(--border-default); background: var(--surface-well);
+  font-size: var(--text-caption); font-weight: 700; color: var(--color-secondary); font-variant-numeric: tabular-nums;
+}
+.wl-more:hover { border-color: var(--color-accent); color: var(--color-accent); }
+
+/* A fact about the lane, not something to click. */
+.wl-nopr { flex-shrink: 0; font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); white-space: nowrap; }
+
+/* The list behind "+N" and the attach form. */
+.wl-panel { display: flex; flex-direction: column; gap: 6px; padding: 2px; min-width: 0; }
+.wl-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.wl-list-row { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 6px; border-radius: var(--radius-control); }
+.wl-list-row:hover { background: var(--surface-well); }
+.wl-via { flex: 1 1 auto; min-width: 0; font-size: var(--text-label); color: var(--color-muted); overflow-wrap: anywhere; }
+.wl-detach {
+  flex-shrink: 0; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-control); font-size: 15px; line-height: 1; color: var(--color-muted);
+}
+.wl-detach:hover { background: var(--surface-card); color: var(--color-danger); }
+.wl-empty { margin: 0; padding: 4px 6px; font-size: var(--text-label); color: var(--color-muted); }
+.wl-form { display: flex; gap: 6px; min-width: 0; }
+.wl-input {
+  flex: 1 1 8rem; min-width: 0; height: 32px; padding: 0 10px; border-radius: var(--radius-control);
+  border: 1px solid var(--border-default); background: var(--surface-card); color: var(--color-primary); font-size: var(--text-ui);
+}
+.wl-input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 0; }
+.wl-attach {
+  flex-shrink: 0; height: 32px; padding: 0 12px; border-radius: var(--radius-control);
+  border: 1px solid var(--border-default); background: var(--surface-card); font-size: var(--text-label); font-weight: 600; color: var(--color-primary);
+}
+.wl-attach:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-accent); }
+.wl-attach:disabled { opacity: 0.55; }
+.wl-error { margin: 0; padding: 0 6px; font-size: var(--text-label); color: var(--color-danger); overflow-wrap: anywhere; }
+
+/* The pipeline section's own row, under its header line (§6.1), and the card's
+   row under its title, which stays when the card is collapsed (§6.2). */
+.kb .stage-section .plinks { margin-top: 2px; }
+.kb .card .links { margin: 2px 0 0; }
