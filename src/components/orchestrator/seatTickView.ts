@@ -61,9 +61,10 @@ const REASONS: Record<SeatTickWakeReasonKind, MessageKey> = {
   interval: "seatTick.reason.interval",
   "child-terminal": "seatTick.reason.childTerminal",
   "own-lane-settled": "seatTick.reason.ownLaneSettled",
+  "deploy-settled": "seatTick.reason.deploySettled",
 };
 
-/** Every reason key, so the parity test can hold all seven in both locales. */
+/** Every reason key, so the parity test can hold all of them in both locales. */
 export const SEAT_TICK_REASON_KEYS: readonly MessageKey[] = Object.values(REASONS);
 
 const DISPATCH: Record<"active" | "refused" | "returned", MessageKey> = {

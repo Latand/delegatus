@@ -185,7 +185,7 @@ test("an outstanding wake with no operation id is a registry-held one, and survi
   expect(readSeatTickState("viewer", file).outstandingWake).toEqual({
     ...row.outstandingWake,
     operationId: null,
-    commit: { ...row.outstandingWake.commit, shownChildren: [], announcedLanes: [] },
+    commit: { ...row.outstandingWake.commit, shownChildren: [], announcedLanes: [], announcedDeploys: [] },
   });
 });
 
