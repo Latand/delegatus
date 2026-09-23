@@ -2160,6 +2160,7 @@ interface ChildFixture {
   stateFile: string;
   spawn(options: {
     title: string;
+    engine?: "claude" | "copilot";
     turn?: "busy" | "idle" | "terminal" | "unknown";
     terminalAt?: string | null;
     host?: AgentHostStatus | null;
@@ -2168,6 +2169,10 @@ interface ChildFixture {
     memberships?: DurableMembershipInput[];
     /** No conversation record at all: a reservation nothing has settled. */
     unobserved?: boolean;
+    /** The conversation exists, but no scanner turn observation reached it. */
+    unreconciled?: boolean;
+    /** The launch finished and its host later died. */
+    completedReceipt?: boolean;
     /** Where this child's transcript is, as the Viewer would find it (#1783).
         `rooted` is a real spawn's; `outside-roots` is a file the scanner never
         looks at; `missing` is a path the transcript has gone from. The last
@@ -2222,15 +2227,24 @@ function childFixture(name: string, gitRepository = false, sqliteMode: "sqlite" 
       .flatMap((row) => row.kind === "outcome" && row.status === "acknowledged" ? [row.input.conversationId] : row.kind === "legacy" && row.reconciled ? [row.conversationId] : []),
     spawn(options) {
       const childCwd = options.cwd ?? cwd;
+      const engine = options.engine ?? "claude";
       /* Under a scanner root and on disk, the way a real spawn's transcript is
          (#1783): the harvest skips a child the Viewer cannot resolve. */
       const placement = options.transcript ?? "rooted";
-      const childPath = path.join(placement === "outside-roots" ? dir : SESSIONS, `${crypto.randomUUID()}.jsonl`);
-      if (placement !== "missing") fs.writeFileSync(childPath, "");
-      const observedChild = options.unobserved ? null : registry.ensureConversation("claude", childPath, null);
+      const root = placement === "outside-roots" ? dir : SESSIONS;
+      const childPath = engine === "copilot"
+        ? path.join(root, crypto.randomUUID(), "events.jsonl")
+        : path.join(root, `${crypto.randomUUID()}.jsonl`);
+      fs.mkdirSync(path.dirname(childPath), { recursive: true });
+      if (placement !== "missing") fs.writeFileSync(childPath, engine === "copilot" ? [
+        { type: "assistant.turn_start", timestamp: new Date(now - 5 * MINUTE).toISOString() },
+        { type: "assistant.turn_end", timestamp: new Date(now - 5 * MINUTE).toISOString() },
+        { type: "session.shutdown", timestamp: new Date(now - 5 * MINUTE).toISOString() },
+      ].map((event) => JSON.stringify(event)).join("\n") + "\n" : "");
+      const observedChild = options.unobserved ? null : registry.ensureConversation(engine, childPath, null);
       const parent = options.parent === undefined ? seatConversation.id : options.parent;
       const begun = registry.beginSpawnRequest({
-        engine: "claude",
+        engine,
         cwd: childCwd,
         transport: "structured",
         ...(observedChild ? { conversationId: observedChild.id } : {}),
@@ -2239,9 +2253,22 @@ function childFixture(name: string, gitRepository = false, sqliteMode: "sqlite" 
         ...(options.memberships ? { memberships: options.memberships } : {}),
       });
       const child = observedChild ?? { id: begun.receipt.conversationId, generations: [] };
-      if (!options.unobserved) {
+      if (options.completedReceipt) {
+        registry.completeSpawn(begun.receipt.launchId, {
+          key: sessionKeyFromTranscript(engine, childPath)!,
+          artifactPath: childPath,
+          cwd: childCwd,
+          accountId: null,
+          status: "dead",
+          host: null,
+          claimEpoch: 0,
+          claimOwner: null,
+          pendingAction: null,
+        });
+      }
+      if (!options.unobserved && !options.unreconciled) {
         registry.reconcileConversations([{
-          engine: "claude",
+          engine,
           path: childPath,
           accountId: null,
           launchProfile: emptyLaunchProfile({ cwd: childCwd, title: options.title }),
@@ -2251,7 +2278,7 @@ function childFixture(name: string, gitRepository = false, sqliteMode: "sqlite" 
       }
       if (options.host) {
         registry.upsert({
-          key: sessionKeyFromTranscript("claude", childPath)!,
+          key: sessionKeyFromTranscript(engine, childPath)!,
           artifactPath: childPath,
           cwd: childCwd,
           accountId: null,
@@ -2262,7 +2289,7 @@ function childFixture(name: string, gitRepository = false, sqliteMode: "sqlite" 
           pendingAction: null,
         });
       }
-      if (!options.unobserved && (options.turn === "terminal" || options.turn === "idle")) {
+      if (!options.unobserved && !options.unreconciled && (options.turn === "terminal" || options.turn === "idle")) {
         const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
         ledger.append(child.generations[0]!.id, { kind: "turn-started", turnId: "turn-one", seq: 1 });
         ledger.append(child.generations[0]!.id, { kind: "turn-ended", turnId: "turn-one", status: "completed", seq: 2 });
@@ -2961,6 +2988,40 @@ test("a child the registry cannot place is unknown: not open work, not harvested
   const quiet = childRig(fixture, { now: fixture.now + 66 * MINUTE });
   await runSeatTickCheck(fixture.project, quiet.deps);
   expect(quiet.cards).toEqual([]);
+});
+
+test("the seat's Copilot child with a conversation but no observed turn keeps child-unplaced visible (#2081)", async () => {
+  /* The production child is this seat's Viewer spawn. Its launch completed and
+     its transcript ended, but its registry turn stayed unknown/source empty.
+     The gap names an unobserved turn; there is a conversation record. */
+  const fixture = childFixture("copilot-unobserved-turn");
+  const child = fixture.spawn({ title: "smoke worker", engine: "copilot", unreconciled: true, completedReceipt: true });
+  fixture.seed();
+  expect(fixture.registry.conversation(child.id as never)!.turn).toMatchObject({ state: "unknown", source: "empty" });
+  const snapshot = fixture.registry.readOnlySnapshot();
+  expect(snapshot.receipts[child.launchId]!.state).toBe("completed");
+  expect(Object.values(snapshot.entries).find((entry) => entry.artifactPath === child.path)?.status).toBe("dead");
+
+  const rig = childRig(fixture);
+  const record = await runSeatTickCheck(fixture.project, rig.deps);
+  expect(record).toMatchObject({ verdict: "error", reasons: [], items: 0 });
+  expect(record!.detail).toContain("child-unplaced");
+  expect(fixture.row().childrenGap).toMatchObject({ gap: "child-unplaced", attempts: 1 });
+  expect(rig.sent).toEqual([]);
+});
+
+test("another seat's unreadable Copilot child leaves this seat's quiet check unblocked (#2081)", async () => {
+  const fixture = childFixture("other-seat-copilot-unobserved");
+  const otherSeat = fixture.registry.ensureConversation("claude", path.join(fixture.dir, `${crypto.randomUUID()}.jsonl`), null);
+  const child = fixture.spawn({ title: "other seat worker", engine: "copilot", parent: otherSeat.id,
+    unreconciled: true, completedReceipt: true });
+  fixture.seed();
+  expect(fixture.registry.conversation(child.id as never)!.turn).toMatchObject({ state: "unknown", source: "empty" });
+
+  const rig = childRig(fixture);
+  expect(await runSeatTickCheck(fixture.project, rig.deps)).toMatchObject({ verdict: "quiet" });
+  expect(fixture.row().childrenGap).toBeNull();
+  expect(rig.sent).toEqual([]);
 });
 
 test("a cold inbox with no children stays quiet, and no heartbeat card is needed (#1465)", async () => {
