@@ -45,6 +45,7 @@ import { ensureCanonicalMirror, resolveCanonicalRevision } from "../src/runtime-
 import { allocateBuiltCandidatePort, candidatePortsFromEnvironmentLists, isCandidatePortAvailable } from "../src/runtime-host/candidatePort";
 import { withBootstrapMcpHealthProbeAdmission } from "../src/runtime-host/bootstrapMcpHealthProbeAdmission";
 import { viewerCandidateContainerName, viewerCandidateImageName, viewerComposeSnapshotPath } from "../src/runtime-host/deploymentArtifacts";
+import { runtimeHostServiceImageTag } from "../src/runtime-host/dockerNames";
 import { bootstrapViewerRelease } from "../src/runtime-host/deploymentBootstrap";
 import {
   parseRuntimeHostRehearsalReport,
@@ -113,7 +114,7 @@ const targetFile = process.env.LLV_VIEWER_DEPLOY_TARGET || path.join(stateDir, "
 const canonicalRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/live-log-viewer-next.git";
 const runtimeSocket = process.env.LLV_RUNTIME_HOST_SOCKET || path.join(stateDir, "runtime-host.sock");
 const stableEndpoint = `http://127.0.0.1:${Number(process.env.LLV_VIEWER_PORT || 8898)}`;
-const runtimeHostImageTag = process.env.LLV_RUNTIME_HOST_IMAGE_TAG || "agent-log-viewer:node22";
+const runtimeHostImageTag = process.env.LLV_RUNTIME_HOST_IMAGE_TAG || runtimeHostServiceImageTag();
 const mcpRuntimeRoot = stableMcpRuntimeRoot();
 const mcpRuntimeStore = new McpRuntimeReleaseStore({ stateDir, stableRuntimeRoot: mcpRuntimeRoot });
 const deploymentPackageRoot = process.env.LLV_DEPLOYMENT_PACKAGE_ROOT || path.resolve(import.meta.dir, "..");

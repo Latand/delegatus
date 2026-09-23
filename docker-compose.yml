@@ -10,12 +10,12 @@ x-viewer-common: &viewer-common
   network_mode: host
   pid: host
   privileged: true
-  "user": "${LLV_UID:-1000}:${LLV_GID:-1000}"
+  "user": "${DELEGATUS_UID:-${LLV_UID:-1000}}:${DELEGATUS_GID:-${LLV_GID:-1000}}"
   group_add:
-    - "${LLV_DOCKER_GID:-957}"
+    - "${DELEGATUS_DOCKER_GID:-${LLV_DOCKER_GID:-957}}"
   working_dir: /app
   env_file:
-    - ${LLV_ENV_FILE:-${HOME:-/home/user}/.config/agent-log-viewer/service.env}
+    - ${DELEGATUS_ENV_FILE:-${LLV_ENV_FILE:-${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME:-/home/user}/.config/delegatus}}/service.env}}
   environment:
     HOME: ${HOME:-/home/user}
     HOSTNAME: 127.0.0.1
@@ -24,16 +24,16 @@ x-viewer-common: &viewer-common
     XDG_CACHE_HOME: ${HOME:-/home/user}/.cache
     # Keep /tmp until the explicit migration flag is enabled. The supervisor
     # endpoint lives outside the disposable Viewer container.
-    TMUX_TMPDIR: ${LLV_TMUX_TMPDIR:-/tmp}
-    LLV_LEGACY_TMUX_EXTERNAL: ${LLV_LEGACY_TMUX_EXTERNAL:-0}
+    TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
+    LLV_LEGACY_TMUX_EXTERNAL: ${DELEGATUS_LEGACY_TMUX_EXTERNAL:-${LLV_LEGACY_TMUX_EXTERNAL:-0}}
     HF_HOME: ${HOME:-/home/user}/.cache/huggingface
     LLV_WHISPER_VENV: /opt/llv-whisper-venv
-    LLV_TRANSCRIBE_BACKEND: ${LLV_TRANSCRIBE_BACKEND:-}
+    LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}
     LLV_DOCKER_NSENTER_SHIMS: "1"
   volumes:
     - ${HOME:-/home/user}:${HOME:-/home/user}
-    - /tmp/tmux-${LLV_UID:-1000}:/tmp/tmux-${LLV_UID:-1000}
-    - /tmp/claude-${LLV_UID:-1000}:/tmp/claude-${LLV_UID:-1000}
+    - /tmp/tmux-${DELEGATUS_UID:-${LLV_UID:-1000}}:/tmp/tmux-${DELEGATUS_UID:-${LLV_UID:-1000}}
+    - /tmp/claude-${DELEGATUS_UID:-${LLV_UID:-1000}}:/tmp/claude-${DELEGATUS_UID:-${LLV_UID:-1000}}
 
 services:
   # Explicit activation only. This service owns the Viewer replacement
@@ -51,25 +51,33 @@ services:
       XDG_CONFIG_HOME: ${HOME:-/home/user}/.config
       XDG_CACHE_HOME: ${HOME:-/home/user}/.cache
       # Nested `docker compose config` must see the same interpolation inputs
-      # that produced this runtime-host container.
-      LLV_UID: ${LLV_UID:-1000}
-      LLV_GID: ${LLV_GID:-1000}
-      LLV_DOCKER_GID: ${LLV_DOCKER_GID:-957}
-      LLV_ENV_FILE: ${LLV_ENV_FILE:-${HOME:-/home/user}/.config/agent-log-viewer/service.env}
-      LLV_TMUX_TMPDIR: ${LLV_TMUX_TMPDIR:-/tmp}
-      LLV_LEGACY_TMUX_EXTERNAL: ${LLV_LEGACY_TMUX_EXTERNAL:-0}
-      LLV_TRANSCRIBE_BACKEND: ${LLV_TRANSCRIBE_BACKEND:-}
-      LLV_ALLOW_LEGACY_VIEWER: ${LLV_ALLOW_LEGACY_VIEWER:-0}
+      # that produced this runtime-host container. A `DELEGATUS_` input is
+      # folded into its `LLV_` name when the host starts, so each one is passed
+      # on under the `LLV_` name.
+      #
+      # The app dir: an existing install keeps its `agent-log-viewer` spelling
+      # when DELEGATUS_CONFIG_DIR is exported as `bun scripts/app-config-dir.mjs`
+      # prints it (docs/docker.md), so the socket, journal and deploy target
+      # strings stay the ones it recorded.
+      LLV_CONFIG_DIR: ${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME:-/home/user}/.config/delegatus}}
+      LLV_UID: ${DELEGATUS_UID:-${LLV_UID:-1000}}
+      LLV_GID: ${DELEGATUS_GID:-${LLV_GID:-1000}}
+      LLV_DOCKER_GID: ${DELEGATUS_DOCKER_GID:-${LLV_DOCKER_GID:-957}}
+      LLV_ENV_FILE: ${DELEGATUS_ENV_FILE:-${LLV_ENV_FILE:-${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME:-/home/user}/.config/delegatus}}/service.env}}
+      LLV_TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
+      LLV_LEGACY_TMUX_EXTERNAL: ${DELEGATUS_LEGACY_TMUX_EXTERNAL:-${LLV_LEGACY_TMUX_EXTERNAL:-0}}
+      LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}
+      LLV_ALLOW_LEGACY_VIEWER: ${DELEGATUS_ALLOW_LEGACY_VIEWER:-${LLV_ALLOW_LEGACY_VIEWER:-0}}
       # The profile gate is the activation switch; a started runtime-host is
       # always an events host (main.ts refuses to boot without the flag).
-      LLV_RUNTIME_EVENTS: ${LLV_RUNTIME_EVENTS:-1}
-      LLV_RUNTIME_LEGACY_SCHEDULER: ${LLV_RUNTIME_LEGACY_SCHEDULER:-0}
-      LLV_RUNTIME_HOST_SOCKET: ${LLV_RUNTIME_HOST_SOCKET:-${HOME:-/home/user}/.config/agent-log-viewer/state/runtime-host.sock}
-      LLV_RUNTIME_JOURNAL: ${LLV_RUNTIME_JOURNAL:-${HOME:-/home/user}/.config/agent-log-viewer/state/runtime-events.sqlite}
-      LLV_VIEWER_DEPLOYMENTS: ${LLV_VIEWER_DEPLOYMENTS:-0}
-      LLV_VIEWER_DEPLOY_ADAPTER: ${LLV_VIEWER_DEPLOY_ADAPTER:-/app/scripts/runtime-host-viewer-adapter.ts}
-      LLV_VIEWER_DEPLOY_TARGET: ${LLV_VIEWER_DEPLOY_TARGET:-${HOME:-/home/user}/.config/agent-log-viewer/state/viewer-release.json}
-      LLV_VIEWER_PORT: ${LLV_VIEWER_PORT:-8898}
+      LLV_RUNTIME_EVENTS: ${DELEGATUS_RUNTIME_EVENTS:-${LLV_RUNTIME_EVENTS:-1}}
+      LLV_RUNTIME_LEGACY_SCHEDULER: ${DELEGATUS_RUNTIME_LEGACY_SCHEDULER:-${LLV_RUNTIME_LEGACY_SCHEDULER:-0}}
+      LLV_RUNTIME_HOST_SOCKET: ${DELEGATUS_RUNTIME_HOST_SOCKET:-${LLV_RUNTIME_HOST_SOCKET:-${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME:-/home/user}/.config/delegatus}}/state/runtime-host.sock}}
+      LLV_RUNTIME_JOURNAL: ${DELEGATUS_RUNTIME_JOURNAL:-${LLV_RUNTIME_JOURNAL:-${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME:-/home/user}/.config/delegatus}}/state/runtime-events.sqlite}}
+      LLV_VIEWER_DEPLOYMENTS: ${DELEGATUS_VIEWER_DEPLOYMENTS:-${LLV_VIEWER_DEPLOYMENTS:-0}}
+      LLV_VIEWER_DEPLOY_ADAPTER: ${DELEGATUS_VIEWER_DEPLOY_ADAPTER:-${LLV_VIEWER_DEPLOY_ADAPTER:-/app/scripts/runtime-host-viewer-adapter.ts}}
+      LLV_VIEWER_DEPLOY_TARGET: ${DELEGATUS_VIEWER_DEPLOY_TARGET:-${LLV_VIEWER_DEPLOY_TARGET:-${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME:-/home/user}/.config/delegatus}}/state/viewer-release.json}}
+      LLV_VIEWER_PORT: ${DELEGATUS_VIEWER_PORT:-${LLV_VIEWER_PORT:-8898}}
 
   viewer:
     <<: *viewer-common
@@ -94,12 +102,12 @@ services:
       PATH: /usr/local/bin:${HOME:-/home/user}/.bun/bin:${HOME:-/home/user}/.npm-global/bin:${HOME:-/home/user}/.local/bin:/usr/bin:/bin
       XDG_CONFIG_HOME: ${HOME:-/home/user}/.config
       XDG_CACHE_HOME: ${HOME:-/home/user}/.cache
-      TMUX_TMPDIR: ${LLV_TMUX_TMPDIR:-/tmp}
-      LLV_LEGACY_TMUX_EXTERNAL: ${LLV_LEGACY_TMUX_EXTERNAL:-0}
+      TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
+      LLV_LEGACY_TMUX_EXTERNAL: ${DELEGATUS_LEGACY_TMUX_EXTERNAL:-${LLV_LEGACY_TMUX_EXTERNAL:-0}}
       HF_HOME: ${HOME:-/home/user}/.cache/huggingface
       LLV_WHISPER_VENV: /opt/llv-whisper-venv
-      LLV_TRANSCRIBE_BACKEND: ${LLV_TRANSCRIBE_BACKEND:-}
-      LLV_ALLOW_LEGACY_VIEWER: ${LLV_ALLOW_LEGACY_VIEWER:-0}
+      LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}
+      LLV_ALLOW_LEGACY_VIEWER: ${DELEGATUS_ALLOW_LEGACY_VIEWER:-${LLV_ALLOW_LEGACY_VIEWER:-0}}
       LLV_DOCKER_NSENTER_SHIMS: "1"
 
   viewer-test:
@@ -109,13 +117,13 @@ services:
     environment:
       HOME: ${HOME:-/home/user}
       HOSTNAME: 127.0.0.1
-      PORT: ${LLV_TEST_PORT:-8901}
+      PORT: ${DELEGATUS_TEST_PORT:-${LLV_TEST_PORT:-8901}}
       PATH: /usr/local/bin:${HOME:-/home/user}/.bun/bin:${HOME:-/home/user}/.npm-global/bin:${HOME:-/home/user}/.local/bin:/usr/bin:/bin
       XDG_CONFIG_HOME: ${HOME:-/home/user}/.config
       XDG_CACHE_HOME: ${HOME:-/home/user}/.cache
-      TMUX_TMPDIR: ${LLV_TMUX_TMPDIR:-/tmp}
-      LLV_LEGACY_TMUX_EXTERNAL: ${LLV_LEGACY_TMUX_EXTERNAL:-0}
+      TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
+      LLV_LEGACY_TMUX_EXTERNAL: ${DELEGATUS_LEGACY_TMUX_EXTERNAL:-${LLV_LEGACY_TMUX_EXTERNAL:-0}}
       HF_HOME: ${HOME:-/home/user}/.cache/huggingface
       LLV_WHISPER_VENV: /opt/llv-whisper-venv
-      LLV_TRANSCRIBE_BACKEND: ${LLV_TRANSCRIBE_BACKEND:-}
+      LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}
       LLV_DOCKER_NSENTER_SHIMS: "1"

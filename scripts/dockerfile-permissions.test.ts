@@ -80,8 +80,8 @@ describe("runtime image permission determinism (#76)", () => {
 
 describe("runtime-host Docker credentials (#102)", () => {
   test("runtime UID 1000 retains the host Docker socket group through nsenter", () => {
-    expect(compose).toContain('"user": "${LLV_UID:-1000}:${LLV_GID:-1000}"');
-    expect(compose).toContain('group_add:\n    - "${LLV_DOCKER_GID:-957}"');
+    expect(compose).toContain('"user": "${DELEGATUS_UID:-${LLV_UID:-1000}}:${DELEGATUS_GID:-${LLV_GID:-1000}}"');
+    expect(compose).toContain('group_add:\n    - "${DELEGATUS_DOCKER_GID:-${LLV_DOCKER_GID:-957}}"');
     const wrapper = dockerfile.match(/cat > \/usr\/local\/bin\/docker <<'WRAPPER'([\s\S]*?)WRAPPER/)?.[1];
     expect(wrapper).toBeDefined();
     expect(wrapper).toContain("nsenter -t 1 -m -p --");
