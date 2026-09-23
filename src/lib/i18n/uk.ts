@@ -3996,6 +3996,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.update.failedManaged": "Розгортання зупинилося на кроці «{step}» через {duration}.",
   "selfUpdate.update.rolledBack": "Розгортання зупинилося на кроці «{step}» через {duration} і було відкочене: знову працює попередній реліз.",
   "selfUpdate.update.retryFrom": "Повторити з кроку «{step}»",
+  "selfUpdate.update.checkAgain": "Перевірити знову",
+  "selfUpdate.update.checkedTarget": "Оновити до перевіреної версії {target}",
   "selfUpdate.update.deployAgain": "Розгорнути ще раз",
   "selfUpdate.step.fetch": "Завантажити {sha}",
   "selfUpdate.step.checkout": "Отримати {sha}",
