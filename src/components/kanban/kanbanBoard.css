@@ -616,21 +616,19 @@
 }
 
 /* ── How tall an expanded agent conversation is ──────────────────────────── */
-/* The one rule for the orchestrator seat, a reader opened inside a task card
-   and an agent draft on a card: most of the viewport below the board's bar.
-   The seat sits above the board and takes the viewport minus the bar, capped
-   at the 75% its drag already stops at (`seatMaxHeight`); a height the
-   operator dragged still wins. An in-card conversation lives inside a column
-   whose scroll area is about 100dvh - 144px (bar, board padding, sticky column
-   head, column padding) and sits under the card's own title and meta rows, so
-   it subtracts 260px: with the card's head at the top of its column, the
-   reader's header row and its composer are both on screen.
+/* Two heights live here, on purpose apart:
+   - the orchestrator seat sits above the board, so its default is 75% of the
+     viewport, the same stop its drag handle has (`seatMaxHeight`); a height
+     the operator dragged still wins through --seat-h;
+   - a reader or agent draft inside a task card sits in a column that already
+     scrolls, so it takes the viewport minus the bar and the column's chrome
+     (100dvh - 180px), and never less than min(700px, 84dvh), which keeps it
+     above the old min(620px, 74vh) at every window height.
    The phone does not use these: its conversation screen (MobileFocusView)
    already fills the viewport. */
 .kb {
-  --conv-expanded-h: max(360px, calc(100dvh - 160px));
-  --seat-default-h: min(var(--conv-expanded-h), 75dvh);
-  --conv-in-card-h: max(320px, calc(100dvh - 260px));
+  --seat-default-h: 75dvh;
+  --conv-in-card-h: max(min(700px, 84dvh), calc(100dvh - 180px));
 }
 
 /* ── Page: the orchestrator seat above the board (K3) ────────────────────── */

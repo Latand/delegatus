@@ -509,7 +509,7 @@ describe("#1695 K3 conversations inside cards", () => {
    *
    * Gated here, because only a laid-out page settles it:
    *   - the seat is centred, at most 1040 px wide, at the default height
-   *     min(max(360px, 100dvh - 160px), 75dvh) with at least two transcript rows and a
+   *     75dvh with at least two transcript rows and a
    *     composer of at least 60 px, collapsed in a window under 800 px tall, the
    *     side dock stays closed, and every conversation on the page, the
    *     orchestrator included, has at most one composer;
@@ -683,7 +683,7 @@ describe("#1695 K3 conversations inside cards", () => {
             await boardReady(page);
             const seat = await seatGeometry(page);
             const shortWindow = viewport.height < 800;
-            const expected = Math.round(Math.min(Math.max(360, viewport.height - 160), viewport.height * 0.75));
+            const expected = Math.round(viewport.height * 0.75);
             if (!seat.present) failures.push(`${label}: no seat`);
             if (seat.collapsed !== shortWindow) failures.push(`${label}: seat collapsed=${seat.collapsed} in a ${viewport.height} px window`);
             if (!seat.collapsed && Math.abs(seat.height - expected) > 2) failures.push(`${label}: seat ${seat.height}px tall, default ${expected}px`);
