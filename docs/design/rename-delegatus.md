@@ -814,6 +814,11 @@ Slice 1 followed the code wherever the two disagreed:
   the Viewer makes the link, and the runtime host reads through whichever
   name exists.
 - **The cache dir** follows the same precedence, and gets no link.
+- **A spawned agent's sandbox** keeps its fixed `…/config/agent-log-viewer/state`.
+  §4.1 lists `agentConfigSandbox.ts` among the files to switch, but that path
+  is handed to the agent as `LLV_STATE_DIR` inside a throw-away root, and the
+  module never probes the disk for what it hands over, so the resolver does
+  not apply there.
 - **Entry points.** `bin/tailscale.mjs` and `bin/self-update-supervisor.mjs`
   are modules the launcher imports, not entry points; they import
   `envAlias.mjs` first anyway. `src/instrumentation.ts` folds inside its

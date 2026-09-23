@@ -22,7 +22,7 @@ test("a spawned agent's environment carries its own config and state root", () =
 
   const sandbox = path.join("/scratch/tmp", "llv-spawn-sandbox", "lane", "config");
   expect(env.XDG_CONFIG_HOME).toBe(sandbox);
-  expect(env.LLV_STATE_DIR).toBe(path.join(sandbox, "delegatus", "state"));
+  expect(env.LLV_STATE_DIR).toBe(path.join(sandbox, "agent-log-viewer", "state"));
   /* The claim the Viewer made for itself stops at the boundary. */
   expect(env[STATE_OWNER_ENV]).toBeUndefined();
   /* `gh` read its configuration out of XDG_CONFIG_HOME, so it is pinned. */

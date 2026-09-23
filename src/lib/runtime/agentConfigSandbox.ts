@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
-import { appDirIn } from "../../../bin/appDir.mjs";
+import { LEGACY_APP_DIR } from "../../../bin/appDir.mjs";
 import { DELEGATUS_ENV_PREFIX } from "../../../bin/envAlias.mjs";
 
 /**
@@ -92,7 +92,10 @@ export function withAgentConfigSandbox(
        would be worse than the directory arriving late. */
   }
   env.XDG_CONFIG_HOME = configHome;
-  env.LLV_STATE_DIR = path.join(appDirIn(configHome), "state");
+  /* A fixed name, never probed on disk (see GH_CONFIG_DIR below): the agent is
+     handed this path and resolves no app dir of its own, so the spelling is
+     the one every release before the Delegatus rename used. */
+  env.LLV_STATE_DIR = path.join(configHome, LEGACY_APP_DIR, "state");
   /* The new prefix never reaches an agent: an inherited DELEGATUS_STATE_DIR
      would win over the sandbox value above at the agent's own entry point
      (rename-delegatus.md §5). Entry points fold and delete it at the root;
