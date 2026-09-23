@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { deflateSync } from "node:zlib";
 import { chromium, type Browser, type LaunchOptions } from "playwright-core";
 
 import { translate } from "@/lib/i18n";
@@ -1519,4 +1520,160 @@ describe("send latency slice 3: one message, one row", () => {
       expect({ suffix, watch: watches[`foreign-equal-text-${suffix}`] }).toMatchObject({ suffix, watch: { detached: [] } });
     }
   }, 600_000);
+});
+
+describe("#2075 every image an agent looks at", () => {
+  /*
+   * Rendered evidence for #2075: one conversation per engine viewing pictures
+   * the way that engine records it (Claude Read and an MCP screenshot, a Codex
+   * code-mode exec and two app-server imageView items, a Copilot view) and a
+   * live view_image row. Every picture is a thumbnail under its line at both
+   * widths, with no "show" chip and no "[image output]" text; a tap opens the
+   * viewer; a file gone from disk is a pill naming it.
+   *
+   * The pictures on disk are served by the route stub below from rasters
+   * encoded here. Frames go to `LLV_AGENT_IMAGES_OUT` (default
+   * `.artifacts/agent-images/`), which is not committed.
+   */
+
+  const OUT = path.resolve(process.env.LLV_AGENT_IMAGES_OUT ?? ".artifacts/agent-images");
+  const FRAMES = [
+    { name: "phone-390", width: 390, height: 844, touch: true, scheme: "dark" },
+    { name: "phone-390", width: 390, height: 844, touch: true, scheme: "light" },
+    { name: "phone-430", width: 430, height: 932, touch: true, scheme: "dark" },
+    { name: "desktop-1280", width: 1280, height: 800, touch: false, scheme: "dark" },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  const SERVED = new Set(["/w/shot.png", "/w/live.png"]);
+
+  /* A flat two-tone PNG, encoded in place so no raster is committed. */
+  function png(width: number, height: number): Buffer {
+    const chunk = (type: string, data: Buffer) => {
+      const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(data.length);
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(Bun.hash.crc32(body) >>> 0);
+      return Buffer.concat([length, body, crc]);
+    };
+    const header = Buffer.alloc(13);
+    header.writeUInt32BE(width, 0);
+    header.writeUInt32BE(height, 4);
+    header[8] = 8;
+    header[9] = 2;
+    const rows = Buffer.alloc((width * 3 + 1) * height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const at = y * (width * 3 + 1) + 1 + x * 3;
+        const band = (x + y) % 80 < 40;
+        rows[at] = band ? 60 : 200;
+        rows[at + 1] = band ? 130 : 90;
+        rows[at + 2] = 170;
+      }
+    }
+    return Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk("IHDR", header),
+      chunk("IDAT", deflateSync(rows)),
+      chunk("IEND", Buffer.alloc(0)),
+    ]);
+  }
+
+  interface ImagesReading {
+    thumbnails: number;
+    drawn: number;
+    insideClosedDisclosure: number;
+    chips: number;
+    placeholderText: number;
+    unavailable: string[];
+    commandGroups: number;
+    smallControls: number;
+    /* The live picture and the settled pictures start at the same x, so a
+       picture does not move sideways when its canonical row lands. */
+    liveLeft: number | null;
+    settledLeft: number[];
+    overflowX: number;
+  }
+
+  browserTest("every engine's picture is a thumbnail under its line, and a gone file is a pill", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const raster = png(320, 200);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const frame of FRAMES) {
+        for (const lang of LANGS) {
+          const url = `${served.base}?case=agent-images&lang=${lang}`;
+          const { context, page, pageErrors } = await openFixture(
+            browser, url, { width: frame.width, height: frame.height }, frame.scheme, lang, "no-preference", frame.touch,
+          );
+          try {
+            await context.route("**/api/artifact?**", (route) => {
+              const query = new URL(route.request().url()).searchParams;
+              const file = query.get("path") ?? "";
+              if (!SERVED.has(file)) {
+                return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "file not found", code: "not-found" }) });
+              }
+              return route.fulfill({ status: 200, contentType: "image/png", body: raster });
+            });
+            await page.reload();
+            await page.waitForSelector('[data-evidence-case="agent-images"]');
+            await page.waitForSelector("[data-image-unavailable]");
+            await page.waitForFunction(() => [...document.querySelectorAll("img")].every((img) => img.complete));
+            const reading: ImagesReading = await page.evaluate(() => {
+              const imgs = [...document.querySelectorAll("img")];
+              const text = document.body.textContent ?? "";
+              return {
+                thumbnails: imgs.length,
+                drawn: imgs.filter((img) => img.naturalWidth > 0).length,
+                insideClosedDisclosure: imgs.filter((img) => img.closest("details:not([open])")).length,
+                chips: [...document.querySelectorAll("button")].filter((button) => /\b(show|показати)\b/i.test(button.textContent ?? "")).length,
+                placeholderText: (text.match(/\[(image output|вивід зображення)\]/g) ?? []).length,
+                unavailable: [...document.querySelectorAll("[data-image-unavailable]")].map((pill) => pill.textContent ?? ""),
+                commandGroups: document.querySelectorAll('[data-tool-row="group"]').length,
+                smallControls: [...document.querySelectorAll("[data-tool-images] button, [data-live-tool-image] button")]
+                  .filter((button) => button.getBoundingClientRect().height < 44).length,
+                liveLeft: document.querySelector("[data-live-tool-image] img")?.getBoundingClientRect().left ?? null,
+                settledLeft: [...document.querySelectorAll("[data-tool-images] img")].map((img) => img.getBoundingClientRect().left),
+                overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+              };
+            });
+            await page.screenshot({ path: path.join(OUT, `${frame.name}-${frame.scheme}-${lang}.png`), fullPage: true });
+            expect(pageErrors).toEqual([]);
+            /* Claude ×3, Codex exec + one served imageView, Copilot, the live row. */
+            expect(reading.thumbnails).toBe(7);
+            expect(reading.drawn).toBe(7);
+            expect(reading.insideClosedDisclosure).toBe(0);
+            expect(reading.chips).toBe(0);
+            expect(reading.placeholderText).toBe(0);
+            expect(reading.commandGroups).toBe(0);
+            expect(reading.unavailable).toHaveLength(1);
+            expect(reading.unavailable[0]).toContain("deleted.png");
+            expect(reading.unavailable[0]).toContain(translate(lang, "render.imageGone"));
+            expect(reading.overflowX).toBe(0);
+            if (frame.touch) expect(reading.smallControls).toBe(0);
+            expect(reading.liveLeft).not.toBeNull();
+            expect(reading.settledLeft).toHaveLength(6);
+            for (const left of reading.settledLeft) expect(Math.abs(left - reading.liveLeft!)).toBeLessThanOrEqual(1);
+            /* The desktop keeps the feed's avatar-column indent: 36 px gutter plus the 22 px glyph inset. */
+            if (!frame.touch) expect(Math.round(reading.liveLeft!)).toBe(16 + 36 + 22);
+            /* A tap opens the full-screen viewer on the picture it tapped. */
+            const first = page.locator("[data-tool-images] img").first();
+            const source = await first.getAttribute("src");
+            await first.click();
+            const viewer = page.locator("[role=dialog] img");
+            await viewer.waitFor();
+            expect(await viewer.getAttribute("src")).toBe(source);
+            await page.screenshot({ path: path.join(OUT, `${frame.name}-${frame.scheme}-${lang}-viewer.png`) });
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
 });

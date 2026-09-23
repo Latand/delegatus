@@ -120,7 +120,10 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
   /* Mobile v2 (#1439, lane 4): no avatar column on the phone, so nothing lines
      up with one — the `ml-9` chrome indent goes with it. */
   const indent = isMobile ? "" : "ml-9 ";
-  if (item.kind === "image") return <ImageCard media={item.media} data={item.data} w={item.w} h={item.h} bytes={item.bytes} />;
+  if (item.kind === "image") {
+    const { kind: _kind, ...source } = item;
+    return <ImageCard {...source} />;
+  }
   if (item.kind === "inbox-image") return <InboxImageCard name={item.name} path={item.path} />;
   if (item.kind === "blob") return <BlobCard bytes={item.bytes} text={item.text} />;
   if (item.kind === "sysmsg") return <SysMsgCard label={item.label} text={item.text} />;

@@ -164,3 +164,37 @@ test("Copilot tool names map onto the shared vocabulary", () => {
   expect(copilotFeedToolName("viewer-send_message")).toBe("mcp__viewer__send_message");
   expect(copilotFeedToolName("some_new_tool")).toBe("some_new_tool");
 });
+
+/* #2075: Copilot writes a viewed picture's bytes once, as a
+   `session.binary_asset` ahead of the completion, and the completion's
+   `binaryResultsForLlm` names the asset without its data. */
+function viewedImage(withAsset: boolean): string[] {
+  const call = "call-view";
+  return [
+    record("tool.execution_start", { toolCallId: call, toolName: "view", arguments: { path: "/w/shot.png" } }),
+    ...(withAsset
+      ? [record("session.binary_asset", { assetId: "sha256:ab", type: "image", mimeType: "image/png", byteLength: 8, data: "iVBORw0KGgo=", description: "shot.png" })]
+      : []),
+    record("tool.execution_complete", {
+      toolCallId: call,
+      success: true,
+      result: { content: "Viewed image file successfully.", binaryResultsForLlm: [{ assetId: "sha256:ab", type: "image", mimeType: "image/png" }] },
+    }),
+  ];
+}
+
+test("a Copilot view of an image draws the asset's picture on the call's row", () => {
+  const view = render(viewedImage(true)).find((item) => item.kind === "tool");
+  if (view?.kind !== "tool") throw new Error("expected the view row");
+  expect(view.outputBlocks).toEqual([
+    { type: "text", text: "Viewed image file successfully." },
+    { type: "image", media: "image/png", data: "iVBORw0KGgo=" },
+  ]);
+  expect(JSON.stringify(render(viewedImage(true)))).not.toContain("sha256:ab");
+});
+
+test("a Copilot view whose asset fell out of the window draws the viewed file by path", () => {
+  const view = render(viewedImage(false)).find((item) => item.kind === "tool");
+  if (view?.kind !== "tool") throw new Error("expected the view row");
+  expect(view.outputBlocks?.filter((block) => block.type === "image")).toEqual([{ type: "image", path: "/w/shot.png" }]);
+});
