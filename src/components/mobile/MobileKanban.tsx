@@ -8,11 +8,10 @@ import {
 
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
-import { buildKanbanModel, KANBAN_STATUSES } from "@/components/kanban/kanbanModel";
+import { KANBAN_STATUSES } from "@/components/kanban/kanbanModel";
 import { TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
-import { useBands, type BandsInput } from "@/components/kanban/useBands";
-import { drawnTasks, useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
+import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { blockAgeSeconds } from "@/components/pipelines/pipelineBlockModel";
 import { pipelineStateLabel } from "@/components/pipelines/pipelineModel";
@@ -20,7 +19,6 @@ import { humanizeDuration } from "@/components/turnDuration";
 import { fileModelLabel } from "@/components/utils";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
-import type { SeatRefs } from "@/lib/tasks/groupHide";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -33,6 +31,7 @@ import { useMobileNav, useMobileNavStore } from "./mobileNav";
 import { buildPhoneKanban, columnEmpty, nearestWithWork, type PhoneCard, type PhoneColumn } from "./phoneKanbanModel";
 import { readPlace, usePhoneKanbanColumn, usePhoneKanbanDoneShown, writePlace } from "./phoneKanbanPlace";
 import { LONG_PRESS_MS, SWIPE_LOCK_PX } from "./swipeIntent";
+import { usePhoneBoardModel, type PhoneBoardInput, type TaskMutations } from "./usePhoneBoard";
 
 /*
  * The phone's board as status columns (#2072 slice 4; docs/design/phone-kanban.md
@@ -76,14 +75,14 @@ const SWALLOW_CLICK_MS = 600;
 /** Two opens this close together are one press, shorter than any press. */
 const DEDUPE_MS = 300;
 
-export interface MobileKanbanProps extends Omit<BandsInput, "overview"> {
-  /** The seat as the dashboard read it; null while unknown (nothing hidden on a guess). */
-  seatRefs: SeatRefs | null;
+export interface MobileKanbanProps extends PhoneBoardInput {
   /** The attention queue's order (`attentionKey`): the pin walks it as ⚠ does. */
   attention: readonly string[];
   /** The orchestrator card above the tabs; the dock takes its place later (§3.6). */
   seat?: ReactNode;
   mutationPorts?: TaskMutationPorts;
+  /** The task mutations the phone's screens share; absent, the board keeps its own. */
+  mutations?: TaskMutations;
   /** What a row no task owns offers on a long-press: the board rows' own actions. */
   rowActions?: (target: MobileRowActionTarget) => readonly MobileRowAction[];
   onOpenTask: (task: BoardTask) => void;
@@ -490,24 +489,18 @@ function CardSheet({ title, rows, onClose }: { title: string; rows: readonly She
 
 export function MobileKanban(props: MobileKanbanProps) {
   const { t } = useLocale();
-  const { project, allTasks: storedTasks, pipelines, files, flows, now } = props;
+  const { project, allTasks: storedTasks, now } = props;
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const ids = useId().replace(/:/g, "");
 
   /* The desktop's mutations: a move or a hide shows at once, is written with
-     the task's revision as its guard, and a refusal puts the card back. */
-  const { controller, statuses, edits } = useTaskMutations(storedTasks, props.mutationPorts);
-  const hideStamps = useRef(new Map<string, string>());
-  const allTasks = useMemo(() => drawnTasks(storedTasks, edits, hideStamps.current), [storedTasks, edits]);
-  const { bands, projection } = useBands({ ...props, allTasks });
-  /* The model's clock moves in 15 s steps, as the desktop's does: it phrases
-     ages, and a per-second clock would rebuild every card each tick. */
-  const modelNow = Math.floor(now / 15) * 15;
-  const model = useMemo(
-    () => buildKanbanModel({ bands, tasks: allTasks, pipelines, projection, files, flows, statusOverrides: statuses, seat: props.seatRefs, now: modelNow }),
-    [bands, allTasks, pipelines, projection, files, flows, statuses, props.seatRefs, modelNow],
-  );
+     the task's revision as its guard, and a refusal puts the card back. The
+     dashboard hands in the set the task screen shares, so a move made there
+     is still drawn here after ‹. */
+  const own = useTaskMutations(storedTasks, props.mutationPorts);
+  const { controller, statuses, edits } = props.mutations ?? own;
+  const { model, modelNow } = usePhoneBoardModel(props, { statuses, edits });
   const doneShown = usePhoneKanbanDoneShown(project);
   const phone = useMemo(
     () => buildPhoneKanban({ model, attention: props.attention, doneShown, closing: props.closing, now: modelNow }),

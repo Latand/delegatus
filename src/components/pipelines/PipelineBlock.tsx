@@ -340,18 +340,19 @@ function AnswerButtons({ pipeline, answers, acting, large, onAnswer }: {
 }
 
 /** The answer in place: what the lane stopped on, and the two ways on. */
-function AnswerPanel({ pipeline, answers, names, nameOf, acting, onAnswer }: {
+function AnswerPanel({ pipeline, answers, names, nameOf, acting, large, onAnswer }: {
   pipeline: Pipeline;
   answers: PipelineAnswers;
   names: ReadonlyMap<string, string>;
   nameOf: (stage: PipelineStage) => string;
   acting: PipelineActionKind | null;
+  large: boolean;
   onAnswer?: (pipeline: Pipeline, answer: PipelineAnswer) => void;
 }) {
   return (
     <div className="pb-answer" data-answer={answers.kind}>
       <AnswerReport pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} />
-      {onAnswer ? <AnswerButtons pipeline={pipeline} answers={answers} acting={acting} large={false} onAnswer={onAnswer} /> : null}
+      {onAnswer ? <AnswerButtons pipeline={pipeline} answers={answers} acting={acting} large={large} onAnswer={onAnswer} /> : null}
     </div>
   );
 }
@@ -405,6 +406,10 @@ export interface PipelineBlockProps {
   /** Answers a decision or a spent review budget in place. Absent, the block
       shows what the lane stopped on and no buttons. */
   onAnswer?: (pipeline: Pipeline, answer: PipelineAnswer) => void;
+  /** Task density: the answer as the phone's 44 px buttons in its shorter
+      words ("Retry stage"), the phone task screen's (§3.13). The stage is
+      named once, in the report line right above them. */
+  largeAnswers?: boolean;
   /** Screen density: a waiting stage's ⚙, which opens its configuration. */
   onConfigureStage?: (pipeline: Pipeline, stage: PipelineStage) => void;
   /** Screen density: what the host knows about a stage's conversation, which
@@ -552,7 +557,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
         </div>
       )}
       {answers ? (
-        <AnswerPanel pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} acting={props.acting ?? null} onAnswer={props.onAnswer} />
+        <AnswerPanel pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} acting={props.acting ?? null} large={Boolean(props.largeAnswers)} onAnswer={props.onAnswer} />
       ) : needs ? (
         <div className="pb-answer">
           {pipeline.state === "needs_review"

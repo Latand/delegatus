@@ -247,3 +247,18 @@
 
 /* A pipeline state's dot beside its word (the phone board's pipelines row). */
 .pstate-dot { background: var(--pstate-ink); }
+
+/* ── The phone's task screen (#2072 slice 5): each lane row in its own card ── */
+/* The card's frame replaces the hairline, and the head's title wraps over
+   its state instead of sharing one line with it at 390 px. */
+.phone-lane > .pblock[data-density="task"] { border-top: 0; padding: 4px 0 2px; }
+.phone-lane .pblock .pb-open { flex: 1 1 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; row-gap: 3px; align-items: center; }
+.phone-lane .pblock .pb-title { grid-column: 1; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: var(--text-body); line-height: 1.3; overflow-wrap: anywhere; }
+.phone-lane .pblock .pb-meta { grid-column: 1; }
+.phone-lane .pblock .pb-open > svg { grid-column: 2; grid-row: 1; }
+/* A chip at the end of the chain reaches 44 px like the pills beside it: it
+   sits on the pills' middle, so both reaches stop at the same line. */
+@media (pointer: coarse) {
+  .phone-lane .pblock .pb-links { margin-top: 6px; }
+  .phone-lane .pblock .pb-links .wl-chip::after { inset: -13px -2px; }
+}

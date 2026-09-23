@@ -234,8 +234,69 @@ const ACTION_ICON = {
 const phoneShow = (text: string, action?: BoardReceiptAction, options?: { error?: boolean }): number =>
   showReceipt(text, action ? { kind: "act", label: action.label, run: action.run } : null, { error: options?.error }).id;
 
+/** A stage an act names, as the pipeline showed it. */
+type ActStage = Pick<PipelineAnswer, "stageId" | "stageName" | "expectedAttempt">;
+
+/**
+ * The pipeline acts of a phone screen, the pipeline's own and the task's alike
+ * (#2072 slices 5 and 6): the board's pipeline actions (`usePipelineActions`),
+ * so the phone sends the requests the desktop's ⋯ menu sends, with the two acts
+ * the engine cannot take back held for the receipt's window. Skip stage waits
+ * out the receipt, whose inverse cancels it; Close lane too, and then
+ * `onClosed` lets the screen step off a lane that has gone. Retry, One more
+ * round, Pause and Resume go at once.
+ */
+export function usePhonePipelineActs({ ports, acts, onClosed }: {
+  ports: PipelinePorts;
+  acts: PendingPipelineActs;
+  onClosed?: (pipeline: Pipeline) => void;
+}) {
+  const { t } = useLocale();
+  const pending = usePendingPipelineAct(acts);
+  const actions = usePipelineActions(ports, phoneShow, t);
+  /* The intent the board's ⋯ menu builds: retry and skip carry the stage and
+     attempt the operator saw, the lane's other actions carry none. Receipts
+     name the lane; a long first line would crowd out what happened. */
+  const intent = (pipeline: Pipeline, action: PipelineActionKind, stage: ActStage | null = null): PipelineActionIntent => ({
+    pipelineId: pipeline.id,
+    title: cleanTitle(pipelineTitle(t, pipeline), 48),
+    action,
+    stageId: stage?.stageId ?? null,
+    stageName: stage?.stageName ?? null,
+    expectedAttempt: stage?.expectedAttempt ?? null,
+  });
+  const closeLane = (pipeline: Pipeline): void => {
+    acts.begin({ pipelineId: pipeline.id, action: "close" });
+    showReceipt(t("mobile2.pipeline.archived"), { kind: "restore", run: () => acts.cancel() });
+    onClosed?.(pipeline);
+  };
+  const answer = (pipeline: Pipeline, choice: PipelineAnswer): void => {
+    if (choice.action === "close") {
+      closeLane(pipeline);
+      return;
+    }
+    const act = intent(pipeline, choice.action, choice);
+    if (choice.action === "skip-stage") {
+      /* Held like a close, and sent through the board's actions when the
+         window closes, with the stage and attempt the operator saw. */
+      acts.begin({ pipelineId: pipeline.id, action: "skip-stage", send: () => actions.start(act) });
+      showReceipt(t("mobile2.pipeline.skipped"), { kind: "retryStage", run: () => acts.cancel() });
+      return;
+    }
+    actions.start(act);
+  };
+  return {
+    /** The act this page sent or holds for the lane, until it is answered. */
+    acting: (pipeline: Pipeline): PipelineActionKind | null => actions.acting.get(pipeline.id) ?? (pending?.pipelineId === pipeline.id ? pending.action : null),
+    held: (pipeline: Pipeline): boolean => pending?.pipelineId === pipeline.id,
+    start: (pipeline: Pipeline, action: PipelineActionKind): void => actions.start(intent(pipeline, action)),
+    closeLane,
+    answer,
+  };
+}
+
 /** The heading has scrolled up out of the body: the bar takes the title. */
-function useScrolledAway(target: RefObject<HTMLElement | null>, root: RefObject<HTMLElement | null>): boolean {
+export function useScrolledAway(target: RefObject<HTMLElement | null>, root: RefObject<HTMLElement | null>): boolean {
   const [away, setAway] = useState(false);
   useEffect(() => {
     const element = target.current;
@@ -280,6 +341,8 @@ export interface MobilePipelineScreenProps {
       card is stamped seen and ‹ returns here (README §3.3). */
   onOpenConversation: (file: FileEntry) => void;
   onOpenTask?: (task: BoardTask) => void;
+  /** The task this screen was pushed from, which Linked tasks leaves out (§3.13). */
+  cameFromTask?: string | null;
   /** Test seam: the held-act store. Production reads the tab's singleton. */
   acts?: PendingPipelineActs;
   /** Test seam: the pipeline route. Production reads the browser's. */
@@ -321,24 +384,23 @@ export function MobilePipelineScreen({
   renderSheet,
   onOpenConversation,
   onOpenTask,
+  cameFromTask = null,
   acts = pendingPipelineActs,
   ports = browserPipelinePorts,
 }: MobilePipelineScreenProps) {
   const { t } = useLocale();
   const nav = useMobileNavStore();
   const navState = useMobileNav();
-  const pending = usePendingPipelineAct(acts);
   const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
   const flowsById = useMemo(() => new Map(flows.map((flow) => [flow.id, flow] as const)), [flows]);
   const summary = useMemo(() => summarizePipeline(pipeline, flowsById), [pipeline, flowsById]);
   const names = useMemo(() => stageNames(t, pipeline), [t, pipeline]);
-  const actions = usePipelineActions(ports, phoneShow, t);
+  /* A closed lane has no screen left to stand on: Close lane goes back. */
+  const lane = usePhonePipelineActs({ ports, acts, onClosed: () => nav.back() });
   const body = useRef<HTMLDivElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const titleAway = useScrolledAway(heading, body);
   const title = pipelineTitle(t, pipeline);
-  /* Receipts name the lane; a long first line would crowd out what happened. */
-  const receiptTitle = cleanTitle(title, 48);
   /* The stage-configuration sheet (lane 10). The nav store says a sheet is
      open (§3.3: a sheet creates no history, and back takes it with the
      screen); this says which stage. The pane inside is the desktop's own
@@ -355,40 +417,8 @@ export function MobilePipelineScreen({
     if (navState.sheet !== "menu") setMenuFace("pipeline");
   }, [navState.sheet]);
 
-  const held = pending?.pipelineId === pipeline.id;
-  const acting = actions.acting.get(pipeline.id) ?? (held ? pending!.action : null);
-  /* The intent the board's ⋯ menu builds: retry and skip carry the stage and
-     attempt the operator saw, the lane's other actions carry none. */
-  const intent = (action: PipelineActionKind, stage: Pick<PipelineAnswer, "stageId" | "stageName" | "expectedAttempt"> | null = null): PipelineActionIntent => ({
-    pipelineId: pipeline.id,
-    title: receiptTitle,
-    action,
-    stageId: stage?.stageId ?? null,
-    stageName: stage?.stageName ?? null,
-    expectedAttempt: stage?.expectedAttempt ?? null,
-  });
-  /* Close lane: held for the receipt's window, and the screen goes back, since
-     a closed lane has no screen left to stand on. */
-  const closeLane = (): void => {
-    acts.begin({ pipelineId: pipeline.id, action: "close" });
-    showReceipt(t("mobile2.pipeline.archived"), { kind: "restore", run: () => acts.cancel() });
-    nav.back();
-  };
-  const answer = (_pipeline: Pipeline, choice: PipelineAnswer): void => {
-    if (choice.action === "close") {
-      closeLane();
-      return;
-    }
-    const act = intent(choice.action, choice);
-    if (choice.action === "skip-stage") {
-      /* Held like a close, and sent through the board's actions when the
-         window closes, with the stage and attempt the operator saw. */
-      acts.begin({ pipelineId: pipeline.id, action: "skip-stage", send: () => actions.start(act) });
-      showReceipt(t("mobile2.pipeline.skipped"), { kind: "retryStage", run: () => acts.cancel() });
-      return;
-    }
-    actions.start(act);
-  };
+  const held = lane.held(pipeline);
+  const acting = lane.acting(pipeline);
   /* A lane hidden from the board's queue (#1671) comes back from its own
      screen; the optimistic record puts it back in the queue on the tap. A lane
      that has parked again since its Hide is in the queue already. */
@@ -407,7 +437,7 @@ export function MobilePipelineScreen({
     const file = stageFile(stage);
     if (file) onOpenConversation(file);
   };
-  const linked = pipelineLinkedTasks(pipeline, tasks, [...flows], files);
+  const linked = pipelineLinkedTasks(pipeline, tasks, [...flows], files).filter((task) => task.id !== cameFromTask);
 
   const sheets: SheetRenderer = (name, close) => {
     if (name === "links") {
@@ -434,8 +464,8 @@ export function MobilePipelineScreen({
                   disabled={Boolean(acting)}
                   onSelect={() => {
                     close();
-                    if (spec.key === "archive") closeLane();
-                    else actions.start(intent(spec.action));
+                    if (spec.key === "archive") lane.closeLane(pipeline);
+                    else lane.start(pipeline, spec.action);
                   }}
                   attrs={{ "data-mobile2-pipeline-action": spec.key, "data-mobile2-pipeline-patch": spec.action }}
                 />
@@ -521,7 +551,7 @@ export function MobilePipelineScreen({
             nav.openSheet("stage");
           }}
           onWorkLinks={() => nav.openSheet("links")}
-          onAnswer={answer}
+          onAnswer={lane.answer}
         />
         {linked.length ? (
           <section data-mobile2-section="tasks" className="flex shrink-0 flex-col gap-1.5">
