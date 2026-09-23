@@ -237,8 +237,8 @@ for (const phone of [true, false]) {
       const { host, rerender } = mount({ loaded: false, cached: true, files: [ALPHA] });
       /* The board's content, not its skeleton. (The seat's own panel may
          still be reading its seat, which is its own placeholder.) */
-      expect(host.querySelector('[data-kanban-skeleton], [data-skeleton="rows-board"]') === null).toBe(true);
-      if (phone) expect(host.querySelector('[data-mobile2-row="conversation"]')).not.toBeNull();
+      expect(host.querySelector('[data-kanban-skeleton], [data-skeleton="phone-kanban"], [data-skeleton="rows-board"]') === null).toBe(true);
+      if (phone) expect(host.querySelector(`[data-phone-kanban] [data-phone-card-agent="${ALPHA.path}"]`)).not.toBeNull();
       else expect(host.querySelector("[data-kanban-board]")).not.toBeNull();
       expect(host.textContent).toContain(en["dash.updating"]);
       expect(title(host).textContent).toContain("atlas");

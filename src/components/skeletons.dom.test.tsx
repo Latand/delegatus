@@ -49,7 +49,7 @@ afterAll(async () => {
   setLocale("en");
 });
 
-const { AccountRowsSkeleton, BoardRowsSkeleton, FeedSkeleton, KanbanSkeleton } = await import("./skeletons");
+const { AccountRowsSkeleton, BoardRowsSkeleton, FeedSkeleton, KanbanSkeleton, PhoneKanbanSkeleton } = await import("./skeletons");
 const { SEAT_HEIGHT_VERSION, SEAT_STORAGE_KEY } = await import("./kanban/kanbanSeatStore");
 
 let roots: Root[] = [];
@@ -93,6 +93,30 @@ test("the phone board skeleton draws the board's sections, a seat and its rows",
   /* The widths vary by row, so a column of placeholders is not one bar. */
   const widths = new Set(rows.map((row) => (row.querySelector(".skeleton-pulse") as HTMLElement).style.width));
   expect(widths.size).toBeGreaterThan(3);
+});
+
+test("the phone's columns skeleton draws the seat, the real column tabs with Assigned open, and cards in the card's anatomy, in en and uk (#2072 slice 4)", () => {
+  const host = render(<PhoneKanbanSkeleton />);
+  const labels = () => [...host.querySelectorAll("[data-skeleton-tabs] > span > span:first-child")].map((node) => node.textContent);
+  expect(labels()).toEqual([en["kanban.status.inbox"], en["kanban.status.assigned"], en["kanban.status.blocked"], en["kanban.status.done"]]);
+  /* Counts are not known yet: a dimmed bar where each will be. */
+  for (const tab of host.querySelectorAll("[data-skeleton-tabs] > span")) expect(tab.querySelectorAll(".skeleton-pulse").length).toBe(1);
+  /* The board opens on Assigned: its tab is the selected surface with the underline. */
+  const tabs = [...host.querySelectorAll("[data-skeleton-tabs] > span")];
+  expect(tabs.map((tab) => tab.className.includes("bg-card"))).toEqual([false, true, false, false]);
+  expect(tabs[1]!.querySelector(".bg-accent")).not.toBeNull();
+  expect(host.querySelector("[data-skeleton-seat]")).not.toBeNull();
+  const cards = [...host.querySelectorAll("[data-skeleton-card]")];
+  expect(cards.length).toBeGreaterThanOrEqual(5);
+  for (const card of cards) {
+    expect(card.className).toContain("rounded-[12px]");
+    expect(card.className).toContain("min-h-14");
+  }
+  /* Pill shapes where a stage chain will be, on most cards. */
+  expect(cards.filter((card) => card.querySelector(".rounded-full[style*='height: 22px']")).length).toBeGreaterThanOrEqual(3);
+  flushSync(() => setLocale("uk"));
+  expect(labels()).toEqual([translate("uk", "kanban.status.inbox"), translate("uk", "kanban.status.assigned"), translate("uk", "kanban.status.blocked"), translate("uk", "kanban.status.done")]);
+  flushSync(() => setLocale("en"));
 });
 
 test("the list and rail variants keep the row and drop what their content lacks", () => {
@@ -141,6 +165,7 @@ test("the feed skeleton is anchored to the bottom, like the feed", () => {
 test("every skeleton root is a busy status with a translated label, and its bars stop under reduced motion", () => {
   const hosts = [
     render(<BoardRowsSkeleton />),
+    render(<PhoneKanbanSkeleton />),
     render(<KanbanSkeleton project="atlas" />),
     render(<FeedSkeleton />),
     render(<AccountRowsSkeleton />),

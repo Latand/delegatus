@@ -1,7 +1,7 @@
 "use client";
 
 import { Archive, Bot, Columns3, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
 import { FavoritesProvider, type FavoritesApi } from "./favorites/FavoritesContext";
@@ -52,9 +52,10 @@ import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
 import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
 import { TaskPanel } from "./tasks/TaskPanel";
 import { pushTaskToast, TaskToastHost } from "./tasks/taskToast";
-import { MobileBoard, MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
-import type { MobileBoardRowRef } from "./mobile/mobileBoardModel";
-import { MobileRowActionsSheet, useMobileBoardRowActions } from "./mobile/MobileRowActions";
+import { MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
+import { MobileKanban } from "./mobile/MobileKanban";
+import { useMobileBoardRowActions } from "./mobile/MobileRowActions";
+import { attentionKey } from "./mobile/phoneKanbanModel";
 import { MobileFocusView } from "./mobile/MobileFocusView";
 import { MobileHostSheet } from "./mobile/MobileHostSheet";
 import { MobileSeatCard } from "./mobile/MobileSeatCard";
@@ -72,7 +73,7 @@ import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
-import { BoardRowsSkeleton, FeedSkeleton, KanbanSkeleton, TitleSkeleton } from "./skeletons";
+import { FeedSkeleton, KanbanSkeleton, PhoneKanbanSkeleton, TitleSkeleton } from "./skeletons";
 import { Switchboard } from "./Switchboard";
 import {
   buildArchiveBranchGroups,
@@ -1792,6 +1793,13 @@ function ProjectDashboardView({
     mobileNav.closeSheet();
     mobileNav.push({ kind: "pipeline", id: pipeline.id });
   };
+  /* «Tell the orchestrator»: the dock and an empty Assigned column are the
+     same door — the seat's conversation, or over a vacancy the create draft,
+     which is the seat card's own sheet. */
+  const tellOrchestrator = () => {
+    if (seatState.kind === "live" && seatFile) openBoardRow(seatFile);
+    else mobileNav.openSheet(seatState.kind === "draft" ? "rotate" : "seat");
+  };
   /* What a board row reveals under a left swipe and lists on a long-press
      (#1671). Closing a card is the board's own close, the one ⋯ › Close card
      sends. A close the server refuses is shed by the outbox and the row comes
@@ -1836,7 +1844,16 @@ function ProjectDashboardView({
       if (!hiddenSet.has(path)) showReceipt(t("mobile2.board.closeNotSaved", { title }));
     }
   }, [board.sync, hiddenSet, t]);
-  const [rowActionsFor, setRowActionsFor] = useState<MobileBoardRowRef | null>(null);
+  /* The attention queue's order, which the phone's columns pin by (#2072
+     slice 4): the rows the bar's ⚠ sheet lists, in the order Next › walks. */
+  const mobileAttentionKey = (mobileBoardModel?.needsYou ?? [])
+    .map((item) => (item.kind === "conversation" ? attentionKey.conversation(item.path) : attentionKey.pipeline(item.id)))
+    .join("\n");
+  /* Keyed by value: the board model is rebuilt on every render. */
+  const mobileAttention = useMemo(() => (mobileAttentionKey ? mobileAttentionKey.split("\n") : []), [mobileAttentionKey]);
+  /* The conversations the phone's visible column draws, for presence. */
+  const [mobileKanbanShown, setMobileKanbanShown] = useState("");
+  const reportMobileKanbanShown = useCallback((paths: readonly string[]) => setMobileKanbanShown(paths.join("\n")), []);
   /* The phone's board is the leaf when the scheme is this project's view and no
      conversation sits on top of the stack; the footer and the presence slice
      both hang off that one answer. */
@@ -1866,13 +1883,7 @@ function ProjectDashboardView({
      as a signature so the presence effect below compares BY VALUE — a fresh
      array every render would re-report the same view on every poll. Null
      whenever the board is not the leaf. */
-  const mobileBoardSignature = mobileBoardModel && mobileBoardLeaf
-    ? [
-      ...mobileBoardModel.needsYou.flatMap((item) => (item.kind === "conversation" ? [item.path] : [])),
-      ...mobileBoardModel.working.map((row) => row.path),
-      ...mobileBoardModel.recent.map((row) => row.path),
-    ].join("\n")
-    : null;
+  const mobileBoardSignature = mobileBoardModel && mobileBoardLeaf ? mobileKanbanShown : null;
   /* The bar's badge is NOT composed here. The Viewer scopes the phone's queue
      to the project behind the badge and counts this project's pipelines
      waiting on a decision in it (README §4.1, §4.6), from the same pure answer
@@ -1963,6 +1974,9 @@ function ProjectDashboardView({
       { kind: "row", key: "new-pipeline", icon: <ListTree className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newPipeline"), onSelect: () => { mobileNav.closeSheet(); setTemplatePickerOpen(true); } },
       { kind: "divider", key: "d1" },
       { kind: "row", key: "tasks", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.tasks"), trailing: openTaskCount ? t("mobile2.menu.tasksOpen", { count: openTaskCount }) : undefined, onSelect: () => openMobileTasks("list") },
+      /* Every pipeline of the project (§3.1): the columns carry each one on its
+         task's card, and the board's old «N pipelines» row is gone. */
+      { kind: "row", key: "pipelines", icon: <ListTree className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.board.pipelines"), go: "pipelines", onSelect: () => mobileNav.push({ kind: "pipelines" }) },
     ];
     if (viewToggle) {
       /* The board's two faces (issue #613) stay one tap away here, as radio
@@ -2115,16 +2129,6 @@ function ProjectDashboardView({
 
   const renderMobileSheet = (name: MobileSheetName, close: () => void) => {
     if (name === "menu") return <MobileMenuSheet title={projectName} entries={mobileMenuEntries()} onClose={close} />;
-    /* A board row's long-press (#1671): the same actions its swipe reveals. */
-    if (name === "row") {
-      return rowActionsFor ? (
-        <MobileRowActionsSheet
-          title={t("mobile2.board.rowActions", { title: rowActionsFor.kind === "conversation" ? rowActionsFor.row.title : rowActionsFor.row.task })}
-          actions={mobileRowActions(rowActionsFor)}
-          onClose={close}
-        />
-      ) : null;
-    }
     /* Host details (mobile v2 lane 2): the background processes with their PIDs
        and a Kill that acts on the tap, the runtime connection, and the quiet
        conversations — the one place any of it appears on the phone. */
@@ -2263,10 +2267,7 @@ function ProjectDashboardView({
                which is the seat card's own sheet, so both halves of a board
                with no orchestrator lead to the one place that makes one. */
             dock={mobileBoardLeaf && boardReady
-              ? seatState.kind === "live" && seatFile
-                ? <MobileBoardDock onTell={() => openBoardRow(seatFile)} />
-                : <MobileBoardDock create={seatState.kind === "draft"} unresolved={seatState.kind !== "draft"}
-                    onTell={() => mobileNav.openSheet(seatState.kind === "draft" ? "rotate" : "seat")} />
+              ? <MobileBoardDock create={seatState.kind === "draft"} unresolved={!(seatState.kind === "live" && seatFile) && seatState.kind !== "draft"} onTell={tellOrchestrator} />
               /* While the board loads the footer is already there, neutral, so
                  the bottom edge never pops in when the rows land (#2071). */
               : !boardReady && mobileConversationKey === null
@@ -2275,52 +2276,61 @@ function ProjectDashboardView({
           >
             {pipelinesAlert}
               {!boardReady ? (
-                /* The shape of what is coming: the board's sections and rows,
-                   or a conversation's feed when one is on top. */
-                catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : mobileConversationKey === null ? <BoardRowsSkeleton /> : <FeedSkeleton />
+                /* The shape of what is coming: the board's tabs and cards, or
+                   a conversation's feed when one is on top. */
+                catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : mobileConversationKey === null ? <PhoneKanbanSkeleton /> : <FeedSkeleton />
               ) : mobileBoardLeaf ? (
-                <MobileBoard
-                  {...mobileBoardProps}
+                /* The phone's board is the desktop's status columns (#2072
+                   slice 4): the same bands, the same model and counts, one
+                   column at a time. The orchestrator card stays above the
+                   tabs and the dock below until the dock takes both (§3.6). */
+                <MobileKanban
+                  layout={pipelineLayout}
+                  project={project}
+                  groups={layoutGroups}
+                  manual={layoutManual}
+                  files={files}
                   flows={flows}
-                  catalog={{
-                    data: inlineCatalog.catalog,
-                    expanded: inlineCatalog.view.expanded,
-                    paging: inlineCatalog.view.paging,
-                    position: inlineCatalog.view.position,
-                    onToggle: inlineCatalog.toggle,
-                    onReach: inlineCatalog.reach,
-                  }}
+                  reviewGroups={directReviewGroups}
+                  pipelines={pipelines}
+                  surfacePipelines={activePipelines}
+                  now={nowSeconds}
+                  tasks={hasNodes ? boardTasks : EMPTY_TASKS}
+                  allTasks={projectTasks}
+                  drafts={layoutDrafts}
+                  favorites={favoriteIdSet}
+                  isolatedManualPaths={isolatedCompactHistoryPaths}
+                  draftBands={draftBands}
+                  seatRefs={seatRefsForBoard}
+                  attention={mobileAttention}
+                  closing={closingPipelines}
                   rowActions={mobileRowActions}
-                  onRowActions={(ref) => {
-                    setRowActionsFor(ref);
-                    mobileNav.openSheet("row");
-                  }}
-                  onOpenCatalogConversation={openFullCatalogFile}
                   seat={(
-                    /* The card takes the board's full width (README §4.1): it
-                       is the first CARD of the list, not the chip the strip's
-                       38 vw used to cap. */
+                    /* The card takes the board's full width (README §4.1). */
                     <div className="flex items-stretch px-3" data-testid="mobile-orchestrator-slot">
                       <MobileSeatCard
                         project={project}
                         projectName={projectName}
                         files={files}
                         /* One seat read for the phone: the board needs it to
-                           keep the seat out of the list, and the card renders
-                           from the same answer instead of polling for it a
-                           second time. */
+                           keep the seat out of the columns, and the card
+                           renders from the same answer instead of polling for
+                           it a second time. */
                         seat={seatRead}
                         incumbentRead={seatIncumbentRead}
                         /* The board's own clock, so the card's badge ticks with
-                           the rows beside it rather than on a second one. */
+                           the cards beside it rather than on a second one. */
                         now={nowSeconds}
                         onOpenConversation={openBoardRow}
                       />
                     </div>
                   )}
+                  onOpenTask={(task) => openMobileTasks({ taskId: task.id })}
                   onOpenConversation={openBoardRow}
                   onOpenPipeline={openMobilePipeline}
-                  onOpenPipelines={() => mobileNav.push({ kind: "pipelines" })}
+                  onNewTask={() => openMobileTasks("new")}
+                  onTellOrchestrator={tellOrchestrator}
+                  onShown={reportMobileKanbanShown}
                 />
               ) : projectView === "scheme" && schemeAvailable ? (
                 <MobileFocusView

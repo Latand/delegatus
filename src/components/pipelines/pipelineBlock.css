@@ -176,6 +176,10 @@
 .pblock .pb-ended .pmark { color: var(--color-muted); }
 .pblock .pb-reason { font-size: var(--text-label); font-weight: 600; color: var(--color-warning); overflow-wrap: anywhere; }
 .pblock .pb-pr { flex: none; }
+/* The card's word on its other pipelines, at the end of its last line. */
+.pblock .pb-line.reason { align-items: baseline; }
+.pblock .pb-line.reason .pb-reason { min-width: 0; }
+.pblock .pb-aside { flex: none; font-size: var(--text-label); color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pblock .wl-text { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; font-size: var(--text-label); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--color-secondary); }
 .pblock .wl-text[data-tone="open"] { color: var(--color-success); }
 .pblock .wl-text[data-tone="merged"] { color: var(--color-accent); }

@@ -337,7 +337,7 @@ test("the phone's focus mode publishes the selection the desktop Board held", as
   await settle();
   expect(slice().selectedPaths).toEqual(["/beta"]);
 
-  const row = phone.querySelector('[data-mobile2-row="conversation"]') as unknown as HTMLElement | null;
+  const row = phone.querySelector("[data-phone-kanban] [data-phone-card-agent]") as unknown as HTMLElement | null;
   expect(row).not.toBeNull();
   flushSync(() => row!.click());
   await settle();

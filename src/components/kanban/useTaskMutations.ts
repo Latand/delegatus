@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { fireTasksChanged } from "@/components/tasks/taskApi";
+import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
 
 /**
@@ -134,6 +135,49 @@ export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
 
 /** The edits a board shows ahead of the poll, per task. */
 export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; hide?: boolean; text?: string; details?: string }>;
+
+/**
+ * The tasks a board draws: the stored rows with the edits this device has sent
+ * ahead of the poll — a new title or colour at once, and a hidden group gone
+ * at once with a hide stamped now. `stamps` holds each hide's instant, so a
+ * group hidden once keeps one instant across renders; it is cleared as the
+ * edits settle. The desktop board and the phone's columns draw through this.
+ */
+export function drawnTasks(tasks: readonly BoardTask[], edits: FieldEdits, stamps: Map<string, string>): readonly BoardTask[] {
+  if (!edits.size) {
+    stamps.clear();
+    return tasks;
+  }
+  return tasks.map((task) => {
+    const edit = edits.get(task.id);
+    if (!edit) {
+      stamps.delete(task.id);
+      return task;
+    }
+    const next: BoardTask = { ...task };
+    if ("color" in edit) {
+      if (edit.color) next.color = edit.color;
+      else delete next.color;
+    }
+    if (edit.hide === true) {
+      let at = stamps.get(task.id);
+      if (!at) stamps.set(task.id, (at = new Date().toISOString()));
+      next.groupHidden = { at, by: "operator", admitted: admissionSnapshot(task.assignments) };
+    } else {
+      stamps.delete(task.id);
+      if (edit.hide === false) delete next.groupHidden;
+    }
+    if (typeof edit.text === "string") {
+      next.text = edit.text;
+      if (next.origin?.refinement === "pending") next.origin = { ...next.origin, refinement: "titled" };
+    }
+    if (typeof edit.details === "string") {
+      if (edit.details) next.details = edit.details;
+      else delete next.details;
+    }
+    return next;
+  });
+}
 
 export function revisionOf(task: BoardTask): string | null {
   const revision = (task as BoardTask & { revision?: unknown }).revision;

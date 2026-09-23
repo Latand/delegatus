@@ -21,7 +21,7 @@ import { useLocale } from "@/lib/i18n";
 
 export const RECEIPT_MS = 4_000;
 
-export type ReceiptInverse = "respawn" | "reopen" | "restore" | "switchBack" | "retryStage";
+export type ReceiptInverse = "respawn" | "reopen" | "restore" | "switchBack" | "retryStage" | "undo";
 
 export interface ReceiptAction {
   kind: ReceiptInverse;

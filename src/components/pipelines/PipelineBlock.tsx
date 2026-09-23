@@ -370,6 +370,9 @@ export interface PipelineBlockProps {
   /** Answers a decision or a spent review budget in place. Absent, the block
       shows what the lane stopped on and no buttons. */
   onAnswer?: (pipeline: Pipeline, answer: PipelineAnswer) => void;
+  /** Card density: what the card adds about its other pipelines ("+1
+      paused"), at the right end of the block's last line. */
+  aside?: React.ReactNode;
 }
 
 const NO_STAGES: ReadonlySet<string> = new Set();
@@ -417,10 +420,14 @@ export function PipelineBlock(props: PipelineBlockProps) {
        operator's to answer says its word beside the age. */
     const word = needs || pipeline.state === "running" ? null : pipelineStateLabel(t, pipeline.state);
     const ageNode = reason ? null : <span className="pb-age">{[word, age].filter(Boolean).join(" · ")}</span>;
+    const reasonLine = reason ? <span className="pb-reason" data-pipeline-reason={pipeline.id}>{[reason, age].filter(Boolean).join(" · ")}</span> : null;
+    const aside = props.aside ? <span className="pb-aside" data-pipeline-aside={pipeline.id}>{props.aside}</span> : null;
     return (
       <span className="pblock" {...root}>
         <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />
-        {reason ? <span className="pb-reason" data-pipeline-reason={pipeline.id}>{[reason, age].filter(Boolean).join(" · ")}</span> : null}
+        {aside ? (
+          <span className={`pb-line${reasonLine ? " reason" : " sub"}`}>{reasonLine}<span className="pb-grow" />{aside}</span>
+        ) : reasonLine}
       </span>
     );
   }
