@@ -1627,9 +1627,8 @@ test.each([
 });
 
 test("the kanban seat's inline header draws the predecessor link as a glyph, with its words on the name and the title (#1681)", async () => {
-  /* `.kb .seat-head` is one flex row that does not wrap, and the identity
-     beside this link has a flex-basis of 0 — so a label here does not shrink,
-     it takes the model name and the account badge away. Inline the link is the
+  /* The identity beside this link has a flex-basis of 0 — so a label here
+     does not shrink, it takes the model name and the account badge away. Inline the link is the
      glyph alone; the dock's row wraps, so there it keeps its words. */
   incumbentStatus = incumbent({ predecessorConversationId: "conversation_predecessor" });
   const read = {

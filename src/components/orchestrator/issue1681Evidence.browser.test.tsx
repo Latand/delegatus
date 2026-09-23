@@ -265,11 +265,13 @@ function readSeatRow() {
 /**
  * The kanban seat's header, in its own host, in both locales.
  *
- * `.kb .seat-head` is one flex row that does not wrap above 767 px, so an
- * overflow here does not reflow — it draws the controls group over the row's
- * other children and squeezes the model name to nothing. The dock's numbers
+ * `.kb .seat-head` was one flex row that did not wrap above 767 px, so an
+ * overflow there did not reflow — it drew the controls group over the row's
+ * other children and squeezed the model name to nothing. The dock's numbers
  * cannot stand in for it, which is how a 1024 px seat check written into the
- * design note went unmeasured.
+ * design note went unmeasured. The real head now wraps, with the incumbent on
+ * a row of its own; the kanban driver's seat-header case measures it, and
+ * this case's hand-built head is out of date (#2060).
  */
 /**
  * What the seat surface is mounted with (`issue1681Evidence.fixture.tsx`).

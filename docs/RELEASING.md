@@ -27,13 +27,15 @@ The runtime host serializes deployment requests and journals every phase before 
 Enable this mode only after the [bootstrap listener migration](docker.md#bootstrap-listener-ownership) has health-gated an alternate managed release, placed its identity in `state/viewer-release.json`, and freed `127.0.0.1:8898` for runtime-host:
 
 ```bash
+export DELEGATUS_CONFIG_DIR="$(bun scripts/app-config-dir.mjs)"
 export LLV_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
 LLV_RUNTIME_EVENTS=1 LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d runtime-host
 ```
 
 The runtime-host container uses UID/GID `1000:1000` by default and receives
 the Docker socket GID as a supplementary group. `LLV_UID`, `LLV_GID`,
-`LLV_TMUX_TMPDIR`, and `LLV_ENV_FILE` flow into nested Compose resolution so
+`LLV_TMUX_TMPDIR`, `LLV_ENV_FILE` and the app dir (`DELEGATUS_CONFIG_DIR`,
+passed on as `LLV_CONFIG_DIR`) flow into nested Compose resolution so
 candidate containers preserve supported host overrides. The Docker namespace
 shim restores the complete credential set before invoking the host CLI.
 

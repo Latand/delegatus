@@ -11,6 +11,7 @@ import {
   type ViewerCandidateContainerOverrides,
   type ViewerComposeService,
 } from "./candidateContainer";
+import { DOCKER_NAMES } from "./dockerNames";
 
 /**
  * Staging deployment target (#659). One fixed pair of containers serves the
@@ -49,7 +50,7 @@ export function stagingStatePaths(stateDir: string): StagingStatePaths {
 
 export function stagingImageName(revision: string): string {
   if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("staging image revision must be a full commit SHA");
-  return `agent-log-viewer:staging-${revision.slice(0, 12)}`;
+  return `${DOCKER_NAMES.imageRepository}:staging-${revision.slice(0, 12)}`;
 }
 
 /** The image build for a staging revision. The build arg sets the container

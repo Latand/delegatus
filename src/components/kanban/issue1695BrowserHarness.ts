@@ -13,13 +13,13 @@ export async function serveEvidenceFixture(
   outDir: string,
   entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
 ): Promise<{ base: string; stop: () => void }> {
-  /* Bundled by a separate `bun build`: inside the `bun test` process,
+  /* Bundled in a separate process: inside the `bun test` process,
      `Bun.build` resolves the `@/` alias for some module graphs and not for
-     others, and the fixture's graph is one of the others. */
+     others, and the fixture's graph is one of the others. The builder stubs
+     server actions the way Next does for the client bundle (#2009). */
   const bundle = path.join(outDir, "bundle");
   const build = Bun.spawnSync([
-    process.execPath, "build", path.resolve(entryFixture),
-    "--target=browser", `--outdir=${bundle}`, "--define", 'process.env.NODE_ENV="production"', "--define", "process.env={}",
+    process.execPath, path.resolve("src/components/kanban/buildEvidenceFixture.ts"), path.resolve(entryFixture), bundle,
   ], { stdout: "pipe", stderr: "pipe" });
   if (build.exitCode !== 0) throw new Error(`fixture bundle failed: ${build.stderr.toString()}${build.stdout.toString()}`);
   const entry = path.join(bundle, `${path.basename(entryFixture).replace(/\.tsx?$/, "")}.js`);
