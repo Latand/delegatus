@@ -6,6 +6,7 @@ import { chromium, type Browser, type LaunchOptions, type Page } from "playwrigh
 
 import { translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
+import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
@@ -7170,4 +7171,265 @@ describe("columns balanced on large screens, stage pills and heads on one line",
     if (label !== "main") expect(failures).toEqual([]);
     else expect(failures.length).toBeGreaterThan(0);
   }, 240_000);
+});
+
+describe("the orchestrator seat's header keeps every element readable and clickable", () => {
+  /*
+   * The seat's header at its fullest (`?scenario=seat-head`): a mandate one
+   * version behind the default, so the stale chip draws; a designated
+   * incumbent with its effort, account and a context past the rotation line;
+   * twenty previous seats; the tick chip, Rotate, Stop host, the placement
+   * switch and Fold. The operator saw the context meter and the stale chip
+   * drawn over Stop host and Rotate in a seat about 1080 px wide.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "orchestrator seat.s header"
+   *
+   * Every button, link and piece of text in the header is measured by its INK
+   * — its box united with every visible text rect inside it, each rect first
+   * cut by the ancestors that clip it — and no two may touch. On top of that:
+   * nothing may be drawn outside the header, no button's label may be clipped,
+   * no text may be crushed below what can be read, and a truncated label must
+   * carry a title saying the rest. Below 640 px the phone shell replaces the
+   * board, so there the seat's card and its sheet's identity are what is
+   * measured. At the widest desktop the seat is also docked at the side.
+   * Every frame draws the role frame the product ships by default (#2043),
+   * and the 1080 px Ukrainian head is measured under each other variant too.
+   * `SEAT_HEAD_PNG_DIR` collects frames (never committed); the readings go to
+   * `evidence/seat-head/geometry.json`.
+   */
+  const OUT = path.resolve(".artifacts/seat-head");
+  const EVIDENCE = path.resolve("evidence/seat-head");
+  const WIDTHS = [390, 768, 1080, 1440] as const;
+  /** Anything narrower cannot be read: a model name cut to «cla…». */
+  const READABLE_PX = 40;
+
+  const MEASURE = `(rootSelector) => {
+    const root = document.querySelector(rootSelector);
+    if (!root) return null;
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({
+      top: Math.max(a.top, b.top), left: Math.max(a.left, b.left),
+      right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom),
+    });
+    const empty = r => r.right - r.left < 0.5 || r.bottom - r.top < 0.5;
+    /* Rendered at all — display: none has no rects. A box crushed to zero
+       width still has one, and is measured as crushed rather than skipped. */
+    const rendered = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
+    /* The clip every ancestor up to the document imposes: the seat's panel
+       clips with overflow hidden, so a control pushed past its edge is gone. */
+    const clipOf = node => {
+      let clip = null;
+      for (let el = node.parentElement; el; el = el.parentElement) {
+        const style = getComputedStyle(el);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = clip ? intersect(clip, box(el)) : box(el);
+      }
+      return clip;
+    };
+    const ownText = el => [...el.childNodes].some(node => node.nodeType === 3 && node.nodeValue.trim());
+    const interactive = el => el.matches("button, a[href]");
+    const all = [...root.querySelectorAll("*")].filter(rendered);
+    const atoms = all.filter(el =>
+      interactive(el)
+      || el.matches(".role-mark, .av")
+      || (ownText(el) && !el.parentElement.closest("button, a[href]")));
+    const runsOf = el => {
+      const out = [];
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue.trim() || !rendered(node.parentElement)) continue;
+        const clip = clipOf(node);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) {
+          if (raw.height === 0) continue;
+          const full = { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom };
+          const seen = clip ? intersect(clip, full) : full;
+          out.push({ full, seen: empty(seen) ? null : seen });
+        }
+      }
+      return out;
+    };
+    /* What a text node would take if nothing squeezed it. */
+    const natural = el => {
+      let width = 0;
+      for (const node of el.childNodes) {
+        if (node.nodeType !== 3 || !node.nodeValue.trim()) continue;
+        const probe = document.createElement("span");
+        probe.textContent = node.nodeValue;
+        const style = getComputedStyle(el);
+        /* Longhands: Chrome serializes the font shorthand as empty whenever
+           a longhand it cannot express is set, tabular-nums among them. */
+        probe.style.cssText = "position:fixed;left:0;top:0;visibility:hidden;white-space:pre";
+        for (const key of ["fontFamily", "fontSize", "fontWeight", "fontStyle", "fontStretch", "fontVariantNumeric", "fontFeatureSettings", "letterSpacing", "textTransform"]) probe.style[key] = style[key];
+        document.body.appendChild(probe);
+        width += probe.getBoundingClientRect().width;
+        probe.remove();
+      }
+      return width;
+    };
+    const read = atoms.map(el => {
+      const clip = clipOf(el);
+      const own = box(el);
+      const seenBox = clip ? intersect(clip, own) : own;
+      const ink = empty(seenBox) ? null : { ...seenBox };
+      let visibleText = 0;
+      let clipped = false;
+      for (const run of runsOf(el)) {
+        if (!run.seen) { clipped = true; continue; }
+        visibleText += run.seen.right - run.seen.left;
+        if (run.seen.right - run.seen.left < run.full.right - run.full.left - 0.5) clipped = true;
+        if (ink) {
+          ink.top = Math.min(ink.top, run.seen.top); ink.left = Math.min(ink.left, run.seen.left);
+          ink.right = Math.max(ink.right, run.seen.right); ink.bottom = Math.max(ink.bottom, run.seen.bottom);
+        }
+      }
+      /* A truncated label draws the same text into less room than it needs. */
+      const naturalText = interactive(el) ? visibleText : natural(el);
+      const truncated = [el, ...el.querySelectorAll("*")].some(node => node.scrollWidth > node.clientWidth + 0.5 && getComputedStyle(node).textOverflow === "ellipsis")
+        || (!interactive(el) && naturalText - (own.right - own.left) > 1);
+      let titled = false;
+      for (let node = el; node && node !== root.parentElement; node = node.parentElement) if (node.getAttribute("title") || node.getAttribute("aria-label")) { titled = true; break; }
+      const name = (el.getAttribute("aria-label") || el.textContent || el.getAttribute("title") || el.className || el.tagName).toString().trim().slice(0, 40);
+      return {
+        name, button: interactive(el), el,
+        box: own, ink, visibleText: Math.round(visibleText), naturalText: Math.round(naturalText),
+        clipped, truncated, titled,
+      };
+    });
+    const disjoint = (a, b) => a.right <= b.left + 0.5 || b.right <= a.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5;
+    const overlaps = [];
+    for (let i = 0; i < read.length; i++) for (let j = i + 1; j < read.length; j++) {
+      if (read[i].el.contains(read[j].el) || read[j].el.contains(read[i].el)) continue;
+      const a = read[i].ink, b = read[j].ink;
+      if (!a || !b || disjoint(a, b)) continue;
+      overlaps.push({ a: read[i].name, b: read[j].name, x: Math.round(Math.min(a.right, b.right) - Math.max(a.left, b.left)) });
+    }
+    const rootBox = box(root);
+    const rootClip = clipOf(root);
+    const bounds = rootClip ? intersect(rootClip, rootBox) : rootBox;
+    const outside = read.filter(atom => {
+      const b = atom.box;
+      return b.left < bounds.left - 0.5 || b.right > bounds.right + 0.5 || b.top < bounds.top - 0.5 || b.bottom > bounds.bottom + 0.5;
+    }).map(atom => ({ name: atom.name, left: Math.round(atom.box.left), right: Math.round(atom.box.right), bounds: [Math.round(bounds.left), Math.round(bounds.right)] }));
+    return {
+      root: { width: Math.round(rootBox.right - rootBox.left), height: Math.round(rootBox.bottom - rootBox.top) },
+      atoms: read.map(({ el: _el, box: _box, ink: _ink, ...rest }) => rest),
+      overlaps, outside,
+      pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  }`;
+
+  type HeadAtom = { name: string; button: boolean; visibleText: number; naturalText: number; clipped: boolean; truncated: boolean; titled: boolean };
+  type HeadReading = {
+    root: { width: number; height: number };
+    atoms: HeadAtom[];
+    overlaps: Array<{ a: string; b: string; x: number }>;
+    outside: Array<Record<string, unknown>>;
+    pageOverflow: boolean;
+  };
+
+  const measure = (page: Page, root: string) => page.evaluate(`(${MEASURE})(${JSON.stringify(root)})`) as Promise<HeadReading | null>;
+
+  /** What a reading owes the operator, as failure lines. */
+  function verdicts(label: string, reading: HeadReading | null, mandate: boolean): string[] {
+    if (!reading) return [`${label}: nothing was drawn to measure`];
+    const out: string[] = [];
+    if (mandate && !reading.atoms.some((atom) => /mandate v|мандат v/i.test(atom.name))) out.push(`${label}: the stale-mandate chip is not drawn — nothing was measured`);
+    for (const overlap of reading.overlaps) out.push(`${label}: «${overlap.a}» and «${overlap.b}» overlap by ${overlap.x} px`);
+    for (const escape of reading.outside) out.push(`${label}: ${JSON.stringify(escape)} is drawn outside its row`);
+    for (const atom of reading.atoms) {
+      if (atom.button && atom.clipped) out.push(`${label}: the button «${atom.name}» has its label clipped`);
+      if (!atom.button && atom.naturalText > 0 && atom.visibleText < Math.min(atom.naturalText, READABLE_PX) - 0.5) out.push(`${label}: «${atom.name}» is crushed to ${atom.visibleText} of ${atom.naturalText} px`);
+      if (!atom.button && (atom.truncated || atom.clipped) && !atom.titled) out.push(`${label}: «${atom.name}» is truncated with no title saying the rest`);
+    }
+    if (reading.pageOverflow) out.push(`${label}: the page scrolls sideways`);
+    return out;
+  }
+
+  browserTest("at 390, 768, 1080 and 1440 px in en and uk, with a stale mandate and every control present", async () => {
+    const pngDir = process.env.SEAT_HEAD_PNG_DIR ?? null;
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    if (pngDir) fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    /* The attention toast floats over the board's top-right corner, which is
+       where the seat's controls are; it is not part of the header and would
+       only hide it in the frames. */
+    const hideToast = (page: Page) => page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+    /* The fixture has no document head, so the frame the layout's boot script
+       would set is set here. */
+    const setFrame = async (page: Page, frame: string) => {
+      await page.evaluate((value) => document.documentElement.setAttribute("data-role-frame", value), frame);
+      await page.waitForTimeout(150);
+    };
+    const shoot = async (page: Page, selector: string, name: string) => {
+      if (pngDir) await page.locator(selector).first().screenshot({ path: path.join(pngDir, `${name}.png`) });
+    };
+    try {
+      for (const width of WIDTHS) {
+        for (const lang of ["en", "uk"] as const) {
+          const phone = width < 640;
+          const label = `${width}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head`, phone ? { width, height: 844 } : { width, height: 900 }, "light", lang, "no-preference", phone);
+          try {
+            await setFrame(page, DEFAULT_ROLE_FRAME);
+            if (phone) {
+              /* The phone shell replaces the board: the seat is a card, and
+                 its identity and controls are in the sheet the card opens. */
+              await page.waitForSelector("[data-mobile2-seat-card]", { timeout: 20_000 });
+              await page.waitForTimeout(600);
+              frames[`${label}-card`] = await measure(page, "[data-mobile2-seat-card]");
+              failures.push(...verdicts(`${label} seat card`, frames[`${label}-card`] as HeadReading | null, false));
+              await shoot(page, "[data-mobile2-seat-card]", `seat-card-${label}`);
+              await page.locator("[data-mobile2-open=seat]").first().click();
+              await page.waitForSelector("[data-mobile2-sheet='seat'] [data-orchestrator-incumbent]", { timeout: 20_000 });
+              await page.waitForTimeout(600);
+              frames[`${label}-sheet`] = await measure(page, "[data-mobile2-sheet='seat'] [data-orchestrator-incumbent]");
+              failures.push(...verdicts(`${label} seat sheet`, frames[`${label}-sheet`] as HeadReading | null, false));
+              await shoot(page, "[data-mobile2-sheet='seat']", `seat-sheet-${label}`);
+            } else {
+              await page.waitForSelector("[data-kanban-seat] [data-orchestrator-mandate-version]", { timeout: 20_000 });
+              await page.waitForSelector("[data-kanban-seat] [data-orchestrator-account]", { timeout: 20_000 });
+              await hideToast(page);
+              await page.waitForTimeout(600);
+              const placements = width >= 1440 ? ["top", "side"] as const : ["top"] as const;
+              for (const placement of placements) {
+                if (placement === "side") {
+                  await page.locator("[data-kanban-seat] [data-seat-placement]").click();
+                  await page.waitForSelector("[data-kanban-seat].side [data-orchestrator-mandate-version]", { timeout: 20_000 });
+                  await page.waitForTimeout(600);
+                }
+                const key = `${label}-${placement}`;
+                frames[key] = await measure(page, "[data-kanban-seat] .seat-head");
+                failures.push(...verdicts(key, frames[key] as HeadReading | null, true));
+                await shoot(page, "[data-kanban-seat] .seat-head", `seat-head-${key}`);
+                if (width !== 1080 || lang !== "uk" || placement !== "top") continue;
+                for (const frame of ROLE_FRAME_VARIANTS.filter((variant) => variant !== DEFAULT_ROLE_FRAME)) {
+                  await setFrame(page, frame);
+                  frames[`${key}-${frame}`] = await measure(page, "[data-kanban-seat] .seat-head");
+                  failures.push(...verdicts(`${key} ${frame}`, frames[`${key}-${frame}`] as HeadReading | null, true));
+                  await shoot(page, "[data-kanban-seat] .seat-head", `seat-head-${key}-${frame}`);
+                }
+                await setFrame(page, DEFAULT_ROLE_FRAME);
+              }
+            }
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify({ widths: WIDTHS, readablePx: READABLE_PX, frames, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
 });

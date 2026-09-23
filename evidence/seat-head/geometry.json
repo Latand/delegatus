@@ -1,0 +1,2022 @@
+{
+  "widths": [
+    390,
+    768,
+    1080,
+    1440
+  ],
+  "readablePx": 40,
+  "frames": {
+    "390-en-card": {
+      "root": {
+        "width": 366,
+        "height": 67
+      },
+      "atoms": [
+        {
+          "name": "Open the orchestrator's conversation — w",
+          "button": true,
+          "visibleText": 246,
+          "naturalText": 246,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Orchestrator controls: rotate, model, ac",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "390-en-sheet": {
+      "root": {
+        "width": 358,
+        "height": 109
+      },
+      "atoms": [
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 155,
+          "naturalText": 120,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "working 6:41",
+          "button": false,
+          "visibleText": 59,
+          "naturalText": 59,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 37,
+          "naturalText": 37,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "·",
+          "button": false,
+          "visibleText": 2,
+          "naturalText": 2,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "holding the seat for 9h",
+          "button": false,
+          "visibleText": 111,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Context",
+          "button": false,
+          "visibleText": 39,
+          "naturalText": 39,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "48% left of 1M",
+          "button": false,
+          "visibleText": 71,
+          "naturalText": 71,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Rotation recommended — 48% of the window",
+          "button": false,
+          "visibleText": 246,
+          "naturalText": 246,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "390-uk-card": {
+      "root": {
+        "width": 366,
+        "height": 67
+      },
+      "atoms": [
+        {
+          "name": "Відкрити розмову оркестратора — працює 6",
+          "button": true,
+          "visibleText": 249,
+          "naturalText": 249,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Керування оркестратором: заміна, модель,",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "390-uk-sheet": {
+      "root": {
+        "width": 358,
+        "height": 109
+      },
+      "atoms": [
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 155,
+          "naturalText": 120,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "працює 6:41",
+          "button": false,
+          "visibleText": 58,
+          "naturalText": 58,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 37,
+          "naturalText": 37,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "·",
+          "button": false,
+          "visibleText": 2,
+          "naturalText": 2,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "тримає місце вже 9 год",
+          "button": false,
+          "visibleText": 118,
+          "naturalText": 118,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Контекст",
+          "button": false,
+          "visibleText": 46,
+          "naturalText": 46,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "залишилось 48% зі 1M",
+          "button": false,
+          "visibleText": 114,
+          "naturalText": 114,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Радимо ротацію — залишилось 48% вікна.",
+          "button": false,
+          "visibleText": 216,
+          "naturalText": 216,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "768-en-top": {
+      "root": {
+        "width": 486,
+        "height": 97
+      },
+      "atoms": [
+        {
+          "name": "Orchestrator",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Orchestrator",
+          "button": false,
+          "visibleText": 77,
+          "naturalText": 77,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "live",
+          "button": false,
+          "visibleText": 17,
+          "naturalText": 17,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Previous seats, 20",
+          "button": true,
+          "visibleText": 12,
+          "naturalText": 12,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "mandate v21, default v22",
+          "button": false,
+          "visibleText": 114,
+          "naturalText": 114,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Seat tick settings. Tick: could not be r",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Rotate",
+          "button": true,
+          "visibleText": 30,
+          "naturalText": 30,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Stop host",
+          "button": true,
+          "visibleText": 48,
+          "naturalText": 48,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Dock at the side",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Collapse the orchestrator chat (O)",
+          "button": true,
+          "visibleText": 22,
+          "naturalText": 22,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "768-uk-top": {
+      "root": {
+        "width": 486,
+        "height": 97
+      },
+      "atoms": [
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 81,
+          "naturalText": 81,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "живий",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Попередні оркестратори: 20",
+          "button": true,
+          "visibleText": 12,
+          "naturalText": 12,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "мандат v21, типовий v22",
+          "button": false,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування тікера. Тікер: не вдалося п",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Замінити",
+          "button": true,
+          "visibleText": 43,
+          "naturalText": 43,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Зупинити хост",
+          "button": true,
+          "visibleText": 74,
+          "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Закріпити збоку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "button": true,
+          "visibleText": 47,
+          "naturalText": 47,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "1080-en-top": {
+      "root": {
+        "width": 798,
+        "height": 73
+      },
+      "atoms": [
+        {
+          "name": "Orchestrator",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Orchestrator",
+          "button": false,
+          "visibleText": 77,
+          "naturalText": 77,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "atlas",
+          "button": false,
+          "visibleText": 22,
+          "naturalText": 22,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "live",
+          "button": false,
+          "visibleText": 17,
+          "naturalText": 17,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Previous seats, 20",
+          "button": true,
+          "visibleText": 83,
+          "naturalText": 83,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "mandate v21, default v22",
+          "button": false,
+          "visibleText": 114,
+          "naturalText": 114,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Seat tick settings. Tick: could not be r",
+          "button": true,
+          "visibleText": 10,
+          "naturalText": 10,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Rotate",
+          "button": true,
+          "visibleText": 30,
+          "naturalText": 30,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Stop host",
+          "button": true,
+          "visibleText": 48,
+          "naturalText": 48,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Dock at the side",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Collapse the orchestrator chat (O)",
+          "button": true,
+          "visibleText": 22,
+          "naturalText": 22,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "1080-uk-top": {
+      "root": {
+        "width": 798,
+        "height": 73
+      },
+      "atoms": [
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 81,
+          "naturalText": 81,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "atlas",
+          "button": false,
+          "visibleText": 22,
+          "naturalText": 22,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "живий",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Попередні оркестратори: 20",
+          "button": true,
+          "visibleText": 142,
+          "naturalText": 142,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "мандат v21, типовий v22",
+          "button": false,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування тікера. Тікер: не вдалося п",
+          "button": true,
+          "visibleText": 10,
+          "naturalText": 10,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Замінити",
+          "button": true,
+          "visibleText": 43,
+          "naturalText": 43,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Зупинити хост",
+          "button": true,
+          "visibleText": 74,
+          "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Закріпити збоку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "button": true,
+          "visibleText": 47,
+          "naturalText": 47,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "1080-uk-top-rail": {
+      "root": {
+        "width": 798,
+        "height": 73
+      },
+      "atoms": [
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 81,
+          "naturalText": 81,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "atlas",
+          "button": false,
+          "visibleText": 22,
+          "naturalText": 22,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "живий",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Попередні оркестратори: 20",
+          "button": true,
+          "visibleText": 142,
+          "naturalText": 142,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "мандат v21, типовий v22",
+          "button": false,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування тікера. Тікер: не вдалося п",
+          "button": true,
+          "visibleText": 10,
+          "naturalText": 10,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Замінити",
+          "button": true,
+          "visibleText": 43,
+          "naturalText": 43,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Зупинити хост",
+          "button": true,
+          "visibleText": 74,
+          "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Закріпити збоку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "button": true,
+          "visibleText": 47,
+          "naturalText": 47,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "1080-uk-top-halo": {
+      "root": {
+        "width": 798,
+        "height": 73
+      },
+      "atoms": [
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 81,
+          "naturalText": 81,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "atlas",
+          "button": false,
+          "visibleText": 22,
+          "naturalText": 22,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "живий",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Попередні оркестратори: 20",
+          "button": true,
+          "visibleText": 142,
+          "naturalText": 142,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "мандат v21, типовий v22",
+          "button": false,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування тікера. Тікер: не вдалося п",
+          "button": true,
+          "visibleText": 10,
+          "naturalText": 10,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Замінити",
+          "button": true,
+          "visibleText": 43,
+          "naturalText": 43,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Зупинити хост",
+          "button": true,
+          "visibleText": 74,
+          "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Закріпити збоку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "button": true,
+          "visibleText": 47,
+          "naturalText": 47,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "1080-uk-top-bracket": {
+      "root": {
+        "width": 798,
+        "height": 73
+      },
+      "atoms": [
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 81,
+          "naturalText": 81,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "atlas",
+          "button": false,
+          "visibleText": 22,
+          "naturalText": 22,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "живий",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Попередні оркестратори: 20",
+          "button": true,
+          "visibleText": 142,
+          "naturalText": 142,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "мандат v21, типовий v22",
+          "button": false,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування тікера. Тікер: не вдалося п",
+          "button": true,
+          "visibleText": 10,
+          "naturalText": 10,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Замінити",
+          "button": true,
+          "visibleText": 43,
+          "naturalText": 43,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Зупинити хост",
+          "button": true,
+          "visibleText": 74,
+          "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Закріпити збоку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "button": true,
+          "visibleText": 47,
+          "naturalText": 47,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "1440-en-top": {
+      "root": {
+        "width": 1038,
+        "height": 73
+      },
+      "atoms": [
+        {
+          "name": "Orchestrator",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Orchestrator",
+          "button": false,
+          "visibleText": 77,
+          "naturalText": 77,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "atlas",
+          "button": false,
+          "visibleText": 22,
+          "naturalText": 22,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "live",
+          "button": false,
+          "visibleText": 17,
+          "naturalText": 17,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Previous seats, 20",
+          "button": true,
+          "visibleText": 83,
+          "naturalText": 83,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "mandate v21, default v22",
+          "button": false,
+          "visibleText": 114,
+          "naturalText": 114,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Seat tick settings. Tick: could not be r",
+          "button": true,
+          "visibleText": 10,
+          "naturalText": 10,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Rotate",
+          "button": true,
+          "visibleText": 30,
+          "naturalText": 30,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Stop host",
+          "button": true,
+          "visibleText": 48,
+          "naturalText": 48,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Dock at the side",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Collapse the orchestrator chat (O)",
+          "button": true,
+          "visibleText": 22,
+          "naturalText": 22,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "1440-en-side": {
+      "root": {
+        "width": 379,
+        "height": 97
+      },
+      "atoms": [
+        {
+          "name": "Orchestrator",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Orchestrator",
+          "button": false,
+          "visibleText": 77,
+          "naturalText": 77,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "live",
+          "button": false,
+          "visibleText": 17,
+          "naturalText": 17,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Previous seats, 20",
+          "button": true,
+          "visibleText": 12,
+          "naturalText": 12,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "mandate v21, default v22",
+          "button": false,
+          "visibleText": 114,
+          "naturalText": 114,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Seat tick settings. Tick: could not be r",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Rotate",
+          "button": true,
+          "visibleText": 30,
+          "naturalText": 30,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Stop host",
+          "button": true,
+          "visibleText": 48,
+          "naturalText": 48,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Dock at the top",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Collapse the orchestrator chat (O)",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "1440-uk-top": {
+      "root": {
+        "width": 1038,
+        "height": 73
+      },
+      "atoms": [
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 81,
+          "naturalText": 81,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "atlas",
+          "button": false,
+          "visibleText": 22,
+          "naturalText": 22,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "живий",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Попередні оркестратори: 20",
+          "button": true,
+          "visibleText": 142,
+          "naturalText": 142,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "мандат v21, типовий v22",
+          "button": false,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування тікера. Тікер: не вдалося п",
+          "button": true,
+          "visibleText": 10,
+          "naturalText": 10,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Замінити",
+          "button": true,
+          "visibleText": 43,
+          "naturalText": 43,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Зупинити хост",
+          "button": true,
+          "visibleText": 74,
+          "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Закріпити збоку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "button": true,
+          "visibleText": 47,
+          "naturalText": 47,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    },
+    "1440-uk-side": {
+      "root": {
+        "width": 379,
+        "height": 97
+      },
+      "atoms": [
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "av claude",
+          "button": false,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Оркестратор",
+          "button": false,
+          "visibleText": 81,
+          "naturalText": 81,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "живий",
+          "button": false,
+          "visibleText": 35,
+          "naturalText": 35,
+          "clipped": false,
+          "truncated": false,
+          "titled": false
+        },
+        {
+          "name": "Попередні оркестратори: 20",
+          "button": true,
+          "visibleText": 12,
+          "naturalText": 12,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Claude",
+          "button": false,
+          "visibleText": 31,
+          "naturalText": 31,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "claude-opus-4-5-1m · high",
+          "button": false,
+          "visibleText": 143,
+          "naturalText": 111,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "· high",
+          "button": false,
+          "visibleText": 33,
+          "naturalText": 33,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "primary",
+          "button": false,
+          "visibleText": 36,
+          "naturalText": 36,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "52%",
+          "button": false,
+          "visibleText": 20,
+          "naturalText": 20,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "мандат v21, типовий v22",
+          "button": false,
+          "visibleText": 115,
+          "naturalText": 115,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Налаштування тікера. Тікер: не вдалося п",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Замінити",
+          "button": true,
+          "visibleText": 43,
+          "naturalText": 43,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Зупинити хост",
+          "button": true,
+          "visibleText": 74,
+          "naturalText": 74,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Закріпити зверху",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        }
+      ],
+      "overlaps": [],
+      "outside": [],
+      "pageOverflow": false
+    }
+  },
+  "failures": []
+}

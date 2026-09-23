@@ -453,11 +453,12 @@ export function OrchestratorPanel({
           {state.kind === "loading" || failed ? null : (
             <PreviousSeatsControl status={status} tasks={seatTasks} compact={collapsed || placement === "side"} currentEngine={seatEngine} />
           )}
-          {/* The seat is short on purpose: who holds it and its host control
-              ride this row instead of rows of their own under it. */}
-          {/* Who holds the seat and its host control: in line on top, their
-              own row under the title at the side, where 380 px is not room
-              for both (#1841). */}
+          {/* Who holds the seat and its host control: the header's second
+              row, under the title, in both placements. On one row they drew
+              the context meter and the stale-mandate chip over Stop host and
+              Rotate: the title, Previous seats and Fold already take most of
+              the seat's at most 1040 px, and the incumbent needs about 600
+              more in Ukrainian. */}
           {state.kind === "live" && !rotating && !collapsed ? (
             <span className="seat-meta">
               <IncumbentHeader
@@ -472,14 +473,12 @@ export function OrchestratorPanel({
                 rotating={rotating}
                 opening={rotateOpening}
                 onRotate={() => void openRotate(state.conversationId)}
+                hostControls={file ? <ProcessStatusControls file={file} hideChip compact /> : null}
               />
-              {file ? <ProcessStatusControls file={file} hideChip compact /> : null}
             </span>
-          ) : (
-            <span className="grow" />
-          )}
+          ) : null}
           {state.kind === "live" && !collapsed && file && rotating ? <ProcessStatusControls file={file} hideChip compact /> : null}
-          <span className="grow side-only" />
+          <span className="grow" />
           {unreadReply ? (
             <span className="seat-unread" data-seat-unread="" title={t("orchPanel.seatUnreadReply")}>
               <i aria-hidden />
