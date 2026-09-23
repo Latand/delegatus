@@ -1496,6 +1496,35 @@ function refenceHeldDeliveries(
   }
 }
 
+/* A spawn that began before an account switch remains attributable to its
+   birth account. The already-active engine-wide migration intent still
+   applies to the new conversation through the existing coordinator
+   contract — and through the SAME admission the drain itself uses, since
+   an automatic intent enrolling a conversation nobody named is the
+   eleventh automatic selection (#1279); a conversation-scoped reseat moves
+   only its own thread. The migration record is the shared construction, so
+   settlement cannot drift from the two paths that queue the same move.
+   Answers whether the conversation was enrolled. */
+function enrollSettledSpawnInDrain(file: RegistryFile, conversation: RegistryConversation, at: string): boolean {
+  const activeIntent = Object.values(file.migrationIntents).find((intent) =>
+    intent.engine === conversation.engine
+    && engineScopedIntent(intent)
+    && migrationIntentCanEnroll(file, intent, Date.parse(at)));
+  const source = conversation.generations.at(-1);
+  if (!activeIntent || conversation.pinnedAccountId || !source
+    || source.accountId === activeIntent.targetId || conversation.migration
+    || migrationEnrollmentAdmission(file, conversation, source, activeIntent).kind !== "accepted") return false;
+  conversation.migration = conversationMigrationForIntent(
+    conversation,
+    source,
+    activeIntent,
+    migrationTurnIsBusy(file, conversation) ? "waiting-turn" : "requested",
+    at,
+  );
+  conversation.updatedAt = at;
+  return true;
+}
+
 /** Whether `launchId` names this conversation's fresh launch, still settling,
     on the account its current generation runs on (#2051). A settled launch no
     longer speaks for the account: from then on the conversation is ordinary
@@ -5782,30 +5811,11 @@ export class AgentRegistry {
       file.conversationRevision[conversation.engine] += 1;
       file.engineRouting[conversation.engine].revision += 1;
     }
-    /* A spawn that began before an account switch remains attributable to its
-       birth account. The already-active engine-wide migration intent still
-       applies to the new conversation through the existing coordinator
-       contract — and through the SAME admission the drain itself uses, since
-       an automatic intent enrolling a conversation nobody named is the
-       eleventh automatic selection (#1279); a conversation-scoped reseat moves
-       only its own thread. The migration record is the shared construction, so
-       settlement cannot drift from the two paths that queue the same move. */
-    const activeIntent = Object.values(file.migrationIntents).find((intent) =>
-      intent.engine === conversation.engine
-      && engineScopedIntent(intent)
-      && migrationIntentCanEnroll(file, intent, Date.parse(createdAt)));
-    const source = conversation.generations.at(-1);
-    if (activeIntent && !conversation.pinnedAccountId && source
-      && source.accountId !== activeIntent.targetId && !conversation.migration
-      && migrationEnrollmentAdmission(file, conversation, source, activeIntent).kind === "accepted") {
-      conversation.migration = conversationMigrationForIntent(
-        conversation,
-        source,
-        activeIntent,
-        migrationTurnIsBusy(file, conversation) ? "waiting-turn" : "requested",
-        createdAt,
-      );
-    }
+    /* A fresh launch staged ahead of its first message joins a running drain
+       only once that message is delivered, at finalization (#2051): until
+       then the thread has no turn, and a migration fenced on it would hold the
+       very message it waits for. */
+    if (finalize || receipt.purpose !== "launch") enrollSettledSpawnInDrain(file, conversation, createdAt);
     conversation.updatedAt = createdAt;
     file.conversations[conversation.id] = conversation;
 
@@ -5890,6 +5900,10 @@ export class AgentRegistry {
       receipt.state = "completed";
       receipt.error = null;
       receipt.completionMode = "route-completed";
+      /* The drain enrollment staging deferred for a fresh launch (#2051). */
+      if (receipt.purpose === "launch" && enrollSettledSpawnInDrain(file, conversation, entry.updatedAt)) {
+        file.conversationRevision[conversation.engine] += 1;
+      }
       if (receipt.supersedes) {
         stageOrRecordSupersedenceInFile(file, receipt.supersedes.conversationId, receipt.conversationId, receipt.supersedes.reason);
       }
@@ -5930,6 +5944,9 @@ export class AgentRegistry {
       receipt.state = "completed";
       receipt.error = null;
       receipt.completionMode = receipt.completionMode ?? "route-recovered";
+      if (receipt.purpose === "launch" && enrollSettledSpawnInDrain(file, conversation, entry.updatedAt)) {
+        file.conversationRevision[conversation.engine] += 1;
+      }
       if (receipt.supersedes) {
         stageOrRecordSupersedenceInFile(file, receipt.supersedes.conversationId, receipt.conversationId, receipt.supersedes.reason);
       }

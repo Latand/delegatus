@@ -5764,9 +5764,16 @@ test.each(["healthy", "uncertain acknowledgement", "payload timeout"] as const)(
  * before its first turn.
  */
 describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed account (%s viewer transport)", (transport) => {
-  test("starts its first turn on that account and materializes its transcript", async () => {
+  /* `drain`: an engine-wide migration toward the routed account is already
+     running when the launch stages, as every automatic account switch leaves
+     one for a while. Staging used to enroll the launch into it, which fenced
+     the first message behind the same unfinishable migration. */
+  test.each([
+    ["no drain running", false],
+    ["an engine-wide drain running", true],
+  ] as const)("starts its first turn on that account and materializes its transcript (%s)", async (_label, drain) => {
     const id = crypto.randomUUID();
-    const root = path.join(sandbox, `non-routed-first-turn-${transport}-${id}`);
+    const root = path.join(sandbox, `non-routed-first-turn-${transport}-${drain ? "drain" : "plain"}-${id}`);
     const cwd = path.join(root, "project");
     const home = path.join(root, "account-b");
     fs.mkdirSync(cwd, { recursive: true });
@@ -5805,6 +5812,25 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
     try {
       /* Account A is routed; the pool placed this launch on account B. */
       registry.setEngineRouting("claude", "account-a");
+      if (drain) {
+        /* A drain with nothing to move completes at once; this one has work. */
+        registry.reconcileConversations([{
+          engine: "claude",
+          path: path.join(root, "draining.jsonl"),
+          accountId: "account-b",
+          launchProfile: emptyLaunchProfile({ cwd }),
+          turn: { state: "idle", source: "assistant", terminalAt: null },
+          observedAt: new Date().toISOString(),
+        }]);
+        const intent = registry.commitMigrationIntent({
+          engine: "claude",
+          targetId: "account-a",
+          origin: "manual",
+          requestId: `drain-${id}`,
+          expectedRevision: registry.engineRouting("claude").revision,
+        });
+        expect(intent.state).toBe("draining");
+      }
       const begun = beginLegacySpawnFixture(registry, {
         engine: "claude",
         cwd,
@@ -5848,9 +5874,11 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
       expect(fs.readFileSync(transcript, "utf8")).toContain("start on the account the pool chose");
       expect(receipt).toMatchObject({ state: "completed", accountId: "account-b" });
       /* The routed account did not overturn the pool's choice before the
-         conversation's first turn. */
+         conversation's first turn. A running drain takes the conversation
+         only once the launch settled with its first message delivered. */
       const conversation = registry.conversation(begun.receipt.conversationId)!;
-      expect(conversation.migration).toBeNull();
+      if (drain) expect(conversation.migration).toMatchObject({ targetId: "account-a" });
+      else expect(conversation.migration).toBeNull();
       expect(conversation.generations.at(-1)?.accountId).toBe("account-b");
       expect(Object.values(registry.snapshot().heldDeliveries)
         .filter((delivery) => delivery.clientMessageId === `spawn_${begun.receipt.launchId}`))
