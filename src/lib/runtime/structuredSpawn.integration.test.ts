@@ -8,6 +8,7 @@ import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import type { ResumeSpec } from "@/lib/agent/cli";
+import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { procBackend } from "@/lib/proc";
@@ -19,7 +20,7 @@ import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { terminalClaudeExitReason } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import { StructuredHostAdoptionCleanupError, type DeliveryReceipt, type HostState, type QueueEntry, type RuntimeEvent } from "./engineHost";
-import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost } from "./structuredDeliveryController";
+import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, releaseStructuredDeliveryHost } from "./structuredDeliveryController";
 import { dispatchStructuredControl } from "./structuredControls";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { readStructuredHostRecords, terminateStructuredHostTree } from "./structuredHostControl";
@@ -5747,4 +5748,124 @@ test.each(["healthy", "uncertain acknowledgement", "payload timeout"] as const)(
   expect(host.sent[0]?.text).toBe("recover this original first message");
   await bindStructuredDeliveryQueue([]);
   journal.close();
+});
+
+/*
+ * A launch that lands on an account other than the engine's routed one
+ * (#2051). The project's account pool picks the account with the most room and
+ * uses routing only to break a tie, so an unpinned spawn is routinely born on
+ * a non-routed account. Its own first message used to trip the lazy "follow
+ * the routed account" move, which holds the message behind a migration of a
+ * conversation with no transcript yet, and that migration can never advance,
+ * because it waits on the very turn the held message would start. Production
+ * observed exactly this with LLV_MCP_TRANSPORT=http on, so both transports
+ * run here: the production spawn path, the production Claude host, a real
+ * child process that connects to the viewer server it was configured with
+ * before its first turn.
+ */
+describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed account (%s viewer transport)", (transport) => {
+  test("starts its first turn on that account and materializes its transcript", async () => {
+    const id = crypto.randomUUID();
+    const root = path.join(sandbox, `non-routed-first-turn-${transport}-${id}`);
+    const cwd = path.join(root, "project");
+    const home = path.join(root, "account-b");
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.mkdirSync(home, { recursive: true });
+    const binary = path.join(root, "claude");
+    const fixture = path.join(import.meta.dir, "fixtures", "claude-stream-json-transcript.ts");
+    fs.writeFileSync(binary, `#!/bin/sh\nexec ${JSON.stringify(Bun.which("bun") ?? process.execPath)} ${JSON.stringify(fixture)} "$@"\n`, { mode: 0o755 });
+
+    const capabilities: string[] = [];
+    const endpoint = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (request) => {
+        capabilities.push(request.headers.get("x-llv-spawn-capability") ?? "");
+        const message = await request.json() as { id: number };
+        return Response.json({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "0" } },
+        });
+      },
+    });
+    const previous = Object.fromEntries(["LLV_MCP_TRANSPORT", "LLV_MCP_HTTP_URL", "LLV_TOKEN", "LLV_CLAUDE_BINARY"]
+      .map((name) => [name, process.env[name]] as const));
+    if (transport === "http") {
+      process.env.LLV_MCP_TRANSPORT = "http";
+      process.env.LLV_MCP_HTTP_URL = `http://127.0.0.1:${endpoint.port}/api/mcp`;
+    } else delete process.env.LLV_MCP_TRANSPORT;
+    delete process.env.LLV_TOKEN;
+    process.env.LLV_CLAUDE_BINARY = binary;
+
+    const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
+    const client = runtimeClient(journal);
+    await bindStructuredDeliveryQueue([], { registry, client });
+    try {
+      /* Account A is routed; the pool placed this launch on account B. */
+      registry.setEngineRouting("claude", "account-a");
+      const begun = beginLegacySpawnFixture(registry, {
+        engine: "claude",
+        cwd,
+        transport: "structured",
+        accountId: "account-b",
+        accountPin: false,
+        clientAttemptId: `non-routed-${id}`,
+        launchProfile: emptyLaunchProfile({ cwd, permissionMode: "bypassPermissions", mcpServers: ["viewer"] }),
+      });
+      if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+
+      const response = await spawnStructuredConversation({
+        engine: "claude",
+        receipt: begun.receipt,
+        spec: { command: "claude", cwd, windowName: "non-routed", engine: "claude" },
+        account: { engine: "claude", accountId: "account-b", kind: "managed", home, transcriptRoot: path.join(home, "projects"), env: { NODE_ENV: "test", PATH: process.env.PATH } },
+        "prompt": "start on the account the pool chose",
+        registry,
+        client,
+      });
+
+      const receipt = registry.snapshot().receipts[begun.receipt.launchId]!;
+      const sessionId = receipt.key!.sessionId;
+      const transcript = claudeTranscriptPath(cwd, sessionId, path.join(home, "projects"));
+      expect(response).toMatchObject({ launched: true, initialMessage: "delivered", path: transcript });
+      const seen = JSON.parse(fs.readFileSync(path.join(cwd, ".claude-fixture.json"), "utf8")) as {
+        viewer: { type: string; status?: number } | null;
+        turns: string[];
+      };
+      /* The launch went out with the transport under test, and the child
+         reached its viewer server before its first turn, as Claude does. */
+      if (transport === "http") {
+        expect(seen.viewer).toEqual({ type: "http", status: 200 });
+        expect(capabilities).toHaveLength(1);
+        expect(capabilities[0]).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      } else {
+        expect(seen.viewer?.type).toBe("stdio");
+        expect(capabilities).toEqual([]);
+      }
+      expect(seen.turns).toEqual(["start on the account the pool chose"]);
+      expect(fs.readFileSync(transcript, "utf8")).toContain("start on the account the pool chose");
+      expect(receipt).toMatchObject({ state: "completed", accountId: "account-b" });
+      /* The routed account did not overturn the pool's choice before the
+         conversation's first turn. */
+      const conversation = registry.conversation(begun.receipt.conversationId)!;
+      expect(conversation.migration).toBeNull();
+      expect(conversation.generations.at(-1)?.accountId).toBe("account-b");
+      expect(Object.values(registry.snapshot().heldDeliveries)
+        .filter((delivery) => delivery.clientMessageId === `spawn_${begun.receipt.launchId}`))
+        .toMatchObject([{ state: "delivered" }]);
+    } finally {
+      /* The published host owns the child; releasing it reaps the process. */
+      const key = Object.values(registry.snapshot().receipts)[0]?.key;
+      if (key) await releaseStructuredDeliveryHost(key);
+      await bindStructuredDeliveryQueue([]);
+      journal.close();
+      endpoint.stop(true);
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  }, 30_000);
 });

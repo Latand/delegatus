@@ -1496,6 +1496,24 @@ function refenceHeldDeliveries(
   }
 }
 
+/** Whether `launchId` names this conversation's fresh launch, still settling,
+    on the account its current generation runs on (#2051). A settled launch no
+    longer speaks for the account: from then on the conversation is ordinary
+    work the lazy move may carry. */
+function settlingLaunchChoseAccount(
+  file: RegistryFile,
+  conversationId: ViewerConversationId,
+  generation: RegistryConversation["generations"][number],
+  launchId: string | null | undefined,
+): boolean {
+  const receipt = launchId ? file.receipts[launchId] : undefined;
+  return Boolean(receipt
+    && receipt.purpose === "launch"
+    && (receipt.state === "starting" || receipt.state === "path-pending")
+    && resolveConversationAlias(file, receipt.conversationId) === conversationId
+    && receipt.accountId === generation.accountId);
+}
+
 /** The in-flight migration a transaction is about to replace, whose held deliveries its replacement adopts. */
 function inFlightMigration(conversation: RegistryConversation): ConversationMigration | null {
   return conversation.migration && IN_FLIGHT_MIGRATION_PHASES.has(conversation.migration.phase) ? { ...conversation.migration } : null;
@@ -7508,7 +7526,10 @@ export class AgentRegistry {
    * conversation is returned exactly as it stands and the send lands on the
    * account it is already running on, which crosses nothing.
    */
-  requestConversationMigrationToActiveAccount(id: ViewerConversationId): RegistryConversation {
+  requestConversationMigrationToActiveAccount(
+    id: ViewerConversationId,
+    options: { launchId?: string | null } = {},
+  ): RegistryConversation {
     const bindings = accountProjectBindings();
     return this.mutate((file) => {
       const canonicalId = resolveConversationAlias(file, id);
@@ -7521,6 +7542,13 @@ export class AgentRegistry {
       const source = conversation.generations.at(-1);
       if (!targetId || !source || source.accountId === null || source.accountId === targetId) return clone(conversation);
       if (conversation.migrationOptOut?.targetId === targetId) return clone(conversation);
+      /* The launch's own first message (#2051). The launch picked this account
+         moments ago by the automatic rule, where the project's pool ranks
+         accounts by room and routing only breaks a tie. Moving the
+         conversation now strands its mandate behind a migration of a thread
+         with no turn yet: a Claude move waits for a transcript only that
+         held message can start, and a committed move drops the held message. */
+      if (settlingLaunchChoseAccount(file, canonicalId, source, options.launchId)) return clone(conversation);
       if (admitAutomaticAccountTarget({
         project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
         engine: conversation.engine,
