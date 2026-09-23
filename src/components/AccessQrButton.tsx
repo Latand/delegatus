@@ -163,7 +163,7 @@ export function AccessQrButton() {
               type="button"
               data-qr-turn-on=""
               onClick={() => { setOpen(false); openOnboarding("guide", "phone"); }}
-              className="inline-flex min-h-[44px] items-center justify-center rounded-[8px] bg-accent px-3 text-[12px] font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-8"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-[8px] bg-brand px-3 text-[12px] font-semibold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-8"
             >
               {t("qr.turnOn")}
             </button>

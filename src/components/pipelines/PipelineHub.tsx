@@ -128,7 +128,7 @@ export function PipelineHub({
           {error ? <span className="truncate text-[10.5px] font-semibold text-danger" title={error}>{error}</span> : null}
           {parked ? (
             <span className="flex items-center gap-1.5">
-              <button className="flex-1 rounded-full border border-accent bg-accent px-3 py-1 text-[11px] font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40" disabled={busy} onClick={() => void run("retry-stage")}>{t("pipelineStrip.retryStage")}</button>
+              <button className="flex-1 rounded-full border border-brand bg-brand px-3 py-1 text-[11px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40" disabled={busy} onClick={() => void run("retry-stage")}>{t("pipelineStrip.retryStage")}</button>
               <button className="rounded-full border border-border bg-canvas px-2.5 py-1 text-[10.5px] font-bold text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40" disabled={busy} onClick={() => void run("skip-stage")}>{t("pipelineStrip.skipStage")}</button>
             </span>
           ) : null}

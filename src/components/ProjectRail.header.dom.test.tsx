@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { setLocale, translate } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 /*
  * The desktop rail header put in order (issue #1819).
@@ -106,11 +107,13 @@ const click = async (element: HTMLElement) => {
   await act(async () => { element.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event); });
 };
 
-test("the desktop header carries no counters — only the title, the hide control and one menu", async () => {
+test("the desktop header carries no counters — only the product name, the hide control and one menu", async () => {
   const host = await renderRail();
   const header = headerIn(host);
 
-  expect(header.textContent ?? "").toBe(translate("en", "rail.title"));
+  expect(header.textContent ?? "").toBe(PRODUCT_NAME);
+  /* The emblem sits beside the name, as decoration the name already labels. */
+  expect(header.querySelector("[data-brand-mark]")?.getAttribute("alt")).toBe("");
   expect(header.textContent ?? "").not.toMatch(/\d/);
   expect(header.textContent ?? "").not.toContain("⏸");
   /* Exactly two controls: put the rail away, and the menu. */

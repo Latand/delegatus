@@ -274,7 +274,7 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip, onOwnsPrimar
   const lead = runtime
     ? t("onboarding.check.lead", { model: modelLabel(runtime), effort: effortTierLabel(t, runtime.effort) })
     : null;
-  const primary = "inline-flex h-8 items-center justify-center rounded-[8px] bg-accent px-4 text-ui font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 max-sm:h-11 max-sm:flex-1";
+  const primary = "inline-flex h-8 items-center justify-center rounded-[8px] bg-brand px-4 text-ui font-semibold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 max-sm:h-11 max-sm:flex-1";
   const secondary = "inline-flex h-8 items-center justify-center rounded-[8px] border border-border bg-card px-3.5 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 max-sm:h-11 max-sm:flex-1";
 
   if (noEngineShown) {

@@ -135,6 +135,8 @@ test("desktop: the empty project offers the orchestrator and one agent, both wir
   const empty = leaf(host);
   expect(empty).not.toBeNull();
   expect(empty!.textContent).toContain(en["dash.emptyTitle"]);
+  /* The empty board opens on the Delegatus badge. */
+  expect(empty!.querySelector("[data-brand-badge]")).not.toBeNull();
   /* Both lines, with the project named in the first one. */
   expect(empty!.textContent).toContain(translate("en", "dash.emptyStartHere", { project: "atlas" }));
   expect(empty!.textContent).toContain("atlas");

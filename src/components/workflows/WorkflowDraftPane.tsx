@@ -244,7 +244,7 @@ export function WorkflowDraftPane({
           <span className="min-w-0 flex-1 truncate text-[10.5px] text-muted">{t("wfDraft.footerHint")}</span>
         )}
         <button
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-accent bg-accent px-3.5 py-1.5 text-[11.5px] font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-brand bg-brand px-3.5 py-1.5 text-[11.5px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
           disabled={busy}
           onClick={() => void launch()}
         >

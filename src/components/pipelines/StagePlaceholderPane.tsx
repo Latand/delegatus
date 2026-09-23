@@ -430,7 +430,7 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
               <button
                 type="submit"
                 disabled={!editable || busy}
-                className="inline-flex h-7 items-center gap-1 rounded-control border border-accent bg-accent px-2.5 text-label font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
+                className="inline-flex h-7 items-center gap-1 rounded-control border border-brand bg-brand px-2.5 text-label font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
               >
                 {t("pipelineSlot.savePrompt")}
               </button>
