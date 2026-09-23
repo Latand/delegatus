@@ -126,6 +126,14 @@ export const uk: Record<keyof typeof en, Message> = {
   "dash.newTask": "Нова задача",
   "dash.pipelinesUnavailable": "Пайплайни тимчасово недоступні: файл стану пайплайнів не вдалося прочитати. Решта панелей працює.",
   "dash.loadingBoard": "Завантаження дошки…",
+  /* #2071: the title while a project's name is not known after a certified
+     answer, and the line that says the board shows a cached answer. */
+  "dash.projectUnnamed": "Проєкт без назви",
+  "dash.updating": "оновлення…",
+  /* #2071: the server is being reconnected; the board shows the last good
+     answer, from {time}. */
+  "reach.reconnecting": "перепідключення · показано стан на {time}",
+  "reach.reconnectingShort": "перепідключення…",
   "dash.emptyTitle": "На схемі поки порожньо",
   "dash.emptyStartHere": "Почни звідси: Оркестратор — скажи йому, що треба зробити в {project}.",
   "dash.emptyOneAgent": "Або запусти одного агента на одну задачу (Створити → Агент).",
@@ -2582,8 +2590,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.banner.offlineTitle": "Офлайн · перепідключення",
   "mobile2.banner.offlineBody": "Показано останній отриманий стан",
   "mobile2.banner.offlineBodyAt": "Показано останній отриманий стан · {time}",
-  "mobile2.banner.degradedTitle": "Рантайм деградований · опитування",
-  "mobile2.banner.degradedBody": "Оновлення надходять кожні 10 с",
   "mobile2.sheet.close": "Закрити",
   "mobile2.receipt.respawn": "Перезапустити",
   "mobile2.receipt.reopen": "Відкрити знову",

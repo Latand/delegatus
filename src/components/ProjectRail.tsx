@@ -17,7 +17,8 @@ import { AccessQrButton } from "./AccessQrButton";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { DirectoryPicker, isDirectoryPath, splitDirectoryPath } from "./DirectoryPicker";
 import { FlipRow } from "./FlipRow";
-import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, Loader2, MoreHorizontal } from "./icons";
+import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal } from "./icons";
+import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
 import { openOnboarding } from "./onboarding/useOnboarding";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
@@ -348,10 +349,8 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
               <div className="px-3 py-4 text-center text-[12px] text-muted">{t("common.nothingFound")}</div>
             ) : null
           ) : (
-            <div className="flex items-center justify-center gap-2 px-3 py-4 text-[12px] text-muted">
-              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-              {t("common.loading")}
-            </div>
+            /* Rows in the shape of the project rows that are coming (#2071). */
+            <BoardRowsSkeleton variant="rail" rows={6} className="flex-none" />
           )
         ) : null}
       </nav>

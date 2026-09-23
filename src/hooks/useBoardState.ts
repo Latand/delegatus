@@ -78,6 +78,10 @@ export interface BoardSnapshot {
   revision: number;
   sync: BoardSync;
   loaded: boolean;
+  /** The arrangement is the one this browser persisted from an earlier
+      document (#2071), not yet confirmed by this document's GET. Only the
+      first paint reads it; everything gated on `loaded` keeps waiting. */
+  cached: boolean;
   /**
    * THE canonical board selection (#771): the conversation paths the operator
    * has picked, as one set every view reads and writes. It lives here — beside
@@ -163,6 +167,62 @@ const activeStores = new Map<string, () => void>();
    never widen the board beyond what the server last acknowledged. */
 const confirmedBoards = new Map<string, BoardProjectStateV1>();
 
+/* The same confirmed boards, persisted across documents (#2071 D5): the six
+   most recently confirmed projects, at most 64 KB, least recent dropped
+   first. A new document paints a project from here at once, flagged `cached`,
+   while its GET revalidates; a write queued against it meets the revision
+   fence the session cache already relies on. */
+export const PERSISTED_BOARDS_KEY = "llvBoards";
+const PERSISTED_BOARDS_MAX = 6;
+const PERSISTED_BOARDS_MAX_BYTES = 64 * 1024;
+const persistedRevisions = new Map<string, number>();
+
+function boardStorage(): Storage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedBoards(): Array<[string, BoardProjectStateV1]> {
+  try {
+    const raw = boardStorage()?.getItem(PERSISTED_BOARDS_KEY);
+    const parsed = raw ? JSON.parse(raw) as unknown : null;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is [string, BoardProjectStateV1] => Array.isArray(entry)
+      && typeof entry[0] === "string"
+      && Boolean(entry[1]) && typeof entry[1] === "object"
+      && (entry[1] as BoardProjectStateV1).schemaVersion === 1
+      && typeof (entry[1] as BoardProjectStateV1).revision === "number"
+      && Boolean((entry[1] as BoardProjectStateV1).prefs));
+  } catch {
+    return [];
+  }
+}
+
+export function persistedBoard(project: string): BoardProjectStateV1 | undefined {
+  return readPersistedBoards().find(([key]) => key === project)?.[1];
+}
+
+function persistBoard(project: string, board: BoardProjectStateV1): void {
+  if (persistedRevisions.get(project) === board.revision) return;
+  const store = boardStorage();
+  if (!store) return;
+  persistedRevisions.set(project, board.revision);
+  const entries: Array<[string, BoardProjectStateV1]> = [[project, board] as [string, BoardProjectStateV1], ...readPersistedBoards().filter(([key]) => key !== project)].slice(0, PERSISTED_BOARDS_MAX);
+  let text = JSON.stringify(entries);
+  while (text.length > PERSISTED_BOARDS_MAX_BYTES && entries.length > 1) {
+    entries.pop();
+    text = JSON.stringify(entries);
+  }
+  try {
+    if (text.length <= PERSISTED_BOARDS_MAX_BYTES) store.setItem(PERSISTED_BOARDS_KEY, text);
+  } catch {
+    /* quota or private mode: the session cache still serves this page */
+  }
+}
+
 /* The ephemeral selection session per project (#771). Module scope for the same
    reason the confirmed-board cache is: it must survive every mount boundary
    below it. A view switch unmounts SchemeBoard, and a remount of the project's
@@ -233,6 +293,12 @@ export function resetPendingOpensForTest(): void {
   pendingOpens.clear();
   activeStores.clear();
   confirmedBoards.clear();
+  persistedRevisions.clear();
+  try {
+    boardStorage()?.removeItem(PERSISTED_BOARDS_KEY);
+  } catch {
+    /* no storage in this test */
+  }
   for (const entry of sharedStores.values()) entry.store.dispose();
   sharedStores.clear();
 }
@@ -501,18 +567,21 @@ export function createBoardStore(options: BoardStoreOptions): BoardStore {
      confirmed board and `loaded` from the cache, so the first snapshot already
      carries the settled arrangement (#172) while a background GET revalidates. */
   const cachedConfirmed = confirmedBoards.get(project);
-  let confirmed: BoardProjectStateV1 = cachedConfirmed ?? emptyBoard();
+  /* A new document's first visit paints the persisted board instead (#2071). */
+  const persisted = cachedConfirmed === undefined ? persistedBoard(project) : undefined;
+  let confirmed: BoardProjectStateV1 = cachedConfirmed ?? persisted ?? emptyBoard();
   let outbox: OutboxEntry[] = [];
   let inflight = false;
   let loaded = cachedConfirmed !== undefined;
+  const fromPersisted = persisted !== undefined;
   let unavailable = false;
   /* The selection is READ THROUGH the project-scoped session map, never copied
      into a local: a store recreated behind a remount opens with the selection the
      operator still has, and no second holder of the same project can drift. */
   const selection = () => selectionFor(project);
-  let snapshot: BoardSnapshot = loaded
-    ? { prefs: confirmed.prefs, explicitManual: confirmed.explicitManual ?? [], revision: confirmed.revision, sync: "current", loaded: true, selection: selection().paths, selectionArmed: selection().armed }
-    : { prefs: EMPTY_BOARD_PREFS, explicitManual: [], revision: 0, sync: "unavailable", loaded: false, selection: selection().paths, selectionArmed: selection().armed };
+  let snapshot: BoardSnapshot = loaded || fromPersisted
+    ? { prefs: confirmed.prefs, explicitManual: confirmed.explicitManual ?? [], revision: confirmed.revision, sync: "current", loaded, cached: !loaded, selection: selection().paths, selectionArmed: selection().armed }
+    : { prefs: EMPTY_BOARD_PREFS, explicitManual: [], revision: 0, sync: "unavailable", loaded: false, cached: false, selection: selection().paths, selectionArmed: selection().armed };
   let disposed = false;
   /* Consecutive revision conflicts: each means a fresh concurrent write, so we
      retry immediately up to a cap before falling back to the backoff timer. */
@@ -550,11 +619,14 @@ export function createBoardStore(options: BoardStoreOptions): BoardStore {
     /* Every queued intent is acknowledged: this view is no longer behind. */
     if (outbox.length === 0) rebased = false;
     const board = optimisticBoard(confirmed, mutationsOf(outbox));
-    snapshot = { prefs: board.prefs, explicitManual: board.explicitManual ?? [], revision: confirmed.revision, sync: syncFor(), loaded, selection: selection().paths, selectionArmed: selection().armed };
+    snapshot = { prefs: board.prefs, explicitManual: board.explicitManual ?? [], revision: confirmed.revision, sync: syncFor(), loaded, cached: !loaded && fromPersisted, selection: selection().paths, selectionArmed: selection().armed };
     /* Cache only a genuinely loaded, available board — never the pre-load empty
        board or an unavailable one — so a later mount primes from the settled
        arrangement and not from a placeholder that would paint an unpruned set. */
-    if (loaded && !unavailable) confirmedBoards.set(project, confirmed);
+    if (loaded && !unavailable) {
+      confirmedBoards.set(project, confirmed);
+      persistBoard(project, confirmed);
+    }
     emit();
   };
 
@@ -964,7 +1036,7 @@ export function createBoardStore(options: BoardStoreOptions): BoardStore {
   };
 }
 
-const UNAVAILABLE_SNAPSHOT: BoardSnapshot = { prefs: EMPTY_BOARD_PREFS, explicitManual: [], revision: 0, sync: "unavailable", loaded: false, selection: EMPTY_SELECTION.paths, selectionArmed: false };
+const UNAVAILABLE_SNAPSHOT: BoardSnapshot = { prefs: EMPTY_BOARD_PREFS, explicitManual: [], revision: 0, sync: "unavailable", loaded: false, cached: false, selection: EMPTY_SELECTION.paths, selectionArmed: false };
 
 /** The first snapshot a project's binding renders. A project already loaded this
     session starts settled from the session cache (#172) so its board paints the
@@ -979,9 +1051,10 @@ const UNAVAILABLE_SNAPSHOT: BoardSnapshot = { prefs: EMPTY_BOARD_PREFS, explicit
 function initialBoardSnapshot(project: string | null): BoardSnapshot {
   if (typeof window === "undefined" || project === null) return UNAVAILABLE_SNAPSHOT;
   const selection = selectionFor(project);
-  const cached = confirmedBoards.get(project);
-  if (!cached) return { ...UNAVAILABLE_SNAPSHOT, selection: selection.paths, selectionArmed: selection.armed };
-  return { prefs: cached.prefs, explicitManual: cached.explicitManual ?? [], revision: cached.revision, sync: "current", loaded: true, selection: selection.paths, selectionArmed: selection.armed };
+  const confirmed = confirmedBoards.get(project);
+  const board = confirmed ?? persistedBoard(project);
+  if (!board) return { ...UNAVAILABLE_SNAPSHOT, selection: selection.paths, selectionArmed: selection.armed };
+  return { prefs: board.prefs, explicitManual: board.explicitManual ?? [], revision: board.revision, sync: "current", loaded: confirmed !== undefined, cached: confirmed === undefined, selection: selection.paths, selectionArmed: selection.armed };
 }
 
 /* One store per project per tab, refcounted across bindings. A project board is

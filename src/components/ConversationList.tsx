@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { Loader2 } from "@/components/icons";
 import { useConversationCatalog } from "@/hooks/useConversationCatalog";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 import { QuietFileRow } from "./ProjectTrash";
+import { BoardRowsSkeleton } from "./skeletons";
 
 /** One page of the desktop agent list. Deep enough that a scroll reaches the
     next page without a visible pause, small enough that the first paint of a
@@ -74,11 +74,7 @@ export function ConversationList({
             </div>
           ))}
         </div>
-        {catalog.loading && !catalog.items.length ? (
-          <div className="flex min-h-32 items-center justify-center gap-2 text-[13px] font-semibold text-muted">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> {t("common.loading")}
-          </div>
-        ) : null}
+        {catalog.loading && !catalog.items.length ? <BoardRowsSkeleton variant="list" rows={6} className="px-0" /> : null}
         {catalog.error ? (
           <div className="flex min-h-32 flex-col items-center justify-center gap-2 text-center text-[13px] font-semibold text-danger">
             <span>{t("list.failed")}</span>

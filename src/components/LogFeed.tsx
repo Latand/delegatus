@@ -17,6 +17,7 @@ import type { FileEntry } from "@/lib/types";
 import { isAwaitingUser } from "@/hooks/useSwitchboardData";
 
 import { LaunchChips } from "./conversation/LaunchChips";
+import { FeedSkeleton } from "./skeletons";
 import { LiveTurnRows } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
 import { messageRowModel } from "./conversation/messageRow";
@@ -1578,7 +1579,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 ))}
               </div>
             ) : null}
-            {feed.items.length || windowTail ? null : (
+            {feed.items.length || windowTail ? null : tail.loading ? (
+              /* Nothing cached yet (#2071): the feed's shape, bottom-anchored,
+                 instead of the word «Loading…». A tail read before paints at
+                 once from `logTailStore` and never reaches this branch. */
+              <FeedSkeleton className="min-h-[40vh]" />
+            ) : (
               <div className="mt-[14vh] text-center text-muted">
                 {tail.loading
                   ? t("common.loadingCap")
