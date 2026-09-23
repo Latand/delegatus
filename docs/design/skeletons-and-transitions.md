@@ -587,3 +587,46 @@ raster is committed.
 | Design system; en and uk | §1.6 durations and tokens; the strings table |
 | Measure before and after on the phone board | Measurement plan; the before numbers above |
 | Traffic budget: no new polling, no bigger payload | D4 reuses the existing conditional request (a `304` saves the body); D7 adds no request |
+
+## Implementation and results
+
+Built as designed, with three differences:
+
+- **Commits.** Two feature commits (D1 D2 D3 D6, then D4 D5 D7 D8), each
+  with its tests, and a merge of `main`.
+- **Measurement driver.** The before frames were taken with an out-of-repo
+  playwright-core script over the seeded home of
+  `scripts/capture-mobile-v2.ts`. The after frames and both sets of numbers
+  come from the same script, extended with a `reopen-reload` case, the
+  wrong-frame counter, `/api/files` status and bytes, and the `/api/*` count.
+  Both builds were measured with the extended script, so the table compares
+  like with like. No driver was added to the repository.
+- **Loading surfaces kept.** The phone orchestrator sheet keeps its spinner.
+  It is a sheet over content that is already shaped, and the inventory
+  listed it as keep.
+
+Production builds (`next build --webpack`) of the merge base and of this
+branch, served by `next start` under Bun 1.4.0, on an isolated seeded config
+root and a port the OS assigned. Phone 390×844 at DPR 2, 4× CPU throttling,
+80 ms RTT, 10 Mbps. Medians of five runs, in ms from navigation start.
+
+| metric | before | after |
+| --- | --- | --- |
+| wrong frames at 390 px (desktop rail, first run, raw key) | 55 frames, 1750 ms | **0** |
+| phone shell painted | 1699 | **287** |
+| name in the title, `reopen-reload` | 1977 | **285** (first paint) |
+| name in the title, first visit | 2048 (raw key before it) | 1832 (placeholder bar before it) |
+| first conversation row, `cold` | 2048 | 1832 |
+| first conversation row, `reopen-reload` | 1977 | 1677 |
+| CLS over 5 s, `cold` / `reopen-reload` | 0.0004 / 0.0004 | 0.0001 / 0.0005 |
+| `/api/files` on `reopen-reload`, nothing changed | 200, full body | **304, 0 bytes** |
+| `/api/*` requests in the first 5 s | 15 | 9 |
+
+The `reopen-reload` row lands about 40 ms after the app mounts, which meets
+the "client mount + 150 ms" target. It misses the "≤ 0.6 × cold" target. On
+this seed the whole `/api/files` body is about 2 KB, so the cold path is also
+mounting plus one small request, and the bundle's mount under 4× throttling
+dominates both cases. The saving the snapshot buys scales with the catalog;
+production's 1.67 MB compressed body is exactly the part a `304` removes.
+The frames are in `/var/tmp/skeletons/after/`: the before set, plus 1080 px
+desktop frames and the `15`/`16` reload-with-cache frames.
