@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { translate } from "@/lib/i18n";
+import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -138,6 +139,19 @@ const TASKS: BoardTask[] = [
   task("t-off", ATLAS, "inbox", "An empty atlas task nobody started", null, { board: "hidden" } as Partial<BoardTask>),
 ];
 
+/* The ledger task's lane, parked on the operator: its card pins in Assigned,
+   and the bar's ⚠ counts it beside the mesh question. */
+const LANE = "lane-ledger-decide";
+const role = (roleId: string) => ({ roleId, access: roleId === "reviewer" ? "read-only" : "read-write", promptScaffold: null });
+const PIPELINES: Pipeline[] = [{
+  id: LANE, task: "Reconcile the ledger export", taskIds: ["t-ledger"], project: LEDGER, repoDir: "/repo", worktreeDir: "/repo-ledger", branch: "lane/ledger",
+  baseBranch: "main", baseRef: "main", lastPassedCommit: "",
+  stages: [{ id: "implement", kind: "run", effectiveRole: role("builder"), next: "review" }, { id: "review", kind: "run", effectiveRole: role("reviewer"), next: null }],
+  runs: [{ stageId: "implement", attempts: [{ n: 1, state: "failed", startedAt: iso(2_400), completedAt: iso(2_000), effectiveRole: role("builder"), activatedBy: null, verdict: { status: "fail", findings: ["The export drops the last row."] } }] }],
+  cursor: { stageId: "implement", state: "needs_decision", input: null, activatedBy: null },
+  state: "needs_decision", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null, createdAt: iso(7_200), closedAt: null,
+} as unknown as Pipeline];
+
 const emptyBoard = (): BoardProjectStateV1 => ({
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
   prefs: { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
@@ -155,7 +169,7 @@ function stubFetch(): void {
         files: FILES,
         projectCatalog: [LEDGER, ATLAS, MESH, NAMELESS].map((project) => ({ project, conversations: 2, smt: NOW - 30 })),
         projectDisplayNames: NAMES,
-        flows: [], pipelines: [], workflows: [], tasks: TASKS, systemHealth: { tmux: { status: "healthy" } },
+        flows: [], pipelines: PIPELINES, workflows: [], tasks: TASKS, systemHealth: { tmux: { status: "healthy" } },
       });
     }
     if (url.startsWith("/api/board")) {
@@ -374,9 +388,10 @@ test("a conversation opens full screen, never inside a card: a row no task owns,
 
 test("the Needs-you sheet over the Overview opens its conversation full screen over the Overview", async () => {
   const host = await mountOverview();
-  await until(() => host.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") === "1");
+  await until(() => host.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") === "2");
 
   await tap(host.querySelector('[data-mobile2-open="attention"]'));
+  /* Conversations first, as a project's sheet lists them. */
   const row = dom.document.querySelector("[data-attention-row]") as unknown as HTMLElement;
   expect(row).not.toBeNull();
   await tap(row);
@@ -420,4 +435,40 @@ test("a screen the Overview cannot place sends the stack home, and the next card
 
   await tap(cardTitled(host, "Reconcile the ledger export"));
   await until(() => Boolean(host.querySelector('[data-mobile2-screen="task"][data-mobile2-task="t-ledger"]')));
+});
+
+/* The ⚠ badge, the Needs-you sheet and the tabs' ⚠ marks are one list on the
+   Overview as they are in a project: every project's parked lanes included,
+   and a lane's row opens its pipeline screen over the Overview, from the board
+   or from another project's screen already open over it. */
+test("the Overview's ⚠ counts what its tabs mark, and a lane in its sheet opens the pipeline screen", async () => {
+  const host = await mountOverview();
+  const marks = () => [...host.querySelectorAll("[data-phone-tab-needs]")].reduce((sum, mark) => sum + Number(mark.textContent), 0);
+  const badge = () => Number(host.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? "0");
+  await until(() => badge() === 2);
+  expect(host.querySelector('[data-phone-kanban-tab="assigned"] [data-phone-tab-needs]')?.textContent).toBe("1");
+  expect(host.querySelector('[data-phone-kanban-tab="blocked"] [data-phone-tab-needs]')?.textContent).toBe("1");
+  expect(badge()).toBe(marks());
+
+  const laneRow = () => dom.document.querySelector(`[data-attention-row="${LANE}"]`) as unknown as HTMLElement | null;
+  const pipelineScreen = () => host.querySelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${LANE}"]`);
+
+  /* From the Overview's board. */
+  await tap(host.querySelector('[data-mobile2-open="attention"]'));
+  expect(laneRow()).not.toBeNull();
+  await tap(laneRow());
+  await until(() => Boolean(pipelineScreen()));
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "pipeline", id: LANE }]);
+  await back(host);
+  await until(() => Boolean(host.querySelector("[data-phone-kanban]")));
+
+  /* From the mesh task's screen, another project's dashboard. */
+  await tap(host.querySelector('[data-phone-kanban-tab="blocked"]'));
+  await tap(cardTitled(host, "Unblock the mesh migration"));
+  await until(() => Boolean(host.querySelector('[data-mobile2-screen="task"][data-mobile2-task="t-mesh"]')));
+  await tap(host.querySelector('[data-mobile2-open="attention"]'));
+  await tap(laneRow());
+  await until(() => Boolean(pipelineScreen()));
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "pipeline", id: LANE }]);
+  expect(host.querySelector("[data-mobile2-task]")).toBeNull();
 });

@@ -123,6 +123,10 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
      a screen pushed over the Overview, so ‹ comes back to this column. The
      board tells the ⋯ menu how many tasks it is not drawing. */
   const [hiddenCount, setHiddenCount] = useState(0);
+  /* The phone kanban is drawn once there are projects and an answer, the
+     condition `OverviewKanban` holds its skeleton on; the Hidden tasks sheet
+     is the board's, so its ⋯ row waits for it. */
+  const boardDrawn = projects.length > 0 && (loaded || cached);
   /* A screen over the Overview is drawn by its own project's dashboard. One
      the Viewer cannot place (a task deleted while its screen sat in the
      history, reached again by Forward) leaves the Overview drawn under a
@@ -222,7 +226,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
     const renderSheet = (name: MobileSheetName, close: () => void) => {
       if (name === "menu") {
         const entries: MobileMenuEntry[] = [
-          ...(projects.length ? [
+          ...(boardDrawn ? [
             {
               kind: "row" as const,
               key: "hidden",

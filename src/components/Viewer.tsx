@@ -47,7 +47,7 @@ import { needsDecisionPipelineRows } from "./mobile/mobileBoardModel";
 import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { getMobileNav, landResolvedConversation, useMobileNavStore } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
-import { overviewLiftKey, overviewLiftScreenOf, overviewScreenProject } from "./mobile/overviewPhone";
+import { overviewLiftKey, overviewLiftScreenOf, overviewPipelineRows, overviewScreenProject } from "./mobile/overviewPhone";
 import type { MobileShellHost } from "./mobile/MobileShell";
 import { onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
@@ -907,8 +907,11 @@ function ViewerApp() {
      close is answered (#1671), so the badge stops counting it on the same tap
      that took the row away. */
   const closingPipelines = useClosingPipelines();
+  /* On the phone's Overview the columns pin every project's parked lanes
+     (#2098), so the badge and the sheet carry them too: one list, and the
+     badge is the sum of the tabs' ⚠ marks. */
   const shellPipelineRows = useMemo(
-    () => (project === OVERVIEW || !isMobile ? [] : needsDecisionPipelineRows(pipelines, project, clock, closingPipelines)),
+    () => (!isMobile ? [] : project === OVERVIEW ? overviewPipelineRows(pipelines, clock, closingPipelines) : needsDecisionPipelineRows(pipelines, project, clock, closingPipelines)),
     [pipelines, project, clock, isMobile, closingPipelines],
   );
   /* Joined into the ONE list the badge counts, the sheet lists and its
@@ -1149,7 +1152,11 @@ function ViewerApp() {
               } : jumpToItem}
               onOpenPipeline={(row) => {
                 close();
-                getMobileNav().push({ kind: "pipeline", id: row.id });
+                /* Over the Overview, one project's dashboard draws what is
+                   stacked above it: a lane of another project replaces that
+                   stack, as a conversation does in `openOverOverview`. */
+                if (project === OVERVIEW && mobileNav.getState().stack.length > 1) mobileNav.home();
+                mobileNav.push({ kind: "pipeline", id: row.id });
               }}
               onClose={close}
             />
@@ -1158,7 +1165,7 @@ function ViewerApp() {
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, files, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, loaded, catalogFailures, selectProject, createProject, jumpToItem]);
+  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, loaded, catalogFailures, selectProject, createProject, jumpToItem]);
 
   const shell = (
     <div className="flex h-full">

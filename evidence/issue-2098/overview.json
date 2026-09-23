@@ -2,6 +2,18 @@
   "results": [
     {
       "key": "390-en",
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "queue": {
+        "badge": 8,
+        "marks": 8
+      }
+    },
+    {
+      "key": "390-en",
       "status": "inbox",
       "stop": 0,
       "viewport": {
@@ -624,6 +636,18 @@
     },
     {
       "key": "390-uk",
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "queue": {
+        "badge": 8,
+        "marks": 8
+      }
+    },
+    {
+      "key": "390-uk",
       "status": "inbox",
       "stop": 0,
       "viewport": {
@@ -1243,6 +1267,18 @@
         "t-seat",
         "t-quota"
       ]
+    },
+    {
+      "key": "430-en",
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "queue": {
+        "badge": 8,
+        "marks": 8
+      }
     },
     {
       "key": "430-en",
@@ -1865,6 +1901,18 @@
         "t-seat",
         "t-quota"
       ]
+    },
+    {
+      "key": "430-uk",
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "queue": {
+        "badge": 8,
+        "marks": 8
+      }
     },
     {
       "key": "430-uk",

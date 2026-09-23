@@ -4,7 +4,7 @@ import type { FileEntry } from "@/lib/types";
 import { buildAttentionQueue } from "@/components/attention";
 import { projectKey } from "@/components/projectModel";
 
-import { needsDecisionPipelineRows } from "./mobileBoardModel";
+import { needsDecisionPipelineRows, type MobileBoardPipelineRow } from "./mobileBoardModel";
 import { screenKey, type MobileScreen } from "./mobileNav";
 import { attentionKey } from "./phoneKanbanModel";
 
@@ -65,15 +65,22 @@ export function overviewScreenProject(screen: MobileScreen | null, lookup: Overv
   return null;
 }
 
-/** The attention queue's order over every project, as `attentionKey` keys:
-    the order the bar's ⚠ sheet lists on the Overview, which the columns pin
-    by, conversations first and then the lanes parked on the operator, the way
-    a project's board orders its own. */
-export function overviewAttention(files: readonly FileEntry[], pipelines: readonly Pipeline[], now: number, closing: readonly string[]): string[] {
-  const keys = buildAttentionQueue([...files], now).map((item) => attentionKey.conversation(item.file.path));
+/** The lanes parked on the operator in every project: each project's own
+    `needsDecisionPipelineRows`, joined. The Overview's ⚠ badge counts them
+    and its sheet lists them beside the conversations, and the columns pin the
+    same lanes, so the badge is the sum of the tabs' ⚠ marks. */
+export function overviewPipelineRows(pipelines: readonly Pipeline[], now: number, closing: readonly string[]): MobileBoardPipelineRow[] {
   const projects = [...new Set(pipelines.map((pipeline) => pipeline.project))];
-  for (const project of projects) {
-    for (const row of needsDecisionPipelineRows(pipelines, project, now, closing)) keys.push(attentionKey.pipeline(row.id));
-  }
-  return keys;
+  return projects.flatMap((project) => needsDecisionPipelineRows(pipelines, project, now, closing));
+}
+
+/** The attention queue's order over every project, as `attentionKey` keys:
+    the order the bar's ⚠ sheet lists on the Overview (the conversations, then
+    `overviewPipelineRows`), which the columns pin by, the way a project's
+    board orders its own. */
+export function overviewAttention(files: readonly FileEntry[], pipelines: readonly Pipeline[], now: number, closing: readonly string[]): string[] {
+  return [
+    ...buildAttentionQueue([...files], now).map((item) => attentionKey.conversation(item.file.path)),
+    ...overviewPipelineRows(pipelines, now, closing).map((row) => attentionKey.pipeline(row.id)),
+  ];
 }

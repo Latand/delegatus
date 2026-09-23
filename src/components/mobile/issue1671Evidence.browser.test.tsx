@@ -2036,6 +2036,14 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
         await page.goto(`${fixtureBase}/?overview=1`);
         await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
         await pause(page, 800);
+        /* The bar's ⚠ and the tabs' ⚠ marks are one list: every project's
+           asking conversations and parked lanes. */
+        const queue = await page.evaluate(() => ({
+          badge: Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? "0"),
+          marks: [...document.querySelectorAll("[data-phone-tab-needs]")].reduce((sum, mark) => sum + Number(mark.textContent), 0),
+        }));
+        if (queue.badge !== queue.marks) failures.push(`${key}: the ⚠ badge counts ${queue.badge}, the tabs mark ${queue.marks}`);
+        results.push({ key, viewport, lang, queue });
         for (const status of COLUMN_ORDER) {
           await page.locator(`[data-phone-kanban-tab="${status}"]`).click();
           await page.waitForFunction((wanted) => document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active") === wanted, status);
