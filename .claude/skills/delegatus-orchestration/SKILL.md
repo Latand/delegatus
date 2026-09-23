@@ -24,7 +24,7 @@ Delegatus (`~/.agents/tools/live-log-viewer-next`) is the user's dashboard for e
 
 ## Choosing the agent
 
-Templates map 1:1 to `agent:*` labels on GitHub issues (`Latand/delegatus`) — a labeled issue already names its owner.
+An `agent:*` label on a GitHub issue (`Latand/delegatus`) names the owner role; the role registry decides that role's runtime.
 
 The role registry decides the runtime. The seat's mandate ends with its table; a stage or spawn that names no engine, model or effort runs its role's row. Name a runtime only when the operator names one, and set it on the stage, never in the prompt text.
 

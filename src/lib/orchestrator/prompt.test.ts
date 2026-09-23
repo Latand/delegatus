@@ -250,6 +250,7 @@ test("the checked-in playbook no longer tells the seat to schedule itself", () =
   expect(skill).not.toContain("ScheduleWakeup checkpoints");
   expect(skill).toContain("controller appends the stage_report contract");
   expect(skill).not.toContain("required fenced JSON verdict");
+  expect(skill).not.toMatch(/\bSol\b|xhigh/);
 });
 
 test("mandate delivery keys off directive content and appends it exactly once", () => {
