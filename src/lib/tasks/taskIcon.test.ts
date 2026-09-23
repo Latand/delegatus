@@ -37,9 +37,20 @@ test("case, the lucide: prefix, spaces, React export names and renamed icons all
   expect(canonicalTaskIcon("alarm-check")).toBe("alarm-clock-check");
   expect(canonicalTaskIcon("AlertTriangle")).toBe("triangle-alert");
   expect(canonicalTaskIcon("Heading1")).toBe("heading-1");
+  /* A size stays whole: `2x2` is one part of the name, never `2x-2`. */
+  expect(canonicalTaskIcon("Grid2x2")).toBe("grid-2x2");
+  expect(canonicalTaskIcon("Grid3x3Icon")).toBe("grid-3x3");
   expect(canonicalTaskIcon("definitely-not-an-icon")).toBeNull();
   expect(canonicalTaskIcon("../../etc/passwd")).toBeNull();
   expect(canonicalTaskIcon("")).toBeNull();
+});
+
+test("every lucide name, written as its React export, reads back as itself", () => {
+  const pascal = (name: string) => name.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
+  const lost = lucideIconNames().flatMap((name) => [pascal(name), `${pascal(name)}Icon`, `Lucide${pascal(name)}`]
+    .filter((form) => canonicalTaskIcon(form) !== name)
+    .map((form) => `${form} → ${canonicalTaskIcon(form)}, not ${name}`));
+  expect(lost).toEqual([]);
 });
 
 test("an icon field sets, clears, or clamps to none with a note; it never refuses", () => {

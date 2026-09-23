@@ -13,7 +13,9 @@ import type { TaskIconNode } from "@/lib/tasks/taskIconNodes";
  *
  * A name's drawing is `undefined` while unknown, a node once loaded, and null
  * when lucide has no such icon. A request that failed leaves the names
- * unknown and asks again a little later, a few times at most.
+ * unknown and asks again a little later, a few times at most; once those
+ * attempts are spent the names are held as null too, so every icon waiting on
+ * them falls back instead of holding an empty box until the page reloads.
  */
 
 type Fetcher = (names: string[]) => Promise<Record<string, unknown>>;
@@ -21,6 +23,7 @@ type Fetcher = (names: string[]) => Promise<Record<string, unknown>>;
 const BATCH = 100;
 const RETRY_MS = 4_000;
 const MAX_ATTEMPTS = 4;
+let retryMs = RETRY_MS;
 /** The SVG children lucide draws with; anything else in an answer is dropped. */
 const TAGS: ReadonlySet<string> = new Set(["circle", "ellipse", "g", "line", "path", "polygon", "polyline", "rect"]);
 
@@ -76,14 +79,16 @@ async function flush(): Promise<void> {
       for (const name of batch) cache.set(name, iconNode(icons[name]));
     } catch {
       /* Unknown rather than missing: the icon may well exist, so it is asked
-         for again rather than drawn as the fallback for good. */
-      const retry = batch.filter((name) => (attempts.get(name) ?? 0) < MAX_ATTEMPTS);
+         for again rather than drawn as the fallback for good, until the
+         attempts are spent and it is drawn as missing. */
       for (const name of batch) attempts.set(name, (attempts.get(name) ?? 0) + 1);
+      const retry = batch.filter((name) => attempts.get(name)! < MAX_ATTEMPTS);
+      for (const name of batch) if (attempts.get(name)! >= MAX_ATTEMPTS) cache.set(name, null);
       if (retry.length) {
         setTimeout(() => {
           for (const name of retry) if (!cache.has(name)) queued.add(name);
           schedule();
-        }, RETRY_MS);
+        }, retryMs);
       }
     } finally {
       for (const name of batch) inFlight.delete(name);
@@ -113,11 +118,12 @@ export function useTaskIconNode(name: string | null): TaskIconNode | null | unde
   return node;
 }
 
-/** Tests: answer requests with `next` and forget every drawing held. */
-export function resetTaskIconLoaderForTests(next?: Fetcher): void {
+/** Tests: answer requests with `next`, retry after `retry` ms, and forget every drawing held. */
+export function resetTaskIconLoaderForTests(next?: Fetcher, retry = RETRY_MS): void {
   cache.clear();
   queued.clear();
   inFlight.clear();
   attempts.clear();
   fetcher = next ?? fetchIcons;
+  retryMs = retry;
 }

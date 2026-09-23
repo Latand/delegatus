@@ -116,6 +116,29 @@ test("every icon a render draws is asked for in one request, and a drawing alrea
   expect([...host.querySelectorAll("[data-task-icon] svg path")].map((path) => path.getAttribute("d"))).toEqual(["M3 3h4", "M2 2h3", "M1 1h2", "M2 2h3"]);
 });
 
+test("a route that never answers ends in a drawn fallback, after a bounded number of asks", async () => {
+  let asks = 0;
+  resetTaskIconLoaderForTests(async () => {
+    asks += 1;
+    throw new TypeError("Failed to fetch");
+  }, 1);
+  const host = mount(
+    <>
+      <TaskIcon icon="rocket" title="Fix the crash" />
+      <TaskIcon title="Deploy the host" />
+    </>,
+  );
+  /* Each failed ask is retried a few times, then the icon is held as missing. */
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  const icons = [...host.querySelectorAll("[data-task-icon]")];
+  expect(icons.map((element) => [element.getAttribute("data-task-icon"), element.getAttribute("data-icon-source")])).toEqual([["circle-dashed", "default"], ["circle-dashed", "default"]]);
+  expect(icons.every((element) => element.querySelector("svg"))).toBe(true);
+  const settled = asks;
+  expect(settled).toBeLessThanOrEqual(12);
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(asks).toBe(settled);
+});
+
 test("a drawing whose shape is not lucide's is dropped", async () => {
   resetTaskIconLoaderForTests(async () => ({ bug: [["script", { src: "x" }], ["path", { d: "M9 9", onload: 1 }]] }));
   const host = mount(<TaskIcon icon="bug" title="x" />);

@@ -33,9 +33,11 @@ export interface TaskIconProps {
 /**
  * A task's icon (#2102), the one component every task surface draws it with:
  * the stored lucide icon; else the icon the title suggests
- * (`suggestTaskIcon`), which is never stored; else a quiet dashed circle. A
- * stored name lucide cannot draw falls back the same way. Suggested and
- * default icons are muted, so a chosen icon reads as chosen.
+ * (`suggestTaskIcon`), which is never stored; else a quiet dashed circle. An
+ * icon that cannot be drawn — a stored name lucide does not have, or one the
+ * route never answered — falls back the same way, down to the dashed circle,
+ * which is bundled and always draws. Suggested and default icons are muted,
+ * so a chosen icon reads as chosen.
  *
  * Decorative: the title beside it says what the task is, so the icon is
  * hidden from assistive technology; a control that changes it carries its own
@@ -43,8 +45,12 @@ export interface TaskIconProps {
  */
 export const TaskIcon = memo(function TaskIcon({ icon, title, size = 16, className }: TaskIconProps) {
   const primary = displayTaskIcon(icon, title);
-  const node = useTaskIconNode(primary.source === "stored" ? primary.icon : null);
-  const shown: { icon: string; source: TaskIconSource } = primary.source === "stored" && node === null ? displayTaskIcon(null, title) : primary;
+  const storedNode = useTaskIconNode(primary.source === "stored" ? primary.icon : null);
+  const unstored: { icon: string; source: TaskIconSource } = primary.source === "stored" && storedNode === null ? displayTaskIcon(null, title) : primary;
+  const suggestedNode = useTaskIconNode(unstored.source === "suggested" ? unstored.icon : null);
+  const shown: { icon: string; source: TaskIconSource } = unstored.source === "suggested" && suggestedNode === null
+    ? { icon: DEFAULT_TASK_ICON, source: "default" }
+    : unstored;
   const tone = shown.source === "stored" ? "text-secondary" : "text-muted";
   return (
     <span

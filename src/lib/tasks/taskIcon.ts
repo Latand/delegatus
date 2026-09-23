@@ -45,8 +45,9 @@ function candidates(raw: string): string[] {
   /* A React export name: `LucideBug`, `BugIcon`. */
   if (key.startsWith("lucide-")) forms.push(key.slice("lucide-".length));
   if (key.endsWith("-icon")) forms.push(key.slice(0, -"-icon".length));
-  /* `Heading1`, `Grid2x2`: lucide sets a number off with a hyphen. */
-  forms.push(...forms.map((form) => form.replace(/([a-z])(\d)/g, "$1-$2")).filter((form) => !forms.includes(form)));
+  /* `Heading1`, `Grid2x2`: lucide sets a number off with a hyphen, and keeps
+     a size such as `2x2` whole, so a letter right after a digit is not split. */
+  forms.push(...forms.map((form) => form.replace(/(?<!\d)([a-z])(\d)/g, "$1-$2")).filter((form) => !forms.includes(form)));
   return forms;
 }
 
