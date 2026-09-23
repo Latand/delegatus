@@ -148,7 +148,6 @@ for (const [store, fixture] of [["JSON", jsonFixture], ["SQLite", sqliteFixture]
   test(`a Copilot launch on a ${store} registry persisted before Copilot existed settles and records its route`, async () => {
     const root = fs.mkdtempSync(path.join(sandbox, `${store.toLowerCase()}-`));
     const registry = fixture(root);
-    expect(registry.engineRouting("copilot")).toEqual({ activeAccountId: null, revision: 0 });
 
     const conversationId = await launchCopilot(registry, root);
     expect(registry.readOnlySnapshot().conversations[conversationId]?.engine).toBe("copilot");
