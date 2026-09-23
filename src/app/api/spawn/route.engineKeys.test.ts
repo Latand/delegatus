@@ -90,6 +90,9 @@ async function launchCopilot(store: AgentRegistry, root: string): Promise<string
   }), {
     registry: () => store,
     assertStructuredRuntime: () => {},
+    /* The CLI probe reads the process's own home, fixed at startup; the
+       launch under test must not depend on a Copilot CLI being installed. */
+    copilotBinaryGap: () => null,
     resolveHealthySpawnAccount: async () => account,
     resolveSpawnAccount: () => account,
     resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
