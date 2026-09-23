@@ -188,6 +188,16 @@ test("Claude native MCP config supplies the packaged Viewer server on a fresh in
   expect(fs.existsSync(path.join(accountHome, ".claude.json"))).toBe(false);
 });
 
+test("the Viewer entry names the stable host runtime before the package's own launcher", () => {
+  const hostHome = home();
+  const stable = path.join(hostHome, ".agents", "tools", "llv-mcp-runtime", "bin", "mcp-server.mjs");
+  fs.mkdirSync(path.dirname(stable), { recursive: true });
+  fs.writeFileSync(stable, "");
+  /* process.cwd() carries a launcher of its own, as the image's /app does. */
+  expect(viewerMcpServerEntry(process.cwd(), { HOME: hostHome }).args).toEqual([stable]);
+  expect(viewerMcpServerEntry(process.cwd(), { HOME: home() }).args).toEqual([path.resolve(process.cwd(), "bin", "mcp-server.mjs")]);
+});
+
 test("the packaged Viewer entry fails before writing an unusable launcher path", () => {
   expect(() => viewerMcpServerEntry(home())).toThrow("Viewer MCP launcher could not be resolved");
 });

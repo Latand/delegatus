@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import type { ViewerMcpRuntimeIdentity, ViewerReleaseIdentity } from "@/lib/runtime/contracts";
@@ -17,6 +18,14 @@ export interface McpRuntimeLauncherPublicationEvidence {
   launcherDigest: string;
   publishedAt: string;
   durable: true;
+}
+
+/** Where the stable MCP launcher is published (`LLV_MCP_RUNTIME_ROOT`, default
+    `~/.agents/tools/llv-mcp-runtime`): the root `install-mcp.sh` registers for
+    Claude and Codex, and the one an unregistered spawn is given. */
+export function stableMcpRuntimeRoot(source: Readonly<Record<string, string | undefined>> = process.env): string {
+  return source.LLV_MCP_RUNTIME_ROOT?.trim()
+    || path.join(source.HOME?.trim() || os.homedir(), ".agents", "tools", "llv-mcp-runtime");
 }
 
 export interface McpRuntimeReleaseStoreOptions {
