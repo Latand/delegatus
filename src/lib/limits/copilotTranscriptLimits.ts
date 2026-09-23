@@ -7,7 +7,10 @@ import type { LimitRead } from "@/lib/limits";
 const MAX_FILES = 5;
 const CHUNK_BYTES = 1024 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_CANDIDATE_BYTES = 64 * 1024;
 const QUOTA_KEY = '"quotaSnapshots"';
+const QUOTA_KEY_BYTES = Buffer.from(QUOTA_KEY);
+const TIMESTAMP_KEY_BYTES = Buffer.from('"timestamp"');
 
 function newestSessionFiles(sessionStateDir: string): string[] {
   const root = sessionStateDir;
@@ -24,22 +27,25 @@ function newestSessionFiles(sessionStateDir: string): string[] {
   return entries.sort((a, b) => b.mtime - a.mtime || b.file.localeCompare(a.file)).slice(0, MAX_FILES).map((entry) => entry.file);
 }
 
-function balancedObjectEnd(text: string, start: number): number | null {
-  if (text[start] !== "{") return null;
+function balancedObjectEnd(bytes: Buffer, start: number): number | null {
+  if (bytes[start] !== 0x7b) return null;
   let depth = 0;
   let quoted = false;
   let escaped = false;
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index]!;
+  for (let index = start; index < bytes.length; index += 1) {
+    const char = bytes[index]!;
     if (quoted) {
       if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') quoted = false;
+      else if (char === 0x5c) escaped = true;
+      else if (char === 0x22) quoted = false;
       continue;
     }
-    if (char === '"') quoted = true;
-    else if (char === "{") depth += 1;
-    else if (char === "}" && --depth === 0) return index + 1;
+    if (char === 0x22) quoted = true;
+    else if (char === 0x7b) depth += 1;
+    else if (char === 0x7d) {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
   }
   return null;
 }
@@ -58,40 +64,87 @@ function quotaBucket(value: unknown): CopilotQuotaBucket | undefined {
   };
 }
 
-function envelopeTimestamp(linePrefix: string): number | null {
-  const match = /"timestamp"\s*:\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|(\d+(?:\.\d+)?))/.exec(linePrefix);
-  if (!match) return null;
-  const value = match[1] ? Date.parse(match[1]) / 1000 : Number(match[2]);
+function envelopeTimestamp(lineSuffix: Buffer): number | null {
+  const keyAt = lineSuffix.lastIndexOf(TIMESTAMP_KEY_BYTES);
+  if (keyAt < 0) return null;
+  let valueAt = keyAt + TIMESTAMP_KEY_BYTES.length;
+  while (lineSuffix[valueAt] === 0x20 || lineSuffix[valueAt] === 0x09 || lineSuffix[valueAt] === 0x0d) valueAt += 1;
+  if (lineSuffix[valueAt] !== 0x3a) return null;
+  valueAt += 1;
+  while (lineSuffix[valueAt] === 0x20 || lineSuffix[valueAt] === 0x09 || lineSuffix[valueAt] === 0x0d) valueAt += 1;
+  if (lineSuffix[valueAt] === 0x22) {
+    const valueStart = valueAt + 1;
+    let escaped = false;
+    for (let end = valueStart; end < lineSuffix.length; end += 1) {
+      const byte = lineSuffix[end]!;
+      if (escaped) escaped = false;
+      else if (byte === 0x5c) escaped = true;
+      else if (byte === 0x22) {
+        const value = Date.parse(lineSuffix.subarray(valueStart, end).toString("utf8")) / 1000;
+        return Number.isFinite(value) ? value : null;
+      }
+    }
+    return null;
+  }
+  let end = valueAt;
+  while (end < lineSuffix.length && ((lineSuffix[end]! >= 0x30 && lineSuffix[end]! <= 0x39) || lineSuffix[end] === 0x2e)) end += 1;
+  const value = Number(lineSuffix.subarray(valueAt, end).toString("utf8"));
   return Number.isFinite(value) ? value : null;
 }
 
-function snapshotInText(text: string): { snapshot: CopilotQuotaSnapshot; timestamp: number } | null {
-  let cursor = text.length;
-  while (cursor > 0) {
-    const keyAt = text.lastIndexOf(QUOTA_KEY, cursor - 1);
-    if (keyAt < 0) return null;
-    const colon = text.indexOf(":", keyAt + QUOTA_KEY.length);
-    const start = colon < 0 ? -1 : text.indexOf("{", colon + 1);
-    const end = start < 0 ? null : balancedObjectEnd(text, start);
-    if (end !== null) {
-      const lineStart = text.lastIndexOf("\n", keyAt) + 1;
-      const timestamp = envelopeTimestamp(text.slice(lineStart, keyAt));
-      if (timestamp !== null) {
-        try {
-          const raw = JSON.parse(text.slice(start, end)) as Record<string, unknown>;
-          const snapshot: CopilotQuotaSnapshot = {
-            observedAt: timestamp,
-            ...(quotaBucket(raw.chat) ? { chat: quotaBucket(raw.chat) } : {}),
-            ...(quotaBucket(raw.completions) ? { completions: quotaBucket(raw.completions) } : {}),
-            ...(quotaBucket(raw.premium_interactions) ? { premium_interactions: quotaBucket(raw.premium_interactions) } : {}),
-          };
-          if (snapshot.chat || snapshot.completions || snapshot.premium_interactions) return { snapshot, timestamp };
-        } catch { /* malformed or truncated event; try an earlier record */ }
-      }
-    }
-    cursor = keyAt;
+type CandidateRead = { snapshot: CopilotQuotaSnapshot | null; bytesRead: number };
+
+function readCandidate(fd: number, fileSize: number, keyAt: number, budget: number): CandidateRead {
+  const candidateLength = Math.min(MAX_CANDIDATE_BYTES, fileSize - keyAt, budget);
+  if (candidateLength <= 0) return { snapshot: null, bytesRead: 0 };
+  const candidateBytes = Buffer.allocUnsafe(candidateLength);
+  const candidateCount = fs.readSync(fd, candidateBytes, 0, candidateLength, keyAt);
+  const bytes = candidateBytes.subarray(0, candidateCount);
+  const colon = bytes.indexOf(0x3a, QUOTA_KEY_BYTES.length);
+  if (colon < 0) return { snapshot: null, bytesRead: candidateCount };
+  let objectStart = colon + 1;
+  while (bytes[objectStart] === 0x20 || bytes[objectStart] === 0x09 || bytes[objectStart] === 0x0d) objectStart += 1;
+  const objectEnd = balancedObjectEnd(bytes, objectStart);
+  if (objectEnd === null) return { snapshot: null, bytesRead: candidateCount };
+
+  let raw: Record<string, unknown>;
+  try { raw = JSON.parse(bytes.subarray(objectStart, objectEnd).toString("utf8")) as Record<string, unknown>; }
+  catch { return { snapshot: null, bytesRead: candidateCount }; }
+
+  const suffixChunks: Buffer[] = [];
+  let totalRead = candidateCount;
+  let newlineAt = bytes.indexOf(0x0a, objectEnd);
+  suffixChunks.push(bytes.subarray(objectEnd, newlineAt < 0 ? bytes.length : newlineAt));
+  let position = keyAt + candidateCount;
+  let lineEnded = newlineAt >= 0 || position >= fileSize;
+  while (!lineEnded && totalRead < budget && position < fileSize) {
+    const length = Math.min(CHUNK_BYTES, budget - totalRead, fileSize - position);
+    if (length <= 0) break;
+    const chunk = Buffer.allocUnsafe(length);
+    const count = fs.readSync(fd, chunk, 0, length, position);
+    if (count <= 0) break;
+    position += count;
+    totalRead += count;
+    const lineEnd = chunk.indexOf(0x0a);
+    suffixChunks.push(chunk.subarray(0, lineEnd < 0 ? count : lineEnd));
+    lineEnded = lineEnd >= 0 || position >= fileSize;
   }
-  return null;
+  if (!lineEnded) return { snapshot: null, bytesRead: totalRead };
+  const timestamp = envelopeTimestamp(Buffer.concat(suffixChunks));
+  if (timestamp === null) return { snapshot: null, bytesRead: totalRead };
+  const chat = quotaBucket(raw.chat);
+  const completions = quotaBucket(raw.completions);
+  const premium = quotaBucket(raw.premium_interactions);
+  if (!chat && !completions && !premium) return { snapshot: null, bytesRead: totalRead };
+  return {
+    snapshot: {
+      observedAt: timestamp,
+      ...(chat ? { chat } : {}),
+      ...(completions ? { completions } : {}),
+      ...(premium ? { premium_interactions: premium } : {}),
+    },
+    bytesRead: totalRead,
+  };
 }
 
 function readLatestSnapshot(file: string): CopilotQuotaSnapshot | null {
@@ -100,20 +153,28 @@ function readLatestSnapshot(file: string): CopilotQuotaSnapshot | null {
   try {
     const size = fs.fstatSync(fd).size;
     let readBytes = 0;
-    let contents = Buffer.alloc(0);
-    while (readBytes < Math.min(size, MAX_FILE_BYTES)) {
-      const length = Math.min(CHUNK_BYTES, size - readBytes, MAX_FILE_BYTES - readBytes);
+    let end = size;
+    let overlap = Buffer.alloc(0);
+    while (end > 0 && readBytes < MAX_FILE_BYTES) {
+      const length = Math.min(CHUNK_BYTES, end, MAX_FILE_BYTES - readBytes);
       const chunk = Buffer.allocUnsafe(length);
-      const start = size - readBytes - length;
+      const start = end - length;
       const count = fs.readSync(fd, chunk, 0, length, start);
       if (count <= 0) break;
-      contents = Buffer.concat([chunk.subarray(0, count), contents]);
       readBytes += count;
-      const text = contents.toString("utf8");
-      if (text.includes(QUOTA_KEY)) {
-        const found = snapshotInText(text);
-        if (found) return found.snapshot;
+      const current = chunk.subarray(0, count);
+      const searchBytes = overlap.length ? Buffer.concat([current, overlap]) : current;
+      let searchBefore = current.length - 1;
+      while (searchBefore >= 0) {
+        const keyAt = searchBytes.lastIndexOf(QUOTA_KEY_BYTES, searchBefore);
+        if (keyAt < 0) break;
+        const candidate = readCandidate(fd, size, start + keyAt, MAX_FILE_BYTES - readBytes);
+        readBytes += candidate.bytesRead;
+        if (candidate.snapshot) return candidate.snapshot;
+        searchBefore = keyAt - 1;
       }
+      overlap = Buffer.from(current.subarray(0, Math.min(current.length, QUOTA_KEY_BYTES.length - 1)));
+      end = start;
     }
     return null;
   } finally { fs.closeSync(fd); }

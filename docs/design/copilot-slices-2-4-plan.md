@@ -219,7 +219,8 @@ megabytes long. Do not `JSON.parse` whole lines.
   Read each file backwards in 1 MiB chunks, find the last occurrence of
   `"quotaSnapshots":`, extract that object with a brace-depth scanner that respects
   JSON strings and escapes, and parse only that substring. Take the record `timestamp`
-  from the same line (it sits in the envelope, before `data`). Bound the total read
+  from the same line's suffix after the `quotaSnapshots` object closes; Copilot CLI
+  1.0.87 writes it after `data` and `id`, before `parentId`. Bound the total read
   per file (for example 16 MiB). When nothing is found, return
   `{ data: null, reason: "no quotaSnapshots in newest N session files", source: "unavailable" }`.
 - The host does not see quota over ACP: `usage_update` is the context window only. The

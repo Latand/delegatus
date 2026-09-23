@@ -67,7 +67,8 @@ test("Copilot quota probe reads its transcript and never starts an engine probe"
     const session = path.join(sessions, crypto.randomUUID());
     fs.mkdirSync(session, { recursive: true });
     fs.writeFileSync(path.join(home, "config.json"), `// local config\n${JSON.stringify({ lastLoggedInUser: { host: "github.com", login: "placeholder" }, loggedInUsers: [{ host: "github.com", login: "placeholder" }] })}`);
-    fs.writeFileSync(path.join(session, "events.jsonl"), `${JSON.stringify({ timestamp: "2026-09-20T10:00:00.000Z", type: "model.model_call_success", data: { quotaSnapshots: { chat: { entitlementRequests: 200, remainingPercentage: 84, resetDate: "2026-10-01T00:00:00Z", isUnlimitedEntitlement: false, overageAllowedWithExhaustedQuota: false } }, requestMessages: "private content" } })}\n`);
+    const data = { responseUsage: {}, requestMessages: "fixture body", quotaSnapshots: { chat: { entitlementRequests: 200, remainingPercentage: 84, resetDate: "2026-10-01T00:00:00Z", isUnlimitedEntitlement: false, overageAllowedWithExhaustedQuota: false } }, requestId: crypto.randomUUID(), copilotUsage: {} };
+    fs.writeFileSync(path.join(session, "events.jsonl"), `${JSON.stringify({ type: "model.model_call_success", data, id: crypto.randomUUID(), timestamp: "2026-09-20T10:00:00.000Z", parentId: null })}\n`);
     const observation = await liveQuotaProbe.probe("copilot", {
       id: "copilot",
       label: "Copilot",
