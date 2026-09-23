@@ -1,0 +1,103 @@
+{
+  "results": [
+    {
+      "key": "390-en-dark",
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "scheme": "dark",
+      "opened": {
+        "start": "assigned"
+      },
+      "afterLeft": "blocked",
+      "afterRight": "assigned",
+      "vertical": {
+        "scrollTop": 276,
+        "active": "assigned",
+        "sheet": false,
+        "before": 0
+      },
+      "sheet": {
+        "open": true,
+        "actions": [
+          "move-inbox",
+          "move-blocked",
+          "move-done",
+          "hide",
+          "open-agent"
+        ],
+        "smallest": 56
+      },
+      "moved": {
+        "inBlocked": true,
+        "inAssigned": false,
+        "blockedCount": "1",
+        "receipt": "Moved to BlockedUndo",
+        "undo": true
+      },
+      "patches": [
+        {
+          "id": "t-favicon",
+          "body": {
+            "status": "blocked",
+            "expectedProject": "atlas",
+            "expectedRevision": "r-t-favicon-1"
+          }
+        }
+      ],
+      "taskOpen": true
+    },
+    {
+      "key": "430-uk-light",
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "scheme": "light",
+      "opened": {
+        "start": "assigned"
+      },
+      "afterLeft": "blocked",
+      "afterRight": "assigned",
+      "vertical": {
+        "scrollTop": 275,
+        "active": "assigned",
+        "sheet": false,
+        "before": 0
+      },
+      "sheet": {
+        "open": true,
+        "actions": [
+          "move-inbox",
+          "move-blocked",
+          "move-done",
+          "hide",
+          "open-agent"
+        ],
+        "smallest": 56
+      },
+      "moved": {
+        "inBlocked": true,
+        "inAssigned": false,
+        "blockedCount": "1",
+        "receipt": "Переміщено в «Заблоковані»Скасувати",
+        "undo": true
+      },
+      "patches": [
+        {
+          "id": "t-favicon",
+          "body": {
+            "status": "blocked",
+            "expectedProject": "atlas",
+            "expectedRevision": "r-t-favicon-1"
+          }
+        }
+      ],
+      "taskOpen": true
+    }
+  ],
+  "failures": []
+}

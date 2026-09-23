@@ -102,8 +102,16 @@ function shortTitle(t: TFunction, item: PhoneCard): string {
   return title.length > 48 ? `${title.slice(0, 46).trimEnd()}…` : title;
 }
 
-function ageText(ms: number, nowMs: number): string {
-  return humanizeDuration(blockAgeSeconds(Math.max(0, nowMs - ms) / 1000));
+/** An age on a card, with a unit (§3.4: "4m", "1h 5m"); a day or more reads
+    in days, as a task that has waited since yesterday does. */
+function cardAge(t: TFunction, seconds: number): string {
+  const total = Math.max(0, seconds);
+  if (total >= 86_400) return t("mobile2.kanban.ageDays", { count: Math.floor(total / 86_400) });
+  return humanizeDuration(blockAgeSeconds(total));
+}
+
+function ageText(t: TFunction, ms: number, nowMs: number): string {
+  return cardAge(t, (nowMs - ms) / 1000);
 }
 
 /* ── Long-press ─────────────────────────────────────────────────────────── */
@@ -233,9 +241,9 @@ function askDetail(t: TFunction, item: PhoneCard, now: number): string | null {
 }
 
 /** How long the conversation has asked, with a unit. */
-function askAge(item: PhoneCard): string | null {
+function askAge(t: TFunction, item: PhoneCard): string | null {
   if (item.need?.kind !== "conversation" || item.need.state.seconds === null) return null;
-  return humanizeDuration(blockAgeSeconds(item.need.state.seconds));
+  return cardAge(t, item.need.state.seconds);
 }
 
 /** A conversation that asks, on a task's card: who, what, and how long. */
@@ -243,7 +251,7 @@ function AskLine({ item, now }: { item: PhoneCard; now: number }) {
   const { t } = useLocale();
   if (item.need?.kind !== "conversation") return null;
   const detail = askDetail(t, item, now);
-  const age = askAge(item);
+  const age = askAge(t, item);
   return (
     <span data-phone-card-ask="" className="flex min-w-0 items-center gap-[5px] text-label tabular-nums text-muted">
       <Agent file={item.need.member.file} />
@@ -260,7 +268,7 @@ function LooseLine({ item, now }: { item: PhoneCard; now: number }) {
   const file = item.need?.kind === "conversation" ? item.need.member.file : item.firstAgent;
   const detail = askDetail(t, item, now);
   const at = item.card.lastAgentWorkAtMs > 0 ? item.card.lastAgentWorkAtMs : file ? file.mtime * 1000 : 0;
-  const age = askAge(item) ?? (at > 0 ? ageText(at, now * 1000) : null);
+  const age = askAge(t, item) ?? (at > 0 ? ageText(t, at, now * 1000) : null);
   return (
     <span data-phone-card-meta="" className="flex min-w-0 items-center gap-[5px] text-label tabular-nums text-muted">
       {file ? <><Agent file={file} /><Sep /></> : null}
@@ -288,7 +296,7 @@ function AgentsLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
         </>
       ) : null}
       <span className="shrink-0">{agents.conversations ? t("mobile2.kanban.agents", { count: agents.conversations }) : t("mobile2.kanban.noAgents")}</span>
-      {agents.atMs > 0 ? <><Sep /><span className="shrink-0">{ageText(agents.atMs, nowMs)}</span></> : null}
+      {agents.atMs > 0 ? <><Sep /><span className="shrink-0">{ageText(t, agents.atMs, nowMs)}</span></> : null}
     </span>
   );
 }
