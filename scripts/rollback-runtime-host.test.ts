@@ -70,35 +70,34 @@ for (const [failedNames, retainedNames] of [
     expect(plan).toContain(`retained generation  ${retained.revision} (${retained.container})`);
 
     const docker: string[] = [];
-    let intent: RuntimeHostRollbackIntent | null = null;
-    let release: RuntimeHostReleaseRecord | null = null;
+    const written: { intent: RuntimeHostRollbackIntent | null; release: RuntimeHostReleaseRecord | null } = { intent: null, release: null };
     await requestRuntimeHostRollback(target, {
-      writeIntent: (value) => { intent = value; },
-      writeRelease: (value) => { release = value; },
+      writeIntent: (value) => { written.intent = value; },
+      writeRelease: (value) => { written.release = value; },
       enablePreviousRestart: async (container) => { docker.push(`update --restart unless-stopped ${container}`); },
       startPrevious: async (container) => { docker.push(`start ${container}`); },
     });
-    expect(release).toEqual(retained);
+    expect(written.release).toEqual(retained);
     expect(docker).toEqual([`update --restart unless-stopped ${retained.container}`, `start ${retained.container}`]);
 
     const self = { image: retained.image, revision: retained.revision, container: retained.container };
     expect(await resumeRuntimeHostRollback(self, {
-      readIntent: () => intent,
+      readIntent: () => written.intent,
       disableActiveRestart: async (container) => { docker.push(`update --restart no ${container}`); },
       stopActive: async (container) => { docker.push(`stop ${container}`); },
     })).toBe(true);
     expect(await completeRuntimeHostRollback(self, {
-      readIntent: () => intent,
+      readIntent: () => written.intent,
       readHandoffIntent: () => null,
       removeFailed: async (container) => { docker.push(`rm -f ${container}`); },
       clearHandoffIntent: () => {},
-      clearIntent: () => { intent = null; },
+      clearIntent: () => { written.intent = null; },
     })).toBe(true);
     expect(docker.slice(2)).toEqual([
       `update --restart no ${failed.container}`,
       `stop ${failed.container}`,
       `rm -f ${failed.container}`,
     ]);
-    expect(intent).toBeNull();
+    expect(written.intent).toBeNull();
   });
 }
