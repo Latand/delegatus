@@ -24,6 +24,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
+import { FeedSkeleton } from "../skeletons";
 import { RoleFrameMark } from "../RoleFrameMark";
 import { ProcessStatusControls } from "../TaskHeader";
 import { useOrchestratorDraftPrefill, useOrchestratorDraftReveal } from "./draftPrefill";
@@ -539,10 +540,8 @@ export function OrchestratorPanel({
       )}
 
       {state.kind === "loading" ? (
-        <Centered>
-          <LoaderCircle className="h-5 w-5 animate-spin text-muted" aria-hidden />
-          <p className="text-ui text-muted" role="status">{t("orchPanel.loading")}</p>
-        </Centered>
+        /* The conversation it will show, in its shape (#2071). */
+        <FeedSkeleton />
       ) : state.kind === "unavailable" ? (
         <Centered>
           <TriangleAlert className="h-6 w-6 text-warning" aria-hidden />

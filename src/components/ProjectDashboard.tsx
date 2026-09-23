@@ -12,7 +12,9 @@ import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { useRuntimeSelector } from "@/hooks/useRuntime";
 import { DelegatusBadge } from "@/components/brand/BrandMark";
 import { ProjectAccounts } from "@/components/ProjectAccounts";
-import { projectDisplayName } from "@/lib/displayNames";
+import { projectTitle } from "@/lib/displayNames";
+import { cachedProjectName } from "@/lib/client/projectNameCache";
+import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import type { Flow } from "@/lib/flows/types";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -70,7 +72,7 @@ import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
-import { SchemeSkeleton } from "./scheme/SchemeSkeleton";
+import { BoardRowsSkeleton, FeedSkeleton, KanbanSkeleton, TitleSkeleton } from "./skeletons";
 import { Switchboard } from "./Switchboard";
 import {
   buildArchiveBranchGroups,
@@ -122,6 +124,11 @@ interface Props {
   projectCwd?: string;
   project: string;
   loaded: boolean;
+  /** The files are a restored earlier answer not yet confirmed (#2071). Only
+      rendering reads `loaded || cached`; every effect that acts on the data
+      (reviewer auto-close, draft restore, presence reports, pruning) keeps
+      waiting for `loaded`. */
+  cached?: boolean;
   /** Consecutive `/api/files` failures (issue #696). A restored `#p=` or
       localStorage project lands straight here, so this is the surface a dead
       server reaches FIRST — and on the phone the rail is behind a drawer, so
@@ -376,6 +383,7 @@ function ProjectDashboardView({
   projectCwd,
   project,
   loaded,
+  cached = false,
   catalogFailures = 0,
   openNonce,
   focusRequest,
@@ -395,8 +403,10 @@ function ProjectDashboardView({
   onOpenCatalogFile,
   onCloseFile,
 }: Props) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const isMobile = useIsMobile();
+  const reach = useServerReach();
+  const reachText = reachLineText(t, locale, reach);
   /* The phone's navigation (mobile v2 lane 1): which screen is on top and which
      sheet is open. The host sheet — the handoff, the docked background tasks
      and the hidden strips — opens from the board menu's «Host details» row and
@@ -421,8 +431,12 @@ function ProjectDashboardView({
   const boardIsMobileLeaf = isMobile && topScreen(mobileNavState).kind !== "chat";
   const cachedSeatRead = useOrchestratorSeat(boardIsMobileLeaf ? project : null, projectDraftCwd || undefined);
   // A failed revalidation retains a known incumbent, but cannot affirm vacancy.
-  // Give the card, its sheet, and the footer the same safe reading.
+  // Give the card, its sheet, and the footer the same safe reading. While the
+  // server is only being reconnected (#2071 D7) a failed re-read is the
+  // outage, not news about the seat: the last answer stays, and "unreadable"
+  // waits for a seat-specific failure or a long outage.
   const seatRead = cachedSeatRead.failed
+    && reach.kind !== "reconnecting"
     && !(cachedSeatRead.status?.exists && cachedSeatRead.status.seat?.conversationId)
     ? { ...cachedSeatRead, status: null }
     : cachedSeatRead;
@@ -449,11 +463,21 @@ function ProjectDashboardView({
      one poll, because the poll belongs to the project and cwd rather than to
      a mount (`useOrchestratorSeat`). One request per interval per tab. */
   const desktopSeatRead = useOrchestratorSeat(isMobile ? null : project, projectCwd);
-  const inlineCatalog = useMobileInlineCatalog(project, isMobile && loaded);
-  const projectName = projectDisplayName(
+  const inlineCatalog = useMobileInlineCatalog(project, isMobile && (loaded || cached));
+  /* The header never shows the canonical key (#2071): the live name, then the
+     one this browser remembered, then a readable key. An opaque `repo-`/`dir-`
+     key with neither is a placeholder bar until the catalog is certified, and
+     "Unnamed project" after. Every other surface takes the string. */
+  const knownProjectName = projectTitle(
     project,
     providedProjectName ?? projectCatalogEntries.find((entry) => entry.project === project)?.displayName,
+    cachedProjectName(project),
   );
+  /* The surfaces that take the name as a string (the focus view, sheets, the
+     seat) say "Unnamed project" only once the catalog is certified; before
+     that, a neutral ellipsis rather than a verdict. */
+  const projectName = knownProjectName ?? (loaded ? t("dash.projectUnnamed") : "…");
+  const projectTitleNode = knownProjectName ?? (loaded ? projectName : <TitleSkeleton />);
   /* Durable flow/pipeline records freeze member transcript paths at launch; an
      account migration rotates a conversation onto a new path and every
      projection that string-matches the frozen one (halos, decks, claiming,
@@ -481,7 +505,7 @@ function ProjectDashboardView({
      until the scan and the persisted board arrangement have both loaded, so the
      first painted board already reflects closes, worker-stack collapse and caps
      instead of flashing the raw scan snapshot and culling it. */
-  const boardReady = boardFirstPaintReady(loaded, board.loaded);
+  const boardReady = boardFirstPaintReady(loaded || cached, board.loaded || board.cached);
   const prefs = useMemo<ColumnPrefs>(
     () => ({ manual: board.prefs.manual, hidden: board.prefs.hidden, expanded: board.prefs.expanded }),
     [board.prefs],
@@ -2024,7 +2048,7 @@ function ProjectDashboardView({
   const panelTasks = useMemo(() => (seatTaskIds.size ? tasks.filter((task) => !seatTaskIds.has(task.id)) : tasks), [seatTaskIds, tasks]);
   const barLead = (wide: boolean) => (
     <>
-      <h1 className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" title={projectName}>{projectName}</h1>
+      <h1 className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" title={knownProjectName ?? undefined}>{projectTitleNode}</h1>
       {wide ? <ProjectAccounts project={project} appearance="bar" /> : null}
     </>
   );
@@ -2133,9 +2157,15 @@ function ProjectDashboardView({
             /* Issue #696: the header borrows the affirmative idle line only
                when the catalog is actually known. Under a failing fetch it
                names the failure, exactly as the overview board does. */
-            <span data-bar-group="status" className={`${wide || !narrowStatus ? "min-w-16 shrink" : "shrink-0"} truncate whitespace-nowrap text-[12px] ${catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
-              {catalogFailures > 0
+            /* A reconnect in progress is said quietly (#2071 D7); only a long
+               outage turns this red. */
+            <span data-bar-group="status" data-reach={reach.kind} className={`${wide || !narrowStatus ? "min-w-16 shrink" : "shrink-0"} truncate whitespace-nowrap text-[12px] ${reach.kind === "reconnecting" ? "text-muted" : catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
+              {reach.kind === "reconnecting"
+                ? reachText
+                : catalogFailures > 0
                 ? t("catalog.unreachable")
+                /* Loading never borrows «nothing is running» (#2071 D6). */
+                : !loaded ? t(cached ? "dash.updating" : "common.loadingCap")
                 : (wide ? (statusBits.length ? statusBits.join(" · ") : null) : narrowStatus) ?? (statusBits[0] ?? t("common.nothingRunning"))}
             </span>
           )}
@@ -2218,7 +2248,8 @@ function ProjectDashboardView({
                lane 3 makes that screen its own, with the title cell and the
                meta line. */
             back={mobileConversationKey !== null}
-            title={<MobileBarTitle>{projectName}</MobileBarTitle>}
+            /* A restored answer being confirmed says so under the name (#2071). */
+            title={<MobileBarTitle meta={cached && !loaded ? t("dash.updating") : undefined}>{projectTitleNode}</MobileBarTitle>}
             titleLabel={t("mobile2.bar.switchProject")}
             titleOpens={mobileShell ? "projects" : undefined}
             host={mobileShell}
@@ -2235,11 +2266,17 @@ function ProjectDashboardView({
                 ? <MobileBoardDock onTell={() => openBoardRow(seatFile)} />
                 : <MobileBoardDock create={seatState.kind === "draft"} unresolved={seatState.kind !== "draft"}
                     onTell={() => mobileNav.openSheet(seatState.kind === "draft" ? "rotate" : "seat")} />
-              : undefined}
+              /* While the board loads the footer is already there, neutral, so
+                 the bottom edge never pops in when the rows land (#2071). */
+              : !boardReady && mobileConversationKey === null
+                ? <MobileBoardDock unresolved onTell={() => mobileNav.openSheet("seat")} />
+                : undefined}
           >
             {pipelinesAlert}
               {!boardReady ? (
-                catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
+                /* The shape of what is coming: the board's sections and rows,
+                   or a conversation's feed when one is on top. */
+                catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : mobileConversationKey === null ? <BoardRowsSkeleton /> : <FeedSkeleton />
               ) : mobileBoardLeaf ? (
                 <MobileBoard
                   {...mobileBoardProps}
@@ -2299,7 +2336,7 @@ function ProjectDashboardView({
                   drafts={layoutDrafts}
                   favorites={favoriteIdSet}
                   isolatedManualPaths={isolatedCompactHistoryPaths}
-                  loaded={loaded}
+                  loaded={loaded || cached}
                   /* The SCREEN is the truth on the phone (mobile v2 §3.3):
                      the conversation on top of the stack is the one this
                      screen is, and it outranks the board's own highlight —
@@ -2353,7 +2390,7 @@ function ProjectDashboardView({
         <div className="flex min-h-0 min-w-0 flex-1">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {!boardReady ? (
-              catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
+              catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <KanbanSkeleton project={project} />
             ) : kanbanLeaf ? (
               <KanbanBoard
                 layout={pipelineLayout}
@@ -2372,7 +2409,8 @@ function ProjectDashboardView({
                 favorites={favoriteIdSet}
                 isolatedManualPaths={isolatedCompactHistoryPaths}
                 draftBands={draftBands}
-                loaded={loaded}
+                loaded={loaded || cached}
+                updating={cached && !loaded}
                 catalogFailures={catalogFailures}
                 selection={board.selection}
                 focus={highlight}

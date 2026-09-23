@@ -4,6 +4,7 @@ import { ChevronDown, ChevronLeft, Ellipsis, Search, TriangleAlert } from "lucid
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { ConnectionState } from "@/components/runtime/runtimeModel";
+import { reachLineText, useServerReach, type ServerReach } from "@/hooks/serverReach";
 import { useRuntimeBusState } from "@/hooks/useRuntime";
 import { useLocale } from "@/lib/i18n";
 
@@ -51,16 +52,20 @@ export function titleCellWidth(viewport: number, targets: BarTargets): number {
   return viewport - 2 * BAR_PAD_PX - present.reduce((sum, w) => sum + w, 0) - gaps;
 }
 
-export type BannerKind = "offline" | "degraded" | "arrival";
+export type BannerKind = "offline" | "arrival";
 
-/** One banner slot, one thing at a time: offline, then runtime degraded, then
-    a decision that arrived while the operator reads something else. The board
-    never shows an arrival (README §2 rule 3, §4.6): its queue is the first
-    section and the bar's badge carries the count, so on the board the slot
-    holds runtime states only. */
-export function bannerKind(enabled: boolean, connection: ConnectionState, hasArrival: boolean, screen: MobileScreenKind): BannerKind | null {
-  if (enabled && connection === "offline") return "offline";
-  if (enabled && connection === "degraded") return "degraded";
+/** One banner slot, one thing at a time: offline, then a decision that
+    arrived while the operator reads something else. The board never shows an
+    arrival (README §2 rule 3, §4.6): its queue is the first section and the
+    bar's badge carries the count, so on the board the slot holds the offline
+    state only.
+
+    A reconnect in progress is not a banner (#2071): it is the quiet line in
+    the bar's title cell (`MobileBarTitle`), which pushes nothing down. The
+    banner is for the long outage, when actions may fail. `reachOffline` is
+    the Viewer's reading, which also counts a minute of failed files reads. */
+export function bannerKind(enabled: boolean, connection: ConnectionState, hasArrival: boolean, screen: MobileScreenKind, reachOffline = false): BannerKind | null {
+  if (reachOffline || (enabled && connection === "offline")) return "offline";
   return hasArrival && screen !== "board" ? "arrival" : null;
 }
 
@@ -122,7 +127,8 @@ function formatClock(at: number, locale: string): string {
 export function MobileBannerSlot({ screen, arrival }: { screen: MobileScreenKind; arrival: ReactNode }) {
   const { t, locale } = useLocale();
   const { enabled, connection, lastEventAt } = useRuntimeBusState();
-  const kind = bannerKind(enabled, connection, arrival !== null && arrival !== undefined, screen);
+  const reach = useServerReach();
+  const kind = bannerKind(enabled, connection, arrival !== null && arrival !== undefined, screen, reach.kind === "offline");
   if (!kind) return null;
   if (kind === "arrival") {
     return (
@@ -131,11 +137,10 @@ export function MobileBannerSlot({ screen, arrival }: { screen: MobileScreenKind
       </div>
     );
   }
-  const clock = lastEventAt ? formatClock(lastEventAt, locale) : "";
-  const title = kind === "offline" ? t("mobile2.banner.offlineTitle") : t("mobile2.banner.degradedTitle");
-  const body = kind === "offline"
-    ? clock ? t("mobile2.banner.offlineBodyAt", { time: clock }) : t("mobile2.banner.offlineBody")
-    : t("mobile2.banner.degradedBody");
+  const lastGood = lastEventAt ?? reach.lastGoodAt;
+  const clock = lastGood ? formatClock(lastGood, locale) : "";
+  const title = t("mobile2.banner.offlineTitle");
+  const body = clock ? t("mobile2.banner.offlineBodyAt", { time: clock }) : t("mobile2.banner.offlineBody");
   return (
     <div
       role="status"
@@ -150,10 +155,13 @@ export function MobileBannerSlot({ screen, arrival }: { screen: MobileScreenKind
   );
 }
 
+/* A screen change slides 24 px over 200 ms and stays opaque (#2071 D8): the
+   new screen's first frame is its cached content or its shaped skeleton,
+   never blank canvas, which a fade from `opacity-0` painted for a frame. A
+   project switch repaints in place, from the snapshot, with no motion. */
 const MOTION: Record<string, string> = {
-  push: "starting:translate-x-6 starting:opacity-0",
-  pop: "starting:-translate-x-6 starting:opacity-0",
-  switch: "starting:opacity-0",
+  push: "starting:translate-x-6",
+  pop: "starting:-translate-x-6",
 };
 
 export function MobileShell({
@@ -242,7 +250,7 @@ export function MobileShell({
       data-mobile2-conversation={!claimed && screen === "chat" ? screenId : undefined}
       data-mobile2-pipeline={!claimed && screen === "pipeline" ? screenId : undefined}
       data-mobile2-motion={claimed ? undefined : state.motion}
-      className={`relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden overflow-x-clip bg-canvas transition-[transform,opacity] duration-[200ms] ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${claimed ? "" : MOTION[state.motion] ?? ""}`}
+      className={`relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden overflow-x-clip bg-canvas transition-transform duration-[200ms] ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${claimed ? "" : MOTION[state.motion] ?? ""}`}
     >
       {claimed ? null : (
         <header data-mobile2-bar className="flex h-[52px] shrink-0 items-center gap-0.5 border-b border-border bg-canvas px-1">
@@ -326,9 +334,36 @@ export function MobileShell({
   );
 }
 
-/** A static bar title: the board's project name, a screen's name. */
-export function MobileBarTitle({ children }: { children: ReactNode }) {
-  return <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">{children}</span>;
+/** The quiet reconnecting line (#2071): a still warning dot and the time of
+    the answer the screen still shows. It lives inside the fixed 52 px bar, so
+    it appears and goes without moving anything. */
+export function ReachLine({ reach }: { reach: ServerReach }) {
+  const { t, locale } = useLocale();
+  return (
+    <span role="status" data-reach-line={reach.kind} className="flex min-w-0 items-center gap-1 text-label font-normal leading-tight text-muted">
+      <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
+      <span className="min-w-0 truncate">{reachLineText(t, locale, reach)}</span>
+    </span>
+  );
+}
+
+/** A static bar title: the board's project name, a screen's name. `meta` is a
+    second, smaller line under it (a board confirming a cached answer says
+    «updating…»); while the server is being reconnected that line is the
+    reconnecting one, on every screen that titles itself this way. */
+export function MobileBarTitle({ children, meta }: { children: ReactNode; meta?: ReactNode }) {
+  const reach = useServerReach();
+  const line = reach.kind === "reconnecting"
+    ? <ReachLine reach={reach} />
+    : meta ? <span data-mobile2-title-meta className="min-w-0 truncate text-label font-normal leading-tight text-muted">{meta}</span> : null;
+  const name = <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">{children}</span>;
+  if (!line) return name;
+  return (
+    <span className="flex min-w-0 flex-col">
+      {name}
+      {line}
+    </span>
+  );
 }
 
 /** The accounts screen the board menu pushes (README §3.1, §4.8): the shell's

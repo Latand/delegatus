@@ -39,6 +39,8 @@
 .kb .bar .summary { color: var(--color-secondary); font-size: var(--text-ui); display: inline-flex; gap: 6px; align-items: center; }
 .kb .bar .summary .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-success); display: inline-block; }
 .kb .bar .bar-alert { color: var(--color-danger); font-size: var(--text-ui); font-weight: 600; }
+/* A quiet word beside the count: a restored answer being confirmed, or a reconnect in progress (#2071). */
+.kb .bar .bar-note { color: var(--color-muted); font-size: var(--text-ui); }
 .kb .bar .search { position: relative; }
 .kb .bar .search input {
   height: 32px; padding: 0 10px 0 30px; border: 1px solid var(--border-default); border-radius: var(--radius-control);

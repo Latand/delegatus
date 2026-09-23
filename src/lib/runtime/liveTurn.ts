@@ -1,3 +1,5 @@
+import { rasterImagePath } from "@/lib/imagePolicy";
+
 export const LIVE_TURN_TEXT_LIMIT = 64 * 1024;
 export const LIVE_TURN_ITEM_LIMIT = 32;
 export const LIVE_TURN_OVERFLOW_LIMIT = 512;
@@ -36,6 +38,22 @@ export interface RuntimeLiveTurnTool {
   args: Record<string, unknown>;
   /** Arguments were dropped to honor the window's argument bound. */
   argsOmitted?: boolean;
+}
+
+/** The tools whose live row is an agent opening one picture file (#2075). */
+const LIVE_IMAGE_TOOLS = new Set(["view_image", "Read", "view"]);
+
+/**
+ * The raster file a live tool row is looking at, when the row can draw it:
+ * a Codex `view_image` (the app-server `imageView` item), a Claude `Read` or a
+ * Copilot `view` whose path names a png/jpeg/gif/webp. No bytes ever reach the
+ * live overlay, so the file is the only picture it has. Null for a failed
+ * call, a text file, or arguments the window's bound dropped.
+ */
+export function liveToolImagePath(tool: RuntimeLiveTurnTool): string | null {
+  if (tool.status === "err" || !LIVE_IMAGE_TOOLS.has(tool.name)) return null;
+  const path = tool.args.path ?? tool.args.file_path;
+  return typeof path === "string" ? rasterImagePath(path) : null;
 }
 
 export interface RuntimeLiveTurnItem {

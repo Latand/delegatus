@@ -34,6 +34,7 @@ import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceB
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 
+import { LiveTurnRows } from "./LiveTurnRows";
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
   enqueueOutbox,
@@ -84,7 +85,8 @@ export type ConversationWindowCase =
   | "dead-host-resuming"
   | "dead-host-delivering"
   | "dead-host-delivered"
-  | "dead-host-resume-failed";
+  | "dead-host-resume-failed"
+  | "agent-images";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -955,8 +957,104 @@ function mountLifecycle(root: HTMLElement): void {
   createRoot(root).render(<LifecycleFixture />);
 }
 
+/* #2075: one conversation per engine, each viewing pictures the way that
+   engine records it, rendered by the production parser and feed rows. Every
+   raster is drawn on a canvas when the page loads, and every path is invented:
+   the driver answers `/api/artifact` for `/w/shot.png` and `/w/live.png` and
+   reports `/w/deleted.png` gone. */
+function inventedFrame(width: number, height: number, hue: number, label: string): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d")!;
+  const gradient = context.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, `hsl(${hue} 70% 55%)`);
+  gradient.addColorStop(1, `hsl(${(hue + 60) % 360} 70% 35%)`);
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, width, height);
+  context.fillStyle = "rgba(255,255,255,0.85)";
+  context.fillRect(width * 0.08, height * 0.1, width * 0.84, height * 0.14);
+  context.font = `${Math.round(height * 0.09)}px sans-serif`;
+  context.fillStyle = "#111";
+  context.fillText(label, width * 0.11, height * 0.2);
+  return canvas.toDataURL("image/png").slice("data:image/png;base64,".length);
+}
+
+const IMAGE_FILES = {
+  claude: { path: "/tmp/agent-images-claude.jsonl", engine: "claude", fmt: "claude", activity: "recent" },
+  codex: { path: "/tmp/agent-images-codex.jsonl", engine: "codex", fmt: "codex", activity: "recent" },
+  copilot: { path: "/tmp/agent-images-copilot.jsonl", engine: "copilot", fmt: "copilot", activity: "recent" },
+} as unknown as Record<"claude" | "codex" | "copilot", FileEntry>;
+
+function agentImageFeeds(): { engine: keyof typeof IMAGE_FILES; items: Item[] }[] {
+  const at = "2026-09-20T10:00:00.000Z";
+  const login = inventedFrame(640, 400, 210, "login page");
+  const settings = inventedFrame(640, 400, 140, "settings page");
+  const screenshot = inventedFrame(480, 900, 20, "phone capture");
+  const chart = inventedFrame(800, 450, 280, "chart render");
+  const diagram = inventedFrame(360, 360, 60, "diagram");
+  const claudeRead = (id: string, file: string, data: string, w: number, h: number) => [
+    JSON.stringify({ type: "assistant", timestamp: at, message: { content: [{ type: "tool_use", id, name: "Read", input: { file_path: file } }] } }),
+    JSON.stringify({
+      type: "user", timestamp: at,
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "image", source: { type: "base64", media_type: "image/png", data } }] }] },
+      toolUseResult: { type: "image", file: { base64: data, type: "image/png", originalSize: Math.round((data.length * 3) / 4), dimensions: { originalWidth: w, originalHeight: h } } },
+    }),
+  ];
+  const claude = [
+    JSON.stringify({ type: "assistant", timestamp: at, message: { content: [{ type: "text", text: "Comparing the two captures." }] } }),
+    ...claudeRead("toolu-login", "/w/frames/login.png", login, 640, 400),
+    ...claudeRead("toolu-settings", "/w/frames/settings.png", settings, 640, 400),
+    JSON.stringify({ type: "assistant", timestamp: at, message: { content: [{ type: "tool_use", id: "toolu-shot", name: "mcp__browser__take_screenshot", input: {} }] } }),
+    JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu-shot",
+      content: [{ type: "text", text: "Took a screenshot of the current page" }, { type: "image", source: { type: "base64", media_type: "image/png", data: screenshot } }] }] } }),
+  ];
+  const codex = [
+    JSON.stringify({ type: "response_item", timestamp: at, payload: { type: "custom_tool_call", call_id: "exec-chart", name: "exec",
+      input: 'const r = await tools.view_image({path: "/w/out/chart.png", detail: "high"});\nimage(r.image_url);' } }),
+    JSON.stringify({ type: "response_item", timestamp: at, payload: { type: "custom_tool_call_output", call_id: "exec-chart",
+      output: [{ type: "input_text", text: "Script completed" }, { type: "input_image", image_url: `data:image/png;base64,${chart}` }] } }),
+    JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageView", id: "exec-view-1", path: "/w/shot.png" } } }),
+    JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageView", id: "exec-view-2", path: "/w/deleted.png" } } }),
+  ];
+  const copilotRecord = (type: string, data: Record<string, unknown>) => JSON.stringify({ type, data, id: `${type}-1`, timestamp: at, parentId: null });
+  const copilot = [
+    copilotRecord("tool.execution_start", { toolCallId: "call-view", toolName: "view", arguments: { path: "/w/diagram.png" } }),
+    copilotRecord("session.binary_asset", { assetId: "sha256:fixture", type: "image", mimeType: "image/png", byteLength: 1, data: diagram, description: "diagram.png" }),
+    copilotRecord("tool.execution_complete", { toolCallId: "call-view", success: true,
+      result: { content: "Viewed image file successfully.", binaryResultsForLlm: [{ assetId: "sha256:fixture", type: "image", mimeType: "image/png" }] } }),
+  ];
+  return [
+    { engine: "claude", items: buildFeed(IMAGE_FILES.claude, claude, false, "").items },
+    { engine: "codex", items: buildFeed(IMAGE_FILES.codex, codex, false, "").items },
+    { engine: "copilot", items: buildFeed(IMAGE_FILES.copilot, copilot, false, "").items },
+  ];
+}
+
+function AgentImagesFixture() {
+  const feeds = agentImageFeeds();
+  return (
+    <div data-evidence-case="agent-images" className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      {feeds.map(({ engine, items }) => (
+        <section key={engine} data-evidence-engine={engine} className="mb-6">
+          <div className="mb-1 text-caption font-semibold uppercase text-muted">{engine}</div>
+          {items.map((item, index) => <FeedItem key={index} item={item} />)}
+        </section>
+      ))}
+      <section data-evidence-engine="live" className="mb-6">
+        <div className="mb-1 text-caption font-semibold uppercase text-muted">live turn</div>
+        <LiveTurnRows items={[{
+          itemId: "exec-view-live", text: "", phase: "awaiting-echo", startedAt: "2026-09-20T10:00:00.000Z", completedAt: null,
+          tool: { name: "view_image", engine: "codex", status: "run", args: { path: "/w/live.png" } },
+        }]} />
+      </section>
+    </div>
+  );
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
+  if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
   if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;

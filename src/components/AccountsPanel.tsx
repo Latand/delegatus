@@ -26,6 +26,7 @@ import { EngineMark } from "@/components/EngineMark";
 import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
 import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary } from "./AccountRemovalSummary";
 import { ArrowRight, ChevronRight, Loader2, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
+import { AccountRowsSkeleton } from "./skeletons";
 import { MobileMeter, meterTone, type MeterTone } from "./mobile/MobileMeter";
 import { receipts as tabReceipts, type ReceiptStore } from "./mobile/MobileReceipt";
 import { Badge } from "./ui/Badge";
@@ -884,7 +885,7 @@ export function AccountsPanel({
         ) : null}
           <>
             <div className="max-h-[min(420px,60vh)] divide-y divide-border/40 overflow-y-auto">
-              {status === "loading" ? <div className="px-3.5 py-2 text-[11px] text-muted">{t("accounts.loading")}</div> : null}
+              {status === "loading" ? <AccountRowsSkeleton className="px-1.5 py-1" /> : null}
               {status === "error" && accounts.length === 0 ? <div className="px-3.5 py-2 text-[11px] text-muted">{t("accounts.noAccounts")}</div> : null}
               {rows.map(({ account, quota }) => {
                 // The limits block belongs to every account that can be read
@@ -1388,7 +1389,7 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
       </div>
       {/* The phone has no footer slot: the removal answer leads the section. */}
       <RemovalOutcome state={state} phone />
-      {status === "loading" && accounts.length === 0 ? <div className="px-3 pb-2 text-label text-muted">{t("accounts.loading")}</div> : null}
+      {status === "loading" && accounts.length === 0 ? <AccountRowsSkeleton className="px-1 pb-2" /> : null}
       {status !== "loading" && accounts.length === 0 ? <div className="px-3 pb-2 text-label text-muted">{t("mobile2.accounts.noAccounts", { engine: engineName })}</div> : null}
       {ordered.map((account) => (
         <MobileAccountCard

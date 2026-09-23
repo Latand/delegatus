@@ -133,6 +133,14 @@ export const en = {
   "dash.newTask": "New task",
   "dash.pipelinesUnavailable": "Pipelines are temporarily unavailable: the pipelines state file could not be read. Other panels stay live.",
   "dash.loadingBoard": "Loading the board…",
+  /* #2071: the title while a project's name is not known after a certified
+     answer, and the line that says the board shows a cached answer. */
+  "dash.projectUnnamed": "Unnamed project",
+  "dash.updating": "updating…",
+  /* #2071: the server is being reconnected; the board shows the last good
+     answer, from {time}. */
+  "reach.reconnecting": "reconnecting · showing {time}",
+  "reach.reconnectingShort": "reconnecting…",
   "dash.emptyTitle": "The scheme is empty for now",
   "dash.emptyStartHere": "Start here: Orchestrator — tell it what you want done in {project}.",
   "dash.emptyOneAgent": "Or spawn one agent for one task (Create → Agent).",
@@ -1327,6 +1335,9 @@ export const en = {
   "render.protocol": "protocol",
   "render.image": "image",
   "render.imageOutput": "image output",
+  "render.imageGone": "image no longer on disk",
+  "render.imageOutsideRoots": "image outside the folders Delegatus serves",
+  "render.imageUnavailable": "image can't be shown",
   "render.toolOutput": "tool output",
   "render.toolOutputType": "tool output: {type}",
   "render.dataKb": "{n} kB of data",
@@ -2654,8 +2665,6 @@ export const en = {
   "mobile2.banner.offlineTitle": "Offline · reconnecting",
   "mobile2.banner.offlineBody": "Showing the last state received",
   "mobile2.banner.offlineBodyAt": "Showing the last state received · {time}",
-  "mobile2.banner.degradedTitle": "Runtime degraded · polling",
-  "mobile2.banner.degradedBody": "Updates arrive every 10 s",
   "mobile2.sheet.close": "Close",
   "mobile2.receipt.respawn": "Respawn",
   "mobile2.receipt.reopen": "Reopen",
