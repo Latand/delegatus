@@ -315,13 +315,13 @@ test("with no conversation focused the phone leaf is the board: the seat first, 
   expect(rows[0]!.textContent).toContain("Implement the export endpoint");
   expect(rows[0]!.textContent).toContain(translate("en", "mobile2.board.badgeQuestion"));
   expect(rows[1]!.textContent).toContain("Fast conversation switching");
-  expect(rows[1]!.textContent).toContain(translate("en", "mobile2.board.badgeDecision"));
-  /* «stage 2/2 · review failed · 2 findings»: the stage by the name the stage
-     list gives it, lowercased inside the sentence (#1865). */
-  expect(rows[1]!.textContent).toContain(translate("en", "mobile2.board.pipelineStageFailed", {
-    stage: 2, total: 2, name: "review",
-  }));
-  expect(rows[1]!.textContent).toContain(translate("en", "mobile2.board.pipelineFindings", { count: 2 }));
+  /* The pipeline card (#2072 slice 3): the badge in the desktop's state word,
+     the stage chain by the names the stage list gives, and the reason. */
+  expect(rows[1]!.querySelector(".pstate-chip")?.textContent).toBe(translate("en", "pipelineState.needs_decision"));
+  expect([...rows[1]!.querySelectorAll(".pb-pill .pb-name")].map((node) => node.textContent)).toEqual(["Implement", "Review"]);
+  expect(rows[1]!.querySelector("[data-pipeline-reason]")?.textContent).toBe(
+    `${translate("en", "pipelineBlock.reason.failed", { stage: "Review" })} · ${translate("en", "pipelineVerdict.findings", { count: 2 })} · 1h`,
+  );
   expect(rows[1]!.textContent).not.toContain(translate("en", "pipelineStrip.reviewStage").toLocaleLowerCase());
   /* Every row keeps its 8 px dot column — hidden on an edged row rather than
      dropped — so an edged title and an unedged one start on the same line

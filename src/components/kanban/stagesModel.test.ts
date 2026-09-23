@@ -96,7 +96,10 @@ test("pipeline actions carry the engine's own refusals", () => {
     "retry-stage": { action: "retry-stage", refusal: "no-decision", stageId: null, attempt: null },
     "skip-stage": { action: "skip-stage", refusal: "no-decision", stageId: null, attempt: null },
     close: { action: "close", refusal: null, stageId: null, attempt: null },
+    /* One more review round (#1938, #2072) is only for a spent review budget. */
+    "continue-review": { action: "continue-review", refusal: "no-review", stageId: null, attempt: null },
   });
+  expect(byAction({ ...retrying, state: "needs_review" } as Pipeline)["continue-review"]).toEqual({ action: "continue-review", refusal: null, stageId: null, attempt: null });
   const parked = byAction({ ...retrying, state: "needs_decision", cursor: { stageId: "verify", state: "running" } } as unknown as Pipeline);
   /* The attempt retry and skip expect is the waiting stage's latest own attempt. */
   expect(parked["retry-stage"]).toEqual({ action: "retry-stage", refusal: null, stageId: "verify", attempt: 2 });
@@ -107,7 +110,7 @@ test("pipeline actions carry the engine's own refusals", () => {
   expect(byAction({ ...retrying, state: "needs_decision", cursor: { stageId: "merge", state: "pending" } } as unknown as Pipeline)["skip-stage"]).toEqual({ action: "skip-stage", refusal: null, stageId: "merge", attempt: 0 });
   expect(byAction({ ...retrying, state: "paused" } as Pipeline).resume).toEqual({ action: "resume", refusal: null, stageId: null, attempt: null });
   const ended = byAction({ ...retrying, state: "completed" } as Pipeline);
-  expect([ended.pause!.refusal, ended["retry-stage"]!.refusal, ended.close!.refusal]).toEqual(["ended", "ended", "ended"]);
+  expect([ended.pause!.refusal, ended["retry-stage"]!.refusal, ended.close!.refusal, ended["continue-review"]!.refusal]).toEqual(["ended", "ended", "ended", "ended"]);
   const draft = byAction({ ...retrying, state: "draft" } as Pipeline);
   expect([draft.pause!.refusal, draft.close!.refusal]).toEqual(["draft", "draft"]);
 });

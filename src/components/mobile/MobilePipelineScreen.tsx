@@ -1,8 +1,8 @@
 "use client";
 
-import { Check, CircleX, Eye, Pause, Play, RefreshCw, Settings2, SkipForward } from "lucide-react";
+import { CircleX, Eye, Pause, Play, RefreshCw, Settings2, SkipForward } from "lucide-react";
 
-import { ChevronRight, Loader2, X } from "@/components/icons";
+import { ChevronRight } from "@/components/icons";
 import { useState, useSyncExternalStore } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -17,6 +17,7 @@ import { reviewerBindingTargetsForRound } from "../flows/flowModel";
    beside the graph that first drew them; the phone reads the same modules
    rather than growing a second drawing of the same facts. */
 import { FiredMark, identityTitle, StageIdentity } from "../kanban/identityMarks";
+import { STAGE_TONE } from "../kanban/pipelineGraph";
 import { returnsInto, stageIdentity, type EdgeCount } from "../kanban/stageIdentity";
 import {
   attemptNavTarget,
@@ -35,7 +36,10 @@ import {
   stageLatestAttemptPlace,
   stageRoleAside,
   verdictStatusLabel,
+  type StageChipState,
 } from "../pipelines/pipelineModel";
+import { StageToneMark } from "../pipelines/PipelineBlock";
+import { pipelineNeedsYou } from "../pipelines/pipelineBlockModel";
 import { StagePlaceholderPane } from "../pipelines/StagePlaceholderPane";
 import { VerdictFindings } from "../pipelines/VerdictPopover";
 import type { StageSlot } from "../scheme/layout";
@@ -226,16 +230,6 @@ export const PIPELINE_STATE_WORD = {
   closed: "mobile2.pipelines.badgeClosed",
 } as const satisfies Record<Pipeline["state"], string>;
 
-const STATE_TONE: Record<Pipeline["state"], { phrase: string; dot: string }> = {
-  draft: { phrase: "font-semibold text-warning", dot: "bg-warning" },
-  provisioning: { phrase: "font-semibold text-accent", dot: "bg-accent" },
-  running: { phrase: "font-semibold text-accent", dot: "bg-accent" },
-  needs_decision: { phrase: "font-semibold text-warning", dot: "bg-warning" },
-  needs_review: { phrase: "font-semibold text-warning", dot: "bg-warning" },
-  paused: { phrase: "font-semibold text-warning", dot: "bg-warning" },
-  completed: { phrase: "", dot: "bg-success" },
-  closed: { phrase: "", dot: "bg-strong" },
-};
 
 /** The action a state offers, in the order the two buttons sit (README §4.7).
     The last entry is the primary; a state with nothing to decide has one. */
@@ -294,13 +288,13 @@ const ACTION_ICON = {
 
 const STAGE_MARK = "grid h-6 w-6 shrink-0 place-items-center rounded-full text-caption font-bold tabular-nums";
 
-function StageMark({ state, index }: { state: string; index: number }) {
-  if (state === "passed") return <span className={`${STAGE_MARK} bg-success-soft text-success`}><Check className="h-3.5 w-3.5" aria-hidden /></span>;
-  if (state === "failed" || state === "needs_decision") return <span className={`${STAGE_MARK} bg-danger-soft text-danger`}><X className="h-3.5 w-3.5" aria-hidden /></span>;
-  if (state === "running" || state === "reviewing" || state === "committing" || state === "spawning") {
-    return <span className={`${STAGE_MARK} bg-accent-soft text-accent`}><Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /></span>;
-  }
-  return <span className={`${STAGE_MARK} bg-sunken text-muted`}>{index + 1}</span>;
+/** A stage's mark on its row: the block's mark in the stage's `STAGE_TONE`
+    (#2072, one tone map), on a disc of the same tone. A stage that has not
+    run keeps its number. */
+function StageMark({ state, index }: { state: StageChipState; index: number }) {
+  const tone = STAGE_TONE[state];
+  if (tone === "idle") return <span data-mobile2-stage-mark={tone} className={`${STAGE_MARK} bg-sunken text-muted`}>{index + 1}</span>;
+  return <span data-mobile2-stage-mark={tone} className={`${STAGE_MARK} pmark-disc tone-${tone}`}><StageToneMark state={state} /></span>;
 }
 
 /**
@@ -445,7 +439,6 @@ export function MobilePipelineScreen({
   const held = pending?.pipelineId === pipeline.id;
   const { k, n } = pipelineStagePosition(pipeline);
   const created = Date.parse(pipeline.createdAt);
-  const tone = STATE_TONE[pipeline.state];
   const cursorStage = pipeline.cursor ? pipeline.stages.find((stage) => stage.id === pipeline.cursor!.stageId) ?? null : null;
   const cursorAttempt = cursorStage ? latestAttempt(pipeline, cursorStage.id) : null;
   const findings = cursorAttempt?.verdict?.status === "fail" ? cursorAttempt.verdict.findings ?? [] : [];
@@ -485,8 +478,10 @@ export function MobilePipelineScreen({
     <span className="flex min-w-0 flex-1 flex-col">
       <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">{pipeline.task}</span>
       <span data-mobile2-meta className="flex min-w-0 items-center gap-[5px] overflow-hidden text-label tabular-nums leading-tight text-muted">
-        <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot} ${pipeline.state === "running" ? "motion-safe:animate-pulse" : ""}`} />
-        <span data-mobile2-phrase className={`shrink-0 ${tone.phrase}`}>{t(PIPELINE_STATE_WORD[pipeline.state])}</span>
+        {/* The state's tone is the `.pstate-chip` state's, the one map the
+            desktop reads (#2072). */}
+        <span aria-hidden data-pstate={pipeline.state} className={`pstate-dot h-1.5 w-1.5 shrink-0 rounded-full ${pipeline.state === "running" ? "motion-safe:animate-pulse" : ""}`} />
+        <span data-mobile2-phrase data-pstate={pipeline.state} className="pstate-word shrink-0">{t(PIPELINE_STATE_WORD[pipeline.state])}</span>
         <span aria-hidden className="shrink-0 opacity-60">·</span>
         <span className="shrink-0">{t("pipelineStrip.stageOf", { k, n })}</span>
         {Number.isFinite(created) ? (
@@ -527,7 +522,9 @@ export function MobilePipelineScreen({
           </button>
         </div>
         {findings.length && cursorStage ? (
-          <div className="mx-3 mt-2.5 rounded-[12px] bg-danger-soft px-3 py-2">
+          /* A lane stopped on a failed round waits on the operator, and a lane
+             that waits on the operator is amber throughout (#2072 §3.13). */
+          <div className="mx-3 mt-2.5 rounded-[12px] bg-warning-soft px-3 py-2">
             <VerdictFindings
               testId="mobile-pipeline-findings"
               findings={findings}
@@ -713,14 +710,14 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
         data-mobile2-stage-configure={configurable ? "true" : undefined}
         data-mobile2-stage-state={state}
         data-mobile2-stage-current={current ? "true" : undefined}
-        className={`flex min-h-[52px] w-full items-center gap-2.5 py-2 pl-3 pr-2.5 text-left ${current ? "shadow-[inset_3px_0_0_var(--color-accent)]" : ""} ${file || configurable ? TAPPABLE : ""}`}
+        className={`flex min-h-[52px] w-full items-center gap-2.5 py-2 pl-3 pr-2.5 text-left ${current ? `tone-${STAGE_TONE[state]} shadow-[inset_3px_0_0_var(--stage-tone)]` : ""} ${file || configurable ? TAPPABLE : ""}`}
       >
         <StageMark state={state} index={index} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5">
             <span data-mobile2-stage-title className="truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
             {returns.map((count, at) => (
-              <ReturnMark key={at} count={count} />
+              <ReturnMark key={at} count={count} needsYou={pipelineNeedsYou(pipeline)} />
             ))}
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-label tabular-nums text-muted">
@@ -767,11 +764,15 @@ const returnTitle = (t: TFunction, count: EdgeCount) => [
  * line names only the run and the state, so the budget is printed here or it is
  * nowhere on the phone.
  */
-function ReturnMark({ count }: { count: EdgeCount }) {
+function ReturnMark({ count, needsYou }: { count: EdgeCount; needsYou: boolean }) {
   const { t } = useLocale();
   const title = returnTitle(t, count);
+  /* The words take the suffix's tone (#2072): a fired edge warns and a spent one
+     is danger, except on a lane that waits on the operator, which keeps its
+     one status hue. */
+  const tone = count.exhausted && !needsYou ? "text-danger" : "text-warning";
   return (
-    <span className="flex shrink-0 items-center gap-1 text-label font-bold leading-none text-danger" title={title} data-mobile2-stage-returns={count.fired}>
+    <span className={`flex shrink-0 items-center gap-1 text-label font-bold leading-none ${tone}`} title={title} data-mobile2-stage-returns={count.fired}>
       <FiredMark count={count} label={t("kanban.graph.firedTitle", { count: count.fired })} />
       <span data-mobile2-stage-budget={count.exhausted ? "spent" : "left"}>
         {t("kanban.graph.failUsedShort", { n: count.fired, max: count.max ?? 0 })}

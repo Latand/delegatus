@@ -2235,6 +2235,7 @@ function ProjectDashboardView({
           ) : (
             <MobilePipelinesScreen
               pipelines={activePipelines}
+              flows={flows}
               now={nowSeconds}
               host={mobileShell}
               renderSheet={renderMobileSheet}
@@ -2280,6 +2281,7 @@ function ProjectDashboardView({
               ) : mobileBoardLeaf ? (
                 <MobileBoard
                   {...mobileBoardProps}
+                  flows={flows}
                   catalog={{
                     data: inlineCatalog.catalog,
                     expanded: inlineCatalog.view.expanded,
