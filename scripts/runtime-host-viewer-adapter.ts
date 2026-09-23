@@ -54,7 +54,7 @@ import { McpHealthProbeAdmissions } from "../src/runtime-host/mcpHealthProbeAdmi
 import type { McpHealthProbeAdmissionConsumer } from "../src/runtime-host/mcpHealthProbeAdmissionChannel";
 import { VIEWER_CONTROL_TOKEN_ENV } from "../src/lib/mcp/controlEndpoint";
 import { probeControlUrl, probeMcpRuntime } from "../src/runtime-host/mcpRuntimeProbe";
-import { McpRuntimeReleaseStore } from "../src/runtime-host/mcpRuntimeRelease";
+import { McpRuntimeReleaseStore, stableMcpRuntimeRoot } from "../src/runtime-host/mcpRuntimeRelease";
 import {
   clearRuntimeHostHandoffIntent,
   readRuntimeHostHandoffIntent,
@@ -114,7 +114,7 @@ const canonicalRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://gith
 const runtimeSocket = process.env.LLV_RUNTIME_HOST_SOCKET || path.join(stateDir, "runtime-host.sock");
 const stableEndpoint = `http://127.0.0.1:${Number(process.env.LLV_VIEWER_PORT || 8898)}`;
 const runtimeHostImageTag = process.env.LLV_RUNTIME_HOST_IMAGE_TAG || "agent-log-viewer:node22";
-const mcpRuntimeRoot = process.env.LLV_MCP_RUNTIME_ROOT || path.join(process.env.HOME || "/home/user", ".agents", "tools", "llv-mcp-runtime");
+const mcpRuntimeRoot = stableMcpRuntimeRoot();
 const mcpRuntimeStore = new McpRuntimeReleaseStore({ stateDir, stableRuntimeRoot: mcpRuntimeRoot });
 const deploymentPackageRoot = process.env.LLV_DEPLOYMENT_PACKAGE_ROOT || path.resolve(import.meta.dir, "..");
 const releaseSwitchIntentFile = path.join(stateDir, "viewer-release-switch-intent.json");

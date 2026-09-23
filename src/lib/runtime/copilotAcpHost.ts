@@ -6,7 +6,14 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 import type { ProcessIdentity } from "@/lib/agent/registry";
-import { viewerMcpServerEntry, VIEWER_SPAWN_CAPABILITY_ENV, type ViewerMcpServerEntry } from "@/lib/agent/spawnPolicy";
+import {
+  viewerMcpHttpUrl,
+  viewerMcpServerEntry,
+  viewerMcpTransportForLaunch,
+  VIEWER_SPAWN_CAPABILITY_ENV,
+  VIEWER_SPAWN_CAPABILITY_HEADER,
+  type ViewerMcpServerEntry,
+} from "@/lib/agent/spawnPolicy";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
@@ -95,8 +102,9 @@ export interface CopilotAcpHostOptions {
       environment can never reach a spawned Copilot. */
   providerEnv?: Record<string, string>;
   /** The Viewer MCP server definition; null attaches none. Defaults to the
-      package's own launcher. */
-  viewerMcpServer?: ViewerMcpServerEntry | null;
+      shared endpoint when this launch takes the HTTP transport, else to the
+      launcher `viewerMcpServerEntry` resolves. */
+  viewerMcpServer?: CopilotViewerMcpServer | null;
   releaseCleanup?: () => void;
   requestTimeoutMs?: number;
   /** Bound on the wait for a cancelled `session/prompt` to return. */
@@ -164,14 +172,39 @@ export function copilotChildEnv(
   return env;
 }
 
+/** A stdio launcher, or the Viewer's shared HTTP endpoint. */
+export type CopilotViewerMcpServer = ViewerMcpServerEntry | { url: string };
+
+/** The Viewer server for one launch, from the environment its agent runs
+    with: the shared endpoint when `viewerMcpTransportForLaunch` admits HTTP,
+    the resolved stdio launcher otherwise. */
+export function copilotViewerMcpServer(launchEnv: NodeJS.ProcessEnv): CopilotViewerMcpServer {
+  return viewerMcpTransportForLaunch(launchEnv) === "http" ? { url: viewerMcpHttpUrl() } : viewerMcpServerEntry();
+}
+
 /** The `--additional-mcp-config` document. ACP `session/new` rejects stdio
     servers, so the Viewer MCP attaches at process start instead. The spawn
-    capability rides the server's own `env` table, never a command line. */
+    capability rides the server's own `env` table, never a command line; over
+    HTTP it rides the same header Claude sends. The value is written into the
+    0600 file itself, because the capability is removed from the child's
+    environment and no reference to it could resolve there. */
 export function copilotMcpConfig(
-  viewer: ViewerMcpServerEntry | null,
+  viewer: CopilotViewerMcpServer | null,
   capability: string | null,
 ): { mcpServers: Record<string, JsonObject> } {
   if (!viewer) return { mcpServers: {} };
+  if ("url" in viewer) {
+    return {
+      mcpServers: {
+        viewer: {
+          type: "http",
+          url: viewer.url,
+          headers: capability ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {},
+          tools: ["*"],
+        },
+      },
+    };
+  }
   return {
     mcpServers: {
       viewer: {
@@ -353,7 +386,7 @@ export class CopilotAcpHost implements EngineHost {
     let child: ChildProcessWithoutNullStreams;
     try {
       const viewer = options.viewerMcpServer === undefined
-        ? (options.mcpServers ?? ["viewer"]).includes("viewer") ? viewerMcpServerEntry() : null
+        ? (options.mcpServers ?? ["viewer"]).includes("viewer") ? copilotViewerMcpServer(options.env ?? {}) : null
         : options.viewerMcpServer;
       if (viewer) {
         const directory = path.join(options.copilotHome, "llv-mcp");

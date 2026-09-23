@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 
 import { statePath } from "@/lib/configDir";
 import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
+import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
 
 import { appDirIn } from "../../../bin/appDir.mjs";
 
@@ -83,17 +84,28 @@ export function viewerMcpServerEnv(source: NodeJS.ProcessEnv = process.env): Rec
   return env;
 }
 
-/** The package-owned Viewer server, from either a checkout root or the
-    standalone server directory used by the published CLI. */
-export function viewerMcpServerEntry(packageCwd = process.cwd()): ViewerMcpServerEntry {
+/**
+ * The Viewer server an agent launches when its account registers none. The
+ * stable runtime comes first, as in `install-mcp.sh`: it lives under the home
+ * directory the Docker image mounts at the same path, so the agent CLI, which
+ * runs on the host through the nsenter shim, can start it. The package's own
+ * launcher (a checkout root, or the standalone server directory of the
+ * published CLI) is the fallback; inside the image that is `/app`, which does
+ * not exist on the host (#2052).
+ */
+export function viewerMcpServerEntry(
+  packageCwd = process.cwd(),
+  source: NodeJS.ProcessEnv = process.env,
+): ViewerMcpServerEntry {
+  const stable = path.join(stableMcpRuntimeRoot(source), "bin", "mcp-server.mjs");
   const direct = path.resolve(packageCwd, "bin", "mcp-server.mjs");
   const fromStandalone = path.resolve(packageCwd, "..", "..", "bin", "mcp-server.mjs");
-  const launcher = [direct, fromStandalone].find((candidate) => fs.existsSync(candidate));
+  const launcher = [stable, direct, fromStandalone].find((candidate) => fs.existsSync(candidate));
   if (!launcher) throw new Error(`Viewer MCP launcher could not be resolved from package cwd: ${packageCwd}`);
   return {
     command: "bun",
     args: [launcher],
-    env: viewerMcpServerEnv(),
+    env: viewerMcpServerEnv(source),
   };
 }
 
