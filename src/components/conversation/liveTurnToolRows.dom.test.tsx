@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { setLocale, translate } from "@/lib/i18n";
 import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { hhmm } from "@/components/utils";
@@ -296,5 +297,89 @@ test("an MCP call whose outcome was dropped says so in the reader's language, an
       tool: { name: "Bash", engine: "claude", status: "unknown", args: { command: "bun run build" } },
     }]).querySelector<HTMLElement>("[data-live-tool]")!;
     expect(generic.textContent).toContain(translate(lang, "feed.liveToolOutcomeOmitted"));
+  }
+});
+
+/* #2075: a live row that opened a picture file draws it under the line from
+   disk, the same card the settled row draws from the transcript's bytes. */
+test("a live view_image or image Read draws the file under its line; a text Read or a failed view draws none", () => {
+  const host = mount([
+    {
+      itemId: "exec-view-1", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: AT,
+      tool: { name: "view_image", engine: "codex", status: "ok", args: { path: "/w/shot.png" } },
+    },
+    {
+      itemId: "toolu_png", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,
+      tool: { name: "Read", engine: "claude", status: "run", args: { file_path: "~/w/frame.jpg" } },
+    },
+    {
+      itemId: "toolu_ts", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: AT,
+      tool: { name: "Read", engine: "claude", status: "ok", args: { file_path: "/w/src/app.ts" } },
+    },
+    {
+      itemId: "toolu_err", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: AT,
+      tool: { name: "Read", engine: "claude", status: "err", args: { file_path: "/w/missing.png" } },
+    },
+  ]);
+  const pictures = [...host.querySelectorAll<HTMLElement>("[data-live-tool-image] img")];
+  expect(pictures.map((img) => img.getAttribute("src"))).toEqual([
+    "/api/artifact?path=%2Fw%2Fshot.png",
+    "/api/artifact?path=%7E%2Fw%2Fframe.jpg",
+  ]);
+  /* Each picture sits right under the line that opened it. */
+  const rows = [...host.querySelectorAll<HTMLElement>("[data-live-turn]")];
+  expect(rows[0]!.nextElementSibling?.hasAttribute("data-live-tool-image")).toBe(true);
+  expect(rows[1]!.nextElementSibling?.hasAttribute("data-live-tool-image")).toBe(true);
+  expect(rows[2]!.nextElementSibling?.hasAttribute("data-live-tool-image")).toBe(false);
+  expect(rows[3]!.nextElementSibling).toBeNull();
+});
+
+test("on the phone the live line and its picture run edge to edge, where the settled line sits", () => {
+  const original = dom.matchMedia.bind(dom);
+  const phone = (query: string) => ({
+    matches: query.replace(/\s+/g, "") === MOBILE_LAYOUT_QUERY.replace(/\s+/g, ""),
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent() { return false; },
+  });
+  (dom as unknown as { matchMedia: unknown }).matchMedia = phone;
+  try {
+    const host = mount([{
+      itemId: "exec-view-phone", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,
+      tool: { name: "view_image", engine: "codex", status: "run", args: { path: "/w/shot.png" } },
+    }]);
+    const row = host.querySelector<HTMLElement>("[data-live-turn]")!;
+    const picture = host.querySelector<HTMLElement>("[data-live-tool-image]")!;
+    expect(row.className).not.toContain("ml-9");
+    expect(picture.className).not.toContain("ml-9");
+    expect(picture.className).toContain("pl-[22px]");
+  } finally {
+    (dom as unknown as { matchMedia: unknown }).matchMedia = original;
+  }
+});
+
+test("a live picture the route's fence refuses draws nothing, since its settled echo shows the transcript's bytes", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: "fixture", code: "access-denied" }),
+    { status: 403, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  try {
+    const host = mount([{
+      itemId: "toolu_tmp", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,
+      tool: { name: "Read", engine: "claude", status: "run", args: { file_path: "/tmp/capture.png" } },
+    }]);
+    const img = host.querySelector("[data-live-tool-image] img")!;
+    flushSync(() => img.dispatchEvent(new dom.Event("error") as unknown as Event));
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync(() => {});
+    expect(host.querySelector("[data-live-tool-image] img")).toBeNull();
+    expect(host.querySelector("[data-image-unavailable]")).toBeNull();
+    /* The line itself stays. */
+    expect(host.querySelector("[data-live-tool=Read]")).toBeTruthy();
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });

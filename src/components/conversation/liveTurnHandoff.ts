@@ -1,6 +1,7 @@
 "use client";
 
-import type { FeedEntry, FeedSnapshot } from "@/components/feed/parse";
+import type { FeedEntry, FeedSnapshot, ToolEvent } from "@/components/feed/parse";
+import { rasterImagePath } from "@/lib/imagePolicy";
 import { newestTranscriptInstant } from "@/components/feed/transcriptOrder";
 import type { RuntimeTurnAxis } from "@/lib/runtime/contracts";
 import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
@@ -165,6 +166,32 @@ function canonicalAssistantItems(feed: readonly FeedEntry[]): CanonicalAssistant
   });
 }
 
+interface ViewedPathClaim {
+  path: string;
+  at: number | null;
+}
+
+/** The pictures settled code-mode execs opened, by path (#2075). Codex reports
+    each `tools.view_image` inside an exec as an `imageView` item with an id of
+    its own, never the exec's call id, so the exec claims those live rows by
+    the file they opened. `at` is when the exec's result landed: a live view
+    that started after it belongs to a later call. */
+function viewedPathClaims(feed: readonly FeedEntry[]): ViewedPathClaim[] {
+  const calls = feed.flatMap(({ item }): ToolEvent[] => item.kind === "tool" ? [item] : item.kind === "cmd-group" ? item.calls : []);
+  return calls.flatMap((call) => call.status === "run" || !call.viewedPaths
+    ? []
+    : call.viewedPaths.map((path) => ({ path, at: timestamp(call.endTs) })));
+}
+
+function claimedByViewedPath(live: RuntimeLiveTurnItem, claims: readonly ViewedPathClaim[]): boolean {
+  if (!claims.length || live.tool?.name !== "view_image") return false;
+  const raw = live.tool.args.path;
+  const path = typeof raw === "string" ? rasterImagePath(raw) : null;
+  if (!path) return false;
+  const startedAt = timestamp(live.startedAt);
+  return claims.some((claim) => claim.path === path && (claim.at === null || startedAt === null || claim.at >= startedAt));
+}
+
 /** Enrich only matching canonical reasoning members, in their original slots.
  * The caller may retain its previous projection while an empty transcript echo
  * outlives the live buffer. That projection is pane-scoped, never global state.
@@ -258,6 +285,7 @@ export function visibleRuntimeLiveTurnItems(
   const reasoningClaims = new Set(feed.flatMap(({ item }) => item.kind === "think"
     ? (item.members ?? []).map((member) => member.sourceId) : []));
   const transcriptAt = newestTranscriptInstant(feed);
+  const pathClaims = viewedPathClaims(feed);
   const claimed = new Set<number>();
   /** The transcript has moved past this item, so the tail must not show it. */
   const transcriptMovedPast = (live: RuntimeLiveTurnItem): boolean => {
@@ -269,6 +297,7 @@ export function visibleRuntimeLiveTurnItems(
     if (live.itemId && reasoningClaims.has(live.itemId)) return false;
     if (live.phase === "streaming") return sessionTurn !== "idle" || !transcriptMovedPast(live);
     if (live.itemId && (persistedClaims.has(live.itemId) || currentClaims.has(live.itemId))) return false;
+    if (claimedByViewedPath(live, pathClaims)) return false;
     let owner = live.itemId
       ? canonical.findIndex((item, index) => !claimed.has(index) && item.sourceId === live.itemId)
       : -1;

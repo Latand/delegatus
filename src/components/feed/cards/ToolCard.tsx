@@ -10,7 +10,7 @@ import { GlyphIcon, Loader2 } from "../../icons";
 import { hhmm } from "../../utils";
 import { ACTION_GUTTER, MESSAGE_ACTION } from "../actionStyles";
 import { CopyButton } from "../CopyButton";
-import { tr, type ToolEvent, type ToolOutputBlock } from "../parse";
+import { hasImageBlock, tr, type ToolEvent, type ToolOutputBlock } from "../parse";
 import type { ArgChip } from "../tools";
 import { formatDuration, isFollowUpCall, toolDurationMs } from "../toolBlocks";
 import { DiffCard } from "./DiffCard";
@@ -203,12 +203,12 @@ export function ToolBody({ event }: { event: ToolEvent }) {
   );
 }
 
-/* #1498: a result that carried pictures renders its blocks in transcript
-   order — text through the capped preview, a picture through the feed's own
-   ImageCard, collapsed to its chip so the data URI enters the DOM only when
-   the operator opens it. A picture whose data did not survive falls back to
-   the same text placeholder the flattened preview carries, so a broken frame
-   degrades to a line rather than to a blank card. */
+/* #1498: a result that carried pictures renders its text blocks in
+   transcript order through the capped preview. The pictures themselves are
+   drawn on the line, outside this body ({@link ToolImages}, #2075). A picture
+   whose data did not survive falls back to the same text placeholder the
+   flattened preview carries, so a broken frame degrades to a line rather than
+   to a blank card. */
 function ToolOutputBlocks({
   blocks,
   truncated,
@@ -225,9 +225,7 @@ function ToolOutputBlocks({
   return (
     <>
       {blocks.map((block, index) => {
-        if (block.type === "image" && block.data) {
-          return <ImageCard key={index} media={block.media} data={block.data} w={block.w} h={block.h} bytes={block.bytes} initialView="chip" inset />;
-        }
+        if (block.type === "image" && drawable(block)) return null;
         const text = block.type === "text" ? block.text : `[${tr("render.imageOutput")}]`;
         const node = (
           <OutputFrame key={index} output={text} heading={firstText ? heading : undefined}>
@@ -238,6 +236,24 @@ function ToolOutputBlocks({
         return node;
       })}
     </>
+  );
+}
+
+type ImageBlock = Extract<ToolOutputBlock, { type: "image" }>;
+const drawable = (block: ImageBlock) => Boolean(block.data || block.path);
+
+/** The pictures a tool call showed its agent, drawn under its line with the
+    same card that draws an operator's attachment (#2075). They sit outside the
+    line's disclosure, so they show while the line is closed: on the phone, in
+    the dock's collapsed-tools mode, and before the operator opened anything.
+    The inset lines them up with the summary text after the glyph. */
+export function ToolImages({ event }: { event: ToolEvent }) {
+  const images = (event.outputBlocks ?? []).filter((block): block is ImageBlock => block.type === "image" && drawable(block));
+  if (!images.length) return null;
+  return (
+    <div data-tool-images className="flex min-w-0 max-w-full flex-wrap items-start gap-x-2 pl-[22px]">
+      {images.map((image, index) => <ImageCard key={`${image.path ?? "inline"}:${index}`} {...image} inset />)}
+    </div>
   );
 }
 
@@ -289,6 +305,7 @@ export function ToolBlockRow({ event, index, nested = false }: { event: ToolEven
         <RowStatusChip event={event} />
         {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
       </div>
+      <ToolImages event={event} />
       <ToolBody event={event} />
     </div>
   );
@@ -338,9 +355,10 @@ export function ToolLine({
   const duration = durationMs === undefined ? "" : formatDuration(durationMs);
   const isErr = event.status === "err";
   const running = event.status === "run";
-  return (
+  const pictured = hasImageBlock(event);
+  const line = (
     <details
-      className={`group/tool ${className}`}
+      className={`group/tool ${pictured ? "" : className}`}
       open={open}
       onToggle={(e) => {
         const next = e.currentTarget.open;
@@ -379,6 +397,13 @@ export function ToolLine({
       </summary>
       {(collapsed ? manualOpen : isMobile ? phoneOpen : mounted) ? <><ToolBody event={event} />{children}</> : null}
     </details>
+  );
+  if (!pictured) return line;
+  return (
+    <div className={`min-w-0 ${className}`}>
+      {line}
+      <ToolImages event={event} />
+    </div>
   );
 }
 

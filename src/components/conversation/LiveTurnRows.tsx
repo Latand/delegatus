@@ -18,7 +18,8 @@ import {
 } from "lucide-react";
 import { useMemo, useSyncExternalStore } from "react";
 
-import type { RuntimeLiveTurnItem, RuntimeLiveTurnTool } from "@/lib/runtime/liveTurn";
+import { liveToolImagePath, type RuntimeLiveTurnItem, type RuntimeLiveTurnTool } from "@/lib/runtime/liveTurn";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale } from "@/lib/i18n";
 import {
   conversationAvailabilitySnapshot,
@@ -32,6 +33,7 @@ import {
   type McpCallLink,
 } from "@/lib/mcp/presentation";
 import { GlyphIcon } from "@/components/icons";
+import { ImageCard } from "@/components/feed/cards/ImageCard";
 import { StatusIcon } from "@/components/feed/cards/shared";
 import { StreamingMd } from "@/components/feed/markdown";
 import { summarizeTool } from "@/components/feed/tools";
@@ -346,9 +348,14 @@ function LiveMcpRow({
    grammar (glyph · summary · non-ok status) — the row must not change
    appearance when the canonical card replaces it. It has no body: the call's
    output lives in the transcript, and this row only says the call happened,
-   is running, or failed. */
+   is running, or failed. A call that opened a picture file draws it under the
+   line from disk, where the canonical row will draw the same picture from the
+   transcript's own bytes (#2075). On the phone the settled line runs edge to
+   edge (mobile v2, #1439), so the live line and its picture drop the `ml-9`
+   indent there too, and neither moves when the canonical row lands. */
 function LiveToolRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeLiveTurnTool }) {
   const { t } = useLocale();
+  const indent = useIsMobile() ? "" : "ml-9 ";
   const summary = useMemo(() => summarizeTool(tool.name, tool.args, tool.engine), [tool.name, tool.args, tool.engine]);
   const state = liveCallState(tool.status);
   const isErr = state === "error";
@@ -364,13 +371,14 @@ function LiveToolRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeL
         : "";
   const files = tool.name === "apply_patch" && !summary.chips.length ? patchFileNames(tool.args.input) : "";
   const detail = files ? `${summary.summary} · ${files}` : summary.summary;
-  return (
+  const picture = liveToolImagePath(tool);
+  const row = (
     <div
       data-live-turn
       data-live-turn-item-id={item.itemId ?? undefined}
       data-live-tool={tool.name}
       data-live-tool-status={tool.status}
-      className={`ml-9 flex items-center gap-2 rounded-control py-0.5 text-ui ${
+      className={`${indent}flex items-center gap-2 rounded-control py-0.5 text-ui ${
         isErr ? "border-l-2 border-danger bg-danger-soft pl-2 pr-1 text-danger" : "text-muted"
       }`}
     >
@@ -385,6 +393,15 @@ function LiveToolRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeL
         </span>
       ) : null}
     </div>
+  );
+  if (!picture) return row;
+  return (
+    <>
+      {row}
+      <div data-live-tool-image className={`${indent}min-w-0 pl-[22px]`}>
+        <ImageCard path={picture} inset quietOutsideRoots />
+      </div>
+    </>
   );
 }
 
