@@ -1588,6 +1588,10 @@ describe("#2075 every image an agent looks at", () => {
     unavailable: string[];
     commandGroups: number;
     smallControls: number;
+    /* The live picture and the settled pictures start at the same x, so a
+       picture does not move sideways when its canonical row lands. */
+    liveLeft: number | null;
+    settledLeft: number[];
     overflowX: number;
   }
 
@@ -1630,6 +1634,8 @@ describe("#2075 every image an agent looks at", () => {
                 commandGroups: document.querySelectorAll('[data-tool-row="group"]').length,
                 smallControls: [...document.querySelectorAll("[data-tool-images] button, [data-live-tool-image] button")]
                   .filter((button) => button.getBoundingClientRect().height < 44).length,
+                liveLeft: document.querySelector("[data-live-tool-image] img")?.getBoundingClientRect().left ?? null,
+                settledLeft: [...document.querySelectorAll("[data-tool-images] img")].map((img) => img.getBoundingClientRect().left),
                 overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
               };
             });
@@ -1647,6 +1653,11 @@ describe("#2075 every image an agent looks at", () => {
             expect(reading.unavailable[0]).toContain(translate(lang, "render.imageGone"));
             expect(reading.overflowX).toBe(0);
             if (frame.touch) expect(reading.smallControls).toBe(0);
+            expect(reading.liveLeft).not.toBeNull();
+            expect(reading.settledLeft).toHaveLength(6);
+            for (const left of reading.settledLeft) expect(Math.abs(left - reading.liveLeft!)).toBeLessThanOrEqual(1);
+            /* The desktop keeps the feed's avatar-column indent: 36 px gutter plus the 22 px glyph inset. */
+            if (!frame.touch) expect(Math.round(reading.liveLeft!)).toBe(16 + 36 + 22);
             /* A tap opens the full-screen viewer on the picture it tapped. */
             const first = page.locator("[data-tool-images] img").first();
             const source = await first.getAttribute("src");

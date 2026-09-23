@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { setLocale, translate } from "@/lib/i18n";
 import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { hhmm } from "@/components/utils";
@@ -331,4 +332,32 @@ test("a live view_image or image Read draws the file under its line; a text Read
   expect(rows[1]!.nextElementSibling?.hasAttribute("data-live-tool-image")).toBe(true);
   expect(rows[2]!.nextElementSibling?.hasAttribute("data-live-tool-image")).toBe(false);
   expect(rows[3]!.nextElementSibling).toBeNull();
+});
+
+test("on the phone the live line and its picture run edge to edge, where the settled line sits", () => {
+  const original = dom.matchMedia.bind(dom);
+  const phone = (query: string) => ({
+    matches: query.replace(/\s+/g, "") === MOBILE_LAYOUT_QUERY.replace(/\s+/g, ""),
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent() { return false; },
+  });
+  (dom as unknown as { matchMedia: unknown }).matchMedia = phone;
+  try {
+    const host = mount([{
+      itemId: "exec-view-phone", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,
+      tool: { name: "view_image", engine: "codex", status: "run", args: { path: "/w/shot.png" } },
+    }]);
+    const row = host.querySelector<HTMLElement>("[data-live-turn]")!;
+    const picture = host.querySelector<HTMLElement>("[data-live-tool-image]")!;
+    expect(row.className).not.toContain("ml-9");
+    expect(picture.className).not.toContain("ml-9");
+    expect(picture.className).toContain("pl-[22px]");
+  } finally {
+    (dom as unknown as { matchMedia: unknown }).matchMedia = original;
+  }
 });
