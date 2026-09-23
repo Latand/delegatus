@@ -38,6 +38,8 @@ import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./Kanban
 import { MoreGlyph } from "./kanbanGlyphs";
 import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
+import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
+import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
 import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
 import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
@@ -288,6 +290,7 @@ function useBands(props: KanbanBoardProps) {
 export function KanbanBoard(props: KanbanBoardProps) {
   const { t, locale } = useLocale();
   const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
+  const workLinks = useWorkLinks();
   /* The bar's word on the server (#2071 D7): a reconnect in progress is a
      quiet note, a long outage the red alert it always was. */
   const reach = useServerReach();
@@ -329,6 +332,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     { kind: "status" | "card" | "colour"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "create" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
     | { kind: "account"; target: AccountTarget }
+    | { kind: "links"; target: WorkLinkTarget }
   >();
   const { receipts, show, dismiss } = useReceipts();
   const latestUndo = useRef<{ receiptId: number; run: () => void } | null>(null);
@@ -1146,7 +1150,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       });
       return { label: t("kanban.columnActions", { column: statusLabel(t, status) }), items };
     }
-    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account") return null;
+    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links") return null;
     if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor, open.value.stop);
     if (open.value.kind === "pipeline" || open.value.kind === "stage") return pipelineMenu(open.value);
     const value = open.value;
@@ -1182,11 +1186,23 @@ export function KanbanBoard(props: KanbanBoardProps) {
         { type: "item", label: collapsed.has(card.id) ? t("kanban.expandCardShort") : t("kanban.collapseCardShort"), onSelect: () => toggleCollapsed(card.id) },
         { type: "item", label: t("kanban.rename"), kbd: "Enter", keepFocus: true, onSelect: () => startEdit(card, "title") },
         { type: "item", label: card.description ? t("kanban.editDescription") : t("kanban.addDescription"), kbd: "E", keepFocus: true, onSelect: () => startEdit(card, "description") },
+        ...(card.task ? [linksItem({ kind: "task", id: card.task.id })] : []),
         { type: "sep" },
         card.holdsSeat
           ? { type: "item", label: t("kanban.hideFromBoard"), why: t("kanban.seatProtected"), disabled: true, onSelect: () => {} }
           : { type: "item", label: t("kanban.hideFromBoard"), kbd: "H", why: card.working ? t("kanban.hideWhyWorking", { count: card.working }) : t("kanban.hideWhy"), keepFocus: true, onSelect: () => hideCard(card) },
       ],
+    };
+  };
+  /* #2059: the attach form opens where the menu was, over the same anchor. */
+  const linksItem = (target: WorkLinkTarget): KanbanMenuItem => {
+    const anchor = menu.open?.anchor;
+    return {
+      type: "item",
+      label: t("workLinks.attach"),
+      keepFocus: true,
+      disabled: !anchor,
+      onSelect: () => { if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "links", target } })); },
     };
   };
   /* ── A pipeline's actions, and a stage's (prototype `openPipelineMenu`, pane ⋯) ─ */
@@ -1259,6 +1275,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       items: [
         { type: "head", label: t("kanban.pipelineAct.menu") },
         { type: "item", label: t("kanban.stages.expandTitle"), keepFocus: true, onSelect: () => openSheet(card.id, pipeline) },
+        linksItem({ kind: "pipeline", id: pipeline.id }),
         item(pauseOrResume, t(`kanban.pipelineAct.label.${pauseOrResume.action}`, { title, stage: "" }), pauseOrResume.action === "pause" ? t("kanban.pipelineAct.pauseWhy") : null),
         item(retry, decision ? t("kanban.pipelineAct.retryStage", { stage: decision }) : t("kanban.pipelineAct.retryAny"), t("kanban.pipelineAct.retryWhy")),
         item(skip, decision ? t("kanban.pipelineAct.skipStage", { stage: decision }) : t("kanban.pipelineAct.skipAny"), t("kanban.pipelineAct.skipWhy")),
@@ -1761,6 +1778,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openPipelineMenu = useCallback((cardId: string, pipeline: Pipeline, anchor: HTMLElement) => {
     menu.setOpen({ anchor, value: { kind: "pipeline", cardId, pipelineId: pipeline.id } });
   }, [menu]);
+  const openWorkLinks = useCallback((target: WorkLinkTarget, anchor: HTMLElement) => {
+    menu.setOpen({ anchor, value: { kind: "links", target } });
+  }, [menu]);
   const foldReaderFor = useCallback((key: string, folded: boolean) => {
     disown(key);
     memory.update((readers) => foldReader(readers, key, folded));
@@ -2030,6 +2050,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const linkOpen = menu.open?.value.kind === "link" ? menu.open : null;
   const stopOpen = menu.open?.value.kind === "stop" ? menu.open : null;
   const accountOpen = menu.open?.value.kind === "account" ? menu.open : null;
+  const linksOpen = menu.open?.value.kind === "links" ? menu.open.value.target : null;
   /* The picker reads the pipeline and the conversation as the board holds them now. */
   const accountOverlay = (target: AccountTarget, anchor: HTMLElement) => {
     if (target.kind === "stage") {
@@ -2162,6 +2183,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         pipelinePorts,
         onOpenSheet: openSheet,
         onPipelineMenu: openPipelineMenu,
+        onWorkLinks: openWorkLinks,
         onStagePanelFold: foldStagePanel,
         onStagePanelClose: closeStagePanel,
         onStagePanelMenu: openStagePanelMenu,
@@ -2425,6 +2447,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
           onRestore={restoreConversation}
         />
       ) : null}
+      {linksOpen && menu.open ? (
+        <KanbanPopover
+          anchor={menu.open.anchor}
+          label={t("workLinks.listTitle")}
+          onClose={menu.close}
+          initialFocus="input"
+          className="links-popover"
+        >
+          <div className="head">{t("workLinks.listTitle")}</div>
+          <WorkLinksPanel target={linksOpen} resolved={workLinks.of(linksOpen)} />
+        </KanbanPopover>
+      ) : null}
       {dragHint ? <div className="drag-hint">{t("kanban.dragHint")}</div> : null}
       {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
       <KanbanReceipts receipts={receipts} onDismiss={dismiss} />
@@ -2439,7 +2473,7 @@ type CardHandlers = Pick<
   | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
-  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
+  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
   | "projectNames" | "onOpenProject"
 >;
 

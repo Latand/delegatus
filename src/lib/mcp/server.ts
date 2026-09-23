@@ -3259,6 +3259,11 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Board membership of this task's band (#1614). hidden takes the band off the board and shown puts it back; the task itself is never removed, keeps its row in the task list and every assignment, and either direction is one write. It governs EMPTY tasks only — a task holding a durable agent association draws its band whatever this says."),
     color: z.enum(["none", ...TASK_COLORS]).optional()
       .describe("Colour label shown on the task's kanban card (#1695). none clears it."),
+    attachLinks: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
+      .describe("PRs or issues to attach to the task's card by hand (#2059): \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com pull/issue URL, one or a list. A bare number means the task's repository. Attaching one already attached changes nothing. The card also shows every link its pipelines discover, so attach only what discovery cannot see. Leaves updatedAt unchanged."),
+    detachLinks: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
+      .describe("PRs or issues to remove, in the same forms as attachLinks. Only links attached by hand are removed; a discovered one answers WORK_LINK_AUTO with its evidence."),
+    linkKind: z.enum(["pr", "issue"]).optional().describe("Whether attachLinks names pull requests or issues, when the number alone leaves it open."),
     hide: z.boolean().optional()
       .describe("Hide (true) or show (false) the task's whole group on the kanban board (#1695). Requires expectedProject and expectedRevision. Nothing is stopped, sent or changed besides the hide: conversations keep running and pipelines keep their state. The group comes back by itself when something newer needs the operator (a decision request, a newly linked conversation, a pipeline newly waiting on a decision). The task holding the project's orchestrator seat conversation cannot be hidden (TASK_HIDE_PROTECTED)."),
   }).passthrough(),
@@ -3303,6 +3308,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     expectedEpoch: z.number().int().positive().optional(),
     reason: z.string().optional(),
     acceptedSha: z.string().regex(/^[0-9a-f]{40}$/i).optional(),
+    link: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
+      .describe("attach-link and detach-link (#2059): a PR or issue as \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com URL, or a list. A bare number means the pipeline's delivery repository. Attach what discovery cannot see: the pipeline's lane and delivery branches, its delivery.pr and the PR its stages reported are found without it. Allowed in every state; detach removes only links attached by hand. The answer carries workLinks, the resolved links."),
+    kind: z.enum(["pr", "issue"]).optional().describe("attach-link only: whether link names a pull request or an issue, when the number alone leaves it open."),
   }).passthrough(),
   stage_report: z.object({
     clientRequestId: clientRequestIdSchema,

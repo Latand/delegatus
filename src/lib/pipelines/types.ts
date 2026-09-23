@@ -749,6 +749,10 @@ export type Pipeline = {
       transcripts are untouched, and `undismiss` clears it. `hiddenAt` cannot
       carry this, because every reader takes it to mean closed or discarded. */
   dismissedAt?: string | null;
+  /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
+      pipeline's own branches, `delivery.pr` and stage provenance say is joined
+      at read time and never stored here. */
+  workLinks?: import("@/lib/forge/workLinks").StoredWorkLink[];
   /** Hosts the last close could not confirm terminated. Present only while one
       is outstanding; a close that confirms every kill clears it. */
   unconfirmedHosts?: PipelineUnconfirmedHost[];
@@ -822,6 +826,8 @@ export const PIPELINE_ACTIONS = [
   "close",
   "dismiss",
   "undismiss",
+  "attach-link",
+  "detach-link",
 ] as const;
 
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
@@ -848,6 +854,11 @@ export type PatchPipelineRequest = {
   action: PipelineAction;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
+  /** for attach-link and detach-link (#2059): a PR or issue as `#123`, `123`,
+      `PR 123`, `owner/repo#123` or a github.com URL, or a list of them. */
+  link?: string | number | Array<string | number>;
+  /** for attach-link: overrides whether the number is a PR or an issue. */
+  kind?: import("@/lib/forge/workLinks").WorkLinkKind;
   /** Creator transcript used by set-src. */
   srcPath?: string;
   /** Explicit authorization to replace existing creator lineage. */

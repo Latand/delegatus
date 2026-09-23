@@ -12,6 +12,9 @@ import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 
+import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
+import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
+
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
@@ -194,6 +197,9 @@ export interface KanbanCardProps {
   projectNames?: Readonly<Record<string, string>> | null;
   /** The card's project label opens that project's own board. */
   onOpenProject?: (project: string) => void;
+  /** Every PR and issue link of the task or one of its pipelines, with the
+      attach form (#2059). */
+  onWorkLinks?: (target: WorkLinkTarget, anchor: HTMLElement) => void;
 }
 
 function ageLabel(t: TFunction, updatedAtMs: number, nowMs: number): string {
@@ -208,6 +214,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const protectedSeat = card.holdsSeat;
   const resurfaced = card.task && !card.hide.hidden ? card.hide.resurfaced : null;
   const { t } = useLocale();
+  const taskLinks = useWorkLinks().of({ kind: "task", id: card.task?.id ?? "" });
+  const onWorkLinks = props.onWorkLinks;
   const workspace = status === "assigned";
   const title = card.titlePending ? t("kanban.untitled") : card.title;
   const pipelinesWaiting = card.pipelines.reduce((sum, summary) => sum + summary.waiting, 0);
@@ -263,6 +271,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       onOpenStage={(pipeline, stage) => props.onOpenStage(pipeline, stage, card.id)}
       onOpenSheet={(pipeline) => props.onOpenSheet(card.id, pipeline)}
       onMenu={(pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
+      onWorkLinks={onWorkLinks}
     />
   );
   const projectName = props.projectNames?.[card.project] ?? null;
@@ -368,6 +377,17 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </div>
       </div>
       {card.titlePending && editing?.field !== "title" ? <p className="pending-line">{t("kanban.namePending")}</p> : null}
+      {/* #2059: the task's own links and every pipeline's, deduplicated, and
+          still there when the card is collapsed and its pipelines are not. */}
+      {card.task ? (
+        <WorkLinkRow
+          resolved={taskLinks}
+          showNoPr={false}
+          className="links"
+          testId={card.task.id}
+          onMore={onWorkLinks ? (anchor) => onWorkLinks({ kind: "task", id: card.task!.id }, anchor) : undefined}
+        />
+      ) : null}
       {collapsed ? null : editing?.field === "description" ? (
         <CardInlineText
           field="description"

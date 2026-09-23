@@ -6,6 +6,7 @@ import { isoNow } from "./helpers";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { admissionSnapshot } from "./groupHide";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
+import { editStoredWorkLinks, normalizeWorkLinkInput, workLinkInputs, type NormalizedWorkLink, type StoredWorkLink, type WorkLinkKind, type WorkLinkVia } from "@/lib/forge/workLinks";
 import { TASK_COLORS, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
 /* The caps live beside the type, which a client component can import without
@@ -87,6 +88,25 @@ export interface PatchTaskInput {
       it again. Requires the revision fence. Leaves `updatedAt` unchanged when
       it is the whole patch (with `color`). */
   hide?: unknown;
+  /** PRs or issues to attach by hand (#2059): `#123`, `123`, `PR 123`,
+      `owner/repo#123` or a github.com URL, one or a list. Add and remove sets,
+      so two writers never replace each other's list. Presentation only, with
+      `color` and `hide`. */
+  attachLinks?: unknown;
+  detachLinks?: unknown;
+  /** `pr` or `issue`: overrides the guess for every attached link. */
+  linkKind?: unknown;
+}
+
+/** What `attachLinks`/`detachLinks` need to know about the task's repository
+    and the forge cache; the command itself stays pure. */
+export interface TaskWorkLinkContext {
+  repository: string | null;
+  kindOf?: (repository: string, number: number) => WorkLinkKind | null;
+  canonical?: (repository: string) => string;
+  /** The evidence a link the task's pipelines discovered carries, so detaching
+      it answers why nothing changed. */
+  autoVia?: (link: NormalizedWorkLink) => WorkLinkVia[] | null;
 }
 
 /** What a hide asks of the caller that can see the orchestrator seats: whether
@@ -101,6 +121,8 @@ export interface PatchTaskOptions {
   actor?: TaskGroupHidden["by"];
   /** Required for `hide: true`; without it the hide is refused. */
   seatHolding?: (task: BoardTask) => SeatHolding;
+  /** For attachLinks/detachLinks; without it a bare number cannot be resolved. */
+  workLinks?: (task: BoardTask) => TaskWorkLinkContext;
 }
 
 /** Injected so the pure command can ask the store whether an attachment ref's
@@ -333,6 +355,41 @@ export function createTask(
   return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false };
 }
 
+/** Presentation of a task, never work on it: `updatedAt` stays (see below). */
+const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "hide", "attachLinks", "detachLinks", "linkKind"]);
+
+function editTaskWorkLinks(
+  task: BoardTask,
+  input: PatchTaskInput,
+  now: string,
+  options: PatchTaskOptions,
+): { ok: true; links: StoredWorkLink[]; changed: boolean } | TaskRefusal {
+  const refusal = (error: string, field: string, status = 400, code = "TASK_INVALID_FIELD"): TaskRefusal => ({ ok: false, error, status, code, field });
+  if (input.linkKind !== undefined && input.linkKind !== "pr" && input.linkKind !== "issue") return refusal("linkKind must be pr or issue", "linkKind");
+  const context = options.workLinks?.(task) ?? { repository: null };
+  const normalize = (field: "attachLinks" | "detachLinks") => {
+    const links: NormalizedWorkLink[] = [];
+    for (const raw of workLinkInputs(input[field])) {
+      const normalized = normalizeWorkLinkInput(raw, {
+        repository: context.repository,
+        kind: field === "attachLinks" ? input.linkKind as WorkLinkKind | undefined : undefined,
+        kindOf: context.kindOf,
+      });
+      if (!normalized.ok) return refusal(normalized.error, field);
+      links.push(normalized.link);
+    }
+    return links;
+  };
+  const attach = normalize("attachLinks");
+  if (!Array.isArray(attach)) return attach;
+  const detach = normalize("detachLinks");
+  if (!Array.isArray(detach)) return detach;
+  if (!attach.length && !detach.length) return { ok: true, links: task.workLinks ?? [], changed: false };
+  const edit = editStoredWorkLinks(task.workLinks, attach, detach, { now, addedBy: options.actor ?? "operator", canonical: context.canonical }, context.autoVia);
+  if (!edit.ok) return refusal(edit.error, edit.code === "WORK_LINK_AUTO" ? "detachLinks" : "attachLinks", edit.status, edit.code);
+  return { ok: true, links: edit.links, changed: edit.changed };
+}
+
 export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInput, now = isoNow(), options: PatchTaskOptions = {}): TaskCommandResult {
   const index = existing.findIndex((task) => task.id === id);
   if (index < 0) return { ok: false, error: "task not found", status: 404 };
@@ -439,6 +496,11 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
     patch.placement = placement;
   }
+  if (Object.hasOwn(input, "attachLinks") || Object.hasOwn(input, "detachLinks")) {
+    const edited = editTaskWorkLinks(task, input, now, options);
+    if (!edited.ok) return edited;
+    if (edited.changed) patch.workLinks = edited.links.length ? edited.links : undefined;
+  }
   /* Deadline: `{dueAt:null}` clears both fields; `{dueAt,dueTz}` sets them
      (both-or-neither, validated). Touching only one is a 400. */
   if (Object.hasOwn(input, "dueAt") || Object.hasOwn(input, "dueTz")) {
@@ -459,8 +521,8 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
      it" window) are unchanged by them. The revision still moves, because it
      hashes every field, so the fence and board freshness keep working, and a
      hide records its own instant in `groupHidden.at`. */
-  const presentationOnly = Object.keys(input).every((key) => key === "color" || key === "hide" || key === "expectedProject" || key === "expectedRevision")
-    && (Object.hasOwn(input, "color") || Object.hasOwn(input, "hide"));
+  const presentationOnly = Object.keys(input).every((key) => PRESENTATION_KEYS.has(key) || key === "expectedProject" || key === "expectedRevision")
+    && Object.keys(input).some((key) => PRESENTATION_KEYS.has(key));
   const updated: BoardTask = { ...task, ...patch, updatedAt: presentationOnly ? task.updatedAt : now };
   /* An explicit clear leaves `undefined` fields on the spread; drop them so the
      persisted row and its validator agree that the deadline is gone. */
@@ -472,6 +534,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   if (Object.hasOwn(patch, "details") && patch.details === undefined) delete updated.details;
   if (Object.hasOwn(patch, "color") && patch.color === undefined) delete updated.color;
   if (Object.hasOwn(patch, "groupHidden") && patch.groupHidden === undefined) delete updated.groupHidden;
+  if (Object.hasOwn(patch, "workLinks") && patch.workLinks === undefined) delete updated.workLinks;
   const tasks = existing.slice();
   tasks[index] = updated;
   return { ok: true, tasks, task: updated };

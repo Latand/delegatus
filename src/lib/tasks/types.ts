@@ -165,6 +165,9 @@ export interface BoardTask {
   board?: TaskBoardVisibility;
   /** Colour label; absent means none. */
   color?: TaskColor;
+  /** PRs and issues attached to the task by hand (#2059). The card adds the
+      links of every pipeline the task carries at read time. */
+  workLinks?: import("@/lib/forge/workLinks").StoredWorkLink[];
   /** Set while the task's group is hidden from the kanban board. Unlike
       `board`, it holds whatever the group contains. */
   groupHidden?: TaskGroupHidden;
