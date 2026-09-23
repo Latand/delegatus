@@ -10,7 +10,10 @@
  *
  * It starts two runtime-host generations under that interpreter, drives one
  * singleton-fence succession, and holds both endpoints the succession handed
- * over. Nothing it touches is shared: a private state directory removed on
+ * over. The succession is a rollback from a `delegatus`-named generation to an
+ * `agent-log-viewer`-named one, which has to find, stop and remove the failed
+ * generation (docs/design/rename-delegatus.md §13); Docker is a stub that
+ * records the calls. Nothing it touches is shared: a private state directory removed on
  * exit, a private socket, an ephemeral loopback port. It never binds the
  * stable port and never reads the operator's state directory. The deployment
  * gate runs the same rehearsal inside the candidate image.
@@ -53,5 +56,8 @@ console.error(
   + ` succession completed in ${report.succession.successorTookOverMs}ms,`
   + ` stable listener answered ${report.listener.answered}/${report.listener.polls}`
   + ` and the runtime socket ${report.socket.answered}/${report.socket.polls}`
-  + ` over ${Math.round(report.listener.windowMs / 1_000)}s`,
+  + ` over ${Math.round(report.listener.windowMs / 1_000)}s`
+  + (report.recovery
+    ? `; ${report.recovery.retained.container} (${report.recovery.retained.image}) rolled back from ${report.recovery.failed.container}`
+    : ""),
 );
