@@ -250,12 +250,13 @@ function Desktop({ dock }: { dock: number }) {
  * The KANBAN SEAT's header, the incumbent row's other host — and the one the
  * dock's measurements say nothing about.
  *
- * It is a different layout problem, not a narrower version of the same one:
- * `.kb .seat-head` is a single flex row that does NOT wrap above 767 px, it
- * already carries four other children (the mark, the seat title, the «stays on
- * the board» pill, the host controls and Collapse), and the seat's width is
- * `calc(100% - 32px)` capped at 1040 px. So the row has to be measured in its
- * own host, at the widths where the board is still a desktop.
+ * When this was written, `.kb .seat-head` was a single flex row that did NOT
+ * wrap above 767 px, carrying four other children (the mark, the seat title,
+ * the «stays on the board» pill, the host controls and Collapse), and the
+ * seat's width is `calc(100% - 32px)` capped at 1040 px. The real head now
+ * wraps and gives the incumbent a row of its own (`kanbanBoard.css`); this
+ * hand-built head predates that and #1841's Previous seats (#2060). The real
+ * header is measured by the kanban driver's seat-header case.
  */
 function Seat() {
   return (

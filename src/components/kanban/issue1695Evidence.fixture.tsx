@@ -6,6 +6,7 @@ import { runFocusTransaction } from "@/components/attention/navigate";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
@@ -90,6 +91,11 @@ const ARCS = SCENARIO === "issue1798";
 /* #1938: a lane whose review budget ran out and whose last fix wrote a head
    nobody reviewed — parked in needs_review, never completed. */
 const REVIEW_SPENT = SCENARIO === "issue1938";
+/* The seat's header at its fullest: a mandate a version behind the default,
+   so the stale chip draws, a designated incumbent with its effort, account and
+   a context past the rotation line, twenty previous seats and a running host
+   with its Stop host control — every element the row has to keep readable. */
+const SEAT_HEAD = SCENARIO === "seat-head";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -193,7 +199,10 @@ const compactVer = add(conversation("compact-ver", "Board frames match at five w
 /* The project's orchestrator: seated above the board, and, as in production,
    also a conversation on it ("Not on a task" here). Its one composer is the
    seat's. */
-const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", working({ plan: { current: "Watching the search fix" } })));
+const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", working({
+  plan: { current: "Watching the search fix" },
+  ...(SEAT_HEAD ? { model: "claude-opus-4-5-1m", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } } : {}),
+})));
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
@@ -1317,12 +1326,28 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       seat: {
         project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: "Keep the project moving.",
-        promptVersion: null, predecessorConversationId: null, state: "active",
+        promptVersion: SEAT_HEAD ? ORCHESTRATOR_PROMPT_VERSION - 1 : null, predecessorConversationId: null, state: "active",
         intent: { clientRequestId: "seat-atlas", mode: "spawn", launchId: null, error: null }, designatedAt: iso(9 * 60 * MIN), activatedAt: iso(9 * 60 * MIN),
       },
       pending: null,
       exists: true,
       viewerMcpRegistered: true,
+      ...(SEAT_HEAD ? {
+        previous: Array.from({ length: 20 }, (_, index) => ({
+          conversationId: `conversation_previous_${index}`, title: `Seat ${index + 1}`, engine: "claude",
+          heldFrom: iso((40 - index) * 60 * MIN), heldTo: iso((39 - index) * 60 * MIN), taskId: null, hasNotes: false,
+        })),
+      } : {}),
+    });
+  }
+  if (SEAT_HEAD && url.pathname === "/api/orchestrator/seat/status") {
+    return json({
+      project: PROJECT, designated: true, conversationId: orchestrator.conversationId, predecessorConversationId: null,
+      engine: "claude", model: "claude-opus-4-5-1m", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: orchestrator.path,
+      liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
+      context: { tokens: 520_825, limit: 1_000_000, percent: 52, estimated: false, basis: "" },
+      transcriptFacts: null,
+      rotation: { recommended: true, level: "strongly_recommend", reasons: ["context usage has reached the rotation threshold"], thresholdUnknown: false },
     });
   }
   /* The rail's footer, so the frames that fold it away (#1802) have something
