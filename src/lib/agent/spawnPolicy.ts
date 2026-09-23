@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
+import { statePath } from "@/lib/configDir";
+import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
+
 import { appDirIn } from "../../../bin/appDir.mjs";
 
 import type { AgentEngine } from "./cli";
@@ -91,6 +94,106 @@ export function viewerMcpServerEntry(packageCwd = process.cwd()): ViewerMcpServe
     command: "bun",
     args: [launcher],
     env: viewerMcpServerEnv(),
+  };
+}
+
+/**
+ * How a newly spawned agent reaches the Viewer MCP tools (`LLV_MCP_TRANSPORT`).
+ *
+ * `stdio` (the default) starts `bin/mcp-server.mjs` beside every agent, one Bun
+ * process each. `http` points the agent at the Viewer's own shared endpoint,
+ * `/api/mcp`, so no per-agent server process exists at all. The flag is read
+ * when a spawn's configuration is written, so it moves NEW spawns only: an
+ * agent already running keeps the transport it was launched with, and stdio
+ * keeps working for it whatever the flag says now.
+ */
+export const VIEWER_MCP_TRANSPORT_ENV = "LLV_MCP_TRANSPORT";
+type McpEnvironment = Readonly<Record<string, string | undefined>>;
+export type ViewerMcpTransport = "stdio" | "http";
+
+export function viewerMcpTransport(source: McpEnvironment = process.env): ViewerMcpTransport {
+  return source[VIEWER_MCP_TRANSPORT_ENV]?.trim().toLowerCase() === "http" ? "http" : "stdio";
+}
+
+/**
+ * The transport for ONE launch, decided from the environment its agent will
+ * actually run with. The shared endpoint identifies a caller only by the spawn
+ * capability that environment carries, so a launch without one — a successor
+ * host started with none, a command pasted into a terminal — keeps the stdio
+ * launcher, which identifies it by process ancestry as it always has. A launch
+ * whose environment is not known here passes nothing and gets stdio.
+ */
+export function viewerMcpTransportForLaunch(
+  launchEnv: McpEnvironment,
+  flag: McpEnvironment = process.env,
+): ViewerMcpTransport {
+  const capability = launchEnv[VIEWER_SPAWN_CAPABILITY_ENV]?.trim() ?? "";
+  return viewerMcpTransport(flag) === "http"
+    && /^[A-Za-z0-9_-]{43}$/.test(capability)
+    && viewerMcpHttpAdmitted(flag)
+    ? "http"
+    : "stdio";
+}
+
+function stableViewerPort(source: McpEnvironment): string {
+  const port = source.LLV_VIEWER_PORT?.trim();
+  return port && /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65_535 ? port : "8898";
+}
+
+/**
+ * Whether an agent can reach the endpoint through the Viewer's access gate.
+ * With LLV_TOKEN configured every request needs it, and agents are launched
+ * without it on purpose; the one thing that supplies it on their behalf is the
+ * stable local entry, and only when the gateway file trusts that entry. Any
+ * other shape keeps the launch on stdio rather than handing an agent a
+ * connection every call of which would be refused.
+ */
+function viewerMcpHttpAdmitted(source: McpEnvironment): boolean {
+  if (!source.LLV_TOKEN?.trim()) return true;
+  const port = stableViewerPort(source);
+  if (new URL(viewerMcpHttpUrl(source)).port !== port) return false;
+  const gateway = readViewerGatewayConfig(statePath(VIEWER_GATEWAY_FILE), Number(port));
+  return gateway.problem === null && gateway.config.localEntry === "trusted";
+}
+
+const LOOPBACK_MCP_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/** The shared endpoint's URL: `LLV_MCP_HTTP_URL` when it names a loopback
+    http URL, else the stable listener (`LLV_VIEWER_PORT`, default 8898) that
+    stays put across deploys while the release behind it changes. */
+export function viewerMcpHttpUrl(source: McpEnvironment = process.env): string {
+  const configured = source.LLV_MCP_HTTP_URL?.trim();
+  if (configured) {
+    try {
+      const url = new URL(configured);
+      if (url.protocol === "http:" && LOOPBACK_MCP_HOSTS.has(url.hostname) && url.port) return url.href;
+    } catch { /* an unusable override falls back to the stable listener */ }
+  }
+  return `http://127.0.0.1:${stableViewerPort(source)}/api/mcp`;
+}
+
+/**
+ * The Claude `--mcp-config` entry for the shared endpoint. The capability is
+ * written as a reference Claude expands from the agent's own environment, so
+ * the file holds no secret and stays correct when a relaunch rotates the
+ * capability. It rides in its own header: Authorization is what the stable
+ * listener rewrites when it vouches for a loopback caller.
+ */
+export function viewerMcpHttpClaudeEntry(source: McpEnvironment = process.env): JsonObject {
+  return {
+    type: "http",
+    url: viewerMcpHttpUrl(source),
+    headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: `\${${VIEWER_SPAWN_CAPABILITY_ENV}}` },
+  };
+}
+
+/** The Codex `mcp_servers.viewer` table for the shared endpoint.
+    `env_http_headers` maps a header to the environment variable Codex reads
+    its value from (codex-cli 0.155.1). */
+export function viewerMcpHttpCodexEntry(source: McpEnvironment = process.env): JsonObject {
+  return {
+    url: viewerMcpHttpUrl(source),
+    env_http_headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: VIEWER_SPAWN_CAPABILITY_ENV },
   };
 }
 
@@ -194,14 +297,19 @@ function claudeMcpServers(
   home: string,
   cwd: string | undefined,
   allowlist: readonly string[] | undefined,
-  mcpStatePath?: string,
+  mcpStatePath: string | undefined,
+  viewerTransport: ViewerMcpTransport,
 ): JsonObject {
   const registered = resolveClaudeMcpServers(home, cwd, mcpStatePath);
   /* The grant bound is enforced again here (issue #739): the per-spawn
      `--strict-mcp-config` file is copied from the re-validated list, so a
      server the Viewer cannot grant is never written into it. */
   const names = grantedMcpServers(allowlist);
+  const http = viewerTransport === "http";
   return Object.fromEntries(names.flatMap((name) => {
+    /* Over HTTP the Viewer owns the whole definition: a registered stdio
+       launcher is replaced, never merged into. */
+    if (name === "viewer" && http) return [[name, viewerMcpHttpClaudeEntry()]];
     const definition = record(registered[name])
       ?? (name === "viewer" ? { type: "stdio", ...viewerMcpServerEntry() } : null);
     if (!definition) return [];
@@ -281,6 +389,9 @@ export function applyClaudeSpawnPolicy(
     cwd?: string;
     mcpServers?: readonly string[];
     mcpStatePath?: string;
+    /** How this launch reaches the Viewer tools; see
+        {@link viewerMcpTransportForLaunch}. Absent means stdio. */
+    viewerTransport?: ViewerMcpTransport;
   } = {},
 ): ClaudeSpawnPolicyResult {
   const sourceSettingsPath = path.join(home, "settings.json");
@@ -318,6 +429,7 @@ export function applyClaudeSpawnPolicy(
     options.cwd,
     options.mcpServers,
     options.mcpStatePath,
+    options.viewerTransport ?? "stdio",
   );
   const includedMcpServers = new Set(Object.keys(mcpServers));
   const excludedProjectMcpServers = Object.keys(claudeProjectMcpServers(options.cwd))

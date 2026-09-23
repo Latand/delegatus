@@ -273,6 +273,54 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(child.signals).toContain("SIGTERM");
   });
 
+  test("with the HTTP flag, only a host whose environment carries a capability is pointed at the shared endpoint", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-structured-http-"));
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { viewer: { type: "stdio", command: "viewer-mcp" } } }));
+    const previous = { transport: process.env.LLV_MCP_TRANSPORT, token: process.env.LLV_TOKEN };
+    process.env.LLV_MCP_TRANSPORT = "http";
+    delete process.env.LLV_TOKEN;
+    const viewerEntry = async (env: Record<string, string>, resume: boolean) => {
+      const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+      const options = {
+        cwd: "/repo",
+        claudeConfigDir: home,
+        env: { NODE_ENV: "test", ...env } as NodeJS.ProcessEnv,
+        eventStore: new MemoryEventStore(),
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai" as const, subscriptionType: "max" }),
+        readTranscript: () => [],
+        spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+      };
+      const host = resume
+        ? await ClaudeStreamBrokerHost.adopt(crypto.randomUUID(), options)
+        : await ClaudeStreamBrokerHost.start(options);
+      const mcpConfigPath = captured.args![captured.args!.indexOf("--mcp-config") + 1]!;
+      const viewer = (JSON.parse(fs.readFileSync(mcpConfigPath, "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers.viewer;
+      await host.release();
+      return viewer;
+    };
+    const httpEntry = {
+      type: "http",
+      url: "http://127.0.0.1:8898/api/mcp",
+      headers: { "x-llv-spawn-capability": "${LLV_SPAWN_CAPABILITY}" },
+    };
+    try {
+      const capability = crypto.randomBytes(32).toString("base64url");
+      /* A spawn, and a resume the Viewer drives, both hand the host its capability. */
+      expect(await viewerEntry({ LLV_SPAWN_CAPABILITY: capability }, false)).toEqual(httpEntry);
+      expect(await viewerEntry({ LLV_SPAWN_CAPABILITY: capability }, true)).toEqual(httpEntry);
+      /* A host started with none (an account-migration successor the registry
+         could not match) keeps the stdio launcher, which finds it by process
+         ancestry, instead of an endpoint that would refuse every call. */
+      expect(await viewerEntry({}, true)).toEqual({ type: "stdio", command: "viewer-mcp", env: viewerMcpServerEnv() });
+    } finally {
+      for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_TOKEN", previous.token]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("defaults writable pane-less Claude processes to bypassPermissions", async () => {
     const ledger = new RecordingDeliveryLedger();
     const child = new FakeClaude(ledger);

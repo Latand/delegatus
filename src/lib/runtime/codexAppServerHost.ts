@@ -20,6 +20,7 @@ import type { ProcessIdentity } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, signalProcessGroup, type ProcessSignal } from "@/lib/processGroup";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
+import { viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -1406,19 +1407,20 @@ export class CodexAppServerHost implements EngineHost {
       "realtime_conversation",
     ];
     const granted = grantedPlugins(options.plugins);
+    const childEnv = withTelegramConnectorGrant(
+      subscriptionEnv(
+        options.env ?? process.env,
+        options.codexHome,
+        granted.length > 0,
+        options.forwardGitHubConfig === true,
+      ),
+      options.mcpServers,
+    );
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawnProcess(options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex", args, {
         cwd: options.cwd,
-        env: withTelegramConnectorGrant(
-          subscriptionEnv(
-            options.env ?? process.env,
-            options.codexHome,
-            granted.length > 0,
-            options.forwardGitHubConfig === true,
-          ),
-          options.mcpServers,
-        ),
+        env: childEnv,
         detached: true,
       });
     } catch (error) {
@@ -1455,6 +1457,10 @@ export class CodexAppServerHost implements EngineHost {
         options.allowSubagents === true,
         options.mcpServers,
         granted,
+        /* The app-server reads the capability header's value from its own
+           environment, so only a thread whose app-server holds one goes
+           over HTTP. */
+        viewerMcpTransportForLaunch(childEnv),
       );
       const result = threadId
         ? await provisional.resumeThreadTolerantly({
