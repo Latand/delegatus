@@ -1,17 +1,15 @@
 "use client";
 
-import { workLinkClause } from "@/components/workLinks/WorkLinkChips";
-import { useWorkLinks } from "@/components/workLinks/workLinksContext";
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight, Crown, Mic } from "@/components/icons";
-import { Fragment, useLayoutEffect, useRef } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef } from "react";
 import type { ConversationCatalogData } from "@/hooks/useConversationCatalog";
 import { captureCatalogPosition, MobileCatalogTail, restoreCatalogPosition, type CatalogPosition } from "./MobileInlineCatalog";
 import { Bot } from "lucide-react";
 import { useLocale, type TFunction } from "@/lib/i18n";
+import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
-import { pipelineReviewHeads, stageCardLabel, stageLatestAttemptPlace } from "../pipelines/pipelineModel";
 import { formatResetClock } from "../rateLimit";
 import { clockDuration, humanizeDuration } from "../turnDuration";
 import { fileModelLabel } from "../utils";
@@ -25,6 +23,7 @@ import {
   type MobileBoardRowRef,
   type MobileRowState,
 } from "./mobileBoardModel";
+import { MobilePipelineCard } from "./MobilePipelineCard";
 import { MobileSwipeRow, type MobileRowAction } from "./MobileSwipeRow";
 
 /*
@@ -234,63 +233,36 @@ const PHRASE_TONE: Record<MobileRowState["key"], string> = {
 };
 
 /**
- * A pipeline in `needs_decision` is a queue row like any other (README §4.1),
- * on the board and in the queue sheet the badge opens — the same component, so
- * the two entries cannot describe the same pipeline differently.
+ * A pipeline that waits on the operator is a queue row like any other (README
+ * §4.1): since #2072 slice 3 it is the phone's pipeline card — its title, the
+ * state badge, and the one pipeline block at card density, whose stage chain,
+ * PR and reason line are the desktop's lane row made one line.
  *
- * Its destination is the pipeline screen, which lane 7 brings. Until that
- * screen exists there is nowhere to go, so the row is a statement and NOT a
- * control: rendering a button that answers a tap with nothing is worse than
- * rendering none. Lane 7 passes `onOpen` and the same row becomes the door.
+ * Its destination is the pipeline screen. Without `onOpen` there is nowhere to
+ * go, so the row is a statement and NOT a control: rendering a button that
+ * answers a tap with nothing is worse than rendering none.
  */
-export function MobilePipelineQueueRow({ row, onOpen }: { row: MobileBoardPipelineRow; onOpen?: (pipeline: Pipeline) => void }) {
+export function MobilePipelineQueueRow({ row, now, flowsById, onOpen }: {
+  row: MobileBoardPipelineRow;
+  /** Epoch seconds. */
+  now: number;
+  flowsById?: ReadonlyMap<string, Flow>;
+  onOpen?: (pipeline: Pipeline) => void;
+}) {
   const { t } = useLocale();
-  const links = useWorkLinks().of({ kind: "pipeline", id: row.pipeline.id });
-  /* The stage in the operator's words — its name and, once it ran twice, the
-     attempt (#1865) — lowercased inside the sentence the way the prototype
-     writes it: «stage 3/5 · critique · 2 · failed · 2 findings». */
-  const stageName = row.stageRef ? stageCardLabel(t, row.stageRef, stageLatestAttemptPlace(row.pipeline, row.stageRef.id)).toLocaleLowerCase() : "";
-  const meta = [
-    /* `stage k/n · <stage> · <state>` (README §4.1, §4.7). The state word is
-       the failing round's — «needs a decision» is already the badge, so saying
-       it twice would leave the row without the fact that put it here. */
-    t(row.stageFailed ? "mobile2.board.pipelineStageFailed" : "mobile2.board.pipelineStage", { stage: row.stage, total: row.total, name: stageName }),
-    row.findings ? t("mobile2.board.pipelineFindings", { count: row.findings }) : null,
-    pipelineReviewHeads(t, row.review),
-    workLinkClause(t, links),
-  ].filter(Boolean).join(" · ");
-  const Tag = onOpen ? "button" : "div";
   return (
-    <Tag
-      {...(onOpen ? { type: "button" as const, onClick: () => onOpen(row.pipeline), "aria-label": t("mobile2.board.openPipeline", { task: row.task }) } : {})}
-      data-mobile2-row="pipeline"
-      data-mobile2-go={onOpen ? "pipeline" : undefined}
-      data-mobile2-pipeline-row={row.id}
-      data-mobile2-state={row.review ? "needs_review" : "needs_decision"}
-      className={`${CARD} min-h-14 ${EDGE.warning}`}
-    >
-      {/* The hidden dot keeps this row's title on the same line as every other
-          row's (the prototype's `.row.wait .dot`). */}
-      <span aria-hidden className="invisible h-2 w-2 shrink-0 rounded-full" />
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex items-center gap-1.5 text-body font-semibold leading-[1.25] text-primary">
-          <span className="min-w-0 line-clamp-2">{row.task}</span>
-        </span>
-        {/* The sentence flows as text: a long stage label wraps it onto a
-            second line rather than clipping its end, and the age, which never
-            breaks, follows it (#1865). */}
-        <span data-mobile2-row-meta className="text-label tabular-nums text-muted">
-          {meta}
-          {row.seconds === null ? null : (
-            <span data-mobile2-row-age className="whitespace-nowrap">
-              <span aria-hidden className="opacity-60">{" · "}</span>
-              {humanizeDuration(row.seconds)}
-            </span>
-          )}
-        </span>
-      </span>
-      <Badge tone="warning">{t(row.review ? "mobile2.pipelines.badgeReview" : "mobile2.board.badgeDecision")}</Badge>
-    </Tag>
+    <MobilePipelineCard
+      pipeline={row.pipeline}
+      now={now}
+      flowsById={flowsById}
+      onOpen={onOpen}
+      label={t("mobile2.board.openPipeline", { task: row.task })}
+      dataAttributes={{
+        "data-mobile2-row": "pipeline",
+        "data-mobile2-go": onOpen ? "pipeline" : undefined,
+        "data-mobile2-pipeline-row": row.id,
+      }}
+    />
   );
 }
 
@@ -305,7 +277,8 @@ function PipelinesRow({ model, onOpen }: { model: MobileBoardModel; onOpen?: () 
     summary.needsDecision ? t("mobile2.board.pipelinesNeedYou", { count: summary.needsDecision }) : null,
     summary.completed ? t("mobile2.board.pipelinesDone", { count: summary.completed }) : null,
   ].filter(Boolean).join(" · ");
-  const dot = summary.needsDecision ? "warning" : summary.active ? "accent" : "neutral";
+  /* The dot takes the pipeline state's own tone (#2072, the one tone map). */
+  const tone = summary.needsDecision ? "needs_decision" : summary.active ? "running" : "completed";
   const Tag = onOpen ? "button" : "div";
   return (
     <Tag
@@ -314,7 +287,7 @@ function PipelinesRow({ model, onOpen }: { model: MobileBoardModel; onOpen?: () 
       data-mobile2-row="pipelines"
       className={`${CARD} min-h-14`}
     >
-      <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${DOT[dot]}`} />
+      <span aria-hidden data-pstate={tone} className="pstate-dot h-2 w-2 shrink-0 rounded-full" />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-body font-semibold leading-[1.25] text-primary">
           {t("mobile2.board.pipelinesCount", { count: summary.total })}
@@ -342,6 +315,8 @@ export interface MobileBoardData {
   closing?: readonly string[];
   /** Epoch seconds; the dashboard's ticking clock keeps the ages honest. */
   now?: number;
+  /** The review flows a pipeline card counts its rounds from. */
+  flows?: readonly Flow[];
 }
 
 /** «All conversations» (#1671): the Recent list going further down. */
@@ -434,6 +409,7 @@ export function MobileBoard(props: MobileBoardProps) {
   }, [props.project, catalog?.position, catalog?.expanded]);
   const model = mobileBoardOf(props);
   const now = props.now ?? Date.now() / 1000;
+  const flowsById = useMemo(() => new Map((props.flows ?? []).map((flow) => [flow.id, flow] as const)), [props.flows]);
   const pipelinesRow = model.pipelines ? <PipelinesRow model={model} onOpen={onOpenPipelines} /> : null;
   const stack = (children: React.ReactNode) => <div className="flex flex-col gap-1.5 px-3">{children}</div>;
   /* Every conversation and queued pipeline row slides left to reveal its
@@ -489,7 +465,7 @@ export function MobileBoard(props: MobileBoardProps) {
             /* `onOpenPipeline` passes THROUGH: undefined means no pipeline
                screen exists yet, and the row renders as a statement rather
                than as a button that swallows the tap. */
-            swipeable({ kind: "pipeline", row: item }, item.task, <MobilePipelineQueueRow row={item} onOpen={onOpenPipeline} />)
+            swipeable({ kind: "pipeline", row: item }, item.task, <MobilePipelineQueueRow row={item} now={now} flowsById={flowsById} onOpen={onOpenPipeline} />)
           ))))}
         </>
       ) : null}

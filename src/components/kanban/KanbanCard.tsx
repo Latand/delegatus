@@ -8,9 +8,12 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
 import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
+import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { pipelineNeedsYou, type PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
 
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
@@ -20,7 +23,7 @@ import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
 import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
-import { PastAttempts, PipelineSection, stageNames } from "./PipelineSection";
+import { PastAttempts, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
@@ -29,10 +32,19 @@ import type { StageDrafts } from "./stageDrafts";
 import type { PipelineActionKind } from "./stagesModel";
 
 /* One card of the kanban board, in the approved prototype's anatomy
-   (`renderCard`): colour label, saving bar, title and tools, description, the
-   collapsed Details row carrying the agent's context (#1834), activity line,
-   the compact pipeline summary, conversation tiles, and the footer whose status
-   pill is the one place status changes. */
+   (`renderCard`) made flat (#2072, docs/design/desktop-flat-cards.md §4,
+   variant B): colour label, saving bar, title and tools, the links no lane
+   row draws, description, the collapsed Details row carrying the agent's
+   context (#1834), one lane row per pipeline (`PipelineBlock` at task
+   density), the conversations as rows, and the footer: the status pill that
+   is the one place status changes, the age, who is working and how many
+   conversations the card holds.
+
+   The card is the only frame. A lane has a hairline above it, a stage pill
+   is an outline with no fill, and a conversation is a row. What the old
+   activity line said moved to where it belongs: "needs you" to the amber edge
+   and the lane's own state word, the working and conversation counts to the
+   footer, and the stages still waiting to their dashed pills. */
 
 /** Pipelines that have ended: the rows a card folds away once it holds many. */
 const ENDED_PIPELINE_STATES: ReadonlySet<string> = new Set(["completed", "closed"]);
@@ -200,6 +212,18 @@ export interface KanbanCardProps {
   /** Every PR and issue link of the task or one of its pipelines, with the
       attach form (#2059). */
   onWorkLinks?: (target: WorkLinkTarget, anchor: HTMLElement) => void;
+  /** A lane row's answer in place: skip or retry the stage it stopped on,
+      close it, or give its review one more round (#2072). */
+  onAnswer?: (cardId: string, title: string, pipeline: Pipeline, answer: PipelineAnswer) => void;
+}
+
+/** Links a lane row on the card already draws, taken off the task's own row,
+    so every link appears once on screen (variant B). What stays is what no
+    lane row on screen draws: a folded lane's links and the ones attached to
+    the task by hand. */
+function withoutShown(resolved: ResolvedWorkLinks | null, shown: ReadonlySet<string>): ResolvedWorkLinks | null {
+  if (!resolved || !shown.size) return resolved;
+  return { ...resolved, links: resolved.links.filter((link) => !shown.has(link.key)) };
 }
 
 function ageLabel(t: TFunction, updatedAtMs: number, nowMs: number): string {
@@ -214,11 +238,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const protectedSeat = card.holdsSeat;
   const resurfaced = card.task && !card.hide.hidden ? card.hide.resurfaced : null;
   const { t } = useLocale();
-  const taskLinks = useWorkLinks().of({ kind: "task", id: card.task?.id ?? "" });
+  const linkIndex = useWorkLinks();
   const onWorkLinks = props.onWorkLinks;
   const workspace = status === "assigned";
   const title = card.titlePending ? t("kanban.untitled") : card.title;
-  const pipelinesWaiting = card.pipelines.reduce((sum, summary) => sum + summary.waiting, 0);
   const statusText = statusLabel(t, status);
   /* A pipeline stage's conversation is reached through its stage chip, as in
      the prototype; tiles are the conversations that run outside a pipeline. */
@@ -235,14 +258,24 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", card.needsYou ? t("kanban.activityNeeds") : "", collapsed ? t("kanban.collapsed") : ""]
     .filter(Boolean)
     .join(", ");
-  /* What is happening now, never a status: working, owed an answer, how many
-     conversations, or plainly that nothing is on it. */
-  const activity: Array<{ key: string; node: React.ReactNode }> = [];
-  if (card.working) activity.push({ key: "working", node: <span className="working num">{t("kanban.activityWorking", { count: card.working })}</span> });
-  if (card.needsYou) activity.push({ key: "needs", node: <span className="needs">{t("kanban.activityNeeds")}</span> });
-  if (card.conversations) activity.push({ key: "conversations", node: <span className="quiet num">{t("kanban.activityConversations", { count: card.conversations })}</span> });
-  else if (card.pipelines.length === 0) activity.push({ key: "none", node: <span className="quiet">{t("kanban.activityNoAgent")}</span> });
-  if (pipelinesWaiting) activity.push({ key: "waiting", node: <span className="quiet num">{t("kanban.activityStagesWaiting", { count: pipelinesWaiting })}</span> });
+  /* The card's one status hue is its edge (§3.4): red while a member is
+     stalled, amber while it owes the operator an answer, the lane's own amber
+     state word saying which. */
+  const laneNeedsYou = card.pipelines.some((summary) => pipelineNeedsYou(summary.pipeline));
+  const stalled = card.members.some((member) => member.state === "stalled");
+  const attention = stalled ? "stalled" : laneNeedsYou || card.needsYou ? "needs" : undefined;
+  /* What is happening now, never a status, at the foot of the card: who is
+     working, how many conversations it holds or that nothing is on it, and
+     "needs you" only when no lane row already says it. */
+  const footMeta = (
+    <>
+      {card.needsYou && !laneNeedsYou ? <span className="foot-meta needs" data-foot-needs="">{t("kanban.activityNeeds")}</span> : null}
+      {card.working ? <span className="foot-meta working num" data-foot-working={card.working}>{t("kanban.activityWorking", { count: card.working })}</span> : null}
+      {card.conversations
+        ? <span className="foot-meta num" data-foot-conversations={card.conversations}>{t("kanban.activityConversations", { count: card.conversations })}</span>
+        : card.pipelines.length === 0 ? <span className="foot-meta" data-foot-none="">{t("kanban.activityNoAgent")}</span> : null}
+    </>
+  );
   /* Several pipelines on one card: the running ones stay on top, and once the
      card holds more than three rows the finished ones fold behind one count,
      newest first (#1765). */
@@ -260,18 +293,27 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const foldCompleted = card.pipelines.length > PIPELINE_ROWS_BEFORE_FOLD && endedPipelines.length > 0;
   const shownPipelines = foldCompleted ? livePipelines : [...livePipelines, ...endedPipelines];
   const foldedPipelines = foldCompleted ? endedPipelines : [];
+  /* The task's own row keeps only the links no lane row on screen draws. */
+  const drawnLanes = collapsed ? [] : completedOpen ? card.pipelines : shownPipelines;
+  const drawnLinks = new Set(drawnLanes.flatMap((summary) => linkIndex.of({ kind: "pipeline", id: summary.pipeline.id })?.links.map((link) => link.key) ?? []));
+  const taskLinks = withoutShown(linkIndex.of({ kind: "task", id: card.task?.id ?? "" }), drawnLinks);
+  const onAnswer = props.onAnswer;
   const pipelineRow = (summary: KanbanPipeline) => (
-    <PipelineSection
+    <PipelineBlock
       key={summary.pipeline.id}
       summary={summary}
-      open={props.graphChoices.get(`${card.id}|${summary.pipeline.id}`) ?? null}
+      density="task"
+      nowMs={nowMs}
+      taskTitle={card.titlePending ? null : card.title}
+      graphOpen={props.graphChoices.get(`${card.id}|${summary.pipeline.id}`) ?? false}
       selected={selectedStages(summary.pipeline, readerKeys, panels)}
       acting={acting.get(summary.pipeline.id) ?? null}
-      onToggle={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}
+      onToggleGraph={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}
       onOpenStage={(pipeline, stage) => props.onOpenStage(pipeline, stage, card.id)}
-      onOpenSheet={(pipeline) => props.onOpenSheet(card.id, pipeline)}
+      onOpenStages={(pipeline) => props.onOpenSheet(card.id, pipeline)}
       onMenu={(pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
       onWorkLinks={onWorkLinks}
+      onAnswer={onAnswer ? (pipeline, answer) => onAnswer(card.id, title, pipeline, answer) : undefined}
     />
   );
   const projectName = props.projectNames?.[card.project] ?? null;
@@ -285,6 +327,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       data-pending={pending ? "1" : "0"}
       data-collapsed={collapsed ? "1" : "0"}
       data-color={card.color ?? "none"}
+      data-attention={attention}
       data-protected={protectedSeat ? "1" : undefined}
       style={style}
       tabIndex={0}
@@ -483,15 +526,6 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </div>
       ) : null}
 
-      <div className="activity">
-        {activity.map((part, index) => (
-          <span key={part.key} className="part">
-            {index > 0 ? <span className="sep" aria-hidden="true">·</span> : null}
-            {part.node}
-          </span>
-        ))}
-      </div>
-
       {!collapsed ? (
         <>
           {shownPipelines.map(pipelineRow)}
@@ -604,6 +638,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             {statusText} <ChevronDown />
           </button>
           <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
+          {footMeta}
           <span className="spacer" />
           {props.onAddAgent ? (
             <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
@@ -615,6 +650,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         <div className="foot">
           <span className="origin-chip">{t(`kanban.origin.${card.origin}`)}</span>
           <span className="age num">{ageLabel(t, card.updatedAtMs, nowMs)}</span>
+          {footMeta}
         </div>
       )}
     </article>

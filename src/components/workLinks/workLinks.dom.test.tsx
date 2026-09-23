@@ -131,13 +131,14 @@ const click = (element: Element | null | undefined) => {
   flushSync(() => (element as HTMLElement).click());
 };
 
-test("each pipeline header draws its own chips on a line of their own, and a lane with no PR says so as plain text", async () => {
+test("each lane row draws its own chips at the end of its chain line, and a lane with no PR says so as plain text", async () => {
   const host = mount();
   await tick();
   const one = card(host).querySelector('[data-work-links="p-one"]');
   expect(chips(one)).toEqual(["merged:#41", "issue:#2059"]);
-  /* Never inside the header line, where it would take the title's width. */
-  expect(card(host).querySelector(".sec-head .wl-row")).toBeNull();
+  /* Never on the head line, where it would take the title's width (#2072, variant B). */
+  expect(card(host).querySelector(".pb-head .wl-row")).toBeNull();
+  expect(one?.parentElement?.classList.contains("pb-chain")).toBe(true);
   const chip = one!.querySelector<HTMLAnchorElement>(".wl-chip")!;
   expect(chip.getAttribute("href")).toBe("https://github.com/acme/widgets/pull/41");
   expect(chip.getAttribute("target")).toBe("_blank");
@@ -149,17 +150,20 @@ test("each pipeline header draws its own chips on a line of their own, and a lan
   expect(two.querySelector("a")).toBeNull();
 });
 
-test("the card's row shows three chips and +N, stays when the card is collapsed, and +N lists every link with × on the attached one only", async () => {
+test("the card's row draws each link once: what no lane row draws, then three chips and +N once the card is collapsed; +N lists every link with × on the attached one only", async () => {
   const host = mount();
   await tick();
   const row = () => card(host).querySelector('[data-work-links="t-chips"]');
-  expect(chips(row())).toEqual(["draft:#44", "merged:#41", "closed:#40"]);
-  expect(row()!.querySelector("[data-work-links-more]")?.textContent).toBe("+2");
+  /* #41 and #2059 are on the lane's chain line, so the task's row leaves them out (#2072, variant B). */
+  expect(chips(row())).toEqual(["draft:#44", "closed:#40", "issue:#2060"]);
+  expect(row()!.querySelector("[data-work-links-more]")).toBeNull();
   click(card(host).querySelector(".icon-btn.fold"));
   await tick();
   expect(card(host).getAttribute("data-collapsed")).toBe("1");
-  expect(card(host).querySelector(".stage-section")).toBeNull();
+  expect(card(host).querySelector(".pblock")).toBeNull();
+  /* Collapsed, no lane row draws anything, so the task's row carries them all. */
   expect(chips(row())).toEqual(["draft:#44", "merged:#41", "closed:#40"]);
+  expect(row()!.querySelector("[data-work-links-more]")?.textContent).toBe("+2");
 
   click(row()!.querySelector("[data-work-links-more]"));
   await tick();
@@ -172,7 +176,7 @@ test("the card's row shows three chips and +N, stays when the card is collapsed,
 test("the pipeline menu's attach form sends attach-link with what was typed, and draws the answer at once", async () => {
   const host = mount({ pipelines: { "p-two": { links: [], noPr: true } }, tasks: {} });
   await tick();
-  const section = card(host).querySelector('.stage-section[data-pipeline="p-two"]')!;
+  const section = card(host).querySelector('.pblock[data-pipeline="p-two"]')!;
   click(section.querySelector("[data-pipeline-menu]"));
   const attach = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("Attach PR or issue…"));
   click(attach);
@@ -196,7 +200,7 @@ test("an attach on a pipeline redraws the task card that aggregates it from the 
   const host = mount({ pipelines: { "p-two": { links: [], noPr: true } }, tasks: {} });
   await tick();
   expect(card(host).querySelector('[data-work-links="t-chips"]')).toBeNull();
-  click(card(host).querySelector('.stage-section[data-pipeline="p-two"] [data-pipeline-menu]'));
+  click(card(host).querySelector('.pblock[data-pipeline="p-two"] [data-pipeline-menu]'));
   click([...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("Attach PR or issue…")));
   await tick();
   const input = document.querySelector<HTMLInputElement>('[data-work-links-panel="pipeline:p-two"] [data-work-link-input]')!;
@@ -212,5 +216,10 @@ test("an attach on a pipeline redraws the task card that aggregates it from the 
   await tick(20);
   expect(patches).toEqual([{ url: "/api/pipelines/p-two", body: { action: "attach-link", link: "47" } }]);
   expect(chips(card(host).querySelector('[data-work-links="p-two"]'))).toEqual(["open:#47"]);
+  /* Drawn once: on the lane's line while the card is open, and on the task's
+     row, from the same answer, once the card folds its lanes away. */
+  expect(card(host).querySelector('[data-work-links="t-chips"]')).toBeNull();
+  click(card(host).querySelector(".icon-btn.fold"));
+  await tick();
   expect(chips(card(host).querySelector('[data-work-links="t-chips"]'))).toEqual(["open:#47"]);
 });

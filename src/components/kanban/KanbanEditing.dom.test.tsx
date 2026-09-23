@@ -410,7 +410,7 @@ test("Hide finished tasks keeps working and seat groups, writes one task at a ti
     changed: () => {},
   };
   const view = mount(tasks, { ports, seat, files: [working], manual: [working] });
-  expect(cardEl(view.host, "w")?.querySelector(".activity .working")?.textContent).toBe("1 working");
+  expect(cardEl(view.host, "w")?.querySelector(".foot-meta.working")?.textContent).toBe("1 working");
   click(view.host.querySelector('[data-colmenu="done"]'));
   const item = menuItem(view.host, "Hide finished tasks (3)");
   expect(item?.querySelector(".why")?.textContent).toBe("Keeps 1 task whose agent is still working.");

@@ -246,14 +246,19 @@
 .kb .card .desc { margin: 0; color: var(--color-secondary); font-size: var(--text-ui); line-height: 17px; text-align: left; padding: 1px 4px; margin-left: -4px; display: flex; align-items: center; min-height: 24px; }
 .kb .card .pending-line { margin: -2px 0 0; font-size: var(--text-label); color: var(--color-muted); }
 
-.kb .card .activity { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--text-label); color: var(--color-secondary); }
-.kb .card .activity .part { display: inline-flex; align-items: center; gap: 6px; }
-.kb .card .activity .working { display: inline-flex; align-items: center; gap: 5px; color: var(--color-success); font-weight: 600; }
-.kb .card .activity .working::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.kb .card .activity .needs { display: inline-flex; align-items: center; gap: 5px; color: var(--color-warning); font-weight: 600; }
-.kb .card .activity .needs::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 22%, transparent); }
-.kb .card .activity .quiet { color: var(--color-muted); }
-.kb .card .activity .sep { color: var(--border-strong); }
+/* The card's one status hue is its edge (#2072 §3.4): amber while it owes the
+   operator an answer, red while a member stalled. It takes the colour label's
+   place for as long as that lasts, and runs the card's full height. */
+.kb .card[data-attention] .label { top: 0; bottom: 0; border-radius: var(--radius-surface) 0 0 var(--radius-surface); }
+.kb .card[data-attention="needs"] .label { background: var(--color-warning); }
+.kb .card[data-attention="stalled"] .label { background: var(--color-danger); }
+/* What is happening now, at the card's foot: who is working, how many
+   conversations, and "needs you" when no lane row says it. */
+.kb .card .foot-meta { font-size: var(--text-label); color: var(--color-muted); white-space: nowrap; }
+.kb .card .foot-meta.working { display: inline-flex; align-items: center; gap: 5px; color: var(--color-success); font-weight: 600; }
+.kb .card .foot-meta.working::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.kb .card .foot-meta.needs { display: inline-flex; align-items: center; gap: 5px; color: var(--color-warning); font-weight: 600; }
+.kb .card .foot-meta.needs::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 22%, transparent); }
 
 .kb .card .foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; flex-wrap: wrap; row-gap: 4px; }
 .kb .pill {
@@ -287,19 +292,19 @@
 .kb .card .project-chip .clamp { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Members, references ──────────────────────────────────────────────────── */
-.kb .members { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+/* A conversation is a full-width row with a hairline above it (#2072, variant
+   B), not a framed tile: the mark, its name and its state word; then what it
+   is doing now and its age. */
+.kb .members { display: flex; flex-direction: column; gap: 0; margin-top: 2px; }
 .kb .tile {
-  display: flex; flex-direction: column; gap: 2px; width: 196px; min-height: 58px; padding: 7px 10px;
-  border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-card); text-align: left;
-  transition: border-color var(--motion-fast);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; row-gap: 0;
+  width: calc(100% + 8px); margin: 0 -4px; padding: 6px 4px;
+  border: 0; border-top: 1px solid var(--border-default); border-radius: 0; background: transparent; text-align: left;
+  transition: background var(--motion-fast);
 }
-.kb .tile:hover { border-color: var(--border-strong); }
-/* A shelf's tiles fill its narrow column. Whichever column holds the wide
-   share lays them out as the workspace does, and Assigned given a shelf's
-   width fills it (#1841). */
-.kb .tile.fill, .kb .column.shelf .tile { width: 100%; }
-.kb .column.wide .tile.fill { width: 196px; }
-.kb .tile .row { display: flex; align-items: center; gap: 6px; font-size: var(--text-label); min-width: 0; }
+.kb .tile:hover { background: var(--surface-well); }
+.kb .tile:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.kb .tile .row { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; font-size: var(--text-label); min-width: 0; }
 .kb .tile .role { font-weight: 600; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .tile .engine { flex-shrink: 0; }
 /* The attempt a stage tile names (#1865): a muted tabular suffix that keeps
@@ -307,72 +312,21 @@
    «Critique · 2» spaces like one phrase. */
 .kb .tile .attempt { flex-shrink: 0; margin-left: -6px; white-space: pre; font-weight: 600; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .kb .tile .state { margin-left: auto; font-weight: 600; color: var(--color-muted); white-space: nowrap; }
-.kb .tile .state.working { color: var(--color-success); }
+.kb .tile .state.working { display: inline-flex; align-items: center; gap: 5px; color: var(--color-success); }
+.kb .tile .state.working::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .kb .tile .state.needs { color: var(--color-warning); }
 .kb .tile .state.killed { color: var(--color-danger); }
-.kb .tile .latest { font-size: var(--text-label); color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kb .tile .age { font-size: var(--text-caption); color: var(--color-muted); }
-.kb .tile.working { border-color: color-mix(in srgb, var(--color-success) 45%, var(--border-default)); }
-.kb .tile.needs { border-color: color-mix(in srgb, var(--color-warning) 55%, var(--border-default)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 14%, transparent); }
+.kb .tile .latest { grid-column: 1; font-size: var(--text-label); color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb .tile .age { grid-column: 2; font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; text-align: right; }
 .kb .refs { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .kb .refs .ref { font-size: var(--text-label); color: var(--color-accent); font-weight: 600; text-align: left; border-radius: 4px; padding: 2px 4px; margin-left: -4px; }
 .kb .refs .ref.quiet { color: var(--color-muted); font-weight: 500; }
 .kb .refs .ref:hover { background: var(--surface-well); }
 
-/* ── Pipeline summary ─────────────────────────────────────────────────────── */
-.kb .stage-section {
-  /* The tinted ground the section paints on, named so that anything drawn over
-     it — the arc's counter halo (#1798) — can be cut out of the same colour
-     rather than out of the card's white. */
-  --section-surface: color-mix(in srgb, var(--label-strong, var(--color-accent)) 3%, var(--surface-well));
-  position: relative; margin-top: 4px; padding: 8px 10px 10px; border-radius: var(--radius-control);
-  border: 1px solid color-mix(in srgb, var(--label-strong, var(--color-accent)) 26%, var(--border-default));
-  background: var(--section-surface);
-}
-.kb .stage-section .sec-head { display: flex; align-items: center; gap: 6px; font-size: var(--text-label); color: var(--color-secondary); min-height: 28px; }
-.kb .stage-section .sec-head .kind { flex-shrink: 0; padding: 0 6px; height: 18px; display: inline-flex; align-items: center; border-radius: 999px; background: var(--surface-card); border: 1px solid var(--border-default); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
-.kb .stage-section .sec-head .ptitle { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--color-primary); }
-/* The note beside the badge is only the stage's name; it gives way before the pipeline's title does. */
-.kb .stage-section .sec-head .progress { flex: 0 4 auto; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.kb .stage-section .sec-head .grow { flex: 1; }
-.kb .stage-section .graph-edit { margin: 2px 0 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kb .stage-section .review-heads { margin: 2px 0 0; font-size: var(--text-caption); font-weight: 600; color: var(--color-warning); overflow-wrap: anywhere; }
-.kb .stage-section .stage-report { margin: 2px 0 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kb .stage-section .stage-findings { margin: 2px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; }
-.kb .stage-section .stage-findings li { display: flex; gap: 6px; align-items: baseline; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; }
-.kb .stage-section .stage-findings .sev { flex: none; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--color-text); }
-.kb .stage-section .stage-findings li[data-severity="P0"] .sev, .kb .stage-section .stage-findings li[data-severity="P1"] .sev { color: var(--color-danger, var(--color-text)); }
-.kb .stage-section .stage-findings .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kb .card.shelf .stage-section .sec-head { flex-wrap: wrap; row-gap: 2px; }
-.kb .card.shelf .stage-section .sec-head .ptitle { flex-basis: 100%; }
-.kb .card.shelf .stage-section .sec-head .progress { order: 10; flex-basis: 100%; }
+/* ── Pipelines on the card: the lane rows are `PipelineBlock` (pipelineBlock.css) ── */
 .kb .done-pipelines { margin-top: 4px; }
 .kb .done-pipelines .completed-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
 .kb .done-pipelines .completed-toggle svg { width: 12px; height: 12px; }
-.kb .pstate-chip { flex-shrink: 0; height: 18px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: 999px; font-size: var(--text-caption); font-weight: 700; background: var(--surface-card); color: var(--color-muted); border: 1px solid var(--border-default); }
-.kb .pstate-chip[data-pstate="running"] { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 40%, var(--border-default)); }
-.kb .pstate-chip[data-pstate="needs_decision"] { color: var(--color-warning); border-color: color-mix(in srgb, var(--color-warning) 45%, var(--border-default)); background: var(--color-warning-soft); }
-.kb .pstate-chip[data-pstate="provisioning"] { color: var(--color-accent); border-style: dashed; }
-.kb .pstate-chip[data-pstate="completed"] { color: var(--color-secondary); }
-.kb .psummary { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 4px; margin-top: 4px; }
-/* A stage pill is one line at any column width: the arrow, the dot, the engine
-   mark, the model and the effort bars keep their size, and only the stage name
-   gives way, to an ellipsis; the pill's title carries the full name. A name
-   that wrapped painted its second line outside the 24 px pill and squeezed the
-   model to one letter in a 264 px shelf. */
-.kb .pchip-wrap { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
-.kb .pchip-wrap > .parrow { flex-shrink: 0; }
-.kb .pchip {
-  display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 999px;
-  border: 1px solid var(--border-default); background: var(--surface-card); font-size: var(--text-label); font-weight: 600; color: var(--color-primary);
-  min-width: 0; max-width: 100%; white-space: nowrap;
-}
-.kb .pchip > .pdot { flex-shrink: 0; }
-.kb .pchip > .pident { min-width: 0; }
-.kb .pchip .pident.d-chip .imodel { flex-shrink: 0; }
-.kb .pchip .pident.d-chip .pname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1; min-width: 3ch; }
-.kb button.pchip:hover { border-color: var(--border-strong); }
-.kb .pchip.side { border-style: dashed; }
 
 /* ── Who runs a stage (#1743) ─────────────────────────────────────────────
    One unit — engine mark, model, effort ladder — at four densities. The unit
@@ -436,7 +390,6 @@
    which in this vocabulary is the pass count (#1743). */
 .cfired { display: inline-flex; flex-shrink: 0; border-radius: 999px; }
 .cfired.spent { padding: 2px; background: var(--surface-card); box-shadow: 0 0 0 2px var(--color-danger); }
-.kb .parrow { color: var(--color-muted); font-size: var(--text-label); }
 /* The loop chip is one 22 px line and must stay one: on a 256 px column card
    the budget sentence wrapped to two lines and painted outside the pill. The
    stage names are what gives way — they are on the chips beside it — while the
@@ -448,86 +401,10 @@
 .kb .ploop .lbudget, .kb .ploop .lnone, .kb .ploop .lglyph { flex-shrink: 0; }
 .kb .ploop .lnone { font-weight: 700; }
 
-/* ── A fail edge under the collapsed row (#1798) ───────────────────────────
-   The row of pills is the row of STEPS, so a fail edge is not in it: it is an
-   arc below the line the pills sit on, from the failing stage back to its
-   target, arrowhead at the target. Nothing here can cross a pill — the whole
-   layer starts under the pills' bottom edge — and the row reserves the band's
-   height as padding, so the arcs never paint onto what follows the row.
-
-   At rest the arc is the faint dashed line that means "configured, not
-   travelled" everywhere else on this board, and it says nothing: the budget is
-   in its tooltip and in the expanded graph. Firing turns it solid and warning
-   and puts the count on the arc itself; a spent budget turns it danger and
-   thickens it, so exhaustion is never the lighter drawing. */
-.kb .parcs { position: absolute; left: 0; width: 100%; overflow: visible; pointer-events: none; }
-.kb .parc { fill: none; stroke-width: 1.5; stroke: color-mix(in srgb, var(--color-muted) 45%, transparent); stroke-dasharray: 4 3; pointer-events: none; }
-.kb .parc-head { fill: color-mix(in srgb, var(--color-muted) 45%, transparent); }
-/* What the pointer actually meets. The drawn arc is 1.5 px of dashes, and the
-   dash gaps are not the arc at all, so aiming at the drawing means aiming at
-   nothing: a stroke wide enough to hit opens the sentence anywhere along the
-   curve, and a tap on it writes the sentence out where a title cannot. The cap
-   is butt on purpose: both ends of the curve leave their pill straight down, so
-   a round cap would put half a hit stroke back up inside the pill and take the
-   last pixels of a control the operator is aiming at. */
-.kb .parc-hit { fill: none; stroke: transparent; stroke-width: 11; stroke-linecap: butt; pointer-events: stroke; cursor: help; }
-.kb [data-arc-state="fired"] .parc { stroke: var(--color-warning); stroke-dasharray: none; }
-.kb [data-arc-state="fired"] .parc-head { fill: var(--color-warning); }
-.kb [data-arc-state="exhausted"] .parc { stroke: var(--color-danger); stroke-width: 2; stroke-dasharray: none; }
-.kb [data-arc-state="exhausted"] .parc-head { fill: var(--color-danger); }
-/* The arc that carried the work that is running right now, drawn as the graph
-   draws its live edge: the same moving dashes, the same width. The motion runs
-   the other way round here. The graph draws its edges from source to target,
-   so dashes travelling forward along the path travel towards the arrowhead;
-   this curve is drawn from its arrowhead back to the failing pill, so the same
-   keyframe would send the dashes AWAY from the head the arrow points at — the
-   drawing would say the work goes back to Fix and the motion that it goes to
-   Review. A positive offset moves them along the path in reverse, which here
-   is towards the head. */
-.kb [data-arc-live="1"] .parc { stroke-width: 2.25; stroke-dasharray: 7 5; animation: kb-arc-flow 700ms linear infinite; }
-@keyframes kb-arc-flow { to { stroke-dashoffset: 24; } }
-/* Moving dashes put a gap of the pattern over the head for part of every cycle,
-   and an arrowhead standing off its own line reads as a second mark. The first
-   6 px of the same curve are drawn solid under the dashes, so the head is met
-   by ink at every phase. It is a split of the same cubic, not a stand-in, so
-   the two drawings lie on each other exactly. */
-.kb .parc.parc-lead { stroke-dasharray: none; animation: none; }
-/* The counter rides the arc, so the stroke is haloed out from behind the digits
-   rather than boxed away — one less rectangle on a 256 px card. The halo has to
-   be wide enough to be air: at 3 px it cut the stroke only to the edge of the
-   first and last digit and left specks of it between them, so a count read as a
-   line struck through dirty digits. 7 px is 3.5 px a side, which clears the
-   thickest stroke any state draws (3 px, the live arc with motion off) by 2 px
-   on both sides and closes over every gap between two digits from both sides. */
-.kb .parc-count {
-  font: 700 var(--text-caption)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-variant-numeric: tabular-nums; text-anchor: middle; dominant-baseline: middle;
-  paint-order: stroke; stroke: var(--section-surface, var(--surface-card)); stroke-width: 7px; stroke-linejoin: round;
-  fill: var(--color-warning); pointer-events: none;
-}
-.kb [data-arc-state="exhausted"] .parc-count { fill: var(--color-danger); }
-/* The wrapped row has no line to hang an arc under, so the failing pill carries
-   the count instead — and only once the edge has fired. */
-.kb .pret { display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0; font-size: var(--text-caption); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-warning); }
-.kb .pret[data-arc-state="exhausted"] { color: var(--color-danger); }
-/* A return in flight, on the surface that has no arc to make live: the count
-   keeps the state's own colour and sits on the accent ground the board gives
-   anything running, so a lane still going back does not read as one that is
-   over. */
-.kb .pret[data-arc-live="1"] { padding: 0 3px; border-radius: 999px; background: var(--color-accent-soft); }
-/* The tapped arc's sentence, for the surface a tooltip never reaches. */
-.kb .parc-note {
-  position: absolute; left: 0; right: 0; z-index: 4; padding: 3px 7px;
-  border-radius: var(--radius-control); border: 1px solid var(--border-default);
-  background: var(--surface-card); box-shadow: var(--shadow-1);
-  font-size: var(--text-caption); font-weight: 600; color: var(--color-secondary);
-}
 .kb .pdot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-muted); }
-.kb .tone-active .pdot { background: var(--color-success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 22%, transparent); }
-.kb .tone-review .pdot { background: var(--color-info); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-info) 22%, transparent); }
-.kb .tone-ok .pdot { background: var(--color-success); box-shadow: none; }
-.kb .tone-bad .pdot { background: var(--color-danger); box-shadow: none; }
-.kb .tone-needs .pdot { background: var(--color-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 25%, transparent); }
+/* The colour is the stage's tone (the one tone map, pipelineBlock.css). */
+.kb :is(.tone-active, .tone-review, .tone-needs) .pdot { background: var(--stage-tone); box-shadow: 0 0 0 3px color-mix(in srgb, var(--stage-tone) 22%, transparent); }
+.kb :is(.tone-ok, .tone-bad) .pdot { background: var(--stage-tone); box-shadow: none; }
 
 /* ── Moves ────────────────────────────────────────────────────────────────── */
 .kb .card.flying { position: fixed; z-index: 58; margin: 0; pointer-events: none; overflow: hidden; box-shadow: var(--shadow-2); content-visibility: visible; }
@@ -606,7 +483,7 @@
   .kb .card .title { min-height: 44px; }
   .kb .tabs-nav button, .kb .btn, .kb .pill, .kb .receipt .act, .kb .popover .row .show, .kb .refs .ref { min-height: 44px; }
   .kb .pill { height: 36px; padding: 0 12px; }
-  .kb .tile, .kb .pchip, .kb .card .add { min-height: 44px; }
+  .kb .tile, .kb .card .add { min-height: 44px; }
   .kb .receipt .close { width: 44px; height: 44px; flex-shrink: 0; }
   .kb .menu [role="menuitem"], .kb .menu [role="menuitemradio"] { min-height: 44px; }
 }
@@ -946,11 +823,7 @@
 }
 
 /* ── Pipelines on cards: the stage graph and Past attempts (K5a, prototype `graph.js`) ─ */
-.kb .stage-section.open .sec-head { margin-bottom: 4px; }
-.kb .stage-section .icon-btn.sm { width: 24px; height: 24px; }
-.kb .stage-section .icon-btn.sm svg { width: 14px; height: 14px; }
 .kb .graph-slot { width: 100%; min-width: 0; }
-.kb .pchip.selected { border-color: var(--color-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent); }
 .kb .pgraph-box { overflow-x: auto; overflow-y: hidden; margin: 2px -4px 0; padding: 0 4px; scrollbar-width: thin; }
 .kb .pgraph { position: relative; flex-shrink: 0; }
 .kb .pedges { position: absolute; inset: 0; overflow: visible; }
@@ -1062,11 +935,9 @@
 @media (prefers-reduced-motion: reduce) {
   .kb .pedge.live, .kb .pnode.pulse .pdot { animation: none; }
   .kb .pedge.live { stroke-width: 3; stroke-dasharray: none; }
-  .kb [data-arc-live="1"] .parc { animation: none; stroke-width: 3; stroke-dasharray: none; }
 }
 @media (pointer: coarse) {
   .kb .card .history summary, .kb .card .history .hopen { min-height: 44px; }
-  .kb .stage-section .icon-btn.sm { width: 44px; height: 44px; }
 }
 
 /* ── Stages (K5b, prototype `renderSheet`, `renderPane`, `renderStageDraft`, `renderDraftMessage`) ─ */
@@ -1076,13 +947,8 @@
 .kb .btn.primary { background: var(--color-brand); border-color: var(--color-brand); color: var(--color-on-brand); }
 .kb .btn.primary:hover { filter: brightness(1.06); }
 .kb .btn.primary:disabled { opacity: 0.5; filter: none; }
-.kb .btn.expand-stages { flex-shrink: 0; height: 24px; padding: 0 8px; gap: 5px; font-size: var(--text-label); }
-.kb .btn.expand-stages svg { width: 13px; height: 13px; }
-.kb .card.shelf .btn.expand-stages span { display: none; }
-.kb .card.shelf .stage-section .sec-head .icon-btn.sm[aria-pressed] { display: none; }
-.kb .stage-section .sec-head .acting { flex-shrink: 0; font-size: var(--text-caption); font-weight: 600; color: var(--color-accent); padding: 0 6px; height: 18px; display: inline-flex; align-items: center; border-radius: 999px; background: var(--color-accent-soft); }
 .kb .pnode.in-view { border-color: color-mix(in srgb, var(--color-accent) 45%, var(--border-default)); }
-.kb .pnode.tone-idle:not(.no-conv), .kb button.pchip.tone-idle { cursor: pointer; }
+.kb .pnode.tone-idle:not(.no-conv) { cursor: pointer; }
 
 /* The sheet: over the board and under its menus, receipts and the full-window reader. */
 .kb .gsheet-scrim { position: fixed; inset: 0; z-index: 62; background: rgb(10 10 16 / 0.32); display: flex; align-items: stretch; justify-content: center; padding: 12px; }
@@ -1253,7 +1119,7 @@
 }
 @media (pointer: coarse) {
   .kb .navchip { height: 44px; }
-  .kb .pane .attempts button, .kb .lane-bar .btn, .kb .btn.gtoggle, .kb .btn.expand-stages, .kb .pane-strip { min-height: 44px; }
+  .kb .pane .attempts button, .kb .lane-bar .btn, .kb .btn.gtoggle, .kb .pane-strip { min-height: 44px; }
   .kb .msg.user.draft .bedit, .kb .draft-acts .btn, .kb .draft-notice button, .kb .draft-added summary { min-height: 44px; min-width: 44px; }
   .kb .msg.user.draft .bubble { padding-right: 80px; }
 }

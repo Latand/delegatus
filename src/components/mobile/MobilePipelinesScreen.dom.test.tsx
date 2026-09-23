@@ -9,9 +9,9 @@ import type { Pipeline } from "@/lib/pipelines/types";
 
 /*
  * The pipelines list on the phone (mobile v2 lane 7, #1439; README §4.7):
- * Needs you, Active, and a folded «n completed». A row is dot · task title ·
- * `stage k/n · <stage> · <state> · started` · the state badge, and it opens
- * its pipeline. Drafts never appear, and neither does a lane whose archive is
+ * Needs you, Active, and a folded «n completed». A row is the pipeline card
+ * (#2072 slice 3): its title, the badge while it waits on the operator, and
+ * the one pipeline block at card density; it opens its pipeline. Drafts never appear, and neither does a lane whose archive is
  * still inside its receipt's window — the operator has already been told it
  * went.
  */
@@ -137,27 +137,31 @@ test("the list is Needs you, Active and a folded «n completed»; drafts never a
   expect(host.textContent).toContain(translate("en", "mobile2.pipelines.completed", { count: 1 }));
 });
 
-test("a row says the stage in the product's own words, badges the state and opens the pipeline", () => {
+test("a row is the pipeline card: the stage chain in the product's own words, the badge only when it waits on the operator, and a tap opens the pipeline", () => {
   const opened: string[] = [];
   const host = mount(<MobilePipelinesScreen pipelines={[live, parked]} now={NOW} onOpenPipeline={(pipe) => opened.push(pipe.id)} />);
   const row = q(host, '[data-mobile2-pipeline-row="p2"]')!;
   expect(row.tagName).toBe("BUTTON");
   expect(row.getAttribute("data-mobile2-go")).toBe("pipeline");
   expect(row.getAttribute("data-mobile2-state")).toBe("needs_decision");
-  expect(row.textContent).toContain("Fast conversation switching");
-  /* «stage 2/2 · Reviewer · failed» — the role's name from `stageChipLabel`
-     and the chip state's own word, never a raw stage id. */
-  expect(row.textContent).toContain(translate("en", "mobile2.pipelines.rowStage", {
-    stage: 2, total: 2, name: translate("en", "roleCopy.reviewer.name"), state: translate("en", "pipelineChipState.failed"),
-  }));
-  expect(row.textContent).toContain(translate("en", "mobile2.pipelines.badgeDecision"));
-  expect(row.textContent).toContain(translate("en", "mobile2.pipelines.rowStarted", { age: "2h" }));
+  expect(row.querySelector("[data-mobile2-pipeline-title]")?.textContent).toBe("Fast conversation switching");
+  /* The chain by the names the stage list gives (#1865, #2072), never a raw
+     stage id, the parked stage marked as failed, and the reason in words. */
+  expect([...row.querySelectorAll(".pb-pill")].map((pill) => [pill.querySelector(".pb-name")?.textContent, pill.querySelector(".pmark")?.getAttribute("data-mark")]))
+    .toEqual([["Implement", "ring"], ["Review", "cross"]]);
+  expect(row.querySelector(".pstate-chip")?.textContent).toBe(translate("en", "pipelineState.needs_decision"));
+  expect(row.querySelector("[data-pipeline-reason]")?.textContent).toBe(
+    `${translate("en", "pipelineBlock.reason.failed", { stage: "Review" })} · ${translate("en", "pipelineVerdict.findings", { count: 2 })} · 1h`,
+  );
+  /* A card is one tap target: nothing inside it is a control of its own. */
+  expect(row.querySelectorAll("button, a")).toHaveLength(0);
 
   click(row);
   expect(opened).toEqual(["p2"]);
 
   const running = q(host, '[data-mobile2-pipeline-row="p1"]')!;
-  expect(running.textContent).toContain(translate("en", "mobile2.pipelines.badgeRunning"));
+  expect(running.querySelector(".pstate-chip")).toBeNull();
+  expect(running.querySelector(".pb-age")?.textContent).toBe("40m");
   click(running);
   expect(opened).toEqual(["p2", "p1"]);
 });

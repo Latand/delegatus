@@ -79,6 +79,30 @@ export function WorkLinkChip({ link }: { link: WorkLink }) {
   );
 }
 
+/** A lane's links as passive text at the end of a card's line (§6.4, #2072
+    §3.13): the first PR, else the first link, with its glyph and "+N" for the
+    rest, or "no PR". The card is one tap target, so nothing here is a link;
+    the chips themselves are one tap further in. */
+export function WorkLinkText({ resolved, testId, className }: { resolved: ResolvedWorkLinks | null; testId: string; className?: string }) {
+  const { t } = useLocale();
+  const links = resolved?.links ?? [];
+  if (!links.length && !resolved?.noPr) return null;
+  const lead = links.find((link) => link.kind === "pr") ?? links[0] ?? null;
+  const rest = links.length - (lead ? 1 : 0);
+  if (!lead) {
+    return <span className={`wl-text wl-nopr${className ? ` ${className}` : ""}`} data-work-links-text={testId} title={t("workLinks.noPrTitle")}>{t("workLinks.noPr")}</span>;
+  }
+  const tone = toneOf(lead);
+  const description = [workLinkDescription(t, lead), rest > 0 ? t("workLinks.moreAria", { count: rest }) : null].filter(Boolean).join(" · ");
+  return (
+    <span className={`wl-text${className ? ` ${className}` : ""}`} data-work-links-text={testId} data-tone={tone} title={description}>
+      <Glyph tone={tone} />
+      <span className="wl-num">#{lead.number}</span>
+      {rest > 0 ? <span className="wl-rest">{t("workLinks.more", { count: rest })}</span> : null}
+    </span>
+  );
+}
+
 /** The passive clause a phone row's sentence carries (§6.4): a row is one
     tap target, so a link cannot sit inside it. */
 export function workLinkClause(t: TFunction, resolved: ResolvedWorkLinks | null): string | null {

@@ -259,7 +259,7 @@ const kv = (host: HTMLElement) => [...(picker(host)?.querySelectorAll(".acct-now
 const notes = (host: HTMLElement) => [...(picker(host)?.querySelectorAll(".acct-sub, .note") ?? [])].map((node) => node.textContent);
 
 async function openWaitingStage(host: HTMLElement) {
-  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
 }
 async function openPicker(host: HTMLElement, chip: HTMLElement | null) {
@@ -267,7 +267,7 @@ async function openPicker(host: HTMLElement, chip: HTMLElement | null) {
   await tick(20);
 }
 async function openVerify(host: HTMLElement) {
-  click(card(host).querySelector('.psummary [data-stage="verify"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="verify"]'));
   await tick();
 }
 

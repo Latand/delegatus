@@ -268,7 +268,7 @@ const kv = (host: HTMLElement) => [...(picker(host)?.querySelectorAll(".acct-now
 const notes = (host: HTMLElement) => [...(picker(host)?.querySelectorAll(".acct-sub, .note") ?? [])].map((node) => node.textContent);
 
 async function openVerify(host: HTMLElement) {
-  click(card(host).querySelector('.psummary [data-stage="verify"]'));
+  click(card(host).querySelector('.pb-pills [data-stage="verify"]'));
   await tick();
 }
 async function openPicker(host: HTMLElement) {

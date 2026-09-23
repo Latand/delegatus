@@ -13,6 +13,7 @@ import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
 import { compactPipelineLayoutFlows, latestAttempt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
+import type { PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
 import type { BranchGroup } from "@/components/projectModel";
 import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout";
 import { reconcileLayoutNodes } from "@/components/scheme/layoutIdentity";
@@ -1430,7 +1431,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* ── Pointer drag to a column ────────────────────────────────────────── */
   const onCardPointerDown = useCallback((card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || event.pointerType === "touch" || !card.task) return;
-    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .stage-section, .reader-slot, .stage-detail")) return;
+    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .pblock, .reader-slot, .stage-detail")) return;
     const element = event.currentTarget;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -1778,6 +1779,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openPipelineMenu = useCallback((cardId: string, pipeline: Pipeline, anchor: HTMLElement) => {
     menu.setOpen({ anchor, value: { kind: "pipeline", cardId, pipelineId: pipeline.id } });
   }, [menu]);
+  /* A lane row's answer in place (#2072): the same intent the ⋯ menu sends,
+     with Skip and Close held for their receipt's window. */
+  const answerPipeline = useCallback((_cardId: string, title: string, pipeline: Pipeline, answer: PipelineAnswer) => {
+    startPipelineAction(
+      { pipelineId: pipeline.id, title, action: answer.action, stageId: answer.stageId, stageName: answer.stageName, expectedAttempt: answer.expectedAttempt },
+      { hold: answer.action === "skip-stage" || answer.action === "close" },
+    );
+  }, [startPipelineAction]);
   const openWorkLinks = useCallback((target: WorkLinkTarget, anchor: HTMLElement) => {
     menu.setOpen({ anchor, value: { kind: "links", target } });
   }, [menu]);
@@ -2184,6 +2193,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onOpenSheet: openSheet,
         onPipelineMenu: openPipelineMenu,
         onWorkLinks: openWorkLinks,
+        onAnswer: answerPipeline,
         onStagePanelFold: foldStagePanel,
         onStagePanelClose: closeStagePanel,
         onStagePanelMenu: openStagePanelMenu,
@@ -2473,7 +2483,7 @@ type CardHandlers = Pick<
   | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
-  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
+  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
   | "projectNames" | "onOpenProject"
 >;
 

@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { TFunction } from "@/lib/i18n";
+import { RECEIPT_MS } from "@/components/mobile/MobileReceipt";
 
 import type { ReceiptAction } from "./KanbanReceipts";
 import { stageNames } from "./PipelineSection";
@@ -19,6 +20,16 @@ import { actionObserved, pipelineActionOptions, type PipelineActionKind } from "
  * pipeline that moved on answers 409 `STAGE_CHANGED`, which the board explains
  * from a fresh read and never resends. `stageId` keeps its own meaning on
  * `retry-stage` (a launch-receipt retry) and is not sent.
+ *
+ * One more review round (`continue-review`, #1938) always reads the pipeline
+ * first: the engine takes it only against the revision the operator saw, so
+ * the read's revision travels as `expectedRevision`, with one request id per
+ * intent so that a replay can never grant a second round.
+ *
+ * Skip and Close from a lane row can be HELD (#2072, phone-kanban §3.13): the
+ * engine keeps no way back from either, so the receipt is the window. The
+ * request waits out the phone's four seconds and the receipt's Undo cancels
+ * it; a board that goes away first sends what it held.
  *
  * A refusal the route explained keeps its words beside a Retry: retry and skip
  * send the same guarded expectations again, and the other actions read the
@@ -37,7 +48,16 @@ export interface PipelineActionIntent {
   stageName: string | null;
   /** Retry and skip: the `n` of that stage's latest own attempt as the pipeline showed it, `0` for none yet. */
   expectedAttempt: number | null;
+  /** One more round: the request's idempotency key, minted once per intent. */
+  requestId?: string;
 }
+
+/** Skip and Close are the two acts the engine cannot take back. */
+const HOLDABLE: ReadonlySet<PipelineActionKind> = new Set(["skip-stage", "close"]);
+
+const mintRequestId = (): string => (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+  ? `board-${crypto.randomUUID()}`
+  : `board-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
 
 type Show = (text: string, action?: ReceiptAction, options?: { error?: boolean; ttl?: number }) => number;
 
@@ -57,6 +77,9 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
     });
   }, []);
 
+  /* Held acts, by pipeline: the timer that sends it and the intent it sends. */
+  const held = useRef(new Map<string, { timer: ReturnType<typeof setTimeout>; intent: PipelineActionIntent }>());
+
   const send = useRef<(intent: PipelineActionIntent, recheck: boolean) => void>(() => {});
   const check = useRef<(intent: PipelineActionIntent) => void>(() => {});
 
@@ -68,7 +91,8 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
     void (async () => {
       const stageName = intent.stageName;
       const stageBound = STAGE_BOUND.has(action);
-      if (!stageBound && recheck) {
+      let revision: string | null = null;
+      if (action === "continue-review" || (!stageBound && recheck)) {
         const current = await ports.read(pipelineId);
         if (!current) {
           busy(pipelineId, null);
@@ -81,10 +105,18 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
           show(t("kanban.pipelineAct.notSent", { action: label(stageName), reason }), undefined, { error: true });
           return;
         }
+        revision = current.revision ?? null;
+        if (action === "continue-review" && !revision) {
+          busy(pipelineId, null);
+          show(t("kanban.pipelineAct.unread", { action: label(stageName) }), { label: t("kanban.retry"), run: () => send.current(intent, true) }, { error: true });
+          return;
+        }
       }
       const result = await ports.patch(pipelineId, stageBound
         ? { action, expectedStageId: intent.stageId ?? "", ...(intent.expectedAttempt !== null ? { expectedAttempt: intent.expectedAttempt } : {}) }
-        : { action });
+        : action === "continue-review"
+          ? { action, addRounds: 1, expectedRevision: revision ?? "", clientRequestId: intent.requestId ?? mintRequestId() }
+          : { action });
       busy(pipelineId, null);
       if (result.ok) {
         /* For retry and skip the engine checked this stage and attempt before acting. */
@@ -124,6 +156,51 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
     });
   };
 
-  const start = useCallback((intent: PipelineActionIntent) => send.current(intent, false), []);
+  /** Send a held act now: its window closed, or the board is going away. */
+  const release = useCallback((pipelineId: string) => {
+    const entry = held.current.get(pipelineId);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    held.current.delete(pipelineId);
+    busy(pipelineId, null);
+    send.current(entry.intent, false);
+  }, [busy]);
+
+  const start = useCallback((intent: PipelineActionIntent, options: { hold?: boolean } = {}) => {
+    const minted = intent.action === "continue-review" && !intent.requestId ? { ...intent, requestId: mintRequestId() } : intent;
+    if (!options.hold || !HOLDABLE.has(minted.action)) {
+      send.current(minted, false);
+      return;
+    }
+    const { pipelineId, title, action, stageName } = minted;
+    if (inflight.current.has(pipelineId)) return;
+    busy(pipelineId, action);
+    const timer = setTimeout(() => release(pipelineId), RECEIPT_MS);
+    held.current.set(pipelineId, { timer, intent: minted });
+    show(
+      t(`kanban.pipelineAct.held.${action as "skip-stage" | "close"}`, { title, stage: stageName ?? "" }),
+      {
+        label: t("kanban.undo"),
+        run: () => {
+          const entry = held.current.get(pipelineId);
+          if (!entry) return;
+          clearTimeout(entry.timer);
+          held.current.delete(pipelineId);
+          busy(pipelineId, null);
+        },
+      },
+      { ttl: RECEIPT_MS },
+    );
+  }, [busy, release, show, t]);
+
+  /* The receipt's window is the only way back; a board that goes away before
+     it closes sends what it held, as the window closing would have. */
+  useEffect(() => {
+    const pending = held.current;
+    return () => {
+      for (const pipelineId of [...pending.keys()]) release(pipelineId);
+    };
+  }, [release]);
+
   return { acting, start };
 }

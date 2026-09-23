@@ -8,6 +8,8 @@
 /* The kanban desktop board (#1695): its rules are scoped under `.kb`. */
 @import "../components/kanban/kanbanBoard.css";
 @import "../components/workLinks/workLinks.css";
+/* The one pipeline block and the one tone map (#2072), desktop and phone. */
+@import "../components/pipelines/pipelineBlock.css";
 
 /* Role frames on agent conversations: drawn only under
    `html[data-role-frame]`, see src/lib/roleFrames.ts. */
