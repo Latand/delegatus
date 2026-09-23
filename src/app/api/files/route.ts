@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { agentRegistry } from "@/lib/agent/registry";
 import { bridgeReportLogSignature } from "@/lib/bridge/store";
 import { statePath } from "@/lib/configDir";
+import { FILES_BUILT_HEADER, formatFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
 import { diffFilesBodies, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER } from "@/lib/filesDelta";
 import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
@@ -29,6 +30,9 @@ type ProjectionRepresentation = {
   etag: string;
   timing: string;
   delta?: { base: string; body: string };
+  /** The state this body was built from, sent with it whenever it is served,
+      a stale answer included (#2072). */
+  built?: FilesBuilt;
 };
 type ProjectionResult = {
   representation: ProjectionRepresentation;
@@ -74,7 +78,15 @@ const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionWorkerTail?: Promise<void>;
   __llvFilesProjectionPersistenceTail?: Promise<void>;
   __llvFilesPersistedProjectionChecked?: boolean;
+  __llvFilesProjectionSequence?: number;
 };
+
+/** The next build in this process's order, taken when a build reads the
+    stores: a later build read later stores. */
+function nextProjectionSequence(): number {
+  projectionCacheStore.__llvFilesProjectionSequence = (projectionCacheStore.__llvFilesProjectionSequence ?? 0) + 1;
+  return projectionCacheStore.__llvFilesProjectionSequence;
+}
 
 function projectionCache(): Map<string, CachedProjection> {
   projectionCacheStore.__llvFilesProjectionCache ??= new Map();
@@ -246,7 +258,7 @@ function validPersistedProjection(value: unknown): value is PersistedProjection 
     && typeof candidate.timing === "string";
 }
 
-function warmPersistedProjection(scopeKey: string, pinnedPath: string | undefined): void {
+function warmPersistedProjection(scopeKey: string, pinnedPath: string | undefined, epoch: string): void {
   if (pinnedPath || projectionCacheStore.__llvFilesPersistedProjectionChecked) return;
   projectionCacheStore.__llvFilesPersistedProjectionChecked = true;
   try {
@@ -260,6 +272,8 @@ function warmPersistedProjection(scopeKey: string, pinnedPath: string | undefine
       contentType: metadata.contentType,
       etag,
       timing: metadata.timing,
+      /* Built by an earlier process, so before anything this one builds. */
+      built: { epoch, generation: 0, sequence: 0 },
     });
   } catch {
     // A first run or interrupted cache write performs one live projection.
@@ -334,19 +348,32 @@ async function projectionFor(
     const previous = cached?.representation;
     const snapshot = { ...scan.snapshot, pinOverlayPaths: scan.pinOverlayPaths };
     const persistedSnapshot = statePath("files-scan-snapshot.json");
+    const epoch = scan.epoch ?? "0";
     let representation: ProjectionRepresentation;
     if (filesResponseWorkerEnabled()) {
-      representation = await queueProjectionWorker(() =>
-        buildFilesResponseInWorker({
+      representation = await queueProjectionWorker(async () => {
+        /* The build order is taken as the build starts, where it reads the
+           stores. The persisted snapshot is read by the worker when its turn
+           comes, and a later scan may have replaced it by then: the file
+           names its own generation and the worker reports it back, so the
+           rows are dated by the scan they came from. A file this process
+           never wrote holds the snapshot it warm-started from, which it
+           counts as generation 0. */
+        const sequence = nextProjectionSequence();
+        const fromFile = !scan.pinOverlayPaths?.length && fs.existsSync(persistedSnapshot);
+        const { snapshotRead, ...projected } = await buildFilesResponseInWorker({
           type: "project",
           url: request.url,
           headers: [...headers.entries()],
-          ...(scan.pinOverlayPaths?.length || !fs.existsSync(persistedSnapshot)
-            ? { snapshot }
-            : { snapshotFile: persistedSnapshot }),
+          ...(fromFile ? { snapshotFile: persistedSnapshot } : { snapshot }),
           ...(summary ? { deltaScope: createHash("sha1").update(scopeKey).digest("hex") } : {}),
-        }));
+        });
+        const generation = !fromFile ? scan.generation : snapshotRead?.epoch === epoch ? snapshotRead.generation : 0;
+        return { ...projected, built: { epoch, generation, sequence } };
+      });
     } else {
+      /* Stamped as the build starts, where it reads the stores. */
+      const built: FilesBuilt = { epoch, generation: scan.generation, sequence: nextProjectionSequence() };
       const response = await buildFilesResponse(new Request(request.url, { headers }), {
         listFilesWithProjectCatalog: async () => snapshot,
       });
@@ -355,6 +382,7 @@ async function projectionFor(
         contentType: response.headers.get("content-type") ?? "application/json",
         etag: response.headers.get("etag") ?? "",
         timing: response.headers.get("server-timing") ?? "",
+        built,
       };
       if (summary && previous && previous.etag !== representation.etag) {
         representation.delta = {
@@ -455,7 +483,7 @@ export async function GET(request: Request): Promise<Response> {
   const key = projectionKey(baseKey);
   const summary = url.searchParams.get("view") === "summary";
   const scopeKey = projectionScopeKey(pinnedPath, summary);
-  if (!summary) warmPersistedProjection(scopeKey, pinnedPath);
+  if (!summary) warmPersistedProjection(scopeKey, pinnedPath, scan.epoch ?? "0");
   const projected = await projectionFor(scopeKey, key, request, scan, summary);
   const notModified = request.headers.get("if-none-match") === projected.representation.etag;
   const projectionTiming = [
@@ -467,6 +495,9 @@ export async function GET(request: Request): Promise<Response> {
     ...(notModified ? {} : { "content-type": projected.representation.contentType }),
     "x-llv-files-projection-cache": projected.cacheStatus,
     vary: `accept-encoding, ${FILES_DELTA_ACCEPT_HEADER}`,
+    /* The live scan's generation goes out as `x-llv-files-generation`; this
+       is the one the body was built from, older when the answer is stale. */
+    ...(projected.representation.built ? { [FILES_BUILT_HEADER]: formatFilesBuilt(projected.representation.built) } : {}),
   };
   let body: string | Uint8Array | null = null;
   if (!notModified) {

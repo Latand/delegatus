@@ -47,6 +47,8 @@ type PinnedFileScanSnapshot = Pick<CachedFileScan, "snapshot" | "pinOverlayPaths
 };
 type FileScanCacheSlot = {
   schemaVersion: typeof FILE_SCAN_CACHE_SCHEMA_VERSION;
+  /** Which generation counter this slot's generations belong to (#2072). */
+  epoch: string;
   snapshot?: FileScanSnapshot;
   snapshotGeneration: number;
   requestedGeneration: number;
@@ -66,6 +68,10 @@ type FileScanCacheSlot = {
 export type CachedFileScan = {
   snapshot: FileScanSnapshot;
   pinOverlayPaths?: string[];
+  /** The epoch `generation` counts in: generations restart at zero with a new
+      slot (a new process, a schema change), so two of them compare only
+      within one epoch (#2072). */
+  epoch?: string;
   generation: number;
   targetGeneration: number;
   cacheStatus: "hit" | "stale" | "miss";
@@ -105,6 +111,12 @@ const fileScanCacheStore = globalThis as typeof globalThis & {
 function fileScanCache(): Map<string, unknown> {
   fileScanCacheStore.__llvFilesRouteScans ??= new Map();
   return fileScanCacheStore.__llvFilesRouteScans;
+}
+
+let fileScanEpochs = 0;
+function newFileScanEpoch(): string {
+  fileScanEpochs += 1;
+  return `${Date.now().toString(36)}${fileScanEpochs.toString(36)}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -289,7 +301,13 @@ export function persistedFileScanSnapshot(): FileScanSnapshot | undefined {
   return readPersistedFileScanSnapshot();
 }
 
-function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot): void {
+/** The generation a persisted snapshot holds, written beside it (#2072): the
+    files projection worker reads the file whenever its turn comes, and a
+    later scan may have replaced it by then, so the worker reports this pair
+    back and the projection is dated by what it actually read. */
+export type PersistedFileScanGeneration = { epoch: string; generation: number };
+
+function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot, scanned: PersistedFileScanGeneration): void {
   let temporary: string | undefined;
   let operation = "create state directory";
   let target = statePath(FILE_SCAN_SNAPSHOT_FILE);
@@ -303,6 +321,8 @@ function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot): void {
     fs.writeFileSync(temporary, JSON.stringify({
       version: FILE_SCAN_SNAPSHOT_VERSION,
       schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
+      epoch: scanned.epoch,
+      generation: scanned.generation,
       snapshot,
     }) + "\n", {
       encoding: "utf8",
@@ -431,6 +451,8 @@ function normalizeFileScanCacheSlot(value: unknown): FileScanCacheSlot {
     && Number.isSafeInteger(value.requestedGeneration)
   ) {
     const slot = value as FileScanCacheSlot;
+    /* A slot a build before #2072 created counts without a named epoch. */
+    if (typeof slot.epoch !== "string") slot.epoch = newFileScanEpoch();
     const pending = refreshPromise(slot.refresh);
     if (pending && (!slot.refresh?.controller || !Number.isSafeInteger(slot.refresh.subscribers))) {
       installFileScanRefresh(slot, slot.refresh?.generation ?? 0, pending);
@@ -441,6 +463,7 @@ function normalizeFileScanCacheSlot(value: unknown): FileScanCacheSlot {
   const legacy = isRecord(value) ? value : {};
   const slot: FileScanCacheSlot = {
     schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
+    epoch: newFileScanEpoch(),
     snapshot: isFileScanSnapshot(legacy.snapshot) ? legacy.snapshot : undefined,
     snapshotGeneration: 0,
     requestedGeneration: 0,
@@ -500,7 +523,7 @@ function fileScanRefreshPromise(
       ...(onResourceSnapshot ? { onResourceSnapshot, resourceBaseline: slot.snapshot } : {}),
     }, generationSignal));
     if (!snapshot.complete) throw new Error("filesystem scan incomplete");
-    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(snapshot);
+    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(snapshot, { epoch: slot.epoch, generation });
     slot.snapshot = snapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();
@@ -600,7 +623,7 @@ function beginPinnedFileScanRefresh(
       slot.pinnedSnapshots.delete(oldest);
       slot.pinnedGenerations?.delete(oldest);
     }
-    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(globalSnapshot);
+    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(globalSnapshot, { epoch: slot.epoch, generation });
     slot.snapshot = globalSnapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();
@@ -659,6 +682,7 @@ function completedScan(
     });
     return {
       ...completed,
+      epoch: slot.epoch,
       cacheStatus: cacheStatus ?? (completed.generation < targetGeneration ? "stale" : "hit"),
       requestCount: slot.requestCount ?? 0,
       cloneDurationMs: performance.now() - cloneStartedAt,
@@ -669,6 +693,7 @@ function completedScan(
   const snapshot = structuredClone(slot.snapshot!);
   return {
     snapshot,
+    epoch: slot.epoch,
     generation: slot.snapshotGeneration,
     targetGeneration,
     cacheStatus: cacheStatus ?? (slot.snapshotGeneration < targetGeneration ? "stale" : "hit"),
@@ -687,6 +712,7 @@ function resourceScan(
 ): CachedFileScan {
   return {
     snapshot,
+    epoch: slot.epoch,
     generation,
     targetGeneration,
     cacheStatus: "miss",
@@ -737,6 +763,7 @@ function globalFileScanSlot(): FileScanCacheSlot {
     if (snapshot) primePersistedFileDerivations(snapshot);
     const slot: FileScanCacheSlot = {
       schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
+      epoch: newFileScanEpoch(),
       snapshot,
       snapshotGeneration: 0,
       requestedGeneration: 0,

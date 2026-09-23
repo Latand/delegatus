@@ -1285,11 +1285,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      already has rather than off a timer of their own. */
   const suggestionsRevision = `${tail.size}:${feed.items.length}`;
 
-  /* The floating pill is centered on every surface — the same axis as the
-     pinned TurnStatusBar below, per the issue #268 operator note: the two
-     bottom elements share one axis and separate slots, so they can never
-     collide at any pane width. (A right-anchored pill also sat over the tool
-     rows' status column on the phone.) */
+  /* The desktop's live-tail pill is centered on every surface — the same axis
+     as the pinned TurnStatusBar below, per the issue #268 operator note: the
+     two bottom elements share one axis and separate slots, so they can never
+     collide at any pane width. */
   const pillPos = "left-1/2 -translate-x-1/2";
   const markUserScroll = (direction: number | null): void => {
     const el = scroller.current;
@@ -1313,39 +1312,28 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     <RawLineProvider value={getRawLine}>
     <MessageProvenanceProvider value={provenanceLookup}>
     <div className="flex min-h-0 flex-1 flex-col">
-    {/* The pill anchors to the scroller wrapper — NOT the pane column — so the
-        pinned status bar below is structurally outside its overlay area. */}
+    {/* The live-tail pill anchors to the scroller wrapper — NOT the pane
+        column — so the pinned status bar below is structurally outside its
+        overlay area. It shows only at the tail, where the feed's bottom
+        padding is under it. */}
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {file && feed.items.length ? (
-        magnet ? (
-          file.activity === "live" && !phone ? (
-            <div
-              data-live-tail-pill
-              className={`pointer-events-none absolute bottom-2 ${pillPos} z-10 inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-bold text-white shadow-1 transition-transform duration-200 ${
-                pulse ? "scale-125" : "scale-100"
-              }`}
-            >
-              <ArrowDownToLine className="h-3 w-3" aria-hidden /> {t("feed.liveTail")}
-            </div>
-          ) : null
-        ) : (
-          <button
-            className={`absolute bottom-2 ${pillPos} z-10 inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-border bg-raised px-2.5 py-1 text-label font-semibold text-primary shadow-1 [@media(pointer:coarse)]:min-h-11 hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
-            aria-label={t("feed.backToLive")}
-            onClick={jumpToTail}
-          >
-            <ArrowDown className="h-3.5 w-3.5" aria-hidden /> {newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}
-          </button>
-        )
+      {file && feed.items.length && magnet && file.activity === "live" && !phone ? (
+        <div
+          data-live-tail-pill
+          className={`pointer-events-none absolute bottom-2 ${pillPos} z-10 inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-bold text-white shadow-1 transition-transform duration-200 ${
+            pulse ? "scale-125" : "scale-100"
+          }`}
+        >
+          <ArrowDownToLine className="h-3 w-3" aria-hidden /> {t("feed.liveTail")}
+        </div>
       ) : null}
       {/* #1202: with the latest turn off-screen the drafts follow the operator
-          to the bottom of the pane — above the «back to live» chip, so the two
-          bottom controls never share a row. Empty wrapper space targets the
-          feed; vertical pill gestures are forwarded because this overlay and
-          the feed scroller are siblings. */}
+          to the bottom of the pane, just above the jump strip below it.
+          Empty wrapper space targets the feed; vertical pill gestures are
+          forwarded because this overlay and the feed scroller are siblings. */}
       {file && !magnet ? (
         <div
-          className="pointer-events-none absolute inset-x-2 bottom-11 z-10 flex justify-center"
+          className="pointer-events-none absolute inset-x-2 bottom-2 z-10 flex justify-center"
           onWheel={(event) => {
             const row = event.currentTarget.querySelector<HTMLElement>("[data-reply-suggestions]");
             let scale = 1;
@@ -1641,6 +1629,27 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       <div ref={tailSpacer} aria-hidden data-feed-tail-spacer className="h-0" />
       </div>
     </div>
+    {/* The way back to the tail (#2072): a 44 px row of its own below the
+        feed, never over it. It exists only while the reader is away from the
+        tail, which is exactly when a line of text would sit under a floating
+        control. When it appears the feed's viewport ends 44 px higher and the
+        line being read, anchored at the top, stays where it is. */}
+    {file && feed.items.length && !magnet ? (
+      <div data-feed-jump-strip className="flex h-11 shrink-0 items-center justify-center border-t border-border">
+        <button
+          className="group inline-flex h-11 min-w-11 items-center justify-center px-1 focus-visible:outline-none"
+          aria-label={t("feed.backToLive")}
+          onClick={jumpToTail}
+        >
+          <span
+            data-feed-jump-pill
+            className="inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-raised px-3 text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40"
+          >
+            <ArrowDown className="h-3.5 w-3.5" aria-hidden /> {newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}
+          </span>
+        </button>
+      </div>
+    ) : null}
     {/* Bottom working-status slot: live elapsed from the transcript receipt.
         Completed totals stay beside their response rows in the scroller. Not on
         the phone (mobile v2 §3.4): the bar's meta line carries the state phrase
