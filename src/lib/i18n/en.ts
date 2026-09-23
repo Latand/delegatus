@@ -2033,7 +2033,7 @@ export const en = {
   "resources.hoursN": "{n} h",
   "resources.killAll": "Kill all agents",
   "resources.killAllConfirm": "Confirm — kill {n}?",
-  "resources.killAllHint": "force-kill every agent host listed here, live ones included — a clean slate so the next spawn/message routes cleanly. Your shells, the viewer, the runtime host, account-migration workers and unticked orchestrator seats are left alone.",
+  "resources.killAllHint": "force-kill every agent host listed here, live ones included — a clean slate so the next spawn/message routes cleanly. Your shells, the web app, the runtime host, account-migration workers and unticked orchestrator seats are left alone.",
   "resources.killAllNone": "no agent sessions to kill",
   "resources.close": "Close",
 
