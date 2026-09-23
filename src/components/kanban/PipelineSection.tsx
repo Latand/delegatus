@@ -608,6 +608,30 @@ function edgeContent(t: TFunction, edge: GraphEdge, count: EdgeCount, branching:
   );
 }
 
+/** A past attempt's name: the stage and which attempt, round or helper
+    conversation it was. The desktop card and the phone's pipeline screen
+    both list them in these words. */
+export function pastAttemptLabel(t: TFunction, row: PastAttempt, stage: string): string {
+  if (row.kind === "helper") return t("kanban.past.helper", { stage, n: row.n });
+  if (row.kind === "round") return row.ambiguous ? t("kanban.past.attemptRound", { stage, attempt: row.attempt ?? 0, n: row.n }) : t("kanban.past.round", { stage, n: row.n });
+  return t("kanban.past.attempt", { stage, n: row.n });
+}
+
+/** How a past attempt ended: the round's verdict, or the attempt's state and verdict. */
+export function pastAttemptState(t: TFunction, row: PastAttempt): string {
+  if (row.kind === "round") return t(`kanban.past.verdict.${row.state === "APPROVE" || row.state === "REQUEST_CHANGES" || row.state === "COMMENT" ? row.state : "open"}`);
+  const state = attemptStateLabel(t, row.state as never);
+  return row.verdict ? `${state} · ${t(`kanban.past.stageVerdict.${row.verdict as "pass" | "fail" | "needs_decision"}`)}` : state;
+}
+
+/** The tone of that ending: "ok", "bad", or none. */
+export function pastAttemptTone(row: PastAttempt): "ok" | "bad" | "" {
+  const words = `${row.state} ${row.verdict ?? ""}`;
+  if (/passed|APPROVE|\bpass\b/.test(words)) return "ok";
+  if (/failed|REQUEST_CHANGES|\bfail\b/.test(words)) return "bad";
+  return "";
+}
+
 /** "Past attempts · N": finished attempts and review rounds, newest first, then
     the helper conversations stage agents brought in, listed as such. Each opens
     its conversation when one was kept. */
@@ -622,23 +646,9 @@ export function PastAttempts({ rows, names, nowMs, onOpen }: {
   const history = rows.filter((row) => row.kind !== "helper");
   const helpers = rows.filter((row) => row.kind === "helper");
   if (!history.length && !helpers.length) return null;
-  const labelOf = (row: PastAttempt) => {
-    const stage = names.get(row.pipelineId)?.get(row.stageId) ?? row.stageId;
-    if (row.kind === "helper") return t("kanban.past.helper", { stage, n: row.n });
-    if (row.kind === "round") return row.ambiguous ? t("kanban.past.attemptRound", { stage, attempt: row.attempt ?? 0, n: row.n }) : t("kanban.past.round", { stage, n: row.n });
-    return t("kanban.past.attempt", { stage, n: row.n });
-  };
-  const stateOf = (row: PastAttempt) => {
-    if (row.kind === "round") return t(`kanban.past.verdict.${row.state === "APPROVE" || row.state === "REQUEST_CHANGES" || row.state === "COMMENT" ? row.state : "open"}`);
-    const state = attemptStateLabel(t, row.state as never);
-    return row.verdict ? `${state} · ${t(`kanban.past.stageVerdict.${row.verdict as "pass" | "fail" | "needs_decision"}`)}` : state;
-  };
-  const tone = (row: PastAttempt) => {
-    const words = `${row.state} ${row.verdict ?? ""}`;
-    if (/passed|APPROVE|\bpass\b/.test(words)) return "ok";
-    if (/failed|REQUEST_CHANGES|\bfail\b/.test(words)) return "bad";
-    return "";
-  };
+  const labelOf = (row: PastAttempt) => pastAttemptLabel(t, row, names.get(row.pipelineId)?.get(row.stageId) ?? row.stageId);
+  const stateOf = (row: PastAttempt) => pastAttemptState(t, row);
+  const tone = pastAttemptTone;
   const age = (row: PastAttempt) => (row.atMs ? (nowMs - row.atMs < 60_000 ? t("kanban.justNow") : fmtAge(row.atMs / 1000)) : "");
   const item = (row: PastAttempt) => (
     <li key={row.key} data-past={row.key} data-past-kind={row.kind}>

@@ -603,8 +603,8 @@ export function MobileKanban(props: MobileKanbanProps) {
     const title = shortTitle(t, item);
     if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => move({ ...item, card: { ...item.card, status: to } }, from, false) });
     void controller.move(task, to).then((outcome: StatusMoveOutcome) => {
-      if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title, error: outcome.error }));
-      else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title, status: t(STATUS_LABEL[outcome.serverStatus]) }));
+      if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title, error: outcome.error }), null, { error: true });
+      else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title, status: t(STATUS_LABEL[outcome.serverStatus]) }), null, { error: true });
     });
   }, [controller, t]);
   const hide = useCallback((item: PhoneCard) => {
@@ -614,7 +614,7 @@ export function MobileKanban(props: MobileKanbanProps) {
     const unhide = () => {
       const current = tasksById.current.get(raw.id);
       if (current) void controller.edit(current, { field: "hide", value: false }).then((outcome) => {
-        if (outcome.kind === "failed") showReceipt(t("kanban.showFailed", { title, error: outcome.error }));
+        if (outcome.kind === "failed") showReceipt(t("kanban.showFailed", { title, error: outcome.error }), null, { error: true });
       });
     };
     showReceipt(
@@ -623,7 +623,7 @@ export function MobileKanban(props: MobileKanbanProps) {
     );
     void controller.edit(raw, { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }).then((outcome) => {
       if (outcome.kind !== "failed") return;
-      showReceipt(outcome.code === "TASK_HIDE_PROTECTED" ? t("kanban.hideProtected", { title }) : t("kanban.hideFailed", { title, error: outcome.error }));
+      showReceipt(outcome.code === "TASK_HIDE_PROTECTED" ? t("kanban.hideProtected", { title }) : t("kanban.hideFailed", { title, error: outcome.error }), null, { error: true });
     });
   }, [controller, t]);
 

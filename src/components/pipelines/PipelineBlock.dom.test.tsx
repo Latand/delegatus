@@ -25,11 +25,16 @@ const OVERRIDES: Record<string, unknown> = {
 const HAS: Record<string, boolean> = {};
 const SAVED: Record<string, unknown> = {};
 beforeAll(() => { for (const key of Object.keys(OVERRIDES)) { HAS[key] = key in G; SAVED[key] = G[key]; G[key] = OVERRIDES[key]; } });
-afterAll(() => { for (const key of Object.keys(OVERRIDES)) { if (HAS[key]) G[key] = SAVED[key]; else delete G[key]; } });
+/* React schedules the last unmount's passive effects on a timer; they read
+   `window`, so the globals stay until that timer has run. */
+afterAll(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (const key of Object.keys(OVERRIDES)) { if (HAS[key]) G[key] = SAVED[key]; else delete G[key]; }
+});
 
 const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
-const { PipelineBlock } = await import("./PipelineBlock");
+const { PipelineBlock, PipelineStateLine } = await import("./PipelineBlock");
 const { summarizePipeline } = await import("@/components/kanban/kanbanModel");
 const { WorkLinksProvider } = await import("@/components/workLinks/workLinksContext");
 const { setLocale, translate } = await import("@/lib/i18n");
@@ -258,15 +263,25 @@ test("the graph is the operator's toggle on the task row, and it replaces the ch
 test("the screen density numbers the stages, folds the passed ones before the current one, and answers inside the parked stage", () => {
   const answers: string[] = [];
   const host = mount(<PipelineBlock summary={summarizePipeline(parked())} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} onAnswer={(_pipeline, answer) => answers.push(answer.action)} />);
-  expect(host.querySelector(".pb-stateline")?.textContent).toBe(`${translate("en", "pipelineState.needs_decision")}·${translate("en", "pipelineStrip.stageOf", { k: 3, n: 4 })}·41m`);
+  /* The screen's bar says where the lane stands; the body owns the title. */
+  const bar = mount(<PipelineStateLine summary={summarizePipeline(parked())} nowMs={NOW_MS} />);
+  expect(bar.textContent).toBe(`${translate("en", "pipelineState.needs_decision")}·stage 3 of 4·41m`);
+  expect(host.querySelector(".pb-stateline")).toBeNull();
+  expect(host.querySelector("h2[data-pipeline-heading]")?.textContent).toBe("Restore search results after the index rebuild");
   const fold = host.querySelector<HTMLElement>("[data-passed-fold]")!;
-  expect(fold.textContent).toContain("2 passed · Implement · Review");
+  expect(fold.querySelector(".pb-name")?.textContent).toBe("2 passed");
+  expect(fold.querySelector(".pb-ident-words")?.textContent).toBe("Implement · Review");
+  expect(fold.getAttribute("aria-label")).toBe("2 passed · Implement · Review");
   expect(host.querySelector('.pb-stage[data-stage="implement"]')).toBeNull();
   click(fold);
   expect(host.querySelector('.pb-stage[data-stage="implement"]')).toBeTruthy();
   const current = host.querySelector<HTMLElement>(".pb-stage[data-stage-current]")!;
   expect(current.dataset.stage).toBe("verify");
-  expect(current.className).toContain("tone-bad");
+  /* The stage the lane waits on takes the lane's amber and its state word;
+     its mark keeps the failed stage's cross. */
+  expect(current.className).toContain("tone-needs");
+  expect(current.querySelector(".pb-stage-state")?.textContent).toBe(translate("en", "pipelineState.needs_decision"));
+  expect(current.querySelector(".pb-stage-title .pmark")?.getAttribute("data-mark")).toBe("cross");
   expect(texts(current, "[data-answer-action]")).toEqual([translate("en", "mobile2.pipeline.skip"), translate("en", "mobile2.pipeline.retry")]);
   click(current.querySelector('[data-answer-action="retry-stage"]'));
   expect(answers).toEqual(["retry-stage"]);

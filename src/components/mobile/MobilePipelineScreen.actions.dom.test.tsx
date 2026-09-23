@@ -7,19 +7,23 @@ import { emptyStore, type ConnectionState } from "@/components/runtime/runtimeMo
 import { translate } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
+import type { PipelineActionKind } from "@/components/kanban/stagesModel";
 
 /*
- * The phone's pipeline actions (mobile v2 lane 7, #1439; README §4.7, §2 rule
- * 9). The acceptance this file exists for is the one that is easy to fake:
- * retry, skip, pause, resume and archive must reach the SAME actions the
- * desktop reaches — no phone-only subset — act on the tap that names them with
- * no confirmation prompt, and Skip and Archive must carry their inverse in the
- * receipt.
+ * The phone's pipeline actions (#2072 slice 6, phone-kanban §3.13; mobile v2
+ * lane 7 before it, README §4.7, §2 rule 9). The acceptance this file exists
+ * for is the one that is easy to fake: the answers inside a stage (Retry,
+ * Skip, One more round, Close lane) and the bar's ⋯ (Pause, Resume, Close
+ * lane) must send the SAME requests the desktop board's ⋯ menu sends through
+ * `usePipelineActions` — retry and skip naming the stage and attempt the
+ * operator saw, One more round reading the revision first — act on the tap
+ * that names them with no confirmation prompt, and Skip and Close must carry
+ * their inverse in the receipt.
  *
- * So each test drives BOTH surfaces over one recording fetch and compares the
- * requests: the phone's screen and the desktop's `PipelineStrip`, for the same
- * pipeline in the same state. A phone control that invented its own action, or
- * skipped one the desktop has, cannot pass.
+ * So each test drives BOTH over one recording fetch and compares the requests:
+ * the phone's screen, and the desktop menu's intent built the way
+ * `KanbanBoard`'s pipeline menu builds it, for the same pipeline in the same
+ * state. A phone control that invented its own request cannot pass.
  *
  * The two the engine cannot take back — `skip-stage` advances the cursor, and
  * a closed lane has no re-open — are held for the receipt's own window, so the
@@ -47,23 +51,35 @@ mock.module("@/hooks/useRuntime", () => ({
 }));
 
 const { MobilePipelineScreen, createPendingPipelineActs } = await import("./MobilePipelineScreen");
-const { PipelineStrip } = await import("@/components/pipelines/PipelineStrip");
+const { usePipelineActions } = await import("@/components/kanban/usePipelineActions");
+const { browserPipelinePorts } = await import("@/components/kanban/pipelinePorts");
+const { pipelineActionOptions } = await import("@/components/kanban/stagesModel");
+const { stageNames } = await import("@/components/pipelines/pipelineModel");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
 const { receipts } = await import("./MobileReceipt");
+const { useLocale } = await import("@/lib/i18n");
 
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
 const G = globalThis as Record<string, unknown>;
 
-/** Every PATCH either surface issues, in order. */
+/** Every PATCH either surface issues, in order, and the pipeline reads. */
 interface Patch { url: string; method: string; body: unknown }
 let patches: Patch[] = [];
+let reads: string[] = [];
+/** The record the route serves: what a read answers and a PATCH echoes. */
+let served: Pipeline | null = null;
+const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 const recordingFetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
   if (init?.method === "PATCH") {
     patches.push({ url, method: "PATCH", body: JSON.parse(String(init.body)) });
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    return json({ pipeline: served });
   }
-  return new Response(JSON.stringify({ roles: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  if (url.startsWith("/api/pipelines/")) {
+    reads.push(url);
+    return json({ pipeline: served, stageDigests: {}, revision: "rev-7" });
+  }
+  return json({ roles: [] });
 }) as unknown as typeof fetch;
 
 const OVERRIDES: Record<string, unknown> = {
@@ -85,7 +101,7 @@ afterAll(async () => {
 });
 
 let roots: Root[] = [];
-beforeEach(() => { dom.document.body.replaceChildren(); roots = []; patches = []; receipts.dismiss(); });
+beforeEach(() => { dom.document.body.replaceChildren(); roots = []; patches = []; reads = []; served = null; receipts.dismiss(); });
 afterEach(() => { for (const root of roots) flushSync(() => root.unmount()); roots = []; receipts.dismiss(); });
 
 const settle = async () => { await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0)); };
@@ -105,11 +121,11 @@ function nav() {
   });
 }
 
-function mount(node: React.ReactNode): HTMLElement {
+function mount(node: React.ReactNode, store = nav()): HTMLElement {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
-  flushSync(() => root.render(<MobileNavContext.Provider value={nav()}>{node}</MobileNavContext.Provider>));
+  flushSync(() => root.render(<MobileNavContext.Provider value={store}>{node}</MobileNavContext.Provider>));
   roots.push(root);
   return host as unknown as HTMLElement;
 }
@@ -154,6 +170,9 @@ function pipeline(state: Pipeline["state"]): Pipeline {
     cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
     state, pausedState: state === "paused" ? "running" : null, stateDetail: null, srcPath: null, srcConversationId: null,
     createdAt: at(7_200), closedAt: null,
+    ...(state === "needs_review"
+      ? { cursor: null, reviewPending: { stageId: "review", attempt: 3, fixStageId: "implement", fixAttempt: 1, reviewedHead: "4f1c2a9d11", currentHead: "9b2e7d4c22", verdict: "fail", findings: 2 } }
+      : {}),
   } as unknown as Pipeline;
 }
 
@@ -163,63 +182,111 @@ function phone(state: Pipeline["state"]) {
   const acts = createPendingPipelineActs(
     { set: (callback) => { due = callback; return 1; }, clear: () => { due = null; } },
   );
+  served = pipeline(state);
+  const store = nav();
+  store.push({ kind: "pipeline", id: "p2" });
   const host = mount(
     <MobilePipelineScreen pipeline={pipeline(state)} files={[REVIEW_FILE]} now={NOW} onOpenConversation={() => {}} acts={acts} />,
+    store,
   );
   return {
     host,
     acts,
-    tap: (key: string) => click(q(host, `[data-mobile2-pipeline-action="${key}"]`)),
+    store,
+    /** An answer inside the stage. */
+    answer: (action: string) => click(q(host, `[data-answer-action="${action}"]`)),
+    /** A row of the bar's ⋯ sheet. */
+    menu: async (key: string) => {
+      click(q(host, '[data-mobile2-open="menu"]'));
+      await settle();
+      click(q(body(), `[data-mobile2-pipeline-menu] [data-mobile2-pipeline-action="${key}"]`));
+    },
     /** The receipt's four seconds elapse. */
     closeWindow: () => { const run = due; due = null; if (run) flushSync(run); },
     windowOpen: () => due !== null,
   };
 }
 
-/** The desktop strip for the same pipeline; `overflow` opens its ⋯ menu. */
+/**
+ * The desktop board's ⋯ menu for the same pipeline: each item's intent is
+ * built from `pipelineActionOptions` exactly as `KanbanBoard`'s pipeline menu
+ * builds it, and sent through the same `usePipelineActions`.
+ */
 function desktop(state: Pipeline["state"]) {
-  const host = mount(<PipelineStrip pipeline={pipeline(state)} files={[REVIEW_FILE]} />);
-  return {
-    host,
-    primary: (label: string) => click(q(host, `[aria-label="${label}"]`)),
-    menuItem: (text: string) => {
-      click(q(host, `[aria-label="${translate("en", "pipelineStrip.moreActions")}"]`));
-      const item = Array.from(body().querySelectorAll('[role="menuitem"]')).find((el) => el.textContent?.includes(text));
-      click(item ?? null);
-    },
-  };
+  let select: ((action: PipelineActionKind) => void) | null = null;
+  const record = pipeline(state);
+  function Menu() {
+    const { t } = useLocale();
+    const { start } = usePipelineActions(browserPipelinePorts, () => 0, t);
+    const names = stageNames(t, record);
+    select = (action) => {
+      const option = pipelineActionOptions(record).find((candidate) => candidate.action === action)!;
+      const stageName = option.stageId ? names.get(option.stageId) ?? option.stageId : null;
+      start({ pipelineId: record.id, title: record.task, action: option.action, stageId: option.stageId, stageName, expectedAttempt: option.attempt });
+    };
+    return null;
+  }
+  mount(<Menu />);
+  return { choose: (action: PipelineActionKind) => select!(action) };
 }
 
-const patchOf = (index: number) => ({ url: patches[index]!.url, body: patches[index]!.body });
+/** A request without its idempotency key, which each intent mints afresh. */
+const request = (index: number) => {
+  const { clientRequestId: _key, ...rest } = patches[index]!.body as Record<string, unknown>;
+  return { url: patches[index]!.url, body: rest };
+};
+test("Retry stage, answered inside the stage, acts on the tap and sends the desktop menu's guarded retry", async () => {
+  const screen = phone("needs_decision");
+  screen.answer("retry-stage");
+  await settle();
+  expect(patches.length).toBe(1);
+  expect(request(0).body).toEqual({ action: "retry-stage", expectedStageId: "review", expectedAttempt: 3 });
+  /* The receipt names what happened, in the desktop's words. */
+  expect(q(body(), "[data-mobile2-receipt]")!.textContent).toContain(translate("en", "kanban.pipelineAct.done.retry-stage", { title: "Fast conversation switching", stage: "Review" }));
 
-test("retry, pause and resume act on the tap and issue exactly the desktop's PATCH", async () => {
-  for (const [state, key, desktopLabel] of [
-    ["needs_decision", "retry", translate("en", "pipelineStrip.retryStage")],
-    ["running", "pause", translate("en", "pipelineStrip.pause")],
-    ["paused", "resume", translate("en", "pipelineStrip.resume")],
-  ] as const) {
+  desktop("needs_decision").choose("retry-stage");
+  await settle();
+  expect(patches.length).toBe(2);
+  expect(request(0)).toEqual(request(1));
+  /* One tap, one act: nothing asked the operator to confirm it. */
+  expect(screen.host.textContent).not.toContain("?");
+});
+
+test("One more round reads the revision the operator saw and grants exactly one round, as the desktop menu does", async () => {
+  const screen = phone("needs_review");
+  screen.answer("continue-review");
+  await settle();
+  expect(reads).toEqual(["/api/pipelines/p2"]);
+  expect(patches.length).toBe(1);
+  expect(request(0).body).toEqual({ action: "continue-review", addRounds: 1, expectedRevision: "rev-7" });
+  expect(typeof (patches[0]!.body as { clientRequestId?: unknown }).clientRequestId).toBe("string");
+  expect(q(body(), "[data-mobile2-receipt]")!.textContent).toContain(translate("en", "kanban.pipelineAct.done.continue-review", { title: "Fast conversation switching" }));
+
+  desktop("needs_review").choose("continue-review");
+  await settle();
+  expect(patches.length).toBe(2);
+  expect(request(0)).toEqual(request(1));
+});
+
+test("Pause and Resume from the bar's ⋯ send the desktop menu's request", async () => {
+  for (const [state, key] of [["running", "pause"], ["paused", "resume"]] as const) {
     patches = [];
     const screen = phone(state);
-    screen.tap(key);
+    await screen.menu(key);
     await settle();
     expect(patches.length).toBe(1);
-    const fromPhone = patchOf(0);
-
-    const strip = desktop(state);
-    strip.primary(desktopLabel);
+    expect(request(0).body).toEqual({ action: key });
+    desktop(state).choose(key);
     await settle();
-    expect(patches.length).toBe(2);
-    expect(fromPhone).toEqual(patchOf(1));
-    /* One tap, one act: nothing asked the operator to confirm it. */
-    expect(screen.host.textContent).not.toContain("?");
+    expect(request(0)).toEqual(request(1));
     for (const root of roots) flushSync(() => root.unmount());
     roots = [];
   }
 });
 
-test("skip reaches the desktop's skip-stage, and its receipt carries Retry stage as a real cancellation", async () => {
+test("Skip stage is held for the receipt's window: Retry stage cancels it, and the window closing sends the desktop menu's guarded skip", async () => {
   const screen = phone("needs_decision");
-  screen.tap("skip");
+  screen.answer("skip-stage");
   await settle();
 
   /* Nothing has gone out yet: the receipt is the window. */
@@ -229,56 +296,88 @@ test("skip reaches the desktop's skip-stage, and its receipt carries Retry stage
   const inverse = q(receipt, "[data-mobile2-receipt-undo]")!;
   expect(inverse.getAttribute("data-mobile2-receipt-undo")).toBe("retryStage");
   expect(inverse.textContent).toBe(translate("en", "mobile2.receipt.retryStage"));
+  /* While it is held, neither answer takes another tap. */
+  expect(Array.from(screen.host.querySelectorAll("[data-answer-action]")).every((button) => (button as unknown as HTMLButtonElement).disabled)).toBe(true);
 
   /* Taking the inverse cancels the act outright — the engine never sees it. */
   click(inverse);
   await settle();
   expect(patches).toEqual([]);
   expect(screen.windowOpen()).toBe(false);
+  expect(Array.from(screen.host.querySelectorAll("[data-answer-action]")).some((button) => (button as unknown as HTMLButtonElement).disabled)).toBe(false);
 
-  /* Skipping again and letting the window close sends the desktop's own PATCH. */
-  screen.tap("skip");
+  /* Skipping again and letting the window close sends the desktop's own request. */
+  screen.answer("skip-stage");
   screen.closeWindow();
   await settle();
   expect(patches.length).toBe(1);
-  const fromPhone = patchOf(0);
+  expect(request(0).body).toEqual({ action: "skip-stage", expectedStageId: "review", expectedAttempt: 3 });
 
-  const strip = desktop("needs_decision");
-  strip.menuItem(translate("en", "pipelineStrip.skipStage"));
+  desktop("needs_decision").choose("skip-stage");
   await settle();
   expect(patches.length).toBe(2);
-  expect(fromPhone).toEqual(patchOf(1));
-  expect(fromPhone.body).toEqual({ action: "skip-stage" });
+  expect(request(0)).toEqual(request(1));
 });
 
-test("archive reaches the desktop's close, and its receipt carries Restore as a real cancellation", async () => {
-  const screen = phone("completed");
-  screen.tap("archive");
-  await settle();
+test("Close lane — in the review stage or the ⋯ — is held, leaves the screen, and its Restore cancels it", async () => {
+  for (const [state, how] of [["needs_review", "answer"], ["completed", "menu"]] as const) {
+    patches = [];
+    receipts.dismiss();
+    const screen = phone(state);
+    expect(screen.store.getState().stack.at(-1)).toEqual({ kind: "pipeline", id: "p2" });
+    if (how === "answer") screen.answer("close");
+    else await screen.menu("archive");
+    await settle();
 
-  expect(patches).toEqual([]);
-  const receipt = q(body(), "[data-mobile2-receipt]")!;
-  expect(receipt.textContent).toContain(translate("en", "mobile2.pipeline.archived"));
-  const inverse = q(receipt, "[data-mobile2-receipt-undo]")!;
-  expect(inverse.getAttribute("data-mobile2-receipt-undo")).toBe("restore");
-  expect(inverse.textContent).toBe(translate("en", "mobile2.receipt.restore"));
+    expect(patches).toEqual([]);
+    const receipt = q(body(), "[data-mobile2-receipt]")!;
+    expect(receipt.textContent).toContain(translate("en", "mobile2.pipeline.archived"));
+    const inverse = q(receipt, "[data-mobile2-receipt-undo]")!;
+    expect(inverse.getAttribute("data-mobile2-receipt-undo")).toBe("restore");
+    expect(screen.acts.getClosing()).toEqual(["p2"]);
 
-  click(inverse);
-  await settle();
-  expect(patches).toEqual([]);
+    click(inverse);
+    await settle();
+    expect(patches).toEqual([]);
+    expect(screen.acts.getClosing()).toEqual([]);
 
-  screen.tap("archive");
-  screen.closeWindow();
+    if (how === "answer") screen.answer("close");
+    else await screen.menu("archive");
+    screen.closeWindow();
+    await settle();
+    expect(patches.length).toBe(1);
+    expect(request(0).body).toEqual({ action: "close" });
+    for (const root of roots) flushSync(() => root.unmount());
+    roots = [];
+  }
+  /* The desktop menu's close is the same request. */
+  patches = [];
+  desktop("needs_review").choose("close");
   await settle();
-  expect(patches.length).toBe(1);
-  const fromPhone = patchOf(0);
+  expect(request(0).body).toEqual({ action: "close" });
+});
 
-  const strip = desktop("completed");
-  strip.menuItem(translate("en", "pipelineStrip.close"));
-  await settle();
-  expect(patches.length).toBe(2);
-  expect(fromPhone).toEqual(patchOf(1));
-  expect(fromPhone.body).toEqual({ action: "close" });
+test("a refusal the route explained comes back on the receipt in the danger tone, with the desktop's Retry", async () => {
+  const refusing = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === "PATCH") {
+      patches.push({ url: String(input), method: "PATCH", body: JSON.parse(String(init.body)) });
+      return new Response(JSON.stringify({ error: "the worktree is locked" }), { status: 409, headers: { "content-type": "application/json" } });
+    }
+    return recordingFetch(input, init);
+  }) as unknown as typeof fetch;
+  G.fetch = refusing;
+  try {
+    const screen = phone("needs_decision");
+    screen.answer("retry-stage");
+    await settle();
+    const receipt = q(body(), "[data-mobile2-receipt]")!;
+    expect(receipt.getAttribute("data-mobile2-receipt-error")).toBe("true");
+    expect(receipt.textContent).toContain("the worktree is locked");
+    const retry = q(receipt, '[data-mobile2-receipt-undo="act"]')!;
+    expect(retry.textContent).toBe(translate("en", "kanban.retry"));
+  } finally {
+    G.fetch = recordingFetch;
+  }
 });
 
 test("a lane hidden from the board offers Show on board, which sends undismiss and nothing else (#1671)", async () => {
@@ -300,36 +399,25 @@ test("a lane hidden from the board offers Show on board, which sends undismiss a
   expect(q(onBoard, '[data-mobile2-pipeline-action="showOnBoard"]')).toBeNull();
 });
 
-test("a second held act sends the first rather than dropping it", () => {
-  /* The screen disables its own row while an act is held, so the second act
-     comes from somewhere else — another pipeline's screen, the same tab. */
+test("a second held act sends the first rather than dropping it, and a held act's own sender is what goes out", () => {
+  /* The screen disables its own answers while an act is held, so the second
+     act comes from somewhere else — another pipeline's screen, the same tab. */
   const sent: string[] = [];
   let due: (() => void) | null = null;
   const acts = createPendingPipelineActs(
     { set: (callback) => { due = callback; return 1; }, clear: () => { due = null; } },
     (act) => { sent.push(`${act.pipelineId}:${act.action}`); },
   );
-  acts.begin({ pipelineId: "p2", action: "skip-stage" });
+  acts.begin({ pipelineId: "p2", action: "skip-stage", send: () => { sent.push("p2:guarded-skip"); } });
   expect(sent).toEqual([]);
   acts.begin({ pipelineId: "p7", action: "close" });
-  expect(sent).toEqual(["p2:skip-stage"]);
+  expect(sent).toEqual(["p2:guarded-skip"]);
   const run = due as (() => void) | null;
   run?.();
-  expect(sent).toEqual(["p2:skip-stage", "p7:close"]);
+  expect(sent).toEqual(["p2:guarded-skip", "p7:close"]);
   /* A cancelled act is never sent, and the store is empty afterwards. */
   acts.begin({ pipelineId: "p9", action: "close" });
   acts.cancel();
-  expect(sent).toEqual(["p2:skip-stage", "p7:close"]);
+  expect(sent).toEqual(["p2:guarded-skip", "p7:close"]);
   expect(acts.getState()).toBeNull();
-});
-
-test("while an act is held the action row takes no further taps", async () => {
-  const screen = phone("needs_decision");
-  screen.tap("skip");
-  await settle();
-  const retry = q(screen.host, '[data-mobile2-pipeline-action="retry"]') as unknown as HTMLButtonElement;
-  expect(retry.disabled).toBe(true);
-  click(retry);
-  await settle();
-  expect(patches).toEqual([]);
 });
