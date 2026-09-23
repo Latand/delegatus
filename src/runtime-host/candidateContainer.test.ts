@@ -277,8 +277,8 @@ test("runtime-host propagates every Viewer Compose interpolation input", () => {
 });
 
 test("rename slice 3: an exported app dir keeps the spelling an existing install recorded", () => {
-  const existing = "/home/operator/.config/agent-log-viewer";
-  const exported = resolvedCompose({ HOME: "/home/operator", DELEGATUS_CONFIG_DIR: existing }).services["runtime-host"].environment;
+  const existing = "/srv/operator/.config/agent-log-viewer";
+  const exported = resolvedCompose({ HOME: "/srv/operator", DELEGATUS_CONFIG_DIR: existing }).services["runtime-host"].environment;
   expect(exported).toMatchObject({
     LLV_CONFIG_DIR: existing,
     LLV_RUNTIME_HOST_SOCKET: `${existing}/state/runtime-host.sock`,
@@ -288,13 +288,13 @@ test("rename slice 3: an exported app dir keeps the spelling an existing install
 
   /* The runtime host folds DELEGATUS_ into LLV_ when it starts, so the nested
      `docker compose config` a deployment runs sees only LLV_CONFIG_DIR. */
-  const nested = resolvedCompose({ HOME: "/home/operator", LLV_CONFIG_DIR: existing }).services["runtime-host"].environment;
+  const nested = resolvedCompose({ HOME: "/srv/operator", LLV_CONFIG_DIR: existing }).services["runtime-host"].environment;
   expect(nested.LLV_RUNTIME_HOST_SOCKET).toBe(`${existing}/state/runtime-host.sock`);
 
-  const fresh = resolvedCompose({ HOME: "/home/operator" }).services["runtime-host"].environment;
+  const fresh = resolvedCompose({ HOME: "/srv/operator" }).services["runtime-host"].environment;
   expect(fresh).toMatchObject({
-    LLV_CONFIG_DIR: "/home/operator/.config/delegatus",
-    LLV_RUNTIME_HOST_SOCKET: "/home/operator/.config/delegatus/state/runtime-host.sock",
+    LLV_CONFIG_DIR: "/srv/operator/.config/delegatus",
+    LLV_RUNTIME_HOST_SOCKET: "/srv/operator/.config/delegatus/state/runtime-host.sock",
   });
 });
 
