@@ -15,6 +15,7 @@ import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, 
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { pipelineNeedsYou, type PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
 
+import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 
@@ -33,12 +34,12 @@ import type { PipelineActionKind } from "./stagesModel";
 
 /* One card of the kanban board, in the approved prototype's anatomy
    (`renderCard`) made flat (#2072, docs/design/desktop-flat-cards.md §4,
-   variant B): colour label, saving bar, title and tools, the links no lane
-   row draws, description, the collapsed Details row carrying the agent's
-   context (#1834), one lane row per pipeline (`PipelineBlock` at task
-   density), the conversations as rows, and the footer: the status pill that
-   is the one place status changes, the age, who is working and how many
-   conversations the card holds.
+   variant B): colour label, saving bar, the task's icon (#2102), title and
+   tools, the links no lane row draws, description, the collapsed Details row
+   carrying the agent's context (#1834), one lane row per pipeline
+   (`PipelineBlock` at task density), the conversations as rows, and the
+   footer: the status pill that is the one place status changes, the age, who
+   is working and how many conversations the card holds.
 
    The card is the only frame. A lane has a hairline above it, a stage pill
    is an outline with no fill, and a conversation is a row. What the old
@@ -180,6 +181,9 @@ export interface KanbanCardProps {
   onUseTheirs: (cardId: string) => void;
   onKeepMine: (cardId: string) => void;
   onHide: (card: KanbanCardModel) => void;
+  /** The icon before the title opens the task icon picker (#2102). Absent,
+      the icon is drawn and changes nothing. */
+  onIconMenu?: (card: KanbanCardModel, anchor: HTMLElement) => void;
   /** The operator's graph-or-summary choices, by `cardId|pipelineId`. */
   graphChoices: ReadonlyMap<string, boolean>;
   onToggleGraph: (cardId: string, pipelineId: string, open: boolean) => void;
@@ -242,6 +246,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const onWorkLinks = props.onWorkLinks;
   const workspace = status === "assigned";
   const title = card.titlePending ? t("kanban.untitled") : card.title;
+  /* A placeholder's text is no title to guess an icon from: it gets the quiet default. */
+  const iconTitle = card.titlePending ? "" : card.title;
   const statusText = statusLabel(t, status);
   /* A pipeline stage's conversation is reached through its stage chip, as in
      the prototype; tiles are the conversations that run outside a pipeline. */
@@ -352,6 +358,26 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </button>
       ) : null}
       <div className="head">
+        {/* The icon leads the title in a fixed box and never takes the
+            title's room (#2102): stored, else suggested by the title, else a
+            quiet default. On a task it is the picker's button. */}
+        {card.task && props.onIconMenu ? (
+          <button
+            type="button"
+            className="task-icon"
+            data-icon-menu={card.id}
+            aria-haspopup="dialog"
+            aria-label={t("kanban.iconChange", { title })}
+            title={t("kanban.iconChange", { title })}
+            onClick={(event) => props.onIconMenu?.(card, event.currentTarget)}
+          >
+            <TaskIcon icon={card.icon} title={iconTitle} />
+          </button>
+        ) : (
+          <span className="task-icon">
+            <TaskIcon icon={card.icon} title={iconTitle} />
+          </span>
+        )}
         {editing?.field === "title" ? (
           <CardInlineText
             field="title"

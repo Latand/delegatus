@@ -1,0 +1,47 @@
+/* The task icon picker (#2102). The desktop board's popover and the phone's
+   sheet mount the same component, so every rule sits under `.tip`: at
+   (0,2,0) it outranks the board's `.kb button` reset (0,1,1), which would
+   otherwise strip the cells' frame inside the board. */
+
+.tip {
+  --tip-cell: 34px;
+  display: flex; flex-direction: column; gap: 6px;
+  width: calc(var(--tip-columns, 8) * var(--tip-cell) + (var(--tip-columns, 8) - 1) * 2px); max-width: 100%;
+}
+.tip .tip-search {
+  width: 100%; height: 32px; padding: 0 10px; border: 1px solid var(--border-default); border-radius: var(--radius-control);
+  background: var(--surface-sunken); color: var(--color-primary); font-size: var(--text-ui);
+}
+.tip .tip-search:focus { outline: none; border-color: var(--color-accent); background: var(--surface-card); }
+.tip .tip-none {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px;
+  border: 1px solid transparent; border-radius: var(--radius-control); background: none;
+  font-size: var(--text-ui); font-weight: 600; color: var(--color-secondary);
+}
+.tip .tip-none:hover { background: var(--surface-well); color: var(--color-primary); }
+.tip .tip-none[aria-pressed="true"] { border-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-accent); }
+.tip .tip-none:focus-visible, .tip .tip-cell:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+/* «No icon» is drawn as a struck-through circle. */
+.tip .tip-none-mark { position: relative; flex-shrink: 0; width: 14px; height: 14px; border: 1.5px solid currentColor; border-radius: 50%; }
+.tip .tip-none-mark::after { content: ""; position: absolute; left: 50%; top: -1px; bottom: -1px; width: 1.5px; background: currentColor; transform: translateX(-50%) rotate(-45deg); }
+.tip .tip-caption { padding: 0 2px; font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
+.tip .tip-grid {
+  display: grid; grid-template-columns: repeat(var(--tip-columns, 8), var(--tip-cell)); gap: 2px;
+  max-height: calc(6 * var(--tip-cell) + 5 * 2px); overflow-y: auto; scrollbar-width: thin;
+}
+.tip .tip-cell {
+  width: var(--tip-cell); height: var(--tip-cell); display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  border: 1px solid transparent; border-radius: var(--radius-control); background: none; color: var(--color-secondary);
+}
+.tip .tip-cell:hover { background: var(--surface-well); color: var(--color-primary); }
+.tip .tip-cell[aria-pressed="true"] { border-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-accent); }
+.tip .tip-cell[data-suggested] { border: 1px dashed var(--border-strong); }
+.tip .tip-name {
+  min-height: 14px; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono); font-size: var(--text-caption); color: var(--color-secondary);
+}
+@media (pointer: coarse) {
+  .tip { --tip-cell: 44px; }
+  .tip .tip-search { height: 44px; font-size: 16px; }
+  .tip .tip-none { height: 44px; }
+}

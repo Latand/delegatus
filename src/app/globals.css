@@ -10,6 +10,8 @@
 @import "../components/workLinks/workLinks.css";
 /* The one pipeline block and the one tone map (#2072), desktop and phone. */
 @import "../components/pipelines/pipelineBlock.css";
+/* The task icon picker (#2102), desktop and phone. */
+@import "../components/tasks/taskIcon.css";
 
 /* Role frames on agent conversations: drawn only under
    `html[data-role-frame]`, see src/lib/roleFrames.ts. */
