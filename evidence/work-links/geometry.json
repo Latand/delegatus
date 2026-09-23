@@ -1,8 +1,8 @@
 {
   "frames": {
     "768-en": {
-      "rows": 11,
-      "chips": 24,
+      "rows": 8,
+      "chips": 16,
       "overlaps": [],
       "clipped": [],
       "squeezed": [],
@@ -10,8 +10,8 @@
       "innerWidth": 768
     },
     "1080-en": {
-      "rows": 15,
-      "chips": 28,
+      "rows": 12,
+      "chips": 20,
       "overlaps": [],
       "clipped": [],
       "squeezed": [],
@@ -19,8 +19,8 @@
       "innerWidth": 1080
     },
     "1440-en": {
-      "rows": 15,
-      "chips": 28,
+      "rows": 12,
+      "chips": 20,
       "overlaps": [],
       "clipped": [],
       "squeezed": [],
@@ -37,8 +37,8 @@
       "innerWidth": 390
     },
     "768-uk": {
-      "rows": 11,
-      "chips": 24,
+      "rows": 8,
+      "chips": 16,
       "overlaps": [],
       "clipped": [],
       "squeezed": [],
@@ -46,8 +46,8 @@
       "innerWidth": 768
     },
     "1080-uk": {
-      "rows": 15,
-      "chips": 28,
+      "rows": 12,
+      "chips": 20,
       "overlaps": [],
       "clipped": [],
       "squeezed": [],
@@ -55,8 +55,8 @@
       "innerWidth": 1080
     },
     "1440-uk": {
-      "rows": 15,
-      "chips": 28,
+      "rows": 12,
+      "chips": 20,
       "overlaps": [],
       "clipped": [],
       "squeezed": [],

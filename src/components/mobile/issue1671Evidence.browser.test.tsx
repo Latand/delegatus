@@ -1108,12 +1108,13 @@ browserTest("#1846 desktop: the deck surface's account chip at 1280 px names the
  *
  *   LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#1865"
  *
- * The queue row names the stage and its attempt inside its sentence, lowercased,
- * and never the preset. The lane's screen titles each stage row by the name the
- * stage list gives it, with the attempt once the stage ran twice, and the preset
- * leads the row's meta line instead. Neither title is cut. The queue row's
- * sentence is painted whole with its age after it, however many lines that
- * takes; each stage row's meta line keeps its verdict and findings count whole
+ * The queue row is the pipeline card (#2072 slice 3): its chain names the stage
+ * by the name the stage list gives it, its reason line says what the stage
+ * returned, and neither names the preset. The lane's screen titles each stage
+ * row by that name, with the attempt once the stage ran twice, and the preset
+ * leads the row's meta line instead. Neither title is cut. The card's reason
+ * line is painted whole with its age after it, however many lines that takes;
+ * each stage row's meta line keeps its verdict and findings count whole
  * (the preset truncates first), and the effort ladder ends before the meta
  * line begins — both of which the Ukrainian row once failed.
  *
@@ -1147,31 +1148,29 @@ browserTest("#1865: the phone names a stage and its attempt in the queue row and
           await page.waitForSelector(ROW, { timeout: 20_000 });
           await pause(page, 600);
           const queueRow = await page.evaluate((selector) => document.querySelector(selector)?.textContent ?? "", ROW);
-          /* The sentence and its age, each painted inside the row's text column. */
+          /* The reason line and its age, painted inside the block's column. */
           const queueMeta = await page.evaluate((selector) => {
-            const meta = document.querySelector<HTMLElement>(`${selector} [data-mobile2-row-meta]`);
-            const age = meta?.querySelector<HTMLElement>("[data-mobile2-row-age]");
-            const column = meta?.parentElement?.getBoundingClientRect();
-            const box = meta?.getBoundingClientRect();
-            const ageBox = age?.getBoundingClientRect();
+            const reason = document.querySelector<HTMLElement>(`${selector} [data-pipeline-reason]`);
+            const column = reason?.closest(".pblock")?.getBoundingClientRect();
+            const box = reason?.getBoundingClientRect();
             const range = document.createRange();
-            if (meta) range.selectNodeContents(meta);
+            if (reason) range.selectNodeContents(reason);
             const ink = range.getBoundingClientRect();
             return {
-              text: meta?.textContent ?? "",
-              age: age?.textContent ?? "",
-              lines: box ? Math.round(box.height / parseFloat(getComputedStyle(meta!).lineHeight || "16")) : 0,
+              text: reason?.textContent ?? "",
+              chain: [...document.querySelectorAll(`${selector} .pb-pill[data-stage] .pb-name`)].map((name) => name.textContent),
+              lines: box && reason ? Math.round(box.height / parseFloat(getComputedStyle(reason).lineHeight || "16")) : 0,
               columnRight: column ? Math.round(column.right * 10) / 10 : 0,
               inkRight: Math.round(ink.right * 10) / 10,
-              ageRight: ageBox ? Math.round(ageBox.right * 10) / 10 : 0,
-              clipped: !!meta && (meta.scrollWidth > meta.clientWidth + 0.5 || (column ? ink.right > column.right + 0.5 : true)),
+              clipped: !reason || reason.scrollWidth > reason.clientWidth + 0.5 || (column ? ink.right > column.right + 0.5 : true),
             };
           }, ROW);
-          if (queueMeta.clipped) fail(`the queue row's sentence is clipped: ${JSON.stringify(queueMeta)}`);
-          if (!queueMeta.age || queueMeta.ageRight > queueMeta.columnRight + 0.5) fail(`the queue row's age is not painted whole: ${JSON.stringify(queueMeta)}`);
+          if (queueMeta.clipped) fail(`the queue row's reason line is clipped: ${JSON.stringify(queueMeta)}`);
+          if (!/ · \d/.test(queueMeta.text)) fail(`the queue row's reason line carries no age: ${JSON.stringify(queueMeta)}`);
           await page.screenshot({ path: path.join(LABELS_OUT, `phone-${key}-queue.png`) });
-          const expectedQueue = translate(lang, "mobile2.board.pipelineStageFailed", { stage: 2, total: 2, name: "critique · 2" });
-          if (!queueRow.includes(expectedQueue)) fail(`the queue row reads ${JSON.stringify(queueRow)}, expected it to hold ${JSON.stringify(expectedQueue)}`);
+          const expectedQueue = translate(lang, "pipelineBlock.reason.failed", { stage: "Critique" });
+          if (!queueMeta.text.startsWith(expectedQueue)) fail(`the queue row's reason reads ${JSON.stringify(queueMeta.text)}, expected it to begin ${JSON.stringify(expectedQueue)}`);
+          if (!queueMeta.chain.includes("Critique")) fail(`the queue row's chain does not name Critique: ${JSON.stringify(queueMeta.chain)}`);
           const preset = translate(lang, "roleCopy.architect.name");
           if (queueRow.toLocaleLowerCase().includes(preset.toLocaleLowerCase())) fail(`the queue row names the preset: ${JSON.stringify(queueRow)}`);
 

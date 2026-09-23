@@ -1,0 +1,137 @@
+{
+  "frames": {
+    "1440-en-light": {
+      "scopes": 14,
+      "lanes": 14,
+      "cards": 0,
+      "texts": 143,
+      "controls": 101,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    "1080-en-light": {
+      "scopes": 14,
+      "lanes": 14,
+      "cards": 0,
+      "texts": 143,
+      "controls": 101,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 1080,
+      "innerWidth": 1080
+    },
+    "390-en-dark-board": {
+      "scopes": 4,
+      "lanes": 0,
+      "cards": 4,
+      "texts": 35,
+      "controls": 0,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "390-en-dark-pipelines": {
+      "scopes": 13,
+      "lanes": 0,
+      "cards": 13,
+      "texts": 100,
+      "controls": 0,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "390-en-light-board": {
+      "scopes": 4,
+      "lanes": 0,
+      "cards": 4,
+      "texts": 35,
+      "controls": 0,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "390-en-light-pipelines": {
+      "scopes": 13,
+      "lanes": 0,
+      "cards": 13,
+      "texts": 100,
+      "controls": 0,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "1440-uk-light": {
+      "scopes": 14,
+      "lanes": 14,
+      "cards": 0,
+      "texts": 143,
+      "controls": 101,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    "1080-uk-light": {
+      "scopes": 14,
+      "lanes": 14,
+      "cards": 0,
+      "texts": 143,
+      "controls": 101,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 1080,
+      "innerWidth": 1080
+    },
+    "390-uk-dark-board": {
+      "scopes": 4,
+      "lanes": 0,
+      "cards": 4,
+      "texts": 35,
+      "controls": 0,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "390-uk-dark-pipelines": {
+      "scopes": 13,
+      "lanes": 0,
+      "cards": 13,
+      "texts": 100,
+      "controls": 0,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "390-uk-light-board": {
+      "scopes": 4,
+      "lanes": 0,
+      "cards": 4,
+      "texts": 35,
+      "controls": 0,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "390-uk-light-pipelines": {
+      "scopes": 13,
+      "lanes": 0,
+      "cards": 13,
+      "texts": 100,
+      "controls": 0,
+      "overlaps": [],
+      "escapes": [],
+      "scrollWidth": 390,
+      "innerWidth": 390
+    }
+  },
+  "failures": []
+}
