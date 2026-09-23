@@ -12,6 +12,7 @@ import viewerPackageManifest from "../../../package.json";
 
 import { activeClaudeAccountId, listClaudeAccounts } from "@/lib/accounts/claude";
 import { activeCodexAccountId, listCodexAccounts } from "@/lib/accounts/codex";
+import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
 import {
   accountProjectBindings,
@@ -2991,10 +2992,12 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
     accounts: {
       claude: listClaudeAccounts().map((account) => ({ accountId: account.id })),
       codex: listCodexAccounts().map((account) => ({ accountId: account.id })),
+      copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {
       claude: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
       codex: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
+      copilot: snapshot.engineRouting.copilot.activeAccountId ?? activeCopilotAccountId(),
     },
     observations: snapshot.quotaObservations,
     now: Date.now(),
@@ -3008,15 +3011,15 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
  */
 function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const engine = text(args.engine);
-  if (engine && engine !== "claude" && engine !== "codex") throw new Error("engine must be claude or codex");
+  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot") throw new Error("engine must be claude, codex or copilot");
   const accountId = text(args.accountId);
   const source = (dependencies.accountLimitsSource ?? productionAccountLimitsSource)();
   const accounts = accountLimitRows({
     ...source,
-    ...(engine ? { engine: engine as "claude" | "codex" } : {}),
+    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" } : {}),
     ...(accountId ? { accountId } : {}),
   });
-  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude or codex"} account has the id ${accountId}`);
+  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex or copilot"} account has the id ${accountId}`);
   return redactPayload({ count: accounts.length, accounts });
 }
 

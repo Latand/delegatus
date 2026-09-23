@@ -1,25 +1,31 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 
 import { activeClaudeAccountId, listClaudeAccounts, type ClaudeAccount } from "@/lib/accounts/claude";
 import { realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
 import { accountProbeIdentity, claudeProbeCredentialIdentity, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { activeCodexAccountId, listCodexAccounts, type CodexAccount } from "@/lib/accounts/codex";
+import { activeCopilotAccountId, copilotSignedInUser, listCopilotAccounts, type CopilotAccount } from "@/lib/accounts/copilot";
 import { managedCodexRuntime, type CodexQuotaProbe } from "@/lib/accounts/codexRuntime";
 import type { AppServerResetCredits } from "@/lib/accounts/codexAppServer";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { logQuotaEvent } from "@/lib/events";
 import { adoptClaudeLimitsSnapshot, readClaudeAccountLimits, readCodexLimits } from "@/lib/limits";
+import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
 
-import type { DurableQuotaObservation, MigrationEngine } from "./contracts";
-import type { QuotaObservation, QuotaResetCredits } from "./quotaPolicy";
+import type { DurableQuotaObservation } from "./contracts";
+import type { QuotaEngine, QuotaObservation, QuotaResetCredits } from "./quotaPolicy";
+
+type QuotaAccount = ClaudeAccount | CodexAccount | CopilotAccount;
 
 export interface QuotaProbePort {
-  list(engine: MigrationEngine): Array<ClaudeAccount | CodexAccount>;
-  active(engine: MigrationEngine): string;
+  list(engine: QuotaEngine): QuotaAccount[];
+  active(engine: QuotaEngine): string;
   /** Optional backend-aware credential fingerprint; evaluated outside the lease. */
-  credentialIdentity?(engine: MigrationEngine, account: ClaudeAccount | CodexAccount): string | null;
-  probe(engine: MigrationEngine, account: ClaudeAccount | CodexAccount, now: number, options?: QuotaProbeOptions): Promise<QuotaObservation>;
+  credentialIdentity?(engine: QuotaEngine, account: QuotaAccount): string | null;
+  probe(engine: QuotaEngine, account: QuotaAccount, now: number, options?: QuotaProbeOptions): Promise<QuotaObservation>;
 }
 
 export interface QuotaProbeOptions {
@@ -124,11 +130,27 @@ export async function claudeQuotaObservation(
 }
 
 const productionProbe: QuotaProbePort = {
-  list: (engine) => engine === "claude" ? listClaudeAccounts() : listCodexAccounts(),
-  active: (engine) => engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId(),
-  credentialIdentity: (engine, account) => engine === "claude" ? claudeProbeCredentialIdentity(account.home) : accountProbeIdentity(account),
+  list: (engine) => engine === "claude" ? listClaudeAccounts() : engine === "codex" ? listCodexAccounts() : listCopilotAccounts(),
+  active: (engine) => engine === "claude" ? activeClaudeAccountId() : engine === "codex" ? activeCodexAccountId() : activeCopilotAccountId() ?? "",
+  credentialIdentity: (engine, account) => engine === "claude"
+    ? claudeProbeCredentialIdentity(account.home)
+    : engine === "copilot" ? copilotProbeIdentity(account as CopilotAccount) : accountProbeIdentity(account),
   async probe(engine, account, now, options) {
     if (engine === "claude") return await claudeQuotaObservation(account as ClaudeAccount, now, options);
+    if (engine === "copilot") {
+      const candidate = account as CopilotAccount;
+      const authenticated = copilotSignedInUser(candidate.home) !== null;
+      const limits = authenticated ? readCopilotTranscriptLimits(candidate.sessionStateDir) : { data: null, reason: "Copilot CLI is signed out", source: "unavailable" as const };
+      return {
+        engine: "copilot",
+        accountId: candidate.id,
+        authenticated,
+        authCheckedAt: now,
+        limits: limits.data,
+        provenance: { source: limits.source, reason: limits.reason, staleSince: null },
+        observedAt: limits.data?.capturedAt ?? now,
+      };
+    }
     const candidate = account as CodexAccount;
     try {
       const probe = await managedCodexRuntime().probeQuota(candidate);
@@ -153,6 +175,16 @@ const productionProbe: QuotaProbePort = {
     }
   },
 };
+
+function copilotProbeIdentity(account: CopilotAccount): string {
+  try {
+    const stat = fs.statSync(path.join(account.home, "config.json"), { bigint: true });
+    return [accountProbeIdentity(account), stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return `${accountProbeIdentity(account)}:${code === "ENOENT" ? "missing" : "unreadable"}`;
+  }
+}
 
 /** The live provider probe, exported so an operator-triggered re-read
     (issue #1418) goes through exactly the reader the controller uses. */
@@ -184,7 +216,7 @@ export class QuotaController {
      The carried observation keeps the previous limits and timestamps and is
      marked as cache provenance, which keeps it ineligible for auto-balance
      decisions (those require a fresh live observation). */
-  private carryForward(engine: MigrationEngine, accountId: string, reason: string, now: number): QuotaObservation {
+  private carryForward(engine: QuotaEngine, accountId: string, reason: string, now: number): QuotaObservation {
     const previous = this.registry.readOnlySnapshot().quotaObservations[engine][accountId];
     if (previous?.limits) {
       return {
@@ -215,7 +247,7 @@ export class QuotaController {
     };
   }
 
-  async tick(engine: MigrationEngine): Promise<void> {
+  async tick(engine: QuotaEngine): Promise<void> {
     // Catalog listing may run recovery or query Keychain. Read it before
     // the lease, then validate the revision it came from inside the lease.
     const revision = accountsCollectionRevision();
@@ -267,7 +299,7 @@ export class QuotaController {
         // Another read may have committed while this one waited for its provider.
         if (previous && Date.parse(previous.authCheckedAt) > now) continue;
         const observation = result.observation;
-        if (!observation || (observation.authenticated && (!observation.limits
+        if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot"
           || (previous?.limits && Date.parse(previous.observedAt) > observation.observedAt)))) {
           observations.push(this.carryForward(engine, account.id, result.reason ?? observation?.provenance.reason ?? (observation?.limits ? "quota-probe-older" : "quota-probe-empty"), now));
         } else {
@@ -275,6 +307,10 @@ export class QuotaController {
         }
       }
       if (observations.length) {
+        if (engine === "copilot") {
+          observations.forEach((observation) => this.registry.recordQuotaObservation(durableQuotaObservation(observation, this.bootId)));
+          return observations;
+        }
         this.registry.recordQuotaEvaluation({
           engine,
           observations: observations.map((observation) => durableQuotaObservation({ ...observation, engine }, this.bootId)),
@@ -288,6 +324,7 @@ export class QuotaController {
     const accounts = new Map(snapshot.accounts.map(({ account }) => [account.id, account]));
     observations.forEach((observation) => {
       const account = accounts.get(observation.accountId)!;
+      if (engine === "copilot") return;
       logQuotaEvent({
         engine,
         accountId: observation.accountId,

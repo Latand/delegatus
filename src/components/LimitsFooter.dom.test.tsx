@@ -25,6 +25,7 @@ const NOW = Math.round(Date.now() / 1000);
 
 let limits: LimitsPayload;
 let limitsUnavailable = false;
+let copilotAccountsReady = false;
 const baseAccount = {
   id: "account-a",
   label: "Account A",
@@ -53,6 +54,9 @@ globalThis.fetch = (async (input: RequestInfo | URL) => {
   const url = String(input);
   if (url === "/api/limits") return limitsUnavailable ? new Response(null, { status: 503 }) : Response.json(limits);
   if (url === "/api/accounts") return Response.json(accounts);
+  if (url === "/api/accounts/copilot") return Response.json(copilotAccountsReady
+    ? { cli: { present: true, reason: null }, active: "copilot-a", accounts: [{ id: "copilot-a", label: "Copilot", kind: "managed", active: true, loginCommand: null }] }
+    : { cli: { present: false, reason: null }, active: "", accounts: [] });
   return new Response(null, { status: 404 });
 }) as unknown as typeof fetch;
 
@@ -65,6 +69,7 @@ afterEach(async () => {
   document.body.replaceChildren();
   accounts.codex.accounts = [baseAccount];
   limitsUnavailable = false;
+  copilotAccountsReady = false;
   setSystemTime();
 });
 
@@ -79,6 +84,26 @@ async function render(): Promise<HTMLElement> {
   await act(async () => { await Promise.resolve(); });
   return host;
 }
+
+test("the Copilot footer renders its monthly transcript allowance", async () => {
+  copilotAccountsReady = true;
+  limits = {
+    claude: null,
+    codex: null,
+    copilot: { session: null, weekly: { usedPercent: 0.2, resetsAt: NOW + 10 * 86_400, windowMinutes: 30 * 1440, observedAt: NOW }, tiers: [], plan: null, capturedAt: NOW },
+    claudeAccountId: "claude-a",
+    codexAccountId: "account-a",
+    copilotAccountId: "copilot-a",
+    provenance: {
+      claude: { source: "unavailable", reason: null, staleSince: null },
+      codex: { source: "unavailable", reason: null, staleSince: null },
+      copilot: { source: "transcript", reason: null, staleSince: null },
+    },
+  };
+  const host = await render();
+  expect(host.textContent).toContain("Month");
+  expect(host.textContent).toContain("100%");
+});
 
 test("a weekly-horizon Codex window is labelled Week in the footer, never 5h", async () => {
   // The production shape of #606: the only window the plan reports is a weekly

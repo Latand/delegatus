@@ -18,9 +18,9 @@ import type { AccountContext } from "./contracts";
  * operator's own `$COPILOT_HOME` or `~/.copilot`: it is scanned when it
  * exists and launched into only when the operator selects it.
  *
- * Authentication state is not read in slice 1: it stays `unknown` until a
- * launch succeeds or fails on auth, and the Accounts panel offers the login
- * command instead.
+ * Authentication and quota are read from the account's own config and
+ * transcript. The token itself stays in the desktop keyring and is never read
+ * by this module.
  */
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -34,6 +34,22 @@ export interface CopilotAccount {
   /** `<home>/session-state`, the transcript root the scanner reads. */
   sessionStateDir: string;
   createdAt: number;
+}
+
+/** The login recorded by the Copilot CLI, without exposing token material. */
+export function copilotSignedInUser(home: string): string | null {
+  try {
+    const text = fs.readFileSync(path.join(home, "config.json"), "utf8").replace(/^\s*\/\/.*(?:\r?\n|$)/gm, "");
+    const parsed = JSON.parse(text) as {
+      lastLoggedInUser?: { host?: unknown; login?: unknown };
+      loggedInUsers?: Array<{ host?: unknown; login?: unknown }>;
+    };
+    const last = parsed.lastLoggedInUser;
+    if (typeof last?.host !== "string" || typeof last.login !== "string" || !last.login.trim()) return null;
+    return Array.isArray(parsed.loggedInUsers) && parsed.loggedInUsers.some((user) => user?.host === last.host && user.login === last.login)
+      ? last.login
+      : null;
+  } catch { return null; }
 }
 
 interface StoredAccount { id: string; label: string; createdAt: number }

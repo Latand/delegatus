@@ -56,7 +56,7 @@ export function recordLiveObservation(
   const durable = durableQuotaObservation(observation, LIVE_READ_BOOT_ID);
   registry.recordQuotaObservation(durable);
   if (observation.engine === "codex") forgetCachedLimits(observation.engine, observation.accountId);
-  logQuotaEvent({
+  if (observation.engine !== "copilot") logQuotaEvent({
     engine: observation.engine,
     accountId: observation.accountId,
     accountKind,
@@ -71,8 +71,9 @@ export function recordLiveObservation(
 export async function refreshAccountLimits(engine: MigrationEngine, accountId: string, deps: LiveLimitsDeps = {}): Promise<LimitsRefreshResult> {
   const probe = deps.probe ?? liveQuotaProbe;
   const now = deps.now ?? Date.now();
-  const account = probe.list(engine).find((candidate) => candidate.id === accountId);
-  if (!account) return { kind: "unknown_account" };
+  const found = probe.list(engine).find((candidate) => candidate.id === accountId);
+  if (!found) return { kind: "unknown_account" };
+  const account: ClaudeAccount | CodexAccount = engine === "claude" ? found as ClaudeAccount : found as CodexAccount;
   try {
     const observation = await Promise.race([
       probe.probe(engine, account, now, { force: true }),

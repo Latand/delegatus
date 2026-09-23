@@ -38,7 +38,9 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
   /* Transcript reconciliation is authoritative only for terminal exhaustion.
      Ordinary transcript percentages remain unknown for automatic admission;
      a provider rejection at 100% can safely remove that account until reset. */
-  if (observation.provenance.source !== "live" && !(observation.provenance.source === "transcript" && remaining <= 0)) {
+  if (observation.provenance.source !== "live"
+    && !(observation.engine === "copilot" && observation.provenance.source === "transcript")
+    && !(observation.provenance.source === "transcript" && remaining <= 0)) {
     return { kind: "unknown" };
   }
   if (remaining > 0) return { kind: "available", remaining };

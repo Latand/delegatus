@@ -2,6 +2,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 
 import type { CodexAccount } from "@/lib/accounts/codex";
 
@@ -50,6 +51,35 @@ test("quota probes wait behind account deletion mutations", async () => {
     await tick;
     expect(probes).toBe(1);
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Copilot quota probe reads its transcript and never starts an engine probe", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-copilot-transcript-"));
+  const { liveQuotaProbe } = await import("./quotaController");
+  const { managedCodexRuntime } = await import("@/lib/accounts/codexRuntime");
+  const runtime = managedCodexRuntime();
+  const spawnProbe = spyOn(runtime, "probeQuota").mockImplementation(async () => { throw new Error("Copilot quota checks must not spawn a process"); });
+  try {
+    const home = path.join(root, "home");
+    const sessions = path.join(home, "session-state");
+    const session = path.join(sessions, crypto.randomUUID());
+    fs.mkdirSync(session, { recursive: true });
+    fs.writeFileSync(path.join(home, "config.json"), `// local config\n${JSON.stringify({ lastLoggedInUser: { host: "github.com", login: "placeholder" }, loggedInUsers: [{ host: "github.com", login: "placeholder" }] })}`);
+    fs.writeFileSync(path.join(session, "events.jsonl"), `${JSON.stringify({ timestamp: "2026-09-20T10:00:00.000Z", type: "model.model_call_success", data: { quotaSnapshots: { chat: { entitlementRequests: 200, remainingPercentage: 84, resetDate: "2026-10-01T00:00:00Z", isUnlimitedEntitlement: false, overageAllowedWithExhaustedQuota: false } }, requestMessages: "private content" } })}\n`);
+    const observation = await liveQuotaProbe.probe("copilot", {
+      id: "copilot",
+      label: "Copilot",
+      kind: "managed",
+      home,
+      sessionStateDir: sessions,
+      createdAt: 1,
+    }, Date.now());
+    expect(observation).toMatchObject({ engine: "copilot", authenticated: true, provenance: { source: "transcript" }, limits: { weekly: { usedPercent: 16 } } });
+    expect(spawnProbe).not.toHaveBeenCalled();
+  } finally {
+    spawnProbe.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

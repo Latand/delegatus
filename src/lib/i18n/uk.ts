@@ -1890,6 +1890,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "limits.stale": "дані застарілі: {stale}",
   "limits.5h": "5 год",
   "limits.week": "Тиждень",
+  "limits.month": "Місяць",
   // Підписи вікон за горизонтом, який повідомляє сам провайдер (issue #606).
   "limits.windowMinutes": "{n} хв",
   "limits.windowHours": "{n} год",

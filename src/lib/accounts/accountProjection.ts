@@ -20,7 +20,9 @@ export function currentObservation(observation: DurableQuotaObservation | undefi
 }
 
 export function currentLiveObservation(observation: DurableQuotaObservation | undefined, now: number): boolean {
-  return observation?.provenance.source === "live" && currentObservation(observation, now);
+  return (observation?.provenance.source === "live"
+    || (observation?.engine === "copilot" && observation.provenance.source === "transcript"))
+    && currentObservation(observation, now);
 }
 
 export function liveFreshObservation(observation: DurableQuotaObservation | undefined, now: number): boolean {
