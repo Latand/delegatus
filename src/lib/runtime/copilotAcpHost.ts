@@ -31,7 +31,7 @@ import {
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
-import { copilotModelsFromConfigOptions, modelInfoFromCopilotTranscript, writeCopilotModelCatalog } from "@/lib/agent/copilotModels";
+import { copilotModelsFromConfigOptions, writeCopilotModelCatalog } from "@/lib/agent/copilotModels";
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
 
 /**
@@ -183,7 +183,7 @@ export function copilotMcpConfig(
     const definition = record(raw);
     if (!definition) continue;
     const type = definition.type;
-    if (type === "stdio" || type === "local") {
+    if (type === "stdio" || type === "local" || (type === undefined && typeof definition.command === "string")) {
       if (typeof definition.command !== "string") continue;
       mcpServers[name] = {
         type: "local",
@@ -445,12 +445,8 @@ export class CopilotAcpHost implements EngineHost {
       sessionId = minted;
       const modelOptions = copilotModelsFromConfigOptions(created?.configOptions);
       if (this.options.accountId && modelOptions.length) {
-        const transcriptRoot = path.join(this.options.copilotHome, "session-state");
-        const transcriptInfo = modelInfoFromCopilotTranscript(transcriptRoot);
-        writeCopilotModelCatalog(this.options.accountId, modelOptions.map((model) => {
-          const info = transcriptInfo.find((item) => item.id === model.id);
-          return { ...model, efforts: info?.efforts ? [...info.efforts] : model.efforts, pickerEnabled: info?.pickerEnabled ?? model.pickerEnabled };
-        }), "acp-config");
+        try { writeCopilotModelCatalog(this.options.accountId, modelOptions, "acp-config"); }
+        catch (error) { console.warn("[copilot] model catalogue could not be persisted", error); }
       }
     }
     this.identity = { sessionId, path: copilotTranscriptPath(this.options.copilotHome, sessionId) };

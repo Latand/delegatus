@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { beginProjectCatalogScan } from "@/lib/scanner/projectCatalog";
+import type { ConversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
+import { publishTranscriptIndexFeed } from "@/lib/scanner/discover";
 import { SNIPPET_MATCH_CLOSE, SNIPPET_MATCH_OPEN, snippetSegments } from "./snippet";
+import { scheduleTranscriptIndex, waitForTranscriptIndexIdleForTests } from "./transcriptFeed";
 import {
   indexTranscriptSources,
   InvalidTranscriptSearchCursorError,
@@ -123,6 +127,33 @@ test("indexes only Copilot user and assistant message content", async () => {
     expect.objectContaining({ speaker: "assistant", engine: "copilot", transcriptPath: transcript }),
   ]));
   expect(searchTranscripts({ query: "hidden_private_model_marker" }).total).toBe(0);
+});
+
+test("production scanner feed publishes Copilot transcripts for body indexing", async () => {
+  const transcript = path.join(sandbox, "copilot-catalog-session", "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ type: "user.message", timestamp: "2026-08-20T11:00:00.000Z", data: { content: "feed_copilot_user_marker" } }),
+    JSON.stringify({ type: "model.message", timestamp: "2026-08-20T11:00:01.000Z", data: { content: "feed_copilot_private_model_marker" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: "2026-08-20T11:00:02.000Z", data: { content: "feed_copilot_assistant_marker" } }),
+  ].join("\n") + "\n");
+  const catalog: ConversationCatalogEntry[] = [{
+    path: transcript, root: "copilot-sessions", name: "session", project: "copilot-feed",
+    title: "Copilot fixture", firstPrompt: "feed_copilot_user_marker", engine: "copilot",
+    kind: "session", fmt: "copilot", mtime: Date.parse("2026-08-20T11:00:02.000Z") / 1_000,
+    size: fs.statSync(transcript).size,
+  }];
+  publishTranscriptIndexFeed(catalog, true, beginProjectCatalogScan(false), undefined,
+    (feed) => scheduleTranscriptIndex(feed, { force: true }));
+  await waitForTranscriptIndexIdleForTests();
+
+  expect(searchTranscripts({ query: "feed_copilot_user_marker" }).items).toMatchObject([
+    expect.objectContaining({ speaker: "user", engine: "copilot", transcriptPath: transcript }),
+  ]);
+  expect(searchTranscripts({ query: "feed_copilot_assistant_marker" }).items).toMatchObject([
+    expect.objectContaining({ speaker: "assistant", engine: "copilot", transcriptPath: transcript }),
+  ]);
+  expect(searchTranscripts({ query: "feed_copilot_private_model_marker" }).total).toBe(0);
 });
 
 test("matches Cyrillic hashtags and underscore tags as exact FTS tokens", async () => {

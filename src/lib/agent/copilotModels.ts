@@ -22,6 +22,8 @@ export interface CopilotModelCatalog {
 type ModelInfo = { id: string; name?: string; efforts?: readonly string[]; pickerEnabled?: boolean };
 interface StoredCatalogs { version: 1; catalogs: Record<string, CopilotModelCatalog> }
 
+const transcriptInfoCache = new Map<string, { size: number; mtimeMs: number; models: ModelInfo[] }>();
+
 const MODEL_CONFIG_IDS = new Set(["model", "models"]);
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -69,11 +71,24 @@ export function modelInfoFromCopilotTranscript(sessionStateDir: string): ModelIn
   try { directories = fs.readdirSync(sessionStateDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()); }
   catch { return []; }
   const found = new Map<string, ModelInfo>();
+  const root = path.resolve(sessionStateDir) + path.sep;
+  const livePaths = new Set(directories.map((directory) => path.join(sessionStateDir, directory.name, "events.jsonl")));
+  for (const cachedPath of transcriptInfoCache.keys()) {
+    if (cachedPath.startsWith(root) && !livePaths.has(cachedPath)) transcriptInfoCache.delete(cachedPath);
+  }
   for (const directory of directories) {
     const pathname = path.join(sessionStateDir, directory.name, "events.jsonl");
+    let fileStat: fs.Stats;
+    try { fileStat = fs.statSync(pathname); } catch { transcriptInfoCache.delete(pathname); continue; }
+    const cached = transcriptInfoCache.get(pathname);
+    if (cached && cached.size === fileStat.size && cached.mtimeMs === fileStat.mtimeMs) {
+      for (const model of cached.models) found.set(model.id, model);
+      continue;
+    }
     let descriptor: number;
     try { descriptor = fs.openSync(pathname, "r"); } catch { continue; }
     try {
+      const fileModels = new Map<string, ModelInfo>();
       const chunk = Buffer.allocUnsafe(64 * 1024);
       let linePrefix = "";
       let targetLine: string | null = null;
@@ -91,7 +106,7 @@ export function modelInfoFromCopilotTranscript(sessionStateDir: string): ModelIn
           const efforts = Array.isArray(supports?.reasoning_effort) && supports.reasoning_effort.every((entry) => typeof entry === "string")
             ? supports.reasoning_effort as string[] : null;
           if (!id || !efforts) return;
-          found.set(id, { id, name: typeof raw?.name === "string" ? raw.name : undefined, efforts, pickerEnabled: raw?.model_picker_enabled !== false });
+          fileModels.set(id, { id, name: typeof raw?.name === "string" ? raw.name : undefined, efforts, pickerEnabled: raw?.model_picker_enabled !== false });
         } catch { /* malformed transcript line */ }
       };
       let offset = 0;
@@ -120,6 +135,9 @@ export function modelInfoFromCopilotTranscript(sessionStateDir: string): ModelIn
         }
       }
       if (targetLine !== null) consume(targetLine + linePrefix);
+      const models = [...fileModels.values()];
+      transcriptInfoCache.set(pathname, { size: fileStat.size, mtimeMs: fileStat.mtimeMs, models });
+      for (const model of models) found.set(model.id, model);
     } finally { fs.closeSync(descriptor); }
   }
   return [...found.values()];

@@ -3,11 +3,13 @@ import crypto from "node:crypto";
 import os from "node:os";
 
 import { resolveCopilotBinary } from "@/lib/agent/cli";
+import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { copilotChildEnv } from "@/lib/runtime/copilotAcpHost";
 import type { LoginOperationSummary, LoginPhase, LoginResult } from "./contracts";
 import { copilotSignedInUser, listCopilotAccounts } from "./copilot";
 
 export const COPILOT_LOGIN_TIMEOUT_MS = 15 * 60_000;
+export const COPILOT_LOGIN_TERM_GRACE_MS = 2_000;
 export const COPILOT_LOGIN_PHASES: ReadonlySet<LoginPhase> = new Set(["starting", "awaiting_browser", "verifying", "canceling"]);
 const OUTPUT_LIMIT = 64 * 1024;
 const ANSI = /\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\))/g;
@@ -22,14 +24,15 @@ export interface CopilotLoginChild {
   pid?: number;
   stdout?: NodeJS.ReadableStream | null;
   stderr?: NodeJS.ReadableStream | null;
+  kill(signal?: NodeJS.Signals): boolean;
+  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
   once(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
   once(event: "error", listener: (error: Error) => void): this;
-  kill?(signal?: NodeJS.Signals): boolean;
 }
 
 export interface CopilotLoginPorts {
   spawn(command: string, args: string[], options: Parameters<typeof spawn>[2]): CopilotLoginChild;
-  signal(pid: number, signal: NodeJS.Signals): void;
+  signalGroup(child: CopilotLoginChild, signal: NodeJS.Signals): void;
   now(): number;
   sleep(ms: number): Promise<void>;
   setTimeout(callback: () => void, ms: number): NodeJS.Timeout;
@@ -38,6 +41,7 @@ export interface CopilotLoginPorts {
 
 export type CopilotLoginOperation = LoginOperationSummary & {
   accountId: string;
+  generation: number;
   pid: number | null;
   home: string;
   canceled: boolean;
@@ -52,7 +56,7 @@ function failureResult(code: string, message: string): LoginResult { return { st
 
 export const realCopilotLoginPorts: CopilotLoginPorts = {
   spawn: (command, args, options) => spawn(command, args, options) as CopilotLoginChild,
-  signal: (pid, signal) => { try { process.kill(pid, signal); } catch { /* process already exited */ } },
+  signalGroup: (child, signal) => { signalDetachedProcessGroup(child, signal); },
   now: Date.now,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   setTimeout,
@@ -65,6 +69,9 @@ export class CopilotLoginSupervisor {
   private readonly operations = new Map<string, CopilotLoginOperation>();
   private readonly children = new Map<string, CopilotLoginChild>();
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  private readonly escalationTimers = new Map<string, NodeJS.Timeout>();
+  private readonly handledExit = new Set<string>();
+  private readonly generations = new Map<string, number>();
   private readonly output = new Map<string, string>();
 
   constructor(private readonly ports: CopilotLoginPorts = realCopilotLoginPorts) {}
@@ -82,13 +89,36 @@ export class CopilotLoginSupervisor {
     return { operationId, phase, loginUrl, userCode, acceptsCode, deadlineAt, result };
   }
 
-  private finish(operationId: string, phase: LoginPhase, result: LoginResult): CopilotLoginOperation {
+  private cleanupChild(operationId: string): void {
+    const timer = this.escalationTimers.get(operationId);
+    if (timer) this.ports.clearTimeout(timer);
+    this.escalationTimers.delete(operationId);
+    this.children.delete(operationId);
+  }
+
+  private finish(operationId: string, phase: LoginPhase, result: LoginResult, retainGroup = false): CopilotLoginOperation {
     const timer = this.timers.get(operationId);
     if (timer) this.ports.clearTimeout(timer);
     this.timers.delete(operationId);
     this.output.delete(operationId);
-    this.children.delete(operationId);
+    if (!retainGroup) this.cleanupChild(operationId);
     return this.update(operationId, { phase, result, acceptsCode: false, loginUrl: null, userCode: null });
+  }
+
+  private terminateWithEscalation(operationId: string, child: CopilotLoginChild): void {
+    const deadline = this.timers.get(operationId);
+    if (deadline) this.ports.clearTimeout(deadline);
+    this.timers.delete(operationId);
+    this.ports.signalGroup(child, "SIGTERM");
+    const previous = this.escalationTimers.get(operationId);
+    if (previous) this.ports.clearTimeout(previous);
+    const timer = this.ports.setTimeout(() => {
+      if (this.children.get(operationId) === child) {
+        this.ports.signalGroup(child, "SIGKILL");
+        this.cleanupChild(operationId);
+      }
+    }, COPILOT_LOGIN_TERM_GRACE_MS);
+    this.escalationTimers.set(operationId, timer);
   }
 
   private capture(operationId: string, home: string, chunk: Buffer | string): void {
@@ -106,9 +136,11 @@ export class CopilotLoginSupervisor {
 
   private async onExit(operationId: string, code: number | null, home: string): Promise<void> {
     const operation = this.operations.get(operationId);
-    if (!operation || terminal(operation.phase)) return;
+    if (!operation || this.handledExit.has(operationId)) return;
+    this.handledExit.add(operationId);
+    if (operation.phase === "timed_out") return;
     if (operation.canceled) {
-      this.finish(operationId, "canceled", { status: "canceled", code: "canceled", message: "Copilot sign-in was canceled" });
+      this.finish(operationId, "canceled", { status: "canceled", code: "canceled", message: "Copilot sign-in was canceled" }, true);
       return;
     }
     if (code !== 0) {
@@ -130,19 +162,32 @@ export class CopilotLoginSupervisor {
   start(accountId: string): LoginOperationSummary {
     const account = listCopilotAccounts().find((candidate) => candidate.id === accountId && candidate.kind === "managed");
     if (!account) throw new Error("choose a managed Copilot account to sign in");
-    const inProgress = [...this.operations.values()].find((operation) => !terminal(operation.phase));
+    /* A retry can arrive after the launcher exited while its grandchild is
+       still inside the old process group. Finish that cleanup before spawning
+       another login, so both the retry UI and account state remain consistent. */
+    for (const operation of this.operations.values()) {
+      const child = this.children.get(operation.operationId);
+      if (child && terminal(operation.phase)) {
+        this.ports.signalGroup(child, "SIGKILL");
+        this.cleanupChild(operation.operationId);
+      }
+    }
+    const inProgress = [...this.operations.values()].find((operation) => !terminal(operation.phase))
+      ?? (this.children.size ? [...this.operations.values()].find((operation) => this.children.has(operation.operationId)) : undefined);
     if (inProgress) throw new Error("a Copilot sign-in is already running");
     const now = this.ports.now();
+    const generation = (this.generations.get(accountId) ?? 0) + 1;
+    this.generations.set(accountId, generation);
     const operationId = crypto.randomUUID();
     const operation: CopilotLoginOperation = {
       operationId, accountId, phase: "starting", loginUrl: null, userCode: null, acceptsCode: false,
       deadlineAt: new Date(now + COPILOT_LOGIN_TIMEOUT_MS).toISOString(), result: null,
-      pid: null, home: account.home, canceled: false,
+      pid: null, home: account.home, canceled: false, generation,
     };
     this.operations.set(operationId, operation);
     try {
       const child = this.ports.spawn(resolveCopilotBinary(process.env), ["login", "--device-code"], {
-        cwd: os.homedir(), env: copilotChildEnv(process.env, account.home), detached: false,
+        cwd: os.homedir(), env: copilotChildEnv(process.env, account.home), detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
       if (!child.pid) throw new Error("Copilot login process did not start");
@@ -150,7 +195,14 @@ export class CopilotLoginSupervisor {
       this.update(operationId, { pid: child.pid });
       child.stdout?.on("data", (chunk: Buffer) => this.capture(operationId, account.home, chunk));
       child.stderr?.on("data", (chunk: Buffer) => this.capture(operationId, account.home, chunk));
-      child.once("close", (code) => { void this.onExit(operationId, code, account.home); });
+      child.once("exit", (code) => { void this.onExit(operationId, code, account.home); });
+      child.once("close", (code, signal) => {
+        if (!this.handledExit.has(operationId)) void this.onExit(operationId, code, account.home);
+        /* A launcher can close its own stdio while an ignoring grandchild is
+           still alive. Keep the group reference through the SIGKILL deadline. */
+        if (!this.escalationTimers.has(operationId)) this.cleanupChild(operationId);
+        this.handledExit.delete(operationId);
+      });
       child.once("error", () => {
         const live = this.operations.get(operationId);
         if (live && !terminal(live.phase)) this.finish(operationId, "failed", failureResult("process_failed", "Copilot sign-in did not complete"));
@@ -158,9 +210,9 @@ export class CopilotLoginSupervisor {
       const timer = this.ports.setTimeout(() => {
         const live = this.operations.get(operationId);
         if (!live || terminal(live.phase)) return;
-        const pid = live.pid;
-        this.finish(operationId, "timed_out", failureResult("timed_out", "Copilot sign-in expired"));
-        if (pid) this.ports.signal(pid, "SIGTERM");
+        this.update(operationId, { phase: "timed_out", result: failureResult("timed_out", "Copilot sign-in expired"), acceptsCode: false, loginUrl: null, userCode: null });
+        const child = this.children.get(operationId);
+        if (child) this.terminateWithEscalation(operationId, child);
       }, COPILOT_LOGIN_TIMEOUT_MS);
       this.timers.set(operationId, timer);
       return this.summary(this.operations.get(operationId)!);
@@ -177,7 +229,7 @@ export class CopilotLoginSupervisor {
     if (!operation.pid || !child) throw new Error("Copilot sign-in process is unavailable");
     this.update(operationId, { phase: "canceling", canceled: true });
     try {
-      this.ports.signal(operation.pid, "SIGTERM");
+      this.terminateWithEscalation(operationId, child);
     } catch {
       this.finish(operationId, "failed", failureResult("process_failed", "Copilot sign-in process could not be stopped"));
     }
@@ -185,7 +237,7 @@ export class CopilotLoginSupervisor {
   }
 
   forAccount(accountId: string): LoginOperationSummary | null {
-    const operation = [...this.operations.values()].find((candidate) => candidate.accountId === accountId);
+    const operation = [...this.operations.values()].filter((candidate) => candidate.accountId === accountId).sort((a, b) => b.generation - a.generation)[0];
     return operation ? this.summary(operation) : null;
   }
 

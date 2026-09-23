@@ -27,6 +27,7 @@ class FakeChild extends EventEmitter {
   stdout = new PassThrough();
   stderr = new PassThrough();
   signals: NodeJS.Signals[] = [];
+  kill(): boolean { return true; }
 }
 
 let child: FakeChild;
@@ -42,7 +43,7 @@ beforeEach(() => {
   fs.writeFileSync(path.join(account.home, "config.json"), '// comment\n{"lastLoggedInUser":{"host":"github.com","login":"fixture-user"},"loggedInUsers":[{"host":"github.com","login":"fixture-user"}]}');
   setCopilotLoginSupervisorForTests(new CopilotLoginSupervisor({
     spawn: () => child,
-    signal: (pid, signal) => { if (pid !== child.pid) throw new Error("wrong pid"); child.signals.push(signal); },
+    signalGroup: (processChild, signal) => { if (processChild.pid !== child.pid) throw new Error("wrong child"); child.signals.push(signal); },
     now: Date.now,
     sleep: async () => undefined,
     setTimeout: () => ({ unref() {} } as NodeJS.Timeout),
@@ -85,6 +86,12 @@ test("cross-origin POST is rejected", async () => {
   const response = await POST(post({ action: "login", id: accountId }, "https://other.invalid"));
   expect(response.status).toBe(403);
   expect(child.pid).toBe(45678);
+});
+
+test("cancel-login returns 404 for an id the Copilot supervisor does not own", async () => {
+  const response = await POST(post({ action: "cancel-login", operationId: "foreign-operation" }));
+  expect(response.status).toBe(404);
+  expect(await response.json()).toMatchObject({ error: "Copilot login operation was not found" });
 });
 
 test("the model endpoint returns the selected account catalogue with auto first", async () => {

@@ -11,7 +11,6 @@ import {
   UnknownCopilotAccountError,
 } from "@/lib/accounts/copilot";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { accountManager } from "@/lib/accounts/manager";
 import { copilotLoginSupervisor } from "@/lib/accounts/copilotLogin";
 
 export const runtime = "nodejs";
@@ -60,7 +59,8 @@ export async function POST(req: NextRequest) {
     }
     if (body.action === "cancel-login") {
       if (typeof body.operationId !== "string") return NextResponse.json({ error: "operationId must be a string" }, { status: 400 });
-      await accountManager.cancelLogin(body.operationId);
+      if (!copilotLoginSupervisor.has(body.operationId)) return NextResponse.json({ error: "Copilot login operation was not found" }, { status: 404 });
+      copilotLoginSupervisor.cancel(body.operationId);
       return NextResponse.json(copilotAccountsBody());
     }
     if (body.action === "select") {

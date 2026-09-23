@@ -3,6 +3,8 @@ import { agentRegistry, type AgentRegistry, type ProcessIdentity } from "@/lib/a
 import { reconfigurationFromBody, type AgentReconfiguration } from "@/lib/agent/reconfigure";
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
+import { listCopilotAccounts } from "@/lib/accounts/copilot";
+import { copilotModelCatalog } from "@/lib/agent/copilotModels";
 import {
   attributeNamedAccountChoice,
   type AccountChoiceActor,
@@ -268,8 +270,15 @@ export async function dispatchStructuredControl(
      reconfigure the host then refused. */
   let attributeSwitch: (() => AccountOverrideNotice | undefined) | null = null;
   try {
+    const requestedCopilotModel = typeof request.reconfiguration?.model === "string" ? request.reconfiguration.model.trim() : "";
+    const copilotAccount = conversation.engine === "copilot"
+      ? listCopilotAccounts().find((account) => account.id === generation.accountId)
+      : undefined;
+    const copilotModelEfforts = copilotAccount && requestedCopilotModel
+      ? copilotModelCatalog(copilotAccount.id, copilotAccount.sessionStateDir).models.find((model) => model.id === requestedCopilotModel)?.efforts
+      : undefined;
     const reconfiguration = request.action === "reconfigure"
-      ? reconfigurationFromBody(reconfigurableEngine!, request.reconfiguration ?? {})
+      ? reconfigurationFromBody(reconfigurableEngine!, request.reconfiguration ?? {}, copilotModelEfforts)
       : null;
     if (reconfiguration && !reconfiguration.value) {
       return { status: 400, body: { error: reconfiguration.error ?? "invalid configuration" } };

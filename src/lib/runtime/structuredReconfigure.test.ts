@@ -13,6 +13,7 @@ import type { StructuredReconfigureEffect } from "./structuredDeliveryQueue";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { copilotLaunchArgs } from "./copilotAcpHost";
+import { copilotHostOptions } from "./structuredSpawn";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -134,10 +135,17 @@ test("Copilot model and effort reconfigure releases the host and recovers the pa
     registry: target.registry,
     releaseHost: async (key) => { released.push(`${key.engine}:${key.sessionId}`); return true; },
     recover: async (request) => {
-      const profile = target.registry.conversation(request.conversationId as ViewerConversationId)?.generations.at(-1)?.launchProfile;
+      const profile = target.registry.conversation(request.conversationId as ViewerConversationId)?.generations.at(-1)?.launchProfile ?? undefined;
+      const options = copilotHostOptions(
+        {
+          spec: { cwd: target.cwd, launchProfile: profile } as never,
+          account: { accountId: "source", home: "copilot-home-fixture" } as never,
+        },
+        { env: {}, host: {} } as never,
+      );
       recovered.push({
         profile,
-        args: copilotLaunchArgs({ cwd: target.cwd, model: "claude-sonnet-5", effort: "low" }, null),
+        args: copilotLaunchArgs(options, null),
       });
       return { target: null, path: target.transcript, conversationId: target.conversationId, spawned: true };
     },

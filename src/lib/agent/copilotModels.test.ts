@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -54,6 +54,29 @@ test("harvests only small model_call_started records from Copilot transcripts", 
     id: "gpt-5.4-nano", name: "Nano", pickerEnabled: false,
     efforts: ["none", "low", "medium", "high", "xhigh"],
   }]);
+});
+
+test("reuses transcript metadata until a transcript's size or mtime changes", () => {
+  const sessions = path.join(sandbox, "cached-sessions");
+  const session = path.join(sessions, "fixture-session");
+  fs.mkdirSync(session, { recursive: true });
+  const transcript = path.join(session, "events.jsonl");
+  fs.writeFileSync(transcript, JSON.stringify({ type: "model.model_call_started", data: { modelInfo: {
+    id: "cache-model", capabilities: { supports: { reasoning_effort: ["low"] } },
+  } } }) + "\n");
+  const read = spyOn(fs, "readSync");
+  try {
+    expect(modelInfoFromCopilotTranscript(sessions).map((model) => model.id)).toEqual(["cache-model"]);
+    const reads = read.mock.calls.length;
+    expect(reads).toBeGreaterThan(0);
+    expect(modelInfoFromCopilotTranscript(sessions).map((model) => model.id)).toEqual(["cache-model"]);
+    expect(read.mock.calls.length).toBe(reads);
+    fs.writeFileSync(transcript, JSON.stringify({ type: "model.model_call_started", data: { modelInfo: {
+      id: "cache-model-updated", capabilities: { supports: { reasoning_effort: ["low", "high"] } },
+    } } }) + "\n");
+    expect(modelInfoFromCopilotTranscript(sessions).map((model) => model.id)).toEqual(["cache-model-updated"]);
+    expect(read.mock.calls.length).toBeGreaterThan(reads);
+  } finally { read.mockRestore(); }
 });
 
 test("persists account catalogues and always puts auto first", () => {

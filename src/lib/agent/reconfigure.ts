@@ -11,6 +11,7 @@ export interface AgentReconfiguration {
 export function reconfigurationFromBody(
   engine: "claude" | "codex" | "copilot",
   body: { model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown },
+  copilotModelEfforts?: readonly string[] | null,
 ): { value?: AgentReconfiguration; error?: string } {
   const model = typeof body.model === "string" ? body.model.trim() : "";
   const validModel = engine === "claude" ? normalizeClaudeLaunchModel(model)
@@ -25,7 +26,7 @@ export function reconfigurationFromBody(
   if (!validModel || !known) return { error: `model is not supported by ${engine}` };
 
   const effort = typeof body.effort === "string" ? body.effort.trim() : "";
-  if (!effortScale(engine, validModel)?.includes(effort)) {
+  if (!effortScale(engine, validModel, engine === "copilot" ? copilotModelEfforts : undefined)?.includes(effort)) {
     return { error: `effort is not supported by ${engine} model ${validModel}` };
   }
   if (engine !== "codex" && body.fast !== undefined && body.fast !== null) {

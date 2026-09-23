@@ -199,6 +199,10 @@ export function RuntimePill({
       .catch(() => {});
     return () => { cancelled = true; };
   }, [engine, runsOnAccount]);
+  const effortScaleForModel = useCallback((model: string | null | undefined) => {
+    const catalogEfforts = engine === "copilot" ? copilotModels?.find((entry) => entry.id === model)?.efforts : null;
+    return engine ? effortScale(engine, model, catalogEfforts) ?? [] : [];
+  }, [engine, copilotModels]);
   const modelOptions: readonly AgentModelOption[] = engine === "copilot" && copilotModels
     ? [
         ...copilotModels.map((model) => ({ id: model.id, label: model.name, shortLabel: model.name, use: "general" as const })),
@@ -421,14 +425,17 @@ export function RuntimePill({
     if (!engine) return { model: "", effort: "", fast: false };
     // A failed live reconfigure reverts the face to the observed runtime (§6) —
     // the pill never keeps advertising a draft the pane rejected.
-    if (pillSurface === "live-root" || pillSurface === "structured") return applyState === "error" ? defaults(file) : liveDraft;
-    if (pillSurface === "resume") return readResumeDraft(file);
-    return effectiveProfile(file);
+    const draft = pillSurface === "live-root" || pillSurface === "structured"
+      ? applyState === "error" ? defaults(file) : liveDraft
+      : pillSurface === "resume" ? readResumeDraft(file) : effectiveProfile(file);
+    if (engine !== "copilot" || !copilotModels) return draft;
+    const scale = effortScaleForModel(draft.model);
+    return scale.includes(draft.effort) ? draft : { ...draft, effort: scale[0] ?? draft.effort };
     // version re-reads the persisted profile after a commit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engine, pillSurface, applyState, liveDraft, file, version]);
+  }, [engine, pillSurface, applyState, liveDraft, file, version, copilotModels, effortScaleForModel]);
 
-  const efforts = useMemo(() => (engine ? effortScale(engine, face.model) ?? [] : []), [engine, face.model]);
+  const efforts = useMemo(() => effortScaleForModel(face.model), [effortScaleForModel, face.model]);
   const speedShown = engine === "codex";
 
   // Structured reconfigure restarts at an idle boundary, so every launch-level
@@ -473,7 +480,7 @@ export function RuntimePill({
       };
       rollbackRef.current = rollback;
       writeBrowserProfileRollback(file, rollback);
-      const scale = patch.model ? effortScale(engine, patch.model) ?? [] : effortScale(engine, current.model) ?? [];
+      const scale = effortScaleForModel(patch.model ?? current.model);
       const next: RuntimeDraft = {
         ...current,
         ...patch,
@@ -491,13 +498,17 @@ export function RuntimePill({
     }
     // Resume keeps a client-side profile that the next host launch consumes.
     if (pillSurface === "resume") {
-      announceCommit(writeResumeProfile(file, patch));
+      const scale = effortScaleForModel(patch.model ?? face.model);
+      const nextPatch = patch.model && patch.effort === undefined && !scale.includes(face.effort)
+        ? { ...patch, effort: scale[0] ?? face.effort }
+        : patch;
+      announceCommit(writeResumeProfile(file, nextPatch));
     } else {
       writeProfile(file, patch);
       announceCommit(effectiveProfile(file));
     }
     setVersion((v) => v + 1);
-  }, [engine, pillSurface, file, announceCommit, applyReconfigure, runtimeSession]);
+  }, [engine, pillSurface, file, announceCommit, applyReconfigure, runtimeSession, effortScaleForModel, face]);
 
   /**
    * #1846: an account pick for THIS conversation. It is shown in the same frame and sent as the
@@ -954,9 +965,11 @@ function RuntimePopover({
           {/* Which account the conversation runs on (#1795). The desktop card
               carries the badge in its header; the popover is where the runtime
               is chosen, so it says it here too. */}
-          <div className="px-2 pb-1 pt-1.5 text-label text-muted" data-runtime-popover-account>
-            {accountLine(t, account, accountChoice, nameOf)}
-          </div>
+          {engine !== "copilot" ? (
+            <div className="px-2 pb-1 pt-1.5 text-label text-muted" data-runtime-popover-account>
+              {accountLine(t, account, accountChoice, nameOf)}
+            </div>
+          ) : null}
           <RowGroup label={t("composer.reasoningGroup")}>
             {rows.filter((row) => row.kind === "tier").map((row) => (
               <MenuRow key={row.key} row={row} active={rows.indexOf(row) === activeIndex} refFor={(el) => { rowRefs.current[rows.indexOf(row)] = el; }} />

@@ -13,7 +13,7 @@
 /** The legacy (default) home carries no managed-account path segment. */
 export const DEFAULT_ACCOUNT_ID = "default";
 
-const ACCOUNT_PATH = /[/\\]accounts[/\\](?:claude|codex)[/\\]([^/\\]+)[/\\]/;
+const ACCOUNT_PATH = /[/\\]accounts[/\\](?:claude|codex|copilot)[/\\]([^/\\]+)[/\\]/;
 
 /** The account id owning a transcript path, or {@link DEFAULT_ACCOUNT_ID}. */
 export function accountIdFromPath(path: string | null | undefined): string {
