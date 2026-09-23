@@ -34,7 +34,7 @@ const NOTE_KEY: Record<TranscribeBackend, Parameters<TFunction>[0]> = {
 /* The provider's own name in the check sentence, never translated. */
 const PROVIDER_NAME: Record<LiveProvider, string> = { elevenlabs: "ElevenLabs", soniox: "Soniox" };
 
-export const TRANSCRIPTION_GUIDE_URL = "https://github.com/Latand/live-log-viewer-next/blob/main/docs/transcription.md#local-default--faster-whisper";
+export const TRANSCRIPTION_GUIDE_URL = "https://github.com/Latand/delegatus/blob/main/docs/transcription.md#local-default--faster-whisper";
 
 type CheckResult = { tone: "success" | "danger"; text: string };
 type KeyNote = { provider: LiveProvider; kind: "saved" } | { provider: LiveProvider; kind: "failed"; reason: string };

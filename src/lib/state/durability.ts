@@ -1019,15 +1019,20 @@ export function startStateDurability(options: {
   };
 }
 
-/** The Viewer's own project, the one its board incident cards belong to. */
+/** The Viewer's own project, the one its board incident cards belong to. While
+    the repository's two GitHub names are still two keys, the card goes to the
+    one a checkout on this machine resolved, so it lands on the board the
+    operator sees rather than on a project nothing else is under. */
 async function viewerProject(): Promise<string | null> {
-  const [{ default: manifest }, { projectIdentityFromRemote }, { canonicalOrchestratorProject }] = await Promise.all([
+  const [{ default: manifest }, { viewerRepositoryProjects }, { recordedProjectRemote }, { canonicalOrchestratorProject }] = await Promise.all([
     import("../../../package.json"),
-    import("@/lib/projects/identity"),
+    import("@/lib/projects/viewerRepository"),
+    import("@/lib/projects/aliases"),
     import("@/lib/orchestrator/seats"),
   ]);
   const remote = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim() || manifest.repository.url.trim();
-  const project = projectIdentityFromRemote(remote, process.cwd())?.project ?? null;
+  const projects = viewerRepositoryProjects(remote, process.cwd());
+  const project = projects.find((candidate) => recordedProjectRemote(candidate) !== null) ?? projects[0];
   return project ? canonicalOrchestratorProject(project) : null;
 }
 

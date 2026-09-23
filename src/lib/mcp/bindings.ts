@@ -101,7 +101,7 @@ import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction, PipelineCloseReport } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
-import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
@@ -688,14 +688,15 @@ export interface ViewerMcpDomainDependencies {
       Null means the invariant "a registered session has a canonical project"
       is violated, and unscoped directive routing fails closed diagnostically. */
   callerProject?(): string | null;
-  /** The canonical project of the repository this Viewer deploys (#1321) — the
-      only project whose designated seat may execute a deploy. Production derives
-      it from the canonical Viewer remote, never from the caller's working
-      directory, because an MCP client launches inside the caller's own
-      repository. Optional so partial harnesses fall back to the production
-      resolver; null means the Viewer cannot name what it deploys, and the
-      deploy refusal then fails closed. */
-  viewerProject?(): string | null;
+  /** The canonical projects of the repository this Viewer deploys (#1321) —
+      the only projects whose designated seat may execute a deploy. Production
+      derives them from the canonical Viewer remote, never from the caller's
+      working directory, because an MCP client launches inside the caller's own
+      repository. More than one while the repository's GitHub rename has not
+      been folded into one key yet. Optional so partial harnesses fall back to
+      the production resolver; an empty list means the Viewer cannot name what
+      it deploys, and the deploy refusal then fails closed. */
+  viewerProjects?(): readonly string[];
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
       writes the durable record, and every answer is a read of it. */
@@ -750,13 +751,13 @@ function productionCallerProject(): string | null {
  *
  * Folded through the operator's project aliases because seats are stored
  * alias-resolved: comparing a raw repository id against an aliased seat project
- * would refuse the Viewer's own deploy.
+ * would refuse the Viewer's own deploy. Both GitHub names of this repository
+ * count until that alias exists (`viewerRepositoryProjects`).
  */
-function viewerOwnProject(): string | null {
+function viewerOwnProjects(): string[] {
   const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
   const remote = configured || viewerPackageManifest.repository.url.trim();
-  const project = projectIdentityFromRemote(remote, process.cwd())?.project ?? null;
-  return project ? canonicalOrchestratorProject(project) : null;
+  return [...new Set(viewerRepositoryProjects(remote, process.cwd()).map(canonicalOrchestratorProject))];
 }
 
 /**
@@ -1089,7 +1090,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     (conversationId) => authorizedManagerSeats(productionManagerAuthoritySources())
       .some((seat) => seat.conversationId === conversationId),
   ),
-  viewerProject: viewerOwnProject,
+  viewerProjects: viewerOwnProjects,
 };
 
 function text(value: unknown): string {
@@ -2406,8 +2407,8 @@ async function deployExactSha(
      would otherwise learn only "revision not found" and go looking for a better
      SHA. Fails closed when the Viewer cannot name its own repository — a deploy
      whose target is unproven is the one this closes. */
-  const viewerProject = dependencies.viewerProject ? dependencies.viewerProject() : viewerOwnProject();
-  if (seat.project !== viewerProject) {
+  const viewerProjects = dependencies.viewerProjects ? dependencies.viewerProjects() : viewerOwnProjects();
+  if (!seat.project || !viewerProjects.includes(seat.project)) {
     throw new McpToolRefusal(
       "this tool deploys the Delegatus application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Delegatus surface can. Report the request over the bridge instead.",
       { code: "deploy_foreign_project", revision },

@@ -7,7 +7,8 @@ import { expect, test } from "bun:test";
 import viewerPackageManifest from "../../../package.json";
 
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
-import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
+import { resetProjectAliasesForTests } from "@/lib/projects/aliases";
+import { projectIdentityFromRemote, projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 
 import { productionDomainDependencies, viewerMcpBindings, type ViewerControlDependencies } from "./bindings";
 import { McpToolRefusal } from "./server";
@@ -40,6 +41,7 @@ function bindings(options: {
   conversationId?: string | null;
   callerProject?: string | null;
   viewerProject?: string | null;
+  viewerProjects?: () => readonly string[];
   seats?: { conversationId: string; path: string | null; project: string }[];
   replayed?: boolean;
 }) {
@@ -63,7 +65,8 @@ function bindings(options: {
       role: options.kind === "agent" ? "builder" : null,
     }),
     callerProject: () => options.callerProject ?? null,
-    viewerProject: () => options.viewerProject === undefined ? VIEWER_PROJECT : options.viewerProject,
+    viewerProjects: options.viewerProjects
+      ?? (() => options.viewerProject === undefined ? [VIEWER_PROJECT] : options.viewerProject === null ? [] : [options.viewerProject]),
     authorizedSeats: () => options.seats ?? [
       { conversationId: "conversation_seat", path: null, project: VIEWER_PROJECT },
     ],
@@ -150,7 +153,7 @@ test("#1321: the deploy target is the Viewer's own repository, never the caller'
      no checkout of its own, so neither the cwd nor a `.git` read can name the
      deploy target. What can: the canonical Viewer remote, resolved through the
      same repository-key algorithm that names live checkouts. */
-  const viewerProject = () => productionDomainDependencies.viewerProject?.() ?? null;
+  const viewerProject = () => productionDomainDependencies.viewerProjects?.()[0] ?? null;
   const originalCwd = process.cwd();
   const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-deploy-viewer-identity-"));
@@ -192,6 +195,66 @@ test("#1321: the deploy target is the Viewer's own repository, never the caller'
     if (configured === undefined) delete process.env.LLV_VIEWER_CANONICAL_REMOTE;
     else process.env.LLV_VIEWER_CANONICAL_REMOTE = configured;
     fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("the renamed repository deploys under either GitHub name before the rename alias exists", async () => {
+  /* GitHub renamed Latand/live-log-viewer-next to Latand/delegatus and
+     redirects the old name. A checkout still cloned from the old URL keeps its
+     seat under the old key until the operator re-points origin, and only then
+     does the forge-proven alias join the keys. The release in between names
+     the new remote, and its own seat must still deploy. A fork that kept the
+     name is a different repository and is still refused. */
+  const restoreState = process.env.LLV_STATE_DIR;
+  const restoreRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-renamed-deploy-"));
+  process.env.LLV_STATE_DIR = state;
+  resetProjectAliasesForTests();
+  const key = (remote: string): string => projectIdentityFromRemote(remote, state)!.project;
+  const deploysFor = async (seatProject: string): Promise<boolean> => {
+    const tools = bindings({
+      kind: "manager",
+      callerProject: seatProject,
+      viewerProjects: () => productionDomainDependencies.viewerProjects?.() ?? [],
+      seats: [{ conversationId: "conversation_seat", path: null, project: seatProject }],
+    });
+    try {
+      await tools.deploy_exact_sha({ clientRequestId: `d-${seatProject}`, revision: SHA });
+      return posted.length === 1;
+    } catch (error) {
+      expect((error as McpToolRefusal).details).toMatchObject({ code: "deploy_foreign_project" });
+      return false;
+    }
+  };
+  try {
+    const oldSeat = key(`git${"@"}github.com:Latand/live-log-viewer-next.git`);
+    const newSeat = key(`git${"@"}github.com:Latand/delegatus.git`);
+    expect(oldSeat).not.toBe(newSeat);
+
+    /* The bundled manifest names the new repository. */
+    delete process.env.LLV_VIEWER_CANONICAL_REMOTE;
+    expect(viewerPackageManifest.repository.url).toBe("git+https://github.com/Latand/delegatus.git");
+    expect(await deploysFor(newSeat)).toBe(true);
+    expect(await deploysFor(oldSeat)).toBe(true);
+    expect(await deploysFor(key("https://github.com/Latand/another-project.git"))).toBe(false);
+
+    /* A host still configured with the old remote recognizes the new key too. */
+    process.env.LLV_VIEWER_CANONICAL_REMOTE = "https://github.com/Latand/live-log-viewer-next.git";
+    expect(await deploysFor(newSeat)).toBe(true);
+    expect(await deploysFor(oldSeat)).toBe(true);
+
+    /* A fork of the same name deploys only its own seat. */
+    process.env.LLV_VIEWER_CANONICAL_REMOTE = "https://github.com/someone-else/delegatus.git";
+    expect(await deploysFor(key("https://github.com/someone-else/delegatus.git"))).toBe(true);
+    expect(await deploysFor(oldSeat)).toBe(false);
+    expect(await deploysFor(newSeat)).toBe(false);
+  } finally {
+    if (restoreState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = restoreState;
+    if (restoreRemote === undefined) delete process.env.LLV_VIEWER_CANONICAL_REMOTE;
+    else process.env.LLV_VIEWER_CANONICAL_REMOTE = restoreRemote;
+    resetProjectAliasesForTests();
+    fs.rmSync(state, { recursive: true, force: true });
   }
 });
 
