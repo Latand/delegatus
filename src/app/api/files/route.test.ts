@@ -28,6 +28,7 @@ import {
   resetFilesRouteCacheForTests,
   setFileScanRunnerForTests,
 } from "@/lib/scanner/scanCache";
+import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
 
 let scans = 0;
@@ -638,6 +639,47 @@ test("a stale projection answer carries the generation its own body was built fr
   expect(confirmed.status).toBe(304);
   expect(builtOf(confirmed)).toEqual(rebuiltStamp);
 });
+
+/* #2072: the worker reads the persisted scan snapshot when its turn in the
+   projection queue comes. A newer scan can replace that file while the build
+   waits, and the rows it projects are then newer than the scan the request
+   carried: they are dated by the file the worker read. */
+test("a worker-built projection is dated by the scan snapshot the worker actually read", async () => {
+  const store = globalThis as typeof globalThis & {
+    __llvFilesProjectionInflight?: Map<string, Promise<unknown>>;
+    __llvFilesProjectionWorkerTail?: Promise<void>;
+  };
+  setFilesResponseWorkerRuntimeForTests({
+    launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") },
+    env: { ...process.env, NODE_ENV: "production", LLV_STATE_DIR: stateDir, LLV_AGENT_REGISTRY_SQLITE: "off", LLV_FILES_RESPONSE_WORKER: "1" },
+    timeoutMs: 30_000,
+  });
+  let release!: () => void;
+  try {
+    scannedFiles = [file("/sessions/generation-1.jsonl")];
+    await cachedFileScan();
+    /* The build waits its turn behind another projection. */
+    store.__llvFilesProjectionWorkerTail = new Promise<void>((resolve) => { release = resolve; });
+    const pending = GET(new Request("http://127.0.0.1/api/files?view=summary"));
+    for (let attempt = 0; attempt < 500 && !store.__llvFilesProjectionInflight?.size; attempt += 1) await Bun.sleep(2);
+    expect(store.__llvFilesProjectionInflight?.size).toBe(1);
+
+    scannedFiles = [file("/sessions/generation-2.jsonl")];
+    await currentFileScan({ fresh: true });
+    release();
+    const response = await pending;
+    const match = /^([0-9a-z]+)\.(\d+)\.(\d+)$/.exec(response.headers.get("x-llv-files-built") ?? "");
+
+    /* The request carried generation 1; the worker read generation 2's rows. */
+    expect(response.headers.get("x-llv-files-generation")).toBe("1");
+    expect(await response.text()).toContain("generation-2.jsonl");
+    expect(match?.[2]).toBe("2");
+  } finally {
+    release?.();
+    setFilesResponseWorkerRuntimeForTests(null);
+    shutdownFilesResponseWorker("test");
+  }
+}, 60_000);
 
 test("generation completion retries skip the stale projection while its refresh is running", async () => {
   scannedFiles = [file("/sessions/generation-1.jsonl")];

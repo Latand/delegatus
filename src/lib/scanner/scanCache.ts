@@ -301,7 +301,13 @@ export function persistedFileScanSnapshot(): FileScanSnapshot | undefined {
   return readPersistedFileScanSnapshot();
 }
 
-function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot): void {
+/** The generation a persisted snapshot holds, written beside it (#2072): the
+    files projection worker reads the file whenever its turn comes, and a
+    later scan may have replaced it by then, so the worker reports this pair
+    back and the projection is dated by what it actually read. */
+export type PersistedFileScanGeneration = { epoch: string; generation: number };
+
+function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot, scanned: PersistedFileScanGeneration): void {
   let temporary: string | undefined;
   let operation = "create state directory";
   let target = statePath(FILE_SCAN_SNAPSHOT_FILE);
@@ -315,6 +321,8 @@ function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot): void {
     fs.writeFileSync(temporary, JSON.stringify({
       version: FILE_SCAN_SNAPSHOT_VERSION,
       schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
+      epoch: scanned.epoch,
+      generation: scanned.generation,
       snapshot,
     }) + "\n", {
       encoding: "utf8",
@@ -515,7 +523,7 @@ function fileScanRefreshPromise(
       ...(onResourceSnapshot ? { onResourceSnapshot, resourceBaseline: slot.snapshot } : {}),
     }, generationSignal));
     if (!snapshot.complete) throw new Error("filesystem scan incomplete");
-    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(snapshot);
+    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(snapshot, { epoch: slot.epoch, generation });
     slot.snapshot = snapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();
@@ -615,7 +623,7 @@ function beginPinnedFileScanRefresh(
       slot.pinnedSnapshots.delete(oldest);
       slot.pinnedGenerations?.delete(oldest);
     }
-    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(globalSnapshot);
+    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(globalSnapshot, { epoch: slot.epoch, generation });
     slot.snapshot = globalSnapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();

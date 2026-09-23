@@ -348,29 +348,32 @@ async function projectionFor(
     const previous = cached?.representation;
     const snapshot = { ...scan.snapshot, pinOverlayPaths: scan.pinOverlayPaths };
     const persistedSnapshot = statePath("files-scan-snapshot.json");
-    /* Stamped as the build starts, where it reads the stores. */
-    const builtNow = (): FilesBuilt => ({
-      epoch: scan.epoch ?? "0",
-      generation: scan.generation,
-      sequence: nextProjectionSequence(),
-    });
+    const epoch = scan.epoch ?? "0";
     let representation: ProjectionRepresentation;
     if (filesResponseWorkerEnabled()) {
       representation = await queueProjectionWorker(async () => {
-        const built = builtNow();
-        const projected = await buildFilesResponseInWorker({
+        /* The build order is taken as the build starts, where it reads the
+           stores. The persisted snapshot is read by the worker when its turn
+           comes, and a later scan may have replaced it by then: the file
+           names its own generation and the worker reports it back, so the
+           rows are dated by the scan they came from. A file this process
+           never wrote holds the snapshot it warm-started from, which it
+           counts as generation 0. */
+        const sequence = nextProjectionSequence();
+        const fromFile = !scan.pinOverlayPaths?.length && fs.existsSync(persistedSnapshot);
+        const { snapshotRead, ...projected } = await buildFilesResponseInWorker({
           type: "project",
           url: request.url,
           headers: [...headers.entries()],
-          ...(scan.pinOverlayPaths?.length || !fs.existsSync(persistedSnapshot)
-            ? { snapshot }
-            : { snapshotFile: persistedSnapshot }),
+          ...(fromFile ? { snapshotFile: persistedSnapshot } : { snapshot }),
           ...(summary ? { deltaScope: createHash("sha1").update(scopeKey).digest("hex") } : {}),
         });
-        return { ...projected, built };
+        const generation = !fromFile ? scan.generation : snapshotRead?.epoch === epoch ? snapshotRead.generation : 0;
+        return { ...projected, built: { epoch, generation, sequence } };
       });
     } else {
-      const built = builtNow();
+      /* Stamped as the build starts, where it reads the stores. */
+      const built: FilesBuilt = { epoch, generation: scan.generation, sequence: nextProjectionSequence() };
       const response = await buildFilesResponse(new Request(request.url, { headers }), {
         listFilesWithProjectCatalog: async () => snapshot,
       });
