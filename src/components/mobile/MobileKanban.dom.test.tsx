@@ -32,7 +32,8 @@ import { LONG_PRESS_MS } from "./swipeIntent";
  *     it back and says why;
  *   - an empty column says so in the desktop's words and points to the
  *     nearest column with work; Done opens twenty cards at a time;
- *   - a card opens its task, a row no task owns opens its conversation.
+ *   - a card opens its task, a row no task owns opens its conversation;
+ *   - coming back to the board lands on the column and offset it left.
  */
 
 const NOW = 1_800_000_000;
@@ -343,4 +344,23 @@ test("a card whose pipeline waits on the operator says the lane's state and draw
   expect(q(card, "[data-phone-card-badge]")!.getAttribute("data-pstate")).toBe("needs_decision");
   expect(q(card, '[data-density="card"]')!.getAttribute("data-pipeline")).toBe("parked");
   expect(q(host, "[data-phone-kanban-tab=assigned] [data-phone-tab-needs]")!.textContent).toBe("1");
+});
+
+test("coming back to the board lands on the column and the offset the operator left (§3.7)", () => {
+  const files = Array.from({ length: 30 }, (_, index) => file(index + 1, { lastAgentWorkAt: (NOW - (index + 1) * 60) * 1000 } as Partial<FileEntry>));
+  const tasks = files.map((entry, index) => task(`d${index + 1}`, "done", [entry.path]));
+  const first = mount({ files, tasks });
+  click(q(first.host, "[data-phone-kanban-tab=done]"));
+  const page = q(first.host, '[data-phone-kanban-column="done"]')!;
+  page.scrollTop = 240;
+  flushSync(() => { page.dispatchEvent(new dom.Event("scroll", { bubbles: false }) as unknown as Event); });
+  /* A conversation pushed over the board unmounts it. */
+  for (const root of roots.splice(0)) flushSync(() => root.unmount());
+
+  const again = mount({ files, tasks });
+  expect(q(again.host, "[data-phone-kanban]")!.getAttribute("data-phone-kanban-active")).toBe("done");
+  expect(q(again.host, '[data-phone-kanban-column="done"]')!.scrollTop).toBe(240);
+  /* A fresh load of the tab reads the column back from the session. */
+  resetPhoneKanbanPlaces();
+  expect(JSON.parse(dom.sessionStorage.getItem("llv.phoneKanban.fixture") ?? "{}").column).toBe("done");
 });

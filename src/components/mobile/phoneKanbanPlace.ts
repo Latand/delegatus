@@ -64,8 +64,28 @@ export function readPlace(project: string): PhoneKanbanPlace {
   return place;
 }
 
-/** Records a change of place. Only a new column or Done window is announced:
-    an offset changes on every scroll and nobody renders from it. */
+/** Session writes wait for the scroll that caused them to pause. */
+const PERSIST_MS = 250;
+const pending = new Map<string, ReturnType<typeof setTimeout>>();
+
+function persist(project: string, now: boolean): void {
+  const write = () => {
+    pending.delete(project);
+    try {
+      storage()?.setItem(PREFIX + project, JSON.stringify(memory.get(project)));
+    } catch {
+      /* Private mode or a full store: the place still holds for this page. */
+    }
+  };
+  const waiting = pending.get(project);
+  if (waiting !== undefined) clearTimeout(waiting);
+  if (now) write();
+  else pending.set(project, setTimeout(write, PERSIST_MS));
+}
+
+/** Records a change of place. Only a new column or Done window is announced
+    and written at once: an offset changes on every scroll frame, nobody
+    renders from it, and the session copy of it waits for the scroll to rest. */
 export function writePlace(project: string, patch: Partial<PhoneKanbanPlace>): void {
   const current = readPlace(project);
   const next: PhoneKanbanPlace = {
@@ -74,12 +94,9 @@ export function writePlace(project: string, patch: Partial<PhoneKanbanPlace>): v
     doneShown: patch.doneShown ?? current.doneShown,
   };
   memory.set(project, next);
-  try {
-    storage()?.setItem(PREFIX + project, JSON.stringify(next));
-  } catch {
-    /* Private mode or a full store: the place still holds for this page. */
-  }
-  if (next.column !== current.column || next.doneShown !== current.doneShown) for (const listener of listeners) listener();
+  const announced = next.column !== current.column || next.doneShown !== current.doneShown;
+  persist(project, announced || !patch.offsets);
+  if (announced) for (const listener of listeners) listener();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -99,5 +116,7 @@ export function usePhoneKanbanDoneShown(project: string): number {
 
 /** Tests start from a clean session. */
 export function resetPhoneKanbanPlaces(): void {
+  for (const waiting of pending.values()) clearTimeout(waiting);
+  pending.clear();
   memory.clear();
 }

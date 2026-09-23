@@ -318,14 +318,14 @@ const kanbanPipelines: Pipeline[] = [];
 const kanbanTasks: unknown[] = [];
 if (KANBAN) {
   /* Assigned */
-  kanbanPipelines.push(kanbanLane("k-decision", "Mobile data: stop repeated full-board downloads", ["t-data"], "needs_decision", [
+  kanbanPipelines.push(kanbanLane("lane-decision", "Mobile data: stop repeated full-board downloads", ["t-data"], "needs_decision", [
     { id: "implement", state: "needs_decision", ago: 2_460 }, { id: "review", role: "reviewer" },
   ]));
-  kanbanPipelines.push(kanbanLane("k-paused", "Finish mobile traffic acceptance", ["t-data"], "paused", [{ id: "accept", state: "passed", ago: 5_400 }, { id: "review", role: "reviewer" }]));
-  kanbanLinks.pipelines["k-decision"] = { links: [], noPr: true };
+  kanbanPipelines.push(kanbanLane("lane-paused", "Finish mobile traffic acceptance", ["t-data"], "paused", [{ id: "accept", state: "passed", ago: 5_400 }, { id: "review", role: "reviewer" }]));
+  kanbanLinks.pipelines["lane-decision"] = { links: [], noPr: true };
   const buildPath = kanbanConversation("GitHub Copilot as a third engine · build", "settled", 900);
   const critiquePath = kanbanConversation("GitHub Copilot as a third engine · critique", "settled", 720);
-  kanbanPipelines.push(kanbanLane("k-review", "GitHub Copilot as a third engine the Viewer can launch", ["t-copilot"], "needs_review", [
+  kanbanPipelines.push(kanbanLane("lane-review", "GitHub Copilot as a third engine the Viewer can launch", ["t-copilot"], "needs_review", [
     { id: "build", attempts: [
       { n: 1, state: "passed", startedAt: iso(4_000), completedAt: iso(3_000), agentPath: buildPath, conversationId: idOf(buildPath), activatedBy: null, effectiveRole: kanbanRole("builder"), verdict: { status: "pass", findings: [] } },
       { n: 2, state: "passed", startedAt: iso(1_600), completedAt: iso(900), agentPath: buildPath, conversationId: idOf(buildPath), activatedBy: { stageId: "critique", attempt: 1, edge: "fail" }, effectiveRole: kanbanRole("builder"), verdict: { status: "pass", findings: [] } },
@@ -334,31 +334,31 @@ if (KANBAN) {
       { n: 1, state: "failed", startedAt: iso(2_800), completedAt: iso(2_000), agentPath: critiquePath, conversationId: idOf(critiquePath), activatedBy: null, effectiveRole: kanbanRole("reviewer"), verdict: { status: "fail", findings: ["one", "two"] } },
     ] },
   ], { reviewPending: { stageId: "critique", attempt: 1, fixStageId: "build", fixAttempt: 2, reviewedHead: "4be1c07a1d2e", currentHead: "9b2e7d4c5f60", verdict: "fail", findings: 2 } }));
-  kanbanLinks.pipelines["k-review"] = prLinks(2031);
-  kanbanPipelines.push(kanbanLane("k-favicon", "Restore /favicon.ico with the Delegatus emblem", ["t-favicon"], "running", [
+  kanbanLinks.pipelines["lane-review"] = prLinks(2031);
+  kanbanPipelines.push(kanbanLane("lane-favicon", "Restore /favicon.ico with the Delegatus emblem", ["t-favicon"], "running", [
     { id: "implement", state: "passed", ago: 900 }, { id: "review", state: "running", ago: 240, role: "reviewer" },
   ]));
-  kanbanLinks.pipelines["k-favicon"] = prLinks(2070);
-  kanbanPipelines.push(kanbanLane("k-kanban", "Phone kanban: a convenient board on mobile", ["t-kanban"], "running", [
+  kanbanLinks.pipelines["lane-favicon"] = prLinks(2070);
+  kanbanPipelines.push(kanbanLane("lane-kanban", "Phone kanban: a convenient board on mobile", ["t-kanban"], "running", [
     { id: "design", state: "passed", ago: 4_000 }, { id: "critique", state: "passed", ago: 2_000, role: "reviewer" }, { id: "revise", state: "running", ago: 1_080 },
   ]));
-  kanbanLinks.pipelines["k-kanban"] = { links: [], noPr: true };
-  kanbanPipelines.push(kanbanLane("k-upload", "Redesign attachment upload for large files", ["t-upload"], "running", [
+  kanbanLinks.pipelines["lane-kanban"] = { links: [], noPr: true };
+  kanbanPipelines.push(kanbanLane("lane-upload", "Redesign attachment upload for large files", ["t-upload"], "running", [
     { id: "plan", state: "passed", ago: 6_000 }, { id: "build-api", state: "passed", ago: 4_000 }, { id: "review-api", state: "passed", ago: 2_000, role: "reviewer" },
     { id: "build-ui", state: "running", ago: 360 }, { id: "review-ui", role: "reviewer" }, { id: "verify" }, { id: "docs" }, { id: "merge" },
   ]));
-  kanbanLinks.pipelines["k-upload"] = prLinks(2201);
-  kanbanPipelines.push(kanbanLane("k-skeletons", "Skeletons and state transitions on phone and desktop", ["t-skeletons"], "running", [
+  kanbanLinks.pipelines["lane-upload"] = prLinks(2201);
+  kanbanPipelines.push(kanbanLane("lane-skeletons", "Skeletons and state transitions on phone and desktop", ["t-skeletons"], "running", [
     { id: "design", state: "passed", ago: 3_000 }, { id: "verify-the-phone-board-at-both-widths-in-uk", state: "running", ago: 1_265 },
   ]));
-  kanbanPipelines.push(kanbanLane("k-chips", "PR and issue chips on pipelines and task cards", ["t-chips"], "completed", [
+  kanbanPipelines.push(kanbanLane("lane-chips", "PR and issue chips on pipelines and task cards", ["t-chips"], "completed", [
     { id: "implement", state: "passed", ago: 2_400 }, { id: "review", state: "passed", ago: 1_200, role: "reviewer" },
   ]));
-  kanbanLinks.pipelines["k-chips"] = prLinks(2068, "merged");
-  kanbanPipelines.push(kanbanLane("k-seat", "Seat wakes after its own deploy and keeps its mandate", ["t-seat"], "completed", [
+  kanbanLinks.pipelines["lane-chips"] = prLinks(2068, "merged");
+  kanbanPipelines.push(kanbanLane("lane-seat", "Seat wakes after its own deploy and keeps its mandate", ["t-seat"], "completed", [
     { id: "implement", state: "passed", ago: 7_200 }, { id: "review", state: "passed", ago: 5_400, role: "reviewer" },
   ]));
-  kanbanLinks.pipelines["k-seat"] = prLinks(2044, "merged");
+  kanbanLinks.pipelines["lane-seat"] = prLinks(2044, "merged");
   const longWorker = kanbanConversation("Pick the row state as the one authority", "working", 780);
   const longReader = kanbanConversation("Read every surface that counts agents", "settled", 3_000);
   const ukWorker = kanbanConversation("Перевірити опитування мобільної дошки", "working", 420);
@@ -386,7 +386,7 @@ if (KANBAN) {
   kanbanConversation("Measure the board's memory on a 390 px phone", "stalled", 2_230);
   kanbanConversation("Draft the Copilot engine login flow", "stalled", 2_280);
   kanbanConversation("Rename the MCP key in the setup docs", "stalled", 2_290);
-  kanbanPipelines.push(kanbanLane("k-flake", "Nightly: rerun the flake campaign on a quiet machine", [], "running", [
+  kanbanPipelines.push(kanbanLane("lane-flake", "Nightly: rerun the flake campaign on a quiet machine", [], "running", [
     { id: "measure", state: "running", ago: 1_500 }, { id: "report", role: "reviewer" },
   ]));
   /* Done: more than its window of twenty. */
