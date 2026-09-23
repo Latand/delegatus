@@ -1496,6 +1496,64 @@ function refenceHeldDeliveries(
   }
 }
 
+/* A spawn that began before an account switch remains attributable to its
+   birth account. The already-active engine-wide migration intent still
+   applies to the new conversation through the existing coordinator
+   contract — and through the SAME admission the drain itself uses, since
+   an automatic intent enrolling a conversation nobody named is the
+   eleventh automatic selection (#1279); a conversation-scoped reseat moves
+   only its own thread. The migration record is the shared construction, so
+   settlement cannot drift from the two paths that queue the same move.
+   Answers whether the conversation was enrolled. */
+function enrollSettledSpawnInDrain(file: RegistryFile, conversation: RegistryConversation, at: string): boolean {
+  const activeIntent = Object.values(file.migrationIntents).find((intent) =>
+    intent.engine === conversation.engine
+    && engineScopedIntent(intent)
+    && migrationIntentCanEnroll(file, intent, Date.parse(at)));
+  const source = conversation.generations.at(-1);
+  if (!activeIntent || conversation.pinnedAccountId || !source
+    || source.accountId === activeIntent.targetId || conversation.migration
+    || migrationEnrollmentAdmission(file, conversation, source, activeIntent).kind !== "accepted") return false;
+  conversation.migration = conversationMigrationForIntent(
+    conversation,
+    source,
+    activeIntent,
+    migrationTurnIsBusy(file, conversation) ? "waiting-turn" : "requested",
+    at,
+  );
+  conversation.updatedAt = at;
+  return true;
+}
+
+/** Whether `launchId` names this conversation's fresh launch, still settling,
+    on the account its current generation runs on (#2051). A settled launch no
+    longer speaks for the account: from then on the conversation is ordinary
+    work the lazy move may carry. */
+/** The account each conversation's fresh launch chose, for every launch still
+    settling: staged, its first message not yet delivered (#2051). */
+function settlingLaunchAccounts(file: RegistryFile): Map<ViewerConversationId, string | null> {
+  const accounts = new Map<ViewerConversationId, string | null>();
+  for (const receipt of Object.values(file.receipts)) {
+    if (receipt.purpose !== "launch" || (receipt.state !== "starting" && receipt.state !== "path-pending")) continue;
+    accounts.set(resolveConversationAlias(file, receipt.conversationId), receipt.accountId);
+  }
+  return accounts;
+}
+
+function settlingLaunchChoseAccount(
+  file: RegistryFile,
+  conversationId: ViewerConversationId,
+  generation: RegistryConversation["generations"][number],
+  launchId: string | null | undefined,
+): boolean {
+  const receipt = launchId ? file.receipts[launchId] : undefined;
+  return Boolean(receipt
+    && receipt.purpose === "launch"
+    && (receipt.state === "starting" || receipt.state === "path-pending")
+    && resolveConversationAlias(file, receipt.conversationId) === conversationId
+    && receipt.accountId === generation.accountId);
+}
+
 /** The in-flight migration a transaction is about to replace, whose held deliveries its replacement adopts. */
 function inFlightMigration(conversation: RegistryConversation): ConversationMigration | null {
   return conversation.migration && IN_FLIGHT_MIGRATION_PHASES.has(conversation.migration.phase) ? { ...conversation.migration } : null;
@@ -5764,30 +5822,11 @@ export class AgentRegistry {
       file.conversationRevision[conversation.engine] += 1;
       file.engineRouting[conversation.engine].revision += 1;
     }
-    /* A spawn that began before an account switch remains attributable to its
-       birth account. The already-active engine-wide migration intent still
-       applies to the new conversation through the existing coordinator
-       contract — and through the SAME admission the drain itself uses, since
-       an automatic intent enrolling a conversation nobody named is the
-       eleventh automatic selection (#1279); a conversation-scoped reseat moves
-       only its own thread. The migration record is the shared construction, so
-       settlement cannot drift from the two paths that queue the same move. */
-    const activeIntent = Object.values(file.migrationIntents).find((intent) =>
-      intent.engine === conversation.engine
-      && engineScopedIntent(intent)
-      && migrationIntentCanEnroll(file, intent, Date.parse(createdAt)));
-    const source = conversation.generations.at(-1);
-    if (activeIntent && !conversation.pinnedAccountId && source
-      && source.accountId !== activeIntent.targetId && !conversation.migration
-      && migrationEnrollmentAdmission(file, conversation, source, activeIntent).kind === "accepted") {
-      conversation.migration = conversationMigrationForIntent(
-        conversation,
-        source,
-        activeIntent,
-        migrationTurnIsBusy(file, conversation) ? "waiting-turn" : "requested",
-        createdAt,
-      );
-    }
+    /* A fresh launch staged ahead of its first message joins a running drain
+       only once that message is delivered, at finalization (#2051): until
+       then the thread has no turn, and a migration fenced on it would hold the
+       very message it waits for. */
+    if (finalize || receipt.purpose !== "launch") enrollSettledSpawnInDrain(file, conversation, createdAt);
     conversation.updatedAt = createdAt;
     file.conversations[conversation.id] = conversation;
 
@@ -5872,6 +5911,11 @@ export class AgentRegistry {
       receipt.state = "completed";
       receipt.error = null;
       receipt.completionMode = "route-completed";
+      /* The drain enrollment staging deferred for a fresh launch (#2051). */
+      if (receipt.purpose === "launch" && enrollSettledSpawnInDrain(file, conversation, entry.updatedAt)) {
+        file.conversationRevision[conversation.engine] += 1;
+        file.engineRouting[conversation.engine].revision += 1;
+      }
       if (receipt.supersedes) {
         stageOrRecordSupersedenceInFile(file, receipt.supersedes.conversationId, receipt.conversationId, receipt.supersedes.reason);
       }
@@ -5912,6 +5956,10 @@ export class AgentRegistry {
       receipt.state = "completed";
       receipt.error = null;
       receipt.completionMode = receipt.completionMode ?? "route-recovered";
+      if (receipt.purpose === "launch" && enrollSettledSpawnInDrain(file, conversation, entry.updatedAt)) {
+        file.conversationRevision[conversation.engine] += 1;
+        file.engineRouting[conversation.engine].revision += 1;
+      }
       if (receipt.supersedes) {
         stageOrRecordSupersedenceInFile(file, receipt.supersedes.conversationId, receipt.conversationId, receipt.supersedes.reason);
       }
@@ -7443,6 +7491,7 @@ export class AgentRegistry {
       route.revision += 1;
 
       let scoped = 0;
+      const settlingLaunches = settlingLaunchAccounts(file);
       for (const conversation of Object.values(file.conversations)) {
         if (conversation.engine !== input.engine) continue;
         if (conversation.pinnedAccountId) continue;
@@ -7461,6 +7510,11 @@ export class AgentRegistry {
           }
           continue;
         }
+        /* A launch still waiting on its first message stays where the pool put
+           it (#2051): a migration now would hold that message behind a move
+           that waits for the turn it starts. Finalization enrolls it into this
+           drain once the message is delivered. */
+        if (settlingLaunches.has(conversation.id) && settlingLaunches.get(conversation.id) === source.accountId) continue;
         /* The decision the engine-wide loop was missing, taken here at the
            per-conversation boundary because that is the only place the project
            is known: this conversation's own project's pool, and whether the
@@ -7508,7 +7562,10 @@ export class AgentRegistry {
    * conversation is returned exactly as it stands and the send lands on the
    * account it is already running on, which crosses nothing.
    */
-  requestConversationMigrationToActiveAccount(id: ViewerConversationId): RegistryConversation {
+  requestConversationMigrationToActiveAccount(
+    id: ViewerConversationId,
+    options: { launchId?: string | null } = {},
+  ): RegistryConversation {
     const bindings = accountProjectBindings();
     return this.mutate((file) => {
       const canonicalId = resolveConversationAlias(file, id);
@@ -7521,6 +7578,13 @@ export class AgentRegistry {
       const source = conversation.generations.at(-1);
       if (!targetId || !source || source.accountId === null || source.accountId === targetId) return clone(conversation);
       if (conversation.migrationOptOut?.targetId === targetId) return clone(conversation);
+      /* The launch's own first message (#2051). The launch picked this account
+         moments ago by the automatic rule, where the project's pool ranks
+         accounts by room and routing only breaks a tie. Moving the
+         conversation now strands its mandate behind a migration of a thread
+         with no turn yet: a Claude move waits for a transcript only that
+         held message can start, and a committed move drops the held message. */
+      if (settlingLaunchChoseAccount(file, canonicalId, source, options.launchId)) return clone(conversation);
       if (admitAutomaticAccountTarget({
         project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
         engine: conversation.engine,
