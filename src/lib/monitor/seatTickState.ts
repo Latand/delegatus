@@ -6,7 +6,7 @@ import { statePath } from "@/lib/configDir";
 
 import {
   emptySeatTickState,
-  SEAT_TICK_ANNOUNCED_LANES_LIMIT,
+  SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -247,10 +247,10 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     childrenShown: conversationIds(raw.childrenShown).slice(-SEAT_TICK_CHILDREN_SHOWN_LIMIT),
     /* Absent on every row from before #1799, and absent reads as empty: a seat
        that has been told nothing about its lanes is told about all of them. */
-    announcedLanes: conversationIds(raw.announcedLanes).slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT),
+    announcedLanes: conversationIds(raw.announcedLanes),
     /* Absent on every row from before #2063, and absent reads as empty: a
        settled deploy nobody announced is announced. */
-    announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT),
+    announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
