@@ -172,8 +172,7 @@ export class CopilotLoginSupervisor {
         this.cleanupChild(operation.operationId);
       }
     }
-    const inProgress = [...this.operations.values()].find((operation) => !terminal(operation.phase))
-      ?? (this.children.size ? [...this.operations.values()].find((operation) => this.children.has(operation.operationId)) : undefined);
+    const inProgress = [...this.operations.values()].find((operation) => !terminal(operation.phase));
     if (inProgress) throw new Error("a Copilot sign-in is already running");
     const now = this.ports.now();
     const generation = (this.generations.get(accountId) ?? 0) + 1;
@@ -210,6 +209,10 @@ export class CopilotLoginSupervisor {
       const timer = this.ports.setTimeout(() => {
         const live = this.operations.get(operationId);
         if (!live || terminal(live.phase)) return;
+        const deadline = this.timers.get(operationId);
+        if (deadline) this.ports.clearTimeout(deadline);
+        this.timers.delete(operationId);
+        this.output.delete(operationId);
         this.update(operationId, { phase: "timed_out", result: failureResult("timed_out", "Copilot sign-in expired"), acceptsCode: false, loginUrl: null, userCode: null });
         const child = this.children.get(operationId);
         if (child) this.terminateWithEscalation(operationId, child);

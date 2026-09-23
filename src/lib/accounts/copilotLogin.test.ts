@@ -106,13 +106,19 @@ test("cancel signals the detached process group and escalates after the grace pe
   expect(supervisor.forAccount(account.id)?.phase).toBe("canceled");
 });
 
-test("the fifteen-minute deadline marks timeout and signals its recorded pid", () => {
+test("the fifteen-minute deadline clears buffered code and the timer, then stops the process group", () => {
   const account = createManagedCopilotAccount("Deadline");
   const supervisor = new CopilotLoginSupervisor(ports());
   const operation = supervisor.start(account.id);
   expect(timers.find((timer) => timer.delay === COPILOT_LOGIN_TIMEOUT_MS)).toBeDefined();
+  child.stdout.emit("data", "To authenticate, visit https://github.com/login/device and enter code ABCD-1234");
+  const internals = supervisor as unknown as { output: Map<string, string>; timers: Map<string, NodeJS.Timeout> };
+  expect(internals.output.has(operation.operationId)).toBe(true);
+  expect(internals.timers.has(operation.operationId)).toBe(true);
   timers.find((timer) => timer.delay === COPILOT_LOGIN_TIMEOUT_MS)!.callback();
   expect(supervisor.forAccount(account.id)?.phase).toBe("timed_out");
+  expect(internals.output.has(operation.operationId)).toBe(false);
+  expect(internals.timers.has(operation.operationId)).toBe(false);
   timers.find((timer) => timer.delay === COPILOT_LOGIN_TERM_GRACE_MS)!.callback();
   expect(signals).toEqual([{ pid: -child.pid, signal: "SIGTERM" }, { pid: -child.pid, signal: "SIGKILL" }]);
   child.emit("exit", null, "SIGTERM");
