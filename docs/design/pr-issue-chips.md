@@ -363,9 +363,23 @@ rules that found it:
 3. Each distinct `runs[].attempts[].report.provenance.pullRequest` number gives
    `via: ["provenance"]`.
 4. Cached PRs whose `headRefName` is the lane branch or the stripped delivery
-   branch give `lane-branch` or `delivery-branch`. The PR's `createdAt` must be
-   at or after `pipeline.createdAt`, unless rule 2 already named it. This guards
-   against the seven reused head names (§1) and loses the one unexplained case.
+   branch give `lane-branch` or `delivery-branch`. The PR must have been opened
+   while the lane was alive, meaning both of these hold:
+   - its `createdAt` is at or after `pipeline.createdAt`;
+   - for a settled lane, its `createdAt` is at or before `pipeline.closedAt`.
+     Every completed and closed lane carries `closedAt`, and no open lane does.
+
+   The window does not apply to a PR that rule 2 (`delivery.pr`) or rule 3
+   (provenance) already names, because those are the lane's own records.
+   Instants are compared with `Date.parse`, because the forge writes `…00Z` and
+   the registry writes `…00.000Z`. A PR whose opening time cannot be read falls
+   outside the window.
+
+   The lower bound stops a new lane from inheriting an old PR on a reused head.
+   The upper bound stops a finished lane from picking up the PRs that later
+   lanes open on the same head. The seven reused head names in §1 (one of them
+   carrying 15 PRs) are exactly that case. The window loses the one unexplained
+   case in §1.
 5. For every PR from rules 1–4, `closes` gives issue links with
    `via: ["closes"]`.
 

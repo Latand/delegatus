@@ -47,11 +47,12 @@ Object.defineProperty(dom.HTMLElement.prototype, "clientWidth", { configurable: 
 
 const patches: Array<{ url: string; body: unknown }> = [];
 let answer: ResolvedWorkLinks | null = null;
+let taskAnswer: Record<string, ResolvedWorkLinks> | null = null;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   if (init?.method === "PATCH") {
     patches.push({ url, body: JSON.parse(String(init.body)) });
-    return new Response(JSON.stringify({ ok: true, workLinks: answer }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: true, workLinks: answer, ...(taskAnswer ? { taskWorkLinks: taskAnswer } : {}) }), { status: 200, headers: { "content-type": "application/json" } });
   }
   return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
 }) as unknown as typeof fetch;
@@ -67,6 +68,8 @@ afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
   patches.length = 0;
+  answer = null;
+  taskAnswer = null;
 });
 
 const NOW = 1_800_000_000;
@@ -187,4 +190,27 @@ test("the pipeline menu's attach form sends attach-link with what was typed, and
   expect(patches).toEqual([{ url: "/api/pipelines/p-two", body: { action: "attach-link", link: "#2059" } }]);
   expect(chips(card(host).querySelector('[data-work-links="p-two"]'))).toEqual(["unknown:#2059"]);
   expect(card(host).querySelector('[data-work-links="p-two"] [data-work-links-nopr]')).toBeNull();
+});
+
+test("an attach on a pipeline redraws the task card that aggregates it from the same answer, not the next poll", async () => {
+  const host = mount({ pipelines: { "p-two": { links: [], noPr: true } }, tasks: {} });
+  await tick();
+  expect(card(host).querySelector('[data-work-links="t-chips"]')).toBeNull();
+  click(card(host).querySelector('.stage-section[data-pipeline="p-two"] [data-pipeline-menu]'));
+  click([...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("Attach PR or issue…")));
+  await tick();
+  const input = document.querySelector<HTMLInputElement>('[data-work-links-panel="pipeline:p-two"] [data-work-link-input]')!;
+  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+  flushSync(() => {
+    setter.call(input, "47");
+    input.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  const attached = link(47, { source: "manual", via: ["manual"] });
+  answer = { links: [attached], noPr: false };
+  taskAnswer = { "t-chips": { links: [attached], noPr: false } };
+  click(document.querySelector('[data-work-links-panel="pipeline:p-two"] [data-work-link-attach]'));
+  await tick(20);
+  expect(patches).toEqual([{ url: "/api/pipelines/p-two", body: { action: "attach-link", link: "47" } }]);
+  expect(chips(card(host).querySelector('[data-work-links="p-two"]'))).toEqual(["open:#47"]);
+  expect(chips(card(host).querySelector('[data-work-links="t-chips"]'))).toEqual(["open:#47"]);
 });

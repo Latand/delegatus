@@ -61,6 +61,22 @@ export function taskWorkLinks(task: BoardTask, pipelines: readonly Pipeline[], c
   return resolveTaskLinks(task, carried, cache);
 }
 
+/** The cards that aggregate a pipeline's links, keyed by task id, so an edit on
+    the pipeline redraws them from its own answer rather than the next poll.
+    `pipelines` is the registry the edit left; the edited record stands in for
+    its own row whatever that read returned. */
+export function carryingTaskWorkLinks(
+  pipeline: Pipeline,
+  tasks: readonly BoardTask[],
+  pipelines: readonly Pipeline[],
+  cache: ForgeCacheView = forgeCacheView(),
+): Record<string, ResolvedWorkLinks> {
+  const carrying = tasks.filter((task) => pipeline.taskIds?.includes(task.id));
+  if (!carrying.length) return {};
+  const current = [pipeline, ...pipelines.filter((candidate) => candidate.id !== pipeline.id)];
+  return Object.fromEntries(carrying.map((task) => [task.id, taskWorkLinks(task, current, cache)]));
+}
+
 /** The compact list row's one string: `#2059 open`, `no PR`, or null. */
 export function pullRequestSummary(resolved: ResolvedWorkLinks): string | null {
   const pr = resolved.links.find((link) => link.kind === "pr");

@@ -250,8 +250,10 @@ const manyPipelines: Pipeline[] = MANY ? ([
     closedAt: closedAgo === null ? null : iso(closedAgo * MIN),
     /* The last completed pipeline carries a stage report: role, outcome, age —
        and no conversation id anywhere on the card. */
+    /* Its PR (#2150 below) was opened while it ran: a settled lane keeps only
+       the head's PRs from its own lifetime (#2059), so it starts before them. */
     ...(id === "p-many-report"
-      ? { stageReports: [{ seq: 1, at: iso(30 * MIN), actor: { kind: "agent", role: "builder", conversationId: closing.conversationId }, stageId: second, attempt: 1, status: "pass", findings: 0, replaces: null, summary: "Read the line as words." }] }
+      ? { createdAt: iso(28 * 60 * MIN), stageReports: [{ seq: 1, at: iso(30 * MIN), actor: { kind: "agent", role: "builder", conversationId: closing.conversationId }, stageId: second, attempt: 1, status: "pass", findings: 0, replaces: null, summary: "Read the line as words." }] }
       : {}),
   });
 }) : [];
@@ -1031,14 +1033,15 @@ function fixtureStageDigest(stage: Pipeline["stages"][number]): string {
    cache: the same rules and the same shapes `/api/files` answers with. */
 function fixtureWorkLinks(): FilesWorkLinks {
   const repository = "acme/atlas";
-  const pr = (number: number, head: string, state: CachedPullRequest["state"], closes: number[] = []): CachedPullRequest => ({
-    number, url: `https://github.com/${repository}/pull/${number}`, headRefName: head, createdAt: iso(7 * 60 * MIN), state, closes, checkedAt: iso(2 * MIN),
+  const pr = (number: number, head: string, state: CachedPullRequest["state"], closes: number[] = [], openedAgo = 7 * 60): CachedPullRequest => ({
+    number, url: `https://github.com/${repository}/pull/${number}`, headRefName: head, createdAt: iso(openedAgo * MIN), state, closes, checkedAt: iso(2 * MIN),
   });
   const prs = [
     pr(2201, "pipeline/p-many-pills", "open", [2059, 2060]),
     pr(2188, "fix/shared-pill-head", "merged"),
     pr(2170, "pipeline/p-many-collapse", "closed"),
-    pr(2150, "pipeline/p-many-report", "merged", [2045]),
+    /* Opened inside its lane's lifetime, which ended 26 hours ago. */
+    pr(2150, "pipeline/p-many-report", "merged", [2045], 27 * 60),
     pr(2190, "pipeline/p-search", "open", [2044]),
     /* The lane the phone's queue opens: three chips beside the attach link. */
     pr(2195, "pipeline/p-links", "draft", [2046, 2047]),

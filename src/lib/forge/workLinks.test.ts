@@ -14,6 +14,7 @@ import {
   type StoredWorkLink,
   type WorkLink,
 } from "./workLinks";
+import { carryingTaskWorkLinks } from "./resolve";
 
 /* PR and issue links (#2059), pure: invented repositories, branches and
    numbers, an in-memory cache, no store and no forge. */
@@ -130,6 +131,44 @@ describe("discovery", () => {
     expect(named.links.find((link) => link.number === 10)!.via.sort()).toEqual(["delivery-branch", "delivery-pr"]);
   });
 
+  test("a settled lane on a reused head keeps only the PR opened while it was alive; later lanes' PRs stay theirs", () => {
+    const view = cache([
+      pr(10, { headRefName: "hotfix/board", createdAt: "2026-09-01T00:00:00Z", state: "merged" }),
+      pr(20, { headRefName: "hotfix/board", createdAt: "2026-09-10T00:00:00Z", state: "merged" }),
+      pr(30, { headRefName: "hotfix/board", createdAt: "2026-09-15T00:00:00Z" }),
+    ]);
+    const lane = { createdAt: "2026-08-31T00:00:00.000Z", delivery: delivery("hotfix/board") };
+    const settled = resolvePipelineLinks(pipeline({ ...lane, state: "closed", closedAt: "2026-09-02T00:00:00.000Z" }), REPO, view);
+    expect(numbers(settled.links)).toEqual(["pr:10"]);
+    expect(settled.links[0]!.via).toEqual(["delivery-branch"]);
+    /* The same head on a lane that is still running takes the PR opened now. */
+    const open = resolvePipelineLinks(pipeline({ ...lane, createdAt: "2026-09-14T00:00:00.000Z", state: "running", closedAt: null }), REPO, view);
+    expect(numbers(open.links)).toEqual(["pr:30"]);
+  });
+
+  test("a settled fix-round lane still resolves the older PR its delivery.pr or its provenance names", () => {
+    const view = cache([
+      pr(10, { headRefName: "hotfix/board", createdAt: "2026-09-01T00:00:00Z", state: "merged" }),
+      pr(30, { headRefName: "hotfix/board", createdAt: "2026-09-15T00:00:00Z" }),
+    ]);
+    const fixRound = { createdAt: "2026-09-05T00:00:00.000Z", state: "completed" as const, closedAt: "2026-09-06T00:00:00.000Z" };
+    const named = resolvePipelineLinks(pipeline({ ...fixRound, delivery: delivery("hotfix/board", 10) }), REPO, view);
+    expect(numbers(named.links)).toEqual(["pr:10"]);
+    expect(named.links[0]!.via.sort()).toEqual(["delivery-branch", "delivery-pr"]);
+    /* Provenance is the lane's own record too: a PR it saw is the lane's, opened late or not. */
+    const seen = resolvePipelineLinks(pipeline({ ...fixRound, delivery: delivery("hotfix/board"), runs: [provenanceRun(30)] }), REPO, view);
+    expect(numbers(seen.links)).toEqual(["pr:30"]);
+    expect(seen.links[0]!.via.sort()).toEqual(["delivery-branch", "provenance"]);
+  });
+
+  test("the window compares instants: the forge's `…Z` and the registry's `….000Z` name the same moment", () => {
+    const view = cache([pr(11, { headRefName: "pipeline/lane-a", createdAt: "2026-09-20T10:00:00Z" })]);
+    expect(numbers(resolvePipelineLinks(pipeline({ createdAt: "2026-09-20T10:00:00.000Z" }), REPO, view).links)).toEqual(["pr:11"]);
+    expect(numbers(resolvePipelineLinks(pipeline({ closedAt: "2026-09-20T10:00:00.000Z" }), REPO, view).links)).toEqual(["pr:11"]);
+    /* An opening time the cache cannot state is outside the window. */
+    expect(resolvePipelineLinks(pipeline(), REPO, cache([pr(12, { headRefName: "pipeline/lane-a", createdAt: "" })])).links).toEqual([]);
+  });
+
   test("provenance alone names a PR the cache has not read yet: a neutral chip, not a state it never saw", () => {
     const resolved = resolvePipelineLinks(pipeline({ runs: [provenanceRun(44), provenanceRun(44)] }), REPO, cache([]));
     expect(resolved.links).toEqual([expect.objectContaining({ number: 44, kind: "pr", via: ["provenance"], state: null, checkedAt: null })]);
@@ -185,6 +224,21 @@ describe("many-to-many", () => {
     const manual = (number: number, kind: StoredWorkLink["kind"]): StoredWorkLink => ({ repository: REPO, number, kind, addedAt: LANE_AT, addedBy: "operator" });
     const resolved = resolveTaskLinks({ workLinks: [50, 51, 52, 53, 54].map((n) => manual(n, "pr")).concat(manual(60, "issue"), manual(61, "pr"), manual(62, null)) }, [], view);
     expect(numbers(sortWorkLinks(resolved.links))).toEqual(["pr:53", "pr:52", "pr:54", "pr:51", "pr:50", "pr:61", "null:62", "issue:60"]);
+  });
+});
+
+describe("an edit's answer", () => {
+  test("a pipeline edit answers every task card aggregating it, from the edited record rather than the registry's older row", () => {
+    const view = cache([pr(48, { headRefName: "pipeline/lane-b" })]);
+    const manual: StoredWorkLink = { repository: REPO, number: 47, kind: "pr", addedAt: LANE_AT, addedBy: "operator" };
+    const edited = pipeline({ delivery: delivery("pipeline/lane-a"), taskIds: ["task-a"], workLinks: [manual] });
+    const stale = pipeline({ delivery: delivery("pipeline/lane-a"), taskIds: ["task-a"] });
+    const sibling = pipeline({ id: "pipe-b", branch: "pipeline/lane-b", delivery: delivery("pipeline/lane-b"), taskIds: ["task-a"] });
+    const tasks = [{ id: "task-a" }, { id: "task-other" }] as unknown as Parameters<typeof carryingTaskWorkLinks>[1];
+    const answered = carryingTaskWorkLinks(edited, tasks, [stale, sibling], view);
+    expect(Object.keys(answered)).toEqual(["task-a"]);
+    expect(numbers(answered["task-a"]!.links)).toEqual(["pr:48", "pr:47"]);
+    expect(carryingTaskWorkLinks(pipeline({ taskIds: [] }), tasks, [], view)).toEqual({});
   });
 });
 

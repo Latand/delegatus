@@ -11,7 +11,8 @@ import type { Pipeline } from "@/lib/pipelines/types";
 /*
  * The resolved PR and issue links the board draws (#2059). `/api/files`
  * carries them for every pipeline and task it carries; an attach or detach
- * answers with the record's new links, which stand in until the next poll
+ * answers with the record's new links, and a pipeline's answer with those of
+ * every task card that aggregates it, which stand in until the next poll
  * brings its own.
  */
 
@@ -28,20 +29,30 @@ const WorkLinksContext = createContext<WorkLinksValue>(NO_LINKS);
 
 const keyOf = (target: WorkLinkTarget) => `${target.kind}:${target.id}`;
 
-async function send(target: WorkLinkTarget, action: "attach" | "detach", link: string): Promise<{ links: ResolvedWorkLinks | null; error: string | null }> {
+type EditAnswer = { links: ReadonlyMap<string, ResolvedWorkLinks>; error: string | null };
+
+async function send(target: WorkLinkTarget, action: "attach" | "detach", link: string): Promise<EditAnswer> {
   const url = target.kind === "pipeline" ? `/api/pipelines/${encodeURIComponent(target.id)}` : `/api/tasks/${encodeURIComponent(target.id)}`;
   const body = target.kind === "pipeline"
     ? { action: action === "attach" ? "attach-link" : "detach-link", link }
     : action === "attach" ? { attachLinks: link } : { detachLinks: link };
   try {
     const response = await fetch(url, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; workLinks?: ResolvedWorkLinks; error?: string } | null;
-    if (!response.ok) return { links: null, error: json?.error ?? translate(getLocale(), "pipelineModel.failed", { status: response.status }) };
+    const json = (await response.json().catch(() => null)) as {
+      pipeline?: Pipeline;
+      workLinks?: ResolvedWorkLinks;
+      taskWorkLinks?: Record<string, ResolvedWorkLinks>;
+      error?: string;
+    } | null;
+    if (!response.ok) return { links: new Map(), error: json?.error ?? translate(getLocale(), "pipelineModel.failed", { status: response.status }) };
     if (json?.pipeline) applyPipelineSnapshot(json.pipeline, true);
     if (target.kind === "task") fireTasksChanged();
-    return { links: json?.workLinks ?? null, error: null };
+    const links = new Map<string, ResolvedWorkLinks>();
+    if (json?.workLinks) links.set(keyOf(target), json.workLinks);
+    for (const [taskId, resolved] of Object.entries(json?.taskWorkLinks ?? {})) links.set(keyOf({ kind: "task", id: taskId }), resolved);
+    return { links, error: null };
   } catch {
-    return { links: null, error: translate(getLocale(), "common.serverUnavailable") };
+    return { links: new Map(), error: translate(getLocale(), "common.serverUnavailable") };
   }
 }
 
@@ -55,7 +66,7 @@ export function WorkLinksProvider({ value, children }: { value: FilesWorkLinks |
   }, [served]);
   const edit = useCallback(async (target: WorkLinkTarget, action: "attach" | "detach", link: string) => {
     const answer = await send(target, action, link);
-    if (answer.links) setLocal((current) => new Map(current).set(keyOf(target), answer.links!));
+    if (answer.links.size) setLocal((current) => new Map([...current, ...answer.links]));
     return answer.error;
   }, []);
   const context = useMemo<WorkLinksValue>(() => ({

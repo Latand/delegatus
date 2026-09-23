@@ -248,16 +248,17 @@ function manualDrafts(links: readonly StoredWorkLink[] | undefined): LinkDraft[]
   return (links ?? []).map((link) => ({ repository: link.repository, number: link.number, kind: link.kind, source: "manual", via: ["manual"] }));
 }
 
-export type PipelineLinkRecord = Pick<Pipeline, "branch" | "createdAt" | "delivery" | "runs" | "workLinks">;
+export type PipelineLinkRecord = Pick<Pipeline, "branch" | "createdAt" | "delivery" | "runs" | "workLinks"> & Partial<Pick<Pipeline, "closedAt">>;
 
 const stripHeads = (ref: string) => ref.replace(/^refs\/heads\//, "");
 
 /**
  * A pipeline's links, by the design's rules (§4.4): manual links, the recorded
  * `delivery.pr`, every PR stage provenance saw, and the cached PRs whose head
- * is the lane or the delivery branch — created no earlier than the lane, so a
- * reused head name cannot hand a new lane an old PR, unless `delivery.pr`
- * names it — and then the issues those PRs close.
+ * is the lane or the delivery branch — created while the lane was alive, so a
+ * reused head name can neither hand a new lane an old PR nor hand a settled
+ * lane the PRs later lanes open on it, unless `delivery.pr` or provenance
+ * names the PR — and then the issues those PRs close.
  */
 export function resolvePipelineLinks(pipeline: PipelineLinkRecord, repository: string | null, cache: ForgeCacheView): ResolvedWorkLinks {
   const drafts: LinkDraft[] = manualDrafts(pipeline.workLinks);
@@ -265,6 +266,8 @@ export function resolvePipelineLinks(pipeline: PipelineLinkRecord, repository: s
   if (repository) {
     const deliveryPr = pipeline.delivery?.target.pr;
     if (deliveryPr) drafts.push({ repository, number: deliveryPr, kind: "pr", source: "auto", via: ["delivery-pr"] });
+    /* Numbers the lane's own records name: a head match on one of them is
+       evidence of the lane, whenever the PR was opened. */
     const seen = new Set<number>();
     for (const run of pipeline.runs ?? []) for (const attempt of run.attempts ?? []) {
       const number = attempt.report?.provenance?.pullRequest?.number;
@@ -273,13 +276,24 @@ export function resolvePipelineLinks(pipeline: PipelineLinkRecord, repository: s
       drafts.push({ repository, number, kind: "pr", source: "auto", via: ["provenance"] });
     }
     if (view) {
+      /* A settled lane's window closes when it settles: every completed and
+         closed lane carries `closedAt`, and a PR opened on its head after that
+         belongs to whichever lane reused the head. */
+      const bornAt = pipeline.createdAt ? Date.parse(pipeline.createdAt) : Number.NaN;
+      const settledAt = pipeline.closedAt ? Date.parse(pipeline.closedAt) : Number.NaN;
       const heads: Array<[string, WorkLinkVia]> = [[pipeline.branch, "lane-branch"]];
       const deliveryBranch = pipeline.delivery?.target.branch ? stripHeads(pipeline.delivery.target.branch) : "";
       if (deliveryBranch) heads.push([deliveryBranch, "delivery-branch"]);
       for (const [head, via] of heads) {
         if (!head) continue;
         for (const pr of view.byHead(head)) {
-          if (pr.number !== deliveryPr && pipeline.createdAt && pr.createdAt < pipeline.createdAt) continue;
+          /* Instants, not strings: the forge writes `…00Z` and the registry
+             `…00.000Z`, which sort the same instant apart. */
+          const openedAt = Date.parse(pr.createdAt);
+          const named = pr.number === deliveryPr || seen.has(pr.number);
+          /* An opening time the cache cannot state is outside every window. */
+          if (!named && Number.isFinite(bornAt) && !(openedAt >= bornAt)) continue;
+          if (!named && Number.isFinite(settledAt) && !(openedAt <= settledAt)) continue;
           drafts.push({ repository, number: pr.number, kind: "pr", source: "auto", via: [via] });
         }
       }
