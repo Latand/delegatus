@@ -45,7 +45,7 @@ import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows"
 import { KeepAwakeProvider } from "./KeepAwakeControl";
 import { needsDecisionPipelineRows } from "./mobile/mobileBoardModel";
 import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
-import { getMobileNav } from "./mobile/mobileNav";
+import { getMobileNav, landResolvedConversation } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import type { MobileShellHost } from "./mobile/MobileShell";
 import { onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
@@ -523,15 +523,16 @@ function ViewerApp() {
     dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId });
     setProject(key);
     localStorage.setItem(PROJECT_KEY, key);
-    getMobileNav().home();
     setOpenNonce((value) => value + 1);
     focusNonceRef.current += 1;
     setFocusRequest({ path: file.path, nonce: focusNonceRef.current, catalog: true });
     /* A hydrated open is the RESOLVER arriving (deep link, hashchange,
        popstate replay): it re-types the entry the tab is standing on and never
        pushes, so initial restoration adds no duplicate and a replay cannot
-       loop. A direct catalog click records the deliberate navigation. */
-    recordFocusNavigation(file, key, { restore: hydrated });
+       loop. A direct catalog click records the deliberate navigation. On the
+       phone the shell goes home under it, unless the replay landed on an entry
+       the phone's own stack wrote (#2072 slice 5, `landResolvedConversation`). */
+    landResolvedConversation(getMobileNav(), hydrated, window.history.state, () => recordFocusNavigation(file, key, { restore: hydrated }));
   }, []);
 
   const openCatalogFile = useCallback((file: FileEntry) => {

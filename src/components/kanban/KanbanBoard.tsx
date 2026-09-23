@@ -49,6 +49,7 @@ import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
 import { stageNames } from "./PipelineSection";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { StagesSheet, type SheetPane } from "./StagesSheet";
+import { textField, withField } from "./taskText";
 import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
 import { usePipelineActions } from "./usePipelineActions";
 import { useBands } from "./useBands";
@@ -215,22 +216,6 @@ function cardMatchesShown(model: KanbanModel, card: KanbanCardModel): boolean {
 }
 
 type EditField = CardEditField;
-
-/** The title (first line) or description (the rest) of a task's text. `details`
-    is its own stored field and never reaches these two (#1834). */
-function textField(text: string, field: "title" | "description"): string {
-  const newline = text.search(/\r?\n/);
-  if (field === "title") return (newline < 0 ? text : text.slice(0, newline)).trim();
-  return newline < 0 ? "" : text.slice(newline).trim();
-}
-
-/** The task's text with one of its fields replaced, the other kept byte for byte. */
-function withField(text: string, field: "title" | "description", value: string): string {
-  const newline = text.search(/\r?\n/);
-  if (field === "title") return newline < 0 ? value : value + text.slice(newline);
-  const first = newline < 0 ? text : text.slice(0, newline);
-  return value ? `${first}\n${value}` : first;
-}
 
 function withEntry<V>(map: ReadonlyMap<string, V>, key: string, value: V | undefined): ReadonlyMap<string, V> {
   if (value === undefined && !map.has(key)) return map;

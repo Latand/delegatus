@@ -146,7 +146,9 @@ export const BADGE_LABEL = {
   limit: "mobile2.board.badgeLimit",
 } as const;
 
-function ConversationRow({ row, quiet, now, onOpen, catalogPath }: {
+/** A conversation as a phone row: the board's, and the task screen's agents
+    (#2072 slice 5). */
+export function ConversationRow({ row, quiet, now, onOpen, catalogPath }: {
   row: MobileBoardConversation;
   quiet?: boolean;
   now: number;

@@ -1725,8 +1725,8 @@ browserTest("#2072 slice 4 touch: the pager swipes, a column scrolls alone, a he
         await pause(page, 400);
         await tap(page, cdp, card);
         await pause(page, 500);
-        const taskOpen = await page.evaluate((back) => Boolean(document.querySelector(`[aria-label="${back}"]`)), translate(lang, "tasks.sheetBack"));
-        if (!taskOpen) fail("a tap on a card did not open its task");
+        const taskOpen = await page.evaluate(() => Boolean(document.querySelector('[data-mobile2-task="t-favicon"] [data-phone-task-body="t-favicon"]')));
+        if (!taskOpen) fail("a tap on a card did not open its task screen");
         if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
         results.push({ key, viewport, lang, scheme, opened, afterLeft, afterRight, vertical: { ...vertical, before: scrollBefore }, sheet, moved, patches, taskOpen });
         await page.close();
@@ -1741,3 +1741,225 @@ browserTest("#2072 slice 4 touch: the pager swipes, a column scrolls alone, a he
   fs.writeFileSync(path.join(COLUMNS_EVIDENCE, "columns-touch.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 300_000);
+
+/*
+ * #2072 slice 5 — the task screen (phone-kanban §3.5), opened from its card
+ * the way the operator opens it: a task with one pipeline, one with seven
+ * (three completed, folded), one with agents and no pipeline, and one whose
+ * pipeline waits on a decision, at 390 × 667 and 430 × 735 (the page Safari
+ * leaves), in en and uk, dark. At every scroll stop: no sideways overflow, no
+ * text over text or over a control (the ink walk of the columns' case), every
+ * whole control at least 44 × 44 counting the reach a pill or a chip draws
+ * past its box, no two controls crossing, and the bottom bar inside the page.
+ * The 390 frames, and the whole scroll of each, are the review's pictures.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2072 slice 5"
+ */
+const TASK_OUT = path.resolve(process.env.LLV_TASK_FRAMES || ".artifacts/phone-kanban-s5");
+const TASK_CASES = [
+  { key: "one-pipeline", task: "t-favicon" },
+  { key: "many", task: "t-many" },
+  { key: "agents", task: "t-long" },
+  { key: "decision", task: "t-data" },
+] as const;
+
+interface TaskReading {
+  overflowX: number;
+  bodyOverflowX: number;
+  smallControls: Array<{ label: string; width: number; height: number }>;
+  crossingControls: string[];
+  inkOverlaps: string[];
+  inkOnControls: string[];
+  dock: Rect | null;
+  lanes: string[];
+  scrollHeight: number;
+  clientHeight: number;
+}
+
+const readTaskScreen = (page: Page) => page.evaluate((): TaskReading => {
+  interface Box { l: number; t: number; r: number; b: number }
+  const box = (element: Element): Box => {
+    const r = element.getBoundingClientRect();
+    return { l: r.left, t: r.top, r: r.right, b: r.bottom };
+  };
+  const overlap = (a: Box, b: Box) => Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l)) * Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
+  const clip = (element: Element): Box => {
+    let out: Box = { l: -Infinity, t: -Infinity, r: Infinity, b: Infinity };
+    for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (/(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
+        const p = box(parent);
+        out = { l: Math.max(out.l, p.l), t: Math.max(out.t, p.t), r: Math.min(out.r, p.r), b: Math.min(out.b, p.b) };
+      }
+    }
+    return { l: Math.max(out.l, 0), t: Math.max(out.t, 0), r: Math.min(out.r, innerWidth), b: Math.min(out.b, innerHeight) };
+  };
+  const screen = document.querySelector<HTMLElement>("[data-mobile2-task]")!;
+  const body = screen.querySelector<HTMLElement>("[data-phone-task-body]")!;
+  const scope = [screen.querySelector("[data-mobile2-bar]")!, body, screen.querySelector("[data-mobile2-dock]")].filter((element): element is Element => Boolean(element));
+  /* A swipe row's tray waits under its card at opacity 0 until a swipe
+     reveals it: nothing there is on screen. */
+  const transparent = (element: Element) => {
+    for (let node: Element | null = element; node; node = node.parentElement) if (getComputedStyle(node).opacity === "0") return true;
+    return false;
+  };
+  const visible = (element: Element) => {
+    const r = element.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0 || transparent(element)) return false;
+    const c = clip(element);
+    return Math.min(r.right, c.r) - Math.max(r.left, c.l) > 1 && Math.min(r.bottom, c.b) - Math.max(r.top, c.t) > 1;
+  };
+  const controls = scope.flatMap((root) => [...root.querySelectorAll<HTMLElement>("button:not(:disabled), a[href]")]).filter(visible);
+  const label = (element: Element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 60);
+  const shown = (element: Element): Box => {
+    const r = box(element);
+    const c = clip(element.parentElement ?? element);
+    return { l: Math.max(r.l, c.l), t: Math.max(r.t, c.t), r: Math.min(r.r, c.r), b: Math.min(r.b, c.b) };
+  };
+  const whole = (element: Element) => {
+    const r = box(element);
+    const c = clip(element.parentElement ?? element);
+    return r.t >= c.t - 0.5 && r.b <= c.b + 0.5;
+  };
+  /* The target a finger has: the box, grown by a positioned ::after reach. */
+  const target = (element: Element) => {
+    const r = element.getBoundingClientRect();
+    const after = getComputedStyle(element, "::after");
+    if (after.content === "none" || after.position !== "absolute") return { width: r.width, height: r.height };
+    const px = (value: string) => (value.endsWith("px") ? parseFloat(value) : 0);
+    return { width: r.width - Math.min(0, px(after.left)) - Math.min(0, px(after.right)), height: r.height - Math.min(0, px(after.top)) - Math.min(0, px(after.bottom)) };
+  };
+  const smallControls = controls.filter(whole).map((element) => ({ label: label(element), ...target(element) }))
+    .filter((control) => control.width < 43.5 || control.height < 43.5);
+  const crossingControls: string[] = [];
+  controls.forEach((a, i) => controls.slice(i + 1).forEach((b) => {
+    if (a.contains(b) || b.contains(a)) return;
+    if (overlap(shown(a), shown(b)) > 0.5) crossingControls.push(`${label(a)} × ${label(b)}`);
+  }));
+  const inks: Array<{ node: Node; text: string; rect: Box; control: Element | null }> = [];
+  const range = document.createRange();
+  for (const root of scope) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!node.textContent?.trim() || !parent) continue;
+      const style = getComputedStyle(parent);
+      if (style.visibility === "hidden" || parent.closest(".sr-only") || transparent(parent)) continue;
+      const c = clip(parent);
+      range.selectNodeContents(node);
+      for (const q of range.getClientRects()) {
+        const rect = { l: Math.max(q.left, c.l), t: Math.max(q.top, c.t), r: Math.min(q.right, c.r), b: Math.min(q.bottom, c.b) };
+        if (rect.r - rect.l <= 0.5 || rect.b - rect.t <= 0.5) continue;
+        inks.push({ node, text: node.textContent.trim().slice(0, 40), rect, control: parent.closest("button, a[href]") });
+      }
+    }
+  }
+  const inkOverlaps: string[] = [];
+  inks.forEach((a, i) => inks.slice(i + 1).forEach((b) => {
+    if (a.node === b.node) return;
+    if (overlap(a.rect, b.rect) > 1) inkOverlaps.push(`«${a.text}» × «${b.text}»`);
+  }));
+  const inkOnControls: string[] = [];
+  for (const ink of inks) {
+    for (const control of controls) {
+      if (ink.control === control || control.contains(ink.node) || (ink.control && ink.control.contains(control))) continue;
+      if (overlap(ink.rect, shown(control)) > 1) inkOnControls.push(`«${ink.text}» on ${label(control)}`);
+    }
+  }
+  const dockElement = screen.querySelector("[data-mobile2-dock]");
+  const dockRect = dockElement?.getBoundingClientRect() ?? null;
+  return {
+    overflowX: document.documentElement.scrollWidth - innerWidth,
+    bodyOverflowX: body.scrollWidth - body.clientWidth,
+    smallControls,
+    crossingControls,
+    inkOverlaps,
+    inkOnControls,
+    dock: dockRect ? { x: dockRect.x, y: dockRect.y, width: dockRect.width, height: dockRect.height } : null,
+    lanes: [...body.querySelectorAll("[data-phone-task-lane]")].map((lane) => lane.getAttribute("data-phone-task-lane") ?? ""),
+    scrollHeight: body.scrollHeight,
+    clientHeight: body.clientHeight,
+  };
+});
+
+browserTest("#2072 slice 5: the task screen, opened from its card, in en and uk at 390 and 430, holds its ink, targets and bar", async () => {
+  fs.mkdirSync(TASK_OUT, { recursive: true });
+  fs.mkdirSync(COLUMNS_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = ([{ width: 390, height: 667 }, { width: 430, height: 735 }] as const).flatMap((viewport) =>
+    (["en", "uk"] as const).flatMap((lang) => TASK_CASES.map((entry) => ({ viewport, lang, ...entry }))));
+  try {
+    for (const { viewport, lang, key: scene, task } of cases) {
+      const key = `${scene}-${viewport.width}-${lang}`;
+      const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: "dark" });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/?kanban=1#p=atlas`);
+        await page.waitForSelector(`[data-phone-card="task:${task}"]`, { timeout: 20_000 });
+        await pause(page, 600);
+        await page.locator(`[data-phone-card="task:${task}"]`).click();
+        await page.waitForSelector(`[data-mobile2-task="${task}"] [data-phone-task-body="${task}"]`, { timeout: 10_000 });
+        /* A finger lifts; the driver's pointer would stay and hover the row under it. */
+        await page.mouse.move(0, 0);
+        await pause(page, 600);
+        if (scene === "many") {
+          await page.locator("[data-phone-task-ended]").click();
+          await pause(page, 300);
+          await page.evaluate(() => { document.querySelector("[data-phone-task-body]")!.scrollTop = 0; });
+          await pause(page, 200);
+        }
+        for (let stop = 0; stop < 12; stop += 1) {
+          const fail = (label: string) => failures.push(`${key} @${stop}: ${label}`);
+          const reading = await readTaskScreen(page);
+          await page.screenshot({ path: path.join(TASK_OUT, `task-${key}${stop ? `-${stop}` : ""}.png`) });
+          if (reading.overflowX > 0.5) fail(`the page overflows sideways by ${reading.overflowX} px`);
+          if (reading.bodyOverflowX > 0.5) fail(`the body overflows sideways by ${reading.bodyOverflowX} px`);
+          if (reading.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(reading.smallControls)}`);
+          if (reading.crossingControls.length) fail(`controls crossing: ${JSON.stringify(reading.crossingControls)}`);
+          if (reading.inkOverlaps.length) fail(`text over text: ${JSON.stringify(reading.inkOverlaps.slice(0, 6))}`);
+          if (reading.inkOnControls.length) fail(`text over a control: ${JSON.stringify(reading.inkOnControls.slice(0, 6))}`);
+          if (!reading.dock || reading.dock.y < 0 || reading.dock.y + reading.dock.height > viewport.height + 0.5) fail(`the bottom bar is not inside the page: ${JSON.stringify(reading.dock)}`);
+          if (stop === 0 && scene === "many" && reading.lanes.length !== 7) fail(`the task with seven pipelines draws ${reading.lanes.length}`);
+          if (stop === 0 && scene === "decision" && reading.lanes[0] !== "lane-decision") fail(`the lane that needs a decision is not first: ${reading.lanes.join(",")}`);
+          results.push({ key, stop, viewport, lang, ...reading });
+          const moved = await page.evaluate(() => {
+            const body = document.querySelector<HTMLElement>("[data-phone-task-body]")!;
+            const before = body.scrollTop;
+            body.scrollTop = before + Math.round(body.clientHeight * 0.85);
+            return body.scrollTop !== before;
+          });
+          if (!moved) break;
+          await pause(page, 250);
+        }
+        /* The whole scroll in one frame, at 390: the page grown to hold it. */
+        if (viewport.width === 390) {
+          const { scrollHeight, clientHeight } = await page.evaluate(() => {
+            const body = document.querySelector<HTMLElement>("[data-phone-task-body]")!;
+            body.scrollTop = 0;
+            return { scrollHeight: body.scrollHeight, clientHeight: body.clientHeight };
+          });
+          await page.setViewportSize({ width: viewport.width, height: viewport.height + Math.max(0, scrollHeight - clientHeight) });
+          await pause(page, 400);
+          await page.screenshot({ path: path.join(TASK_OUT, `task-${scene}-390-full-${lang}.png`) });
+          await page.setViewportSize(viewport);
+        }
+        if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(COLUMNS_EVIDENCE, "task-screen.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);

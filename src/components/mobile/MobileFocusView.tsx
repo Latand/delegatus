@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { TaskSheet, type TaskSheetView } from "@/components/tasks/TaskSheet";
 import { taskRelationsByPath } from "@/components/tasks/taskRelations";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { useIntendedAccount } from "@/lib/accounts/intendedAccount";
@@ -151,6 +150,8 @@ interface Props {
   /** Drops a draft that continues a conversation, for the menu's «Hand off»
       row (§4.2). The board owns the draft, so the screen only asks for it. */
   onHandoff?: (file: FileEntry) => void;
+  /** The task screen's opener, for the conversation's task strip (#2072 slice 5). */
+  onOpenTask?: (task: BoardTask) => void;
   /** In-flow alert the project board renders above the leaf. */
   alert?: React.ReactNode;
   /** Engine-native subagent tray surface (issue #142). The DOCKED tray is gone
@@ -182,7 +183,7 @@ interface Props {
  * not loaded — the same shell renders the board leaf, which lane 2 fills with
  * the board list.
  */
-export function MobileFocusView({ project, projectName, groups, manual, files, flows, reviewGroups = [], pipelines, surfacePipelines = [], tasks, sheetTasks, drafts, favorites, isolatedManualPaths = EMPTY_PATHS, loaded, focus, onSelect, onClose, onDraftClose, onDraftSpawned, onConversationOpened, shellHost = null, renderBoardSheet, onOpenSearch, hostTaskCount = 0, onHandoff, alert }: Props) {
+export function MobileFocusView({ project, projectName, groups, manual, files, flows, reviewGroups = [], pipelines, surfacePipelines = [], tasks, sheetTasks, drafts, favorites, isolatedManualPaths = EMPTY_PATHS, loaded, focus, onSelect, onClose, onDraftClose, onDraftSpawned, onConversationOpened, shellHost = null, renderBoardSheet, onOpenSearch, hostTaskCount = 0, onHandoff, onOpenTask, alert }: Props) {
   const { t } = useLocale();
   /* The screen is mounted INSIDE the project board's shell (lane 2 pushes it
      when a conversation reaches the top of the stack), so the badge, the
@@ -224,7 +225,6 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   if (focusState.project !== project) setFocusState({ project, key: focus ?? rememberedFocus(project) });
   const focusPath = focusState.key;
   const setFocusPath = useCallback((key: string | null) => setFocusState((prev) => (prev.key === key ? prev : { project: prev.project, key })), []);
-  const [taskSheet, setTaskSheet] = useState<TaskSheetView | null>(null);
   /* Bumped by the menu's Rename row: the editor opens over the bar, where the
      title cell is (§4.2, #1348). The editor reports the effective title back,
      so the cell under it shows an optimistic rename at once instead of waiting
@@ -349,7 +349,9 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   /* Conversation-side relation strip (issue #292). */
   const relatedTasksByPath = useMemo(() => taskRelationsByPath(files, sheetTasks ?? tasks), [files, sheetTasks, tasks]);
 
-  const openPipelineTask = useCallback((task: BoardTask) => setTaskSheet({ taskId: task.id }), []);
+  /* A task the conversation belongs to opens on the task screen, pushed
+     above this one (#2072 slice 5). */
+  const openPipelineTask = useCallback((task: BoardTask) => onOpenTask?.(task), [onOpenTask]);
 
   /* Pin a pane the layout already holds, as the phone's OPEN gesture (#1244).
      A switcher row and a map/attention pick are the same deliberate act as
@@ -748,9 +750,6 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         />
       ) : null}
 
-      {taskSheet ? (
-        <TaskSheet project={project} projectName={projectName} tasks={sheetTasks ?? tasks} files={files} initialView={taskSheet} onClose={() => setTaskSheet(null)} />
-      ) : null}
     </div>
   );
 }

@@ -359,6 +359,43 @@ if (KANBAN) {
     { id: "implement", state: "passed", ago: 7_200 }, { id: "review", state: "passed", ago: 5_400, role: "reviewer" },
   ]));
   kanbanLinks.pipelines["lane-seat"] = prLinks(2044, "merged");
+  /* #2072 slice 5: one task with seven pipelines — a spent review budget, a
+     review in its second round, a fired fail edge, one provisioning and three
+     completed — the task screen's `task-many` frame. */
+  const reviewBuild = kanbanConversation("Name every pipeline row by its first prompt line · build", "settled", 900);
+  const reviewCritique = kanbanConversation("Name every pipeline row by its first prompt line · critique", "settled", 720);
+  kanbanPipelines.push(kanbanLane("lane-many-review", "Name every pipeline row by its first prompt line", ["t-many"], "needs_review", [
+    { id: "build", attempts: [
+      { n: 1, state: "passed", startedAt: iso(4_000), completedAt: iso(3_000), agentPath: reviewBuild, conversationId: idOf(reviewBuild), activatedBy: null, effectiveRole: kanbanRole("builder"), verdict: { status: "pass", findings: [] } },
+      { n: 2, state: "passed", startedAt: iso(1_600), completedAt: iso(900), agentPath: reviewBuild, conversationId: idOf(reviewBuild), activatedBy: { stageId: "critique", attempt: 1, edge: "fail" }, effectiveRole: kanbanRole("builder"), verdict: { status: "pass", findings: [] } },
+    ] },
+    { id: "critique", role: "reviewer", onFail: { to: "build", maxRounds: 1 }, attempts: [
+      { n: 1, state: "failed", startedAt: iso(2_800), completedAt: iso(2_000), agentPath: reviewCritique, conversationId: idOf(reviewCritique), activatedBy: null, effectiveRole: kanbanRole("reviewer"), verdict: { status: "fail", findings: ["one", "two"] } },
+    ] },
+  ], { reviewPending: { stageId: "critique", attempt: 1, fixStageId: "build", fixAttempt: 2, reviewedHead: "4f1c2a9d7e3b", currentHead: "9b2e7d4c5f60", verdict: "fail", findings: 2 } }));
+  kanbanLinks.pipelines["lane-many-review"] = prLinks(2201);
+  kanbanPipelines.push(kanbanLane("lane-many-drawer", "Remove the legacy drawer", ["t-many"], "running", [
+    { id: "implement", state: "passed", ago: 1_800 }, { id: "review", state: "running", ago: 420, role: "reviewer" },
+  ]));
+  kanbanLinks.pipelines["lane-many-drawer"] = prLinks(2195);
+  const foldImplement = kanbanConversation("Fold the completed pipelines of a task · implement", "working", 180);
+  const foldVerify = kanbanConversation("Fold the completed pipelines of a task · verify", "settled", 600);
+  kanbanPipelines.push(kanbanLane("lane-many-fold", "Fold the completed pipelines of a task", ["t-many"], "running", [
+    { id: "implement", attempts: [
+      { n: 1, state: "passed", startedAt: iso(2_400), completedAt: iso(1_500), agentPath: foldImplement, conversationId: idOf(foldImplement), activatedBy: null, effectiveRole: kanbanRole("builder"), verdict: { status: "pass", findings: [] } },
+      { n: 2, state: "running", startedAt: iso(180), completedAt: null, agentPath: foldImplement, conversationId: idOf(foldImplement), activatedBy: { stageId: "verify", attempt: 1, edge: "fail" }, effectiveRole: kanbanRole("builder"), verdict: null },
+    ] },
+    { id: "verify", role: "reviewer", onFail: { to: "implement", maxRounds: 2 }, attempts: [
+      { n: 1, state: "failed", startedAt: iso(1_400), completedAt: iso(600), agentPath: foldVerify, conversationId: idOf(foldVerify), activatedBy: null, effectiveRole: kanbanRole("reviewer"), verdict: { status: "fail", findings: ["The fold hides a lane that still runs."] } },
+    ] },
+  ], { cursor: { stageId: "implement", state: "running", input: null, activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } } }));
+  kanbanLinks.pipelines["lane-many-fold"] = prLinks(2188);
+  kanbanPipelines.push(kanbanLane("lane-many-pill", "Take the floating waiting pill out of the feed", ["t-many"], "provisioning", [{ id: "critique" }, { id: "fix" }]));
+  kanbanLinks.pipelines["lane-many-pill"] = { links: [], noPr: true };
+  ([["lane-many-done-1", "Name the stage a conversation runs in its bar", 2170, 3_600], ["lane-many-done-2", "Count every lane of a task once", 2150, 7_200], ["lane-many-done-3", "Say which lane a finding belongs to", 2140, 10_800]] as const).forEach(([id, title, number, ago]) => {
+    kanbanPipelines.push(kanbanLane(id, title, ["t-many"], "completed", [{ id: "implement", state: "passed", ago: ago + 1_200 }, { id: "review", state: "passed", ago, role: "reviewer" }]));
+    kanbanLinks.pipelines[id] = prLinks(number, "merged");
+  });
   const longWorker = kanbanConversation("Pick the row state as the one authority", "working", 780);
   const longReader = kanbanConversation("Read every surface that counts agents", "settled", 3_000);
   const ukWorker = kanbanConversation("Перевірити опитування мобільної дошки", "working", 420);
@@ -373,6 +410,7 @@ if (KANBAN) {
     kanbanTask("t-uk", "assigned", "Перевірити, що мобільна дошка не завантажує весь проєкт при кожному опитуванні", { assignments: [kanbanAssign(ukWorker)], color: "teal" }),
     kanbanTask("t-chips", "assigned", "PR and issue chips on pipelines and task cards"),
     kanbanTask("t-seat", "assigned", "Seat wakes after its own deploy and keeps its mandate"),
+    kanbanTask("t-many", "assigned", "Kanban: say what each pipeline of a task does\nA task with several lanes names each one by its first prompt line, and the finished ones fold behind their PRs.", { details: "Agent context: the lane titles come from pipelineTitle; the fold is the task screen's." }),
   );
   /* Inbox */
   const asker = kanbanConversation("Retire the systemd install path", "asking", 540, { model: "claude-opus-5-5" });
@@ -423,6 +461,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!row) return json({ error: "task not found" }, 404);
     if (body.expectedRevision !== row.revision) return json({ error: "revision moved", code: "TASK_REVISION_CONFLICT" }, 409);
     if (typeof body.status === "string") row.status = body.status;
+    if (typeof body.text === "string") row.text = body.text;
+    if (typeof body.details === "string") row.details = body.details;
+    if (typeof body.color === "string") row.color = body.color === "none" ? undefined : body.color;
     if (body.hide === true) row.groupHidden = { at: new Date().toISOString(), by: "operator", admitted: { conversationIds: [], paths: [] } };
     if (body.hide === false) delete row.groupHidden;
     row.revision = `${String(row.revision).replace(/-\d+$/, "")}-${Number(String(row.revision).split("-").pop()) + 1}`;
