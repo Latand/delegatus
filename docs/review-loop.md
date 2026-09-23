@@ -1,6 +1,6 @@
 # Review loops
 
-The viewer can orchestrate an implement→review cycle for any conversation it
+Delegatus can orchestrate an implement→review cycle for any conversation it
 tracks: one long-lived **implementer** agent writes the code, a
 fresh **reviewer** session audits the full diff each round, findings flow back
 to the implementer automatically, and the cycle repeats until the reviewer
@@ -16,7 +16,7 @@ asks for:
 - **Preset** — an engine/model/effort pair for each role. Seeded presets put
   GPT-5.6-Terra on implementation and GPT-5.6-Sol on adversarial review, with
   Fable and Sonnet combinations available alongside them. Edit or add your
-  own in `~/.config/agent-log-viewer/state/review-loop-presets.json`. Records
+  own in `~/.config/delegatus/state/review-loop-presets.json`. Records
   carrying `managed: "role-registry"` (seeded presets and workflow templates)
   regenerate from the role registry on every load — a hand edit survives only
   after removing that flag, which turns the record into a custom entry that

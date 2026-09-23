@@ -300,7 +300,7 @@ describe("process blocks", () => {
     expect(text(section(el, "web"))).toContain("PID 48213·port 45123");
     expect(text(section(el, "web"))).toContain("up 2 h 14 m·checked 12:04:31");
     expect(text(section(el, "host"))).toContain("PID 48190·runtime-host.sock");
-    expect(text(section(el, "host"))).toContain("Restarting the runtime host drops the agents it supervises. Restart web first if you only changed the Viewer.");
+    expect(text(section(el, "host"))).toContain("Restarting the runtime host drops the agents it supervises. Restart web first if you only changed Delegatus.");
     expect(section(el, "web")!.querySelector("[data-badge]")!.getAttribute("data-badge")).toBe("healthy");
     click(button(el, "restart-web"));
     click(button(el, "arm-host"));
@@ -388,7 +388,7 @@ describe("managed install", () => {
 describe("the rest of the surface", () => {
   test("an install that cannot update itself says why and offers nothing", () => {
     const el = render(snapshot({ mode: "unsupported", unsupportedReason: "not-a-checkout" }));
-    expect(text(el)).toContain("This Viewer was installed as a package.");
+    expect(text(el)).toContain("This Delegatus install came from a package.");
     expect(button(el, "check")).toBeNull();
   });
 
@@ -416,7 +416,7 @@ describe("the rest of the surface", () => {
     expect(text(el.querySelector('[data-error="action"]'))).toBe("The runtime host did not take the deployment: runtime host socket is unavailable");
     flushSync(() => root!.unmount());
     el = render(snapshot(), { error: actionError(403, { error: "this is an operator-only action" } as never) });
-    expect(text(el.querySelector('[data-error="action"]'))).toBe("Only the operator can update or restart the Viewer.");
+    expect(text(el.querySelector('[data-error="action"]'))).toBe("Only the operator can update or restart Delegatus.");
     flushSync(() => root!.unmount());
     el = render(snapshot(), { error: actionError(502, null) });
     expect(text(el.querySelector('[data-error="action"]'))).toBe("The request failed (HTTP 502).");
@@ -443,7 +443,7 @@ describe("the rest of the surface", () => {
   test("Ukrainian: our own check and step failures are worded, a silent host too", () => {
     setLocale("uk");
     let el = render(snapshot({ mode: "managed", check: { ...idleCheck(), state: "failed", at: AT, nextPollAt: NEXT, errorCode: "no-release-target" } }));
-    expect(text(el.querySelector('[data-error="check"]'))).toBe("Не вдалося прочитати ціль релізу Viewer, тож установлена ревізія невідома.");
+    expect(text(el.querySelector('[data-error="check"]'))).toBe("Не вдалося прочитати ціль релізу Delegatus, тож установлена ревізія невідома.");
     flushSync(() => root!.unmount());
     el = render(snapshot({ processes: { web: proc("web"), runtimeHost: proc("runtimeHost", { state: "failed", error: { kind: "no-answer" } }) } }));
     expect(text(section(el, "host")!.querySelector('[data-error="process"]'))).toBe("Runtime host не відповів");

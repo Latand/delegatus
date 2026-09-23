@@ -6,7 +6,7 @@ import { ROLE_FRAME_BOOT_SCRIPT } from "@/lib/roleFrames";
 
 export const metadata: Metadata = {
   title: PRODUCT_NAME,
-  description: "Agent Log Viewer for Codex and Claude agent logs",
+  description: `${PRODUCT_NAME}: run and watch Codex and Claude agents from one board`,
 };
 
 /* The on-screen keyboard shrinks the layout instead of covering it, so the

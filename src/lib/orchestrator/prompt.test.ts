@@ -47,7 +47,7 @@ test("the retired unequal-channel phrasing does not return", () => {
 });
 
 test("the canonical direct-spawn example includes the mandatory semantic title", () => {
-  const skill = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/live-log-viewer-orchestration/SKILL.md"), "utf8");
+  const skill = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/delegatus-orchestration/SKILL.md"), "utf8");
   expect(skill).toContain('"title":"<semantic task title>"');
 });
 
@@ -71,17 +71,21 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 21, and a v20 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(21);
+test("the default mandate is at version 22, and a v21 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(22);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
      v18 carries (#1834): the card's text is the human's and agent context goes
      in the task's separate details field. v19 (#1843) adds the human-in-the-loop
      section. v20 (#1880) points "role per the role table" at the table
-     delivery renders. v21 (#2030) carries the seat tick contract. */
-  expect(orchestratorMandateStale(20)).toBe(true);
-  expect(orchestratorMandateStale(21)).toBe(false);
+     delivery renders. v21 (#2030) carries the seat tick contract. v22 names the
+     product Delegatus and says its MCP key stays `viewer`. */
+  expect(orchestratorMandateStale(21)).toBe(true);
+  expect(orchestratorMandateStale(22)).toBe(false);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("You are Delegatus's built-in Manager");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("registered under the key `viewer`");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("the viewer's built-in Manager");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("act on the items it lists and nothing else");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("AGENT CONTEXT GOES IN details");
 });
@@ -98,6 +102,7 @@ test("the default mandate is at version 21, and a v20 seat reads as stale", () =
 const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   20: "e49277d58a32cd581d1d9a3ab6658528b2d42de6465350e8108d00cffebdcfca",
   21: "99305652476c390cccbe283e49771f6abe408cb6ff8bdd14ed6fb4394dd7704c",
+  22: "6e5ca84fd3997ce92d85d2ae1602d909b1786fa3340312539021e31d91dec74a",
 };
 
 test("any edit to the default mandate text moves its version (#2030)", () => {
@@ -238,7 +243,7 @@ test("the playbook reference is no longer pinned to this checkout", () => {
    exact instruction that contradicted the mandate — self-pacing on a wakeup
    interval, which is what the measured seat was doing — is checkable here. */
 test("the checked-in playbook no longer tells the seat to schedule itself", () => {
-  const skill = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/llv-conveyor/SKILL.md"), "utf8");
+  const skill = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/delegatus-conveyor/SKILL.md"), "utf8");
   expect(skill).not.toContain("self-paces with ScheduleWakeup");
   expect(skill).not.toContain("ScheduleWakeup checkpoints");
 });
@@ -337,7 +342,7 @@ test("the prompt carries the directive trailer contract in the exact wire form",
 /* #1760 — the mandate is the prompt for a manager of ANY project, and the
    deploy section described deploying Agent Log Viewer itself. It is gone from
    the body for every project, the Viewer's own included; the protocol it
-   carried lives in the llv-conveyor skill the fences already name. */
+   carried lives in the delegatus-conveyor skill the fences already name. */
 test("the mandate body says nothing about deploying the Viewer", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT.split("\n").filter((line) => line.trimEnd() === "## Deploys")).toHaveLength(0);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("deploy_exact_sha");

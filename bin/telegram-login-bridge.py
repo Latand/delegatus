@@ -50,7 +50,7 @@ from telegram_mcp.singleton import SessionLock, session_identity
 ENROLL_DEADLINE_S = 15 * 60
 CONNECT_TIMEOUT_S = 30
 
-DEVICE_MODEL = "Agent Log Viewer"
+DEVICE_MODEL = "Delegatus"
 SESSION_LOCK_GRACE_S = 20.0
 
 

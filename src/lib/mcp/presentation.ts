@@ -28,7 +28,9 @@ export function isViewerMcpServer(serverName: string): boolean {
     || serverName.startsWith("viewer-")
     || serverName.startsWith("viewer_")
     || serverName === "agent-log-viewer"
-    || serverName.startsWith("agent-log-viewer-");
+    || serverName.startsWith("agent-log-viewer-")
+    || serverName === "delegatus"
+    || serverName.startsWith("delegatus-");
 }
 
 function record(value: unknown): Record<string, unknown> {

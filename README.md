@@ -5,9 +5,9 @@
   </picture>
 </p>
 
-# Agent Log Viewer
+# Delegatus
 
-Agent Log Viewer is a local web app for running Claude Code and Codex agents
+Delegatus is a local web app for running Claude Code and Codex agents
 and reading what they do. It shows every agent conversation on your machine
 as a readable chat, and lets you give agents work through a task board and
 pipelines, from a desktop browser or your phone.
@@ -53,10 +53,15 @@ You need [Bun](https://bun.sh) 1.4 or newer, and the Claude Code and/or Codex
 CLI installed and logged in. Then:
 
 ```bash
-bunx agent-log-viewer
+bunx delegatus-cli
 ```
 
-This serves the Viewer on `http://127.0.0.1:8898` and opens it in your
+or install it once with `npm i -g delegatus-cli` and run `delegatus` (the
+short alias `dlg` starts the same command). Delegatus was called Agent Log
+Viewer before; the old `agent-log-viewer` command still works and prints a
+one-line notice.
+
+This serves Delegatus on `http://127.0.0.1:8898` and opens it in your
 browser. It reads the transcripts already in `~/.claude` and `~/.codex`, so
 existing sessions show up at once. The same command also starts the runtime
 host that launches and supervises agents. Stop both with Ctrl-C.
@@ -141,10 +146,10 @@ keeps its own login, and agents launched afterwards use the active one.
 
 Open the setup guide (sidebar **More** menu → **Setup guide**, or the board's
 ⋯ menu on a phone) and go to **Phone**. If Tailscale is signed in on this
-computer, one button, **Turn on phone access**, publishes the running Viewer
+computer, one button, **Turn on phone access**, publishes the running Delegatus
 inside your tailnet with `tailscale serve --bg`, protects it with the access
 key and comes back with the link and its QR code. Nothing restarts. The
-choice is remembered in `~/.config/agent-log-viewer/phone-access`, so the next
+choice is remembered in `~/.config/delegatus/phone-access`, so the next
 start publishes again by itself; **Turn off phone access** takes the mapping
 down and forgets the choice. When Tailscale is missing, signed out or has no
 MagicDNS name, the step says which in one sentence with a link, and picks up
@@ -153,7 +158,7 @@ the change by itself.
 The same thing from a terminal:
 
 ```bash
-bunx agent-log-viewer --tailscale
+bunx delegatus-cli --tailscale
 ```
 
 Either way the server stays on `127.0.0.1` and is published only inside your
@@ -169,13 +174,13 @@ is missing, run `sudo tailscale set --operator=$USER` once and press it again.
 
 <img src="docs/media/readme/phone-conversation.svg" width="300" alt="A conversation on a 390 px phone screen, its test run expanded">
 
-On a phone the Viewer opens a layout of its own: a project list, the board,
+On a phone Delegatus opens a layout of its own: a project list, the board,
 and one conversation at a time with the composer at the bottom. Accounts and
 limits are in the board's ⋯ menu. Push notifications, once enabled, tell
 you when an agent asks you a question.
 
 Anyone who has the tailnet URL can read every transcript and start commands
-through the Viewer, so treat it as a secret.
+through Delegatus, so treat it as a secret.
 
 ## Voice
 
@@ -186,37 +191,38 @@ through the Viewer, so treat it as a secret.
   per-machine opt-in: pick one in the setup guide's **Voice** step (also the
   **Dictation** menu row) or by right-clicking the microphone button. The
   Voice step saves an ElevenLabs or Soniox key without showing it again and
-  checks that dictation answers. `LLV_TRANSCRIBE_BACKEND` overrides the
+  checks that dictation answers. `DELEGATUS_TRANSCRIBE_BACKEND` overrides the
   choice and locks it. See [docs/transcription.md](docs/transcription.md).
 - **Read aloud.** An answer's speaker button reads it with OpenAI, ElevenLabs
   or Soniox speech, billed to your own API key. Right-click the button to pick
   the provider.
-- **Voice conversation.** A Codex agent that the Viewer hosts offers a
+- **Voice conversation.** A Codex agent that Delegatus hosts offers a
   continuous voice conversation from its composer.
 
 <a id="connect-an-orchestrator-through-mcp"></a>
 
 ## MCP server for agents
 
-The package includes `agent-log-viewer-mcp`, a local stdio MCP server that
-runs Viewer services against the same state as the Viewer. With the package
-installed globally (`bun add -g agent-log-viewer`), register it under the name
-`viewer`:
+The package includes `delegatus-mcp`, a local stdio MCP server that runs
+Delegatus services against the same state as the web app. With the package
+installed globally (`npm i -g delegatus-cli`), register it under the name
+`viewer`. The key keeps its old name so that tool names (`mcp__viewer__*`)
+and the permission allowlists that list them keep matching:
 
 ```bash
 # Claude Code
-claude mcp add viewer -s user -- agent-log-viewer-mcp
+claude mcp add viewer -s user -- delegatus-mcp
 ```
 
 ```toml
 # Codex: ~/.codex/config.toml
 [mcp_servers.viewer]
-command = "agent-log-viewer-mcp"
+command = "delegatus-mcp"
 ```
 
 From a clone, point the command at `bin/mcp-server.mjs` instead, or run
 `scripts/install-mcp.sh`, which registers the server for your Claude Code and
-Codex configurations and for every account the Viewer manages.
+Codex configurations and for every account Delegatus manages.
 
 The tools include:
 
@@ -235,7 +241,7 @@ The tools include:
 - **accounts:** `account_limits`, `account_project_binding`,
   `conversation_migration`;
 - **the operator and the machine:** `operator_snapshot`, `request_attention`
-  (moves your active Viewer to a conversation, task or other target and
+  (moves your active Delegatus view to a conversation, task or other target and
   returns once the browser has arrived there; it does not wait for a reply,
   and a Return control takes you back), `agent_activity`,
   `lifecycle_events`, `resources`, `deployment_status`, `deploy_exact_sha`.
@@ -247,8 +253,10 @@ conversation, task or pipeline they name.
 
 ## Configuration
 
-Everything the Viewer keeps lives in one directory,
-`~/.config/agent-log-viewer/` (it follows `XDG_CONFIG_HOME`):
+Everything Delegatus keeps lives in one directory, `~/.config/delegatus/`
+(it follows `XDG_CONFIG_HOME`). An install from before the rename keeps its
+data in `~/.config/agent-log-viewer/`, and `~/.config/delegatus` becomes a
+link to it; nothing is moved or copied:
 
 - `state/` — tasks, pipelines, the agent registry and other state, mostly in
   SQLite;
@@ -258,28 +266,31 @@ Everything the Viewer keeps lives in one directory,
   `elevenlabs-api-key` and `openai-api-key`.
 
 The local transcription environment lives in
-`~/.cache/agent-log-viewer/whisper-venv`.
+`~/.cache/delegatus/whisper-venv` (`~/.cache/agent-log-viewer/whisper-venv`
+on an install from before the rename).
 
 **Language.** The interface is in English or Ukrainian. Switch it under the
 sidebar's **More** menu; the default follows your browser. CLI messages
-switch to Ukrainian with `LLV_LANG=uk` or a `uk_*` locale.
+switch to Ukrainian with `DELEGATUS_LANG=uk` or a `uk_*` locale.
 
-**Environment variables.** All optional:
+**Environment variables.** All optional. Each `DELEGATUS_` variable is also
+accepted under its earlier `LLV_` spelling; when both are set, the
+`DELEGATUS_` one wins:
 
 | Variable | Effect |
 | --- | --- |
-| `LLV_LANG` | `en` or `uk`: the CLI message language. |
-| `LLV_TRANSCRIBE_BACKEND` | `local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu. |
-| `LLV_WHISPER_MODEL`, `LLV_WHISPER_DEVICE` | faster-whisper model size (default `small`) and device (`cpu` or `cuda`). |
-| `LLV_TTS_BACKEND` | `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider. |
-| `LLV_HOST_RETIREMENT_IDLE_HOURS` | Hours a hosted agent's transcript must be quiet before the Viewer may stop its host (default `6`, `0` turns this off). Hosts in the middle of a turn, with a pending question or holding an orchestrator seat are never stopped. |
-| `LLV_REAPER_ENABLED` | `1` lets the agent reaper stop leaked agent processes it has verified; unset, it only reports them at `GET /api/lifecycle/reaper`. |
+| `DELEGATUS_LANG` | `en` or `uk`: the CLI message language. |
+| `DELEGATUS_TRANSCRIBE_BACKEND` | `local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu. |
+| `DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE` | faster-whisper model size (default `small`) and device (`cpu` or `cuda`). |
+| `DELEGATUS_TTS_BACKEND` | `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider. |
+| `DELEGATUS_HOST_RETIREMENT_IDLE_HOURS` | Hours a hosted agent's transcript must be quiet before Delegatus may stop its host (default `6`, `0` turns this off). Hosts in the middle of a turn, with a pending question or holding an orchestrator seat are never stopped. |
+| `DELEGATUS_REAPER_ENABLED` | `1` lets the agent reaper stop leaked agent processes it has verified; unset, it only reports them at `GET /api/lifecycle/reaper`. |
 | `VIEWER_PROC_BACKEND` | `linux`, `portable` or `windows`: force the process-discovery backend. |
 
 ## Platform support
 
 Linux is the main target. macOS works through a backend that uses `ps` and
-`lsof` instead of `/proc`. Native Windows runs the Viewer with Claude Code
+`lsof` instead of `/proc`. Native Windows runs Delegatus with Claude Code
 (install Claude with its native installer so a `claude.exe` is on `PATH`)
 but leaves out Codex, managed accounts, local dictation, the MCP server and
 `--tailscale`; run under WSL 2 for those. Windows also has no open-file scan,
@@ -289,7 +300,7 @@ so liveness comes from file modification times.
 
 The server binds to `127.0.0.1` by default. Any non-loopback bind, and
 `--tailscale`, require the access key. Endpoints that start or message agents
-exist, so anyone who can reach the Viewer can run commands as you. The log
+exist, so anyone who can reach Delegatus can run commands as you. The log
 APIs refuse paths outside the known transcript roots.
 
 ## Docker
