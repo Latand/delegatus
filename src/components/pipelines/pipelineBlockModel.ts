@@ -202,6 +202,14 @@ export function parkedStage(pipeline: Pipeline): PipelineStage | null {
   return null;
 }
 
+/** The stage the pipeline screen expands (§3.13): the one the lane waits on
+    the operator for, else the one it stands on. A finished lane has none. */
+export function screenCurrentStageId(summary: KanbanPipeline): string | null {
+  const { pipeline, chips } = summary;
+  if (pipelineEnded(pipeline)) return null;
+  return parkedStage(pipeline)?.id ?? chips[currentChipIndex(chips)]?.stage.id ?? null;
+}
+
 /**
  * The card's reason line for a lane that needs the operator, in warning ink:
  * "Implement failed · 1 finding" for a decision, "head 9b2e7d4c unreviewed ·
