@@ -1,47 +1,34 @@
 import { test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import tailwind from "@tailwindcss/postcss";
 import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright-core";
-import postcss from "postcss";
 
+import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { translate } from "@/lib/i18n";
 
 /*
- * Browser evidence for #1671 at phone width, in both colour schemes, against
- * the production stylesheet and the real Viewer (`issue1671Evidence.fixture.tsx`):
+ * The phone's browser evidence driver: the real Viewer at phone width, in
+ * both colour schemes, against the production stylesheet
+ * (`issue1671Evidence.fixture.tsx`), one case per issue:
  *
- *   LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "<case>"
  *
  * happy-dom has no compositor, so what only a browser can settle is settled
- * here with real touch input — CDP `Input.dispatchTouchEvent`, so the row's
- * `touch-action: pan-y` meets Chromium's own gesture recognizer:
+ * here, with real touch input where a gesture is the question — CDP
+ * `Input.dispatchTouchEvent`, so the page's `touch-action` meets Chromium's
+ * own gesture recognizer.
  *
- *   - a vertical drag that starts on a row scrolls the board and opens nothing;
- *   - a horizontal drag reveals a tray whose buttons are at least 44 px, sit
- *     beside the card and inside the phone;
- *   - a lane hidden since its last round stays off the board, and a lane that
- *     parked again after its Hide is back in Needs you and in the badge;
- *     hidden again, it stays off both once the server answers, in every
- *     painted frame, although the server keeps a lane's first Hide instant;
- *   - Hide takes the row and the bar's count on the tap, Restore brings both
- *     back, and a hide the server refuses puts both back and says why;
- *   - Close lane takes the row on the tap and sends nothing once Restore
- *     cancelled it; a close that has gone out keeps its row gone until the
- *     server answers, and a second close inside the window keeps the first gone;
- *   - a long-press opens the actions sheet and not the lane under the finger;
- *   - a conversation's Close writes only the board, and Reopen round-trips;
- *   - «All conversations» appends the feed's rows first with no request, then
- *     project pages, in identical rows, with no search field, no repeats and
- *     no superseded round.
- *
- * Measurements go to `evidence/issue-1671/geometry.json`; frames to
- * `.artifacts/issue-1671/`, which is not committed.
+ * #1671's case drove the board's swipe tray and its inline «All
+ * conversations». Both left the board with #2072 slice 4 (the column pager
+ * owns the sideways swipe, and history leaves the work surface); its readings
+ * stay in `evidence/issue-1671/geometry.json`, what a row can have done to it
+ * is now its long-press sheet, and the #2072 slice 4 cases below drive that
+ * board with real touches.
  */
 
 const browserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" ? test : test.skip;
 const OUT = path.resolve(".artifacts/issue-1671");
-const EVIDENCE = path.resolve("evidence/issue-1671");
 /** The fixture's running conversation, under its managed account's home. */
 const runningPath = (account: string) => `/state/agent-log-viewer/shared/accounts/claude/${account}/projects/atlas/running.jsonl`;
 const RUNNING_PATH = runningPath("spare");
@@ -50,15 +37,6 @@ const SCHEMES = ["light", "dark"] as const;
 
 type Point = [number, number];
 interface Rect { x: number; y: number; width: number; height: number }
-interface Recorded {
-  catalogRequests: string[];
-  pipelinePatches: Array<{ id: string; action: string }>;
-  closesAnswered: string[];
-  hidesAnswered: Array<{ id: string; action: string; dismissedAt: string | null }>;
-  boardMutations: Array<{ kind: string; path?: string }>;
-  refuseNextPipelinePatch: boolean;
-  pipelineAnswerDelayMs: number;
-}
 
 const pause = (page: Page, ms = 300) => page.waitForTimeout(ms);
 const along = (from: Point, to: Point, steps = 12): Point[] =>
@@ -97,363 +75,14 @@ async function tap(page: Page, cdp: CDPSession, selector: string): Promise<void>
   await touch(cdp, [[box.x + box.width / 2, box.y + box.height / 2]]);
 }
 
-async function swipeLeft(page: Page, cdp: CDPSession, selector: string, width: number): Promise<void> {
-  const [, y] = await centre(page, selector);
-  await touch(cdp, along([width - 40, y], [width - 250, y + 3]));
-  await pause(page, 350);
-}
-
-/* The target's rect once two reads 120 ms apart agree: nothing above it is
-   still arriving, so a tap measured now lands where it was measured. */
-async function stableRect(page: Page, selector: string): Promise<Rect> {
-  let last = await rectOf(page, selector);
-  for (let i = 0; i < 25; i += 1) {
-    await pause(page, 120);
-    const next = await rectOf(page, selector);
-    if (last && next && Math.abs(next.y - last.y) < 0.5 && Math.abs(next.height - last.height) < 0.5) return next;
-    last = next;
-  }
-  throw new Error(`${selector} never stopped moving`);
-}
-
-async function run(context: BrowserContext, base: string, viewport: { width: number; height: number }, scheme: "light" | "dark") {
-  const key = `${viewport.width}-${scheme}`;
-  const page = await context.newPage();
-  const pageErrors: string[] = [];
-  page.on("pageerror", (error) => pageErrors.push(error.message));
-  const cdp = await context.newCDPSession(page);
-  const shot = (name: string) => page.screenshot({ path: path.join(OUT, `${key}-${name}.png`) });
-  const lane = (i: number) => `[data-mobile2-board] [data-mobile2-swipe-row="pipeline:lane-${i}"]`;
-  const count = (selector: string) => page.evaluate((sel) => document.querySelectorAll(sel).length, selector);
-  const badge = async () => Number(await page.evaluate(() => document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? "NaN"));
-  const receipt = () => page.evaluate(() => document.querySelector("[data-mobile2-receipt]")?.textContent ?? "");
-  const recorded = () => page.evaluate(() => structuredClone((window as unknown as { evidence: Recorded }).evidence));
-  const failures: string[] = [];
-  const check = (label: string, ok: boolean) => { if (!ok) failures.push(label); };
-
-  await page.goto(`${base}/#p=atlas`);
-  await page.waitForSelector(lane(9), { timeout: 20_000 });
-  await pause(page, 800);
-  const queued = await badge();
-  await shot("board");
-
-  /* 0. A Hide covers the decision it saw: the lane hidden since its last round
-     stays off the board, the lane that parked again after its Hide is back,
-     and the badge counts every lane Needs you lists. */
-  const laneRow = (id: string) => `[data-mobile2-board] [data-mobile2-swipe-row="pipeline:${id}"]`;
-  const hideDecision = {
-    stillHidden: await count(laneRow("lane-hidden")),
-    parkedAgain: await count(laneRow("lane-parked-again")),
-    listedLanes: await count('[data-mobile2-board] [data-mobile2-swipe-row^="pipeline:"]'),
-  };
-  check("a lane hidden since its last round stays off the board", hideDecision.stillHidden === 0);
-  check("a lane that parked again after its Hide is back in Needs you", hideDecision.parkedAgain === 1);
-  check("the badge counts every lane Needs you lists", hideDecision.listedLanes === queued);
-
-  /* 1. A vertical drag that starts on a row scrolls the board and opens nothing. */
-  const startY = viewport.height - 220;
-  const startedOn = await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.closest("[data-mobile2-swipe-row]")?.getAttribute("data-mobile2-swipe-row") ?? null, [viewport.width / 2, startY]);
-  await touch(cdp, along([viewport.width / 2, startY], [viewport.width / 2 + 6, startY - 320], 14));
-  await pause(page, 700);
-  const vertical = {
-    startedOn,
-    scrollTop: await page.evaluate(() => (document.querySelector("[data-mobile2-board]") as HTMLElement).scrollTop),
-    openRows: await count("[data-mobile2-swipe-open]"),
-  };
-  check("a vertical drag starts on a row", startedOn !== null);
-  check("a vertical drag scrolls the board", vertical.scrollTop > 40);
-  check("a vertical drag opens no row", vertical.openRows === 0);
-  await page.evaluate(() => { (document.querySelector("[data-mobile2-board]") as HTMLElement).scrollTop = 0; });
-  await pause(page);
-
-  /* 2. A horizontal drag reveals the tray beside the card, at touch size. */
-  await swipeLeft(page, cdp, lane(0), viewport.width);
-  const tray = await page.evaluate((sel) => {
-    const row = document.querySelector(sel)!;
-    const card = row.querySelector("[data-mobile2-swipe-card]")!.getBoundingClientRect();
-    return {
-      open: row.getAttribute("data-mobile2-swipe-open"),
-      touchAction: getComputedStyle(row).touchAction,
-      cardLeft: card.left, cardRight: card.right,
-      opacity: getComputedStyle(row.querySelector("[data-mobile2-swipe-tray]")!).opacity,
-      buttons: [...row.querySelectorAll("[data-mobile2-swipe-action]")].map((button) => {
-        const r = button.getBoundingClientRect();
-        return { key: button.getAttribute("data-mobile2-swipe-action"), label: button.getAttribute("aria-label"), x: r.x, y: r.y, width: r.width, height: r.height };
-      }),
-    };
-  }, lane(0));
-  await shot("tray");
-  check("the tray opens", tray.open === "true" && tray.opacity === "1");
-  check("the row keeps vertical panning to the browser", tray.touchAction === "pan-y");
-  check("the tray holds Hide and Close lane", tray.buttons.map((button) => button.key).join() === "hide,closeLane");
-  check("tray buttons are at least 44 px", tray.buttons.every((button) => button.width >= 44 && button.height >= 44));
-  check("tray buttons sit beside the card", tray.buttons.every((button) => button.x >= tray.cardRight - 0.5));
-  check("tray buttons stay inside the phone", tray.buttons.every((button) => button.x + button.width <= viewport.width + 0.5));
-
-  /* 3. Hide takes the row and the count on the tap; Restore brings both back. */
-  await tap(page, cdp, `${lane(0)} [data-mobile2-swipe-action="hide"]`);
-  await pause(page, 120);
-  const hide = {
-    rowGone: (await count(lane(0))) === 0,
-    badge: await badge(),
-    receipt: await receipt(),
-    receiptBox: await rectOf(page, "[data-mobile2-receipt]"),
-    dockBox: await rectOf(page, "[data-mobile2-board-dock]"),
-    patches: (await recorded()).pipelinePatches,
-  };
-  await shot("hidden");
-  check("Hide takes the row on the tap", hide.rowGone);
-  check("Hide takes the bar's count on the tap", hide.badge === queued - 1);
-  check("Hide sends dismiss", hide.patches.at(-1)?.action === "dismiss");
-  check("the receipt names the lane", hide.receipt.includes(TASK_0));
-  check("the receipt sits above the dock", !hide.receiptBox || !hide.dockBox || hide.receiptBox.y + hide.receiptBox.height <= hide.dockBox.y + 0.5);
-  await tap(page, cdp, '[data-mobile2-receipt-undo="restore"]');
-  await page.waitForSelector(lane(0), { timeout: 5_000 });
-  await pause(page, 200);
-  const restored = { badge: await badge(), patches: (await recorded()).pipelinePatches };
-  check("Restore brings the row and the count back", restored.badge === queued && restored.patches.at(-1)?.action === "undismiss");
-
-  /* 4. A hide the server refuses puts the row and the count back, and says why. */
-  await page.evaluate(() => { (window as unknown as { evidence: Recorded }).evidence.refuseNextPipelinePatch = true; });
-  await swipeLeft(page, cdp, lane(1), viewport.width);
-  await tap(page, cdp, `${lane(1)} [data-mobile2-swipe-action="hide"]`);
-  await pause(page, 80);
-  const refusedAtOnce = { rowGone: (await count(lane(1))) === 0, badge: await badge() };
-  await page.waitForSelector(lane(1), { timeout: 5_000 });
-  await pause(page, 250);
-  const refused = { ...refusedAtOnce, badgeAfter: await badge(), receipt: await receipt() };
-  await shot("refused");
-  check("a refused hide still leaves on the tap", refused.rowGone && refused.badge === queued - 1);
-  check("a refused hide comes back and says why", refused.badgeAfter === queued && refused.receipt.includes("refused by the evidence fixture"));
-
-  /* 5. Close lane goes on the tap and sends nothing once Restore cancelled it. */
-  await swipeLeft(page, cdp, lane(2), viewport.width);
-  const sentBefore = (await recorded()).pipelinePatches.length;
-  await tap(page, cdp, `${lane(2)} [data-mobile2-swipe-action="closeLane"]`);
-  await pause(page, 150);
-  const closeLane = { rowGone: (await count(lane(2))) === 0, badge: await badge(), receipt: await receipt() };
-  await shot("close-lane");
-  await tap(page, cdp, '[data-mobile2-receipt-undo="restore"]');
-  await page.waitForSelector(lane(2), { timeout: 5_000 });
-  /* Past the receipt's window: a cancelled close is never sent late. */
-  await pause(page, 4_400);
-  const closeLaneAfter = { badge: await badge(), sent: (await recorded()).pipelinePatches.length - sentBefore };
-  check("Close lane takes the row and the count on the tap", closeLane.rowGone && closeLane.badge === queued - 1);
-  check("Close lane's receipt says the lane closed", closeLane.receipt.includes(translate("en", "mobile2.pipeline.archived")));
-  check("a cancelled Close lane sends nothing", closeLaneAfter.sent === 0 && closeLaneAfter.badge === queued);
-
-  /* 5b. A Close lane that has gone out stays gone until the server answers it,
-     and a second Close lane inside the first one's window keeps the first gone.
-     The fixture answers a close after 2.5 s, as a close stopping hosts does. */
-  const sentBeforeCloses = (await recorded()).pipelinePatches.length;
-  const closesSent = async () => (await recorded()).pipelinePatches.slice(sentBeforeCloses).map((patch) => patch.id);
-  const closes = async () => ({ first: await count(lane(4)), second: await count(lane(5)), badge: await badge() });
-  await swipeLeft(page, cdp, lane(4), viewport.width);
-  await tap(page, cdp, `${lane(4)} [data-mobile2-swipe-action="closeLane"]`);
-  await pause(page, 150);
-  await swipeLeft(page, cdp, lane(5), viewport.width);
-  await tap(page, cdp, `${lane(5)} [data-mobile2-swipe-action="closeLane"]`);
-  const secondTapAt = Date.now();
-  await pause(page, 150);
-  const successive = { ...(await closes()), sent: await closesSent() };
-  /* Past the second receipt's window, while its close is still out. */
-  await pause(page, 4_300);
-  const inFlight = { ...(await closes()), sinceSecondTapMs: Date.now() - secondTapAt, sent: await closesSent(), answered: [...(await recorded()).closesAnswered] };
-  await shot("close-in-flight");
-  await page.waitForFunction(() => (window as unknown as { evidence: Recorded }).evidence.closesAnswered.length >= 2, undefined, { timeout: 10_000 });
-  await pause(page, 300);
-  const answered = { ...(await closes()), answered: [...(await recorded()).closesAnswered] };
-  check("a second Close lane inside the window keeps the first lane gone while its close is out", successive.first === 0 && successive.second === 0 && successive.badge === queued - 2 && successive.sent.join() === "lane-4");
-  check("a Close lane whose window ran out stays gone while the server answers", inFlight.first === 0 && inFlight.second === 0 && inFlight.badge === queued - 2 && inFlight.sent.join() === "lane-4,lane-5" && !inFlight.answered.includes("lane-5"));
-  check("answered closes stay gone", answered.first === 0 && answered.second === 0 && answered.badge === queued - 2);
-
-  /* 5c. A lane hidden before that parked again hides again. The fixture keeps
-     a lane's first Hide instant through a later dismiss, as the engine does,
-     and holds each answer 400 ms. Every frame painted from the tap until both
-     answers have landed is sampled for the row and the count. */
-  const parkedAgain = laneRow("lane-parked-again");
-  const badgeBeforeRehide = await badge();
-  await page.evaluate(() => { (window as unknown as { evidence: Recorded }).evidence.pipelineAnswerDelayMs = 400; });
-  await swipeLeft(page, cdp, parkedAgain, viewport.width);
-  const sentBeforeRehide = (await recorded()).pipelinePatches.length;
-  await tap(page, cdp, `${parkedAgain} [data-mobile2-swipe-action="hide"]`);
-  await page.evaluate((sel) => {
-    const sampler = window as unknown as { rehideFrames: Array<{ row: boolean; badge: string | null }>; rehideSampling: boolean };
-    sampler.rehideFrames = [];
-    sampler.rehideSampling = true;
-    const sample = () => {
-      sampler.rehideFrames.push({
-        row: document.querySelector(sel) !== null,
-        badge: document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? null,
-      });
-      if (sampler.rehideSampling) requestAnimationFrame(sample);
-    };
-    requestAnimationFrame(sample);
-  }, parkedAgain);
-  await page.waitForFunction(() => (window as unknown as { evidence: Recorded }).evidence.hidesAnswered.filter((answer) => answer.id === "lane-parked-again").length >= 2, undefined, { timeout: 5_000 }).catch(() => undefined);
-  await pause(page, 600);
-  const rehideFrames = await page.evaluate(() => {
-    const sampler = window as unknown as { rehideFrames: Array<{ row: boolean; badge: string | null }>; rehideSampling: boolean };
-    sampler.rehideSampling = false;
-    return sampler.rehideFrames;
-  });
-  await page.evaluate(() => { (window as unknown as { evidence: Recorded }).evidence.pipelineAnswerDelayMs = 0; });
-  const rehideAnswers = (await recorded()).hidesAnswered.filter((answer) => answer.id === "lane-parked-again");
-  const rehide = {
-    sent: (await recorded()).pipelinePatches.slice(sentBeforeRehide).map((patch) => `${patch.id}:${patch.action}`),
-    answers: rehideAnswers,
-    answeredDismissAgeMs: rehideAnswers.at(-1)?.dismissedAt ? Date.now() - Date.parse(rehideAnswers.at(-1)!.dismissedAt!) : null,
-    frames: rehideFrames.length,
-    framesWithRow: rehideFrames.filter((frame) => frame.row).length,
-    badges: [...new Set(rehideFrames.map((frame) => frame.badge))],
-    rowAfter: await count(parkedAgain),
-    badgeBefore: badgeBeforeRehide,
-    badgeAfter: await badge(),
-  };
-  await shot("rehidden");
-  check("hiding a lane that parked again clears its old Hide, then sends the new one", rehide.sent.join() === "lane-parked-again:undismiss,lane-parked-again:dismiss");
-  check("the new Hide is stamped now, after the round that parked the lane again", rehide.answeredDismissAgeMs !== null && rehide.answeredDismissAgeMs < 60_000);
-  check("no painted frame shows the re-hidden row or its count while the answers land", rehide.frames >= 10 && rehide.framesWithRow === 0 && rehide.badges.join() === String(badgeBeforeRehide - 1));
-  check("the re-hidden lane stays off Needs you and the badge once answered", rehide.rowAfter === 0 && rehide.badgeAfter === badgeBeforeRehide - 1);
-
-  /* 6. A long-press opens the actions sheet and not the lane under the finger. */
-  const [pressX, pressY] = await centre(page, lane(3));
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: pressX, y: pressY }] });
-  await page.waitForTimeout(700);
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-  await pause(page, 450);
-  const longPress = await page.evaluate(() => {
-    const sheet = document.querySelector('[data-mobile2-sheet="row"]');
-    return {
-      sheet: sheet !== null,
-      rows: sheet ? [...sheet.querySelectorAll("[data-mobile2-row-action]")].map((row) => ({ key: row.getAttribute("data-mobile2-row-action"), height: row.getBoundingClientRect().height })) : [],
-      pipelineScreen: document.querySelector('[data-mobile2-screen="pipeline"]') !== null,
-    };
-  });
-  await shot("long-press");
-  check("a long-press opens the actions sheet", longPress.sheet && longPress.rows.map((row) => row.key).join() === "hide,closeLane");
-  check("the sheet's rows are at least 44 px", longPress.rows.every((row) => row.height >= 44));
-  check("a long-press does not open the lane", !longPress.pipelineScreen);
-  await page.evaluate(() => (document.querySelector('[data-mobile2-sheet="row"] [data-mobile2-close]') as HTMLElement | null)?.click());
-  await pause(page, 450);
-
-  /* 7. A conversation's Close writes only the board, and Reopen round-trips. */
-  const running = `[data-mobile2-board] [data-mobile2-swipe-row="conversation:${RUNNING_PATH}"]`;
-  await swipeLeft(page, cdp, running, viewport.width);
-  const conversationTray = await page.evaluate((sel) => [...document.querySelectorAll(`${sel} [data-mobile2-swipe-action]`)].map((button) => button.getAttribute("aria-label")), running);
-  await shot("conversation-tray");
-  await tap(page, cdp, `${running} [data-mobile2-swipe-action="close"]`);
-  await pause(page, 150);
-  const conversationGone = (await count(running)) === 0;
-  await page.waitForFunction(() => (window as unknown as { evidence: Recorded }).evidence.boardMutations.some((mutation) => mutation.kind === "close"), undefined, { timeout: 5_000 });
-  await shot("conversation-closed");
-  await tap(page, cdp, '[data-mobile2-receipt-undo="reopen"]');
-  const reopened = await page.waitForSelector(running, { timeout: 5_000 }).then(() => true, () => false);
-  const conversationClose = {
-    tray: conversationTray, rowGone: conversationGone, reopened,
-    boardScreen: await count('[data-mobile2-screen="board"]'),
-    mutations: (await recorded()).boardMutations.map((mutation) => mutation.kind),
-    pipelineWrites: (await recorded()).pipelinePatches.length - sentBefore,
-  };
-  check("a conversation's tray holds Close card only", conversationTray.length === 1 && String(conversationTray[0]).startsWith(translate("en", "mobile2.chat.menuClose")));
-  check("Close card takes the row on the tap", conversationClose.rowGone);
-  check("Reopen brings the conversation back to the board", conversationClose.reopened && conversationClose.boardScreen === 1);
-
-  /* 8. «All conversations» appends the same rows: the feed's first, then pages.
-     The tap waits for the list above the row to stop moving: a banner that
-     arrived between measuring and touching once moved the row out from under
-     the finger, and the tap expanded nothing. */
-  const toggle = '[data-mobile2-row="catalog"]';
-  await page.evaluate((sel) => document.querySelector(sel)?.scrollIntoView({ block: "center" }), toggle);
-  const toggleBox = await stableRect(page, toggle);
-  const banners = await count("[data-mobile2-banner]");
-  await touch(cdp, [[toggleBox.x + toggleBox.width / 2, toggleBox.y + toggleBox.height / 2]]);
-  await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-expanded") === "true", toggle, { timeout: 5_000 }).catch(() => undefined);
-  await pause(page, 250);
-  check("no banner stands over the list when the catalog row is tapped", banners === 0);
-  const rowsSelector = '[data-mobile2-board] [data-mobile2-row="conversation"][data-catalog-path]';
-  const expanded = await page.evaluate((sel) => ({
-    rows: document.querySelectorAll(sel).length,
-    requests: (window as unknown as { evidence: Recorded }).evidence.catalogRequests.length,
-    toggle: document.querySelector('[data-mobile2-row="catalog"]')?.textContent ?? "",
-  }), rowsSelector);
-  await shot("expanded");
-  /* The reader keeps scrolling: a page lands below the fold, and the next one
-     loads only once the list's end is in reach again. The first page carries
-     the superseded round, which gets no row, so twenty stored rows take two
-     pages. A list that stops loading fails the checks below. */
-  const scrolledStoredRows = () => page.evaluate((sel) => {
-    const scroller = document.querySelector("[data-mobile2-board]") as HTMLElement;
-    scroller.scrollTop = scroller.scrollHeight;
-    return [...document.querySelectorAll<HTMLElement>(sel)].filter((row) => row.dataset.catalogPath?.startsWith("/repo/history-")).length;
-  }, rowsSelector);
-  for (let i = 0; i < 50 && (await scrolledStoredRows()) < 20; i += 1) await pause(page, 200);
-  await pause(page, 500);
-  const appended = await page.evaluate((sel) => {
-    const rows = [...document.querySelectorAll<HTMLElement>(sel)];
-    const paths = rows.map((row) => row.dataset.catalogPath ?? "");
-    const scroller = document.querySelector("[data-mobile2-board]")!;
-    return {
-      rows: rows.length,
-      unique: new Set(paths).size,
-      stored: paths.filter((item) => item.startsWith("/repo/history-")).length,
-      superseded: paths.includes("/repo/superseded-round.jsonl"),
-      rowStyles: new Set(rows.map((row) => row.className)).size,
-      heights: [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))],
-      requests: (window as unknown as { evidence: Recorded }).evidence.catalogRequests,
-      searchFields: document.querySelectorAll('input[type="search"]').length,
-      pageOverflow: document.documentElement.scrollWidth > innerWidth,
-      boardOverflow: scroller.scrollWidth > scroller.clientWidth,
-    };
-  }, rowsSelector);
-  await shot("appended");
-  check("expanding appends the feed's thirty rows with no request", expanded.rows === 30 && expanded.requests === 0);
-  check("the expanded row reads Show fewer", expanded.toggle.includes(translate("en", "mobile2.board.showFewer")));
-  check("catalog pages append below the feed's rows", appended.stored >= 20);
-  check("a superseded round the stored catalog lists gets no row", !appended.superseded);
-  check("no row appears twice", appended.unique === appended.rows);
-  check("every appended row is the same row", appended.rowStyles === 1 && appended.heights.length === 1);
-  check("catalog requests are this project's pages with no query",appended.requests.length > 0 && appended.requests.every((query) => query.includes("project=atlas") && query.includes("limit=20") && !/[?&]q=/.test(query)));
-  check("no search field anywhere", appended.searchFields === 0);
-  check("nothing overflows the phone sideways", !appended.pageOverflow && !appended.boardOverflow);
-  check("no page errors", pageErrors.length === 0);
-
-  await page.close();
-  return {
-    key, viewport, scheme, queued, hideDecision, vertical, tray, hide, restored, refused, closeLane: { ...closeLane, ...closeLaneAfter },
-    closes: { successive, inFlight, answered }, rehide, longPress, conversationClose, banners, expanded, appended, pageErrors, failures,
-  };
-}
-
-const TASK_0 = "Fast conversation switching";
-
-/** The fixture page, bundled and served: one setup both cases below run on. */
+/** The fixture page, bundled and served: one setup every case below runs on.
+    The shared harness builds it the way the Viewer's client bundle sees it,
+    with server actions stubbed (#2009); a plain browser build pulls their
+    Node-only bodies in and fails before any case runs. */
 async function serveFixture(): Promise<{ base: string; stop: () => void }> {
   fs.mkdirSync(OUT, { recursive: true });
-  const build = await Bun.build({
-    entrypoints: [path.resolve("src/components/mobile/issue1671Evidence.fixture.tsx")],
-    target: "browser",
-    outdir: path.join(OUT, "bundle"),
-    define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
-  });
-  if (!build.success) throw new Error(build.logs.join("\n"));
-  const entry = build.outputs.find((output) => output.kind === "entry-point")!.path;
-  const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request) {
-      const pathname = new URL(request.url).pathname;
-      if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
-      if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
-      return new Response(
-        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
-        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>',
-        { headers: { "content-type": "text/html" } },
-      );
-    },
-  });
-  return { base: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
+  const { base, stop } = await serveEvidenceFixture(OUT, "src/components/mobile/issue1671Evidence.fixture.tsx");
+  return { base: base.replace(/\/$/, ""), stop };
 }
 
 const launchChromium = () => chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
@@ -500,31 +129,6 @@ browserTest("composer queue: a lost seat read drains once on the phone and survi
   fs.mkdirSync(evidence, { recursive: true });
   fs.writeFileSync(path.join(evidence, "recovery.json"), JSON.stringify(results, null, 2) + "\n");
 }, 90_000);
-
-browserTest("#1671 at phone width: real touches on the real Viewer, in both schemes", async () => {
-  fs.mkdirSync(EVIDENCE, { recursive: true });
-  const { base: fixtureBase, stop } = await serveFixture();
-  const browser = await launchChromium();
-  const results: Awaited<ReturnType<typeof run>>[] = [];
-  try {
-    for (const viewport of VIEWPORTS) {
-      for (const scheme of SCHEMES) {
-        const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
-        try {
-          results.push(await run(context, fixtureBase, viewport, scheme));
-        } finally {
-          await context.close();
-        }
-      }
-    }
-  } finally {
-    await browser.close();
-    stop();
-  }
-  fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(results, null, 2)}\n`);
-  const failed = results.filter((result) => result.failures.length > 0);
-  if (failed.length) throw new Error(JSON.stringify(failed.map((result) => ({ key: result.key, failures: result.failures, pageErrors: result.pageErrors })), null, 2));
-}, 300_000);
 
 /*
  * #1795 — the runtime pill's sheet, on the same real Viewer, at the two phone
@@ -1108,12 +712,13 @@ browserTest("#1846 desktop: the deck surface's account chip at 1280 px names the
  *
  *   LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#1865"
  *
- * The queue row names the stage and its attempt inside its sentence, lowercased,
- * and never the preset. The lane's screen titles each stage row by the name the
- * stage list gives it, with the attempt once the stage ran twice, and the preset
- * leads the row's meta line instead. Neither title is cut. The queue row's
- * sentence is painted whole with its age after it, however many lines that
- * takes; each stage row's meta line keeps its verdict and findings count whole
+ * The queue row is the pipeline card (#2072 slice 3): its chain names the stage
+ * by the name the stage list gives it, its reason line says what the stage
+ * returned, and neither names the preset. The lane's screen titles each stage
+ * row by that name, with the attempt once the stage ran twice, and the preset
+ * leads the row's meta line instead. Neither title is cut. The card's reason
+ * line is painted whole with its age after it, however many lines that takes;
+ * each stage row's meta line keeps its verdict and findings count whole
  * (the preset truncates first), and the effort ladder ends before the meta
  * line begins — both of which the Ukrainian row once failed.
  *
@@ -1147,31 +752,29 @@ browserTest("#1865: the phone names a stage and its attempt in the queue row and
           await page.waitForSelector(ROW, { timeout: 20_000 });
           await pause(page, 600);
           const queueRow = await page.evaluate((selector) => document.querySelector(selector)?.textContent ?? "", ROW);
-          /* The sentence and its age, each painted inside the row's text column. */
+          /* The reason line and its age, painted inside the block's column. */
           const queueMeta = await page.evaluate((selector) => {
-            const meta = document.querySelector<HTMLElement>(`${selector} [data-mobile2-row-meta]`);
-            const age = meta?.querySelector<HTMLElement>("[data-mobile2-row-age]");
-            const column = meta?.parentElement?.getBoundingClientRect();
-            const box = meta?.getBoundingClientRect();
-            const ageBox = age?.getBoundingClientRect();
+            const reason = document.querySelector<HTMLElement>(`${selector} [data-pipeline-reason]`);
+            const column = reason?.closest(".pblock")?.getBoundingClientRect();
+            const box = reason?.getBoundingClientRect();
             const range = document.createRange();
-            if (meta) range.selectNodeContents(meta);
+            if (reason) range.selectNodeContents(reason);
             const ink = range.getBoundingClientRect();
             return {
-              text: meta?.textContent ?? "",
-              age: age?.textContent ?? "",
-              lines: box ? Math.round(box.height / parseFloat(getComputedStyle(meta!).lineHeight || "16")) : 0,
+              text: reason?.textContent ?? "",
+              chain: [...document.querySelectorAll(`${selector} .pb-pill[data-stage] .pb-name`)].map((name) => name.textContent),
+              lines: box && reason ? Math.round(box.height / parseFloat(getComputedStyle(reason).lineHeight || "16")) : 0,
               columnRight: column ? Math.round(column.right * 10) / 10 : 0,
               inkRight: Math.round(ink.right * 10) / 10,
-              ageRight: ageBox ? Math.round(ageBox.right * 10) / 10 : 0,
-              clipped: !!meta && (meta.scrollWidth > meta.clientWidth + 0.5 || (column ? ink.right > column.right + 0.5 : true)),
+              clipped: !reason || reason.scrollWidth > reason.clientWidth + 0.5 || (column ? ink.right > column.right + 0.5 : true),
             };
           }, ROW);
-          if (queueMeta.clipped) fail(`the queue row's sentence is clipped: ${JSON.stringify(queueMeta)}`);
-          if (!queueMeta.age || queueMeta.ageRight > queueMeta.columnRight + 0.5) fail(`the queue row's age is not painted whole: ${JSON.stringify(queueMeta)}`);
+          if (queueMeta.clipped) fail(`the queue row's reason line is clipped: ${JSON.stringify(queueMeta)}`);
+          if (!/ · \d/.test(queueMeta.text)) fail(`the queue row's reason line carries no age: ${JSON.stringify(queueMeta)}`);
           await page.screenshot({ path: path.join(LABELS_OUT, `phone-${key}-queue.png`) });
-          const expectedQueue = translate(lang, "mobile2.board.pipelineStageFailed", { stage: 2, total: 2, name: "critique · 2" });
-          if (!queueRow.includes(expectedQueue)) fail(`the queue row reads ${JSON.stringify(queueRow)}, expected it to hold ${JSON.stringify(expectedQueue)}`);
+          const expectedQueue = translate(lang, "pipelineBlock.reason.failed", { stage: "Critique" });
+          if (!queueMeta.text.startsWith(expectedQueue)) fail(`the queue row's reason reads ${JSON.stringify(queueMeta.text)}, expected it to begin ${JSON.stringify(expectedQueue)}`);
+          if (!queueMeta.chain.includes("Critique")) fail(`the queue row's chain does not name Critique: ${JSON.stringify(queueMeta.chain)}`);
           const preset = translate(lang, "roleCopy.architect.name");
           if (queueRow.toLocaleLowerCase().includes(preset.toLocaleLowerCase())) fail(`the queue row names the preset: ${JSON.stringify(queueRow)}`);
 
@@ -1533,3 +1136,830 @@ browserTest("#1978: a command card's copy controls stay apart and off the text, 
   fs.writeFileSync(path.join(EDGE_EVIDENCE, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 300_000);
+
+/*
+ * #2072 slice 2, the jump strip: a conversation away from its tail, at the
+ * pages Safari leaves on a 390 × 844 and a 430 × 932 phone, in both languages
+ * and both schemes (the desktop reader's strip is held by the DOM test in
+ * `LogFeed.mobileChrome.dom.test.tsx`). The «down» control used to float
+ * over the feed's bottom edge, where a line of text always sat once the reader
+ * had left the tail. It is now a 44 px row of its own between the feed and the
+ * composer:
+ *
+ *   - the feed's viewport ends at the strip's top edge, and no text's ink,
+ *     clipped by its overflow ancestors, reaches the strip or its control;
+ *   - the strip is 44 px tall, its target at least 44 × 44 around a 32 px
+ *     pill, and it lies wholly above the composer and inside the page;
+ *   - the feed's scroll offset is the same before and after the strip
+ *     appears, so the line being read at the top does not move;
+ *   - a tap returns to the tail and the strip leaves with it.
+ *
+ * Readings go to `evidence/issue-2072/jump-strip.json`; frames to `.artifacts/jump-strip/`.
+ */
+const JUMP_OUT = path.resolve(".artifacts/jump-strip");
+const JUMP_EVIDENCE = path.resolve("evidence/issue-2072");
+
+interface JumpReading {
+  strip: Rect | null;
+  control: Rect | null;
+  pill: Rect | null;
+  feed: Rect;
+  composerTop: number | null;
+  inkOnStrip: string[];
+  controlsCrossing: string[];
+  overflowX: number;
+  label: string;
+}
+
+/* Runs in the page; the ink walk is the test's own. */
+const readJump = (page: Page) => page.evaluate((): JumpReading => {
+  interface Box { l: number; t: number; r: number; b: number }
+  const box = (element: Element): Box => {
+    const r = element.getBoundingClientRect();
+    return { l: r.left, t: r.top, r: r.right, b: r.bottom };
+  };
+  const rect = (element: Element | null): Rect | null => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  };
+  const meets = (a: Box, b: Box) => Math.min(a.r, b.r) - Math.max(a.l, b.l) > 0.5 && Math.min(a.b, b.b) - Math.max(a.t, b.t) > 0.5;
+  const clip = (element: Element): Box => {
+    let out: Box = { l: -Infinity, t: -Infinity, r: Infinity, b: Infinity };
+    for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (/(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
+        const p = box(parent);
+        out = { l: Math.max(out.l, p.l), t: Math.max(out.t, p.t), r: Math.min(out.r, p.r), b: Math.min(out.b, p.b) };
+      }
+    }
+    return out;
+  };
+  const strip = document.querySelector("[data-feed-jump-strip]");
+  const control = strip?.querySelector("button") ?? null;
+  const feed = document.querySelector("[data-log-feed-scroller]")!;
+  /* Every text outside the strip, as the ink it paints. */
+  const inkOnStrip: string[] = [];
+  if (strip) {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim() || !node.parentElement || strip.contains(node)) continue;
+      if (getComputedStyle(node.parentElement).visibility === "hidden") continue;
+      const c = clip(node.parentElement);
+      range.selectNodeContents(node);
+      for (const q of range.getClientRects()) {
+        const seen = { l: Math.max(q.left, c.l), t: Math.max(q.top, c.t), r: Math.min(q.right, c.r), b: Math.min(q.bottom, c.b) };
+        if (seen.r - seen.l <= 0.5 || seen.b - seen.t <= 0.5) continue;
+        if (meets(seen, box(strip))) inkOnStrip.push(node.textContent.trim().slice(0, 48));
+      }
+    }
+  }
+  const controlsCrossing = control
+    ? [...document.querySelectorAll("button, a[href], textarea, input")]
+      .filter((other) => other !== control && !control.contains(other) && !other.contains(control))
+      .filter((other) => other.getClientRects().length && meets(box(other), box(control)))
+      .map((other) => other.getAttribute("aria-label") ?? other.tagName.toLowerCase())
+    : [];
+  const composer = document.querySelector("textarea");
+  return {
+    strip: rect(strip),
+    control: rect(control),
+    pill: rect(strip?.querySelector("[data-feed-jump-pill]") ?? null),
+    feed: rect(feed)!,
+    composerTop: composer ? box(composer.parentElement ?? composer).t : null,
+    inkOnStrip,
+    controlsCrossing,
+    overflowX: document.documentElement.scrollWidth - window.innerWidth,
+    label: control?.textContent?.trim() ?? "",
+  };
+});
+
+browserTest("#2072: away from the tail, the jump control is a row of its own and never covers text", async () => {
+  fs.mkdirSync(JUMP_OUT, { recursive: true });
+  fs.mkdirSync(JUMP_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = (["en", "uk"] as const).flatMap((lang) => [
+    { viewport: { width: 390, height: 667 }, scheme: "dark", lang },
+    { viewport: { width: 390, height: 667 }, scheme: "light", lang },
+    { viewport: { width: 430, height: 735 }, scheme: "dark", lang },
+  ] as const);
+  try {
+    for (const { viewport, scheme, lang } of cases) {
+      const key = `${viewport.width}x${viewport.height}-${scheme}-${lang}`;
+      const fail = (label: string) => failures.push(`${key}: ${label}`);
+      const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/#f=${encodeURIComponent(RUNNING_PATH)}`);
+        await page.waitForSelector('[data-log-feed-scroller] [data-feed-state="items"]', { timeout: 20_000 });
+        await pause(page, 900);
+        await feedAtRest(page);
+        const following = await readJump(page);
+        if (following.strip) fail("a strip while following the tail");
+
+        /* Leave the tail as a wheel does: the input marks the scroll as the
+           reader's, then the offset moves. The offset is read again once the
+           strip has laid out, before any settle can run. */
+        const anchoring = await page.evaluate(async () => {
+          const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+          const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          const firstRow = () => [...feed.querySelectorAll<HTMLElement>("[data-feed-key]")]
+            .find((row) => row.getBoundingClientRect().bottom > feed.getBoundingClientRect().top + 1);
+          feed.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -360 }));
+          feed.scrollTop -= 360;
+          const before = feed.scrollTop;
+          const row = firstRow();
+          const rowTop = row?.getBoundingClientRect().top ?? null;
+          for (let i = 0; i < 30 && !document.querySelector("[data-feed-jump-strip]"); i += 1) await frame();
+          await frame();
+          await frame();
+          return {
+            mounted: Boolean(document.querySelector("[data-feed-jump-strip]")),
+            before,
+            after: feed.scrollTop,
+            rowMoved: row && rowTop !== null ? row.getBoundingClientRect().top - rowTop : null,
+          };
+        });
+        if (!anchoring.mounted) fail("no jump strip once away from the tail");
+        if (anchoring.after !== anchoring.before) fail(`the feed moved when the strip appeared: ${anchoring.before} → ${anchoring.after}`);
+        if (anchoring.rowMoved !== null && Math.abs(anchoring.rowMoved) > 0.5) fail(`the line being read moved by ${anchoring.rowMoved} px when the strip appeared`);
+
+        await feedAtRest(page);
+        const away = await readJump(page);
+        await page.screenshot({ path: path.join(JUMP_OUT, `${key}.png`) });
+        const { strip, control, pill, feed } = away;
+        if (!strip || !control || !pill) fail(`strip, control and pill: ${JSON.stringify({ strip, control, pill })}`);
+        else {
+          if (Math.abs(strip.height - 44) > 0.5) fail(`the strip is ${strip.height} px tall, expected 44`);
+          if (control.width < 44 - 0.5 || control.height < 44 - 0.5) fail(`the control's target is ${control.width}x${control.height}`);
+          if (Math.abs(pill.height - 32) > 0.5) fail(`the pill is ${pill.height} px tall, expected 32`);
+          if (feed.y + feed.height > strip.y + 0.5) fail(`the feed ends at ${feed.y + feed.height}, below the strip's top ${strip.y}`);
+          if (strip.y < 0 || strip.y + strip.height > viewport.height + 0.5) fail(`the strip is outside the page: ${JSON.stringify(strip)}`);
+          if (away.composerTop !== null && strip.y + strip.height > away.composerTop + 0.5) fail(`the strip reaches into the composer at ${away.composerTop}`);
+        }
+        if (away.inkOnStrip.length) fail(`text under the strip: ${JSON.stringify(away.inkOnStrip)}`);
+        if (away.controlsCrossing.length) fail(`controls crossing the jump control: ${JSON.stringify(away.controlsCrossing)}`);
+        if (away.overflowX > 0.5) fail(`the page overflows sideways by ${away.overflowX} px`);
+        const word = translate(lang, "feed.down");
+        if (!away.label.includes(word) && !/\d/.test(away.label)) fail(`the control reads «${away.label}», expected «${word}» or a count`);
+
+        await page.locator("[data-feed-jump-strip] button").click();
+        await pause(page, 600);
+        await feedAtRest(page);
+        const back = await page.evaluate(() => {
+          const feed = document.querySelector("[data-log-feed-scroller]")!;
+          return { strip: Boolean(document.querySelector("[data-feed-jump-strip]")), fromBottom: feed.scrollHeight - feed.clientHeight - feed.scrollTop };
+        });
+        if (back.strip) fail("the strip stayed after returning to the tail");
+        if (back.fromBottom > 60) fail(`the tap left the feed ${back.fromBottom} px from the tail`);
+        if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        results.push({ key, viewport, scheme, lang, following: following.strip, anchoring, away, back });
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(JUMP_EVIDENCE, "jump-strip.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);
+
+/*
+ * #2072 slice 4 — the phone's status columns (docs/design/phone-kanban.md
+ * §3.2–§3.4, §3.9, §5), on the same real Viewer over the fixture's `?kanban=1`
+ * scene, at the page iOS Safari leaves at 390 × 844 and 430 × 932, in en and
+ * uk, dark and light:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2072 slice 4"
+ *
+ * Each column is opened from its tab and measured where it rests. Gates: no
+ * sideways overflow; every visible control at least 44 × 44 and no two
+ * crossing; the ink of each text (the union of its client rects, clipped by
+ * its overflow ancestors) meets no other text's ink and no control it is not
+ * inside; card titles two lines at most; tab labels whole; the dock inside
+ * the page; each card's stage chain one line with its current stage whole;
+ * no card age reads like a clock; what a tab's ⚠n counts is its first n
+ * cards. Frames go to `LLV_KANBAN_FRAMES` (default `.artifacts/phone-kanban-s4`,
+ * not committed); readings to `evidence/issue-2072/columns.json`.
+ */
+const COLUMNS_OUT = path.resolve(process.env.LLV_KANBAN_FRAMES || ".artifacts/phone-kanban-s4");
+const COLUMNS_EVIDENCE = path.resolve("evidence/issue-2072");
+const COLUMN_ORDER = ["inbox", "assigned", "blocked", "done"] as const;
+
+interface ColumnReading {
+  active: string | null;
+  pagerAligned: number;
+  overflowX: number;
+  columnOverflowX: number;
+  cards: Array<{ key: string; height: number; titleLines: number; needs: boolean }>;
+  smallControls: Array<{ label: string; width: number; height: number }>;
+  crossingControls: string[];
+  inkOverlaps: string[];
+  inkOnControls: string[];
+  truncatedTabs: string[];
+  chainOverflow: string[];
+  cutCurrentStage: string[];
+  clockAges: string[];
+  dock: Rect | null;
+  tabs: Array<{ status: string; count: string | null; working: string | null; needs: string | null }>;
+  pinnedFirst: boolean;
+  empty: boolean;
+  more: string | null;
+}
+
+/* Runs in the page; the ink walk is the test's own. */
+const readColumn = (page: Page) => page.evaluate((): ColumnReading => {
+  interface Box { l: number; t: number; r: number; b: number }
+  const box = (element: Element): Box => {
+    const r = element.getBoundingClientRect();
+    return { l: r.left, t: r.top, r: r.right, b: r.bottom };
+  };
+  const overlap = (a: Box, b: Box) => Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l)) * Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
+  const clip = (element: Element): Box => {
+    let out: Box = { l: -Infinity, t: -Infinity, r: Infinity, b: Infinity };
+    for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (/(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
+        const p = box(parent);
+        out = { l: Math.max(out.l, p.l), t: Math.max(out.t, p.t), r: Math.min(out.r, p.r), b: Math.min(out.b, p.b) };
+      }
+    }
+    return { l: Math.max(out.l, 0), t: Math.max(out.t, 0), r: Math.min(out.r, innerWidth), b: Math.min(out.b, innerHeight) };
+  };
+  const board = document.querySelector<HTMLElement>("[data-phone-kanban]")!;
+  const active = board.getAttribute("data-phone-kanban-active");
+  const pager = board.querySelector<HTMLElement>("[data-phone-kanban-pager]")!;
+  const column = board.querySelector<HTMLElement>(`[data-phone-kanban-column="${active}"]`)!;
+  /* What is on screen: the tab strip and the column at rest. */
+  const scope = [board.querySelector("[data-phone-kanban-tabs]")!, column];
+  const visible = (element: Element) => {
+    const r = element.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const c = clip(element);
+    return Math.min(r.right, c.r) - Math.max(r.left, c.l) > 1 && Math.min(r.bottom, c.b) - Math.max(r.top, c.t) > 1;
+  };
+  const controls = scope.flatMap((root) => [...root.querySelectorAll<HTMLElement>("button, a[href]")]).filter(visible);
+  const label = (element: Element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 60);
+  /* A control as the operator can see and tap it: its box clipped by its
+     overflow ancestors, so a card scrolled under the tab strip is only the
+     part the column still shows. */
+  const shown = (element: Element): Box => {
+    const r = box(element);
+    const c = clip(element.parentElement ?? element);
+    return { l: Math.max(r.l, c.l), t: Math.max(r.t, c.t), r: Math.min(r.r, c.r), b: Math.min(r.b, c.b) };
+  };
+  /* Controls whose target the operator can reach whole: cut by the column's
+     edge is scrolling, not a small target, so only whole ones are sized. */
+  const whole = (element: Element) => {
+    const r = box(element);
+    const c = clip(element.parentElement ?? element);
+    return r.t >= c.t - 0.5 && r.b <= c.b + 0.5;
+  };
+  const smallControls = controls.filter(whole).map((element) => ({ label: label(element), width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height }))
+    .filter((control) => control.width < 43.5 || control.height < 43.5);
+  const crossingControls: string[] = [];
+  controls.forEach((a, i) => controls.slice(i + 1).forEach((b) => {
+    if (a.contains(b) || b.contains(a)) return;
+    if (overlap(shown(a), shown(b)) > 0.5) crossingControls.push(`${label(a)} × ${label(b)}`);
+  }));
+  /* Ink: every text node in scope, as the rects it paints, clipped. */
+  const inks: Array<{ node: Node; text: string; rect: Box; control: Element | null }> = [];
+  const range = document.createRange();
+  for (const root of scope) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!node.textContent?.trim() || !parent) continue;
+      const style = getComputedStyle(parent);
+      if (style.visibility === "hidden" || parent.closest(".sr-only")) continue;
+      const c = clip(parent);
+      range.selectNodeContents(node);
+      for (const q of range.getClientRects()) {
+        const rect = { l: Math.max(q.left, c.l), t: Math.max(q.top, c.t), r: Math.min(q.right, c.r), b: Math.min(q.bottom, c.b) };
+        if (rect.r - rect.l <= 0.5 || rect.b - rect.t <= 0.5) continue;
+        inks.push({ node, text: node.textContent.trim().slice(0, 40), rect, control: parent.closest("button, a[href]") });
+      }
+    }
+  }
+  const inkOverlaps: string[] = [];
+  inks.forEach((a, i) => inks.slice(i + 1).forEach((b) => {
+    if (a.node === b.node) return;
+    if (overlap(a.rect, b.rect) > 1) inkOverlaps.push(`«${a.text}» × «${b.text}»`);
+  }));
+  const inkOnControls: string[] = [];
+  for (const ink of inks) {
+    for (const control of controls) {
+      if (ink.control === control || control.contains(ink.node) || (ink.control && ink.control.contains(control))) continue;
+      if (overlap(ink.rect, shown(control)) > 1) inkOnControls.push(`«${ink.text}» on ${label(control)}`);
+    }
+  }
+  const cards = [...column.querySelectorAll<HTMLElement>("[data-phone-card]")];
+  const cardReadings = cards.map((card) => {
+    const title = card.querySelector<HTMLElement>("[data-phone-card-title]")!;
+    const lineHeight = parseFloat(getComputedStyle(title).lineHeight) || 16;
+    return { key: card.getAttribute("data-phone-card") ?? "", height: card.getBoundingClientRect().height, titleLines: Math.round(title.getBoundingClientRect().height / lineHeight), needs: card.getAttribute("data-needs") === "1" };
+  });
+  const needsCount = Number(board.querySelector(`[data-phone-kanban-tab="${active}"] [data-phone-tab-needs]`)?.getAttribute("data-phone-tab-needs") ?? "0");
+  const firstNeeds = cardReadings.slice(0, needsCount).every((card) => card.needs) && cardReadings.slice(needsCount).every((card) => !card.needs);
+  const chainOverflow = [...column.querySelectorAll<HTMLElement>('[data-density="card"] .pb-pills.fold')]
+    .filter((pills) => pills.scrollWidth > pills.clientWidth + 0.5)
+    .map((pills) => pills.closest("[data-phone-card]")?.getAttribute("data-phone-card") ?? "");
+  const cutCurrentStage = [...column.querySelectorAll<HTMLElement>('[data-density="card"] .pb-pill:is(.tone-active, .tone-review, .tone-needs) .pb-name')]
+    .filter((name) => name.scrollWidth > name.clientWidth + 0.5)
+    .map((name) => name.textContent ?? "");
+  const clockAges = [...column.querySelectorAll<HTMLElement>("[data-phone-card] span")]
+    .map((span) => (span.childElementCount ? "" : (span.textContent ?? "").trim()))
+    .filter((text) => /^\d{1,2}:\d{2}$/.test(text));
+  const truncatedTabs = [...board.querySelectorAll<HTMLElement>("[data-phone-tab-label]")]
+    .filter((labelElement) => labelElement.scrollWidth > labelElement.clientWidth + 0.5 || box(labelElement).l < box(labelElement.closest("button")!).l - 0.5 || box(labelElement).r > box(labelElement.closest("button")!).r + 0.5)
+    .map((labelElement) => labelElement.textContent ?? "");
+  const dockElement = document.querySelector("[data-mobile2-dock]");
+  const dockRect = dockElement?.getBoundingClientRect() ?? null;
+  return {
+    active,
+    pagerAligned: pager.scrollLeft - COLUMN_INDEX(active) * pager.clientWidth,
+    overflowX: document.documentElement.scrollWidth - innerWidth,
+    columnOverflowX: column.scrollWidth - column.clientWidth,
+    cards: cardReadings,
+    smallControls,
+    crossingControls,
+    inkOverlaps,
+    inkOnControls,
+    truncatedTabs,
+    chainOverflow,
+    cutCurrentStage,
+    clockAges,
+    dock: dockRect ? { x: dockRect.x, y: dockRect.y, width: dockRect.width, height: dockRect.height } : null,
+    tabs: [...board.querySelectorAll("[data-phone-kanban-tab]")].map((tab) => ({
+      status: tab.getAttribute("data-phone-kanban-tab") ?? "",
+      count: tab.querySelector("[data-phone-tab-count]")?.textContent ?? null,
+      working: tab.querySelector("[data-phone-tab-working]")?.textContent ?? null,
+      needs: tab.querySelector("[data-phone-tab-needs]")?.textContent ?? null,
+    })),
+    pinnedFirst: firstNeeds,
+    empty: Boolean(column.querySelector("[data-phone-kanban-empty]")),
+    more: column.querySelector("[data-phone-kanban-more]")?.textContent ?? null,
+  };
+  function COLUMN_INDEX(status: string | null): number {
+    return ["inbox", "assigned", "blocked", "done"].indexOf(status ?? "");
+  }
+});
+
+/* The pager at rest: its offset unchanged across 300 ms. */
+async function pagerAtRest(page: Page): Promise<void> {
+  let last = Number.NaN;
+  let still = 0;
+  for (let i = 0; i < 60 && still < 3; i += 1) {
+    await pause(page, 100);
+    const left = await page.evaluate(() => document.querySelector("[data-phone-kanban-pager]")?.scrollLeft ?? 0);
+    still = left === last ? still + 1 : 0;
+    last = left;
+  }
+  if (still < 3) throw new Error("the pager never came to rest");
+}
+
+browserTest("#2072 slice 4: the phone's status columns, each column at rest, in en and uk, dark and light", async () => {
+  fs.mkdirSync(COLUMNS_OUT, { recursive: true });
+  fs.mkdirSync(COLUMNS_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = ([{ width: 390, height: 667 }, { width: 430, height: 735 }] as const).flatMap((viewport) =>
+    (["en", "uk"] as const).flatMap((lang) => (["dark", "light"] as const).map((scheme) => ({ viewport, lang, scheme }))));
+  try {
+    for (const { viewport, lang, scheme } of cases) {
+      const key = `${viewport.width}-${lang}-${scheme}`;
+      const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/?kanban=1#p=atlas`);
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+        await page.waitForSelector('[data-mobile2-seat-card][data-mobile2-seat-state="live"]', { timeout: 20_000 }).catch(() => {});
+        await pause(page, 800);
+        for (const status of COLUMN_ORDER) {
+          await page.locator(`[data-phone-kanban-tab="${status}"]`).click();
+          await page.waitForFunction((wanted) => document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active") === wanted, status);
+          await pagerAtRest(page);
+          /* The column from its top to its end, a screen at a time: every
+             gate holds at each stop, so a card low in the column is measured
+             where the operator would read it. */
+          for (let stop = 0; stop < 8; stop += 1) {
+          const fail = (label: string) => failures.push(`${key} ${status} @${stop}: ${label}`);
+          const reading = await readColumn(page);
+          await page.screenshot({ path: path.join(COLUMNS_OUT, `${viewport.width}-${lang}-${scheme}-${status}${stop ? `-${stop}` : ""}.png`) });
+          if (Math.abs(reading.pagerAligned) > 1) fail(`the pager rests ${reading.pagerAligned} px off its column`);
+          if (reading.overflowX > 0.5) fail(`the page overflows sideways by ${reading.overflowX} px`);
+          if (reading.columnOverflowX > 0.5) fail(`the column overflows sideways by ${reading.columnOverflowX} px`);
+          if (reading.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(reading.smallControls)}`);
+          if (reading.crossingControls.length) fail(`controls crossing: ${JSON.stringify(reading.crossingControls)}`);
+          if (reading.inkOverlaps.length) fail(`text over text: ${JSON.stringify(reading.inkOverlaps.slice(0, 6))}`);
+          if (reading.inkOnControls.length) fail(`text over a control: ${JSON.stringify(reading.inkOnControls.slice(0, 6))}`);
+          if (reading.truncatedTabs.length) fail(`tab labels cut: ${JSON.stringify(reading.truncatedTabs)}`);
+          if (reading.chainOverflow.length) fail(`chains off their line: ${JSON.stringify(reading.chainOverflow)}`);
+          if (reading.cutCurrentStage.length) fail(`current stage names cut: ${JSON.stringify(reading.cutCurrentStage)}`);
+          if (reading.clockAges.length) fail(`ages that read as clocks: ${JSON.stringify(reading.clockAges)}`);
+          const tall = reading.cards.filter((card) => card.titleLines > 2);
+          if (tall.length) fail(`titles over two lines: ${JSON.stringify(tall)}`);
+          if (!reading.pinnedFirst) fail("what the tab's ⚠ counts is not the column's first cards");
+          if (!reading.dock || reading.dock.y < 0 || reading.dock.y + reading.dock.height > viewport.height + 0.5) fail(`the dock is not inside the page: ${JSON.stringify(reading.dock)}`);
+          if (status === "blocked" && !reading.empty) fail("Blocked, which holds nothing, does not say so");
+          if (status === "done" && !reading.more) fail("Done shows no «Show more» past its window");
+          if (status !== "blocked" && reading.empty) fail("a column with work says it is empty");
+          /* The running card with a one-line title (§5): at most 74 px. */
+          const favicon = reading.cards.find((card) => card.key === "task:t-favicon");
+          if (favicon && favicon.titleLines === 1 && favicon.height > 74.5) fail(`a running card with a one-line title is ${favicon.height} px tall`);
+          results.push({ key, status, stop, viewport, lang, scheme, ...reading });
+          const moved = await page.evaluate((wanted) => {
+            const column = document.querySelector<HTMLElement>(`[data-phone-kanban-column="${wanted}"]`)!;
+            const before = column.scrollTop;
+            column.scrollTop = before + Math.round(column.clientHeight * 0.85);
+            return column.scrollTop !== before;
+          }, status);
+          if (!moved) break;
+          await pause(page, 350);
+          }
+        }
+        if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(COLUMNS_EVIDENCE, "columns.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);
+
+/*
+ * #2072 slice 4 — the columns under real touches (phone-kanban §3.3, §3.7,
+ * §3.8): a sideways swipe over the column area moves the pager one column and
+ * the tabs follow; a vertical drag scrolls that column alone, keeps the tab
+ * and opens nothing; a held finger on a card opens the card's sheet and not
+ * the task under it; Move to moves the card on the tap, writes one guarded
+ * PATCH, and says so in a receipt with Undo; a tap opens the task.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2072 slice 4 touch"
+ */
+browserTest("#2072 slice 4 touch: the pager swipes, a column scrolls alone, a held card opens its sheet and Move to lands", async () => {
+  fs.mkdirSync(COLUMNS_OUT, { recursive: true });
+  fs.mkdirSync(COLUMNS_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = [
+    { viewport: { width: 390, height: 667 }, lang: "en", scheme: "dark" },
+    { viewport: { width: 430, height: 735 }, lang: "uk", scheme: "light" },
+  ] as const;
+  try {
+    for (const { viewport, lang, scheme } of cases) {
+      const key = `${viewport.width}-${lang}-${scheme}`;
+      const fail = (label: string) => failures.push(`${key}: ${label}`);
+      const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        await page.goto(`${fixtureBase}/?kanban=1#p=atlas`);
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+        await pause(page, 800);
+        const active = () => page.evaluate(() => document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active") ?? null);
+        const column = await rectOf(page, '[data-phone-kanban-column="assigned"]');
+        if (!column) throw new Error("no Assigned column");
+        const midY = column.y + Math.min(column.height / 2, 160);
+        const opened = { start: await active() };
+
+        /* Sideways: Assigned → Blocked, and back. */
+        await touch(cdp, along([viewport.width - 30, midY], [40, midY + 4], 14), 16);
+        await pagerAtRest(page);
+        const afterLeft = await active();
+        await touch(cdp, along([40, midY], [viewport.width - 30, midY + 4], 14), 16);
+        await pagerAtRest(page);
+        const afterRight = await active();
+        if (opened.start !== "assigned") fail(`the board opened on ${opened.start}`);
+        if (afterLeft !== "blocked") fail(`a swipe left from Assigned landed on ${afterLeft}`);
+        if (afterRight !== "assigned") fail(`a swipe right from Blocked landed on ${afterRight}`);
+        const tabSelected = await page.evaluate(() => document.querySelector('[data-phone-kanban-tab="assigned"]')?.getAttribute("aria-selected"));
+        if (tabSelected !== "true") fail("the tabs did not follow the pager");
+
+        /* Vertical: the column scrolls, the tab and the stack stay. */
+        const scrollBefore = await page.evaluate(() => document.querySelector('[data-phone-kanban-column="assigned"]')!.scrollTop);
+        await touch(cdp, along([viewport.width / 2, midY + 120], [viewport.width / 2 + 3, midY - 120], 14), 16);
+        await pause(page, 600);
+        const vertical = await page.evaluate(() => ({
+          scrollTop: document.querySelector('[data-phone-kanban-column="assigned"]')!.scrollTop,
+          active: document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active"),
+          sheet: Boolean(document.querySelector("[data-mobile2-sheet]")),
+        }));
+        if (!(vertical.scrollTop > scrollBefore + 40)) fail(`a vertical drag scrolled the column by ${vertical.scrollTop - scrollBefore} px`);
+        if (vertical.active !== "assigned") fail(`a vertical drag changed the column to ${vertical.active}`);
+        if (vertical.sheet) fail("a vertical drag opened a sheet");
+        await page.evaluate(() => { document.querySelector('[data-phone-kanban-column="assigned"]')!.scrollTop = 0; });
+        await pause(page, 300);
+
+        /* A held finger: the sheet, not the task. */
+        const card = '[data-phone-card="task:t-favicon"]';
+        const cardBox = await rectOf(page, card);
+        if (!cardBox) throw new Error("no favicon card");
+        const held: Point = [cardBox.x + cardBox.width / 2, cardBox.y + 18];
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: held[0], y: held[1] }] });
+        await pause(page, 700);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 500);
+        const sheet = await page.evaluate(() => ({
+          open: Boolean(document.querySelector('[data-mobile2-sheet="card"]')),
+          actions: [...document.querySelectorAll("[data-phone-card-sheet] [data-phone-card-action]")].map((row) => row.getAttribute("data-phone-card-action")),
+          smallest: Math.min(...[...document.querySelectorAll<HTMLElement>("[data-phone-card-sheet] [data-phone-card-action]")].map((row) => row.getBoundingClientRect().height)),
+        }));
+        await page.screenshot({ path: path.join(COLUMNS_OUT, `${key}-card-sheet.png`) });
+        if (!sheet.open) fail("a held finger on a card opened no sheet");
+        if (sheet.actions.join(",") !== "move-inbox,move-blocked,move-done,hide,open-agent") fail(`the card sheet offers ${sheet.actions.join(",")}`);
+        if (sheet.smallest < 43.5) fail(`a sheet row is ${sheet.smallest} px tall`);
+
+        /* Move to Blocked: on the tap, one guarded PATCH, a receipt with Undo. */
+        await tap(page, cdp, '[data-phone-card-action="move-blocked"]');
+        await pause(page, 150);
+        const moved = await page.evaluate(() => ({
+          inBlocked: Boolean(document.querySelector('[data-phone-kanban-column="blocked"] [data-phone-card="task:t-favicon"]')),
+          inAssigned: Boolean(document.querySelector('[data-phone-kanban-column="assigned"] [data-phone-card="task:t-favicon"]')),
+          blockedCount: document.querySelector('[data-phone-kanban-tab="blocked"] [data-phone-tab-count]')?.textContent ?? null,
+          receipt: document.querySelector("[data-mobile2-receipt]")?.textContent ?? "",
+          undo: Boolean(document.querySelector('[data-mobile2-receipt-undo="undo"]')),
+        }));
+        await page.screenshot({ path: path.join(COLUMNS_OUT, `${key}-moved.png`) });
+        await page.waitForFunction(() => (window as unknown as { evidence: { taskPatches: unknown[] } }).evidence.taskPatches.length >= 1, undefined, { timeout: 5_000 }).catch(() => undefined);
+        const patches = await page.evaluate(() => structuredClone((window as unknown as { evidence: { taskPatches: Array<{ id: string; body: Record<string, unknown> }> } }).evidence.taskPatches));
+        if (!moved.inBlocked || moved.inAssigned) fail(`the card did not move on the tap: ${JSON.stringify(moved)}`);
+        if (moved.blockedCount !== "1") fail(`Blocked counts ${moved.blockedCount}`);
+        if (!moved.receipt.includes(translate(lang, "mobile2.kanban.moved", { column: translate(lang, "kanban.status.blocked") }))) fail(`the receipt reads «${moved.receipt}»`);
+        if (!moved.undo) fail("the receipt carries no Undo");
+        if (patches.length !== 1 || patches[0]!.id !== "t-favicon" || patches[0]!.body.status !== "blocked" || typeof patches[0]!.body.expectedRevision !== "string") fail(`the writes were ${JSON.stringify(patches)}`);
+
+        /* Undo moves it back through the same queue. */
+        await tap(page, cdp, '[data-mobile2-receipt-undo="undo"]');
+        await page.waitForFunction(() => Boolean(document.querySelector('[data-phone-kanban-column="assigned"] [data-phone-card="task:t-favicon"]')), undefined, { timeout: 5_000 }).catch(() => fail("Undo did not bring the card back"));
+        await page.waitForFunction(() => (window as unknown as { evidence: { taskPatches: unknown[] } }).evidence.taskPatches.length >= 2, undefined, { timeout: 5_000 }).catch(() => fail("Undo sent no write"));
+
+        /* A tap opens the task. */
+        await pause(page, 400);
+        await tap(page, cdp, card);
+        await pause(page, 500);
+        const taskOpen = await page.evaluate(() => Boolean(document.querySelector('[data-mobile2-task="t-favicon"] [data-phone-task-body="t-favicon"]')));
+        if (!taskOpen) fail("a tap on a card did not open its task screen");
+        if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        results.push({ key, viewport, lang, scheme, opened, afterLeft, afterRight, vertical: { ...vertical, before: scrollBefore }, sheet, moved, patches, taskOpen });
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(COLUMNS_EVIDENCE, "columns-touch.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);
+
+/*
+ * #2072 slice 5 — the task screen (phone-kanban §3.5), opened from its card
+ * the way the operator opens it: a task with one pipeline, one with seven
+ * (three completed, folded), one with agents and no pipeline, and one whose
+ * pipeline waits on a decision, at 390 × 667 and 430 × 735 (the page Safari
+ * leaves), in en and uk, dark. At every scroll stop: no sideways overflow, no
+ * text over text or over a control (the ink walk of the columns' case), every
+ * whole control at least 44 × 44 counting the reach a pill or a chip draws
+ * past its box, no two controls crossing, and the bottom bar inside the page.
+ * The 390 frames, and the whole scroll of each, are the review's pictures.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2072 slice 5"
+ */
+const TASK_OUT = path.resolve(process.env.LLV_TASK_FRAMES || ".artifacts/phone-kanban-s5");
+const TASK_CASES = [
+  { key: "one-pipeline", task: "t-favicon" },
+  { key: "many", task: "t-many" },
+  { key: "agents", task: "t-long" },
+  { key: "decision", task: "t-data" },
+] as const;
+
+interface TaskReading {
+  overflowX: number;
+  bodyOverflowX: number;
+  smallControls: Array<{ label: string; width: number; height: number }>;
+  crossingControls: string[];
+  inkOverlaps: string[];
+  inkOnControls: string[];
+  dock: Rect | null;
+  lanes: string[];
+  scrollHeight: number;
+  clientHeight: number;
+}
+
+const readTaskScreen = (page: Page) => page.evaluate((): TaskReading => {
+  interface Box { l: number; t: number; r: number; b: number }
+  const box = (element: Element): Box => {
+    const r = element.getBoundingClientRect();
+    return { l: r.left, t: r.top, r: r.right, b: r.bottom };
+  };
+  const overlap = (a: Box, b: Box) => Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l)) * Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
+  const clip = (element: Element): Box => {
+    let out: Box = { l: -Infinity, t: -Infinity, r: Infinity, b: Infinity };
+    for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (/(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
+        const p = box(parent);
+        out = { l: Math.max(out.l, p.l), t: Math.max(out.t, p.t), r: Math.min(out.r, p.r), b: Math.min(out.b, p.b) };
+      }
+    }
+    return { l: Math.max(out.l, 0), t: Math.max(out.t, 0), r: Math.min(out.r, innerWidth), b: Math.min(out.b, innerHeight) };
+  };
+  const screen = document.querySelector<HTMLElement>("[data-mobile2-task]")!;
+  const body = screen.querySelector<HTMLElement>("[data-phone-task-body]")!;
+  const scope = [screen.querySelector("[data-mobile2-bar]")!, body, screen.querySelector("[data-mobile2-dock]")].filter((element): element is Element => Boolean(element));
+  /* A swipe row's tray waits under its card at opacity 0 until a swipe
+     reveals it: nothing there is on screen. */
+  const transparent = (element: Element) => {
+    for (let node: Element | null = element; node; node = node.parentElement) if (getComputedStyle(node).opacity === "0") return true;
+    return false;
+  };
+  const visible = (element: Element) => {
+    const r = element.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0 || transparent(element)) return false;
+    const c = clip(element);
+    return Math.min(r.right, c.r) - Math.max(r.left, c.l) > 1 && Math.min(r.bottom, c.b) - Math.max(r.top, c.t) > 1;
+  };
+  const controls = scope.flatMap((root) => [...root.querySelectorAll<HTMLElement>("button:not(:disabled), a[href]")]).filter(visible);
+  const label = (element: Element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 60);
+  const shown = (element: Element): Box => {
+    const r = box(element);
+    const c = clip(element.parentElement ?? element);
+    return { l: Math.max(r.l, c.l), t: Math.max(r.t, c.t), r: Math.min(r.r, c.r), b: Math.min(r.b, c.b) };
+  };
+  const whole = (element: Element) => {
+    const r = box(element);
+    const c = clip(element.parentElement ?? element);
+    return r.t >= c.t - 0.5 && r.b <= c.b + 0.5;
+  };
+  /* The target a finger has: the box, grown by a positioned ::after reach. */
+  const target = (element: Element) => {
+    const r = element.getBoundingClientRect();
+    const after = getComputedStyle(element, "::after");
+    if (after.content === "none" || after.position !== "absolute") return { width: r.width, height: r.height };
+    const px = (value: string) => (value.endsWith("px") ? parseFloat(value) : 0);
+    return { width: r.width - Math.min(0, px(after.left)) - Math.min(0, px(after.right)), height: r.height - Math.min(0, px(after.top)) - Math.min(0, px(after.bottom)) };
+  };
+  const smallControls = controls.filter(whole).map((element) => ({ label: label(element), ...target(element) }))
+    .filter((control) => control.width < 43.5 || control.height < 43.5);
+  const crossingControls: string[] = [];
+  controls.forEach((a, i) => controls.slice(i + 1).forEach((b) => {
+    if (a.contains(b) || b.contains(a)) return;
+    if (overlap(shown(a), shown(b)) > 0.5) crossingControls.push(`${label(a)} × ${label(b)}`);
+  }));
+  const inks: Array<{ node: Node; text: string; rect: Box; control: Element | null }> = [];
+  const range = document.createRange();
+  for (const root of scope) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!node.textContent?.trim() || !parent) continue;
+      const style = getComputedStyle(parent);
+      if (style.visibility === "hidden" || parent.closest(".sr-only") || transparent(parent)) continue;
+      const c = clip(parent);
+      range.selectNodeContents(node);
+      for (const q of range.getClientRects()) {
+        const rect = { l: Math.max(q.left, c.l), t: Math.max(q.top, c.t), r: Math.min(q.right, c.r), b: Math.min(q.bottom, c.b) };
+        if (rect.r - rect.l <= 0.5 || rect.b - rect.t <= 0.5) continue;
+        inks.push({ node, text: node.textContent.trim().slice(0, 40), rect, control: parent.closest("button, a[href]") });
+      }
+    }
+  }
+  const inkOverlaps: string[] = [];
+  inks.forEach((a, i) => inks.slice(i + 1).forEach((b) => {
+    if (a.node === b.node) return;
+    if (overlap(a.rect, b.rect) > 1) inkOverlaps.push(`«${a.text}» × «${b.text}»`);
+  }));
+  const inkOnControls: string[] = [];
+  for (const ink of inks) {
+    for (const control of controls) {
+      if (ink.control === control || control.contains(ink.node) || (ink.control && ink.control.contains(control))) continue;
+      if (overlap(ink.rect, shown(control)) > 1) inkOnControls.push(`«${ink.text}» on ${label(control)}`);
+    }
+  }
+  const dockElement = screen.querySelector("[data-mobile2-dock]");
+  const dockRect = dockElement?.getBoundingClientRect() ?? null;
+  return {
+    overflowX: document.documentElement.scrollWidth - innerWidth,
+    bodyOverflowX: body.scrollWidth - body.clientWidth,
+    smallControls,
+    crossingControls,
+    inkOverlaps,
+    inkOnControls,
+    dock: dockRect ? { x: dockRect.x, y: dockRect.y, width: dockRect.width, height: dockRect.height } : null,
+    lanes: [...body.querySelectorAll("[data-phone-task-lane]")].map((lane) => lane.getAttribute("data-phone-task-lane") ?? ""),
+    scrollHeight: body.scrollHeight,
+    clientHeight: body.clientHeight,
+  };
+});
+
+browserTest("#2072 slice 5: the task screen, opened from its card, in en and uk at 390 and 430, holds its ink, targets and bar", async () => {
+  fs.mkdirSync(TASK_OUT, { recursive: true });
+  fs.mkdirSync(COLUMNS_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = ([{ width: 390, height: 667 }, { width: 430, height: 735 }] as const).flatMap((viewport) =>
+    (["en", "uk"] as const).flatMap((lang) => TASK_CASES.map((entry) => ({ viewport, lang, ...entry }))));
+  try {
+    for (const { viewport, lang, key: scene, task } of cases) {
+      const key = `${scene}-${viewport.width}-${lang}`;
+      const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: "dark" });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/?kanban=1#p=atlas`);
+        await page.waitForSelector(`[data-phone-card="task:${task}"]`, { timeout: 20_000 });
+        await pause(page, 600);
+        await page.locator(`[data-phone-card="task:${task}"]`).click();
+        await page.waitForSelector(`[data-mobile2-task="${task}"] [data-phone-task-body="${task}"]`, { timeout: 10_000 });
+        /* A finger lifts; the driver's pointer would stay and hover the row under it. */
+        await page.mouse.move(0, 0);
+        await pause(page, 600);
+        if (scene === "many") {
+          await page.locator("[data-phone-task-ended]").click();
+          await pause(page, 300);
+          await page.evaluate(() => { document.querySelector("[data-phone-task-body]")!.scrollTop = 0; });
+          await pause(page, 200);
+        }
+        for (let stop = 0; stop < 12; stop += 1) {
+          const fail = (label: string) => failures.push(`${key} @${stop}: ${label}`);
+          const reading = await readTaskScreen(page);
+          await page.screenshot({ path: path.join(TASK_OUT, `task-${key}${stop ? `-${stop}` : ""}.png`) });
+          if (reading.overflowX > 0.5) fail(`the page overflows sideways by ${reading.overflowX} px`);
+          if (reading.bodyOverflowX > 0.5) fail(`the body overflows sideways by ${reading.bodyOverflowX} px`);
+          if (reading.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(reading.smallControls)}`);
+          if (reading.crossingControls.length) fail(`controls crossing: ${JSON.stringify(reading.crossingControls)}`);
+          if (reading.inkOverlaps.length) fail(`text over text: ${JSON.stringify(reading.inkOverlaps.slice(0, 6))}`);
+          if (reading.inkOnControls.length) fail(`text over a control: ${JSON.stringify(reading.inkOnControls.slice(0, 6))}`);
+          if (!reading.dock || reading.dock.y < 0 || reading.dock.y + reading.dock.height > viewport.height + 0.5) fail(`the bottom bar is not inside the page: ${JSON.stringify(reading.dock)}`);
+          if (stop === 0 && scene === "many" && reading.lanes.length !== 7) fail(`the task with seven pipelines draws ${reading.lanes.length}`);
+          if (stop === 0 && scene === "decision" && reading.lanes[0] !== "lane-decision") fail(`the lane that needs a decision is not first: ${reading.lanes.join(",")}`);
+          results.push({ key, stop, viewport, lang, ...reading });
+          const moved = await page.evaluate(() => {
+            const body = document.querySelector<HTMLElement>("[data-phone-task-body]")!;
+            const before = body.scrollTop;
+            body.scrollTop = before + Math.round(body.clientHeight * 0.85);
+            return body.scrollTop !== before;
+          });
+          if (!moved) break;
+          await pause(page, 250);
+        }
+        /* The whole scroll in one frame, at 390: the page grown to hold it. */
+        if (viewport.width === 390) {
+          const { scrollHeight, clientHeight } = await page.evaluate(() => {
+            const body = document.querySelector<HTMLElement>("[data-phone-task-body]")!;
+            body.scrollTop = 0;
+            return { scrollHeight: body.scrollHeight, clientHeight: body.clientHeight };
+          });
+          await page.setViewportSize({ width: viewport.width, height: viewport.height + Math.max(0, scrollHeight - clientHeight) });
+          await pause(page, 400);
+          await page.screenshot({ path: path.join(TASK_OUT, `task-${scene}-390-full-${lang}.png`) });
+          await page.setViewportSize(viewport);
+        }
+        if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(COLUMNS_EVIDENCE, "task-screen.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);

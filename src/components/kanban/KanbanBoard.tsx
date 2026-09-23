@@ -8,18 +8,15 @@ import { conversationIdentity, formatConversationHash } from "@/lib/accounts/ide
 import { useLocale } from "@/lib/i18n";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import { admissionSnapshot, type SeatRefs } from "@/lib/tasks/groupHide";
+import type { SeatRefs } from "@/lib/tasks/groupHide";
 import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
-import { compactPipelineLayoutFlows, latestAttempt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
+import type { PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
 import type { BranchGroup } from "@/components/projectModel";
-import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout";
-import { reconcileLayoutNodes } from "@/components/scheme/layoutIdentity";
-import { buildTaskBands } from "@/components/scheme/taskBands";
-import { isPlacedTask } from "@/components/scheme/taskGeometry";
+import type { SchemeLayout } from "@/components/scheme/layout";
 import { updateTask } from "@/components/tasks/taskApi";
-import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
@@ -41,7 +38,7 @@ import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./ka
 import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
-import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
+import { drawnTasks, useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
 import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
@@ -52,15 +49,18 @@ import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
 import { stageNames } from "./PipelineSection";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { StagesSheet, type SheetPane } from "./StagesSheet";
+import { textField, withField } from "./taskText";
 import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
 import { usePipelineActions } from "./usePipelineActions";
+import { useBands } from "./useBands";
 
 /**
  * The desktop kanban board (#1695 K2): the approved prototype's columns and
  * cards over the project's complete task inventory.
  *
  * Cards come from the same band projection the scheme board draws
- * (`buildSchemeLayout` → `buildTaskBands`, same inputs), so identity and
+ * (`useBands`: `buildSchemeLayout` → `buildTaskBands`, same inputs, and the
+ * phone's columns read it too), so identity and
  * grouping never differ between the two boards while both exist. Status moves
  * are optimistic and revision-guarded (`useTaskMutations`); every other write
  * this slice offers goes through an existing route.
@@ -197,9 +197,6 @@ interface SheetTarget {
 }
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
-const EMPTY_FLOWS: Flow[] = [];
-const EMPTY_PIPELINES: Pipeline[] = [];
-const EMPTY_MAP: ReadonlyMap<string, string> = new Map();
 const NO_READERS: readonly OpenReader[] = [];
 /** Parts of the board's root that belong to the Viewer, where the board answers no key. */
 const VIEWER_OWNED = ".kb-aside, [data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
@@ -220,22 +217,6 @@ function cardMatchesShown(model: KanbanModel, card: KanbanCardModel): boolean {
 
 type EditField = CardEditField;
 
-/** The title (first line) or description (the rest) of a task's text. `details`
-    is its own stored field and never reaches these two (#1834). */
-function textField(text: string, field: "title" | "description"): string {
-  const newline = text.search(/\r?\n/);
-  if (field === "title") return (newline < 0 ? text : text.slice(0, newline)).trim();
-  return newline < 0 ? "" : text.slice(newline).trim();
-}
-
-/** The task's text with one of its fields replaced, the other kept byte for byte. */
-function withField(text: string, field: "title" | "description", value: string): string {
-  const newline = text.search(/\r?\n/);
-  if (field === "title") return newline < 0 ? value : value + text.slice(newline);
-  const first = newline < 0 ? text : text.slice(0, newline);
-  return value ? `${first}\n${value}` : first;
-}
-
 function withEntry<V>(map: ReadonlyMap<string, V>, key: string, value: V | undefined): ReadonlyMap<string, V> {
   if (value === undefined && !map.has(key)) return map;
   const next = new Map(map);
@@ -255,36 +236,6 @@ const SCROLL_SETTLE_MS = 120;
 
 function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-function useBands(props: KanbanBoardProps) {
-  const { t } = useLocale();
-  const { groups, manual, files, flows, reviewGroups = EMPTY_FLOWS, pipelines, surfacePipelines = EMPTY_PIPELINES, tasks, allTasks, drafts, favorites = EMPTY_SET, isolatedManualPaths = EMPTY_SET, draftBands = EMPTY_MAP, now, project } = props;
-  const deckFlows = useMemo(() => (reviewGroups.length ? [...flows, ...reviewGroups] : flows), [flows, reviewGroups]);
-  const layoutFlows = useMemo(() => compactPipelineLayoutFlows(pipelines, deckFlows), [pipelines, deckFlows]);
-  const placedTasks = useMemo(() => tasks.filter(isPlacedTask), [tasks]);
-  const previousLayout = useRef<SchemeLayout | null>(null);
-  const layout = useMemo(() => {
-    const built = reconcileLayoutNodes(
-      previousLayout.current,
-      props.layout ?? buildSchemeLayout(groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, EMPTY_SET, { now }),
-    );
-    previousLayout.current = built;
-    return built;
-  }, [props.layout, groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, now]);
-  /* The projection's `project` only fences its UNLINKED buckets to one
-     project; omitting it is already the cross-project answer, so the Overview
-     passes nothing rather than calling this once per project. */
-  const projectionProject = props.overview ? undefined : project;
-  const projection = useMemo(
-    () => projectTaskWorkflows([...allTasks], pipelines, flows, files, projectionProject),
-    [allTasks, pipelines, flows, files, projectionProject],
-  );
-  const bands = useMemo(
-    () => buildTaskBands(layout, { tasks: allTasks, projection, draftBands, untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow") }),
-    [layout, allTasks, projection, draftBands, t],
-  );
-  return { bands, projection };
 }
 
 export function KanbanBoard(props: KanbanBoardProps) {
@@ -362,41 +313,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The board draws the edits it has sent ahead of the poll: a new title or
      colour at once, and a hidden group gone at once with a hide stamped now. */
   const hideStamps = useRef(new Map<string, string>());
-  const effectiveTasks = useMemo(() => {
-    if (!edits.size) {
-      hideStamps.current.clear();
-      return allTasks;
-    }
-    return allTasks.map((task) => {
-      const edit = edits.get(task.id);
-      if (!edit) {
-        hideStamps.current.delete(task.id);
-        return task;
-      }
-      const next: BoardTask = { ...task };
-      if ("color" in edit) {
-        if (edit.color) next.color = edit.color;
-        else delete next.color;
-      }
-      if (edit.hide === true) {
-        let at = hideStamps.current.get(task.id);
-        if (!at) hideStamps.current.set(task.id, (at = new Date().toISOString()));
-        next.groupHidden = { at, by: "operator", admitted: admissionSnapshot(task.assignments) };
-      } else {
-        hideStamps.current.delete(task.id);
-        if (edit.hide === false) delete next.groupHidden;
-      }
-      if (typeof edit.text === "string") {
-        next.text = edit.text;
-        if (next.origin?.refinement === "pending") next.origin = { ...next.origin, refinement: "titled" };
-      }
-      if (typeof edit.details === "string") {
-        if (edit.details) next.details = edit.details;
-        else delete next.details;
-      }
-      return next;
-    });
-  }, [allTasks, edits]);
+  const effectiveTasks = useMemo(() => drawnTasks(allTasks, edits, hideStamps.current), [allTasks, edits]);
   const { bands, projection } = useBands({ ...props, allTasks: effectiveTasks });
   /* Every conversation the project's seat record names leaves the bands
      (#1841), as the page that read it reports them. Null is «not known yet»:
@@ -1430,7 +1347,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* ── Pointer drag to a column ────────────────────────────────────────── */
   const onCardPointerDown = useCallback((card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || event.pointerType === "touch" || !card.task) return;
-    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .stage-section, .reader-slot, .stage-detail")) return;
+    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .pblock, .reader-slot, .stage-detail")) return;
     const element = event.currentTarget;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -1778,6 +1695,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openPipelineMenu = useCallback((cardId: string, pipeline: Pipeline, anchor: HTMLElement) => {
     menu.setOpen({ anchor, value: { kind: "pipeline", cardId, pipelineId: pipeline.id } });
   }, [menu]);
+  /* A lane row's answer in place (#2072): the same intent the ⋯ menu sends,
+     with Skip and Close held for their receipt's window. */
+  const answerPipeline = useCallback((_cardId: string, title: string, pipeline: Pipeline, answer: PipelineAnswer) => {
+    startPipelineAction(
+      { pipelineId: pipeline.id, title, action: answer.action, stageId: answer.stageId, stageName: answer.stageName, expectedAttempt: answer.expectedAttempt },
+      { hold: answer.action === "skip-stage" || answer.action === "close" },
+    );
+  }, [startPipelineAction]);
   const openWorkLinks = useCallback((target: WorkLinkTarget, anchor: HTMLElement) => {
     menu.setOpen({ anchor, value: { kind: "links", target } });
   }, [menu]);
@@ -2184,6 +2109,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onOpenSheet: openSheet,
         onPipelineMenu: openPipelineMenu,
         onWorkLinks: openWorkLinks,
+        onAnswer: answerPipeline,
         onStagePanelFold: foldStagePanel,
         onStagePanelClose: closeStagePanel,
         onStagePanelMenu: openStagePanelMenu,
@@ -2473,7 +2399,7 @@ type CardHandlers = Pick<
   | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
-  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
+  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
   | "projectNames" | "onOpenProject"
 >;
 

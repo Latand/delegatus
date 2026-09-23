@@ -191,3 +191,29 @@ test("a retired worker still answers the next revision with a delta from its per
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+/* #2072: the worker reads the persisted scan snapshot when its turn comes, and
+   a later scan may have replaced the file by then. It reports the generation
+   the file it read names, so the projection is dated by the rows it holds. */
+test("a projection from the snapshot file reports the scan generation that file holds", async () => {
+  const stateDir = scratchState();
+  const snapshotFile = path.join(stateDir, "files-scan-snapshot.json");
+  const snapshot = { files: [], projectCatalog: [], complete: true };
+  try {
+    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 12, epoch: "e1", generation: 15, snapshot }));
+    const fromFile = await buildFilesResponseInWorker({ ...request, snapshot: undefined, snapshotFile }, runtimeFor(stateDir));
+    expect(fromFile.snapshotRead).toEqual({ epoch: "e1", generation: 15 });
+
+    /* A file written before the scan named its generation dates nothing. */
+    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 12, snapshot }));
+    const undated = await buildFilesResponseInWorker({ ...request, snapshot: undefined, snapshotFile }, runtimeFor(stateDir));
+    expect(undated.snapshotRead).toBeUndefined();
+
+    /* An inline snapshot is the caller's own; it knows what it sent. */
+    const inline = await buildFilesResponseInWorker(request, runtimeFor(stateDir));
+    expect(inline.snapshotRead).toBeUndefined();
+  } finally {
+    shutdownFilesResponseWorker("test");
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});

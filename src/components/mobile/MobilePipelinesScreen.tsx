@@ -1,23 +1,24 @@
 "use client";
 
 import { EyeOff } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { ChevronDown, ChevronRight } from "@/components/icons";
 import { useLocale } from "@/lib/i18n";
+import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 
-import { MobilePipelineRow } from "../pipelines/PipelineStrip";
 import { pipelineHiddenFromBoard } from "./mobileBoardModel";
+import { MobilePipelineCard } from "./MobilePipelineCard";
 import { MobileBarTitle, MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { pendingPipelineActs, useClosingPipelines, type PendingPipelineActs } from "./MobilePipelineScreen";
 
 /*
  * The pipelines list on the phone (issue #1439, lane 7; docs/design/mobile-v2/
  * README.md §4.7): Needs you, Active, and a folded «n completed» toggle. Each
- * row is the same description of a pipeline the board's summary and the
- * desktop's strip give — `MobilePipelineRow`, the strip's mobile row mode — so
- * the two surfaces cannot say different things about one lane.
+ * row is the phone's pipeline card (#2072 slice 3): the one pipeline block the
+ * desktop's lane rows draw, at card density, so the two surfaces cannot say
+ * different things about one lane.
  *
  * A draft never appears: it is edited where it is written, and the board's own
  * pipelines summary drops it too. A closed lane is gone by definition, and a
@@ -56,12 +57,15 @@ export interface MobilePipelinesScreenProps {
   host?: MobileShellHost | null;
   renderSheet?: SheetRenderer;
   onOpenPipeline: (pipeline: Pipeline) => void;
+  /** The review flows a card counts its rounds from. */
+  flows?: readonly Flow[];
   /** Test seam: the held-act store. Production reads the tab's singleton. */
   acts?: PendingPipelineActs;
 }
 
-export function MobilePipelinesScreen({ pipelines, now, host, renderSheet, onOpenPipeline, acts = pendingPipelineActs }: MobilePipelinesScreenProps) {
+export function MobilePipelinesScreen({ pipelines, now, host, renderSheet, onOpenPipeline, flows, acts = pendingPipelineActs }: MobilePipelinesScreenProps) {
   const { t } = useLocale();
+  const flowsById = useMemo(() => new Map((flows ?? []).map((flow) => [flow.id, flow] as const)), [flows]);
   const [showCompleted, setShowCompleted] = useState(false);
   /* The operator is told a close happened the moment they take it: the row
      goes on the tap, not when the receipt's four seconds run out, and stays
@@ -69,7 +73,18 @@ export function MobilePipelinesScreen({ pipelines, now, host, renderSheet, onOpe
   const closing = useClosingPipelines(acts);
   const model = mobilePipelinesModel(pipelines, closing);
   const row = (pipeline: Pipeline, quiet?: boolean) => {
-    const card = <MobilePipelineRow key={pipeline.id} pipeline={pipeline} now={now} quiet={quiet} onOpen={onOpenPipeline} />;
+    const card = (
+      <MobilePipelineCard
+        key={pipeline.id}
+        pipeline={pipeline}
+        now={now}
+        flowsById={flowsById}
+        quiet={quiet}
+        onOpen={onOpenPipeline}
+        label={t("mobile2.pipelines.open", { task: pipeline.task })}
+        dataAttributes={{ "data-mobile2-pipeline-row": pipeline.id, "data-mobile2-go": "pipeline" }}
+      />
+    );
     if (!pipelineHiddenFromBoard(pipeline)) return card;
     /* A lane hidden from the board while it waits on this decision (#1671)
        stays here, where it is found again, and says so; its screen offers

@@ -1,55 +1,24 @@
 "use client";
 
-import { ChevronDown, ChevronLeft, ChevronRight, Loader2, Send, Trash2 } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { X } from "@/components/icons";
-import { MicButtonView } from "@/components/MicButton";
-import { activityDot, cleanTitle, engineBadge, fmtAge } from "@/components/utils";
-import { useAutosizePinned } from "@/hooks/useAutosizePinned";
-import { useDictation } from "@/hooks/useDictation";
+import { fmtAge } from "@/components/utils";
 import { useTaskDraft } from "@/hooks/useTaskDraft";
 import { projectDisplayName } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
-import { TASK_DETAILS_LIMIT, type BoardTask, type TaskStatus } from "@/lib/tasks/types";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
-import { createTask, deleteTask, retryTaskSpawn, sendTask, updateTask } from "./taskApi";
+import { createTask, sendTask } from "./taskApi";
 import { TaskComposer } from "./TaskComposer";
-import { TASK_STATUS_CYCLE, TASK_TONES, taskTitle } from "./taskModel";
+import { TASK_TONES, taskTitle } from "./taskModel";
 import { TargetChecklist } from "./TargetChecklist";
 import { pushTaskToast, sendSummary } from "./taskToast";
 import { Z } from "@/components/layers";
 
-export type TaskSheetView = "list" | "new" | { taskId: string };
-
-function StatusRow({ value, onPick }: { value: TaskStatus; onPick: (status: TaskStatus) => void }) {
-  const { t } = useLocale();
-  return (
-    <div className="flex flex-wrap items-center gap-1">
-      {TASK_STATUS_CYCLE.map((status) => {
-        const tone = TASK_TONES[status];
-        const active = status === value;
-        return (
-          <button
-            key={status}
-            type="button"
-            aria-pressed={active}
-            className="inline-flex min-h-11 items-center rounded-full border px-3 text-[11px] font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            style={
-              active
-                ? { backgroundColor: tone.soft, color: tone.color, borderColor: tone.color }
-                : { borderColor: "transparent", color: "var(--color-muted)" }
-            }
-            onClick={() => onPick(status)}
-          >
-            {t(`tasks.status.${status}`)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+export type TaskSheetView = "list" | "new";
 
 /** Create view: the shared task composer (text, voice, images, deadline) plus
     the target checkboxes. Commits an `unplaced` task — placement is a board
@@ -146,284 +115,11 @@ function NewTaskView({
   );
 }
 
-/** Edit view: text with dictation, the agent's collapsed details, status chips,
-    assignments, send, delete. */
-function TaskDetailView({
-  task,
-  files,
-  onDeleted,
-}: {
-  task: BoardTask;
-  files: FileEntry[];
-  onDeleted: () => void;
-}) {
-  const { t } = useLocale();
-  const [draft, setDraft] = useState(task.text);
-  const [checked, setChecked] = useState<ReadonlySet<string>>(() => new Set());
-  const [sending, setSending] = useState(false);
-  const [armDelete, setArmDelete] = useState(false);
-  /* The agent's context (#1834): one row, closed on every fresh opening of the
-     task, and edited in place exactly as the text above it is — the draft is
-     committed when the field is left. */
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [detailsDraft, setDetailsDraft] = useState(task.details ?? "");
-  /* What this view last saved, until the polled task carries it: a cleared
-     field has to take its row with it now, not one poll later. Dropped as soon
-     as the task moves, so an agent's own write is what is shown again. */
-  const [detailsSaved, setDetailsSaved] = useState<string | null>(null);
-  const storedDetails = detailsSaved ?? task.details ?? "";
-  useEffect(() => {
-    setDetailsSaved(null);
-  }, [task.details]);
-  /* The stored value the draft was taken from. Until the operator changes the
-     draft it follows the task as it moves, so an agent's newer details are what
-     the field shows, and leaving an untouched field never writes the older text
-     back over them. */
-  const [detailsBase, setDetailsBase] = useState(storedDetails);
-  if (storedDetails !== detailsBase && detailsDraft === detailsBase) {
-    setDetailsBase(storedDetails);
-    setDetailsDraft(storedDetails);
-  }
-
-  useEffect(() => {
-    if (!armDelete) return;
-    const timer = window.setTimeout(() => setArmDelete(false), 4000);
-    return () => window.clearTimeout(timer);
-  }, [armDelete]);
-
-  const editRef = useRef<HTMLTextAreaElement>(null);
-  const dictation = useDictation({
-    onError: (message) => pushTaskToast("err", message),
-    onUnclaimedText: (spoken) => setDraft((prev) => (prev ? prev.trimEnd() + " " + spoken : spoken)),
-    onLiveCommit: (spoken) => setDraft((prev) => (prev ? prev.trimEnd() + " " + spoken : spoken)),
-  });
-
-  /* Same grow-and-pin seam as the composers: the edit field keeps the newest
-     dictated/typed words visible instead of the old wrapped-line `rows`
-     heuristic that miscounted height and pinned the view to the top. */
-  const displayText = dictation.liveText ? (draft ? draft.trimEnd() + " " : "") + dictation.liveText : draft;
-  useAutosizePinned(editRef, displayText, { maxPx: 260, minPx: 84, pinned: Boolean(dictation.liveText) });
-
-  /* Re-created each render, so blur/send always commit the latest draft.
-     Returns the PATCH error: deliveries read the persisted text server-side,
-     so they must wait for the save and abort when it fails, or a quick send
-     after editing would deliver the previous body. A blank draft is never
-     persisted (the server rejects empty text) — deliveries treat it as an
-     error too, or the blank editor would silently send the old body. */
-  const commitText = async (): Promise<string | null> => {
-    if (draft === task.text) return null;
-    if (!draft.trim()) return t("tasks.emptyTextBlocked");
-    const error = await updateTask(task.id, { text: draft });
-    if (error) pushTaskToast("err", error);
-    return error;
-  };
-
-  /* Written on its own, so the text above is left exactly as stored; an empty
-     draft clears the field and the row goes with it — the save closes the
-     disclosure itself, or an emptied editor would keep standing where there is
-     no longer anything to disclose. A refused save keeps the draft and the open
-     field, which is what the operator retries from. */
-  const commitDetails = async (): Promise<void> => {
-    if (detailsDraft === detailsBase) return;
-    const error = await updateTask(task.id, { details: detailsDraft });
-    if (error) {
-      pushTaskToast("err", error);
-      return;
-    }
-    setDetailsBase(detailsDraft);
-    setDetailsSaved(detailsDraft);
-    if (!detailsDraft) setDetailsOpen(false);
-  };
-
-  const send = async () => {
-    const targets = [...checked];
-    if (!targets.length || sending) return;
-    if (!draft.trim()) {
-      pushTaskToast("err", t("tasks.emptyTextBlocked"));
-      return;
-    }
-    setSending(true);
-    try {
-      if ((await commitText()) !== null) return;
-      const sent = await sendTask(task.id, targets);
-      if ("error" in sent) pushTaskToast("err", sent.error);
-      else {
-        const summary = sendSummary(sent, files);
-        pushTaskToast(summary.kind, summary.text);
-        setChecked(new Set());
-      }
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const byPath = new Map(files.map((file) => [file.path, file]));
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
-      <div className="flex flex-col gap-1.5 rounded-[10px] border border-border bg-card p-2">
-        <textarea
-          ref={editRef}
-          value={displayText}
-          readOnly={Boolean(dictation.liveText)}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={() => void commitText()}
-          rows={4}
-          aria-label={t("tasks.editAria")}
-          maxLength={6000}
-          className="w-full resize-none overflow-y-auto rounded-[8px] border border-border bg-card px-2.5 py-1.5 text-[12.5px] leading-[18px] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-        />
-        <div className="flex items-center justify-between gap-1.5">
-          <StatusRow
-            value={task.status}
-            onPick={(status) => {
-              if (status === task.status) return;
-              void updateTask(task.id, { status }).then((error) => {
-                if (error) pushTaskToast("err", error);
-              });
-            }}
-          />
-          <MicButtonView {...dictation} onText={(spoken) => setDraft((prev) => (prev ? prev.trimEnd() + " " + spoken : spoken))} />
-        </div>
-      </div>
-
-      {storedDetails || detailsOpen ? (
-        <div className="flex flex-col gap-1.5 rounded-[10px] border border-border bg-card p-2" data-task-details={task.id}>
-          <button
-            type="button"
-            aria-expanded={detailsOpen}
-            data-task-details-toggle
-            className="inline-flex min-h-11 items-center gap-1 self-start text-[11px] font-bold text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => setDetailsOpen((open) => !open)}
-          >
-            {detailsOpen ? <ChevronDown className="h-3.5 w-3.5" aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}
-            {t("tasks.details")}
-          </button>
-          {detailsOpen ? (
-            <textarea
-              value={detailsDraft}
-              onChange={(event) => setDetailsDraft(event.target.value)}
-              onBlur={() => void commitDetails()}
-              rows={8}
-              aria-label={t("tasks.detailsAria")}
-              maxLength={TASK_DETAILS_LIMIT}
-              className="max-h-[260px] w-full resize-none overflow-y-auto rounded-[8px] border border-border bg-canvas px-2.5 py-1.5 font-mono text-[11.5px] leading-[17px] text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            />
-          ) : null}
-        </div>
-      ) : null}
-
-      {task.assignments.length ? (
-        <div className="flex flex-col gap-1 rounded-[10px] border border-border bg-card p-2">
-          <div className="text-[10.5px] font-bold text-muted">{t("tasks.sheetAssignments")}</div>
-          {task.assignments.map((assignment, index) => {
-            const file = assignment.path ? (byPath.get(assignment.path) ?? null) : null;
-            const failed = assignment.state === "failed";
-            const badge = file ? engineBadge(file) : null;
-            const title = assignment.path
-              ? file
-                ? cleanTitle(file.title, 44)
-                : (assignment.path.split("/").pop() ?? assignment.path)
-              : failed
-                ? t("tasks.failedChip")
-                : t("tasks.spawning");
-            return (
-              <div
-                key={(assignment.path ?? "spawning") + index}
-                className={`flex min-h-11 items-center gap-1.5 rounded-[6px] px-1.5 ${
-                  failed ? "bg-danger-soft text-danger" : file ? "bg-canvas" : "bg-canvas opacity-60"
-                }`}
-                title={failed ? t("tasks.chipFailedTitle", { error: assignment.error ?? "" }) : undefined}
-              >
-                {file ? <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${activityDot(file.activity)}`} /> : null}
-                {badge ? (
-                  <span className="shrink-0 rounded-full px-1.5 text-[9px] font-bold" style={badge.style}>
-                    {badge.label}
-                  </span>
-                ) : null}
-                <span className="min-w-0 flex-1 truncate text-[11px] font-semibold">{title}</span>
-                {failed ? <span aria-hidden>⚠</span> : null}
-                {(assignment.path && (failed || !file)) || (failed && assignment.launchId) ? (
-                  <button
-                    type="button"
-                    data-task-sheet-retry
-                    className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded px-2 text-[11px] font-bold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                    onClick={() => {
-                      void (async () => {
-                        if (!draft.trim()) {
-                          pushTaskToast("err", t("tasks.emptyTextBlocked"));
-                          return;
-                        }
-                        if ((await commitText()) !== null) return;
-                        /* A pathless failed assignment has no transcript to
-                           deliver into — relaunch from its durable launch
-                           identity instead (#334). */
-                        const retryLaunchId = assignment.launchId;
-                        if (failed && !assignment.path && retryLaunchId) {
-                          const relaunched = await retryTaskSpawn(task.id, retryLaunchId);
-                          if ("task" in relaunched) pushTaskToast("ok", t("tasks.retryLaunched"));
-                          else pushTaskToast("err", relaunched.error);
-                          return;
-                        }
-                        const sent = await sendTask(task.id, [assignment.path!]);
-                        if ("error" in sent) pushTaskToast("err", sent.error);
-                        else {
-                          const summary = sendSummary(sent, files);
-                          pushTaskToast(summary.kind, summary.text);
-                        }
-                      })();
-                    }}
-                  >
-                    {failed && !assignment.path ? t("tasks.retryLaunch") : t("tasks.retry")}
-                  </button>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-
-      <div className="flex flex-col gap-1 rounded-[10px] border border-border bg-card p-1.5">
-        <div className="px-1 text-[10.5px] font-bold text-muted">{t("tasks.pickerTitle")}</div>
-        <TargetChecklist files={files} project={task.project} checked={checked} onChange={setChecked} maxHeight={9999} />
-        <button
-          type="button"
-          disabled={!checked.size || sending}
-          className="mt-1 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] border border-brand bg-brand text-[12px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
-          onClick={() => void send()}
-        >
-          {sending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Send className="h-4 w-4" aria-hidden />}
-          {t("tasks.pickerSend", { count: checked.size })}
-        </button>
-      </div>
-
-      <button
-        type="button"
-        className={`inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] border text-[12px] font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-          armDelete ? "border-danger bg-danger text-white" : "border-border bg-card text-muted hover:border-danger/40 hover:text-danger"
-        }`}
-        onClick={() => {
-          if (!armDelete) {
-            setArmDelete(true);
-            return;
-          }
-          void deleteTask(task.id).then((error) => {
-            if (error) pushTaskToast("err", error);
-            else onDeleted();
-          });
-        }}
-      >
-        <Trash2 className="h-3.5 w-3.5" aria-hidden />
-        {armDelete ? t("tasks.deleteConfirm") : t("tasks.delete")}
-      </button>
-    </div>
-  );
-}
-
 /**
- * The phone's task surface: list → detail/create, full-screen over the focus
- * view. Everything the desktop card offers minus spatial gestures — text with
- * dictation and images, manual status, delete, and multi-target assignment
- * through the same checkbox picker.
+ * The phone's task list and its create view, full-screen over the screen it
+ * was opened on. A task in the list, and a task just created, open on the
+ * phone's task screen (#2072 slice 5), which is where a task's status, text,
+ * pipelines and agents live; this sheet has no editor of its own.
  */
 export function TaskSheet({
   project,
@@ -432,6 +128,7 @@ export function TaskSheet({
   files,
   initialView,
   onClose,
+  onOpenTask,
 }: {
   project: string;
   projectName?: string;
@@ -439,6 +136,8 @@ export function TaskSheet({
   files: FileEntry[];
   initialView: TaskSheetView;
   onClose: () => void;
+  /** The task screen's opener: a row of the list, or the task just created. */
+  onOpenTask: (task: BoardTask, from: "list" | "new") => void;
 }) {
   const { t } = useLocale();
   const [view, setView] = useState<TaskSheetView>(initialView);
@@ -450,7 +149,6 @@ export function TaskSheet({
       }),
     [tasks],
   );
-  const openTask = typeof view === "object" ? (tasks.find((task) => task.id === view.taskId) ?? null) : null;
 
   return (
     <div className={`fixed inset-0 ${Z.sheet} flex flex-col bg-canvas pb-[env(safe-area-inset-bottom)]`}>
@@ -466,7 +164,7 @@ export function TaskSheet({
           </button>
         ) : null}
         <span className="shrink-0 pl-1 text-[13px] font-bold">
-          {view === "new" ? t("tasks.sheetNew") : openTask ? taskTitle(openTask.text) || t("tasks.untitled") : t("tasks.panelTitle")}
+          {view === "new" ? t("tasks.sheetNew") : t("tasks.panelTitle")}
         </span>
         <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted" title={projectName ?? project}>{projectDisplayName(project, projectName)}</span>
         <button
@@ -497,7 +195,8 @@ export function TaskSheet({
                 className={`flex w-full min-w-0 flex-col gap-0.5 rounded-[10px] border border-border bg-card px-2.5 py-2 text-left shadow-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
                   task.status === "done" ? "opacity-60" : ""
                 }`}
-                onClick={() => setView({ taskId: task.id })}
+                data-task-sheet-row={task.id}
+                onClick={() => onOpenTask(task, "list")}
               >
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span
@@ -519,12 +218,8 @@ export function TaskSheet({
           })}
           {!rows.length ? <div className="px-2 py-4 text-center text-[11.5px] text-muted">{t("tasks.sheetEmpty")}</div> : null}
         </div>
-      ) : view === "new" ? (
-        <NewTaskView project={project} files={files} onCreated={(task) => setView({ taskId: task.id })} />
-      ) : openTask ? (
-        <TaskDetailView key={openTask.id} task={openTask} files={files} onDeleted={() => setView("list")} />
       ) : (
-        <div className="flex flex-1 items-center justify-center text-[12px] text-muted">{t("tasks.sheetGone")}</div>
+        <NewTaskView project={project} files={files} onCreated={(task) => onOpenTask(task, "new")} />
       )}
     </div>
   );

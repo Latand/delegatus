@@ -9,7 +9,13 @@ import { emptyStore } from "@/components/runtime/runtimeModel";
 import type { FileEntry } from "@/lib/types";
 
 /* Real Home and catalog hook. Fetch is fully intercepted; deferred responses
-   exercise the same cursor and navigation seams used by the browser fixture. */
+   exercise the same cursor and navigation seams used by the browser fixture.
+
+   The board's inline «All conversations» list left the board with #2072
+   slice 4 (docs/design/phone-kanban.md §3.10): a conversation lives on its
+   task's card or under Not on a task, and the full history becomes a screen
+   of its own at ⋯ › All conversations. What stays here is the Home seat card
+   and footer, which read the same seat and incumbent answers. */
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const inertRuntime = { enabled: false, connection: "live" as const, resyncedAt: null, store: emptyStore(), structuredHostsEnabled: false, lastEventAt: null };
@@ -246,7 +252,6 @@ function mount(over: Partial<React.ComponentProps<typeof ProjectDashboard>> = {}
 const q = (root: HTMLElement, selector: string) => root.querySelector(selector) as unknown as HTMLElement | null;
 const all = (root: HTMLElement, selector: string) => Array.from(root.querySelectorAll(selector)) as unknown as HTMLElement[];
 const click = (el: HTMLElement | null) => { expect(el).not.toBeNull(); flushSync(() => el!.click()); };
-const board = (root: HTMLElement) => q(root, "[data-mobile2-board]");
 
 const observers = new Set<() => void>();
 let seatFailure = false;
@@ -258,87 +263,6 @@ const defaultCatalogReply = (url: URL) => {
   return jsonResponse({ items: catalogItems.slice(offset, offset + 20), nextCursor: offset + 20 < 45 ? String(offset + 20) : null, total: 4232 });
 };
 let catalogReply: (url: URL) => unknown = defaultCatalogReply;
-const intersect = () => flushSync(() => { for (const callback of [...observers]) callback(); });
-/* Recent rows the feed itself carries past the board's first three (#1671). */
-const feedRows = (count: number) => Array.from({ length: count }, (_, i) => file({ path: `/repo/feed-${i}.jsonl`, title: `Feed ${i}`, mtime: NOW - 1_000 - i }));
-/* Every row of the Recent list, in order: the three first and all that «All
-   conversations» appended under them. */
-const anchors = (root: HTMLElement) => all(root, "[data-catalog-path]").map((el) => el.dataset.catalogPath!);
-
-test("All conversations appends the feed's own Recent rows first with no request, then project pages of twenty in the same rows", async () => {
-  const feed = feedRows(4);
-  const root = mount({ files: [asking, running, finished, ...feed] });
-  expect(await waitFor(() => board(root) !== null)).toBe(true);
-  expect(anchors(root)).toEqual([finished.path, feed[0]!.path, feed[1]!.path]);
-  const hash = dom.location.hash;
-
-  click(q(root, '[data-mobile2-row="catalog"]'));
-  /* The rest of the feed's rows, from memory. */
-  expect(anchors(root)).toEqual([finished.path, ...feed.map((row) => row.path)]);
-  await settle();
-  expect(catalogRequests).toHaveLength(0);
-  expect(q(root, '[data-mobile2-row="catalog"]')!.textContent).toContain(translate("en", "mobile2.board.showFewer"));
-  /* One list: no search field, no refresh button, no hint line. */
-  expect(q(root, 'input[type="search"]')).toBeNull();
-  expect(root.textContent).not.toContain(translate("en", "mobile.catalog.refresh"));
-  expect(root.textContent).not.toContain(translate("en", "mobile.catalog.hint"));
-
-  /* The end of those rows coming into view reads the project's own catalog. */
-  intersect();
-  expect(await waitFor(() => anchors(root).length === 5 + 20)).toBe(true);
-  expect(catalogRequests).toHaveLength(1);
-  const request = new URL(catalogRequests[0]!, "http://localhost");
-  expect(request.searchParams.get("limit")).toBe("20");
-  expect(request.searchParams.get("project")).toBe(PROJECT);
-  expect(request.searchParams.has("q")).toBe(false);
-  expect(q(root, '[data-mobile2-row="catalog"]')!.textContent).toContain("4232");
-  expect(board(root)).not.toBeNull();
-  expect(dom.location.hash).toBe(hash);
-
-  /* Every appended row is the board's own conversation row, swipe and all. */
-  const stored = q(root, `[data-catalog-path="${catalogItems[0]!.path}"]`)!;
-  const fromFeed = q(root, `[data-catalog-path="${feed[3]!.path}"]`)!;
-  for (const row of [stored, fromFeed]) {
-    expect(row.getAttribute("data-mobile2-row")).toBe("conversation");
-    expect(row.closest("[data-mobile2-swipe-row]")).not.toBeNull();
-    expect(row.className).toContain("bg-quiet");
-  }
-  /* A stored row past the scan opens through the resolver that pins it. */
-  click(stored);
-  expect(opened).toEqual([catalogItems[0]!.path]);
-});
-
-test("a page never repeats a row: what the board lists, a closed card and an entry two pages share appear once", async () => {
-  const feed = feedRows(4);
-  const closed = "/repo/closed.jsonl";
-  /* The board store keeps each project's settled board across mounts, so the
-     closed card is served at a revision no earlier case reached. */
-  boardRevision = 1_000;
-  boardPrefs = { hidden: [closed] };
-  const page = (items: FileEntry[], nextCursor: string | null) => jsonResponse({ items, nextCursor, total: 60 });
-  const history = (i: number) => catalogItems[i]!;
-  catalogReply = (url) => {
-    const cursor = url.searchParams.get("cursor");
-    if (!cursor) return page([finished, running, feed[3]!, file({ path: closed, title: "Closed card" }), history(0), history(1)], "p2");
-    if (cursor === "p2") return page([history(1), history(2), asking], "p3");
-    return page([history(3)], null);
-  };
-  const root = mount({ files: [asking, running, finished, ...feed] });
-  expect(await waitFor(() => board(root) !== null)).toBe(true);
-  click(q(root, '[data-mobile2-row="catalog"]'));
-  intersect();
-  expect(await waitFor(() => anchors(root).includes(history(1).path))).toBe(true);
-  await settle(); intersect();
-  expect(await waitFor(() => anchors(root).includes(history(2).path))).toBe(true);
-  await settle(); intersect();
-  expect(await waitFor(() => anchors(root).includes(history(3).path))).toBe(true);
-  expect(anchors(root)).toEqual([finished.path, ...feed.map((row) => row.path), history(0).path, history(1).path, history(2).path, history(3).path]);
-  const paths = all(root, "[data-mobile2-path]").map((el) => el.getAttribute("data-mobile2-path"));
-  expect(paths.filter((path) => path === running.path)).toHaveLength(1);
-  expect(paths.filter((path) => path === asking.path)).toHaveLength(1);
-  expect(paths).not.toContain(closed);
-  expect(catalogRequests).toHaveLength(3);
-});
 
 test("existing manager with null seat path resolves by durable identity in the footer", async () => {
   seatAnswer = { project: PROJECT, seatEpoch: 1, conversationId: running.conversationId, path: null,
@@ -352,49 +276,6 @@ test("existing manager with null seat path resolves by durable identity in the f
   expect(await waitFor(() => topScreen(getMobileNav().getState()).kind === "chat")).toBe(true);
 });
 
-
-test("pages append once across polls, Show fewer collapses to three, reopening needs no request, and the last page ends the list", async () => {
-  const root = mount();
-  expect(await waitFor(() => board(root) !== null)).toBe(true);
-  click(q(root, '[data-mobile2-row="catalog"]'));
-  intersect();
-  expect(await waitFor(() => anchors(root).length === 1 + 20)).toBe(true);
-  await settle();
-  intersect(); intersect();
-  expect(await waitFor(() => anchors(root).length === 1 + 40)).toBe(true);
-  expect(catalogRequests).toHaveLength(2);
-  flushSync(() => roots[0]!.render(<ProjectDashboard {...dashboardProps({ files: [asking, { ...running, mtime: NOW + 90 }, finished] })} />));
-  await settle(); expect(catalogRequests).toHaveLength(2);
-  /* Feed order, then the catalog's own order; a poll re-sorts nothing. */
-  expect(anchors(root)).toEqual([finished.path, ...catalogItems.slice(0, 40).map((row) => row.path)]);
-  click(q(root, '[data-mobile2-row="catalog"]'));
-  expect(anchors(root)).toEqual([finished.path]);
-  expect(q(root, '[data-mobile2-row="catalog"]')!.textContent).toContain(translate("en", "mobile2.board.allConversations"));
-  click(q(root, '[data-mobile2-row="catalog"]'));
-  expect(anchors(root)).toHaveLength(41);
-  expect(catalogRequests).toHaveLength(2);
-  await settle(); intersect();
-  expect(await waitFor(() => anchors(root).length === 46)).toBe(true);
-  expect(await waitFor(() => root.textContent!.includes(translate("en", "mobile.catalog.end")))).toBe(true);
-  intersect(); await settle(); expect(catalogRequests).toHaveLength(3);
-  expect(new Set(anchors(root)).size).toBe(46);
-});
-
-test("each project keeps its own expansion and pages, and the list never searches", async () => {
-  const root = mount();
-  expect(await waitFor(() => board(root) !== null)).toBe(true);
-  click(q(root, '[data-mobile2-row="catalog"]'));
-  intersect();
-  expect(await waitFor(() => anchors(root).length === 21)).toBe(true);
-  flushSync(() => roots[0]!.render(<ProjectDashboard {...dashboardProps({ project: "beta", files: [file({ path: "/repo/beta.jsonl", project: "beta" })] })} />));
-  await settle();
-  expect(anchors(root)).toEqual(["/repo/beta.jsonl"]);
-  expect(q(root, '[data-mobile2-row="catalog"]')!.getAttribute("aria-expanded")).toBe("false");
-  flushSync(() => roots[0]!.render(<ProjectDashboard {...dashboardProps()} />));
-  expect(await waitFor(() => anchors(root).length === 21)).toBe(true);
-  expect(catalogRequests).toHaveLength(1);
-  expect(catalogRequests.every((url) => !new URL(url, "http://localhost").searchParams.has("q"))).toBe(true);
-});
 
 test("failed seat read and an unresolved designation never offer Create", async () => {
   seatFailure = true;
@@ -450,52 +331,6 @@ test("a failed poll preserves the known null-path incumbent on both Home surface
   expect(q(root, '[data-mobile2-board-dock]')!.textContent).toContain(translate("en", "mobile2.board.tellOrchestrator"));
   expect(q(root, '[data-mobile2-seat-invitation]')).toBeNull();
 }, 12000);
-
-test("a failed append keeps the rows and retries the same cursor; an expired snapshot keeps them and reloads from the start", async () => {
-  let respond: ((value: unknown) => void) | undefined;
-  let failNext = true;
-  catalogReply = (url) => {
-    const cursor = url.searchParams.get("cursor");
-    if (cursor === "20" && failNext) { failNext = false; return { ok: false, status: 503, json: async () => ({}) }; }
-    if (cursor === "40") return new Promise((resolve) => { respond = resolve; });
-    return defaultCatalogReply(url);
-  };
-  const root = mount();
-  expect(await waitFor(() => board(root) !== null)).toBe(true);
-  click(q(root, '[data-mobile2-row="catalog"]'));
-  intersect();
-  expect(await waitFor(() => anchors(root).length === 21)).toBe(true);
-  await settle(); intersect();
-  expect(await waitFor(() => q(root, '[data-mobile2-catalog-retry="retry"]') !== null)).toBe(true);
-  expect(root.textContent).toContain(translate("en", "list.failed"));
-  expect(anchors(root)).toHaveLength(21);
-  /* The sentinel stays quiet while the failure stands; its own row retries. */
-  intersect(); await settle(); expect(catalogRequests).toHaveLength(2);
-  const retry = q(root, '[data-mobile2-catalog-retry="retry"]')!;
-  expect(retry.className).toContain("min-h-11");
-  click(retry);
-  expect(await waitFor(() => anchors(root).length === 41)).toBe(true);
-  expect(new URL(catalogRequests[2]!, "http://localhost").searchParams.get("cursor")).toBe("20");
-
-  await settle(); intersect();
-  expect(await waitFor(() => respond !== undefined)).toBe(true);
-  flushSync(() => roots[0]!.render(<ProjectDashboard {...dashboardProps({ files: [asking, { ...running, title: "Updated title" }, finished] })} />));
-  expect(anchors(root)).toHaveLength(41);
-  respond!({ ok: false, status: 409, json: async () => ({}) });
-  expect(await waitFor(() => root.textContent!.includes(translate("en", "mobile.catalog.expired")))).toBe(true);
-  intersect(); await settle(); expect(catalogRequests).toHaveLength(4);
-  expect(anchors(root)).toHaveLength(41);
-  catalogReply = () => ({ ok: false, status: 503, json: async () => ({}) });
-  click(q(root, '[data-mobile2-catalog-retry="reload"]'));
-  expect(await waitFor(() => catalogRequests.length === 5)).toBe(true); await settle();
-  expect(new URL(catalogRequests[4]!, "http://localhost").searchParams.has("cursor")).toBe(false);
-  expect(anchors(root)).toHaveLength(41);
-  catalogReply = () => jsonResponse({ items: [catalogItems[44]], total: 1, nextCursor: null });
-  click(q(root, '[data-mobile2-catalog-retry="reload"]'));
-  expect(await waitFor(() => anchors(root).length === 2)).toBe(true);
-  expect(anchors(root)[1]).toBe(catalogItems[44]!.path);
-});
-
 
 test("Home card and footer share the incumbent-resolved transcript with a scanner-native file ID", async () => {
   seatAnswer = { project: PROJECT, seatEpoch: 1, conversationId: "conversation_manager", path: null,

@@ -26,6 +26,8 @@ export type PipelineWriteResult =
 export interface PipelineRead {
   pipeline: Pipeline;
   stageDigests: Readonly<Record<string, string>>;
+  /** The record's revision, which one more review round names as `expectedRevision` (#1938). */
+  revision?: string | null;
 }
 
 export interface PipelinePorts {
@@ -37,17 +39,17 @@ export interface PipelinePorts {
 }
 
 /** Actions whose effects reach past the record: the catalog is read again after them. */
-const REFRESH_ACTIONS = new Set(["retry-stage", "skip-stage", "resume", "pause", "close"]);
+const REFRESH_ACTIONS = new Set(["retry-stage", "skip-stage", "resume", "pause", "close", "continue-review"]);
 
 export const browserPipelinePorts: PipelinePorts = {
   async read(id) {
     try {
       const response = await fetch(`/api/pipelines/${encodeURIComponent(id)}`, { cache: "no-store" });
       if (!response.ok) return null;
-      const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; stageDigests?: Record<string, unknown> } | null;
+      const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; stageDigests?: Record<string, unknown>; revision?: unknown } | null;
       if (!json?.pipeline) return null;
       const stageDigests = Object.fromEntries(Object.entries(json.stageDigests ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-      return { pipeline: json.pipeline, stageDigests };
+      return { pipeline: json.pipeline, stageDigests, revision: typeof json.revision === "string" ? json.revision : null };
     } catch {
       return null;
     }

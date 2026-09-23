@@ -141,7 +141,7 @@ describe("#1695 K1+K2 kanban board", () => {
       } : null,
       hiddenCount: board.querySelector("[data-hidden-pill] .count")?.textContent ?? null,
       cards: board.querySelectorAll(".card[data-id]").length,
-      pipelineSections: board.querySelectorAll(".stage-section").length,
+      pipelineSections: board.querySelectorAll(".pblock").length,
     };
   }, root);
 
@@ -1873,7 +1873,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
     const shot = (page: Page, side: string, id: string, scheme: Scheme) => page.screenshot({ path: path.join(OUT, `${side}-k5a-${id}-${scheme}.png`) });
 
     const openGraph = async (page: Page, id: string) => {
-      const section = `${card(id)} .stage-section`;
+      const section = `${card(id)} .pblock`;
       await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "start" }));
       if (await page.evaluate((selector) => document.querySelector(`${selector} [data-graph-toggle]`)?.getAttribute("aria-pressed") !== "true", section)) {
         await page.click(`${section} [data-graph-toggle]`);
@@ -1885,19 +1885,25 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
     try {
       for (const scheme of ["light", "dark"] as const) {
         await production(scheme, `retry graph ${scheme}`, async (page) => {
-          /* Binding correction 4: every card starts on the compact summary. */
-          await page.locator(`${card("t-search")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "start" }));
+          /* Binding correction 4: every card starts on the summary. The lane
+             row (#2072) draws the summary as its chain of pills with no graph
+             slot, and its toggle puts the graph in the chain's place. */
+          await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.waitForTimeout(300);
-          const fresh = await page.evaluate((selector) => ({
-            compact: document.querySelector(`${selector} .stage-section`)?.classList.contains("compact") ?? null,
-            nodes: document.querySelectorAll(`${selector} .pnode`).length,
-            pressed: document.querySelector(`${selector} [data-graph-toggle]`)?.getAttribute("aria-pressed") ?? null,
-            chips: document.querySelectorAll(`${selector} .psummary .pchip`).length,
-          }), card("t-search"));
+          const view = (selector: string) => page.evaluate((scope) => ({
+            chain: document.querySelectorAll(`${scope} .pblock .pb-chain`).length,
+            graphs: document.querySelectorAll(`${scope} .pblock .pb-graph`).length,
+            nodes: document.querySelectorAll(`${scope} .pnode`).length,
+            pressed: document.querySelector(`${scope} [data-graph-toggle]`)?.getAttribute("aria-pressed") ?? null,
+            chips: document.querySelectorAll(`${scope} .pb-chain .pb-pills .pb-pill`).length,
+          }), selector);
+          const fresh = await view(card("t-search"));
           await shot(page, "production", "summary-default", scheme);
-          if (!fresh.compact || fresh.nodes !== 0 || fresh.pressed !== "false" || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
+          if (fresh.chain !== 1 || fresh.graphs !== 0 || fresh.nodes !== 0 || fresh.pressed !== "false" || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
           frames[`summary-default-${scheme}`] = { production: fresh };
           await openGraph(page, "t-search");
+          const opened = await view(card("t-search"));
+          if (opened.chain !== 0 || opened.graphs !== 1 || opened.pressed !== "true") failures.push(`retry card graph ${scheme}: the graph did not take the summary's place ${JSON.stringify(opened)}`);
           const graph = await measureGraph(page, card("t-search"));
           await shot(page, "production", "graph-branch-retry", scheme);
           frames[`graph-branch-retry-${scheme}`] = { production: graph };
@@ -1916,9 +1922,14 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           if (!fail?.dashed || !/\bback\b/.test(fail.classes) || !/\btaken\b/.test(fail.classes)) failures.push(`retry graph ${scheme}: fail edge ${JSON.stringify(fail)}`);
           if (graph.edges.filter((edge) => !edge.dashed).length !== 3) failures.push(`retry graph ${scheme}: pass edges ${JSON.stringify(graph.edges)}`);
           if (!graph.labels.includes("fail · retry 1 of 2")) failures.push(`retry graph ${scheme}: labels ${JSON.stringify(graph.labels)}`);
+          /* The same toggle brings the summary back, all four stages with it. */
+          await page.click(`${card("t-search")} .pblock [data-graph-toggle]`);
+          await page.waitForSelector(`${card("t-search")} .pblock .pb-chain`, { timeout: 5_000 });
+          const back = await view(card("t-search"));
+          if (back.chain !== 1 || back.graphs !== 0 || back.nodes !== 0 || back.pressed !== "false" || back.chips !== 4) failures.push(`retry card summary again ${scheme}: ${JSON.stringify(back)}`);
         });
         await prototype("scrollto=t-search", scheme, `prototype retry graph ${scheme}`, async (page) => {
-          await page.locator(`${protoCard("t-search")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.locator(`${protoCard("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.waitForTimeout(300);
           const graph = await measureGraph(page, protoCard("t-search"));
           await shot(page, "prototype", "graph-branch-retry", scheme);
@@ -1928,7 +1939,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "two-stage graph", async (page) => {
         await openGraph(page, "t-links");
-        await page.locator(`${card("t-links")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.locator(`${card("t-links")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.waitForTimeout(250);
         const graph = await measureGraph(page, card("t-links"));
         await shot(page, "production", "graph-two-stage", "light");
@@ -1936,7 +1947,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         if (graph?.dir !== "LR" || graph.nodes.some((node) => node.width !== 176 || node.height !== 76)) failures.push(`two-stage graph: ${JSON.stringify(graph)}`);
       }, WIDE);
       await prototype("scrollto=t-links", "light", "prototype two-stage graph", async (page) => {
-        await page.locator(`${protoCard("t-links")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.locator(`${protoCard("t-links")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.waitForTimeout(300);
         Object.assign(frames["graph-two-stage"] as object, { prototype: await measureGraph(page, protoCard("t-links")) });
         await shot(page, "prototype", "graph-two-stage", "light");
@@ -1944,7 +1955,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "five review rounds", async (page) => {
         await openGraph(page, "t-rounds");
-        await page.locator(`${card("t-rounds")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.locator(`${card("t-rounds")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.waitForTimeout(250);
         const review = await page.evaluate((selector) => {
           const node = document.querySelector<HTMLElement>(`${selector} .pnode[data-stage="review"]`);
@@ -1994,18 +2005,18 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
       });
 
       await production("light", "toggle and node", async (page) => {
-        const section = `${card("t-search")} .stage-section`;
+        const section = `${card("t-search")} .pblock`;
         await openGraph(page, "t-search");
         await page.click(`${section} .pnode[data-stage="implement"]`);
         await page.waitForSelector(`${card("t-search")} [data-kanban-reader]`, { timeout: 10_000 });
         await page.waitForTimeout(300);
         const node = await page.evaluate((selector) => ({
           pressed: document.querySelector(`${selector} .pnode[data-stage="implement"]`)?.getAttribute("aria-pressed"),
-          reader: document.querySelector<HTMLElement>(`${selector.replace(" .stage-section", "")} [data-kanban-reader]`)?.dataset.kanbanReader ?? null,
+          reader: document.querySelector<HTMLElement>(`${selector.replace(" .pblock", "")} [data-kanban-reader]`)?.dataset.kanbanReader ?? null,
         }), section);
         await shot(page, "production", "node-reader", "light");
         await page.click(`${section} [data-graph-toggle]`);
-        const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pchip`).length }), section);
+        const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pb-pill`).length }), section);
         /* The historical helper was adopted last; the node opens and marks Implement's own latest attempt. */
         if (node.pressed !== "true" || node.reader !== "conversation_search-impl-2") failures.push(`node: ${JSON.stringify(node)}`);
         if (summary.nodes !== 0 || summary.chips !== 4) failures.push(`toggle back: ${JSON.stringify(summary)}`);
@@ -2014,7 +2025,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "live edge", async (page) => {
         type Hook = { evidence: { addStageAttempt: (pipelineId: string, stageId: string, over: Record<string, unknown>) => void } };
-        const section = `${card("t-search")} .stage-section`;
+        const section = `${card("t-search")} .pblock`;
         await openGraph(page, "t-search");
         const before = await page.evaluate((selector) => document.querySelectorAll(`${selector} .pedge.live`).length, section);
         /* A helper adopted with the fail edge's provenance copied: nothing travelled that edge. */
@@ -2230,7 +2241,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
     };
     const shot = (page: Page, side: string, id: string, scheme: Scheme) => page.screenshot({ path: path.join(OUT, `${side}-k5b-${id}-${scheme}.png`) });
     const openStages = async (page: Page, taskId: string) => {
-      await page.locator(`${card(taskId)} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await page.locator(`${card(taskId)} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
       await page.click(`${card(taskId)} [data-open-stages]`);
       await page.waitForSelector(".gsheet .pane[data-stage]", { timeout: 10_000 });
       await page.waitForTimeout(500);
@@ -2287,9 +2298,9 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       });
 
       await production("light", "stage details and save", async (page) => {
-        const section = `${card("t-links")} .stage-section`;
+        const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.click(`${section} .psummary [data-stage="review"]`);
+        await page.click(`${section} .pb-pills [data-stage="review"]`);
         const panel = `${card("t-links")} [data-stage-detail]`;
         await page.waitForSelector(panel, { timeout: 5_000 });
         await page.locator(panel).evaluate((element) => element.scrollIntoView({ block: "center" }));
@@ -2339,9 +2350,9 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       }, "board");
 
       await production("light", "stage started during save", async (page) => {
-        const section = `${card("t-links")} .stage-section`;
+        const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.click(`${section} .psummary [data-stage="review"]`);
+        await page.click(`${section} .pb-pills [data-stage="review"]`);
         const panel = `${card("t-links")} [data-stage-detail]`;
         await page.waitForSelector(panel);
         await page.click(`${panel} [data-draft-edit]`);
@@ -2371,9 +2382,9 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       });
 
       await production("light", "changed between read and write", async (page) => {
-        const section = `${card("t-links")} .stage-section`;
+        const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.click(`${section} .psummary [data-stage="review"]`);
+        await page.click(`${section} .pb-pills [data-stage="review"]`);
         const panel = `${card("t-links")} [data-stage-detail]`;
         await page.waitForSelector(panel);
         await page.click(`${panel} [data-draft-edit]`);
@@ -2423,7 +2434,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       });
 
       await production("light", "pipeline actions", async (page) => {
-        const section = `${card("t-upload")} .stage-section`;
+        const section = `${card("t-upload")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} [data-pipeline-menu]`);
         await page.waitForTimeout(350);
@@ -2467,7 +2478,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       });
 
       await production("light", "moved cursor", async (page) => {
-        const section = `${card("t-links")} .stage-section`;
+        const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the stage worktree has uncommitted changes" }; });
         await page.click(`${section} [data-pipeline-menu]`);
@@ -2490,9 +2501,9 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       });
 
       await production("light", "persistent reader and keys", async (page) => {
-        const section = `${card("t-upload")} .stage-section`;
+        const section = `${card("t-upload")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.click(`${section} .psummary [data-stage="build-ui"]`);
+        await page.click(`${section} .pb-pills [data-stage="build-ui"]`);
         const reader = '[data-kanban-reader="conversation_upload-ui"]';
         await page.waitForSelector(`${card("t-upload")} ${reader} textarea`, { timeout: 10_000 });
         await page.fill(`${card("t-upload")} ${reader} textarea`, "Keep this draft while the stages open.");
@@ -2709,8 +2720,8 @@ describe("#1695 K6a account chips and pickers", () => {
     const shot = (page: Page, side: string, id: string, scheme: Scheme) => page.screenshot({ path: path.join(OUT, `${side}-k6a-${id}-${scheme}.png`) });
     const hook = <T,>(page: Page, run: (evidence: Hook["evidence"]) => T) => page.evaluate(`(${run.toString()})(window.evidence)`) as Promise<T>;
     const openVerify = async (page: Page) => {
-      await page.locator(`${card("t-search")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-      await page.click(`${card("t-search")} .psummary [data-stage="verify"]`);
+      await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await page.click(`${card("t-search")} .pb-pills [data-stage="verify"]`);
       await page.waitForSelector(VERIFY_CHIP, { timeout: 10_000 });
       await page.waitForTimeout(300);
     };
@@ -2752,8 +2763,8 @@ describe("#1695 K6a account chips and pickers", () => {
       }
 
       await production("light", "stage picker", async (page) => {
-        await page.locator(`${card("t-links")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.click(`${card("t-links")} .psummary [data-stage="review"]`);
+        await page.locator(`${card("t-links")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+        await page.click(`${card("t-links")} .pb-pills [data-stage="review"]`);
         await page.waitForSelector(LINKS_REVIEW_CHIP, { timeout: 10_000 });
         await openPicker(page, LINKS_REVIEW_CHIP);
         const before = await measurePicker(page, LINKS_REVIEW_CHIP);
@@ -2989,8 +3000,8 @@ describe("#1846 one account pick, every surface in the same frame", () => {
         try {
           await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
           await page.waitForTimeout(700);
-          await page.locator(`${card("t-search")} .stage-section`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-          await page.click(`${card("t-search")} .psummary [data-stage="verify"]`);
+          await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.click(`${card("t-search")} .pb-pills [data-stage="verify"]`);
           await page.waitForSelector(CHIP, { timeout: 10_000 });
           await page.waitForSelector(`${READER} [data-runtime-pill]`, { state: "attached", timeout: 10_000 });
           await page.waitForTimeout(500);
@@ -3524,12 +3535,12 @@ describe("#1765 pipelines named on the card", () => {
     const card = document.querySelector(selector);
     if (!card) return null;
     const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
-    const rows = [...card.querySelectorAll<HTMLElement>(".stage-section")].map((row) => ({
+    const rows = [...card.querySelectorAll<HTMLElement>(".pblock")].map((row) => ({
       pipeline: row.dataset.pipeline ?? "",
-      title: text(row.querySelector(".ptitle")),
-      hover: row.querySelector(".ptitle")?.getAttribute("title") ?? "",
+      title: text(row.querySelector(".pb-title")),
+      hover: row.querySelector(".pb-title")?.getAttribute("title") ?? "",
       state: text(row.querySelector(".pstate-chip")),
-      pills: [...row.querySelectorAll(".psummary .pname, .pnode .pname")].map((pill) => text(pill)),
+      pills: [...row.querySelectorAll(".pb-pills .pname, .pnode .pname")].map((pill) => text(pill)),
     }));
     const toggle = card.querySelector<HTMLElement>("[data-completed-toggle]");
     const folded = card.querySelector<HTMLElement>("[data-completed-pipelines]");
@@ -3677,10 +3688,11 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
    *
    * One task holds one lane whose critique failed on its only round, whose
    * findings went to one more build, and whose build wrote a new head. At
-   * 1280 px the kanban card's state chip says needs review and its note names
+   * 1280 px the lane row's state word says needs review and its answer names
    * the last verdict, the reviewed head and the unreviewed current head; the
    * card never reads completed. At 390 px the phone queues the lane under
-   * Needs you with the same line and a «needs review» badge.
+   * Needs you as a pipeline card with a «needs review» badge and the heads line
+   * shortened to the unreviewed head (#2072 §3.4).
    *
    * Measurements go to `evidence/issue-1938/board.json`; frames to
    * `.artifacts/issue-1938/`, which is not committed.
@@ -3708,11 +3720,11 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
           await opened.page.waitForTimeout(500);
           const measured = await opened.page.evaluate((selector) => {
             const card = document.querySelector(selector);
-            const row = card?.querySelector<HTMLElement>('.stage-section[data-pipeline="p-review-spent"]');
+            const row = card?.querySelector<HTMLElement>('.pblock[data-pipeline="p-review-spent"]');
             const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
-            const chip = row?.querySelector<HTMLElement>(".pstate-chip");
+            const chip = row?.querySelector<HTMLElement>(".pb-head .pstate-word");
             const note = row?.querySelector<HTMLElement>("[data-review-heads]");
-            const title = row?.querySelector<HTMLElement>(".ptitle");
+            const title = row?.querySelector<HTMLElement>(".pb-title");
             const box = (node: HTMLElement | null | undefined) => node ? (({ x, y, width, height }) => ({ x, y, width, height }))(node.getBoundingClientRect()) : null;
             return {
               drawn: Boolean(row),
@@ -3751,7 +3763,7 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
         const measured = await phone.page.evaluate((selector) => {
           const row = document.querySelector<HTMLElement>(selector);
           const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
-          const meta = row?.querySelector<HTMLElement>("[data-mobile2-row-meta]");
+          const meta = row?.querySelector<HTMLElement>("[data-pipeline-reason]");
           return {
             state: row?.dataset.mobile2State ?? null,
             text: text(row),
@@ -3764,7 +3776,8 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
         await phone.page.screenshot({ path: path.join(OUT, "issue-1938-390-board.png"), fullPage: true });
         frames["390"] = measured;
         if (measured.state !== "needs_review") failures.push(`390: the row's state is ${measured.state}`);
-        if (!measured.meta.includes(HEADS)) failures.push(`390: the row's meta omits the heads: ${JSON.stringify(measured.meta)}`);
+        const SHORT = translate("en", "pipelineBlock.reason.review", { current: "9b2e7d4c" });
+        if (!measured.meta.startsWith(SHORT)) failures.push(`390: the card's reason omits the unreviewed head: ${JSON.stringify(measured.meta)}`);
         if (!measured.text.includes(en["mobile2.pipelines.badgeReview"])) failures.push(`390: the row has no needs review badge: ${JSON.stringify(measured.text)}`);
         if (measured.overflows) failures.push("390: the row overflows its width");
         if (phone.pageErrors.length) failures.push(`390: page errors ${phone.pageErrors.join(" | ")}`);
@@ -3890,8 +3903,8 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
               await opened.page.waitForSelector(CARD, { state: "attached", timeout: 20_000 });
               await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
               await opened.page.waitForTimeout(500);
-              await clickAt(opened.page, `${CARD} .pchip[data-stage="design"]`);
-              await clickAt(opened.page, `${CARD} .pchip[data-stage="critique"]`);
+              await clickAt(opened.page, `${CARD} .pb-pill[data-stage="design"]`);
+              await clickAt(opened.page, `${CARD} .pb-pill[data-stage="critique"]`);
               /* Critique's first attempt opens from the card's Past attempts,
                  which the card keeps folded. */
               if (!(await opened.page.locator(`${CARD} details.history`).first().evaluate((element) => (element as HTMLDetailsElement).open))) {
@@ -4001,8 +4014,8 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
   const OUT = path.resolve(".artifacts/issue-1743");
   const EVIDENCE = path.resolve("evidence/issue-1743");
   const CARD = card("t-marks");
-  const LOOPED = '.stage-section[data-pipeline="p-marks"]';
-  const SPENT = '.stage-section[data-pipeline="p-marks-spent"]';
+  const LOOPED = '.pblock[data-pipeline="p-marks"]';
+  const SPENT = '.pblock[data-pipeline="p-marks-spent"]';
 
   interface NodeMeasure {
     stage: string;
@@ -4159,7 +4172,7 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
     const scope = document.querySelector(selector);
     if (!scope) return null;
     return {
-      chips: [...scope.querySelectorAll<HTMLElement>(".psummary .pchip")].map((chip) => ({
+      chips: [...scope.querySelectorAll<HTMLElement>(".pb-pills .pb-pill")].map((chip) => ({
         stage: chip.dataset.stage ?? "",
         engineMark: chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark") ?? null,
         effortStep: chip.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step") ?? null,
@@ -5187,697 +5200,11 @@ describe("#1819 putting the whole project sidebar away, and the header that stay
   }, 300_000);
 });
 
-describe("#1798 a fail edge is a return arc under the collapsed row", () => {
-  /*
-   * Rendered evidence for #1798, on the harness every kanban case uses: the real
-   * Viewer over `issue1695Evidence.fixture.tsx?scenario=issue1798`, with the
-   * production stylesheet, in Chromium.
-   *
-   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=$(which google-chrome-stable) \
-   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx
-   *
-   * One task carries the lanes the arc has to tell apart: a fail edge at rest,
-   * one that fired once and is carrying the work back right now, one whose
-   * budget is spent with the last return still in flight, one the spent budget
-   * already stopped, and a lane with two fail edges into the same stage. A
-   * sixth lane has four stages, the length a real lane usually has, and wraps
-   * in every column this board has — which is what puts the pill suffix, not
-   * the arc, on most of the rows an operator sees.
-   *
-   * What only a browser settles, and is gated here:
-   *   - the collapsed row holds stage pills and nothing else — the fail-edge
-   *     chip is gone from it, at every width;
-   *   - an arc is drawn entirely BELOW the line the pills sit on, so it crosses
-   *     no pill, and stays inside the card, so it touches no card edge;
-   *   - the row reserves the arcs' depth, so nothing the arc paints lands on the
-   *     line under the row — and a lane with no fail edge reserves nothing;
-   *   - at rest the arc prints no count and keeps the sentence in its title;
-   *     once fired it prints `n/max` and takes the warning colour; a spent
-   *     budget takes the danger colour, which is a different colour, not a
-   *     lighter one;
-   *   - two edges into one target hang at two different depths, their curves
-   *     never cross, and their two tips keep clear air between them;
-   *   - the sentence is reachable: every point sampled along a drawn arc, and
-   *     every point 4 px beside it, opens that arc's own explanation — at rest
-   *     the sentence is the only place the budget lives;
-   *   - a lane that parked on a spent edge does not say what a lane still
-   *     running says;
-   *   - the counter's halo is cut out of the ground the section paints, and is
-   *     wide enough to be air: 2 px of ground on both sides of the digits
-   *     against the thickest stroke any state draws, and no gap between two
-   *     digits that the halo cannot close from both sides;
-   *   - the dashes of a live arc travel towards its own arrowhead, and a solid
-   *     piece under them keeps the head met by ink at every phase;
-   *   - a lane whose edges all rest reserves no room for a counter it has not;
-   *   - a row that wrapped drops the arcs altogether and puts the same count on
-   *     the failing stage's own pill, only once the edge has fired, and marks a
-   *     return still in flight apart from one that is over.
-   *
-   * The phone (390 px) is recorded rather than gated: under 640 px the Viewer
-   * hands the whole board to the mobile shell, so the collapsed kanban row has
-   * no phone surface at all. The wrapped row is therefore a desktop rendering
-   * — and not only a narrow one: a four-stage lane wraps in a 1680 px board's
-   * columns too, so the suffix is gated at every width here and the arcs are
-   * what the short lanes draw.
-   *
-   * Measurements go to `evidence/issue-1798/arcs.json`; frames to
-   * `.artifacts/issue-1798/`, which is not committed.
-   */
-
-  const OUT = path.resolve(".artifacts/issue-1798");
-  const EVIDENCE = path.resolve("evidence/issue-1798");
-  const CARD = card("t-arcs");
-  /* The lanes with no fail edge at all: they must reserve no band. */
-  const PLAIN = "[data-kanban-board]";
-
-  interface ArcMeasure {
-    edge: string;
-    state: string | null;
-    live: string | null;
-    fired: string | null;
-    max: string | null;
-    /** The count drawn on the arc itself, when one is. */
-    count: string | null;
-    /** The sentence the arc kept, which is where the budget lives at rest. */
-    title: string;
-    stroke: string;
-    strokeWidth: string;
-    dash: string;
-    countFill: string;
-    /** The colour the counter's halo is cut out of: it has to be the ground the
-        section actually paints, or the count carries a blot of another colour. */
-    countHalo: string;
-    /** How wide that halo is cut. Half of it is the air on each side of the
-        digits, and the arc runs at the digits' own vertical middle, so a halo
-        no wider than the stroke leaves the count read as a line struck into
-        dirty digits. */
-    countHaloWidth: number;
-    /** The widest gap between two digits' INK, measured in the font the counter
-        actually draws with. The halo closes over a gap from both sides, so a
-        gap wider than the whole halo keeps a speck of the arc inside the
-        count. Null when the browser cannot report glyph ink. */
-    countInkGap: number | null;
-    /** The live arc's dashes move; these are its `stroke-dashoffset` sampled
-        with the animation paused at three points of one cycle. The curve is
-        drawn from the head backwards, so an offset that GROWS is a dash
-        travelling towards the arrowhead — which is where the work goes. */
-    flow: number[] | null;
-    /** The solid piece drawn over the head end of a live arc, so no phase of
-        the motion leaves the arrowhead standing off its own line. */
-    lead: { length: number; dash: string } | null;
-    /** The arrowhead's own box, so two heads on one pill can be told apart. */
-    head: { x: number; right: number } | null;
-    /** What a pointer aimed at the arc actually meets, over `samples` points
-        taken along the drawn curve. `answered` of them open SOME arc's
-        sentence, which is the whole point — a tooltip that opens only on 1.5 px
-        of dashes opens nowhere. `onPath` open this arc's own, and where two
-        nested arcs converge into their shared pill the shallower one answers
-        for both, so that number is a share rather than all of them. `offPath`
-        and `offAnswered` are the same two readings 4 px off the curve, and
-        `ownsHead` is whether the arc answers at its own arrowhead, and
-        `clearsPills` whether the stroke stays out of the pill the arc leaves —
-        a hit target that reaches back up into a pill takes the last pixels of
-        a control the operator is aiming at. */
-    hit: { strokeWidth: string; samples: number; answered: number; onPath: number; offAnswered: number; offPath: number; ownsHead: boolean; clearsPills: boolean };
-    /** The arc's painted box, relative to the row's own box. */
-    box: { x: number; y: number; right: number; bottom: number } | null;
-    /** Pixels by which the arc reaches ABOVE the pills' bottom edge: anything
-        over zero is an arc drawn into the row of pills. */
-    intoPills: number;
-    /** Pixels by which the arc paints outside the card's content box. */
-    pastCard: number;
-    /** Pixels by which the arc paints below the row's own box — onto whatever
-        the card draws under it. */
-    pastRow: number;
-  }
-
-  interface RowMeasure {
-    pipeline: string;
-    /** `arcs` on a one-line row, `suffix` on a wrapped one, absent with no edge. */
-    mode: string | null;
-    chips: string[];
-    /** Fail-edge chips still in the row of steps. There must be none. */
-    loopChips: number;
-    columnWidth: number;
-    rowWidth: number;
-    rowHeight: number;
-    /** The bottom of the line the pills sit on, relative to the row. */
-    pillsBottom: number;
-    /** The height the row reserved under the pills for the arcs. */
-    band: number;
-    /** Reserved room under the deepest arc's ink: a lane whose edges all rest
-        has no counter to put there, so it should be near zero. */
-    deadBelowArcs: number;
-    /** The ground the section paints, which the counter's halo has to match. */
-    sectionSurface: string;
-    /** Every pair of arcs in this row: do the curves cross, how close do they
-        come, and how much clear air is between their two arrowheads. */
-    pairs: Array<{ a: string; b: string; crosses: boolean; minGap: number; headGap: number }>;
-    arcs: ArcMeasure[];
-    /** The wrapped row's stand-in for the arcs, on the failing stage's own
-        pill. `live` and `ground` are how a return still in flight is told
-        apart from one that is over on the surface that has no arc to make
-        live — and a four-stage lane wraps in every column the board has, so
-        this is the rendering most lanes get. */
-    suffixes: Array<{ edge: string; state: string | null; live: string | null; text: string; title: string; colour: string; ground: string }>;
-    /** The gap between the row's bottom and the next thing the card draws. */
-    gapBelow: number;
-  }
-
-  const readRows = (page: Page, scopeSelector: string) => page.evaluate((selector): RowMeasure[] => {
-    const scope = document.querySelector(selector);
-    if (!scope) return [];
-    return [...scope.querySelectorAll<HTMLElement>(".stage-section")].map((section) => {
-      const row = section.querySelector<HTMLElement>(".psummary");
-      const cardBox = section.closest<HTMLElement>(".card")!.getBoundingClientRect();
-      const column = section.closest<HTMLElement>(".column") ?? section.closest<HTMLElement>(".card")!;
-      if (!row) {
-        return {
-          pipeline: section.dataset.pipeline ?? "", mode: null, chips: [], loopChips: 0,
-          columnWidth: Math.round(column.getBoundingClientRect().width), rowWidth: 0, rowHeight: 0,
-          pillsBottom: 0, band: 0, deadBelowArcs: 0, sectionSurface: getComputedStyle(section).backgroundColor,
-          pairs: [], arcs: [], suffixes: [], gapBelow: 0,
-        };
-      }
-      const rowBox = row.getBoundingClientRect();
-      const pills = [...row.querySelectorAll<HTMLElement>(".pchip")].map((pill) => pill.getBoundingClientRect());
-      const pillsBottom = pills.length ? Math.max(...pills.map((pill) => pill.bottom)) - rowBox.top : 0;
-      /* The `.psummary` is alone inside its slot, so what follows the row is
-         what follows the slot — and failing that, the section's own bottom. */
-      const slot = row.closest<HTMLElement>(".graph-slot") ?? row;
-      const next = (slot.nextElementSibling ?? section.nextElementSibling)?.getBoundingClientRect()
-        ?? { top: section.getBoundingClientRect().bottom };
-      const round = (value: number) => Math.round(value * 100) / 100;
-      /* A curve in client pixels, sampled along its own length: the one way to
-         ask whether two arcs meet, and where a pointer aimed at one lands. */
-      const trace = (path: SVGPathElement) => {
-        const matrix = path.getScreenCTM();
-        const total = path.getTotalLength();
-        const points: Array<{ x: number; y: number }> = [];
-        for (let step = 0; step <= 32; step += 1) {
-          const at = path.getPointAtLength((total * step) / 32);
-          const screen = matrix ? new DOMPoint(at.x, at.y).matrixTransform(matrix) : at;
-          points.push({ x: screen.x, y: screen.y });
-        }
-        return points;
-      };
-      const traces = new Map<string, Array<{ x: number; y: number }>>();
-      const arcs = [...row.querySelectorAll<SVGGElement>("[data-loop-arc]")].map((group): ArcMeasure => {
-        const path = group.querySelector<SVGPathElement>(".parc");
-        const head = group.querySelector<SVGPolygonElement>(".parc-head");
-        const count = group.querySelector<SVGTextElement>(".parc-count");
-        /* The painted ink of the whole arc: the curve, its arrowhead and, when
-           it has one, its counter. */
-        const parts = [path, head, count].filter(Boolean).map((part) => part!.getBoundingClientRect());
-        const box = parts.length
-          ? {
-            x: round(Math.min(...parts.map((part) => part.left)) - rowBox.left),
-            y: round(Math.min(...parts.map((part) => part.top)) - rowBox.top),
-            right: round(Math.max(...parts.map((part) => part.right)) - rowBox.left),
-            bottom: round(Math.max(...parts.map((part) => part.bottom)) - rowBox.top),
-          }
-          : null;
-        /* Where a pointer aimed at the drawing actually lands. The sentence is
-           the only home of the budget at rest, so an arc nothing can be aimed
-           at explains nothing. */
-        const owner = (x: number, y: number) =>
-          (document.elementFromPoint(x, y) as Element | null)?.closest<SVGElement>("[data-arc-hit]")?.dataset.arcHit ?? null;
-        const mine = (x: number, y: number) => owner(x, y) === group.dataset.loopArc;
-        const samples = path ? trace(path) : [];
-        if (path) traces.set(group.dataset.loopArc ?? "", samples);
-        const inside = samples.filter((point) => point.x >= 0 && point.y >= 0 && point.x < innerWidth && point.y < innerHeight);
-        const hitPath = group.querySelector<SVGPathElement>(".parc-hit");
-        const style = path ? getComputedStyle(path) : null;
-        const countStyle = count ? getComputedStyle(count) : null;
-        /* The digits' own ink, in the font the counter draws with: the halo
-           dilates each glyph outline by half its width, so a gap between two
-           digits wider than the halo reaches from both sides keeps a speck of
-           the arc in it. Canvas is the one place a glyph's ink box can be
-           asked for; a browser that does not answer reports nothing rather
-           than a number nobody measured. */
-        const inkGap = (() => {
-          const text = count?.textContent ?? "";
-          const context = text.length > 1 ? document.createElement("canvas").getContext("2d") : null;
-          if (!context || !countStyle) return null;
-          context.font = `${countStyle.fontWeight} ${countStyle.fontSize} ${countStyle.fontFamily}`;
-          if (!Number.isFinite(context.measureText("1").actualBoundingBoxRight)) return null;
-          let widest = 0;
-          for (let index = 1; index < text.length; index += 1) {
-            const run = context.measureText(text.slice(0, index));
-            const next = context.measureText(text[index]!);
-            widest = Math.max(widest, (run.width - next.actualBoundingBoxLeft) - run.actualBoundingBoxRight);
-          }
-          return round(widest);
-        })();
-        /* Where the dashes of a live arc are going. The animation is paused at
-           three points of one cycle and its offset read off the same element
-           the eye watches; the curve starts at the arrowhead, so an offset
-           that grows is ink travelling towards the head. The motion is put
-           back as it was, so nothing after this reads a stopped board. */
-        const flow = (() => {
-          if (!path || group.dataset.arcLive !== "1") return null;
-          const animations = path.getAnimations();
-          if (!animations.length) return null;
-          const samples = [0, 175, 350].map((at) => {
-            for (const animation of animations) { animation.pause(); animation.currentTime = at; }
-            return round(Number.parseFloat(getComputedStyle(path).strokeDashoffset) || 0);
-          });
-          for (const animation of animations) animation.play();
-          return samples;
-        })();
-        const leadPath = group.querySelector<SVGPathElement>(".parc-lead");
-        /* A stroke is painted half outside the geometry the box reports, so the
-           half-width is added on every side before anything is called a clash. */
-        const half = style ? Number.parseFloat(style.strokeWidth) / 2 || 0 : 0;
-        const absolute = parts.length
-          ? { top: Math.min(...parts.map((part) => part.top)) - half, left: Math.min(...parts.map((part) => part.left)) - half, right: Math.max(...parts.map((part) => part.right)) + half, bottom: Math.max(...parts.map((part) => part.bottom)) + half }
-          : null;
-        return {
-          edge: group.dataset.loopArc ?? "",
-          state: group.dataset.arcState ?? null,
-          live: group.dataset.arcLive ?? null,
-          fired: group.dataset.arcFired ?? null,
-          max: group.dataset.arcMax ?? null,
-          count: count?.textContent?.trim() ?? null,
-          title: group.querySelector("title")?.textContent ?? "",
-          stroke: style?.stroke ?? "",
-          strokeWidth: style?.strokeWidth ?? "",
-          dash: style?.strokeDasharray ?? "",
-          countFill: countStyle?.fill ?? "",
-          countHalo: countStyle?.stroke ?? "",
-          countHaloWidth: countStyle ? round(Number.parseFloat(countStyle.strokeWidth) || 0) : 0,
-          countInkGap: inkGap,
-          flow,
-          lead: leadPath ? { length: round(leadPath.getTotalLength()), dash: getComputedStyle(leadPath).strokeDasharray } : null,
-          head: head ? { x: round(head.getBoundingClientRect().left - rowBox.left), right: round(head.getBoundingClientRect().right - rowBox.left) } : null,
-          hit: {
-            strokeWidth: hitPath ? getComputedStyle(hitPath).strokeWidth : "",
-            samples: inside.length,
-            answered: inside.filter((point) => owner(point.x, point.y) !== null).length,
-            onPath: inside.filter((point) => mine(point.x, point.y)).length,
-            offAnswered: inside.filter((point) => owner(point.x, point.y + 4) !== null).length,
-            offPath: inside.filter((point) => mine(point.x, point.y + 4)).length,
-            /* The curve is drawn from its arrowhead back to the failing pill. */
-            ownsHead: samples.length ? mine(samples[0]!.x, samples[0]!.y) : false,
-            /* One pixel inside the bottom of the pill the arc leaves. */
-            clearsPills: samples.length
-              ? owner(samples[samples.length - 1]!.x, rowBox.top + pillsBottom - 1) === null
-              : true,
-          },
-          box,
-          intoPills: absolute ? round(Math.max(0, (rowBox.top + pillsBottom) - absolute.top)) : 0,
-          pastCard: absolute ? round(Math.max(0, cardBox.left - absolute.left, absolute.right - cardBox.right)) : 0,
-          pastRow: absolute ? round(Math.max(0, absolute.bottom - rowBox.bottom)) : 0,
-        };
-      });
-      /* Two arcs into one pill have to nest. They cross when the sign of the
-         vertical distance between them flips anywhere over the stretch of x
-         they share — which is exactly what the reader sees as a tangle. */
-      const pairs: RowMeasure["pairs"] = [];
-      const traced = [...traces.entries()];
-      for (let i = 0; i < traced.length; i += 1) {
-        for (let j = i + 1; j < traced.length; j += 1) {
-          const [aId, a] = traced[i]!;
-          const [bId, b] = traced[j]!;
-          const yAt = (points: Array<{ x: number; y: number }>, x: number) => {
-            const sorted = [...points].sort((one, two) => one.x - two.x);
-            if (x < sorted[0]!.x || x > sorted[sorted.length - 1]!.x) return null;
-            for (let k = 1; k < sorted.length; k += 1) {
-              if (sorted[k]!.x >= x) {
-                const span = sorted[k]!.x - sorted[k - 1]!.x;
-                const ratio = span ? (x - sorted[k - 1]!.x) / span : 0;
-                return sorted[k - 1]!.y + ratio * (sorted[k]!.y - sorted[k - 1]!.y);
-              }
-            }
-            return sorted[sorted.length - 1]!.y;
-          };
-          const shared = a.map((point) => point.x).concat(b.map((point) => point.x))
-            .filter((x) => yAt(a, x) !== null && yAt(b, x) !== null);
-          const gaps = shared.map((x) => yAt(a, x)! - yAt(b, x)!);
-          const headA = arcs.find((arc) => arc.edge === aId)?.head ?? null;
-          const headB = arcs.find((arc) => arc.edge === bId)?.head ?? null;
-          pairs.push({
-            a: aId,
-            b: bId,
-            crosses: gaps.some((gap) => gap > 0.5) && gaps.some((gap) => gap < -0.5),
-            minGap: gaps.length ? round(Math.min(...gaps.map((gap) => Math.abs(gap)))) : 0,
-            headGap: headA && headB ? round(Math.max(headA.x, headB.x) - Math.min(headA.right, headB.right)) : 0,
-          });
-        }
-      }
-      const inkBottom = arcs.reduce((deepest, arc) => Math.max(deepest, arc.box?.bottom ?? 0), 0);
-      return {
-        pipeline: section.dataset.pipeline ?? "",
-        mode: row.dataset.arcs ?? null,
-        chips: [...row.querySelectorAll<HTMLElement>(".pchip")].map((pill) => pill.dataset.stage ?? ""),
-        loopChips: row.querySelectorAll(".ploop").length,
-        columnWidth: Math.round(column.getBoundingClientRect().width),
-        rowWidth: round(rowBox.width),
-        rowHeight: round(rowBox.height),
-        pillsBottom: round(pillsBottom),
-        band: round(rowBox.height - pillsBottom),
-        deadBelowArcs: inkBottom ? round(rowBox.height - inkBottom) : 0,
-        sectionSurface: getComputedStyle(section).backgroundColor,
-        pairs,
-        arcs,
-        suffixes: [...row.querySelectorAll<HTMLElement>(".pret")].map((mark) => ({
-          edge: mark.dataset.stageReturn ?? "",
-          state: mark.dataset.arcState ?? null,
-          live: mark.dataset.arcLive ?? null,
-          text: mark.textContent?.trim() ?? "",
-          title: mark.getAttribute("title") ?? "",
-          colour: getComputedStyle(mark).color,
-          ground: getComputedStyle(mark).backgroundColor,
-        })),
-        gapBelow: round(next.top - rowBox.bottom),
-      };
-    });
-  }, scopeSelector);
-
-  browserTest("#1798: the fail-edge chip is gone, the arc hangs under the pills, and a wrapped row carries the count on the pill", async () => {
-    fs.mkdirSync(OUT, { recursive: true });
-    fs.mkdirSync(EVIDENCE, { recursive: true });
-    const server = await serveEvidenceFixture(OUT);
-    const base = `${server.base}?scenario=issue1798`;
-    const browser: Browser = await chromium.launch(LAUNCH);
-    const failures: string[] = [];
-    const frames: Record<string, unknown> = {};
-
-    /* The thickest stroke any state of an arc draws: the live one with motion
-       switched off, which is the rendering the halo has the least room against. */
-    const ARC_INK = 3;
-
-    const check = (label: string, rows: RowMeasure[], plain: RowMeasure[]) => {
-      const by = (id: string) => rows.find((row) => row.pipeline === id);
-      if (rows.length !== 6) {
-        failures.push(`${label}: the card drew ${rows.length} pipeline rows`);
-        return;
-      }
-      for (const row of rows) {
-        /* The point of the issue: the row of steps holds steps only. */
-        if (row.loopChips) failures.push(`${label}: ${row.pipeline} still draws ${row.loopChips} fail-edge chip(s) in the row`);
-        if (!row.chips.length) failures.push(`${label}: ${row.pipeline} drew no stage pill`);
-        for (const arc of row.arcs) {
-          if (arc.intoPills > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.intoPills} px into the row of pills`);
-          if (arc.pastCard > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.pastCard} px outside the card`);
-          if (arc.pastRow > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.pastRow} px below the row, onto the line under it`);
-          if (!arc.title || arc.title.length < 12) failures.push(`${label}: ${row.pipeline} ${arc.edge} carries no sentence (${JSON.stringify(arc.title)})`);
-          /* The sentence is the only home of the budget at rest, so the arc has
-             to be something a pointer can be aimed at: every point ON the drawn
-             curve opens it, and so does a point beside it. */
-          if (arc.hit.samples < 8) {
-            failures.push(`${label}: ${row.pipeline} ${arc.edge} put only ${arc.hit.samples} sample(s) on screen`);
-          } else {
-            /* Nothing drawn is dead: every point of the curve, and every point
-               beside it, opens an explanation. */
-            if (arc.hit.answered < arc.hit.samples) failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves ${arc.hit.samples - arc.hit.answered} of ${arc.hit.samples} points on the drawn arc explaining nothing`);
-            if (arc.hit.offAnswered < arc.hit.samples - 1) failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves ${arc.hit.samples - arc.hit.offAnswered} of ${arc.hit.samples} points beside the arc explaining nothing`);
-            /* And an arrow you can see is an arrow you can ask about: it owns
-               its own head and the clear majority of its own length. Where two
-               nested arcs converge into one pill the shallower one answers for
-               both, which is the only reading a reader could have given them. */
-            if (!arc.hit.ownsHead) failures.push(`${label}: ${row.pipeline} ${arc.edge} does not answer at its own arrowhead`);
-            if (!arc.hit.clearsPills) failures.push(`${label}: ${row.pipeline} ${arc.edge} reaches back up into the pill it leaves`);
-            if (arc.hit.onPath * 3 < arc.hit.samples * 2) failures.push(`${label}: ${row.pipeline} ${arc.edge} answers for only ${arc.hit.onPath} of its own ${arc.hit.samples} points`);
-          }
-          /* The halo is cut out of the ground the section paints, or every
-             count carries a blot of the card's colour on a tinted row. */
-          if (arc.count && arc.countHalo !== row.sectionSurface) {
-            failures.push(`${label}: ${row.pipeline} ${arc.edge} halos its count with ${arc.countHalo} over a ${row.sectionSurface} ground`);
-          }
-          /* And it is wide enough to BE air. The counter sits on the arc, at
-             the digits' own vertical middle, so a halo that only reaches the
-             edge of the first and last digit leaves the arc drawn through the
-             count: 2 px of ground on both sides of the digits is the target,
-             against the thickest stroke any state of the arc draws. */
-          if (arc.count && (arc.countHaloWidth - ARC_INK) / 2 < 2) {
-            failures.push(`${label}: ${row.pipeline} ${arc.edge} halos its count ${arc.countHaloWidth} px wide, which leaves ${(arc.countHaloWidth - ARC_INK) / 2} px of air beside the digits`);
-          }
-          /* The halo closes over a gap between two digits from both sides. A
-             gap wider than the whole halo keeps a speck of arc inside the
-             count, which is what blinks as the dashes pass. */
-          if (arc.count && arc.countInkGap !== null && arc.countInkGap > arc.countHaloWidth) {
-            failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves a ${arc.countInkGap} px gap between digits that a ${arc.countHaloWidth} px halo cannot close`);
-          }
-          /* A live arc says where the work goes twice: with its arrowhead, and
-             with the way its dashes move. They have to say the same thing. The
-             curve runs from the head backwards, so the offset has to GROW. */
-          if (arc.live === "1" && arc.flow) {
-            const [start, middle, end] = arc.flow;
-            if (!(start! < middle! && middle! < end!)) {
-              failures.push(`${label}: ${row.pipeline} ${arc.edge} runs its dashes ${JSON.stringify(arc.flow)}, away from its own arrowhead`);
-            }
-          }
-          /* And the head is met by ink at every phase of that motion: the first
-             px of the curve are drawn solid under the dashes. */
-          if (arc.live === "1" && arc.dash !== "none") {
-            if (!arc.lead) failures.push(`${label}: ${row.pipeline} ${arc.edge} moves dashes over its arrowhead with nothing solid under it`);
-            else if (arc.lead.dash !== "none" || arc.lead.length < 5) {
-              failures.push(`${label}: ${row.pipeline} ${arc.edge} draws a ${arc.lead.length} px lead dashed ${arc.lead.dash}, which cannot hold the head`);
-            }
-          }
-        }
-        /* Two arcs into one pill nest; they never tangle and their tips never
-           touch — that is the point at which a reader stops being able to say
-           which count belongs to which arrow. */
-        for (const pair of row.pairs) {
-          if (pair.crosses) failures.push(`${label}: ${row.pipeline} ${pair.a} and ${pair.b} cross each other`);
-          if (pair.headGap < 1) failures.push(`${label}: ${row.pipeline} the tips of ${pair.a} and ${pair.b} are ${pair.headGap} px apart`);
-        }
-        /* Room for a counter is reserved only where a counter goes. */
-        if (row.arcs.length && row.arcs.every((arc) => !arc.count) && row.deadBelowArcs > 4) {
-          failures.push(`${label}: ${row.pipeline} rests and still reserves ${row.deadBelowArcs} px of empty band under its arc`);
-        }
-        if (row.mode === "arcs" && !row.arcs.length) failures.push(`${label}: ${row.pipeline} says it draws arcs and drew none`);
-        /* The band exists only for the arcs: a wrapped row reserves nothing. */
-        if (row.mode === "suffix" && row.band > 1) failures.push(`${label}: ${row.pipeline} wrapped to suffixes and still reserves ${row.band} px`);
-        if (row.mode === "suffix" && row.arcs.length) failures.push(`${label}: ${row.pipeline} wrapped and still drew ${row.arcs.length} arc(s)`);
-        /* Whatever the mode, a fired edge says its count somewhere in the row. */
-        const marks = [...row.arcs.map((arc) => [arc.state, arc.count] as const), ...row.suffixes.map((mark) => [mark.state, mark.text] as const)];
-        for (const [state, text] of marks) {
-          if (state === "rest" && text) failures.push(`${label}: ${row.pipeline} prints ${JSON.stringify(text)} for an edge that never fired`);
-          if (state !== "rest" && !text) failures.push(`${label}: ${row.pipeline} prints nothing for an edge in state ${state}`);
-        }
-      }
-      /* A lane with no fail edge reserves no band and draws no layer. */
-      const edgeless = plain.filter((row) => row.mode === null && row.chips.length);
-      if (!edgeless.length) failures.push(`${label}: the board drew no lane without a fail edge to compare against`);
-      for (const row of edgeless) {
-        if (row.band > 1) failures.push(`${label}: ${row.pipeline} has no fail edge and still reserves ${row.band} px under its row`);
-      }
-
-      const rest = by("p-arc-rest")!;
-      const fired = by("p-arc-fired")!;
-      const spent = by("p-arc-spent")!;
-      const parked = by("p-arc-parked")!;
-      const two = by("p-arc-two")!;
-      const edgeOf = (row: RowMeasure, edge: string) => row.arcs.find((arc) => arc.edge === edge) ?? null;
-      const markOf = (row: RowMeasure, edge: string) => row.suffixes.find((mark) => mark.edge === edge) ?? null;
-
-      /* At rest: no number anywhere in the row, and the budget in the title. */
-      const restEdge = edgeOf(rest, "review:fail:fix");
-      if (rest.mode === "arcs") {
-        if (restEdge?.state !== "rest") failures.push(`${label}: the untouched edge reads ${JSON.stringify(restEdge?.state)}`);
-        if (restEdge?.count) failures.push(`${label}: the untouched edge prints ${JSON.stringify(restEdge.count)}`);
-        if (!/3/.test(restEdge?.title ?? "")) failures.push(`${label}: the untouched edge's title does not carry its budget (${JSON.stringify(restEdge?.title)})`);
-      } else if (rest.suffixes.length) {
-        failures.push(`${label}: the wrapped lane at rest still marks a pill ${JSON.stringify(rest.suffixes)}`);
-      }
-
-      /* Fired once of three, with the returned stage running because of it. */
-      const firedEdge = edgeOf(fired, "review:fail:fix");
-      const firedMark = markOf(fired, "review:fail:fix");
-      if (fired.mode === "arcs") {
-        if (firedEdge?.state !== "fired") failures.push(`${label}: the edge that fired once reads ${JSON.stringify(firedEdge?.state)}`);
-        if (firedEdge?.count !== "1/3") failures.push(`${label}: the edge that fired once counts ${JSON.stringify(firedEdge?.count)}`);
-        if (firedEdge?.live !== "1") failures.push(`${label}: the edge carrying the running work is not the live one`);
-      } else if (!/1.*3/.test(firedMark?.text ?? "")) {
-        failures.push(`${label}: the wrapped fired lane marks its pill ${JSON.stringify(firedMark?.text)}`);
-      }
-
-      /* A spent budget: a different colour, never a lighter version of the same. */
-      const spentEdge = edgeOf(spent, "review:fail:fix");
-      const spentMark = markOf(spent, "review:fail:fix");
-      if (spent.mode === "arcs") {
-        if (spentEdge?.state !== "exhausted") failures.push(`${label}: the spent edge reads ${JSON.stringify(spentEdge?.state)}`);
-        if (spentEdge?.count !== "2/2") failures.push(`${label}: the spent edge counts ${JSON.stringify(spentEdge?.count)}`);
-        if (firedEdge && spentEdge && firedEdge.stroke === spentEdge.stroke) {
-          failures.push(`${label}: the spent arc is painted the same colour as the live one (${spentEdge.stroke})`);
-        }
-        /* Exhaustion is never the lighter drawing: the spent arc carries at
-           least the ink of the untouched one. The live arc is not the subject
-           — liveness has its own width wherever it appears. */
-        if (restEdge && spentEdge && Number.parseFloat(spentEdge.strokeWidth) < Number.parseFloat(restEdge.strokeWidth) - 0.01) {
-          failures.push(`${label}: the spent arc is thinner than the untouched one`);
-        }
-        if (restEdge && spentEdge && restEdge.stroke === spentEdge.stroke) {
-          failures.push(`${label}: the spent arc is painted the colour of an untouched one (${spentEdge.stroke})`);
-        }
-      } else if (spentMark?.state !== "exhausted") {
-        failures.push(`${label}: the wrapped spent lane marks its pill ${JSON.stringify(spentMark)}`);
-      }
-
-      /* A lane the spent budget already stopped: the same red arc, and a
-         sentence about what happened rather than about a failure that can no
-         longer happen. */
-      const parkedEdge = edgeOf(parked, "review:fail:fix");
-      const parkedMark = markOf(parked, "review:fail:fix");
-      if (parked.mode === "arcs") {
-        if (parkedEdge?.state !== "exhausted") failures.push(`${label}: the parked lane's edge reads ${JSON.stringify(parkedEdge?.state)}`);
-        if (parkedEdge && spentEdge && parkedEdge.title === spentEdge.title) {
-          failures.push(`${label}: a lane that parked on the edge says what a lane still running says (${JSON.stringify(parkedEdge.title)})`);
-        }
-      } else if (parkedMark?.state !== "exhausted") {
-        failures.push(`${label}: the wrapped parked lane marks its pill ${JSON.stringify(parkedMark)}`);
-      }
-
-      /* Two edges into one target: two arcs, two depths, no meeting. */
-      if (two.mode === "arcs") {
-        if (two.arcs.length !== 2) failures.push(`${label}: the two-edge lane drew ${two.arcs.length} arc(s)`);
-        const [first, second] = [...two.arcs].sort((a, b) => (a.box?.bottom ?? 0) - (b.box?.bottom ?? 0));
-        if (first?.box && second?.box) {
-          /* Both arcs end on the same pill — that IS the shape. What has to
-             differ is how deep each hangs and where each head lands, or the
-             two read as one arrow. */
-          if (second.box.bottom - first.box.bottom < 4) {
-            failures.push(`${label}: the two arcs hang at the same depth (${first.box.bottom} and ${second.box.bottom})`);
-          }
-          if (Math.abs(first.box.x - second.box.x) < 3) {
-            failures.push(`${label}: the two arrowheads land on the same point (${first.box.x} and ${second.box.x})`);
-          }
-        }
-        if (two.arcs.some((arc) => arc.count === null)) {
-          failures.push(`${label}: an edge of the two-edge lane prints no count ${JSON.stringify(two.arcs.map((arc) => [arc.edge, arc.count]))}`);
-        }
-      } else if (two.suffixes.length !== 2) {
-        failures.push(`${label}: the wrapped two-edge lane marks ${two.suffixes.length} pill(s)`);
-      }
-
-      /* The four-stage lane: the length a real lane usually has. It wraps in
-         every column this board has, which makes the suffix the ORDINARY
-         rendering rather than a narrow-column fallback, so the wide frames
-         have to show it and it has to carry every reading the arc carries. */
-      const long = by("p-arc-long")!;
-      const longMark = markOf(long, "verify:fail:implement");
-      if (long.mode !== "suffix") {
-        failures.push(`${label}: the four-stage lane reads ${JSON.stringify(long.mode)}; the suffix is what a row of that length draws`);
-      } else {
-        if (long.arcs.length) failures.push(`${label}: the four-stage lane wrapped and still drew ${long.arcs.length} arc(s)`);
-        if (longMark?.state !== "fired") failures.push(`${label}: the four-stage lane's mark reads ${JSON.stringify(longMark?.state)}`);
-        if (!/1.*3/.test(longMark?.text ?? "")) failures.push(`${label}: the four-stage lane marks its pill ${JSON.stringify(longMark?.text)}`);
-        /* A return in flight is not a return that is over. With no arc to make
-           live, the mark itself has to carry it. */
-        if (longMark?.live !== "1") failures.push(`${label}: the four-stage lane's return is in flight and its mark says ${JSON.stringify(longMark?.live)}`);
-        const settled = [parked, spent, fired, rest].flatMap((row) => row.suffixes).find((mark) => mark.live === "0");
-        if (settled && longMark && settled.ground === longMark.ground && settled.colour === longMark.colour) {
-          failures.push(`${label}: a return in flight is drawn exactly like one that is over (${longMark.colour} on ${longMark.ground})`);
-        }
-      }
-    };
-
-    const desktop = async (width: number, height: number, scheme: Scheme, lang: "en" | "uk", motion: "no-preference" | "reduce" = "no-preference") => {
-      const label = `${width}-${lang}-${scheme}${motion === "reduce" ? "-still" : ""}`;
-      const opened = await openFixture(browser, base, { width, height }, scheme, lang, motion);
-      try {
-        await opened.page.waitForSelector(CARD, { state: "attached", timeout: 20_000 });
-        await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
-        await opened.page.waitForTimeout(500);
-        const rows = await readRows(opened.page, CARD);
-        const plain = await readRows(opened.page, PLAIN);
-        await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `card-${label}.png`) });
-        await opened.page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
-        /* One label also keeps the live arc still at three points of a cycle.
-           Which way the dashes go, and whether the arrowhead is left standing
-           off its own line while they go there, are questions about a moving
-           drawing: a single frame of it answers neither. */
-        if (label === "1680-en-light") {
-          for (const at of [0, 175, 350]) {
-            await opened.page.evaluate((ms) => {
-              for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = ms; }
-            }, at);
-            await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `phase-${at}.png`) });
-          }
-          await opened.page.evaluate(() => { for (const animation of document.getAnimations()) animation.play(); });
-        }
-        check(label, rows, plain);
-        frames[label] = { viewport: { width, height }, lang, scheme, motion, documentLang: await opened.page.evaluate(() => document.documentElement.lang), rows, plain };
-        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
-      } catch (error) {
-        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
-      } finally {
-        await opened.context.close();
-      }
-    };
-
-    /* The phone is recorded, not gated: the kanban board does not mount there. */
-    const phone = async (scheme: Scheme) => {
-      const label = `390-en-${scheme}`;
-      const opened = await openFixture(browser, base, { width: 390, height: 844 }, scheme, "en");
-      try {
-        await opened.page.waitForTimeout(800);
-        await opened.page.screenshot({ path: path.join(OUT, `phone-${label}.png`), fullPage: true });
-        frames[label] = {
-          viewport: { width: 390, height: 844 },
-          board: await opened.page.evaluate(() => (document.querySelector("[data-mobile2-board]") ? "mobile2" : document.querySelector("[data-kanban-board]") ? "kanban" : "none")),
-          collapsedRows: await opened.page.evaluate(() => document.querySelectorAll(".psummary").length),
-          arcLayers: await opened.page.evaluate(() => document.querySelectorAll("[data-arc-layer]").length),
-        };
-        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
-      } finally {
-        await opened.context.close();
-      }
-    };
-
-    try {
-      for (const scheme of ["light", "dark"] as const) {
-        for (const lang of ["en", "uk"] as const) {
-          /* A wide board and the scroller, where the short rows are one line
-             and their arcs are drawn while the four-stage lane already wraps;
-             then 640 px, the narrowest desktop the board supports, where the
-             three-stage rows wrap too and hand their count to the failing pill
-             while the two-stage ones keep their arcs. */
-          /* Tall enough that the whole card is inside the frame at every
-             width: the arcs are read off the drawing, and a curve scrolled
-             past the bottom of the window is a curve nothing can be asked
-             about. */
-          await desktop(1680, 1150, scheme, lang);
-          await desktop(1280, 1250, scheme, lang);
-          /* Motion off is the arc's second rendering, and the one the counter's
-             halo has the least room against: the live arc is a solid 3 px line
-             there rather than dashes with gaps in it. */
-          if (lang === "en") await desktop(1440, 1250, scheme, lang, "reduce");
-          /* Tall enough that the whole card fits one frame: the wrapped row's
-             pill suffix is the only drawing of the edge there, and a frame
-             that clips it away shows nothing of what it replaced. */
-          await desktop(640, 1240, scheme, lang);
-        }
-        await phone(scheme);
-      }
-    } finally {
-      await browser.close();
-      server.stop();
-    }
-
-    /* Both modes have to appear across the widths, or the evidence only shows
-       half the design — and the suffix has to appear at a WIDE one, because
-       that is where it is the ordinary rendering rather than the fallback. */
-    const modesOf = (frame: unknown) => ((frame as { rows?: RowMeasure[] }).rows ?? []).map((row) => row.mode);
-    const modes = new Set(Object.values(frames).flatMap(modesOf));
-    for (const wanted of ["arcs", "suffix"]) {
-      if (!modes.has(wanted)) failures.push(`no width produced a row in ${wanted} mode; modes seen: ${[...modes].join(", ")}`);
-    }
-    const wide = Object.entries(frames).filter(([, frame]) => ((frame as { viewport?: { width: number } }).viewport?.width ?? 0) >= 1280);
-    if (!wide.some(([, frame]) => modesOf(frame).includes("suffix"))) {
-      failures.push("no wide frame drew a row in suffix mode, so the common case is not on record");
-    }
-    if (!wide.some(([, frame]) => modesOf(frame).includes("arcs"))) {
-      failures.push("no wide frame drew a row in arcs mode");
-    }
-
-    fs.writeFileSync(path.join(EVIDENCE, "arcs.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
-    if (failures.length) throw new Error(failures.join("\n"));
-  }, 900_000);
-});
+/* #1798's return arc under the collapsed row is gone from the card: variant B
+   (#2072) puts a fired fail edge on the failing pill as "↺1/2", and the arc is
+   drawn only by the graph. The rendered record of the arc stays in
+   `evidence/issue-1798/`; the suffix is gated by `PipelineBlock.dom.test.tsx`
+   and the "#2072 one pipeline block" case below. */
 
 describe("#1836 where the view was just taken", () => {
   /*
@@ -6924,7 +6251,7 @@ describe("#1972 stopped launches in the production task reader", () => {
       await page.waitForSelector(card("t-stopped"));
       await page.locator(card("t-stopped")).scrollIntoViewIfNeeded();
 
-      await page.locator(`${card("t-stopped")} [data-pipeline="p-closed"] .pchip[data-stage="build"]`).click();
+      await page.locator(`${card("t-stopped")} [data-pipeline="p-closed"] .pb-pill[data-stage="build"]`).click();
       const closed = page.locator('[data-reader-path="spawn:launch-closed"]');
       await closed.locator("[data-launch-dismiss]").waitFor({ state: "visible" });
       expect(await closed.locator("[data-launch-retry]").count()).toBe(0);
@@ -6937,7 +6264,7 @@ describe("#1972 stopped launches in the production task reader", () => {
       await page.waitForFunction(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string; path?: string }> } }).evidence.boardMutations
         .some((mutation) => mutation.kind === "close" && mutation.path === "spawn:launch-closed"));
       expect(await page.locator(`${card("t-stopped")} .tile[data-member="spawn:launch-closed"]`).count()).toBe(0);
-      await page.locator(`${card("t-stopped")} [data-pipeline="p-needs_decision"] .pchip[data-stage="build"]`).click();
+      await page.locator(`${card("t-stopped")} [data-pipeline="p-needs_decision"] .pb-pill[data-stage="build"]`).click();
       const parked = page.locator('[data-reader-path="spawn:launch-needs_decision"]');
       await parked.locator("[data-launch-retry]").waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(out, "parked-launch.png") });
@@ -7051,7 +6378,7 @@ describe("columns balanced on large screens, stage pills and heads on one line",
         narrowCards: cards.filter(card => card.getBoundingClientRect().width < inner - 1).map(card => ({ id: card.dataset.id, width: Math.round(card.getBoundingClientRect().width), inner: Math.round(inner) })),
       };
     });
-    const pills = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .psummary .pchip')].filter(pill => pill.getBoundingClientRect().width > 0).map(pill => {
+    const pills = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .pb-pills .pb-pill')].filter(pill => pill.getBoundingClientRect().width > 0).map(pill => {
       const name = pill.querySelector(".pname");
       const model = pill.querySelector(".imodel");
       const parts = [pill.querySelector(".pdot"), pill.querySelector(".pident > span:first-child"), model, pill.querySelector(".reasoning-slot")].filter(Boolean);
@@ -7071,8 +6398,8 @@ describe("columns balanced on large screens, stage pills and heads on one line",
         height: Math.round(r.height),
       };
     });
-    const heads = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .stage-section .sec-head')].filter(row => row.getBoundingClientRect().width > 0).map(row => {
-      const title = row.querySelector(".ptitle");
+    const heads = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .pblock .pb-head')].filter(row => row.getBoundingClientRect().width > 0).map(row => {
+      const title = row.querySelector(".pb-title");
       return { column: row.closest(".column").dataset.status, ellipsis: getComputedStyle(title).textOverflow, clipped: title.scrollWidth > title.clientWidth + 1, escapes: escapes(row.closest(".card"), 1) };
     });
     return {
@@ -7485,8 +6812,8 @@ describe("PR and issue chips on pipelines and task cards", () => {
     let chips = 0;
     for (const row of rows) {
       row.scrollIntoView({ block: "center" });
-      const scope = row.closest(".stage-section") || row.closest(".card") || row.closest("[data-mobile2-pipeline-body]")?.parentElement || document.body;
-      const title = row.closest(".stage-section")?.querySelector(".ptitle")
+      const scope = row.closest(".pblock") || row.closest(".card") || row.closest("[data-mobile2-pipeline-body]")?.parentElement || document.body;
+      const title = row.closest(".pblock")?.querySelector(".pb-title")
         || row.closest(".card")?.querySelector(".head .title")
         || document.querySelector("[data-mobile2-title-text]");
       const marks = [...row.querySelectorAll(".wl-chip, .wl-more, .wl-nopr")];
@@ -7559,8 +6886,9 @@ describe("PR and issue chips on pipelines and task cards", () => {
           await page.waitForSelector('[data-mobile2-go="pipeline"]', { state: "attached", timeout: 20_000 });
           await page.waitForTimeout(300);
           await page.screenshot({ path: path.join(pngDir, `phone-board-${label}.png`) });
-          const clause = await page.locator('[data-mobile2-go="pipeline"] [data-mobile2-row-meta]').first().textContent();
-          if (!/PR #2195/.test(clause ?? "")) failures.push(`${label}: the queue row does not name its PR: ${JSON.stringify(clause)}`);
+          /* The queue row is the pipeline card (#2072): its PR is passive text at the end of the chain line. */
+          const clause = await page.locator('[data-mobile2-go="pipeline"] [data-work-links-text]').first().textContent();
+          if (!/#2195/.test(clause ?? "")) failures.push(`${label}: the queue row does not name its PR: ${JSON.stringify(clause)}`);
           await page.locator('[data-mobile2-go="pipeline"]').first().evaluate((element) => (element as HTMLElement).click());
           await page.waitForSelector("[data-mobile2-links]", { state: "attached", timeout: 10_000 });
           await page.waitForTimeout(300);
@@ -7581,4 +6909,495 @@ describe("PR and issue chips on pipelines and task cards", () => {
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 600_000);
+});
+
+/* #2072 slice 3: one pipeline block for the desktop card and the phone,
+   variant B (docs/design/desktop-flat-cards.md §4, docs/design/phone-kanban.md
+   §3.13). Over the variant renders' own cards (`?scenario=pipeline-block`):
+   the lane rows on the desktop card at 1440 and 1080 px, and the pipeline
+   cards on the phone's Needs you rows and pipelines list at 390 px, in en and
+   uk. The gate is ink, not boxes (§5): the union of each text element's
+   client rects, cut by every ancestor that clips it, meets no other text's ink
+   and no control, no two controls meet, and no text of a block paints outside
+   its card.
+
+     CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+       bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "one pipeline block"
+
+   PNGs go to the directory named by `PIPELINE_BLOCK_PNG_DIR` (never
+   committed), with the variant renders' file names; the readings go to
+   `evidence/pipeline-block/geometry.json`. */
+describe("#2072 one pipeline block, desktop and phone", () => {
+  /* Two lanes of the pipeline-block scenario stand on a long-named stage. The
+     eight-stage one's 44 characters leave no room for "✓3" and "+4" beside it
+     in a 390 px card, so the card settles on the stage alone; the two-stage
+     one's 86 characters do not fit even alone, so the name wraps in its pill. */
+  const LONG_STAGES = {
+    "verify-backward-compatibility-and-migrations": { name: "Verify backward compatibility and migrations", wrap: false },
+    "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": { name: "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge", wrap: true },
+  } as const;
+  const measureBlocks = `(() => {
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const area = r => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+    const meets = (a, b) => area(intersect(a, b)) > 0.5;
+    const union = (a, b) => ({ top: Math.min(a.top, b.top), left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) });
+    /* A clipped label is not an escape: a Range's rects ignore overflow, so
+       each one is cut down by every ancestor that clips it first. */
+    const clipFrom = el => {
+      let clip = { top: -1e9, left: -1e9, right: 1e9, bottom: 1e9 };
+      for (let up = el; up; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, box(up));
+      }
+      return clip;
+    };
+    /* Each text element's ink: the union of its visible text rects. */
+    const inkOf = scope => {
+      const byElement = new Map();
+      const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const el = node.parentElement;
+        if (!el || getComputedStyle(el).visibility === "hidden") continue;
+        const clip = clipFrom(el);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) {
+          const rect = intersect(clip, { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom });
+          if (area(rect) <= 0.5) continue;
+          const entry = byElement.get(el);
+          byElement.set(el, entry ? { ...entry, rect: union(entry.rect, rect) } : { el, rect, text: (el.textContent || "").trim().slice(0, 48) });
+        }
+      }
+      return [...byElement.values()];
+    };
+    const controlsOf = scope => [...scope.querySelectorAll("button, a, [role=button]")]
+      .filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== "hidden")
+      .map(el => ({ el, rect: intersect(box(el), clipFrom(el.parentElement)), text: (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 48) }))
+      .filter(entry => area(entry.rect) > 0.5);
+    const nested = (a, b) => a.contains(b) || b.contains(a);
+    /* The ink above is what paints, so it cannot see a text that does not
+       paint at all. A card's chain (phone-kanban §3.13) cuts no name or count:
+       each text in a card-density block is seen where it is laid out — its
+       natural rects, clipped by nothing up to its card — and its own box does
+       not hide a sideways overflow behind an ellipsis. */
+    const clippedOf = (block, card) => {
+      const out = [];
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const el = node.parentElement;
+        if (!el || getComputedStyle(el).visibility === "hidden") continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rects = [...range.getClientRects()].filter(r => r.width * r.height > 0.5).map(r => ({ top: r.top, left: r.left, right: r.right, bottom: r.bottom }));
+        if (!rects.length) continue;
+        const natural = rects.reduce(union);
+        let clip = { top: -1e9, left: -1e9, right: 1e9, bottom: 1e9 };
+        for (let up = el; up; up = up.parentElement) {
+          const style = getComputedStyle(up);
+          if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, box(up));
+          if (up === card) break;
+        }
+        const visible = intersect(natural, clip);
+        const lost = Math.max(visible.left - natural.left, natural.right - visible.right, visible.top - natural.top, natural.bottom - visible.bottom);
+        const own = getComputedStyle(el);
+        const ellipsis = own.overflowX !== "visible" && el.scrollWidth > el.clientWidth + 1;
+        if (lost > 1 || ellipsis) out.push({ text: node.nodeValue.trim().slice(0, 48), natural: Math.round(natural.right - natural.left), visible: Math.round(Math.max(0, visible.right - visible.left)), lost: Math.round(lost), ellipsis });
+      }
+      return out;
+    };
+    /* A desktop lane row is its own scope; a phone card is the scope of the
+       block inside it, with its title and badge. */
+    const scopes = [...new Set([...document.querySelectorAll("[data-kanban-board] .card [data-pipeline], [data-mobile2-pipeline-row]")]
+      .filter(el => el.getClientRects().length)
+      .map(el => el.closest("[data-mobile2-pipeline-row]") || el))];
+    const overlaps = [], escapes = [], clipped = [], unsettled = [];
+    let texts = 0, controls = 0;
+    for (const scope of scopes) {
+      scope.scrollIntoView({ block: "center" });
+      const card = scope.closest(".card, [data-mobile2-pipeline-row]") || scope;
+      const frame = box(card);
+      const ink = inkOf(scope);
+      const hits = controlsOf(scope);
+      texts += ink.length; controls += hits.length;
+      const where = scope.getAttribute("data-pipeline") || scope.getAttribute("data-mobile2-pipeline-row");
+      for (const block of scope.querySelectorAll('.pblock[data-density="card"]')) {
+        for (const entry of clippedOf(block, card)) clipped.push({ where, ...entry });
+        /* Every fold the card settled on fits its box. */
+        for (const fold of block.querySelectorAll(".pb-pills.fold")) {
+          if (fold.scrollWidth > fold.clientWidth + 1) {
+            const line = fold.closest(".pb-line");
+            unsettled.push({ where, scrollWidth: fold.scrollWidth, clientWidth: fold.clientWidth, level: line?.getAttribute("data-fold-level"), alone: line?.getAttribute("data-alone"), wrap: line?.getAttribute("data-wrap") });
+          }
+        }
+      }
+      for (let i = 0; i < ink.length; i++) {
+        const a = ink[i];
+        if (a.rect.left < frame.left - 1 || a.rect.right > frame.right + 1 || a.rect.top < frame.top - 1 || a.rect.bottom > frame.bottom + 1) escapes.push({ where, text: a.text });
+        for (let j = i + 1; j < ink.length; j++) {
+          const b = ink[j];
+          if (!nested(a.el, b.el) && meets(a.rect, b.rect)) overlaps.push({ where, kind: "text/text", a: a.text, b: b.text });
+        }
+        for (const control of hits) {
+          if (!control.el.contains(a.el) && meets(a.rect, control.rect)) overlaps.push({ where, kind: "text/control", a: a.text, b: control.text });
+        }
+      }
+      for (let i = 0; i < hits.length; i++) for (let j = i + 1; j < hits.length; j++) {
+        if (!nested(hits[i].el, hits[j].el) && meets(hits[i].rect, hits[j].rect)) overlaps.push({ where, kind: "control/control", a: hits[i].text, b: hits[j].text });
+      }
+    }
+    const lanes = document.querySelectorAll('.pblock[data-density="task"]').length;
+    const cards = document.querySelectorAll('[data-mobile2-pipeline-row] .pblock[data-density="card"]').length;
+    /* Each long-named current stage, as its card drew it. */
+    const longStages = {};
+    for (const id of ${JSON.stringify(Object.keys(LONG_STAGES))}) {
+      const pill = document.querySelector('[data-mobile2-pipeline-row] .pblock[data-density="card"] .pb-pill[data-stage="' + id + '"]');
+      const line = pill && pill.closest(".pb-line");
+      longStages[id] = pill && line ? {
+        text: pill.querySelector(".pb-name")?.textContent ?? null,
+        level: line.getAttribute("data-fold-level"),
+        alone: line.getAttribute("data-alone") === "1",
+        wrap: line.getAttribute("data-wrap") === "1",
+        items: [...line.querySelectorAll(".pb-pills.fold .pb-pill")].map(item => item.textContent.trim()),
+        height: Math.round(pill.getBoundingClientRect().height),
+      } : null;
+    }
+    return { scopes: scopes.length, lanes, cards, texts, controls, overlaps, escapes, clipped, unsettled, longStages, scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth };
+  })()`;
+  type LongStage = { text: string | null; level: string | null; alone: boolean; wrap: boolean; items: string[]; height: number };
+  type Reading = {
+    scopes: number; lanes: number; cards: number; texts: number; controls: number; overlaps: unknown[]; escapes: unknown[];
+    clipped: unknown[]; unsettled: unknown[]; longStages: Record<string, LongStage | null>;
+    scrollWidth: number; innerWidth: number;
+  };
+  const CARDS = ["t-mobile", "t-review-spent", "t-many", "t-upload", "t-search", "t-export", "t-links", "t-limits", "t-attach"];
+
+  browserTest("no text of a pipeline block meets another's ink or a control, and no card cuts a name or count, at 390, 1080 and 1440 px, in en and uk", async () => {
+    const out = path.resolve(".artifacts/pipeline-block");
+    const pngDir = process.env.PIPELINE_BLOCK_PNG_DIR ?? "/var/tmp/llv-pipeline-block-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=pipeline-block`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, Reading> = {};
+    const failures: string[] = [];
+    const gate = (label: string, reading: Reading, need: { lanes?: number; cards?: number; longStages?: boolean }) => {
+      frames[label] = reading;
+      /* Nothing measured is no verdict: the block has to be on the page. */
+      if (need.lanes !== undefined && reading.lanes < need.lanes) failures.push(`${label}: ${reading.lanes} lane rows drawn, expected at least ${need.lanes}`);
+      if (need.cards !== undefined && reading.cards < need.cards) failures.push(`${label}: ${reading.cards} pipeline cards drawn, expected at least ${need.cards}`);
+      if (reading.overlaps.length) failures.push(`${label}: ${reading.overlaps.length} overlaps — ${JSON.stringify(reading.overlaps.slice(0, 3))}`);
+      if (reading.escapes.length) failures.push(`${label}: ${reading.escapes.length} texts paint outside their card — ${JSON.stringify(reading.escapes.slice(0, 3))}`);
+      if (reading.clipped.length) failures.push(`${label}: ${reading.clipped.length} card texts are cut — ${JSON.stringify(reading.clipped.slice(0, 3))}`);
+      if (reading.unsettled.length) failures.push(`${label}: ${reading.unsettled.length} card chains settled wider than their box — ${JSON.stringify(reading.unsettled.slice(0, 3))}`);
+      /* Each long current stage is drawn whole, on the line of its own that
+         the fold reached: alone for the one that fits, wrapped for the one
+         that does not. */
+      if (need.longStages) {
+        for (const [id, want] of Object.entries(LONG_STAGES)) {
+          const got = reading.longStages[id];
+          if (got?.text !== want.name || !got.alone || got.wrap !== want.wrap || got.items.length !== 1) failures.push(`${label}: ${id} settled as ${JSON.stringify(got)}, expected its whole name alone on its line${want.wrap ? ", wrapped" : ""}`);
+        }
+      }
+      if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
+    };
+    const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const [width, scheme] of [[1440, "light"], [1440, "dark"], [1080, "light"]] as const) {
+          const label = `${width}-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, base, { width, height: 3400 }, scheme, lang);
+          try {
+            await context.addInitScript(seatFolded);
+            await page.reload();
+            /* Waits for the card, not the block, so a build without the block
+               is measured too and its missing lane rows are the verdict. */
+            await page.waitForSelector('[data-kanban-board] .card[data-id="task:t-many"] [data-pipeline]', { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            if (scheme === "light") {
+              gate(label, await page.evaluate(measureBlocks) as Reading, { lanes: 12 });
+              /* One tone map (#2080): a spent review budget's state word takes
+                 the same warning ink as a decision's. */
+              const inks = await page.evaluate(() => ["needs_decision", "needs_review"].map((state) => {
+                const word = document.querySelector(`.pb-head .pstate-word[data-pstate="${state}"]`);
+                return word ? getComputedStyle(word).color : null;
+              }));
+              if (!inks[0] || inks[0] !== inks[1]) failures.push(`${label}: needs review is drawn ${inks[1]}, needs a decision ${inks[0]}`);
+            }
+            for (const id of CARDS) {
+              const element = page.locator(card(id));
+              if (await element.count()) await element.screenshot({ path: path.join(pngDir, `card-${id}-${label}.png`) });
+            }
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        for (const scheme of ["dark", "light"] as const) {
+          const label = `390-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, base, { width: 390, height: 844 }, scheme, lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-mobile2-pipeline-row]", { timeout: 30_000 });
+            await page.waitForTimeout(600);
+            const suffix = scheme === "dark" ? lang : `light-${lang}`;
+            await page.screenshot({ path: path.join(pngDir, `phone-board-390-${suffix}.png`) });
+            gate(`${label}-board`, await page.evaluate(measureBlocks) as Reading, { cards: 3 });
+            await page.locator('[data-mobile2-row="pipelines"]').first().evaluate((element) => (element as HTMLElement).click());
+            await page.waitForSelector("[data-mobile2-pipelines] [data-mobile2-pipeline-row]", { timeout: 10_000 });
+            await page.waitForTimeout(400);
+            await page.evaluate(() => document.querySelector("[data-mobile2-pipelines]")?.scrollTo(0, 0));
+            await page.screenshot({ path: path.join(pngDir, `phone-pipelines-390-${suffix}.png`) });
+            gate(`${label}-pipelines`, await page.evaluate(measureBlocks) as Reading, { cards: 8, longStages: true });
+            for (const id of Object.keys(LONG_STAGES)) {
+              const row = page.locator(`[data-mobile2-pipelines] [data-mobile2-pipeline-row]:has(.pb-pill[data-stage="${id}"])`);
+              if (await row.count()) await row.first().screenshot({ path: path.join(pngDir, `phone-card-390-${await row.first().getAttribute("data-mobile2-pipeline-row")}-${suffix}.png`) });
+            }
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/pipeline-block", { recursive: true });
+    fs.writeFileSync("evidence/pipeline-block/geometry.json", `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+
+  /* The phone's pipeline screen, the Stages view (slice 6, §3.13), over the
+     same scenario's lanes: the eight-stage one running its long-named fourth
+     stage, a lane paused while a stage ran, the parked decision, the spent
+     review budget and a completed lane.
+     Each is opened from the phone's pipelines list the way the operator opens
+     it, and the whole screen, bar and body, is measured as ink: no text meets
+     another text or a control, no control meets another, every control is a
+     44 px target, no stage name is cut, and nothing scrolls sideways. The body
+     scrolls, so it is measured at its top and at its end, and the running lane
+     once more with its passed stages unfolded. */
+  const measureScreen = `(() => {
+    const screen = document.querySelector('[data-mobile2-screen="pipeline"]');
+    if (!screen) return null;
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const area = r => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+    const meets = (a, b) => area(intersect(a, b)) > 0.5;
+    const union = (a, b) => ({ top: Math.min(a.top, b.top), left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) });
+    const clipFrom = el => {
+      let clip = { top: -1e9, left: -1e9, right: 1e9, bottom: 1e9 };
+      for (let up = el; up; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, box(up));
+      }
+      return clip;
+    };
+    /* The banner slot is the shell's, on every screen, and gated with it. */
+    const banner = el => Boolean(el.closest("[data-mobile2-banner]"));
+    /* A chip's target is its box plus the reach its ::after gives it on a coarse pointer. */
+    const reach = el => {
+      const r = box(el);
+      const after = getComputedStyle(el, "::after");
+      if (after.content === "none" || after.position !== "absolute") return r;
+      const px = v => parseFloat(v) || 0;
+      return { top: r.top + px(after.top), left: r.left + px(after.left), right: r.right - px(after.right), bottom: r.bottom - px(after.bottom) };
+    };
+    const byElement = new Map();
+    const walker = document.createTreeWalker(screen, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.nodeValue || !node.nodeValue.trim()) continue;
+      const el = node.parentElement;
+      if (!el || banner(el) || getComputedStyle(el).visibility === "hidden") continue;
+      const clip = clipFrom(el);
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const raw of range.getClientRects()) {
+        const rect = intersect(clip, { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom });
+        if (area(rect) <= 0.5) continue;
+        const entry = byElement.get(el);
+        byElement.set(el, entry ? { ...entry, rect: union(entry.rect, rect) } : { el, rect, text: (el.textContent || "").trim().slice(0, 48) });
+      }
+    }
+    const ink = [...byElement.values()];
+    const controls = [...screen.querySelectorAll("button, a, [role=button]")]
+      .filter(el => !banner(el) && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden")
+      .map(el => ({ el, full: reach(el), rect: intersect(reach(el), clipFrom(el.parentElement)), text: (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 48) }))
+      .filter(entry => area(entry.rect) > 0.5);
+    const nested = (a, b) => a.contains(b) || b.contains(a);
+    const overlaps = [], escapes = [], small = [], cut = [];
+    const frame = box(screen);
+    for (let i = 0; i < ink.length; i++) {
+      const a = ink[i];
+      if (a.rect.left < frame.left - 1 || a.rect.right > frame.right + 1) escapes.push(a.text);
+      for (let j = i + 1; j < ink.length; j++) {
+        const b = ink[j];
+        if (!nested(a.el, b.el) && meets(a.rect, b.rect)) overlaps.push({ kind: "text/text", a: a.text, b: b.text });
+      }
+      for (const control of controls) {
+        if (!control.el.contains(a.el) && meets(a.rect, control.rect)) overlaps.push({ kind: "text/control", a: a.text, b: control.text });
+      }
+    }
+    for (let i = 0; i < controls.length; i++) for (let j = i + 1; j < controls.length; j++) {
+      if (!nested(controls[i].el, controls[j].el) && meets(controls[i].rect, controls[j].rect)) overlaps.push({ kind: "control/control", a: controls[i].text, b: controls[j].text });
+    }
+    /* A target is measured whole, before the scroller clips it. */
+    for (const control of controls) {
+      const height = control.full.bottom - control.full.top, width = control.full.right - control.full.left;
+      if (height < 43.5 || width < 43.5) small.push({ text: control.text, width: Math.round(width), height: Math.round(height) });
+    }
+    for (const name of screen.querySelectorAll(".pb-stage .pb-name, .pb-heading")) {
+      if (name.scrollWidth > name.clientWidth + 1) cut.push((name.textContent || "").slice(0, 48));
+    }
+    const stages = [...screen.querySelectorAll(".pb-stage[data-stage]")].map(el => el.getAttribute("data-stage"));
+    /* How the current stage is drawn, read as computed colour and motion, and
+       the tokens it is compared with, read the same way. */
+    const probe = token => {
+      const el = document.createElement("span");
+      el.style.color = "var(" + token + ")";
+      screen.appendChild(el);
+      const color = getComputedStyle(el).color;
+      el.remove();
+      return color;
+    };
+    const cur = screen.querySelector(".pb-stage[data-stage-current]");
+    const mark = cur && cur.querySelector(".pb-stage-title .pmark");
+    const tone = cur && mark ? {
+      held: cur.getAttribute("data-stage-held") === "1",
+      mark: mark.getAttribute("data-mark"),
+      live: mark.getAttribute("data-live") === "1",
+      pulse: getComputedStyle(mark, "::before").animationName,
+      markInk: getComputedStyle(mark).color,
+      word: getComputedStyle(cur.querySelector(".pb-stage-state")).color,
+      stripe: getComputedStyle(cur).boxShadow,
+    } : null;
+    const inks = { muted: probe("--color-muted"), success: probe("--color-success") };
+    return {
+      texts: ink.length, controls: controls.length, overlaps, escapes, small, cut, stages, tone, inks,
+      current: screen.querySelector(".pb-stage[data-stage-current]")?.getAttribute("data-stage") ?? null,
+      answers: [...screen.querySelectorAll("[data-answer-action]")].map(el => el.getAttribute("data-answer-action")),
+      fold: screen.querySelector("[data-passed-fold]")?.getAttribute("data-passed-fold") ?? null,
+      scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth,
+    };
+  })()`;
+  type ScreenTone = { held: boolean; mark: string | null; live: boolean; pulse: string; markInk: string; word: string; stripe: string };
+  type ScreenReading = {
+    texts: number; controls: number; overlaps: unknown[]; escapes: unknown[]; small: unknown[]; cut: unknown[];
+    stages: string[]; current: string | null; answers: string[]; fold: string | null; scrollWidth: number; innerWidth: number;
+    tone: ScreenTone | null; inks: { muted: string; success: string };
+  } | null;
+  /* `motion`: the running lane's current stage pulses in its live tone; the
+     paused lane's held stage is hollow, still and muted (§3.13). */
+  const SCREENS = [
+    { id: "p-upload", name: "running", current: "verify-backward-compatibility-and-migrations", answers: [], fold: "3", completed: false, motion: "live" },
+    { id: "p-md-accept", name: "paused", current: "accept", answers: [], fold: null, completed: false, motion: "held" },
+    { id: "p-md-decision", name: "decision", current: "implement", answers: ["skip-stage", "retry-stage"], fold: null, completed: false, motion: null },
+    { id: "p-review-spent", name: "review", current: "critique", answers: ["close", "continue-review"], fold: null, completed: false, motion: null },
+    { id: "p-compact", name: "done", current: null, answers: [], fold: null, completed: true, motion: null },
+  ] as const;
+
+  browserTest("the phone's pipeline screen: no text meets another's ink or a control, every control is 44 px, no stage name is cut, and a paused lane's stage is still, at 390 and 430 px, in en and uk", async () => {
+    const out = path.resolve(".artifacts/pipeline-screen");
+    const pngDir = process.env.PIPELINE_SCREEN_PNG_DIR ?? "/var/tmp/llv-pipeline-screen-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=pipeline-block`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, ScreenReading> = {};
+    const failures: string[] = [];
+    const gate = (label: string, reading: ScreenReading, want: (typeof SCREENS)[number]) => {
+      frames[label] = reading;
+      if (!reading) {
+        failures.push(`${label}: no pipeline screen drawn`);
+        return;
+      }
+      if (reading.current !== want.current) failures.push(`${label}: the current stage is ${reading.current}, expected ${want.current}`);
+      if (JSON.stringify(reading.answers) !== JSON.stringify(want.answers)) failures.push(`${label}: answers ${JSON.stringify(reading.answers)}, expected ${JSON.stringify(want.answers)}`);
+      if (reading.overlaps.length) failures.push(`${label}: ${reading.overlaps.length} overlaps — ${JSON.stringify(reading.overlaps.slice(0, 3))}`);
+      if (reading.escapes.length) failures.push(`${label}: ${reading.escapes.length} texts paint outside the screen — ${JSON.stringify(reading.escapes.slice(0, 3))}`);
+      if (reading.small.length) failures.push(`${label}: ${reading.small.length} controls under 44 px — ${JSON.stringify(reading.small.slice(0, 4))}`);
+      if (reading.cut.length) failures.push(`${label}: ${reading.cut.length} names are cut — ${JSON.stringify(reading.cut.slice(0, 3))}`);
+      if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
+      const { tone, inks } = reading;
+      if (want.motion === "held" && (!tone || !tone.held || tone.mark !== "ring" || tone.live || tone.pulse !== "none"
+        || tone.markInk !== inks.muted || tone.word !== inks.muted || !tone.stripe.includes(inks.muted))) {
+        failures.push(`${label}: the held stage is drawn ${JSON.stringify(tone)}, expected a still hollow ring with the mark, the word and the stripe in ${inks.muted}`);
+      }
+      if (want.motion === "live" && (!tone || tone.held || tone.mark !== "dot" || !tone.live || tone.pulse === "none"
+        || tone.markInk !== inks.success || tone.word !== inks.success || !tone.stripe.includes(inks.success))) {
+        failures.push(`${label}: the running stage is drawn ${JSON.stringify(tone)}, expected a pulsing dot with the mark, the word and the stripe in ${inks.success}`);
+      }
+    };
+    const bodyTo = (page: Page, where: "top" | "end") => page.evaluate((to) => {
+      const body = document.querySelector("[data-mobile2-pipeline-body]");
+      if (body) body.scrollTop = to === "top" ? 0 : body.scrollHeight;
+    }, where);
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const [width, height, scheme] of [[390, 844, "dark"], [390, 844, "light"], [430, 932, "dark"]] as const) {
+          const { context, page, pageErrors } = await openFixture(browser, base, { width, height }, scheme, lang, "no-preference", true);
+          try {
+            await page.waitForSelector('[data-mobile2-row="pipelines"]', { timeout: 30_000 });
+            await page.waitForTimeout(500);
+            await page.locator('[data-mobile2-row="pipelines"]').first().evaluate((element) => (element as HTMLElement).click());
+            await page.waitForSelector("[data-mobile2-pipelines] [data-mobile2-pipeline-row]", { timeout: 10_000 });
+            for (const screen of SCREENS) {
+              const label = `${screen.name}-${width}-${lang}-${scheme}`;
+              if (screen.completed && !(await page.locator(`[data-mobile2-pipeline-row="${screen.id}"]`).count())) {
+                await page.locator("[data-mobile2-completed-toggle]").evaluate((element) => (element as HTMLElement).click());
+              }
+              await page.locator(`[data-mobile2-pipeline-row="${screen.id}"]`).first().evaluate((element) => (element as HTMLElement).click());
+              await page.waitForSelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${screen.id}"] .pblock`, { timeout: 10_000 });
+              await page.waitForTimeout(400);
+              const name = `pipeline-${screen.name}-${width}-${lang}${scheme === "light" ? "-light" : ""}`;
+              if (width === 390) await page.screenshot({ path: path.join(pngDir, `${name}.png`) });
+              gate(`${label}-top`, await page.evaluate(measureScreen) as ScreenReading, screen);
+              await bodyTo(page, "end");
+              await page.waitForTimeout(150);
+              gate(`${label}-end`, await page.evaluate(measureScreen) as ScreenReading, screen);
+              const folded = frames[`${label}-top`]?.fold ?? null;
+              if (folded !== screen.fold) failures.push(`${label}: the passed fold is ${folded}, expected ${screen.fold}`);
+              /* The whole scroll at 390 px, folded, the way the round-2 "-full" frames draw it. */
+              if (width === 390 && screen.name === "running") {
+                const tall = await page.evaluate(() => {
+                  const body = document.querySelector("[data-mobile2-pipeline-body]");
+                  return body ? body.scrollHeight - body.clientHeight : 0;
+                });
+                await page.setViewportSize({ width, height: height + tall });
+                await page.waitForTimeout(300);
+                await page.screenshot({ path: path.join(pngDir, `${name.replace(`-${width}-`, `-${width}-full-`)}.png`) });
+                await page.setViewportSize({ width, height });
+              }
+              if (screen.fold) {
+                await bodyTo(page, "top");
+                await page.locator("[data-passed-fold]").evaluate((element) => (element as HTMLElement).click());
+                await page.waitForTimeout(200);
+                const open = await page.evaluate(measureScreen) as ScreenReading;
+                gate(`${label}-unfolded`, open, screen);
+                if ((open?.stages.length ?? 0) !== 8) failures.push(`${label}: unfolded, ${open?.stages.length} stages are listed, expected 8`);
+              }
+              await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+              await page.waitForSelector("[data-mobile2-pipelines]", { timeout: 10_000 });
+              await page.waitForTimeout(250);
+            }
+            if (pageErrors.length) failures.push(`${width}-${lang}-${scheme}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/pipeline-block", { recursive: true });
+    fs.writeFileSync("evidence/pipeline-block/pipeline-screen.json", `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
 });

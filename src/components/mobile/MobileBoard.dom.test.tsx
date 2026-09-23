@@ -10,22 +10,21 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
 /*
- * The board on the phone (mobile v2 lane 2, README §8 row 2), mounted as the
- * project leaf it really is. happy-dom does no layout, so what this guards is
- * the contract behind the frames the capture harness measures in Chromium:
+ * The board on the phone (mobile v2 lane 2, README §8 row 2; since #2072
+ * slice 4 the desktop's status columns), mounted as the project leaf it
+ * really is. happy-dom does no layout, so what this guards is the contract
+ * behind the frames the capture harness measures in Chromium:
  *
  *   - with no conversation on top of the stack the leaf is the BOARD: the seat
- *     first, then Needs you, the pipelines summary above Working while a
- *     pipeline runs, and three Recent rows over the catalog;
+ *     card above the column tabs, and what no task owns in Inbox, what needs
+ *     the operator first;
  *   - the board carries NO Host section — host detail is one tap away, in the
  *     host sheet behind ⋯ › Host details, and nowhere else;
- *   - the bar's badge counts the Needs-you rows, conversations and pipelines;
+ *   - the bar's badge counts what Inbox pins, conversations and pipelines;
  *   - opening a row stamps the card seen (#1244) and pushes the conversation
- *     over the board, so ‹ returns to the list;
- *   - a row says WHEN (#1487): a host that died mid-turn reads killed with its
- *     age and claims no queue, a host stopped after its turn settled reads
- *     done, the held plurals are grammatical at 1 and at n, and every row
- *     ends with when it was launched.
+ *     over the board, so ‹ returns to the column it left;
+ *   - what a board row can have done to it (#1671) is on a long-press, since
+ *     the column pager owns the sideways swipe (phone-kanban §3.8).
  */
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
@@ -53,6 +52,7 @@ const { receipts } = await import("@/components/mobile/MobileReceipt");
 const { resetOrchestratorSeatCacheForTests } = await import("@/components/orchestrator/useOrchestratorSeat");
 const { buildMobileBoard, needsDecisionPipelineRows } = await import("@/components/mobile/mobileBoardModel");
 const { launchAge, statePhrase } = await import("@/components/mobile/MobileBoard");
+const { resetPhoneKanbanPlaces } = await import("@/components/mobile/phoneKanbanPlace");
 const { pendingPipelineActs } = await import("@/components/mobile/MobilePipelineScreen");
 const { humanizeDuration } = await import("@/components/turnDuration");
 const { formatResetClock } = await import("@/components/rateLimit");
@@ -219,8 +219,13 @@ const backgroundTask = file({
 const decisionPipeline = {
   id: "pipeline_atlas_p2", task: "Fast conversation switching", taskIds: [], project: PROJECT,
   repoDir: "/repo", worktreeDir: "/repo-p2", branch: "lane/p2", baseBranch: "main", baseRef: "main",
-  lastPassedCommit: "", stages: [{ id: "implement", kind: "run" }, { id: "review", kind: "review-loop" }],
-  runs: [{ stageId: "review", attempts: [{ n: 3, state: "failed", verdict: { status: "fail", findings: ["one", "two"] }, completedAt: new Date((NOW - 3_600) * 1_000).toISOString() }] }],
+  /* Every stage and attempt carries the role it runs under, as the engine
+     records it: the task projection the columns read relies on it. */
+  lastPassedCommit: "", stages: [
+    { id: "implement", kind: "run", effectiveRole: { roleId: "builder", access: "read-write", promptScaffold: null } },
+    { id: "review", kind: "review-loop", effectiveRole: { roleId: "reviewer", access: "read-only", promptScaffold: null } },
+  ],
+  runs: [{ stageId: "review", attempts: [{ n: 3, state: "failed", effectiveRole: { roleId: "reviewer", access: "read-only", promptScaffold: null }, verdict: { status: "fail", findings: ["one", "two"] }, completedAt: new Date((NOW - 3_600) * 1_000).toISOString() }] }],
   cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
   state: "needs_decision", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
   createdAt: new Date((NOW - 7_200) * 1_000).toISOString(), closedAt: null,
@@ -267,6 +272,7 @@ beforeEach(() => {
   dom.document.body.style.overflow = "";
   dom.sessionStorage.clear();
   dom.localStorage.clear();
+  resetPhoneKanbanPlaces();
   dom.location.hash = "#p=" + encodeURIComponent(PROJECT);
   getMobileNav().home();
   receipts.dismiss();
@@ -294,55 +300,64 @@ function mount(over: Partial<React.ComponentProps<typeof ProjectDashboard>> = {}
 const q = (root: HTMLElement, selector: string) => root.querySelector(selector) as unknown as HTMLElement | null;
 const all = (root: HTMLElement, selector: string) => Array.from(root.querySelectorAll(selector)) as unknown as HTMLElement[];
 const click = (el: HTMLElement | null) => { expect(el).not.toBeNull(); flushSync(() => el!.click()); };
-const board = (root: HTMLElement) => q(root, "[data-mobile2-board]");
-const sections = (root: HTMLElement) => all(root, "[data-mobile2-section]").map((el) => el.getAttribute("data-mobile2-section"));
+const board = (root: HTMLElement) => q(root, "[data-phone-kanban]");
+/** A row of the columns by the conversation it opens. */
+const rowFor = (root: HTMLElement, path: string) => q(root, `[data-phone-card-agent="${path}"]`);
+const rowPaths = (root: HTMLElement) => all(root, "[data-phone-card-agent]").map((el) => el.getAttribute("data-phone-card-agent"));
+const inbox = (root: HTMLElement) => click(q(root, "[data-phone-kanban-tab=inbox]"));
 
-test("with no conversation focused the phone leaf is the board: the seat first, the queue, then Working and Recent", async () => {
+test("with no conversation focused the phone leaf is the board: the seat card above the tabs, and what needs the operator first", async () => {
   const root = mount({ pipelines: [decisionPipeline, runningPipeline] });
   expect(await waitFor(() => board(root) !== null)).toBe(true);
   expect(q(root, '[data-mobile2-screen="board"]')).not.toBeNull();
   /* The focus view is not mounted: one primary surface at a time. */
   expect(q(root, '[data-testid="mobile-chat-shell"]')).toBeNull();
-  expect(sections(root)).toEqual(["orchestrator", "needs", "pipelines", "working", "recent"]);
-  /* The seat card leads, above every section row. */
-  expect(q(root, '[data-testid="mobile-orchestrator-slot"]')).not.toBeNull();
+  /* The seat card leads, above the column tabs. */
+  const seat = q(root, '[data-testid="mobile-orchestrator-slot"]')!;
+  const tabs = q(root, "[data-phone-kanban-tabs]")!;
+  expect(seat).not.toBeNull();
+  expect(seat.compareDocumentPosition(tabs as unknown as Node) & 4).toBe(4);
+  expect(all(root, "[role=tab]").map((tab) => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["inbox", "assigned", "blocked", "done"]);
+  /* A first visit opens on Assigned; this project has no task, so it says so
+     and points at Inbox, where its work is. */
+  expect(board(root)!.getAttribute("data-phone-kanban-active")).toBe("assigned");
+  expect(q(root, "[data-phone-kanban-empty=assigned] [data-phone-kanban-nearest]")!.getAttribute("data-phone-kanban-nearest")).toBe("inbox");
 
-  const rows = all(root, "[data-mobile2-row]");
-  const kinds = rows.map((row) => row.getAttribute("data-mobile2-row"));
-  expect(kinds).toEqual(["conversation", "pipeline", "pipelines", "conversation", "conversation", "catalog"]);
-  /* The queue holds both item kinds; the badge on the waiting row names the
-     decision, and the working row says what the agent is doing now. */
-  expect(rows[0]!.textContent).toContain("Implement the export endpoint");
-  expect(rows[0]!.textContent).toContain(translate("en", "mobile2.board.badgeQuestion"));
-  expect(rows[1]!.textContent).toContain("Fast conversation switching");
-  expect(rows[1]!.textContent).toContain(translate("en", "mobile2.board.badgeDecision"));
-  /* «stage 2/2 · review failed · 2 findings»: the stage by the name the stage
-     list gives it, lowercased inside the sentence (#1865). */
-  expect(rows[1]!.textContent).toContain(translate("en", "mobile2.board.pipelineStageFailed", {
-    stage: 2, total: 2, name: "review",
-  }));
-  expect(rows[1]!.textContent).toContain(translate("en", "mobile2.board.pipelineFindings", { count: 2 }));
-  expect(rows[1]!.textContent).not.toContain(translate("en", "pipelineStrip.reviewStage").toLocaleLowerCase());
-  /* Every row keeps its 8 px dot column — hidden on an edged row rather than
-     dropped — so an edged title and an unedged one start on the same line
-     (the prototype's `.row.wait .dot { visibility: hidden }`). */
-  for (const row of [rows[0]!, rows[1]!, rows[3]!]) {
-    const dot = row.querySelector("span[aria-hidden]") as unknown as HTMLElement;
-    expect(dot.className).toContain("h-2");
-    expect(dot.className).toContain("w-2");
-  }
-  expect((rows[0]!.querySelector("span[aria-hidden]") as unknown as HTMLElement).className).toContain("invisible");
-  expect((rows[1]!.querySelector("span[aria-hidden]") as unknown as HTMLElement).className).toContain("invisible");
-  expect((rows[3]!.querySelector("span[aria-hidden]") as unknown as HTMLElement).className).not.toContain("invisible");
-  expect(rows[3]!.textContent).toContain("Add the held precedence");
-  expect(rows[5]!.textContent).toContain(translate("en", "mobile.catalog.unknown"));
+  /* Inbox: what needs the operator first — the question, then the lane parked
+     on a decision — then the rest of what no task owns. */
+  const cards = all(root, '[data-phone-kanban-column="inbox"] [data-phone-card]');
+  expect(cards[0]!.getAttribute("data-phone-card-agent")).toBe(asking.path);
+  expect(cards[0]!.textContent).toContain("Implement the export endpoint");
+  expect(q(cards[0]!, "[data-phone-card-badge]")!.textContent).toBe(translate("en", "mobile2.board.badgeQuestion"));
+  expect(cards[0]!.textContent).toContain("Which format?");
+  const lane = cards[1]!;
+  expect(lane.getAttribute("data-phone-card-kind")).toBe("pipeline");
+  expect(lane.textContent).toContain("Fast conversation switching");
+  /* The pipeline card (#2072 slice 3): the badge in the desktop's state word,
+     the stage chain by the names the stage list gives, and the reason. */
+  expect(lane.querySelector(".pstate-chip")?.textContent).toBe(translate("en", "pipelineState.needs_decision"));
+  expect([...lane.querySelectorAll(".pb-pill .pb-name")].map((node) => node.textContent)).toEqual(["Implement", "Review"]);
+  expect(lane.querySelector("[data-pipeline-reason]")?.textContent).toBe(
+    `${translate("en", "pipelineBlock.reason.failed", { stage: "Review" })} · ${translate("en", "pipelineVerdict.findings", { count: 2 })} · 1h`,
+  );
+  /* Both of them carry the edge; nothing after them needs the operator. */
+  expect(cards.slice(0, 2).map((card) => card.getAttribute("data-needs"))).toEqual(["1", "1"]);
+  expect(cards.slice(2).some((card) => card.getAttribute("data-needs") === "1")).toBe(false);
+  expect(q(root, "[data-phone-kanban-tab=inbox] [data-phone-tab-needs]")!.textContent).toBe("2");
+  /* The working conversation and the finished one are rows no task owns. */
+  expect(q(root, "[data-phone-kanban-unlinked]")).not.toBeNull();
+  expect(rowFor(root, running.path)).not.toBeNull();
+  expect(rowFor(root, finished.path)).not.toBeNull();
+  /* The old sections are gone: no Recent, no counts of the scan window. */
+  expect(q(root, "[data-mobile2-section]")).toBeNull();
+  expect(q(root, '[data-mobile2-row="catalog"]')).toBeNull();
 });
 
 test("the board has no Host section: background processes are rows in the host sheet behind ⋯", async () => {
   const root = mount({ files: [asking, running, finished, backgroundTask] });
   expect(await waitFor(() => board(root) !== null)).toBe(true);
   expect(board(root)!.textContent).not.toContain("next dev · port 8899");
-  expect(sections(root)).not.toContain("host");
+  expect(rowPaths(root)).not.toContain(backgroundTask.path);
   /* Nor a docked strip above the board, which is what the phone used to show. */
   expect(q(root, "[data-mobile2-host-tasks]")).toBeNull();
 
@@ -356,26 +371,26 @@ test("the board has no Host section: background processes are rows in the host s
   expect(sheet.textContent).toContain(translate("en", "mobile2.host.pid", { pid: 41_822 }));
 });
 
-test("the Needs-you rows the bar's badge counts are the conversations queued and the pipelines waiting on a decision", async () => {
+test("what Inbox pins is what the bar's badge counts: the conversations queued and the pipelines waiting on a decision", async () => {
   const root = mount({ pipelines: [decisionPipeline, runningPipeline], mobileShell: host(2) });
   expect(await waitFor(() => board(root) !== null)).toBe(true);
-  const rows = all(root, "[data-mobile2-row]").filter((row) => ["conversation", "pipeline"].includes(row.getAttribute("data-mobile2-row") ?? ""));
-  const queued = rows.filter((row) => row.closest("[data-mobile2-board]") && ["waiting", "needs_decision", "stalled", "limit"].includes(row.getAttribute("data-mobile2-state") ?? ""));
-  expect(queued).toHaveLength(2);
+  const pinned = all(root, '[data-phone-kanban-column="inbox"] [data-phone-card][data-needs="1"]');
+  expect(pinned).toHaveLength(2);
   /* The count is not this leaf's arithmetic: the badge, the queue sheet and
      its «Next ›» read ONE list, scoped to the project behind the badge, and
-     the Viewer composes it from the same pure answer that put these rows on
-     the board (`Viewer.switching.dom.test.tsx` proves the scoping over two
-     projects). What this asserts is that the answer under the rows and the
-     number over them are the same number. */
+     the Viewer composes it from the same pure answer that orders these pins
+     (`Viewer.switching.dom.test.tsx` proves the scoping over two projects).
+     What this asserts is that the answer under the pins and the number over
+     them are the same number. */
   const model = buildMobileBoard({
     files: [asking, running, finished],
     pipelines: [decisionPipeline, runningPipeline],
     project: PROJECT,
     now: NOW,
   });
-  expect(model.attentionCount).toBe(queued.length);
+  expect(model.attentionCount).toBe(pinned.length);
   expect(needsDecisionPipelineRows([decisionPipeline, runningPipeline], PROJECT, NOW)).toHaveLength(1);
+  expect(q(root, "[data-phone-kanban-tab=inbox] [data-phone-tab-needs]")!.textContent).toBe(String(model.attentionCount));
   const badge = q(root, "[data-mobile2-attention-count]")!;
   expect(badge).not.toBeNull();
   expect(badge.getAttribute("data-mobile2-attention-count")).toBe(String(model.attentionCount));
@@ -387,8 +402,9 @@ test("opening a board row stamps the card seen (#1244) and pushes the conversati
   expect(await waitFor(() => board(root) !== null)).toBe(true);
   expect(mutations.filter((mutation) => mutation.kind === "mark-seen")).toEqual([]);
 
-  const row = all(root, '[data-mobile2-row="conversation"]').find((el) => el.getAttribute("data-mobile2-path") === finished.path)!;
-  expect(row).toBeDefined();
+  inbox(root);
+  const row = rowFor(root, finished.path)!;
+  expect(row).not.toBeNull();
   click(row);
   await settle();
 
@@ -412,16 +428,17 @@ test("opening a board row stamps the card seen (#1244) and pushes the conversati
      board row is a file the scan already carries, never a beyond-cap pin. */
   expect(opened).toEqual([]);
 
-  /* ‹ pops back to the list the operator came from, and stays there. (What
+  /* ‹ pops back to the column the operator came from, and stays there. (What
      the pop replays is the Viewer's own focus entry, so the replay itself is
      driven — and its red proved — in `Viewer.switching.dom.test.tsx`.) */
   click(q(root, "[data-mobile2-back]"));
   await settle();
   expect(await waitFor(() => board(root) !== null)).toBe(true);
   expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
+  expect(board(root)!.getAttribute("data-phone-kanban-active")).toBe("inbox");
 
   /* Backing out is not a lock: the same row opens again. */
-  click(all(root, '[data-mobile2-row="conversation"]').find((el) => el.getAttribute("data-mobile2-path") === finished.path)!);
+  click(rowFor(root, finished.path));
   await settle();
   expect(topScreen(getMobileNav().getState())).toEqual({ kind: "chat", id: finished.path });
 });
@@ -451,9 +468,8 @@ test("the board's footer lands the operator in the orchestrator's conversation, 
   const dock = q(seated, "[data-mobile2-board-dock]")!;
   expect(dock.getAttribute("aria-label")).toBe(translate("en", "mobile2.board.tellOrchestratorLabel"));
   expect(dock.className).toContain("min-h-11");
-  /* The seat is the card above the sections, never a row inside them. */
-  expect(all(seated, '[data-mobile2-row="conversation"]').map((row) => row.getAttribute("data-mobile2-path")))
-    .not.toContain(running.path);
+  /* The seat is the card above the columns, never a row inside them. */
+  expect(rowPaths(seated)).not.toContain(running.path);
 
   click(dock);
   await settle();
@@ -464,78 +480,10 @@ test("the board's footer lands the operator in the orchestrator's conversation, 
   expect(opened).toEqual([]);
 });
 
-test("a row says when: a killed host carries its age and no queue, a settled host reads done, and every row says when it was launched (#1487)", async () => {
-  const started = new Date((NOW - 10_800) * 1_000).toISOString();
-  /* The host died with its turn open — the one row worth the danger dot. */
-  const zombie = file({
-    path: "/repo/zombie.jsonl", title: "Research the reseat race", proc: "killed", pid: null,
-    activity: "stalled", activityReason: "jsonl_turn_stalled", mtime: NOW - 900,
-    lastTurn: { startedAt: (NOW - 1_500) * 1_000, endedAt: null }, sessionStartedAt: started,
-  } as unknown as Partial<FileEntry> & { path: string });
-  /* The operator's own case: the stage settled, the host was stopped, the work is on disk. */
-  const settled = file({
-    path: "/repo/settled.jsonl", title: "Write the migration notes", proc: "killed", pid: null,
-    activity: "idle", mtime: NOW - 7_200,
-    lastTurn: { startedAt: (NOW - 9_000) * 1_000, endedAt: (NOW - 7_200) * 1_000 }, sessionStartedAt: started,
-  } as unknown as Partial<FileEntry> & { path: string });
-  const held = (path: string, heldDeliveries: number) => file({
-    path, title: `Held ${heldDeliveries}`, activity: "live", proc: "running", pid: 4_410,
-    migration: { intentId: "i1", trigger: "manual", phase: "switching", targetAccountId: "other", heldDeliveries, failure: null },
-  } as unknown as Partial<FileEntry> & { path: string });
-  /* A working row with all four fragments: the phrase, the now-fragment, the
-     model and the launch. */
-  const busy = file({
-    path: "/repo/busy.jsonl", title: "Rebuild the board status projection", activity: "live", proc: "running", pid: 4_409, mtime: NOW - 30,
-    lastTurn: { startedAt: (NOW - 760) * 1_000, endedAt: null }, sessionStartedAt: started,
-    plan: { steps: [], done: 1, total: 3, current: "Edit cardStatus.ts", updatedAt: null },
-  } as unknown as Partial<FileEntry> & { path: string });
-  const root = mount({ files: [zombie, settled, busy, held("/repo/held-1.jsonl", 1), held("/repo/held-3.jsonl", 3)] });
-  expect(await waitFor(() => board(root) !== null)).toBe(true);
-
-  const rowOf = (path: string) => q(root, `[data-mobile2-row="conversation"][data-mobile2-path="${path}"]`)!;
-  const phrase = (path: string) => rowOf(path).querySelector("[data-mobile2-phrase]")!.textContent ?? "";
-  const dot = (path: string) => rowOf(path).querySelector("span[aria-hidden]")!.className;
-
-  expect(rowOf(zombie.path).getAttribute("data-mobile2-state")).toBe("killed");
-  expect(phrase(zombie.path)).toMatch(/^killed · 15m/);
-  expect(phrase(zombie.path)).not.toMatch(/queue/i);
-  expect(dot(zombie.path)).toContain("bg-danger");
-
-  expect(rowOf(settled.path).getAttribute("data-mobile2-state")).toBe("done");
-  expect(phrase(settled.path)).toMatch(/^done · 2h/);
-  expect(dot(settled.path)).toContain("bg-strong");
-  expect(dot(settled.path)).not.toContain("bg-danger");
-
-  expect(phrase("/repo/held-1.jsonl")).toBe("held · 1 message queued");
-  expect(phrase("/repo/held-3.jsonl")).toBe("held · 3 messages queued");
-
-  /* Every row ends with when it was launched, beside the state's own age. */
-  expect(rowOf(zombie.path).querySelector("[data-mobile2-started]")!.textContent).toMatch(/^started 3h/);
-  expect(rowOf(settled.path).querySelector("[data-mobile2-started]")!.textContent).toMatch(/^started 3h/);
-  /* A conversation nothing durable dates says nothing rather than guessing. */
-  expect(rowOf("/repo/held-1.jsonl").querySelector("[data-mobile2-started]")).toBeNull();
-  /* The launch's age is one unit — context, not the clock the operator acts on. */
+test("a launch's age is one unit: context, never the clock the operator acts on (#1487)", () => {
   expect(launchAge(2 * 3600 + 25 * 60)).toBe("2h");
   expect(launchAge(25 * 60 + 40)).toBe("25m");
   expect(launchAge(40)).toBe("40s");
-
-  /* The meta line has exactly ONE elastic fragment, the now-fragment, so at
-     390 px a working row loses the tool name it is on and never its model or
-     its launch (the round-2 review of #1487 found both truncated). */
-  const busyRow = rowOf(busy.path);
-  expect(busyRow.getAttribute("data-mobile2-state")).toBe("working");
-  const nowSpan = busyRow.querySelector("[data-mobile2-now]")!;
-  expect(nowSpan.textContent).toContain("Edit cardStatus.ts");
-  expect(nowSpan.className).toContain("truncate");
-  expect(nowSpan.className).toContain("min-w-0");
-  const modelSpan = busyRow.querySelector("[data-mobile2-model]")!;
-  expect(modelSpan.textContent).toBe("opus");
-  expect(modelSpan.className).toContain("shrink-0");
-  expect(modelSpan.className).not.toContain("truncate");
-  expect(busyRow.querySelector("[data-mobile2-phrase]")!.className).toContain("shrink-0");
-  expect(busyRow.querySelector("[data-mobile2-started]")!.className).toContain("shrink-0");
-  /* A row that is not working carries no now-fragment, so nothing on it is elastic. */
-  expect(rowOf(settled.path).querySelector("[data-mobile2-now]")).toBeNull();
 });
 
 test("each phrase carries its age, and the held plurals read right at 1 and at n, in both locales (#1487)", () => {
@@ -567,12 +515,13 @@ test("a row at its account's limit says which account and when the window reopen
      the conversation to find out when to come back. */
   const root = mount({ files: [asking, running, finished, limited] });
   expect(await waitFor(() => board(root) !== null)).toBe(true);
-  const row = all(root, '[data-mobile2-row="conversation"]').find((el) => el.getAttribute("data-mobile2-path") === limited.path)!;
-  expect(row).toBeDefined();
-  /* A wall needs the operator, so the row is in the queue, edged and badged. */
-  expect(row.getAttribute("data-mobile2-state")).toBe("limit");
-  expect(row.textContent).toContain(translate("en", "mobile2.board.badgeLimit"));
-  expect(q(row, "[data-mobile2-phrase]")!.textContent).toBe(translate("en", "mobile2.board.limitAccountResets", {
+  const row = rowFor(root, limited.path)!;
+  expect(row).not.toBeNull();
+  /* A wall needs the operator, so the row is pinned, edged and badged. */
+  expect(row.getAttribute("data-needs")).toBe("1");
+  expect(row.getAttribute("data-edge")).toBe("warning");
+  expect(q(row, "[data-phone-card-badge]")!.textContent).toBe(translate("en", "mobile2.board.badgeLimit"));
+  expect(q(row, "[data-phone-card-meta]")!.textContent).toContain(translate("en", "mobile2.board.limitAccountResets", {
     account: "Main", time: formatResetClock(RESET_AT, NOW),
   }));
 });
@@ -595,8 +544,7 @@ test("the phone reads the seat ONCE: the board keeps it out of the list and the 
   expect(await waitFor(() => q(root, "[data-mobile2-board-dock]")?.textContent?.includes(translate("en", "mobile2.board.tellOrchestrator")) === true)).toBe(true);
 
   /* The board has the answer: the seat's conversation is the card, not a row. */
-  expect(all(root, '[data-mobile2-row="conversation"]').map((el) => el.getAttribute("data-mobile2-path")))
-    .not.toContain(running.path);
+  expect(rowPaths(root)).not.toContain(running.path);
   /* And so does the card: it is seated — the invitation is gone — from the
      same answer, without a read of its own. */
   const card = q(root, '[data-testid="mobile-orchestrator-slot"] [data-mobile2-seat-card]')!;
@@ -607,86 +555,85 @@ test("the phone reads the seat ONCE: the board keeps it out of the list and the 
 });
 
 /* ────────────────────────────────────────────────────────────────────────── *
- * #1671: what a row reveals under a left swipe                                *
+ * #1671: what a row can have done to it, on a long-press                      *
  * ────────────────────────────────────────────────────────────────────────── */
 
-/* A finger on a board row: touch pointers, the way the phone sends them. */
+/* A finger on a board card: touch pointers, the way the phone sends them. */
 const finger = (target: Element, type: string, x: number, y: number) => flushSync(() => {
   target.dispatchEvent(new dom.PointerEvent(type, {
     bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 7, pointerType: "touch", isPrimary: true,
   }) as unknown as Event);
 });
-const dragRow = (row: HTMLElement, points: Array<[number, number]>) => {
-  const card = row.querySelector("[data-mobile2-swipe-card] [data-mobile2-row]")!;
-  finger(card, "pointerdown", ...points[0]!);
-  for (const point of points.slice(1)) finger(card, "pointermove", ...point);
-  finger(card, "pointerup", ...points[points.length - 1]!);
+const hold = async (card: HTMLElement) => {
+  finger(card, "pointerdown", 200, 30);
+  await new Promise((r) => setTimeout(r, 520));
+  finger(card, "pointerup", 200, 30);
+  await settle();
 };
-const swipeLeft = (row: HTMLElement) => dragRow(row, [[350, 30], [340, 31], [150, 32]]);
 const page = () => dom.document.body as unknown as HTMLElement;
 const receiptNow = () => q(page(), "[data-mobile2-receipt]");
+const sheetActions = () => all(page(), "[data-phone-card-sheet] [data-phone-card-action]").map((el) => el.getAttribute("data-phone-card-action"));
+const laneCard = (root: HTMLElement) => q(root, '[data-phone-card-kind="pipeline"][data-needs="1"]');
 
-test("a conversation row slides left to Close card: the card leaves on the tap, nothing stops the agent, and Reopen brings it back", async () => {
+test("a row no task owns holds to Close card: the card leaves on the tap, nothing stops the agent, and Reopen brings it back", async () => {
   const root = mount();
-  const card = () => q(root, `[data-mobile2-row="conversation"][data-mobile2-path="${running.path}"]`);
-  const row = () => card()!.closest("[data-mobile2-swipe-row]") as unknown as HTMLElement;
-  expect(await waitFor(() => board(root) !== null && card() !== null)).toBe(true);
+  expect(await waitFor(() => board(root) !== null && rowFor(root, running.path) !== null)).toBe(true);
+  inbox(root);
   await settle();
-  swipeLeft(row());
-  expect(row().getAttribute("data-mobile2-swipe-open")).toBe("true");
-  const actions = all(row(), "[data-mobile2-swipe-action]");
-  expect(actions.map((el) => el.getAttribute("data-mobile2-swipe-action"))).toEqual(["close"]);
-  expect(actions[0]!.getAttribute("aria-label")).toBe(`${translate("en", "mobile2.chat.menuClose")}. ${translate("en", "mobile2.board.closeCardHint")}`);
-  /* The lift that opened the tray did not open the conversation. */
+  await hold(rowFor(root, running.path)!);
+  expect(getMobileNav().getState().sheet).toBe("card");
+  expect(sheetActions()).toEqual(["close"]);
+  expect(q(page(), '[data-phone-card-action="close"]')!.textContent).toContain(translate("en", "mobile2.board.closeCardHint"));
+  /* The held press did not open the conversation. */
   expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
 
   const before = requestLog.length;
-  click(actions[0]!);
+  click(q(page(), '[data-phone-card-action="close"]'));
   /* Gone on the tap, before any answer. */
-  expect(card()).toBeNull();
+  expect(await waitFor(() => rowFor(root, running.path) === null)).toBe(true);
   expect(receiptNow()!.textContent).toContain(translate("en", "mobile2.chat.closed", { title: running.title }));
   expect(await waitFor(() => mutations.some((mutation) => mutation.kind === "close" && mutation.path === running.path))).toBe(true);
   /* The board is the only thing written: no process control, no transcript. */
   expect(requestLog.slice(before).filter((entry) => !entry.startsWith("GET ")).every((entry) => entry.startsWith("PATCH /api/board"))).toBe(true);
-  /* An accepted close stays closed and says nothing more. */
   await settle();
-  expect(card()).toBeNull();
+  expect(rowFor(root, running.path)).toBeNull();
   expect(receiptNow()!.textContent).not.toContain(translate("en", "mobile2.board.closeNotSaved", { title: running.title }));
 
   click(q(receiptNow()!, '[data-mobile2-receipt-undo="reopen"]'));
-  expect(await waitFor(() => card() !== null)).toBe(true);
+  expect(await waitFor(() => rowFor(root, running.path) !== null)).toBe(true);
   expect(mutations.some((mutation) => mutation.kind === "restore" && mutation.path === running.path)).toBe(true);
   expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
 });
 
-test("a close the server refuses brings the row back, shut, and says the close was not saved", async () => {
+test("a close the server refuses brings the row back and says the close was not saved", async () => {
   boardRejectsClose = true;
   const root = mount();
-  const card = () => q(root, `[data-mobile2-row="conversation"][data-mobile2-path="${finished.path}"]`);
-  expect(await waitFor(() => board(root) !== null && card() !== null)).toBe(true);
+  expect(await waitFor(() => board(root) !== null && rowFor(root, finished.path) !== null)).toBe(true);
+  inbox(root);
   await settle();
-  swipeLeft(card()!.closest("[data-mobile2-swipe-row]") as unknown as HTMLElement);
-  click(q(root, `[data-mobile2-swipe-row="conversation:${finished.path}"] [data-mobile2-swipe-action="close"]`));
-  expect(card()).toBeNull();
-  expect(await waitFor(() => card() !== null)).toBe(true);
+  await hold(rowFor(root, finished.path)!);
+  click(q(page(), '[data-phone-card-action="close"]'));
+  expect(await waitFor(() => rowFor(root, finished.path) === null)).toBe(true);
+  expect(await waitFor(() => rowFor(root, finished.path) !== null)).toBe(true);
   expect(await waitFor(() => receiptNow()?.textContent?.includes(translate("en", "mobile2.board.closeNotSaved", { title: finished.title })) === true)).toBe(true);
-  expect(card()!.closest("[data-mobile2-swipe-row]")!.getAttribute("data-mobile2-swipe-open")).toBeNull();
   expect(mutations.some((mutation) => mutation.kind === "close")).toBe(false);
 });
 
-test("a queued pipeline slides left to Hide and Close lane: Hide sends the reversible dismiss, Close lane waits out its receipt", async () => {
+test("a lane parked on a decision holds to Hide and Close lane: Hide sends the reversible dismiss, Close lane waits out its receipt", async () => {
   const root = mount({ pipelines: [decisionPipeline] });
-  const row = () => q(root, `[data-mobile2-swipe-row="pipeline:${decisionPipeline.id}"]`);
-  expect(await waitFor(() => board(root) !== null && row() !== null)).toBe(true);
+  expect(await waitFor(() => board(root) !== null && laneCard(root) !== null)).toBe(true);
+  inbox(root);
   await settle();
-  swipeLeft(row()!);
-  expect(row()!.getAttribute("data-mobile2-swipe-open")).toBe("true");
-  expect(all(row()!, "[data-mobile2-swipe-action]").map((el) => el.getAttribute("data-mobile2-swipe-action"))).toEqual(["hide", "closeLane"]);
-  expect(q(row()!, '[data-mobile2-swipe-action="closeLane"]')!.getAttribute("aria-label"))
-    .toBe(`${translate("en", "mobile2.board.closeLane")}. ${translate("en", "mobile2.board.closeLaneHint")}`);
-  expect(root.textContent).not.toMatch(/\b(Mute|Delete)\b/);
+  await hold(laneCard(root)!);
+  expect(sheetActions()).toEqual(["hide", "closeLane"]);
+  expect(page().textContent).toContain(translate("en", "mobile2.board.hidePipelineHint"));
+  expect(page().textContent).toContain(translate("en", "mobile2.board.closeLaneHint"));
+  expect(q(page(), "[data-phone-card-sheet]")!.textContent).not.toMatch(/\b(Mute|Delete)\b/);
+  /* The held press did not open the pipeline under it. */
+  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
 
-  click(q(row()!, '[data-mobile2-swipe-action="hide"]'));
+  click(q(page(), '[data-phone-card-action="hide"]'));
+  expect(getMobileNav().getState().sheet).toBeNull();
   expect(await waitFor(() => pipelinePatches.length === 1)).toBe(true);
   expect(pipelinePatches[0]).toEqual({ url: `/api/pipelines/${decisionPipeline.id}`, body: { action: "dismiss" } });
   expect(receiptNow()!.textContent).toContain(translate("en", "mobile2.board.pipelineHidden", { task: decisionPipeline.task }));
@@ -694,51 +641,38 @@ test("a queued pipeline slides left to Hide and Close lane: Hide sends the rever
   expect(await waitFor(() => pipelinePatches.length === 2)).toBe(true);
   expect(pipelinePatches[1]!.body).toEqual({ action: "undismiss" });
 
-  /* Close lane: the row goes on the tap, and nothing is sent inside the window. */
-  swipeLeft(row()!);
-  click(q(row()!, '[data-mobile2-swipe-action="closeLane"]'));
-  expect(row()).toBeNull();
+  /* Close lane: the card goes on the tap, and nothing is sent inside the window. */
+  expect(await waitFor(() => laneCard(root) !== null)).toBe(true);
+  await hold(laneCard(root)!);
+  click(q(page(), '[data-phone-card-action="closeLane"]'));
+  expect(await waitFor(() => q(root, '[data-phone-card-kind="pipeline"]') === null)).toBe(true);
   expect(receiptNow()!.textContent).toContain(translate("en", "mobile2.pipeline.archived"));
   await settle();
   expect(pipelinePatches).toHaveLength(2);
   click(q(receiptNow()!, '[data-mobile2-receipt-undo="restore"]'));
-  expect(row()).not.toBeNull();
+  expect(await waitFor(() => laneCard(root) !== null)).toBe(true);
   await settle();
   expect(pipelinePatches).toHaveLength(2);
 
   /* Letting the window close sends the engine's own close. */
-  swipeLeft(row()!);
-  click(q(row()!, '[data-mobile2-swipe-action="closeLane"]'));
+  await hold(laneCard(root)!);
+  click(q(page(), '[data-phone-card-action="closeLane"]'));
   flushSync(() => pendingPipelineActs.flush());
   expect(await waitFor(() => pipelinePatches.length === 3)).toBe(true);
   expect(pipelinePatches[2]!.body).toEqual({ action: "close" });
 });
 
-test("a vertical drag passes a row without revealing it, and a long-press lists the same actions in a sheet", async () => {
+test("a finger that moves is the pager or the column scrolling: it opens no sheet and no card", async () => {
   const root = mount({ pipelines: [decisionPipeline] });
-  const row = () => q(root, `[data-mobile2-swipe-row="pipeline:${decisionPipeline.id}"]`)!;
-  expect(await waitFor(() => board(root) !== null && q(root, `[data-mobile2-swipe-row="pipeline:${decisionPipeline.id}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => board(root) !== null && laneCard(root) !== null)).toBe(true);
+  inbox(root);
   await settle();
-  dragRow(row(), [[200, 30], [204, 60], [120, 140]]);
-  expect(row().getAttribute("data-mobile2-swipe-open")).toBeNull();
-  expect(q(row(), "[data-mobile2-swipe-card]")!.style.transform).toBe("");
-
-  const card = q(row(), '[data-mobile2-row="pipeline"]')!;
+  const card = laneCard(root)!;
   finger(card, "pointerdown", 200, 30);
+  finger(card, "pointermove", 204, 60);
   await new Promise((r) => setTimeout(r, 520));
-  finger(card, "pointerup", 200, 30);
+  finger(card, "pointerup", 120, 140);
   await settle();
-  expect(getMobileNav().getState().sheet).toBe("row");
-  const sheet = q(page(), '[data-mobile2-sheet="row"]')!;
-  expect(sheet).not.toBeNull();
-  expect(all(sheet, "[data-mobile2-row-action]").map((el) => el.getAttribute("data-mobile2-row-action"))).toEqual(["hide", "closeLane"]);
-  expect(sheet.textContent).toContain(translate("en", "mobile2.board.hidePipelineHint"));
-  expect(sheet.textContent).toContain(translate("en", "mobile2.board.closeLaneHint"));
-  /* The held press did not open the pipeline under it. */
-  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
-
-  click(q(sheet, '[data-mobile2-row-action="hide"]'));
-  expect(await waitFor(() => pipelinePatches.length === 1)).toBe(true);
-  expect(pipelinePatches[0]!.body).toEqual({ action: "dismiss" });
   expect(getMobileNav().getState().sheet).toBeNull();
+  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
 });

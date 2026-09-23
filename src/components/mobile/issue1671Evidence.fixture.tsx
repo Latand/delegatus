@@ -169,6 +169,8 @@ const evidence = {
   hidesAnswered: [] as Array<{ id: string; action: string; dismissedAt: string | null }>,
   boardMutations: [] as BoardMutationV1[],
   refuseNextPipelinePatch: false,
+  /* Every task PATCH the phone's columns sent (#2072 slice 4). */
+  taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* Holds each pipeline answer this long, so a step can watch the frames
      painted while its requests are out. */
   pipelineAnswerDelayMs: 0,
@@ -242,11 +244,239 @@ const tasks = TOOLCARD ? [{
   createdAt: iso(3_600), updatedAt: iso(1_800),
 }] : [];
 
+/* #2072 slice 4, only when the page asks for it (`?kanban=1`): a project whose
+   phone board is the status columns, shaped like the approved round-2 frames
+   (docs/design/phone-kanban.md §6). Assigned carries a lane parked on a
+   decision beside a paused one, a spent review budget whose fail edge fired,
+   running chains of two, three and eight stages, a 43-character stage name,
+   the 687-character title and a Ukrainian one, and two finished lanes;
+   Inbox a task whose agent asks, four stalled conversations and a running
+   lane no task owns; Blocked is empty; Done holds more than its window. The
+   orchestrator seat is live. Titles are public issue titles of this
+   repository or invented; ages agree across the board. */
+const KANBAN = new URLSearchParams(location.search).has("kanban");
+const kanbanFiles: FileEntry[] = [];
+const kanbanLinks: { pipelines: Record<string, unknown>; tasks: Record<string, unknown> } = { pipelines: {}, tasks: {} };
+const kanbanRole = (roleId: string) => ({ roleId, access: roleId === "reviewer" ? "read-only" : "read-write", promptScaffold: null });
+const idOf = (path: string) => `conversation_${(path.split("/").pop() ?? "").replace(".jsonl", "")}`;
+let kanbanSeq = 0;
+/** A conversation on the board: working for `ago` seconds, or settled `ago` seconds back. */
+function kanbanConversation(title: string, state: "working" | "settled" | "asking" | "stalled", ago: number, over: Record<string, unknown> = {}): string {
+  const path = `/repo/kanban-${++kanbanSeq}.jsonl`;
+  const byState: Record<string, Record<string, unknown>> = {
+    working: { activity: "live", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - 20, lastTurn: { startedAt: (now - ago) * 1_000, endedAt: null }, lastAgentWorkAt: (now - 20) * 1_000 },
+    settled: { mtime: now - ago, lastAgentWorkAt: (now - ago) * 1_000 },
+    asking: {
+      activity: "live", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - ago, lastAgentWorkAt: (now - ago) * 1_000,
+      pendingQuestion: { kind: "question", toolUseId: `toolu-kanban-${kanbanSeq}`, transcriptPath: path, pid: 5_000 + kanbanSeq, paneTarget: null, askedAt: iso(ago),
+        questions: [{ question: "Which unit file stays, the user unit or the system one?", header: "Unit", multiSelect: false, options: [] }] },
+    },
+    stalled: { activity: "stalled", activityReason: "jsonl_turn_stalled", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - ago, engine: "codex", model: "gpt-6-astra", lastTurn: { startedAt: (now - ago - 600) * 1_000, endedAt: null }, lastAgentWorkAt: (now - ago) * 1_000 },
+  };
+  kanbanFiles.push(conversation(path, title, { ...byState[state], ...over }));
+  return path;
+}
+interface KanbanStage { id: string; state?: "passed" | "running" | "failed" | "needs_decision"; ago?: number; role?: string; onFail?: { to: string; maxRounds: number }; attempts?: unknown[] }
+function kanbanLane(id: string, title: string, taskIds: string[], state: Pipeline["state"], stages: KanbanStage[], over: Record<string, unknown> = {}): Pipeline {
+  const runs: unknown[] = [];
+  let cursor: unknown = null;
+  for (const spec of stages) {
+    if (spec.attempts) { runs.push({ stageId: spec.id, attempts: spec.attempts }); continue; }
+    if (!spec.state) continue;
+    const ago = spec.ago ?? 900;
+    const agentPath = kanbanConversation(`${title.split("\n")[0]} · ${spec.id}`, spec.state === "running" ? "working" : "settled", ago);
+    const failing = spec.state === "failed" || spec.state === "needs_decision";
+    runs.push({ stageId: spec.id, attempts: [{
+      n: 1, state: spec.state, startedAt: iso(ago + 300), completedAt: spec.state === "running" ? null : iso(ago), agentPath, conversationId: idOf(agentPath),
+      activatedBy: null, effectiveRole: kanbanRole(spec.role ?? "builder"),
+      verdict: failing ? { status: "fail", findings: ["The delta chain is rebuilt on the request thread; the worker must own it."] } : spec.state === "passed" ? { status: "pass", findings: [] } : null,
+    }] });
+    if (spec.state === "running" || spec.state === "needs_decision") cursor = { stageId: spec.id, state: spec.state, input: null, activatedBy: null };
+  }
+  return {
+    id, task: title, taskIds, project: PROJECT, repoDir: "/repo", worktreeDir: `/repo-${id}`, branch: `lane/${id}`, baseBranch: "main", baseRef: "main", lastPassedCommit: "",
+    stages: stages.map((spec, index) => ({ id: spec.id, kind: "run", effectiveRole: kanbanRole(spec.role ?? "builder"), next: stages[index + 1]?.id ?? null, ...(spec.onFail ? { onFail: spec.onFail } : {}) })),
+    runs, cursor, state, pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null, createdAt: iso(14_400), closedAt: state === "completed" ? iso(1_200) : null,
+    ...over,
+  } as unknown as Pipeline;
+}
+const prLinks = (number: number, state: "open" | "merged" = "open") => ({
+  links: [{ key: `example/atlas#${number}`, kind: "pr", repository: "example/atlas", number, url: `https://github.com/example/atlas/pull/${number}`, source: "auto", via: ["delivery-pr"], state, checkedAt: iso(60) }],
+  noPr: false,
+});
+const kanbanAssign = (path: string) => ({ path, conversationId: idOf(path), panePid: null, state: "delivered", error: null, at: iso(3_600), engine: "claude" });
+const kanbanTask = (id: string, status: string, text: string, over: Record<string, unknown> = {}) => ({
+  id, project: PROJECT, status, text, placement: "unplaced", board: "shown", assignments: [], createdAt: iso(3 * 86_400), updatedAt: iso(3_600), revision: `r-${id}-1`, ...over,
+});
+const LONG_TITLE = [
+  "Board and phone: one definition of «working» everywhere a count is shown, so the bar, the tabs, the cards, the seat and the switcher never disagree about how many agents are running;",
+  "today the bar counts open turns, the switcher counts live transcripts, the seat counts its own children and the cards count members whose row state is working or held,",
+  "and on a busy afternoon the phone showed three different numbers for the same five agents within one screen, which made the operator open each conversation to find out which number was true;",
+  "pick the row state as the one authority and have every surface read it",
+].join(" ");
+const kanbanPipelines: Pipeline[] = [];
+const kanbanTasks: unknown[] = [];
+if (KANBAN) {
+  /* Assigned */
+  kanbanPipelines.push(kanbanLane("lane-decision", "Mobile data: stop repeated full-board downloads", ["t-data"], "needs_decision", [
+    { id: "implement", state: "needs_decision", ago: 2_460 }, { id: "review", role: "reviewer" },
+  ]));
+  kanbanPipelines.push(kanbanLane("lane-paused", "Finish mobile traffic acceptance", ["t-data"], "paused", [{ id: "accept", state: "passed", ago: 5_400 }, { id: "review", role: "reviewer" }]));
+  kanbanLinks.pipelines["lane-decision"] = { links: [], noPr: true };
+  const buildPath = kanbanConversation("GitHub Copilot as a third engine · build", "settled", 900);
+  const critiquePath = kanbanConversation("GitHub Copilot as a third engine · critique", "settled", 720);
+  kanbanPipelines.push(kanbanLane("lane-review", "GitHub Copilot as a third engine the Viewer can launch", ["t-copilot"], "needs_review", [
+    { id: "build", attempts: [
+      { n: 1, state: "passed", startedAt: iso(4_000), completedAt: iso(3_000), agentPath: buildPath, conversationId: idOf(buildPath), activatedBy: null, effectiveRole: kanbanRole("builder"), verdict: { status: "pass", findings: [] } },
+      { n: 2, state: "passed", startedAt: iso(1_600), completedAt: iso(900), agentPath: buildPath, conversationId: idOf(buildPath), activatedBy: { stageId: "critique", attempt: 1, edge: "fail" }, effectiveRole: kanbanRole("builder"), verdict: { status: "pass", findings: [] } },
+    ] },
+    { id: "critique", role: "reviewer", onFail: { to: "build", maxRounds: 1 }, attempts: [
+      { n: 1, state: "failed", startedAt: iso(2_800), completedAt: iso(2_000), agentPath: critiquePath, conversationId: idOf(critiquePath), activatedBy: null, effectiveRole: kanbanRole("reviewer"), verdict: { status: "fail", findings: ["one", "two"] } },
+    ] },
+  ], { reviewPending: { stageId: "critique", attempt: 1, fixStageId: "build", fixAttempt: 2, reviewedHead: "4be1c07a1d2e", currentHead: "9b2e7d4c5f60", verdict: "fail", findings: 2 } }));
+  kanbanLinks.pipelines["lane-review"] = prLinks(2031);
+  kanbanPipelines.push(kanbanLane("lane-favicon", "Restore /favicon.ico with the Delegatus emblem", ["t-favicon"], "running", [
+    { id: "implement", state: "passed", ago: 900 }, { id: "review", state: "running", ago: 240, role: "reviewer" },
+  ]));
+  kanbanLinks.pipelines["lane-favicon"] = prLinks(2070);
+  kanbanPipelines.push(kanbanLane("lane-kanban", "Phone kanban: a convenient board on mobile", ["t-kanban"], "running", [
+    { id: "design", state: "passed", ago: 4_000 }, { id: "critique", state: "passed", ago: 2_000, role: "reviewer" }, { id: "revise", state: "running", ago: 1_080 },
+  ]));
+  kanbanLinks.pipelines["lane-kanban"] = { links: [], noPr: true };
+  kanbanPipelines.push(kanbanLane("lane-upload", "Redesign attachment upload for large files", ["t-upload"], "running", [
+    { id: "plan", state: "passed", ago: 6_000 }, { id: "build-api", state: "passed", ago: 4_000 }, { id: "review-api", state: "passed", ago: 2_000, role: "reviewer" },
+    { id: "build-ui", state: "running", ago: 360 }, { id: "review-ui", role: "reviewer" }, { id: "verify" }, { id: "docs" }, { id: "merge" },
+  ]));
+  kanbanLinks.pipelines["lane-upload"] = prLinks(2201);
+  kanbanPipelines.push(kanbanLane("lane-skeletons", "Skeletons and state transitions on phone and desktop", ["t-skeletons"], "running", [
+    { id: "design", state: "passed", ago: 3_000 }, { id: "verify-the-phone-board-at-both-widths-in-uk", state: "running", ago: 1_265 },
+  ]));
+  kanbanPipelines.push(kanbanLane("lane-chips", "PR and issue chips on pipelines and task cards", ["t-chips"], "completed", [
+    { id: "implement", state: "passed", ago: 2_400 }, { id: "review", state: "passed", ago: 1_200, role: "reviewer" },
+  ]));
+  kanbanLinks.pipelines["lane-chips"] = prLinks(2068, "merged");
+  kanbanPipelines.push(kanbanLane("lane-seat", "Seat wakes after its own deploy and keeps its mandate", ["t-seat"], "completed", [
+    { id: "implement", state: "passed", ago: 7_200 }, { id: "review", state: "passed", ago: 5_400, role: "reviewer" },
+  ]));
+  kanbanLinks.pipelines["lane-seat"] = prLinks(2044, "merged");
+  /* #2072 slice 5: one task with seven pipelines — a spent review budget, a
+     review in its second round, a fired fail edge, one provisioning and three
+     completed — the task screen's `task-many` frame. */
+  const reviewBuild = kanbanConversation("Name every pipeline row by its first prompt line · build", "settled", 900);
+  const reviewCritique = kanbanConversation("Name every pipeline row by its first prompt line · critique", "settled", 720);
+  kanbanPipelines.push(kanbanLane("lane-many-review", "Name every pipeline row by its first prompt line", ["t-many"], "needs_review", [
+    { id: "build", attempts: [
+      { n: 1, state: "passed", startedAt: iso(4_000), completedAt: iso(3_000), agentPath: reviewBuild, conversationId: idOf(reviewBuild), activatedBy: null, effectiveRole: kanbanRole("builder"), verdict: { status: "pass", findings: [] } },
+      { n: 2, state: "passed", startedAt: iso(1_600), completedAt: iso(900), agentPath: reviewBuild, conversationId: idOf(reviewBuild), activatedBy: { stageId: "critique", attempt: 1, edge: "fail" }, effectiveRole: kanbanRole("builder"), verdict: { status: "pass", findings: [] } },
+    ] },
+    { id: "critique", role: "reviewer", onFail: { to: "build", maxRounds: 1 }, attempts: [
+      { n: 1, state: "failed", startedAt: iso(2_800), completedAt: iso(2_000), agentPath: reviewCritique, conversationId: idOf(reviewCritique), activatedBy: null, effectiveRole: kanbanRole("reviewer"), verdict: { status: "fail", findings: ["one", "two"] } },
+    ] },
+  ], { reviewPending: { stageId: "critique", attempt: 1, fixStageId: "build", fixAttempt: 2, reviewedHead: "4f1c2a9d7e3b", currentHead: "9b2e7d4c5f60", verdict: "fail", findings: 2 } }));
+  kanbanLinks.pipelines["lane-many-review"] = prLinks(2201);
+  kanbanPipelines.push(kanbanLane("lane-many-drawer", "Remove the legacy drawer", ["t-many"], "running", [
+    { id: "implement", state: "passed", ago: 1_800 }, { id: "review", state: "running", ago: 420, role: "reviewer" },
+  ]));
+  kanbanLinks.pipelines["lane-many-drawer"] = prLinks(2195);
+  const foldImplement = kanbanConversation("Fold the completed pipelines of a task · implement", "working", 180);
+  const foldVerify = kanbanConversation("Fold the completed pipelines of a task · verify", "settled", 600);
+  kanbanPipelines.push(kanbanLane("lane-many-fold", "Fold the completed pipelines of a task", ["t-many"], "running", [
+    { id: "implement", attempts: [
+      { n: 1, state: "passed", startedAt: iso(2_400), completedAt: iso(1_500), agentPath: foldImplement, conversationId: idOf(foldImplement), activatedBy: null, effectiveRole: kanbanRole("builder"), verdict: { status: "pass", findings: [] } },
+      { n: 2, state: "running", startedAt: iso(180), completedAt: null, agentPath: foldImplement, conversationId: idOf(foldImplement), activatedBy: { stageId: "verify", attempt: 1, edge: "fail" }, effectiveRole: kanbanRole("builder"), verdict: null },
+    ] },
+    { id: "verify", role: "reviewer", onFail: { to: "implement", maxRounds: 2 }, attempts: [
+      { n: 1, state: "failed", startedAt: iso(1_400), completedAt: iso(600), agentPath: foldVerify, conversationId: idOf(foldVerify), activatedBy: null, effectiveRole: kanbanRole("reviewer"), verdict: { status: "fail", findings: ["The fold hides a lane that still runs."] } },
+    ] },
+  ], { cursor: { stageId: "implement", state: "running", input: null, activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } } }));
+  kanbanLinks.pipelines["lane-many-fold"] = prLinks(2188);
+  kanbanPipelines.push(kanbanLane("lane-many-pill", "Take the floating waiting pill out of the feed", ["t-many"], "provisioning", [{ id: "critique" }, { id: "fix" }]));
+  kanbanLinks.pipelines["lane-many-pill"] = { links: [], noPr: true };
+  ([["lane-many-done-1", "Name the stage a conversation runs in its bar", 2170, 3_600], ["lane-many-done-2", "Count every lane of a task once", 2150, 7_200], ["lane-many-done-3", "Say which lane a finding belongs to", 2140, 10_800]] as const).forEach(([id, title, number, ago]) => {
+    kanbanPipelines.push(kanbanLane(id, title, ["t-many"], "completed", [{ id: "implement", state: "passed", ago: ago + 1_200 }, { id: "review", state: "passed", ago, role: "reviewer" }]));
+    kanbanLinks.pipelines[id] = prLinks(number, "merged");
+  });
+  const longWorker = kanbanConversation("Pick the row state as the one authority", "working", 780);
+  const longReader = kanbanConversation("Read every surface that counts agents", "settled", 3_000);
+  const ukWorker = kanbanConversation("Перевірити опитування мобільної дошки", "working", 420);
+  kanbanTasks.push(
+    kanbanTask("t-data", "assigned", "Mobile data: stop repeated full-board downloads and hidden-tab traffic"),
+    kanbanTask("t-copilot", "assigned", "GitHub Copilot as a third engine the Viewer can launch"),
+    kanbanTask("t-favicon", "assigned", "Restore /favicon.ico with the Delegatus emblem"),
+    kanbanTask("t-kanban", "assigned", "Phone kanban: a convenient board on mobile, merged with today's phone view"),
+    kanbanTask("t-upload", "assigned", "Redesign attachment upload for large files"),
+    kanbanTask("t-skeletons", "assigned", "Skeletons and state transitions on phone and desktop"),
+    kanbanTask("t-long", "assigned", LONG_TITLE, { assignments: [kanbanAssign(longWorker), kanbanAssign(longReader)] }),
+    kanbanTask("t-uk", "assigned", "Перевірити, що мобільна дошка не завантажує весь проєкт при кожному опитуванні", { assignments: [kanbanAssign(ukWorker)], color: "teal" }),
+    kanbanTask("t-chips", "assigned", "PR and issue chips on pipelines and task cards"),
+    kanbanTask("t-seat", "assigned", "Seat wakes after its own deploy and keeps its mandate"),
+    kanbanTask("t-many", "assigned", "Kanban: say what each pipeline of a task does\nA task with several lanes names each one by its first prompt line, and the finished ones fold behind their PRs.", { details: "Agent context: the lane titles come from pipelineTitle; the fold is the task screen's." }),
+  );
+  /* Inbox */
+  const asker = kanbanConversation("Retire the systemd install path", "asking", 540, { model: "claude-opus-5-5" });
+  kanbanTasks.push(
+    kanbanTask("t-systemd", "inbox", "Retire the systemd install path", { assignments: [kanbanAssign(asker)] }),
+    kanbanTask("t-quota", "inbox", "Spend quota before its window resets", { updatedAt: iso(2 * 86_400) }),
+    kanbanTask("t-attention", "inbox", "request_attention: the target blinks, intent open opens the conversation (#1696)", { updatedAt: iso(86_400) }),
+    kanbanTask("t-tray", "inbox", "Hide the Hidden tray when it holds nothing", { color: "amber", updatedAt: iso(5 * 3_600) }),
+  );
+  kanbanConversation("Audit the release notes for dead anchors", "stalled", 2_220);
+  kanbanConversation("Measure the board's memory on a 390 px phone", "stalled", 2_230);
+  kanbanConversation("Draft the Copilot engine login flow", "stalled", 2_280);
+  kanbanConversation("Rename the MCP key in the setup docs", "stalled", 2_290);
+  kanbanPipelines.push(kanbanLane("lane-flake", "Nightly: rerun the flake campaign on a quiet machine", [], "running", [
+    { id: "measure", state: "running", ago: 1_500 }, { id: "report", role: "reviewer" },
+  ]));
+  /* Done: more than its window of twenty. */
+  const doneTitles = [
+    "The board only moves forward", "The jump strip takes its own room", "One pipeline block and one tone map", "Deploy gate reads the pinned runtime",
+    "Queue drain on reconnect", "Archive TTL for closed lanes", "Catalog pages stay in snapshot order", "Voice utterances render once",
+    "Held deliveries heal themselves", "Board zoom keeps the focused card", "Seat rotation keeps the mandate", "Stage verdict recovery after a host restart",
+    "Fast conversation switching", "Reconnect note stays quiet", "Search lands on the message", "Composer keeps its draft across screens",
+    "Accounts screen on the phone", "Host sheet names each PID", "Receipts carry their inverse", "Project sheet scrolls to the current project",
+    "Hidden tray lists closed conversations", "Stage names are display names", "Review heads line on the card", "Findings ranked by severity",
+    "Empty columns say where the work is",
+  ];
+  doneTitles.forEach((title, index) => {
+    const path = kanbanConversation(title, "settled", 3_600 * (index + 2));
+    kanbanTasks.push(kanbanTask(`t-done-${index}`, "done", title, { assignments: [kanbanAssign(path)], updatedAt: iso(3_600 * (index + 2)) }));
+  });
+  /* The live seat: the card above the tabs, never a card in a column. */
+  kanbanConversation("Orchestrator", "settled", 300);
+}
+const SEAT_PATH = kanbanFiles.find((entry) => entry.title === "Orchestrator")?.path ?? null;
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  /* The phone's Move to and Hide (#2072 slice 4): the task store's guarded
+     PATCH, applied to the fixture's own rows and recorded. */
+  if (KANBAN && url.pathname.startsWith("/api/tasks/") && method === "PATCH") {
+    const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    evidence.taskPatches.push({ id, body });
+    const row = kanbanTasks.find((entry) => (entry as { id: string }).id === id) as Record<string, unknown> | undefined;
+    if (!row) return json({ error: "task not found" }, 404);
+    if (body.expectedRevision !== row.revision) return json({ error: "revision moved", code: "TASK_REVISION_CONFLICT" }, 409);
+    if (typeof body.status === "string") row.status = body.status;
+    if (typeof body.text === "string") row.text = body.text;
+    if (typeof body.details === "string") row.details = body.details;
+    if (typeof body.color === "string") row.color = body.color === "none" ? undefined : body.color;
+    if (body.hide === true) row.groupHidden = { at: new Date().toISOString(), by: "operator", admitted: { conversationIds: [], paths: [] } };
+    if (body.hide === false) delete row.groupHidden;
+    row.revision = `${String(row.revision).replace(/-\d+$/, "")}-${Number(String(row.revision).split("-").pop()) + 1}`;
+    row.updatedAt = new Date().toISOString();
+    return json({ task: row });
+  }
+  if (KANBAN && url.pathname === "/api/tasks" && method === "GET") return json({ tasks: kanbanTasks });
+  if (url.pathname === "/api/files" && KANBAN) {
+    return json({
+      files: kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length }], flows: [], pipelines: kanbanPipelines,
+      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" } },
+    });
+  }
   if (url.pathname === "/api/files") {
     return json({
       files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows, pipelines,
@@ -288,6 +518,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.
     if (queueRecovery) return new Promise<Response>(() => {});
+    if (KANBAN && SEAT_PATH) {
+      return json({
+        seat: {
+          project: PROJECT, seatEpoch: 1, conversationId: idOf(SEAT_PATH), path: SEAT_PATH, mandate: "Run the atlas board.", state: "active", designatedAt: iso(86_400),
+          intent: { clientRequestId: "seat-atlas-1", mode: "existing", launchId: null, error: null },
+        },
+        pending: null, exists: true,
+      });
+    }
     return json({ seat: null, pending: null, exists: true });
   }
   if (queueRecovery && url.pathname === "/api/runtime/send") {

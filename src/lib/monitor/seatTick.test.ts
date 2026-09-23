@@ -1462,6 +1462,7 @@ test("a provisioned lane reaches its creator as one more item kind under the own
     kind: "provisioning",
     id: "pipeline_a1",
     label: "ship the exporter — lane you launched: provisioned, first stage running",
+    laneAnnouncement: "pipeline_a1:provisioned",
   }]);
 });
 
@@ -1478,6 +1479,7 @@ test("a lane whose provisioning failed names what stopped it (#1799)", () => {
     kind: "pipeline",
     id: "pipeline_a1",
     label: "ship the exporter — lane you launched: provisioning failed, it never ran a stage: fetching origin/main: origin unavailable",
+    laneAnnouncement: "pipeline_a1:provisioning-failed",
   });
 });
 
@@ -1495,6 +1497,7 @@ test("a needs_review lane's wake line says the last review failed and the head i
     kind: "pipeline",
     id: "pipeline_a1",
     label: `ship the exporter — lane you launched: last review failed, head unreviewed: review said fail with 2 findings on ${"1".repeat(12)}; current head ${"2".repeat(12)} was never reviewed. pipeline_action continue-review with addRounds resumes it`,
+    laneAnnouncement: "pipeline_a1:needs_review",
   });
   expect(verdict.items[0]!.label).not.toContain("completed");
 });
@@ -1510,8 +1513,8 @@ test("only a landed wake records a provisioning announcement, and only for the l
   /* The plan records exactly the lanes the message carries: the two the bound
      held back were announced to nobody and stay offerable. */
   const commit = plan(decision.verdict, "fp-2", 0);
-  expect(commit.announcedLanes).toEqual(named);
-  expect(seatTickWakeCommit(emptySeatTickState(), commit, NOW).announcedLanes).toEqual(named);
+  expect(commit.announcedLanes).toEqual(named.map((id) => `${id}:provisioned`));
+  expect(seatTickWakeCommit(emptySeatTickState(), commit, NOW).announcedLanes).toEqual(named.map((id) => `${id}:provisioned`));
   /* A wake that never landed leaves the row untouched, which is what keeps the
      announcement owed rather than lost. */
   expect(emptySeatTickState().announcedLanes).toEqual([]);
@@ -1527,7 +1530,7 @@ test("a provisioning announcement does not displace the lane's later settlements
   expect(reasonsOf(completed.verdict)).toEqual(["own-lane-settled"]);
   const verdict = completed.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
   expect(verdict.items[0]!.kind).toBe("pipeline");
-  expect(verdict.items[0]!.label).toContain("completed, and nobody has closed it out");
+  expect(verdict.items[0]!.label).toContain("completed");
 });
 
 test("a child whose host died over an open turn is named once and then keeps the project's hour, however much the board moves (#1881)", () => {

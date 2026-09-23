@@ -1091,9 +1091,9 @@ export function defaultPipelinePorts(
       const recovery = stagedLaunchRecovery(receipt);
       // An uncertain/delivered operation can outlive the controller's budget.
       if (recovery && recovery.phase !== "unpublished") return false;
-      registry.failSpawn(launchId, reason);
+      const failed = registry.failSpawn(launchId, reason);
       invalidateRegistryProjection();
-      return registry.readOnlySnapshot().receipts[launchId]?.state === "failed";
+      return failed;
     },
     claimSpawnRetry: (launchId, claimId) => {
       const result = registry.claimFailedSpawnForRetry(launchId, claimId).kind;

@@ -606,6 +606,7 @@ function finishedLane(over: Record<string, unknown> = {}): Record<string, unknow
     state: "completed",
     cursor: null,
     runs: [],
+    createdAt: "2026-08-27T09:00:00.000Z",
     closedAt: new Date(NOW - 14 * 60 * 60_000).toISOString(),
     ...over,
   });
@@ -657,6 +658,7 @@ function openPullRequest(over: Partial<OpenPullRequest> = {}): OpenPullRequest {
     number: 1289,
     title: "wake on a merge that is waiting",
     headRefName: "topic-merge-queue",
+    createdAt: "2026-08-27T10:00:00.000Z",
     updatedAt: new Date(NOW - 30 * 60_000).toISOString(),
     ...over,
   };
@@ -786,12 +788,12 @@ test("a project whose tick is off asks GitHub nothing", async () => {
 /** The same lane, three days later: out of the hot store, into cold storage,
     and its pull request still unmerged. */
 function archivedLane(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return finishedLane({ closedAt: new Date(NOW - 5 * DAY_MS).toISOString(), ...over });
+  return finishedLane({ createdAt: new Date(NOW - 6 * DAY_MS).toISOString(), closedAt: new Date(NOW - 5 * DAY_MS).toISOString(), ...over });
 }
 
 test("a lane that has been archived still owes its open pull request", async () => {
   const input = await gather(
-    { pipelines: [], archivedPipelines: [archivedLane()], openPullRequests: [openPullRequest()] },
+    { pipelines: [], archivedPipelines: [archivedLane()], openPullRequests: [openPullRequest({ createdAt: new Date(NOW - 5.5 * DAY_MS).toISOString() })] },
     withCursor(0, OVERDUE),
   );
   expect(input.pullRequests).toEqual([{
@@ -810,7 +812,7 @@ test("a lane that has been archived still owes its open pull request", async () 
 test("an archived lane names the repository the pull requests are read from", async () => {
   const calls: { cwd: string; limit: number }[] = [];
   await gather(
-    { pipelines: [], archivedPipelines: [archivedLane()], openPullRequests: [openPullRequest()], pullRequestCalls: calls },
+    { pipelines: [], archivedPipelines: [archivedLane()], openPullRequests: [openPullRequest({ createdAt: new Date(NOW - 5.5 * DAY_MS).toISOString() })], pullRequestCalls: calls },
     withCursor(0, OVERDUE),
   );
   expect(calls).toEqual([{ cwd: "/srv/repo", limit: 60 }]);

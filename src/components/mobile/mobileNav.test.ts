@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { BOARD, createMobileNav, MOBILE_NAV_STATE_KEY, readMobileNavEntry, topScreen, type MobileNav, type MobileNavHost } from "./mobileNav";
+import { BOARD, createMobileNav, landResolvedConversation, MOBILE_NAV_STATE_KEY, readMobileNavEntry, topScreen, type MobileNav, type MobileNavHost } from "./mobileNav";
 
 /*
  * The navigation contract (docs/design/mobile-v2/README.md §3.3) over a model
@@ -84,6 +84,40 @@ describe("screens", () => {
     expect(kinds(nav)).toEqual(["board"]);
     expect(nav.getState().motion).toBe("pop");
     expect(b.index()).toBe(0);
+  });
+
+  test("a task is a screen between the board and what it opens (#2072 slice 5, phone-kanban §3.7)", () => {
+    const { nav, b } = phone();
+    nav.push({ kind: "task", id: "t1" });
+    expect(readMobileNavEntry(b.state())).toEqual({ d: 2, screen: { kind: "task", id: "t1" } });
+    nav.push({ kind: "pipeline", id: "p1" });
+    nav.push({ kind: "chat", id: "/repo/stage.jsonl" });
+    expect(kinds(nav)).toEqual(["board", "task", "pipeline", "chat"]);
+    nav.back();
+    expect(kinds(nav)).toEqual(["board", "task", "pipeline"]);
+    b.host.history.back();
+    expect(topScreen(nav.getState())).toEqual({ kind: "task", id: "t1" });
+    nav.back();
+    expect(kinds(nav)).toEqual(["board"]);
+    /* Forward re-enters the task it left. */
+    b.forward();
+    expect(topScreen(nav.getState())).toEqual({ kind: "task", id: "t1" });
+  });
+
+  test("stamp puts the shell's key back on an entry the host re-typed whole, so a screen pushed above it pops back onto it", () => {
+    const { nav, b } = phone();
+    nav.push({ kind: "task", id: "t1" });
+    nav.push({ kind: "chat", id: "/repo/agent.jsonl" });
+    /* The Viewer's focus record replaces the entry's state whole. */
+    b.host.history.replaceState({ llvFocus: { v: 1, conversationId: "c1", path: "/repo/agent.jsonl", project: "atlas" } }, "", "http://phone/#c=c1");
+    nav.stamp();
+    expect(b.state()).toEqual({
+      llvFocus: { v: 1, conversationId: "c1", path: "/repo/agent.jsonl", project: "atlas" },
+      [MOBILE_NAV_STATE_KEY]: { d: 3, screen: { kind: "chat", id: "/repo/agent.jsonl" } },
+    });
+    nav.push({ kind: "task", id: "t1" });
+    b.host.history.back();
+    expect(kinds(nav)).toEqual(["board", "task", "chat"]);
   });
 
   test("browser back and ‹ agree: both pop exactly one screen", () => {
@@ -235,6 +269,9 @@ describe("history entries", () => {
     expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "chat" } } })).toBeNull();
     expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "bench" } } })).toBeNull();
     expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "chat", id: "c1", extra: 1 } } })).toEqual({ d: 2, screen: { kind: "chat", id: "c1" } });
+    expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "task" } } })).toBeNull();
+    expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "task", id: "t1", extra: 1 } } })).toEqual({ d: 2, screen: { kind: "task", id: "t1" } });
+    expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "board", id: "t1" } } })).toBeNull();
   });
 
   test("attach is ref-counted: the listener stays until the last screen detaches", () => {
@@ -265,3 +302,72 @@ describe("history entries", () => {
     expect(heard).toBe(2);
   });
 });
+
+/*
+ * The Viewer's resolver on the phone (#866's replay, #2072 slice 5). A
+ * conversation opened from a task or a pipeline has its entry re-typed whole
+ * by the focus record and stamped back by the dashboard; ‹ from a screen
+ * pushed over it lands there, and the Viewer's popstate replay resolves that
+ * entry's focus record and runs `landResolvedConversation`. The stack the
+ * traversal built must survive it, so the next ‹ reaches the task or the
+ * pipeline under the conversation.
+ */
+describe("the resolver landing a conversation", () => {
+  const focus = (path: string) => ({ llvFocus: { v: 1, conversationId: `c-${path}`, path, project: "atlas" } });
+  /* The dashboard's open from a pushed screen: push, the focus record's
+     whole-state replace, the stamp. */
+  const openFromScreen = (nav: MobileNav, b: ReturnType<typeof browser>, path: string) => {
+    nav.push({ kind: "chat", id: path });
+    b.host.history.replaceState(focus(path), "", `http://phone/#c=c-${path}`);
+    nav.stamp();
+  };
+  /* The Viewer's replay of the entry the traversal landed on. */
+  const replay = (nav: MobileNav, b: ReturnType<typeof browser>) => {
+    const landed = b.state() as { llvFocus?: { path: string } } | null;
+    expect(landed?.llvFocus).toBeDefined();
+    landResolvedConversation(nav, true, b.state(), () => b.host.history.replaceState(focus(landed!.llvFocus!.path), "", b.url()));
+  };
+
+  test("‹ from a task opened over an agent's conversation keeps [board, task, chat], and the next ‹ lands on the task", () => {
+    const { nav, b } = phone();
+    nav.push({ kind: "task", id: "t1" });
+    openFromScreen(nav, b, "/repo/agent.jsonl");
+    /* The conversation's task strip. */
+    nav.push({ kind: "task", id: "t1" });
+    b.host.history.back();
+    replay(nav, b);
+    expect(nav.getState().stack).toEqual([BOARD, { kind: "task", id: "t1" }, { kind: "chat", id: "/repo/agent.jsonl" }]);
+    /* The re-typed entry keeps its place, so Forward and Back still read it. */
+    expect(readMobileNavEntry(b.state())).toEqual({ d: 3, screen: { kind: "chat", id: "/repo/agent.jsonl" } });
+    nav.back();
+    expect(nav.getState().stack).toEqual([BOARD, { kind: "task", id: "t1" }]);
+  });
+
+  test("pipeline → stage conversation → a screen pushed over it → ‹ keeps the pipeline under the conversation", () => {
+    const { nav, b } = phone();
+    nav.push({ kind: "pipelines" });
+    nav.push({ kind: "pipeline", id: "p1" });
+    openFromScreen(nav, b, "/repo/stage.jsonl");
+    nav.push({ kind: "accounts" });
+    b.host.history.back();
+    replay(nav, b);
+    expect(kinds(nav)).toEqual(["board", "pipelines", "pipeline", "chat"]);
+    nav.back();
+    expect(topScreen(nav.getState())).toEqual({ kind: "pipeline", id: "p1" });
+  });
+
+  test("an entry the phone's stack did not write — a deep link, the desktop's typed entries — still goes home, as #866 replays it", () => {
+    const { nav, b } = phone();
+    nav.push({ kind: "task", id: "t1" });
+    b.viewerPush(focus("/repo/other.jsonl"), "http://phone/#c=c-/repo/other.jsonl");
+    landResolvedConversation(nav, true, b.state(), () => {});
+    expect(kinds(nav)).toEqual(["board"]);
+    /* A fresh open goes home whatever entry it stands on. */
+    const second = phone();
+    second.nav.push({ kind: "task", id: "t1" });
+    second.nav.push({ kind: "chat", id: "/repo/agent.jsonl" });
+    landResolvedConversation(second.nav, false, second.b.state(), () => {});
+    expect(kinds(second.nav)).toEqual(["board"]);
+  });
+});
+

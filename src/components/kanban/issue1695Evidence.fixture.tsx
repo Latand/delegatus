@@ -47,7 +47,12 @@ const CODENAME_TIERS = SCENARIO === "tier-codename";
 const TIER_LIMITS = SCENARIO === "tier-limits" || CODENAME_TIERS;
 const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
 const STAGES = SCENARIO === "stages" || ACCOUNTS;
-const PIPELINES = SCENARIO === "pipelines" || STAGES;
+/* The pipeline block in variant B (#2072 slice 3, docs/design/desktop-flat-cards.md §9):
+   the variant renders' cards, with Ukrainian content when the page is uk. */
+const FLAT = SCENARIO === "pipeline-block";
+const UK = localStorage.getItem("llv_lang") === "uk";
+const L = (en: string, uk: string) => (UK ? uk : en);
+const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured";
@@ -65,7 +70,7 @@ const BALANCE = SCENARIO === "balance";
    a merged fix, so the card aggregates seven links behind "+N"; the longest
    Inbox title carries an attached draft, so chips are read under the longest
    titles in the narrowest column. */
-const WORK_LINKS = SCENARIO === "work-links";
+const WORK_LINKS = SCENARIO === "work-links" || FLAT;
 const MANY = SCENARIO === "issue1765" || BALANCE || WORK_LINKS;
 /* #1743: one task whose pipelines exercise the whole identity/edge vocabulary —
    a fail edge fired twice of three, one whose budget is spent, mixed engines,
@@ -97,7 +102,7 @@ const MESH = "river-mesh";
 const ARCS = SCENARIO === "issue1798";
 /* #1938: a lane whose review budget ran out and whose last fix wrote a head
    nobody reviewed — parked in needs_review, never completed. */
-const REVIEW_SPENT = SCENARIO === "issue1938";
+const REVIEW_SPENT = SCENARIO === "issue1938" || FLAT;
 /* The seat's header at its fullest: a mandate a version behind the default,
    so the stale chip draws, a designated incumbent with its effort, account and
    a context past the rotation line, twenty previous seats and a running host
@@ -523,7 +528,53 @@ const balancePipelines: Pipeline[] = BALANCE ? BALANCE_COLUMNS.flatMap((column) 
   return [one("short"), one("long"), loop("mid"), loop("long")];
 }) : [];
 
+const flatPipelines: Pipeline[] = FLAT ? (() => {
+  const mdImpl = add(conversation("md-impl", L("Builder: move the delta chain off the request thread", "Білдер: винести ланцюг дельт з потоку запиту"), { mtime: now - 41 * MIN }));
+  const mdAccept = add(conversation("md-accept", L("Acceptor: hidden tabs stop polling", "Приймальник: приховані вкладки більше не опитують"), { mtime: now - 120 * MIN }));
+  const loopBuild = add(conversation("many-loop-build", L("Builder: name rows by the prompt", "Білдер: назви рядків із промпту"), { mtime: now - 70 * MIN }));
+  const loopRev = add(conversation("many-loop-rev", L("Reviewer: second round on row names", "Рецензент: другий раунд назв рядків"), working({ engine: "codex", model: "gpt-5.6", plan: { current: "Reading round 2" } })));
+  const firedFix = add(conversation("many-fired-fix", L("Builder: second pass after verify", "Білдер: другий прохід після перевірки"), working({ plan: { current: "Re-measuring the fold" } })));
+  const firedVer = add(conversation("many-fired-ver", L("Verifier: the fold hides a running lane", "Перевіряльник: згортка ховає робочий конвеєр"), { mtime: now - 30 * MIN, engine: "codex", model: "gpt-6-astra" }));
+  const finding = L("The delta chain is rebuilt on the request thread; the worker must own it.", "Ланцюг дельт перебудовується в потоці запиту; ним має володіти воркер.");
+  return [
+    pipeline("p-md-decision", L("Stop repeated full-board downloads", "Припинити повторні завантаження всієї дошки"), "t-mobile", "needs_decision",
+      [stage("implement", "builder", "review"), stage("review", "reviewer", null)],
+      [{ stageId: "implement", attempts: [attempt(1, "needs_decision", mdImpl, { startedAt: iso(80 * MIN), completedAt: iso(41 * MIN), verdict: { status: "fail", findings: [finding], rankedFindings: [{ severity: "P1", text: finding }] } })] }],
+      { stageId: "implement", state: "needs_decision", input: null, activatedBy: null },
+      { createdAt: iso(90 * MIN), stageReports: [{ seq: 1, at: iso(41 * MIN), actor: { kind: "agent", role: "builder", conversationId: mdImpl.conversationId }, stageId: "implement", attempt: 1, status: "fail", findings: 1, replaces: null, summary: finding }] }),
+    /* Paused while its acceptance stage ran: the engine keeps the cursor on the
+       held stage, which the phone's pipeline screen draws hollow (§3.13). */
+    pipeline("p-md-accept", L("Finish mobile traffic acceptance", "Завершити приймання мобільного трафіку"), "t-mobile", "paused",
+      [stage("accept", "verifier", "review"), stage("review", "reviewer", null)],
+      [{ stageId: "accept", attempts: [attempt(1, "running", mdAccept, { startedAt: iso(150 * MIN) })] }],
+      { stageId: "accept", state: "running", input: null, activatedBy: null }, { pausedState: "running", createdAt: iso(160 * MIN) }),
+    pipeline("p-many-loop", L("Name every pipeline row by its first prompt line", "Називати кожен рядок конвеєра першим рядком промпту"), "t-many", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", loopBuild, { startedAt: iso(90 * MIN) })] },
+        { stageId: "review", attempts: [attempt(1, "reviewing", loopRev, { flowId: "flow-rounds-review", startedAt: iso(60 * MIN), activatedBy: { stageId: "build", attempt: 1, edge: "pass" } })] },
+      ],
+      { stageId: "review", state: "reviewing", input: null, activatedBy: null }, { createdAt: iso(100 * MIN) }),
+    pipeline("p-many-fired", L("Keep a running lane out of the completed fold", "Не ховати робочий конвеєр у згортку завершених"), "t-many", "running",
+      [stage("fix", "builder", "verify"), stage("verify", "verifier", null, { onFail: { to: "fix", maxRounds: 2 } })],
+      [
+        { stageId: "fix", attempts: [attempt(1, "passed", firedFix, { startedAt: iso(100 * MIN) }), attempt(2, "running", firedFix, { startedAt: iso(20 * MIN), activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } })] },
+        { stageId: "verify", attempts: [attempt(1, "failed", firedVer, { startedAt: iso(60 * MIN), completedAt: iso(30 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } })] },
+      ],
+      { stageId: "fix", state: "running", input: null, activatedBy: null }, { createdAt: iso(110 * MIN) }),
+  ];
+})() : [];
+
+/* The pipeline block's case (#2072) runs the eight-stage chain with its
+   current stage named in 44 characters: too long to keep "✓3" and "+4" beside
+   it in a 390 px card, so the card's fold has to reach the stage alone. */
+const UPLOAD_UI = FLAT ? "verify-backward-compatibility-and-migrations" : "build-ui";
+/* And a two-stage lane whose current stage is named in 86 characters: too long
+   for a 390 px card's line even alone, so its name wraps inside the pill. */
+const ATTACH_VERIFY = FLAT ? "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge" : "verify";
+
 const pipelines: Pipeline[] = [
+  ...flatPipelines,
   ...reviewSpentPipelines,
   ...balancePipelines,
   ...arcPipelines,
@@ -544,14 +595,14 @@ const pipelines: Pipeline[] = [
     ],
     { stageId: "verify", state: "running", input: null, activatedBy: null }),
   pipeline("p-upload", "Redesign attachment upload for large files", "t-upload", "running",
-    [stage("plan", "architect", "build-api"), stage("build-api", "builder", "review-api"), stage("review-api", "reviewer", "build-ui"), stage("build-ui", "builder", "review-ui"), stage("review-ui", "reviewer", "verify"), stage("verify", "verifier", "docs", { onFail: { to: "build-ui", maxRounds: 2 } }), stage("docs", "builder", "merge"), stage("merge", "cleaner", null)],
+    [stage("plan", "architect", "build-api"), stage("build-api", "builder", "review-api"), stage("review-api", "reviewer", UPLOAD_UI), stage(UPLOAD_UI, "builder", "review-ui"), stage("review-ui", "reviewer", "verify"), stage("verify", "verifier", "docs", { onFail: { to: UPLOAD_UI, maxRounds: 2 } }), stage("docs", "builder", "merge"), stage("merge", "cleaner", null)],
     [
       { stageId: "plan", attempts: [attempt(1, "passed", uploadPlan)] },
       { stageId: "build-api", attempts: [attempt(1, "passed", uploadApi)] },
       { stageId: "review-api", attempts: [attempt(1, "passed", uploadRevApi, { ...flowOf("flow-upload-review-api"), reviewFlowSync: { generation: "g2", roundCount: 2, implementerHeadSha: null, reviewerHeadSha: null, verdict: null, relayState: "approved", terminalState: null } })] },
-      { stageId: "build-ui", attempts: [attempt(1, "running", uploadUi)] },
+      { stageId: UPLOAD_UI, attempts: [attempt(1, "running", uploadUi)] },
     ],
-    { stageId: "build-ui", state: "running", input: null, activatedBy: null }),
+    { stageId: UPLOAD_UI, state: "running", input: null, activatedBy: null }),
   pipeline("p-links", "Repair old links in the release notes", "t-links", "needs_decision",
     [stage("implement", "builder", "review"), stage("review", "reviewer", null)],
     [{ stageId: "implement", attempts: [attempt(1, "needs_decision", linksImpl)] }],
@@ -564,9 +615,9 @@ const pipelines: Pipeline[] = [
     ],
     { stageId: "diagnose", state: "running", input: null, activatedBy: null }),
   pipeline("p-attach", "Finish responsive native attachment delivery", "t-attach", "running",
-    [stage("build", "builder", "verify"), stage("verify", "verifier", null)],
-    [{ stageId: "build", attempts: [attempt(1, "passed", attachBuild)] }, { stageId: "verify", attempts: [attempt(1, "running", attachVerify)] }],
-    { stageId: "verify", state: "running", input: null, activatedBy: null }),
+    [stage("build", "builder", ATTACH_VERIFY), stage(ATTACH_VERIFY, "verifier", null)],
+    [{ stageId: "build", attempts: [attempt(1, "passed", attachBuild)] }, { stageId: ATTACH_VERIFY, attempts: [attempt(1, "running", attachVerify)] }],
+    { stageId: ATTACH_VERIFY, state: "running", input: null, activatedBy: null }),
   pipeline("p-compact", "Compact board stages and separate history from live work", "t-compact", "completed",
     [stage("build", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", null)],
     [
@@ -713,8 +764,9 @@ const tasks: BoardTask[] = [
   task("t-upload", "assigned", "Redesign attachment upload for large files", "Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.", 2 * MIN),
   task("t-export", "assigned", "Simplify the export settings sheet", "Fold the eleven toggles into three sensible presets and one advanced disclosure.", 9 * MIN, [exportImpl, exportExplore]),
   task("t-links", "assigned", "Repair old links in the release notes", "", 17 * MIN),
-  task("t-merge-a", "assigned", "Merge the approved queue adapter release · merge", "", 26 * 60 * MIN),
-  task("t-verify-a", "assigned", "Verify delivery recovery across transcript boundaries · verify", "", 30 * 60 * MIN),
+  ...(FLAT ? [task("t-mobile", "assigned", L("Mobile data: stop repeated full-board downloads and hidden-tab traffic", "Мобільні дані: припинити повторні завантаження всієї дошки й трафік прихованих вкладок"), L("A phone with the board open keeps downloading the whole board every few seconds, even in a hidden tab.", "Телефон із відкритою дошкою кожні кілька секунд завантажує її всю, навіть у прихованій вкладці."), 1 * MIN)] : []),
+  ...(FLAT ? [] : [task("t-merge-a", "assigned", "Merge the approved queue adapter release · merge", "", 26 * 60 * MIN),
+  task("t-verify-a", "assigned", "Verify delivery recovery across transcript boundaries · verify", "", 30 * 60 * MIN)]),
   task("t-disk", "assigned", "Disk space: find what Docker, worktrees and temp storage hold", "", 41 * 60 * MIN),
   task("t-longtitle", "inbox", "You are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.", "", 3 * 60 * MIN),
   task("t-pending", "inbox", "", "", 6 * MIN, [pendingWorker], { origin: { kind: "launch", key: "launch-pending", refinement: "pending" } } as Partial<BoardTask>),
@@ -735,6 +787,38 @@ const tasks: BoardTask[] = [
   ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
+
+if (FLAT) {
+  const retitle: Record<string, [string, string, string, string]> = {
+    "t-review-spent": ["GitHub Copilot as a third engine the Viewer can launch", "The last review failed, and the fix after it was never reviewed.", "GitHub Copilot як третій рушій, який Viewer уміє запускати", "Останнє рев’ю не пройшло, а виправлення після нього ніхто не перевірив."],
+    "t-many": ["Kanban: say what each pipeline of a task does, and fold the finished ones behind their count", "Seven pipelines on one card: four running, three finished.", "Канбан: казати, що робить кожен конвеєр задачі, і згортати завершені за лічильником", "Сім конвеєрів на одній картці: чотири працюють, три завершені."],
+    "t-search": ["Restore search results after the index rebuild", "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.", "Повернути результати пошуку після перебудови індексу", "Результати зникають на десять хвилин після перебудови. Тримати старий індекс, доки новий не відповість."],
+    "t-upload": ["Redesign attachment upload for large files", "Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.", "Переробити завантаження великих вкладень", "Відновлюване завантаження файлів понад 100 МБ: API частинами, прогрес, що переживає перезавантаження, і документація."],
+    "t-export": ["Simplify the export settings sheet", "Fold the eleven toggles into three sensible presets and one advanced disclosure.", "Спростити аркуш налаштувань експорту", "Згорнути одинадцять перемикачів у три розумні пресети й один розширений розділ."],
+    "t-links": ["Repair old links in the release notes", "", "Полагодити старі посилання в нотатках до випуску", ""],
+    "t-disk": ["Disk space: find what Docker, worktrees and temp storage hold", "", "Місце на диску: знайти, що тримають Docker, worktree і тимчасові файли", ""],
+    "t-rounds": ["Rework the retry banner until review passes", "", "Переробляти банер повтору, доки рев’ю не пройде", ""],
+  };
+  for (let index = 0; index < tasks.length; index += 1) {
+    const entry = retitle[tasks[index]!.id];
+    if (!entry) continue;
+    const [title, description] = UK ? [entry[2], entry[3]] : [entry[0], entry[1]];
+    tasks[index] = { ...tasks[index]!, text: description ? `${title}\n${description}` : title } as BoardTask;
+  }
+  const rename: Record<string, [string, string]> = {
+    "p-review-spent": ["Launch Copilot sessions from the composer", "Запускати сесії Copilot із композера"],
+    "p-many-pills": ["Name every pipeline row on a task card", "Назвати кожен рядок конвеєра на картці задачі"],
+    "p-many-drawers": ["Remove the legacy drawers under the board columns", "Прибрати старі шухляди під колонками дошки"],
+    "p-search": ["Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"],
+    "p-upload": ["Redesign attachment upload for large files", "Переробити завантаження великих вкладень"],
+    "p-links": ["Repair old links in the release notes", "Полагодити старі посилання в нотатках до випуску"],
+    "p-rounds": ["Rework the retry banner until review passes", "Переробляти банер повтору, доки рев’ю не пройде"],
+  };
+  for (const lane of pipelines) {
+    const names = rename[lane.id];
+    if (names) (lane as { task: string }).task = UK ? names[1] : names[0];
+  }
+}
 // Stopped launch receipts on a completed task, including a still-retryable parked lane.
 if (SCENARIO === "stopped-launches") {
   const launches = ["closed", "needs_decision"].map((state) => {
@@ -1045,6 +1129,11 @@ function fixtureWorkLinks(): FilesWorkLinks {
     pr(2190, "pipeline/p-search", "open", [2044]),
     /* The lane the phone's queue opens: three chips beside the attach link. */
     pr(2195, "pipeline/p-links", "draft", [2046, 2047]),
+    pr(1996, "pipeline/p-md-accept", "open", [1990]),
+    pr(2031, "pipeline/p-review-spent", "open", [2030]),
+    pr(2204, "pipeline/p-many-drawers", "draft"),
+    pr(2207, "pipeline/p-upload", "open", [2061]),
+    pr(2212, "pipeline/p-many-loop", "open"),
   ];
   const view: ForgeRepositoryView = {
     canonical: repository,

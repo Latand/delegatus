@@ -1,0 +1,805 @@
+{
+  "results": [
+    {
+      "key": "one-pipeline-390-en",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-favicon"
+      ],
+      "scrollHeight": 513,
+      "clientHeight": 513
+    },
+    {
+      "key": "many-390-en",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1268,
+      "clientHeight": 513
+    },
+    {
+      "key": "many-390-en",
+      "stop": 1,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1268,
+      "clientHeight": 513
+    },
+    {
+      "key": "many-390-en",
+      "stop": 2,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1268,
+      "clientHeight": 513
+    },
+    {
+      "key": "agents-390-en",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [],
+      "scrollHeight": 513,
+      "clientHeight": 513
+    },
+    {
+      "key": "decision-390-en",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-decision",
+        "lane-paused"
+      ],
+      "scrollHeight": 625,
+      "clientHeight": 513
+    },
+    {
+      "key": "decision-390-en",
+      "stop": 1,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-decision",
+        "lane-paused"
+      ],
+      "scrollHeight": 625,
+      "clientHeight": 513
+    },
+    {
+      "key": "one-pipeline-390-uk",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-favicon"
+      ],
+      "scrollHeight": 513,
+      "clientHeight": 513
+    },
+    {
+      "key": "many-390-uk",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1284,
+      "clientHeight": 513
+    },
+    {
+      "key": "many-390-uk",
+      "stop": 1,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1284,
+      "clientHeight": 513
+    },
+    {
+      "key": "many-390-uk",
+      "stop": 2,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1284,
+      "clientHeight": 513
+    },
+    {
+      "key": "agents-390-uk",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [],
+      "scrollHeight": 513,
+      "clientHeight": 513
+    },
+    {
+      "key": "decision-390-uk",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-decision",
+        "lane-paused"
+      ],
+      "scrollHeight": 625,
+      "clientHeight": 513
+    },
+    {
+      "key": "decision-390-uk",
+      "stop": 1,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 610,
+        "width": 390,
+        "height": 57
+      },
+      "lanes": [
+        "lane-decision",
+        "lane-paused"
+      ],
+      "scrollHeight": 625,
+      "clientHeight": 513
+    },
+    {
+      "key": "one-pipeline-430-en",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-favicon"
+      ],
+      "scrollHeight": 581,
+      "clientHeight": 581
+    },
+    {
+      "key": "many-430-en",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1253,
+      "clientHeight": 581
+    },
+    {
+      "key": "many-430-en",
+      "stop": 1,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1253,
+      "clientHeight": 581
+    },
+    {
+      "key": "many-430-en",
+      "stop": 2,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1253,
+      "clientHeight": 581
+    },
+    {
+      "key": "agents-430-en",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [],
+      "scrollHeight": 581,
+      "clientHeight": 581
+    },
+    {
+      "key": "decision-430-en",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-decision",
+        "lane-paused"
+      ],
+      "scrollHeight": 593,
+      "clientHeight": 581
+    },
+    {
+      "key": "decision-430-en",
+      "stop": 1,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-decision",
+        "lane-paused"
+      ],
+      "scrollHeight": 593,
+      "clientHeight": 581
+    },
+    {
+      "key": "one-pipeline-430-uk",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-favicon"
+      ],
+      "scrollHeight": 581,
+      "clientHeight": 581
+    },
+    {
+      "key": "many-430-uk",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1269,
+      "clientHeight": 581
+    },
+    {
+      "key": "many-430-uk",
+      "stop": 1,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1269,
+      "clientHeight": 581
+    },
+    {
+      "key": "many-430-uk",
+      "stop": 2,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-many-review",
+        "lane-many-drawer",
+        "lane-many-fold",
+        "lane-many-pill",
+        "lane-many-done-1",
+        "lane-many-done-2",
+        "lane-many-done-3"
+      ],
+      "scrollHeight": 1269,
+      "clientHeight": 581
+    },
+    {
+      "key": "agents-430-uk",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [],
+      "scrollHeight": 581,
+      "clientHeight": 581
+    },
+    {
+      "key": "decision-430-uk",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-decision",
+        "lane-paused"
+      ],
+      "scrollHeight": 593,
+      "clientHeight": 581
+    },
+    {
+      "key": "decision-430-uk",
+      "stop": 1,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "overflowX": 0,
+      "bodyOverflowX": 0,
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "dock": {
+        "x": 0,
+        "y": 678,
+        "width": 430,
+        "height": 57
+      },
+      "lanes": [
+        "lane-decision",
+        "lane-paused"
+      ],
+      "scrollHeight": 593,
+      "clientHeight": 581
+    }
+  ],
+  "failures": []
+}

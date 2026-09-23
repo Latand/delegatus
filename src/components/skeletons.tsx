@@ -127,6 +127,57 @@ const COLUMN_LABEL: Record<(typeof KANBAN_COLUMNS)[number], MessageKey> = {
 /** Card placeholders per column: two waiting, one assigned, none elsewhere. */
 const COLUMN_CARDS: Record<(typeof KANBAN_COLUMNS)[number], number> = { inbox: 2, assigned: 1, blocked: 0, done: 0 };
 
+/** Pill widths of a skeleton card's stage chain, in px, varied by card. */
+const PILL_WIDTHS = [[88, 66], [76, 72], [44, 82, 72], [], [68, 74]] as const;
+
+/** One placeholder card of the phone's columns (`MobileKanban`'s card): two
+    title bars, a row of stage-pill shapes with the link bar at the right, or
+    the agents line on a card that has no pipeline. */
+function PhoneCardSkeleton({ index }: { index: number }) {
+  const pills = PILL_WIDTHS[index % PILL_WIDTHS.length]!;
+  const oneLine = index % 3 === 1;
+  return (
+    <div aria-hidden data-skeleton-card="" className="flex min-h-14 flex-col gap-2 rounded-[12px] bg-card px-3 py-2.5 shadow-1">
+      <Bar width={`${TITLE_WIDTHS[index % TITLE_WIDTHS.length] + 22}%`} height={12} />
+      {oneLine ? null : <Bar width={`${META_WIDTHS[index % META_WIDTHS.length] + 12}%`} height={12} />}
+      {pills.length ? (
+        <span className="flex items-center gap-2.5">
+          {pills.map((width, pill) => <Bar key={pill} width={`${width}px`} height={22} className="rounded-full" />)}
+          <span className="flex-1" />
+          <Bar width="38px" height={10} />
+        </span>
+      ) : <Bar width="36%" height={10} />}
+    </div>
+  );
+}
+
+/**
+ * The phone's columns with nothing cached (#2072 slice 4, phone-kanban §3.9):
+ * the orchestrator card's placeholder where the card will be, the tab strip
+ * with its real labels, Assigned selected as the board opens, and dimmed
+ * count placeholders, then cards in the card's own anatomy.
+ */
+export function PhoneKanbanSkeleton({ seat = true, active = "assigned", className = "" }: { seat?: boolean; active?: (typeof KANBAN_COLUMNS)[number]; className?: string }) {
+  const { t } = useLocale();
+  return (
+    <Status testId="phone-kanban" label={t("dash.loadingBoard")} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${className}`}>
+      {seat ? <div className="shrink-0 pb-1 pt-1.5"><SkeletonSeat /></div> : null}
+      <div aria-hidden data-skeleton-tabs="" className="grid shrink-0 grid-cols-4 gap-1 border-b border-border px-1.5 pt-1">
+        {KANBAN_COLUMNS.map((status) => (
+          <span key={status} className={`relative flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-t-[10px] px-1 pb-2 pt-1.5 ${status === active ? "bg-card" : ""}`}>
+            <span className={`whitespace-nowrap text-ui font-semibold leading-none ${status === active ? "text-primary" : "text-secondary"}`}>{t(COLUMN_LABEL[status])}</span>
+            <Bar width="22px" height={8} className="rounded-full" />
+            {status === active ? <span className="absolute inset-x-[20%] bottom-0 h-0.5 rounded-full bg-accent" /> : null}
+          </span>
+        ))}
+      </div>
+      <div className="flex flex-col gap-2 px-3 pb-3 pt-2">
+        {Array.from({ length: 6 }, (_, index) => <PhoneCardSkeleton key={index} index={index} />)}
+      </div>
+    </Status>
+  );
+}
+
 function KanbanCardSkeleton({ index }: { index: number }) {
   return (
     <div aria-hidden data-skeleton-card="" className="mx-3 mb-2 flex flex-col gap-2 rounded-[10px] border border-border bg-card p-3 shadow-1">

@@ -1,0 +1,264 @@
+/* One pipeline block (#2072 slice 3; docs/design/phone-kanban.md §3.13,
+   docs/design/desktop-flat-cards.md §4, variant B). The desktop card and the
+   phone draw the same block, so none of this is scoped to `.kb`.
+
+   ── One tone map ──────────────────────────────────────────────────────────
+   The colour of a stage state is named once, on the `STAGE_TONE` class the
+   component writes (`tone-idle` … `tone-needs`), and the colour of a pipeline
+   state once, on `data-pstate`. The card's dot, the graph's node, the block's
+   mark and every state word read these variables, so the phone and the
+   desktop cannot disagree about what a state looks like. */
+
+.tone-idle { --stage-tone: var(--color-muted); }
+.tone-active { --stage-tone: var(--color-success); }
+.tone-review { --stage-tone: var(--color-info); }
+.tone-ok { --stage-tone: var(--color-success); }
+.tone-bad { --stage-tone: var(--color-danger); }
+.tone-needs { --stage-tone: var(--color-warning); }
+
+[data-pstate] { --pstate-ink: var(--color-muted); }
+[data-pstate="running"] { --pstate-ink: var(--color-success); }
+[data-pstate="needs_decision"], [data-pstate="needs_review"] { --pstate-ink: var(--color-warning); }
+[data-pstate="provisioning"] { --pstate-ink: var(--color-accent); }
+[data-pstate="completed"] { --pstate-ink: var(--color-secondary); }
+
+/* A pipeline state said as a word, in its tone. */
+.pstate-word { color: var(--pstate-ink); font-weight: 600; white-space: nowrap; }
+/* The same state as a chip, where it stands alone (the Stages sheet's head).
+   Both states that wait on the operator take the warning chip (#2080). */
+.pstate-chip {
+  flex-shrink: 0; height: 18px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: 999px;
+  font-size: var(--text-caption); font-weight: 700; background: var(--surface-card); color: var(--pstate-ink); border: 1px solid var(--border-default);
+}
+.pstate-chip[data-pstate="running"] { border-color: color-mix(in srgb, var(--pstate-ink) 40%, var(--border-default)); }
+.pstate-chip:is([data-pstate="needs_decision"], [data-pstate="needs_review"]) { border-color: color-mix(in srgb, var(--pstate-ink) 45%, var(--border-default)); background: var(--color-warning-soft); }
+.pstate-chip[data-pstate="provisioning"] { border-style: dashed; }
+
+/* ── The mark: shape carries the state, colour repeats it ───────────────── */
+.pmark {
+  position: relative; flex: none; display: inline-grid; place-items: center;
+  width: 12px; height: 12px; color: var(--stage-tone, var(--color-muted));
+}
+.pmark svg { width: 12px; height: 12px; }
+.pmark[data-mark="dot"]::before,
+.pmark[data-mark="ring"]::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
+.pmark[data-mark="dot"]::before { background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 24%, transparent); }
+.pmark[data-mark="ring"]::before { box-shadow: inset 0 0 0 1.5px currentColor; }
+.pmark[data-mark="alert"] { border-radius: 50%; background: currentColor; }
+.pmark .pmark-bang { color: var(--surface-card); font-size: 9px; font-weight: 800; line-height: 1; }
+.pmark[data-live="1"]::before { animation: pb-live 1.8s var(--ease-standard, ease-in-out) infinite; }
+@keyframes pb-live { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 10%, transparent); } }
+
+/* ── The block ───────────────────────────────────────────────────────────── */
+.pblock { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex-shrink: 0; }
+.pblock[data-density="task"] { padding: 6px 0 4px; border-top: 1px solid var(--border-default); }
+.pblock .pb-grow { flex: 1 1 0; min-width: 0; }
+.pblock .pb-sep { color: var(--color-muted); opacity: 0.8; }
+
+/* The pill: the phone's outline with no fill, a mark and the stage's name. */
+.pblock .pb-pill {
+  position: relative; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px;
+  min-width: 0; max-width: 100%; border-radius: 999px; border: 1px solid var(--border-default); background: transparent;
+  font-size: var(--text-label); font-weight: 600; line-height: 1; white-space: nowrap; color: var(--color-primary);
+}
+/* The name clips only sideways: a line box of 1 would cut its descenders. */
+.pblock .pb-pill .pb-name { min-width: 3ch; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
+.pblock .pb-pill.tone-active, .pblock .pb-pill.tone-review { border-color: color-mix(in srgb, var(--stage-tone) 55%, var(--border-default)); }
+.pblock .pb-pill.tone-needs { border-color: var(--stage-tone); color: var(--stage-tone); }
+.pblock .pb-pill.tone-bad { border-color: color-mix(in srgb, var(--stage-tone) 45%, var(--border-default)); }
+.pblock .pb-pill.tone-idle .pb-name { color: var(--color-secondary); }
+/* No conversation yet: dashed, as a configured edge is. */
+.pblock .pb-pill.waiting, .pblock .pb-pill.more { border-style: dashed; }
+.pblock .pb-pill.more .pb-name, .pblock .pb-pill.fold .pb-name { color: var(--color-secondary); }
+.pblock .pb-pill.selected { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 35%, transparent); }
+.pblock button.pb-pill:hover { border-color: var(--border-strong); }
+.pblock button.pb-pill:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.pblock .pb-pill .ccircle { min-width: 14px; height: 14px; }
+
+/* The fail edge on the failing pill: fired is warning, spent is danger, and a
+   lane that waits on the operator keeps one status hue, amber (§3.13). */
+.pblock .pret { display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0; font-size: var(--text-caption); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-warning); }
+.pblock .pret[data-arc-state="exhausted"] { color: var(--color-danger); }
+.pblock[data-needs="1"] .pret { color: var(--color-warning); }
+.pblock .pret[data-arc-live="1"] { padding: 0 3px; border-radius: 999px; background: var(--color-accent-soft); }
+
+.pblock .pb-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.pblock .pb-step { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.pblock .pb-arrow { flex: none; color: var(--color-muted); font-size: var(--text-label); }
+
+/* ── Task density: the lane row ──────────────────────────────────────────── */
+.pblock .pb-head { display: flex; align-items: center; gap: 2px; min-height: 28px; min-width: 0; }
+.pblock .pb-open {
+  display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; flex: 0 1 auto;
+  padding: 3px 4px; margin-left: -4px; border-radius: 6px; text-align: left; color: inherit;
+}
+.pblock .pb-open:not(:disabled):hover { background: var(--surface-well); }
+.pblock .pb-open:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 0; }
+.pblock .pb-open > svg { width: 12px; height: 12px; flex: none; align-self: center; color: var(--color-muted); }
+.pblock .pb-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); }
+.pblock .pb-meta { display: inline-flex; align-items: baseline; gap: 4px; flex: none; font-size: var(--text-label); color: var(--color-muted); white-space: nowrap; }
+.pblock .pb-acting { flex: none; font-size: var(--text-label); font-weight: 600; color: var(--color-accent); white-space: nowrap; }
+.pblock .pb-icon {
+  flex: none; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-control); color: var(--color-muted);
+}
+.pblock .pb-icon:hover { background: var(--surface-well); color: var(--color-primary); }
+.pblock .pb-icon:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 0; }
+.pblock .pb-icon svg { width: 14px; height: 14px; }
+/* The graph is one hover away on a fine pointer; ⋯ always shows. A touch
+   screen has no hover, so there it stays in view. */
+@media (hover: hover) and (pointer: fine) {
+  .pblock .pb-graph-toggle { opacity: 0; transition: opacity var(--motion-fast); }
+  .pblock .pb-graph-toggle[aria-pressed="true"],
+  .pblock:hover .pb-graph-toggle,
+  .pblock:focus-within .pb-graph-toggle { opacity: 1; }
+}
+
+.pblock .pb-chain { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.pblock .pb-chain > .pb-pills { flex: 1 1 auto; }
+/* The chips end the chain line; they wrap under each other rather than
+   squeeze the pills, and never take more than half the row. */
+.pblock .pb-links { flex: 0 1 auto; justify-content: flex-end; margin-top: 2px; max-width: 50%; }
+.pblock .pb-links.end { max-width: none; }
+.pblock .pb-graph { min-width: 0; }
+
+.pblock .stage-report { margin: 2px 0 0; font-size: var(--text-label); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pblock .stage-findings { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.pblock .stage-findings li { display: flex; gap: 6px; align-items: baseline; min-width: 0; font-size: var(--text-label); color: var(--color-secondary); }
+.pblock .stage-findings .sev { flex: none; padding: 0 4px; border-radius: 4px; background: var(--surface-well); color: var(--color-secondary); font-weight: 700; font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
+.pblock .stage-findings li[data-severity="P0"] .sev, .pblock .stage-findings li[data-severity="P1"] .sev { background: var(--color-danger-soft); color: var(--color-danger); }
+.pblock .stage-findings .text { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.pblock .stage-findings .more { color: var(--color-muted); }
+.pblock .graph-edit { margin: 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pblock .review-heads { margin: 2px 0 0; font-size: var(--text-label); font-weight: 600; color: var(--color-warning); overflow-wrap: anywhere; }
+
+/* The answer in place: what stopped the lane, and the two ways on. */
+.pblock .pb-answer, .pblock .pb-note { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pblock .pb-answer .stage-report { color: var(--color-warning); font-weight: 600; }
+/* The buttons share a line when they fit and wrap when they do not; their
+   words are never cut. */
+.pblock .pb-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.pblock .pb-act {
+  flex: 1 1 auto; min-height: 28px; padding: 4px 12px; border-radius: var(--radius-control);
+  border: 1px solid var(--border-default); background: var(--surface-card);
+  font-size: var(--text-ui); font-weight: 600; line-height: 1.25; color: var(--color-primary); text-align: center;
+}
+.pblock .pb-act:hover:not(:disabled) { border-color: var(--border-strong); }
+.pblock .pb-act:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.pblock .pb-act.primary { background: var(--color-brand); border-color: var(--color-brand); color: var(--color-on-brand); }
+.pblock .pb-act:disabled { opacity: 0.5; }
+.pblock .pb-actions.large .pb-act { min-height: 44px; font-size: var(--text-body, 13px); }
+
+@media (pointer: coarse) {
+  /* A 30 px pill whose target reaches 44 px without growing the row. */
+  .pblock[data-density="task"] .pb-pill { height: 30px; }
+  .pblock[data-density="task"] button.pb-pill::after { content: ""; position: absolute; inset: -7px -2px; }
+  .pblock .pb-open { min-height: 44px; align-items: center; }
+  .pblock .pb-icon { width: 44px; height: 44px; }
+  .pblock .pb-act { min-height: 44px; }
+}
+
+/* ── Card density: one line, passive ─────────────────────────────────────── */
+.pblock[data-density="card"] { gap: 2px; }
+.pblock .pb-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pblock .pb-line.sub { font-size: var(--text-label); }
+.pblock .pb-pills.fold { flex: 0 1 auto; flex-wrap: nowrap; overflow: hidden; }
+/* No pill in the fold ellipsizes: a name that does not fit overflows the chain,
+   and the overflow is what moves the card to the next fold. */
+.pblock .pb-pills.fold .pb-step, .pblock .pb-pills.fold .pb-pill { flex: none; max-width: none; }
+/* The last fold: the current stage alone on its own line, its name still too
+   long for it, wraps inside its pill rather than lose a word. */
+.pblock .pb-line[data-wrap="1"] .pb-pills.fold .pb-step, .pblock .pb-line[data-wrap="1"] .pb-pills.fold .pb-pill { flex: 0 1 auto; max-width: 100%; }
+.pblock .pb-line[data-wrap="1"] .pb-pills.fold .pb-pill { height: auto; min-height: 22px; padding-block: 2px; }
+.pblock .pb-line[data-wrap="1"] .pb-pills.fold .pb-name { white-space: normal; overflow-wrap: anywhere; }
+.pblock .pb-age, .pblock .pb-ended { flex: none; font-size: var(--text-label); color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pblock .pb-ended { display: inline-flex; align-items: center; gap: 5px; color: var(--color-secondary); }
+.pblock .pb-ended .pmark { color: var(--color-muted); }
+.pblock .pb-reason { font-size: var(--text-label); font-weight: 600; color: var(--color-warning); overflow-wrap: anywhere; }
+.pblock .pb-pr { flex: none; }
+/* The card's word on its other pipelines, at the end of its last line. */
+.pblock .pb-line.reason { align-items: baseline; }
+.pblock .pb-line.reason .pb-reason { min-width: 0; }
+.pblock .pb-aside { flex: none; font-size: var(--text-label); color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pblock .wl-text { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; font-size: var(--text-label); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--color-secondary); }
+.pblock .wl-text[data-tone="open"] { color: var(--color-success); }
+.pblock .wl-text[data-tone="merged"] { color: var(--color-accent); }
+.pblock .wl-text[data-tone="closed"] { color: var(--color-danger); }
+.pblock .wl-text[data-tone="draft"] { color: var(--color-muted); }
+.pblock .wl-text .wl-rest { margin-left: 2px; color: var(--color-muted); }
+/* A finished lane is quiet: its PR too. */
+.pblock .pb-line.ended .wl-text { color: var(--color-muted); }
+
+/* ── Screen density: the pipeline screen's body, the phone's Stages view ── */
+.pblock[data-density="screen"] { gap: 8px; }
+/* The state line lives in the screen's bar, outside the block. */
+.pb-stateline { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 5px; min-width: 0; font-size: var(--text-ui); color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.pb-stateline .pb-statepart { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+.pb-stateline .pb-sep { color: var(--color-muted); opacity: 0.8; }
+.pblock .pb-heading { margin: 0; font-size: var(--text-title); font-weight: 600; line-height: 1.3; color: var(--color-primary); overflow-wrap: anywhere; }
+.pblock .pb-links-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.pblock .pb-links-row .pb-links { max-width: none; margin-top: 0; }
+.pblock .pb-attach { margin-left: auto; min-height: 44px; padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-ui); font-weight: 600; color: var(--color-accent); }
+.pblock .pb-attach:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 0; }
+/* The chips' line is 44 px tall (Attach sets it), so on a phone each chip's
+   hit area reaches the full 44 px inside it (workLinks.css). */
+@media (pointer: coarse) {
+  .pblock[data-density="screen"] .pb-links-row .wl-chip::after { inset: -13px -2px; }
+}
+.pblock .pb-section { margin: 2px 0 0; display: flex; align-items: baseline; gap: 6px; font-size: var(--text-ui); font-weight: 600; color: var(--color-secondary); }
+.pblock .pb-section .pb-count { font-size: var(--text-label); color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.pblock .pb-stages { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); overflow: hidden; }
+.pblock .pb-stage + .pb-stage { border-top: 1px solid var(--border-default); }
+/* The current stage: its tone's stripe on a raised ground. */
+.pblock .pb-stage.current { box-shadow: inset 3px 0 0 var(--stage-tone); background: color-mix(in srgb, var(--stage-tone) 5%, var(--surface-card)); }
+.pblock .pb-stage-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 7px 10px; text-align: left; color: var(--color-primary); }
+.pblock button.pb-stage-row:active { background: var(--surface-well); }
+.pblock button.pb-stage-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.pblock .pb-stage-row > svg { width: 18px; height: 18px; flex: none; color: var(--color-muted); }
+.pblock .pb-stage-row > .pb-gear { color: var(--color-secondary); }
+.pblock .pb-num { flex: none; display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 5px; border-radius: 999px; background: var(--surface-well); font-size: var(--text-caption); font-weight: 700; color: var(--color-secondary); font-variant-numeric: tabular-nums; }
+.pblock .pb-stage-main { display: flex; flex-direction: column; gap: 3px; flex: 1 1 auto; min-width: 0; }
+.pblock .pb-stage-title { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-body); font-weight: 600; line-height: 1.3; }
+/* A stage's name is never cut on its own screen: a long one wraps. */
+.pblock .pb-stage-title .pb-name { min-width: 0; overflow-wrap: anywhere; }
+.pblock .pb-stage-title .ccircle { min-width: 16px; height: 16px; }
+.pblock .pb-stage-ident { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: var(--text-label); color: var(--color-muted); }
+.pblock .pb-stage-ident .pident { flex: 0 1 auto; }
+.pblock .pb-ident-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pblock .pb-stage-state { flex: none; max-width: 40%; font-size: var(--text-label); font-weight: 600; color: var(--stage-tone); text-align: right; }
+.pblock .pb-stage.tone-idle .pb-stage-state { color: var(--color-muted); font-weight: 500; }
+/* The fail edge's budget at rest is configuration, said quietly. */
+.pblock .pret[data-arc-state="rest"] { color: var(--color-muted); }
+.pblock .pb-stage-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 0 10px 2px 44px; }
+.pblock .pb-stage-body .stage-report { white-space: normal; overflow: visible; }
+.pblock .pb-latest { margin: 0; font-size: var(--text-ui); line-height: 1.4; color: var(--color-primary); overflow-wrap: anywhere; }
+.pblock .pb-edge { margin: 0; font-size: var(--text-label); color: var(--color-secondary); overflow-wrap: anywhere; }
+.pblock[data-needs="1"] .pb-stage.current .pb-edge { color: var(--color-warning); }
+.pblock .pb-open-conv {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin-top: 2px;
+  border-top: 1px solid var(--border-default); text-align: left; font-size: var(--text-ui); font-weight: 600; color: var(--color-accent);
+}
+.pblock .pb-open-conv > span { flex: 1 1 auto; min-width: 0; }
+.pblock .pb-open-conv > svg { width: 18px; height: 18px; flex: none; color: var(--color-muted); }
+.pblock .pb-open-conv:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.pblock .pb-stage.passed-fold .pb-stage-title .pb-name { color: var(--color-secondary); }
+.pblock .pb-note .stage-report { white-space: normal; }
+.pblock .pb-loops { margin: 0; padding: 0 2px; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: var(--text-label); color: var(--color-muted); overflow-wrap: anywhere; }
+
+/* A pipeline state's dot beside its word (the phone board's pipelines row). */
+.pstate-dot { background: var(--pstate-ink); }
+
+/* ── The phone's task screen (#2072 slice 5): each lane row in its own card ── */
+/* The card's frame replaces the hairline, and the head's title wraps over
+   its state instead of sharing one line with it at 390 px. */
+.phone-lane > .pblock[data-density="task"] { border-top: 0; padding: 4px 0 2px; }
+.phone-lane .pblock .pb-open { flex: 1 1 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; row-gap: 3px; align-items: center; }
+.phone-lane .pblock .pb-title { grid-column: 1; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: var(--text-body); line-height: 1.3; overflow-wrap: anywhere; }
+.phone-lane .pblock .pb-meta { grid-column: 1; }
+.phone-lane .pblock .pb-open > svg { grid-column: 2; grid-row: 1; }
+/* A chip at the end of the chain reaches 44 px like the pills beside it: it
+   sits on the pills' middle, so both reaches stop at the same line. */
+@media (pointer: coarse) {
+  .phone-lane .pblock .pb-links { margin-top: 6px; }
+  .phone-lane .pblock .pb-links .wl-chip::after { inset: -13px -2px; }
+}

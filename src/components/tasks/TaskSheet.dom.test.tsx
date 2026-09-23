@@ -52,7 +52,7 @@ function meets44(el: Element): boolean {
 
 test("task sheet list view: header close and create action are 44px targets", () => {
   const { host, root } = mount(
-    <TaskSheet project="orbit-api" tasks={[]} files={[]} initialView="list" onClose={() => {}} />,
+    <TaskSheet project="orbit-api" tasks={[]} files={[]} initialView="list" onClose={() => {}} onOpenTask={() => {}} />,
   );
   const close = host.querySelector('button[aria-label="Close"]');
   expect(close).not.toBeNull();
@@ -76,32 +76,32 @@ test("target checklist rows and the all-children control are 44px targets", () =
   flushSync(() => root.unmount());
 });
 
-function failedTask(): BoardTask {
+function listedTask(id: string, text: string): BoardTask {
   return {
-    id: "t1", project: "orbit-api", status: "assigned", text: "Ship the limiter", placement: "unplaced",
-    createdAt: "2026-07-12T00:00:00Z", updatedAt: "2026-07-12T00:00:00Z",
-    assignments: [{ path: "/a.jsonl", panePid: null, state: "failed", error: "delivery failed", at: "2026-07-12T00:00:00Z" }],
+    id, project: "orbit-api", status: "assigned", text, placement: "unplaced",
+    createdAt: "2026-07-12T00:00:00Z", updatedAt: "2026-07-12T00:00:00Z", assignments: [],
   };
 }
 
-test("task detail view: failed-assignment row and its Retry are 44px targets", () => {
-  const files = [conv("/a.jsonl", "Alpha")];
+test("a task in the list opens the task screen, and the sheet draws no editor of its own (#2072 slice 5)", () => {
+  const opened: Array<[string, string]> = [];
   const { host, root } = mount(
-    <TaskSheet project="orbit-api" tasks={[failedTask()]} files={files} initialView={{ taskId: "t1" }} onClose={() => {}} />,
+    <TaskSheet project="orbit-api" tasks={[listedTask("t1", "Ship the limiter")]} files={[]} initialView="list" onClose={() => {}} onOpenTask={(task, from) => opened.push([task.id, from])} />,
   );
-  const retry = [...host.querySelectorAll("button")].find((b) => (b.textContent ?? "").trim() === "retry delivery");
-  expect(retry).toBeDefined();
-  expect(meets44(retry!)).toBe(true);
-  // The failed row itself carries the ⚠ edge and must stay a 44px block.
-  const row = retry!.closest("div");
+  const row = host.querySelector('[data-task-sheet-row="t1"]') as HTMLButtonElement;
   expect(row).not.toBeNull();
-  expect(meets44(row!)).toBe(true);
+  flushSync(() => row.click());
+  expect(opened).toEqual([["t1", "list"]]);
+  /* The old editor's status chips, assignment rows and send-to list are gone. */
+  expect(host.querySelector("textarea")).toBeNull();
+  expect(host.querySelector("[data-task-sheet-retry]")).toBeNull();
+  expect(host.querySelector('input[type="checkbox"]')).toBeNull();
   flushSync(() => root.unmount());
 });
 
 test("task create view: the deadline pill is a 44px target", () => {
   const { host, root } = mount(
-    <TaskSheet project="orbit-api" tasks={[]} files={[]} initialView="new" onClose={() => {}} />,
+    <TaskSheet project="orbit-api" tasks={[]} files={[]} initialView="new" onClose={() => {}} onOpenTask={() => {}} />,
   );
   const dueInput = host.querySelector('input[type="datetime-local"]');
   expect(dueInput).not.toBeNull();
@@ -109,47 +109,4 @@ test("task create view: the deadline pill is a 44px target", () => {
   expect(pill).not.toBeNull();
   expect(meets44(pill!)).toBe(true);
   flushSync(() => root.unmount());
-});
-
-test("task detail view: a pathless failed assignment retries through the launch seam (#334)", async () => {
-  const fetches: Array<{ url: string; body: unknown }> = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
-    fetches.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null });
-    return new Response(JSON.stringify({ ok: true, task: { id: "t334" }, assignment: "spawning" }), {
-      status: 202,
-      headers: { "content-type": "application/json" },
-    });
-  }) as typeof fetch;
-  try {
-    const task: BoardTask = {
-      id: "t334", project: "orbit-api", status: "assigned", text: "Ship the limiter", placement: "unplaced",
-      createdAt: "2026-07-19T00:00:00Z", updatedAt: "2026-07-19T00:00:00Z",
-      assignments: [{
-        launchId: "launch-334",
-        path: null,
-        panePid: null,
-        state: "failed",
-        error: "structured spawn runtime snapshot has no session after 300000ms",
-        at: "2026-07-19T00:00:00Z",
-      }],
-    };
-    const { host, root } = mount(
-      <TaskSheet project="orbit-api" tasks={[task]} files={[]} initialView={{ taskId: "t334" }} onClose={() => {}} />,
-    );
-    const retry = host.querySelector("[data-task-sheet-retry]") as HTMLButtonElement;
-    expect(retry).not.toBeNull();
-    expect((retry.textContent ?? "").trim()).toBe("retry launch");
-    /* The pathless failed row states its terminal outcome, never «starting…». */
-    expect(retry.closest("div")!.textContent).toContain("delivery failed");
-    retry.click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fetches).toEqual([{
-      url: "/api/tasks/t334/spawn",
-      body: { retryOfLaunchId: "launch-334" },
-    }]);
-    flushSync(() => root.unmount());
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
 });
