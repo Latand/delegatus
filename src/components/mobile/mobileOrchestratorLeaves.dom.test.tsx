@@ -287,19 +287,23 @@ test("with no seat the board's footer is the invitation's other half, and it ope
   expect((sheet.querySelector("[data-orchestrator-mandate]") as unknown as HTMLTextAreaElement).value.length).toBeGreaterThan(0);
 });
 
-test("the board leaf carries the single pin above its sections, and the conversation it opens mounts no pin at all", async () => {
+test("the board leaf carries the single pin above its column tabs, and the conversation it opens mounts no pin at all", async () => {
   const files = [conversation({ activity: "live", proc: "running", pid: 42 })];
   const host = mount({ files, catalogKnown: true, catalogConversationCount: 1 });
-  /* The phone's first leaf is the board (mobile v2 lane 2): the pin is its
-     Orchestrator card, above every section row and outside what the list
-     scrolls. */
-  expect(await waitFor(() => host.querySelector("[data-mobile2-board]") !== null)).toBe(true);
-  const board = host.querySelector("[data-mobile2-board]") as unknown as HTMLElement;
+  /* The phone's first leaf is the board (mobile v2 lane 2; the status columns
+     since #2072 slice 4): the pin is its Orchestrator card, above the column
+     tabs and every card, and outside what any column scrolls. */
+  expect(await waitFor(() => host.querySelector("[data-phone-kanban]") !== null)).toBe(true);
+  const board = host.querySelector("[data-phone-kanban]") as unknown as HTMLElement;
   expect(rows(host)).toHaveLength(1);
   expect(slot(host)).not.toBeNull();
-  const firstRow = board.querySelector('[data-mobile2-row="conversation"]') as unknown as HTMLElement;
+  const tabs = board.querySelector("[data-phone-kanban-tabs]") as unknown as HTMLElement;
+  const firstRow = board.querySelector("[data-phone-card]") as unknown as HTMLElement;
   expect(firstRow).not.toBeNull();
+  expect(row(host).compareDocumentPosition(tabs) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(row(host).compareDocumentPosition(firstRow) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(row(host).closest(".overflow-y-auto")).toBeNull();
+  expect(row(host).closest(".overflow-x-auto")).toBeNull();
 
   /* Opening a row pushes the conversation screen (mobile v2 lane 3), which has
      no strip: the pin that used to ride it is gone from this leaf — the seat is

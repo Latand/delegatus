@@ -414,6 +414,9 @@ export interface PipelineBlockProps {
   /** Screen density: the heading, which the screen's bar watches to take the
       title once it scrolls away. */
   headingRef?: React.Ref<HTMLHeadingElement>;
+  /** Card density: what the card adds about its other pipelines ("+1
+      paused"), at the right end of the block's last line. */
+  aside?: React.ReactNode;
 }
 
 export interface StageConversation {
@@ -466,10 +469,14 @@ export function PipelineBlock(props: PipelineBlockProps) {
        operator's to answer says its word beside the age. */
     const word = needs || pipeline.state === "running" ? null : pipelineStateLabel(t, pipeline.state);
     const ageNode = reason ? null : <span className="pb-age">{[word, age].filter(Boolean).join(" · ")}</span>;
+    const reasonLine = reason ? <span className="pb-reason" data-pipeline-reason={pipeline.id}>{[reason, age].filter(Boolean).join(" · ")}</span> : null;
+    const aside = props.aside ? <span className="pb-aside" data-pipeline-aside={pipeline.id}>{props.aside}</span> : null;
     return (
       <span className="pblock" {...root}>
         <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />
-        {reason ? <span className="pb-reason" data-pipeline-reason={pipeline.id}>{[reason, age].filter(Boolean).join(" · ")}</span> : null}
+        {aside ? (
+          <span className={`pb-line${reasonLine ? " reason" : " sub"}`}>{reasonLine}<span className="pb-grow" />{aside}</span>
+        ) : reasonLine}
       </span>
     );
   }

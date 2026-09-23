@@ -21,7 +21,7 @@ import { useLocale } from "@/lib/i18n";
 
 export const RECEIPT_MS = 4_000;
 
-export type ReceiptInverse = "respawn" | "reopen" | "restore" | "switchBack" | "retryStage";
+export type ReceiptInverse = "respawn" | "reopen" | "restore" | "switchBack" | "retryStage" | "undo";
 
 /** The inverse named by its kind, or an action that carries its own words:
     the board's pipeline actions answer with «Retry» or «Check again» (#2072). */

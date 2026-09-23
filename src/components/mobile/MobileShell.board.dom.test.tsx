@@ -42,7 +42,7 @@ mock.module("@/hooks/useConversationCatalog", () => ({
 
 const { ProjectDashboard } = await import("@/components/ProjectDashboard");
 const { MobileSheet } = await import("@/components/mobile/MobileSheet");
-const { getMobileNav } = await import("@/components/mobile/mobileNav");
+const { getMobileNav, topScreen } = await import("@/components/mobile/mobileNav");
 const { receipts } = await import("@/components/mobile/MobileReceipt");
 type MobileShellHost = NonNullable<React.ComponentProps<typeof ProjectDashboard>["mobileShell"]>;
 
@@ -230,8 +230,9 @@ const click = (el: HTMLElement | null) => { expect(el).not.toBeNull(); flushSync
 /* The leaf under the bar arrives with `boardReady`: the board list on the
    scheme face (mobile v2 lane 2), the pinned orchestrator slot on the list and
    empty leaves. */
-const boardReady = (root: HTMLElement) => q(root, "[data-mobile2-board]") !== null || q(root, '[data-testid="mobile-orchestrator-slot"]') !== null;
-const boardList = (root: HTMLElement) => q(root, "[data-mobile2-board]") !== null;
+const boardReady = (root: HTMLElement) => q(root, "[data-phone-kanban]") !== null || q(root, '[data-testid="mobile-orchestrator-slot"]') !== null;
+/* The board face: the status columns since #2072 slice 4. */
+const boardList = (root: HTMLElement) => q(root, "[data-phone-kanban]") !== null;
 const openMenu = async (root: HTMLElement) => { click(q(root, '[data-mobile2-open="menu"]')); await settle(); expect(q(root, '[data-mobile2-sheet="menu"]')).not.toBeNull(); };
 
 test("the phone board mounts the shell: one bar, the title cell as the switcher, three 44 px targets, and no five-target header", async () => {
@@ -304,7 +305,10 @@ test("⋯ opens the board menu over the board with every former header control a
   await openMenu(root);
   expect(boardReady(root)).toBe(true);
   const rows = Array.from(root.querySelectorAll("[data-mobile2-menu-row]")).map((el) => el.getAttribute("data-mobile2-menu-row"));
-  expect(rows).toEqual(["new-agent", "new-task", "new-pipeline", "tasks", "view-board", "view-catalog", "accounts", "host", "archive"]);
+  /* Pipelines is a row since the columns carry each lane on its task (#2072
+     slice 4); the setup rows are the onboarding and self-update entries. */
+  expect(rows).toEqual(["new-agent", "new-task", "new-pipeline", "tasks", "pipelines", "view-board", "view-catalog", "accounts", "host", "setup-guide", "agent-mapping", "dictation", "self-update", "archive"]);
+  expect(q(root, '[data-mobile2-menu-row="pipelines"]')!.getAttribute("data-mobile2-go")).toBe("pipelines");
   for (const row of root.querySelectorAll("[data-mobile2-menu-row]")) expect((row as unknown as HTMLElement).className).toContain("min-h-11");
   expect(q(root, '[data-mobile2-go="accounts"]')).not.toBeNull();
   expect(q(root, '[data-mobile2-open="host"]')).not.toBeNull();
@@ -331,6 +335,19 @@ test("both board faces stay one tap away inside the menu, announced as radio row
   await openMenu(root);
   const reopened = Array.from(root.querySelectorAll('[role="menuitemradio"]'));
   expect(reopened[1]!.getAttribute("aria-checked")).toBe("true");
+});
+
+test("⋯ › Pipelines opens the pipelines list, the one the columns' old «N pipelines» row opened (#2072 slice 4)", async () => {
+  const root = mount();
+  expect(await waitFor(() => boardReady(root))).toBe(true);
+  await openMenu(root);
+  click(q(root, '[data-mobile2-menu-row="pipelines"]'));
+  await settle();
+  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "pipelines" });
+  expect(q(root, "[data-mobile2-sheet]")).toBeNull();
+  /* ‹ lands on the board again, and leaves no entry behind for the next case. */
+  getMobileNav().back();
+  expect(await waitFor(() => topScreen(getMobileNav().getState()).kind === "board")).toBe(true);
 });
 
 test("Undo and Redo are not menu rows, even with a close in the device-local log (#1801; kanban undo is #1856)", async () => {

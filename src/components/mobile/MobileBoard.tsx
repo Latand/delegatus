@@ -137,7 +137,7 @@ export function statePhrase(t: TFunction, state: MobileRowState, now: number): s
   }
 }
 
-const BADGE_LABEL = {
+export const BADGE_LABEL = {
   question: "mobile2.board.badgeQuestion",
   plan: "mobile2.board.badgePlan",
   decision: "mobile2.board.badgeDecision",
