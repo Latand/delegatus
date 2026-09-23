@@ -150,9 +150,10 @@ function parseProposalIssues(raw: string): ProposalIssue[] {
 export interface OpenPullRequest {
   number: number;
   title: string;
-  /** The branch the pull request is the head of, which is what a lane's own
-      branch is matched against. */
+  /** The branch the pull request is the head of. */
   headRefName: string;
+  /** Its opening instant fences a reused head to the lane that owned it then. */
+  createdAt: string;
   updatedAt: string | null;
 }
 
@@ -184,12 +185,10 @@ const PULL_REQUEST_TITLE_LIMIT = 200;
  * quiet verdict this result type exists to make earnable, which is the
  * collapse the type was introduced to end taking a shorter route.
  *
- * The two fields that make a row usable are the number and the head branch:
- * one names the pull request, the other ties it to the lane that opened it, and
- * a `gh` answering the question it was asked carries both on every row. An
- * array whose rows do not is output nobody can attribute, so it is reported as
- * what it is. A missing title or timestamp is a different matter — neither is
- * load-bearing for the reason, so a row is still attributable without them.
+ * Number, head branch and creation time make a row attributable. A reused
+ * branch can point at a later lane's PR, so an absent creation time cannot
+ * prove which finished lane left it open. A missing title or update time is
+ * harmless because neither decides ownership.
  * Exactly the empty array stays the answer that nothing is open.
  */
 function parseOpenPullRequests(raw: string): OpenPullRequest[] | null {
@@ -203,15 +202,17 @@ function parseOpenPullRequests(raw: string): OpenPullRequest[] | null {
   const rows: OpenPullRequest[] = [];
   for (const entry of parsed) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
-    const row = entry as { number?: unknown; title?: unknown; headRefName?: unknown; updatedAt?: unknown };
+    const row = entry as { number?: unknown; title?: unknown; headRefName?: unknown; createdAt?: unknown; updatedAt?: unknown };
     if (typeof row.number !== "number" || !Number.isSafeInteger(row.number)) return null;
     /* A row with no head branch cannot be attributed to a lane, and a pull
        request nobody can name is not evidence that nothing is open. */
     if (typeof row.headRefName !== "string" || !row.headRefName) return null;
+    if (typeof row.createdAt !== "string" || !Number.isFinite(Date.parse(row.createdAt))) return null;
     rows.push({
       number: row.number,
       title: typeof row.title === "string" ? row.title.slice(0, PULL_REQUEST_TITLE_LIMIT) : "",
       headRefName: row.headRefName,
+      createdAt: row.createdAt,
       updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
     });
   }
@@ -237,7 +238,7 @@ export async function openPullRequestsForRepo(options: {
   const run = options.run ?? githubRunner(options.cwd, options.timeoutMs ?? 20_000);
   let raw: string;
   try {
-    raw = await run(["pr", "list", "--state", "open", "--limit", String(options.limit ?? 60), "--json", "number,title,headRefName,updatedAt"]);
+    raw = await run(["pr", "list", "--state", "open", "--limit", String(options.limit ?? 60), "--json", "number,title,headRefName,createdAt,updatedAt"]);
   } catch (error) {
     return { ok: false, unavailable: githubUnavailableFromError(error) };
   }

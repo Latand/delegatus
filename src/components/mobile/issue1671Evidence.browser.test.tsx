@@ -1,10 +1,9 @@
 import { test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import tailwind from "@tailwindcss/postcss";
 import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright-core";
-import postcss from "postcss";
 
+import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { translate } from "@/lib/i18n";
 
 /*
@@ -427,33 +426,14 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
 
 const TASK_0 = "Fast conversation switching";
 
-/** The fixture page, bundled and served: one setup both cases below run on. */
+/** The fixture page, bundled and served: one setup every case below runs on.
+    The shared harness builds it the way the Viewer's client bundle sees it,
+    with server actions stubbed (#2009); a plain browser build pulls their
+    Node-only bodies in and fails before any case runs. */
 async function serveFixture(): Promise<{ base: string; stop: () => void }> {
   fs.mkdirSync(OUT, { recursive: true });
-  const build = await Bun.build({
-    entrypoints: [path.resolve("src/components/mobile/issue1671Evidence.fixture.tsx")],
-    target: "browser",
-    outdir: path.join(OUT, "bundle"),
-    define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
-  });
-  if (!build.success) throw new Error(build.logs.join("\n"));
-  const entry = build.outputs.find((output) => output.kind === "entry-point")!.path;
-  const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request) {
-      const pathname = new URL(request.url).pathname;
-      if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
-      if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
-      return new Response(
-        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
-        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>',
-        { headers: { "content-type": "text/html" } },
-      );
-    },
-  });
-  return { base: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
+  const { base, stop } = await serveEvidenceFixture(OUT, "src/components/mobile/issue1671Evidence.fixture.tsx");
+  return { base: base.replace(/\/$/, ""), stop };
 }
 
 const launchChromium = () => chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
@@ -1530,5 +1510,202 @@ browserTest("#1978: a command card's copy controls stay apart and off the text, 
     stop();
   }
   fs.writeFileSync(path.join(EDGE_EVIDENCE, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);
+
+/*
+ * #2072 slice 2, the jump strip: a conversation away from its tail, at the
+ * pages Safari leaves on a 390 × 844 and a 430 × 932 phone, in both languages
+ * and both schemes (the desktop reader's strip is held by the DOM test in
+ * `LogFeed.mobileChrome.dom.test.tsx`). The «down» control used to float
+ * over the feed's bottom edge, where a line of text always sat once the reader
+ * had left the tail. It is now a 44 px row of its own between the feed and the
+ * composer:
+ *
+ *   - the feed's viewport ends at the strip's top edge, and no text's ink,
+ *     clipped by its overflow ancestors, reaches the strip or its control;
+ *   - the strip is 44 px tall, its target at least 44 × 44 around a 32 px
+ *     pill, and it lies wholly above the composer and inside the page;
+ *   - the feed's scroll offset is the same before and after the strip
+ *     appears, so the line being read at the top does not move;
+ *   - a tap returns to the tail and the strip leaves with it.
+ *
+ * Readings go to `evidence/issue-2072/jump-strip.json`; frames to `.artifacts/jump-strip/`.
+ */
+const JUMP_OUT = path.resolve(".artifacts/jump-strip");
+const JUMP_EVIDENCE = path.resolve("evidence/issue-2072");
+
+interface JumpReading {
+  strip: Rect | null;
+  control: Rect | null;
+  pill: Rect | null;
+  feed: Rect;
+  composerTop: number | null;
+  inkOnStrip: string[];
+  controlsCrossing: string[];
+  overflowX: number;
+  label: string;
+}
+
+/* Runs in the page; the ink walk is the test's own. */
+const readJump = (page: Page) => page.evaluate((): JumpReading => {
+  interface Box { l: number; t: number; r: number; b: number }
+  const box = (element: Element): Box => {
+    const r = element.getBoundingClientRect();
+    return { l: r.left, t: r.top, r: r.right, b: r.bottom };
+  };
+  const rect = (element: Element | null): Rect | null => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  };
+  const meets = (a: Box, b: Box) => Math.min(a.r, b.r) - Math.max(a.l, b.l) > 0.5 && Math.min(a.b, b.b) - Math.max(a.t, b.t) > 0.5;
+  const clip = (element: Element): Box => {
+    let out: Box = { l: -Infinity, t: -Infinity, r: Infinity, b: Infinity };
+    for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (/(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
+        const p = box(parent);
+        out = { l: Math.max(out.l, p.l), t: Math.max(out.t, p.t), r: Math.min(out.r, p.r), b: Math.min(out.b, p.b) };
+      }
+    }
+    return out;
+  };
+  const strip = document.querySelector("[data-feed-jump-strip]");
+  const control = strip?.querySelector("button") ?? null;
+  const feed = document.querySelector("[data-log-feed-scroller]")!;
+  /* Every text outside the strip, as the ink it paints. */
+  const inkOnStrip: string[] = [];
+  if (strip) {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim() || !node.parentElement || strip.contains(node)) continue;
+      if (getComputedStyle(node.parentElement).visibility === "hidden") continue;
+      const c = clip(node.parentElement);
+      range.selectNodeContents(node);
+      for (const q of range.getClientRects()) {
+        const seen = { l: Math.max(q.left, c.l), t: Math.max(q.top, c.t), r: Math.min(q.right, c.r), b: Math.min(q.bottom, c.b) };
+        if (seen.r - seen.l <= 0.5 || seen.b - seen.t <= 0.5) continue;
+        if (meets(seen, box(strip))) inkOnStrip.push(node.textContent.trim().slice(0, 48));
+      }
+    }
+  }
+  const controlsCrossing = control
+    ? [...document.querySelectorAll("button, a[href], textarea, input")]
+      .filter((other) => other !== control && !control.contains(other) && !other.contains(control))
+      .filter((other) => other.getClientRects().length && meets(box(other), box(control)))
+      .map((other) => other.getAttribute("aria-label") ?? other.tagName.toLowerCase())
+    : [];
+  const composer = document.querySelector("textarea");
+  return {
+    strip: rect(strip),
+    control: rect(control),
+    pill: rect(strip?.querySelector("[data-feed-jump-pill]") ?? null),
+    feed: rect(feed)!,
+    composerTop: composer ? box(composer.parentElement ?? composer).t : null,
+    inkOnStrip,
+    controlsCrossing,
+    overflowX: document.documentElement.scrollWidth - window.innerWidth,
+    label: control?.textContent?.trim() ?? "",
+  };
+});
+
+browserTest("#2072: away from the tail, the jump control is a row of its own and never covers text", async () => {
+  fs.mkdirSync(JUMP_OUT, { recursive: true });
+  fs.mkdirSync(JUMP_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = (["en", "uk"] as const).flatMap((lang) => [
+    { viewport: { width: 390, height: 667 }, scheme: "dark", lang },
+    { viewport: { width: 390, height: 667 }, scheme: "light", lang },
+    { viewport: { width: 430, height: 735 }, scheme: "dark", lang },
+  ] as const);
+  try {
+    for (const { viewport, scheme, lang } of cases) {
+      const key = `${viewport.width}x${viewport.height}-${scheme}-${lang}`;
+      const fail = (label: string) => failures.push(`${key}: ${label}`);
+      const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: scheme });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/#f=${encodeURIComponent(RUNNING_PATH)}`);
+        await page.waitForSelector('[data-log-feed-scroller] [data-feed-state="items"]', { timeout: 20_000 });
+        await pause(page, 900);
+        await feedAtRest(page);
+        const following = await readJump(page);
+        if (following.strip) fail("a strip while following the tail");
+
+        /* Leave the tail as a wheel does: the input marks the scroll as the
+           reader's, then the offset moves. The offset is read again once the
+           strip has laid out, before any settle can run. */
+        const anchoring = await page.evaluate(async () => {
+          const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+          const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          const firstRow = () => [...feed.querySelectorAll<HTMLElement>("[data-feed-key]")]
+            .find((row) => row.getBoundingClientRect().bottom > feed.getBoundingClientRect().top + 1);
+          feed.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -360 }));
+          feed.scrollTop -= 360;
+          const before = feed.scrollTop;
+          const row = firstRow();
+          const rowTop = row?.getBoundingClientRect().top ?? null;
+          for (let i = 0; i < 30 && !document.querySelector("[data-feed-jump-strip]"); i += 1) await frame();
+          await frame();
+          await frame();
+          return {
+            mounted: Boolean(document.querySelector("[data-feed-jump-strip]")),
+            before,
+            after: feed.scrollTop,
+            rowMoved: row && rowTop !== null ? row.getBoundingClientRect().top - rowTop : null,
+          };
+        });
+        if (!anchoring.mounted) fail("no jump strip once away from the tail");
+        if (anchoring.after !== anchoring.before) fail(`the feed moved when the strip appeared: ${anchoring.before} → ${anchoring.after}`);
+        if (anchoring.rowMoved !== null && Math.abs(anchoring.rowMoved) > 0.5) fail(`the line being read moved by ${anchoring.rowMoved} px when the strip appeared`);
+
+        await feedAtRest(page);
+        const away = await readJump(page);
+        await page.screenshot({ path: path.join(JUMP_OUT, `${key}.png`) });
+        const { strip, control, pill, feed } = away;
+        if (!strip || !control || !pill) fail(`strip, control and pill: ${JSON.stringify({ strip, control, pill })}`);
+        else {
+          if (Math.abs(strip.height - 44) > 0.5) fail(`the strip is ${strip.height} px tall, expected 44`);
+          if (control.width < 44 - 0.5 || control.height < 44 - 0.5) fail(`the control's target is ${control.width}x${control.height}`);
+          if (Math.abs(pill.height - 32) > 0.5) fail(`the pill is ${pill.height} px tall, expected 32`);
+          if (feed.y + feed.height > strip.y + 0.5) fail(`the feed ends at ${feed.y + feed.height}, below the strip's top ${strip.y}`);
+          if (strip.y < 0 || strip.y + strip.height > viewport.height + 0.5) fail(`the strip is outside the page: ${JSON.stringify(strip)}`);
+          if (away.composerTop !== null && strip.y + strip.height > away.composerTop + 0.5) fail(`the strip reaches into the composer at ${away.composerTop}`);
+        }
+        if (away.inkOnStrip.length) fail(`text under the strip: ${JSON.stringify(away.inkOnStrip)}`);
+        if (away.controlsCrossing.length) fail(`controls crossing the jump control: ${JSON.stringify(away.controlsCrossing)}`);
+        if (away.overflowX > 0.5) fail(`the page overflows sideways by ${away.overflowX} px`);
+        const word = translate(lang, "feed.down");
+        if (!away.label.includes(word) && !/\d/.test(away.label)) fail(`the control reads «${away.label}», expected «${word}» or a count`);
+
+        await page.locator("[data-feed-jump-strip] button").click();
+        await pause(page, 600);
+        await feedAtRest(page);
+        const back = await page.evaluate(() => {
+          const feed = document.querySelector("[data-log-feed-scroller]")!;
+          return { strip: Boolean(document.querySelector("[data-feed-jump-strip]")), fromBottom: feed.scrollHeight - feed.clientHeight - feed.scrollTop };
+        });
+        if (back.strip) fail("the strip stayed after returning to the tail");
+        if (back.fromBottom > 60) fail(`the tap left the feed ${back.fromBottom} px from the tail`);
+        if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        results.push({ key, viewport, scheme, lang, following: following.strip, anchoring, away, back });
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(JUMP_EVIDENCE, "jump-strip.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 300_000);
