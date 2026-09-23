@@ -87,6 +87,32 @@ test("answers built from generations 12 → 14 → 12 (stale) leave the snapshot
   expect(painted).toEqual([["A at 12"], ["A at 14", "B at 14"]]);
 });
 
+test("a dated 304 moves the generation the screen reports with the stamp it accepted", async () => {
+  const answers = [
+    answer({ files: [file("/a", "A")] }, { ETag: '"same"', "x-llv-files-built": built(12, 1) }),
+    answer(null, { ETag: '"same"', "x-llv-files-built": built(14, 2) }, 304),
+    /* An undated 304 (what a generation wait answers) dates nothing. */
+    answer(null, { ETag: '"same"' }, 304),
+    answer({ files: [file("/a", "A")] }, { ETag: '"older"', "x-llv-files-projection-cache": "stale", "x-llv-files-built": built(13, 9) }),
+  ];
+  const cache = createFilesClientCache(async () => answers.shift()!);
+  const reported: Array<number | undefined> = [];
+  const unsubscribe = cache.subscribe((data) => reported.push(data.builtGeneration));
+  await cache.revalidate();
+  expect(cache.read().builtGeneration).toBe(12);
+  const confirmed = await cache.revalidate();
+  expect(confirmed.builtGeneration).toBe(14);
+  expect(cache.read().builtGeneration).toBe(14);
+  await cache.revalidate();
+  expect(cache.read().builtGeneration).toBe(14);
+  /* Generation 13 is older than the 14 the 304 established. */
+  await cache.revalidate();
+  cache.dispose();
+  unsubscribe();
+  expect(cache.read().builtGeneration).toBe(14);
+  expect(reported).toEqual([12, 14]);
+});
+
 test("a store change inside one scan generation is ordered by the projection's build order", async () => {
   const answers = [
     answer({ files: [file("/a", "A")], pipelines: [pipeline("lane", "closed")] }, { ETag: '"new"', "x-llv-files-built": built(14, 7) }),

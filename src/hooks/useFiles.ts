@@ -689,6 +689,11 @@ export function createFilesClientCache(
       if (!snapshot.loaded || snapshot.cached) {
         snapshot = { ...snapshot, loaded: true, cached: false, scopeCertified: true };
       }
+      /* A dated 304 confirms these rows as of a later scan: the generation the
+         screen reports moves with the stamp it now holds. */
+      if (built && snapshot.builtGeneration !== built.generation) {
+        snapshot = { ...snapshot, builtGeneration: built.generation };
+      }
       appliedGeneration = generation;
       shownBuilt = built;
       rememberRepresentation(url, snapshot, representation.etag, representation.raw, built);
