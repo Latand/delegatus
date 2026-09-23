@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+
+import { ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_VIEWER_CLOCK_HEADING } from "@/lib/orchestrator/prompt";
+
 import { MONITOR_REF_PREFIX, seatTickProposalRef, stateLabel } from "./cards";
 import type { ProposalIssue } from "./githubEvidence";
 import { redactMonitorText } from "./redact";
@@ -81,11 +85,10 @@ export function renderMonitorReport(input: ReportInput): string {
  * lived only in the prompt text and died with the session; here the Viewer says
  * what it found and the seat supplies the judgement.
  *
- * The contract at the foot is the same in both briefs, and each clause answers
- * a way the session-scheduled version actually failed: it left outcomes only in
- * its own transcript, it kept re-running an action that had already failed, it
- * re-armed its own schedule, and it once stopped inside a tick to ask the
- * operator a question.
+ * The contract both briefs used to end with lives in the seat's mandate now,
+ * in its clock section (`ORCHESTRATOR_SEAT_TICK_CONTRACT` in the orchestrator
+ * prompt, #2030): it was the same 893 bytes on every wake, and a wake names the
+ * section instead. The history below is why each clause reads the way it does.
  *
  * The first clause used to read "act on the listed items only, and nothing else
  * this turn", and #1749 is what that cost. A seat woken with five items derived
@@ -101,7 +104,7 @@ export function renderMonitorReport(input: ReportInput): string {
  * The clause about the settings is there because the pair "do not schedule
  * yourself" and "nothing can quiet the schedule armed for you" is what #1275
  * was filed about. The first half is still right; the second half is now false,
- * and the brief says so where the seat reads it, rather than leaving the lever
+ * and the mandate says so where the seat reads it, rather than leaving the lever
  * discoverable only by reading the tool list.
  * ------------------------------------------------------------------------- */
 
@@ -111,7 +114,7 @@ const SEAT_TICK_MESSAGE_LIMIT = 4_000;
  * The least the agenda is left, whatever the reserved half costs.
  *
  * The subtraction in {@link boundedSeatTickMessage} cannot reach this today:
- * the reserved half is a constant contract plus a prompt preview capped at
+ * the reserved half is the contract pointer plus a prompt preview capped at
  * {@link SEAT_TICK_PROMPT_PREVIEW_LIMIT}, which together are well under half
  * the limit.
  * It is here so a future growth of either can only shorten the
@@ -127,8 +130,9 @@ const SEAT_TICK_DYNAMIC_FLOOR = 1_000;
  * The message has two halves. The dynamic one — the reasons, the items, the
  * signals, the open issues — is derived from a board of no fixed size, so it is
  * the half the limit exists to hold down. The reserved one is the project's own
- * monitor prompt, the instructions the slot turns on, and the contract; all
- * three are bounded already, and all three sit at the foot of the message.
+ * monitor prompt, the instructions the slot turns on, and the line naming the
+ * contract; all three are bounded already, and all three sit at the foot of the
+ * message.
  *
  * Clamping the joined text therefore clamped the reserved half first. A
  * maximum-length prompt on a full five-item agenda landed on exactly the limit
@@ -152,18 +156,23 @@ function boundedSeatTickMessage(dynamic: readonly string[], reserved: readonly s
   return head.length <= budget ? `${head}${tail}` : `${head.slice(0, budget - 1).trimEnd()}…${tail}`;
 }
 
-/** Exported so a regression can assert EVERY clause survived a bounded wake,
-    including the ones a hand-written list would miss. */
-export const SEAT_TICK_CONTRACT = [
-  "Handle the listed items first, then make ONE bounded pass over this project's whole board and act on what stands still: "
-    + "list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, "
-    + "list_flows, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running.",
-  "Record every outcome where it belongs — on the board card or on the pipeline — not only in this conversation.",
-  "If an item cannot be done, mark its task blocked with the reason. That is the stop, and it is the only one.",
-  "Do not schedule yourself. The Viewer ticks this seat; a self-scheduled monitor is refused practice.",
-  "This tick is yours to govern: seat_tick_settings turns it off, changes how often it wakes you, or turns it back on, per project, with a reason that shows on the board.",
-  "Do not wait on the operator inside this turn.",
-];
+/** The one line that stands where the contract's clauses used to (#2030),
+    for a seat whose delivered mandate states them. */
+export const SEAT_TICK_CONTRACT_POINTER = `Contract: the "${ORCHESTRATOR_VIEWER_CLOCK_HEADING.replace(/^## /, "").split(" — ")[0]}" section of your mandate governs this turn.`;
+
+/** The foot of a wake: the pointer when the seat's mandate states the
+    contract, the clauses themselves when it may not — a seat still running on
+    what it was delivered before v21, one carried forward on an older mandate,
+    or bespoke rules. The mandate states the ban on scheduling yourself in the
+    clock section's own paragraph; a wake listing the clauses cannot count on
+    that paragraph surviving a seat's edit, so it states the ban too. */
+export const SEAT_TICK_NO_SELF_SCHEDULE = "Do not schedule yourself. The Viewer ticks this seat; a self-scheduled monitor is refused practice.";
+
+function seatTickContractLines(mandateCarriesContract: boolean): string[] {
+  return mandateCarriesContract
+    ? ["", SEAT_TICK_CONTRACT_POINTER]
+    : ["", "Contract:", `- ${SEAT_TICK_NO_SELF_SCHEDULE}`, ...ORCHESTRATOR_SEAT_TICK_CONTRACT.map((clause) => `- ${clause}`)];
+}
 
 function seatTickBullet(item: SeatTickItem): string {
   const bullet = `- [${item.kind}] ${item.id} — ${item.label}`;
@@ -184,15 +193,31 @@ function seatTickBullet(item: SeatTickItem): string {
  *
  * With no prompt on the row this contributes nothing at all, so a project that
  * never set one gets the wake exactly as it was.
+ *
+ * A note the seat was already shown on its last delivered wake is one line
+ * (#2030): the seat wrote it and holds it, and echoing it back cost 136 KB over
+ * one seat's 110 wakes, 33 of them identical to the wake before. The controller
+ * decides "already shown" from the landed wake's record, per seat epoch, so a
+ * successor still sees the note on its first wake.
  */
-function seatTickPromptSection(monitorPrompt: string | null | undefined): string[] {
+function seatTickPromptSection(monitorPrompt: string | null | undefined, unchanged: boolean): string[] {
   if (!monitorPrompt) return [];
+  if (unchanged) {
+    return ["", `Standing monitor note unchanged since your last wake (${monitorPrompt.length} chars; seat_tick_settings with verbose:true reads it).`];
+  }
   return [
     "",
     "Standing monitor note for this project, in the seat's own words (seat_tick_settings sets, replaces and clears it). "
-      + "It shapes what you look at; the contract below still governs what you do:",
+      + "It shapes what you look at; the contract still governs what you do:",
     seatTickPromptPreview(monitorPrompt),
   ];
+}
+
+/** Identity of a note's text, recorded by a landed wake that showed it
+    (#2030). Any edit — a replaced line, a cleared and rewritten note — is a
+    different revision, so the next wake shows the note again. */
+export function seatTickNoteRevision(monitorPrompt: string | null | undefined): string | null {
+  return monitorPrompt ? createHash("sha256").update(monitorPrompt).digest("hex").slice(0, 32) : null;
 }
 
 /**
@@ -227,6 +252,11 @@ export function seatTickWakeMessage(input: {
   gaps?: readonly SeatTickEvidenceGap[];
   /** The project's own monitor prompt (#1280), or nothing. */
   monitorPrompt?: string | null;
+  /** The seat's last landed wake already showed this exact note (#2030). */
+  monitorPromptUnchanged?: boolean;
+  /** The seat's delivered mandate states the contract (#2030); otherwise the
+      wake carries its clauses. */
+  mandateCarriesContract?: boolean;
 }): string {
   const lines = [
     `Seat tick — ${input.project}.`,
@@ -270,10 +300,8 @@ export function seatTickWakeMessage(input: {
     lines.push("", "Signals:", ...input.signals.map((signal) => `- ${signal.label}`));
   }
   return boundedSeatTickMessage(lines, [
-    ...seatTickPromptSection(input.monitorPrompt),
-    "",
-    "Contract:",
-    ...SEAT_TICK_CONTRACT.map((clause) => `- ${clause}`),
+    ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
+    ...seatTickContractLines(input.mandateCarriesContract === true),
   ]);
 }
 
@@ -298,6 +326,11 @@ export function seatTickProposalMessage(input: {
       missing on the one tick that asks the seat to rank the whole board would
       be the same gap in a smaller place. */
   monitorPrompt?: string | null;
+  /** The seat's last landed wake already showed this exact note (#2030). */
+  monitorPromptUnchanged?: boolean;
+  /** The seat's delivered mandate states the contract (#2030); otherwise the
+      wake carries its clauses. */
+  mandateCarriesContract?: boolean;
 }): string {
   const lines = [
     `Seat tick — ${input.project}. No lane is open and no board task is waiting, and the proposal slot is due.`,
@@ -320,9 +353,7 @@ export function seatTickProposalMessage(input: {
     "Rank by what actually matters now: what is blocking, what is cheap and finishes something, what has been waiting longest.",
     `Put this exact line at the foot of the card so the next tick recognizes it: ${MONITOR_REF_PREFIX} ${seatTickProposalRef(input.slot)}`,
     "Open no GitHub issue and start no pipeline from this — the operator moves a card to assigned when they want it, and the next tick starts it.",
-    ...seatTickPromptSection(input.monitorPrompt),
-    "",
-    "Contract:",
-    ...SEAT_TICK_CONTRACT.map((clause) => `- ${clause}`),
+    ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
+    ...seatTickContractLines(input.mandateCarriesContract === true),
   ]);
 }

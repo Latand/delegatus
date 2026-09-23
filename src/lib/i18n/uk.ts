@@ -77,8 +77,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "kind.job": "джоба",
   "kind.background": "фон",
   "kind.handoff": "хендофф",
-
-  "rail.title": "Логи агентів",
   "rail.filter": "Фільтр проєктів…",
   "rail.projects": "Проєкти",
   "rail.overview": "Огляд",

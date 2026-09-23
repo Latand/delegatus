@@ -83,7 +83,6 @@ export const en = {
   "kind.handoff": "handoff",
 
   // ProjectRail
-  "rail.title": "Agent logs",
   "rail.filter": "Filter projects…",
   "rail.projects": "Projects",
   "rail.overview": "Overview",

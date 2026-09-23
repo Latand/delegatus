@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 
 import { en } from "@/lib/i18n/en";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 /*
  * Issue #696, review finding 1 — the whole path, end to end.
@@ -176,7 +177,7 @@ test("on a phone, where the rail is behind a drawer, the failure is still named"
   const host = await mountViewer();
 
   /* The rail really is gone. */
-  expect(host.textContent).not.toContain(en["rail.title"]);
+  expect(host.textContent).not.toContain(PRODUCT_NAME);
   /* And the failure is named anyway, with its recovery action. */
   expect(host.querySelector('[data-catalog-error="true"]')).toBeTruthy();
   expect(host.textContent).toContain(en["catalog.errorTitle"]);

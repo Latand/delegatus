@@ -3,6 +3,7 @@
 import { AlertTriangle, Check, ChevronLeft, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { DelegatusBadge, DelegatusMark } from "@/components/brand/BrandMark";
 import { Z } from "@/components/layers";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -243,6 +244,8 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   const title = view === "mapping" ? t("onboarding.mappingTitle") : view === "voice" ? t("onboarding.voiceTitle") : t("onboarding.title");
   const heading = view === "mapping" ? null : (
     <>
+      {/* The tour says what the product is, so it opens on the product's badge. */}
+      {current === "tour" ? <DelegatusBadge size={64} className="mb-3 block" /> : null}
       <h2 className="text-title font-bold text-primary">{t(HEADING_KEY[current])}</h2>
       {LEAD_KEY[current] ? <p className="mt-2 text-body leading-[1.45] text-secondary">{t(LEAD_KEY[current]!)}</p> : null}
     </>
@@ -321,7 +324,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
           {t("onboarding.back")}
         </button>
       ) : null}
-      <button type="button" data-onboarding-primary="" onClick={next} className={`inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2] ${stepOwnsPrimary ? "border border-border bg-card text-primary hover:bg-sunken" : "bg-accent text-white hover:opacity-90"}`}>
+      <button type="button" data-onboarding-primary="" onClick={next} className={`inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2] ${stepOwnsPrimary ? "border border-border bg-card text-primary hover:bg-sunken" : "bg-brand text-on-brand hover:opacity-90"}`}>
         {last ? t("onboarding.finish") : t("onboarding.continue")}
       </button>
     </>
@@ -388,6 +391,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
         className={`flex ${checkTall ? "h-[820px]" : "h-[640px]"} max-h-[calc(100vh-96px)] w-[920px] max-w-full flex-col overflow-hidden rounded-[12px] border border-border bg-card shadow-2 outline-none`}
       >
         <header className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-raised px-4">
+          <DelegatusMark size={24} />
           <span className="min-w-0 flex-1 truncate text-title font-bold text-primary">{title}</span>
           {view === "guide" ? (
             <button type="button" title={t("onboarding.leaveHint")} onClick={dismiss} className="inline-flex h-8 shrink-0 items-center rounded-[8px] px-2.5 text-ui font-semibold text-secondary hover:bg-sunken hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">

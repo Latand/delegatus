@@ -62,6 +62,27 @@ test("state text roles clear the small-text contrast floor on every surface they
   }
 });
 
+/* The Delegatus brand fill carries the label of every filled primary action, so
+   its on-brand ink clears the small-text floor in both schemes, and the fill
+   itself stands off the card it sits on (3:1, a graphical object). */
+test("the brand fill and its on-brand ink clear the contrast floors in both schemes", () => {
+  const brand = values("color-brand");
+  const onBrand = values("color-on-brand");
+  const card = values("surface-card");
+  const canvas = values("surface-canvas");
+
+  expect(brand.length).toBe(3);
+  expect(onBrand.length).toBe(3);
+  for (const scheme of [0, 1]) {
+    expect(contrast(onBrand[scheme], brand[scheme])).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
+    expect(contrast(brand[scheme], card[scheme])).toBeGreaterThanOrEqual(3);
+    expect(contrast(brand[scheme], canvas[scheme])).toBeGreaterThanOrEqual(3);
+  }
+  /* The two dark override blocks agree. */
+  expect(brand[1]).toBe(brand[2]);
+  expect(onBrand[1]).toBe(onBrand[2]);
+});
+
 /* The depth ladder only works while its three levels stay ordered: a palette
    tweak that lands the well on the card (or the board on the well) silently
    flattens every container back into an outline-only group. */

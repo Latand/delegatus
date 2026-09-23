@@ -752,7 +752,7 @@ export function PipelineStrip({
             <Play className="h-3.5 w-3.5" aria-hidden /> {compact && !mobile ? null : t("pipelineStrip.start")}
           </button>
         ) : pipeline.state === "needs_decision" ? (
-          <button className={`${actionBtn} ${primaryActionSlot} border-accent bg-accent text-white hover:opacity-90`} aria-label={t("pipelineStrip.retryStage")} disabled={busy} onClick={() => void mutate("retry-stage")}>
+          <button className={`${actionBtn} ${primaryActionSlot} border-brand bg-brand text-on-brand hover:opacity-90`} aria-label={t("pipelineStrip.retryStage")} disabled={busy} onClick={() => void mutate("retry-stage")}>
             <RefreshCw className="h-3.5 w-3.5" aria-hidden /> {compact && !mobile ? null : t("pipelineStrip.retryStage")}
           </button>
         ) : finished ? (

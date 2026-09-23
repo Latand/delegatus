@@ -1074,7 +1074,7 @@ function OrchestratorDraft({
             type="submit"
             data-orchestrator-confirm
             disabled={submitting}
-            className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-body font-semibold text-white shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+            className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-body font-semibold text-on-brand shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
           >
             {submitting
               ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />

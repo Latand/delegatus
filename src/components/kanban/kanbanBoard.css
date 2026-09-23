@@ -1065,7 +1065,7 @@
 .kb .btn.quiet { box-shadow: none; border-color: transparent; background: transparent; color: var(--color-secondary); }
 .kb .btn.quiet:hover { background: var(--surface-well); color: var(--color-primary); }
 .kb .btn.quiet:disabled { opacity: 0.5; background: transparent; }
-.kb .btn.primary { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
+.kb .btn.primary { background: var(--color-brand); border-color: var(--color-brand); color: var(--color-on-brand); }
 .kb .btn.primary:hover { filter: brightness(1.06); }
 .kb .btn.primary:disabled { opacity: 0.5; filter: none; }
 .kb .btn.expand-stages { flex-shrink: 0; height: 24px; padding: 0 8px; gap: 5px; font-size: var(--text-label); }
