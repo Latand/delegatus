@@ -2702,6 +2702,11 @@ export const en = {
   "mobile2.kanban.moveTo": "Move to {column}",
   "mobile2.kanban.moved": "Moved to {column}",
   "mobile2.kanban.openFirstAgent": "Open first agent",
+  "mobile2.kanban.hiddenNothing": "Nothing is hidden. Hold a card to hide it.",
+  /* The phone's Overview (#2098): the phone kanban over every project, narrowed
+     to live work as the desktop Overview is (#1820). */
+  "mobile2.overview.workingNow": "Working now only",
+  "mobile2.overview.emptyColumn": "No agent is working on a card in {column}.",
   /* The phone's task screen (#2072 slice 5, phone-kanban §3.5). */
   "mobile2.task.pipelines": { one: "{count} pipeline", other: "{count} pipelines" },
   "mobile2.task.agents": "Agents",

@@ -2,7 +2,7 @@
 
 import { useMemo, useRef } from "react";
 
-import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard, type KanbanModel } from "@/components/kanban/kanbanModel";
+import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard, type KanbanModel, type KanbanModelInput } from "@/components/kanban/kanbanModel";
 import { useBands, type BandsInput } from "@/components/kanban/useBands";
 import { drawnTasks, type useTaskMutations } from "@/components/kanban/useTaskMutations";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
@@ -20,9 +20,12 @@ import type { BoardTask } from "@/lib/tasks/types";
     so a move made on the task screen is still drawn on the board after ‹. */
 export type TaskMutations = ReturnType<typeof useTaskMutations>;
 
-export interface PhoneBoardInput extends Omit<BandsInput, "overview"> {
+export interface PhoneBoardInput extends BandsInput {
   /** The seat as the dashboard read it; null while unknown (nothing hidden on a guess). */
   seatRefs: SeatRefs | null;
+  /** The Overview's narrowing (#2098): the cards with live work, as its
+      desktop board draws them (`cardHasLiveWork`, #1820). */
+  cardFilter?: KanbanModelInput["cardFilter"];
 }
 
 export function usePhoneBoardModel(input: PhoneBoardInput, mutations: Pick<TaskMutations, "statuses" | "edits">): {
@@ -39,10 +42,10 @@ export function usePhoneBoardModel(input: PhoneBoardInput, mutations: Pick<TaskM
   /* The model's clock moves in 15 s steps, as the desktop's does: it phrases
      ages, and a per-second clock would rebuild every card each tick. */
   const modelNow = Math.floor(input.now / 15) * 15;
-  const { pipelines, files, flows, seatRefs } = input;
+  const { pipelines, files, flows, seatRefs, cardFilter } = input;
   const model = useMemo(
-    () => buildKanbanModel({ bands, tasks: allTasks, pipelines, projection, files, flows, statusOverrides: statuses, seat: seatRefs, now: modelNow }),
-    [bands, allTasks, pipelines, projection, files, flows, statuses, seatRefs, modelNow],
+    () => buildKanbanModel({ bands, tasks: allTasks, pipelines, projection, files, flows, statusOverrides: statuses, seat: seatRefs, cardFilter, now: modelNow }),
+    [bands, allTasks, pipelines, projection, files, flows, statuses, seatRefs, cardFilter, modelNow],
   );
   return { model, allTasks, modelNow };
 }

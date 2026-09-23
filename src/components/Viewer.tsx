@@ -45,8 +45,9 @@ import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows"
 import { KeepAwakeProvider } from "./KeepAwakeControl";
 import { needsDecisionPipelineRows } from "./mobile/mobileBoardModel";
 import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
-import { getMobileNav, landResolvedConversation } from "./mobile/mobileNav";
+import { getMobileNav, landResolvedConversation, useMobileNavStore } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
+import { overviewLiftKey, overviewLiftScreenOf, overviewScreenProject } from "./mobile/overviewPhone";
 import type { MobileShellHost } from "./mobile/MobileShell";
 import { onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
@@ -210,19 +211,39 @@ function ViewerApp() {
       && folded.some((file) => file.conversationId === pinned.conversationId);
     return currentGenerationPresent ? folded : [...folded, pinned];
   }, [allFiles, catalogPin]);
+  const isMobile = useIsMobile();
+  /* The phone's Overview is a board under a stack (#2098): a card opens its
+     task, its pipeline or its conversation as a screen over it, and that
+     screen is drawn by its own project's dashboard while the Overview stays
+     the Viewer's project, so ‹ lands back on the Overview's columns. The first
+     screen above the board names the project; a poll that briefly misses it
+     keeps the project it named last, for the same screen. */
+  const mobileNav = useMobileNavStore();
+  const stackedKey = useSyncExternalStore(mobileNav.subscribe, () => overviewLiftKey(mobileNav.getState().stack), () => null);
+  const liftKey = isMobile && project === OVERVIEW ? stackedKey : null;
+  const liftFound = overviewScreenProject(overviewLiftScreenOf(liftKey), { tasks, pipelines, files: allFiles });
+  const liftFoundProject = liftFound ? canonicalClientProject(liftFound, projectAliases) : null;
+  const [liftMemo, setLiftMemo] = useState<{ key: string; project: string } | null>(null);
+  if (liftKey && liftFoundProject && (liftMemo?.key !== liftKey || liftMemo.project !== liftFoundProject)) {
+    setLiftMemo({ key: liftKey, project: liftFoundProject });
+  }
+  const liftedProject = liftFoundProject ?? (liftKey && liftMemo?.key === liftKey ? liftMemo.project : null);
+  /* The project the dashboard draws: the Viewer's own, or the one a screen
+     over the phone's Overview belongs to. */
+  const dashboardProject = liftedProject ?? project;
   const dashboardFilesRef = useRef<{ project: string; files: FileEntry[] } | null>(null);
   const dashboardFiles = useMemo(() => {
-    if (project === OVERVIEW) return [];
-    const selected = files.filter((file) => projectKey(file) === project);
+    if (dashboardProject === OVERVIEW) return [];
+    const selected = files.filter((file) => projectKey(file) === dashboardProject);
     const previous = dashboardFilesRef.current;
-    const stable = previous?.project === project
+    const stable = previous?.project === dashboardProject
       && previous.files.length === selected.length
       && selected.every((file, index) => file === previous.files[index])
       ? previous.files
       : selected;
-    dashboardFilesRef.current = { project, files: stable };
+    dashboardFilesRef.current = { project: dashboardProject, files: stable };
     return stable;
-  }, [files, project]);
+  }, [files, dashboardProject]);
   /* Every certified answer refreshes the names this browser remembers, so
      the next cold start names the project before its first answer (#2071). */
   useEffect(() => {
@@ -251,7 +272,6 @@ function ViewerApp() {
     () => new Map(projectCatalog.map((entry) => [entry.project, entry.conversations])),
     [projectCatalog],
   );
-  const isMobile = useIsMobile();
   /* The per-project orchestrator dock (PRD #976 slice A). Its open state is the
      operator's and belongs to the PROJECT (#1149), exactly as the dock's width
      does (#1011): the server render and the first client render agree on
@@ -483,10 +503,12 @@ function ViewerApp() {
      the overview context/slice here, and ProjectDashboard takes over the moment
      a project opens. */
   useEffect(() => {
-    if (project !== OVERVIEW) return;
+    /* A screen over the phone's Overview is its project's dashboard, which
+       reports itself; the Overview reports again once ‹ brings it back. */
+    if (project !== OVERVIEW || liftedProject) return;
     viewBus.reportContext(OVERVIEW_CONTEXT);
     viewBus.reportSlice(OVERVIEW_SLICE);
-  }, [project]);
+  }, [project, liftedProject]);
 
   /* A tapped account badge (issue #229) opens the accounts surface. On the
      phone the limits blocks live on the shell's Accounts & limits screen
@@ -714,6 +736,39 @@ function ViewerApp() {
     focusNonceRef.current += 1;
     setFocusRequest({ path, nonce: focusNonceRef.current, catalog: false });
   }, []);
+
+  /* A conversation opened over the phone's Overview (#2098): a card's row,
+     its sheet's «Open first agent», the ⚠ sheet, an arrival. It is a SCREEN
+     on the Overview's stack, full screen and never inside a card, and its own
+     project's dashboard draws it (see `liftedProject`). The screen goes on
+     first; the focus record then re-types that entry in place, as a stage
+     conversation's does, so the conversation keeps its link without a second
+     entry under it, and ‹ lands on the Overview. The focus request is what
+     puts the conversation on its project's board for the screen to show. */
+  const openOverOverview = useCallback((file: FileEntry) => {
+    const nav = mobileNav;
+    const top = nav.getState().stack;
+    const onTop = top[top.length - 1];
+    if (onTop?.kind !== "chat" || onTop.id !== file.path) {
+      /* From a screen already over the Overview (the ⚠ sheet over another
+         conversation), the new one replaces that stack: one project's
+         dashboard draws what is over the Overview. */
+      if (top.length > 1) nav.home();
+      nav.push({ kind: "chat", id: file.path });
+    }
+    setPendingHash(null);
+    setStaleFocusNotice(false);
+    recordFocusNavigation(file, projectKey(file), { restore: true });
+    nav.stamp();
+    focusNonceRef.current += 1;
+    setFocusRequest({ path: file.path, nonce: focusNonceRef.current, catalog: false });
+  }, [mobileNav]);
+  /* A focus request outlives the screen it was for; the next dashboard to
+     mount over the Overview must not replay it. */
+  useEffect(() => {
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- the screen that asked is gone */
+    if (project === OVERVIEW && !liftedProject) setFocusRequest(null);
+  }, [project, liftedProject]);
 
   /* In-app conversation links (#1432 addendum): «Open conversation» chips on
      MCP call cards, «Open it on the board» in the orchestrator panel, the
@@ -1046,7 +1101,8 @@ function ViewerApp() {
           file={toastFile}
           mobile
           onOpen={() => {
-            openFile(toastFile);
+            if (project === OVERVIEW) openOverOverview(toastFile);
+            else openFile(toastFile);
             setToastPath(null);
           }}
           onDismiss={() => setToastPath(null)}
@@ -1084,7 +1140,13 @@ function ViewerApp() {
             <MobileAttentionSheet
               entries={shellEntries}
               now={clock}
-              onOpenConversation={jumpToItem}
+              /* Over the Overview a row opens as a screen on its stack, as its
+                 cards do (#2098); a project's own board focuses in place. */
+              onOpenConversation={project === OVERVIEW ? (item) => {
+                close();
+                cycleRef.current = item.id;
+                openOverOverview(item.file);
+              } : jumpToItem}
               onOpenPipeline={(row) => {
                 close();
                 getMobileNav().push({ kind: "pipeline", id: row.id });
@@ -1096,7 +1158,7 @@ function ViewerApp() {
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, files, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, loaded, catalogFailures, selectProject, createProject, jumpToItem]);
+  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, files, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, loaded, catalogFailures, selectProject, createProject, jumpToItem]);
 
   const shell = (
     <div className="flex h-full">
@@ -1136,7 +1198,15 @@ function ViewerApp() {
           onClose={toggleOrchestrator}
         />
       ) : null}
-      <main className="flex min-w-0 flex-1 flex-col">
+      {/* On the phone a screen enters with a 24 px slide (`starting:translate-x-6`).
+          A screen mounted fresh, such as a project's screen opened over the
+          Overview (#2098), slides in with no ancestor clipping it, and Chrome's
+          mobile layout widened the layout viewport to fit the slide: at 390 × 667
+          `innerHeight` read 709 against a 667 px visual viewport, the
+          conversation took the difference for an open keyboard, and 42 px of
+          empty band stayed under its composer. Clipping the slide here keeps the
+          page the phone's width. */}
+      <main className={`flex min-w-0 flex-1 flex-col${isMobile ? " overflow-x-clip" : ""}`}>
         {/* Desktop: the corner attention anchor — the badge pill sits where the
             toast appears, so a new toast visually docks into it (D7). On the
             phone the badge lives in the board header and the toast docks in flow
@@ -1166,7 +1236,7 @@ function ViewerApp() {
             ) : null}
           </div>
         )}>
-        {project === OVERVIEW ? (
+        {project === OVERVIEW && !liftedProject ? (
           <OverviewBoard
             files={files}
             projectCatalog={projectCatalog}
@@ -1187,6 +1257,7 @@ function ViewerApp() {
             onSelectProject={selectProject}
             onOpenSearch={openSearch}
             mobileShell={mobileShell}
+            onOpenConversation={openOverOverview}
           />
         ) : (
           <ProjectDashboard
@@ -1198,9 +1269,9 @@ function ViewerApp() {
             tasks={tasks}
             conversationAliases={conversationAliases}
             projectCatalog={projectCatalog}
-            projectName={projectDisplayNames[project]}
-            projectCwd={projectCwds[project]}
-            project={project}
+            projectName={projectDisplayNames[dashboardProject]}
+            projectCwd={projectCwds[dashboardProject]}
+            project={dashboardProject}
             loaded={loaded}
             cached={cached}
             catalogFailures={catalogFailures}
@@ -1208,9 +1279,9 @@ function ViewerApp() {
             focusRequest={focusRequest?.catalog && catalogPin?.path !== focusRequest.path ? null : focusRequest}
             placeRequest={placeRequest}
             attentionPaths={attentionPaths}
-            archived={archivedProjects.has(project)}
-            catalogKnown={catalogProjects.has(project)}
-            catalogConversationCount={catalogConversationCounts.get(project) ?? 0}
+            archived={archivedProjects.has(dashboardProject)}
+            catalogKnown={catalogProjects.has(dashboardProject)}
+            catalogConversationCount={catalogConversationCounts.get(dashboardProject) ?? 0}
             onArchive={archiveProject}
             onUnarchive={unarchiveProject}
             onOpenSearch={openSearch}

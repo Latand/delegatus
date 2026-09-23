@@ -128,7 +128,7 @@ function Receipt() {
 
 interface Opened { tasks: string[]; conversations: string[]; pipelines: string[]; shown: string[][] }
 
-function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts }) {
+function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void }) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -156,6 +156,7 @@ function mount(input: { files: FileEntry[]; tasks: BoardTask[]; pipelines?: Pipe
         onOpenConversation={(entry) => opened.conversations.push(entry.path)}
         onOpenPipeline={(entry) => opened.pipelines.push(entry.id)}
         onShown={(paths) => opened.shown.push([...paths])}
+        onHiddenCount={input.onHiddenCount}
       />
       <Receipt />
     </MobileNavContext.Provider>,
@@ -363,4 +364,47 @@ test("coming back to the board lands on the column and the offset the operator l
   /* A fresh load of the tab reads the column back from the session. */
   resetPhoneKanbanPlaces();
   expect(JSON.parse(dom.sessionStorage.getItem("llv.phoneKanban.fixture") ?? "{}").column).toBe("done");
+});
+
+/* #2098: search and the hidden tasks left the top of the board for ⋯. The
+   columns draw ⋯ › Hidden tasks: the groups hidden from them, newest first,
+   then the empty tasks taken off the board, each with Show. */
+test("⋯ › Hidden tasks lists what the columns do not draw, and Show brings a group back", async () => {
+  const { files } = board();
+  const hiddenAt = new Date((NOW - 300) * 1000).toISOString();
+  const tasks = [
+    task("a1", "assigned", [files[0]!.path]),
+    { ...task("h1", "assigned", [files[1]!.path], "Hidden while the export settles"), groupHidden: { at: hiddenAt, by: "operator" } } as BoardTask,
+    { ...task("e1", "inbox", [], "Nothing was started on this one"), board: "hidden" } as BoardTask,
+  ];
+  const patches: Array<{ id: string; body: PatchBody }> = [];
+  const ports: TaskMutationPorts = {
+    async patch(id, body): Promise<PatchResult> {
+      patches.push({ id, body });
+      return { ok: true, task: { ...tasks.find((entry) => entry.id === id)!, revision: "r-next" } as BoardTask };
+    },
+    async read(id) { return tasks.find((entry) => entry.id === id) ?? null; },
+    changed() {},
+  };
+  const counts: number[] = [];
+  const { host, nav } = mount({ files, tasks, ports, onHiddenCount: (count) => counts.push(count) });
+  expect(cardsIn(host, "assigned")).toEqual(["task:a1"]);
+  expect(counts.at(-1)).toBe(2);
+
+  flushSync(() => nav.openSheet("hidden"));
+  const sheet = q(dom.document.body as unknown as HTMLElement, "[data-phone-hidden-sheet]")!;
+  expect(sheet.getAttribute("data-phone-hidden-sheet")).toBe("2");
+  expect(qa(sheet, "[data-phone-hidden-row]").map((row) => row.getAttribute("data-phone-hidden-row"))).toEqual(["h1", "e1"]);
+  const group = q(sheet, '[data-phone-hidden-row="h1"]')!;
+  expect(group.textContent).toContain("Hidden while the export settles");
+  expect(group.textContent).toContain(en("kanban.trayGroupMeta", { who: en("kanban.hiddenBy.operator"), age: "5m" }));
+  expect(q(sheet, '[data-phone-hidden-row="e1"]')!.textContent).toContain(en("kanban.offBoardMeta"));
+  /* A project's own board names no project on its rows. */
+  expect(q(sheet, "[data-phone-card-project]")).toBeNull();
+
+  click(q(group, "[data-phone-hidden-show]"));
+  await sleep(10);
+  expect(patches.map((entry) => [entry.id, (entry.body as { hide?: boolean }).hide])).toEqual([["h1", false]]);
+  /* Shown at once: the group is back in its column before the write answers. */
+  expect(cardsIn(host, "assigned")).toEqual(expect.arrayContaining(["task:a1", "task:h1"]));
 });

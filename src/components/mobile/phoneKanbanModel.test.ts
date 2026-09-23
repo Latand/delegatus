@@ -4,7 +4,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
-import { buildKanbanModel, KANBAN_STATUSES } from "@/components/kanban/kanbanModel";
+import { buildKanbanModel, cardHasLiveWork, KANBAN_STATUSES } from "@/components/kanban/kanbanModel";
 import type { SchemeLayout } from "@/components/scheme/layout";
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
@@ -91,11 +91,11 @@ function layout(files: readonly FileEntry[]): SchemeLayout {
   } as unknown as SchemeLayout;
 }
 
-function desktop(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; seat?: SeatRefs | null } = {}) {
+function desktop(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; seat?: SeatRefs | null; cardFilter?: typeof cardHasLiveWork } = {}) {
   const pipelines = options.pipelines ?? [];
   const projection = projectTaskWorkflows([...tasks], pipelines, [], [...files], "fixture");
   const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
-  return buildKanbanModel({ bands, tasks, pipelines, projection, files, seat: options.seat ?? null, now: NOW });
+  return buildKanbanModel({ bands, tasks, pipelines, projection, files, seat: options.seat ?? null, cardFilter: options.cardFilter, now: NOW });
 }
 
 const keys = (items: readonly PhoneCard[]) => items.map((item) => item.card.task?.id ?? item.key);
@@ -311,4 +311,32 @@ test("a lane the operator set aside asks nothing here, as in the ⚠ queue, and 
   expect(closing.columns.inbox.pinned).toEqual([]);
   expect(closing.columns.inbox.unlinked).toEqual([]);
   expect(closing.columns.inbox.needsYou).toBe(0);
+});
+
+/* #2098: the Overview narrows the model to live work, as its desktop board
+   does (#1820). The phone's columns read what the narrowing keeps, and a tab
+   counts the cards it draws; a project's board, which narrows nothing, is
+   the whole inventory as before. */
+test("the Overview's narrowing keeps live work only, and each tab counts what it draws", () => {
+  const files = [working(1), file(2), asking(3, 600), file(4), working(5)];
+  const tasks = [
+    task("a1", "assigned", [files[0]!.path]),
+    task("a2", "assigned", [files[1]!.path]),
+    task("b1", "blocked", [files[2]!.path]),
+    task("d1", "done", [files[3]!.path]),
+  ];
+  const narrowed = buildPhoneKanban({ model: desktop(tasks, files, { cardFilter: cardHasLiveWork }), now: NOW });
+  expect(keys(narrowed.columns.assigned.cards)).toEqual(["a1"]);
+  expect(narrowed.columns.assigned.count).toBe(1);
+  expect(narrowed.columns.assigned.working).toBe(1);
+  expect(keys(narrowed.columns.blocked.pinned)).toEqual(["b1"]);
+  expect(narrowed.columns.done.count).toBe(0);
+  expect(columnEmpty(narrowed.columns.done)).toBe(true);
+  /* The working row no task owns is live, so Not on a task keeps it. */
+  expect(narrowed.columns.inbox.unlinked.map((item) => item.firstAgent?.path)).toEqual([files[4]!.path]);
+
+  const whole = buildPhoneKanban({ model: desktop(tasks, files), now: NOW });
+  expect(keys(whole.columns.assigned.cards)).toEqual(["a1", "a2"]);
+  expect(whole.columns.assigned.count).toBe(2);
+  expect(whole.columns.done.count).toBe(1);
 });

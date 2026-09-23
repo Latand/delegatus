@@ -77,7 +77,7 @@ for (const surface of ["desktop", "phone"] as const) {
     expect(host.textContent).not.toContain(en["overview.firstRunTitle"]);
     expect(host.textContent).not.toContain(en["common.nothingRunning"]);
     expect(host.querySelector('[aria-busy="true"]')).not.toBeNull();
-    expect(host.querySelector(phone ? '[data-skeleton="rows-list"]' : "[data-kanban-skeleton]")).not.toBeNull();
+    expect(host.querySelector(phone ? '[data-skeleton="phone-kanban"]' : "[data-kanban-skeleton]")).not.toBeNull();
   });
 }
 
