@@ -277,3 +277,50 @@ test("the incident replayed: the 09:23 board then the 09:19 payload keeps Workin
   expect(board.working.map((row) => row.title).sort()).toEqual(["Favicon", "Review round 2", "Skeletons"]);
   expect(board.needsYou.filter((item) => item.kind === "pipeline")).toEqual([]);
 });
+
+test("an incomplete pinned answer keeps the newest rows and adds only the scope's own pin, then the board keeps them", async () => {
+  const pinRow = finished(PIN, "Opened from All conversations");
+  let pinnedCalls = 0;
+  const cache = createFilesClientCache(async (input) => {
+    if (input === GLOBAL) return answer(AT_0923, { ETag: '"0923"', "x-llv-files-generation": "14", "x-llv-files-built": built(14) });
+    pinnedCalls += 1;
+    if (pinnedCalls === 1) {
+      return answer({ ...AT_0919, files: [...AT_0919.files, pinRow], pinOverlayPaths: [PIN] }, { ETag: '"pinned-0919"', "x-llv-files-built": built(12) });
+    }
+    /* The pin's own scan has not caught up: the server answers the pinned
+       scope with its newest global rows, and says the target is still ahead. */
+    return answer(AT_0923, {
+      ETag: '"pinned-global-only"',
+      "x-llv-files-generation": "14",
+      "x-llv-files-target-generation": "15",
+      "x-llv-files-built": built(14, 15),
+    });
+  });
+  const unsubscribe = cache.subscribe(() => {}, PIN);
+
+  await cache.revalidate(PIN);
+  await cache.revalidate();
+  const pinned = await cache.revalidate(PIN);
+  const shown = cache.read();
+  const back = cache.readScope();
+  cache.dispose();
+  unsubscribe();
+
+  const boardOf = (data: { files: readonly FileEntry[]; pipelines: readonly Pipeline[] }) =>
+    buildMobileBoard({ files: data.files, pipelines: data.pipelines, project: PROJECT, now: NOW });
+  for (const data of [pinned, shown]) {
+    expect(data.builtGeneration).toBe(14);
+    expect(boardOf(data).working).toHaveLength(3);
+    expect(data.pipelines.map((row) => row.state)).toEqual(["closed"]);
+    /* The deep link keeps its conversation while the pin's scan catches up. */
+    expect(data.files.map((row) => row.path)).toContain(PIN);
+  }
+  expect(pinned.pinOverlayPaths).toEqual([PIN]);
+
+  /* Back on the board: generation 14's rows, without the pin. */
+  expect(back.builtGeneration).toBe(14);
+  expect(back.files.map((row) => row.path)).not.toContain(PIN);
+  expect(boardOf(back).working).toHaveLength(3);
+  expect(boardOf(back).needsYou.filter((item) => item.kind === "pipeline")).toEqual([]);
+  expect(back.pipelines.map((row) => row.state)).toEqual(["closed"]);
+});

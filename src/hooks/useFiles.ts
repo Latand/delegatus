@@ -264,6 +264,14 @@ function patchFilesData(previous: FilesData, incoming: FilesData): FilesData {
   };
 }
 
+/** The rows of `own` that `owned` names and `base` lacks: a scope's own pin
+    rows, laid on top of newer rows (#2072). */
+function missingPinRows(base: FilesData, own: FilesData, owned: ReadonlySet<string>): FileEntry[] {
+  if (!owned.size) return [];
+  const present = new Set(base.files.map((file) => file.path));
+  return own.files.filter((file) => owned.has(file.path) && !present.has(file.path));
+}
+
 /** The stamp a 304 leaves on the representation it confirms: the later of the
     two when they count in one epoch, else the server's. */
 function confirmedBuilt(header: FilesBuilt | undefined, stored: FilesBuilt | undefined): FilesBuilt | undefined {
@@ -444,9 +452,7 @@ export function createFilesClientCache(
   const forwardFor = (requestScope: string, own: Representation): FilesData => {
     const base = newestUnpinned();
     if (own.forward?.base === base) return own.forward.data;
-    const present = new Set(base.files.map((file) => file.path));
-    const pinOnly = new Set(own.data.pinOverlayPaths);
-    const pinRows = pinOnly.size ? own.data.files.filter((file) => pinOnly.has(file.path) && !present.has(file.path)) : [];
+    const pinRows = missingPinRows(base, own.data, new Set(own.data.pinOverlayPaths));
     const data = !pinRows.length && base.requestScope === requestScope
       ? base
       : {
@@ -730,20 +736,27 @@ export function createFilesClientCache(
     retireConfirmedSpawnOverlays(incoming);
     /* A restarted server can acknowledge a pinned target generation with its
        global-only stale snapshot before the pin hydration resumes. Keep the
-       last URL-scoped completed representation mounted until that generation
-       supplies the target, so the deep-link owner retains its subscription. */
-    const scopedIncoming = generationIncomplete && pinnedPath
+       rows this scope's pin admitted mounted until that generation supplies
+       them, so the deep-link owner retains its subscription — on top of the
+       answer's own rows, which are the newest: the rest of the scope's last
+       representation never comes back (#2072). */
+    const keptPinRows = generationIncomplete && pinnedPath
       && representation?.data.files.some((file) => file.path === pinnedPath)
-      ? { ...representation.data, requestScope: url }
+      ? missingPinRows(incoming, representation.data, new Set([...representation.data.pinOverlayPaths, pinnedPath]))
+      : [];
+    const scopedIncoming = keptPinRows.length
+      ? {
+          ...incoming,
+          files: [...incoming.files, ...keptPinRows],
+          pinOverlayPaths: [...incoming.pinOverlayPaths, ...keptPinRows.map((file) => file.path)],
+        }
       : incoming;
     snapshot = patchFilesData(snapshot, scopedIncoming);
     appliedGeneration = generation;
-    /* The rows kept from the scope's last representation are as old as it. */
-    const scopedBuilt = scopedIncoming === incoming ? built : representation?.built;
-    shownBuilt = scopedBuilt;
+    shownBuilt = built;
     const raw = Array.isArray(parsed) ? undefined
       : scopedIncoming === incoming ? rawSharingRows(parsed as unknown as RawFilesResponse, snapshot) : parsed as unknown as RawFilesResponse;
-    rememberRepresentation(url, snapshot, etag ?? undefined, etag ? raw : undefined, scopedBuilt);
+    rememberRepresentation(url, snapshot, etag ?? undefined, etag ? raw : undefined, built);
     settleServerPipelines(logicalGeneration ?? generation, !generationIncomplete);
     publish(url);
     scheduleOrCancelCompletionRetry(generationIncomplete, completionTargetGeneration, url, pinnedPath, revision, logicalGeneration ?? generation, completionRetryAttempt, completionRetry);
