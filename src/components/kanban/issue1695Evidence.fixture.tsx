@@ -542,10 +542,12 @@ const flatPipelines: Pipeline[] = FLAT ? (() => {
       [{ stageId: "implement", attempts: [attempt(1, "needs_decision", mdImpl, { startedAt: iso(80 * MIN), completedAt: iso(41 * MIN), verdict: { status: "fail", findings: [finding], rankedFindings: [{ severity: "P1", text: finding }] } })] }],
       { stageId: "implement", state: "needs_decision", input: null, activatedBy: null },
       { createdAt: iso(90 * MIN), stageReports: [{ seq: 1, at: iso(41 * MIN), actor: { kind: "agent", role: "builder", conversationId: mdImpl.conversationId }, stageId: "implement", attempt: 1, status: "fail", findings: 1, replaces: null, summary: finding }] }),
+    /* Paused while its acceptance stage ran: the engine keeps the cursor on the
+       held stage, which the phone's pipeline screen draws hollow (§3.13). */
     pipeline("p-md-accept", L("Finish mobile traffic acceptance", "Завершити приймання мобільного трафіку"), "t-mobile", "paused",
       [stage("accept", "verifier", "review"), stage("review", "reviewer", null)],
-      [{ stageId: "accept", attempts: [attempt(1, "passed", mdAccept, { startedAt: iso(150 * MIN), completedAt: iso(120 * MIN) })] }],
-      null, { pausedState: "running", createdAt: iso(160 * MIN) }),
+      [{ stageId: "accept", attempts: [attempt(1, "running", mdAccept, { startedAt: iso(150 * MIN) })] }],
+      { stageId: "accept", state: "running", input: null, activatedBy: null }, { pausedState: "running", createdAt: iso(160 * MIN) }),
     pipeline("p-many-loop", L("Name every pipeline row by its first prompt line", "Називати кожен рядок конвеєра першим рядком промпту"), "t-many", "running",
       [stage("build", "builder", "review"), stage("review", "reviewer", null)],
       [

@@ -11,19 +11,22 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 /*
- * One pipeline on the phone (mobile v2 lane 7, #1439; README §4.7). What this
- * guards is the shape behind the frames the capture harness measures:
+ * One pipeline on the phone, the Stages view (#2072 slice 6,
+ * docs/design/phone-kanban.md §3.13; mobile v2 lane 7 before it). What this
+ * guards is the shape behind the rendered frames:
  *
- *   - the BAR carries the task title and its meta line, so the body holds no
- *     header block and no template line;
- *   - the findings of the round that parked the chain lead, under a heading in
- *     the product's own words (the stage's role name, its round, the count);
- *   - every stage that ran has a conversation and the row opens it, and the
- *     current stage is the one with the accent edge;
- *   - the linked tasks come last;
- *   - what the retired dock sheet alone could reach lives here now (lane 10):
- *     a never-run stage's row opens its configuration in a sheet, and a
- *     stage's earlier attempts and review transcripts are rows under it.
+ *   - the BAR says where the lane stands (state · stage k of N · age) and the
+ *     body owns the title, once;
+ *   - the passed stages before the current one fold into one row that opens
+ *     in place;
+ *   - the current stage is expanded: who runs it, its attempt, what it last
+ *     did, the agent's latest line, and "Open conversation"; the answer to a
+ *     decision or a spent review budget sits inside it;
+ *   - a waiting stage is one compact row whose ⚙ opens its configuration in a
+ *     sheet, the desktop's own editor (lane 10);
+ *   - the linked tasks, then "Past attempts · n", which lists the finished
+ *     attempts, review rounds and a round's other reviewer transcripts;
+ *   - the bar's ⋯ carries the lane's own actions and leads on to the board's.
  */
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
@@ -45,10 +48,10 @@ mock.module("@/hooks/useRuntime", () => ({
   useRuntimeFlow: () => null,
 }));
 
-const { MobilePipelineScreen, mobilePipelineActions, stageMetaLine, stageRowTitle } = await import("./MobilePipelineScreen");
+const { MobilePipelineScreen, mobilePipelineActions } = await import("./MobilePipelineScreen");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
 const { receipts } = await import("./MobileReceipt");
-const { getLocale, translate: t } = await import("@/lib/i18n");
+const { setLocale } = await import("@/lib/i18n");
 
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
 const G = globalThis as Record<string, unknown>;
@@ -70,7 +73,7 @@ afterAll(async () => {
 
 let roots: Root[] = [];
 beforeEach(() => { dom.document.body.replaceChildren(); roots = []; receipts.dismiss(); });
-afterEach(() => { for (const root of roots) flushSync(() => root.unmount()); roots = []; receipts.dismiss(); });
+afterEach(() => { for (const root of roots) flushSync(() => root.unmount()); roots = []; receipts.dismiss(); setLocale("en"); });
 
 function nav() {
   const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=atlas" }];
@@ -156,105 +159,220 @@ function parkedPipeline(over: Partial<Pipeline> = {}): Pipeline {
   } as unknown as Pipeline;
 }
 
-test("the bar carries the task title and its meta line — no header block, no template line in the body", () => {
+const stageRow = (host: HTMLElement, id: string) => q(host, `.pb-stage[data-stage="${id}"]`);
+const position = (k: number, n: number) => {
+  const text = translate("en", "kanban.stages.position", { k, n });
+  return text.charAt(0).toLowerCase() + text.slice(1);
+};
+
+/* The same lane, running its Implement stage: Design passed, and the agent's
+   plan names what it is doing now. */
+const BUILDING = { ...IMPLEMENT, plan: { steps: [], done: 0, total: 0, current: "Checking the fallback path next", updatedAt: null } } as unknown as FileEntry;
+function runningPipeline(): Pipeline {
+  return parkedPipeline({
+    state: "running",
+    runs: [
+      { stageId: "design", attempts: [attempt({})] },
+      { stageId: "implement", attempts: [attempt({ state: "running", agentPath: BUILDING.path, completedAt: null, verdict: null, startedAt: at(360) })] },
+    ],
+    cursor: { stageId: "implement", state: "running", input: null, activatedBy: null },
+  } as unknown as Partial<Pipeline>);
+}
+
+test("the bar says where the lane stands, and the body owns the title once", () => {
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
   expect(q(host, '[data-mobile2-screen="pipeline"]')).not.toBeNull();
   expect(q(host, '[data-mobile2-pipeline="p2"]')).not.toBeNull();
   expect(q(host, "[data-mobile2-back]")).not.toBeNull();
 
-  const title = q(host, "[data-mobile2-title-text]")!;
-  expect(title.textContent).toBe("Fast conversation switching");
   const meta = q(host, "[data-mobile2-meta]")!;
-  expect(meta.textContent).toContain(translate("en", "mobile2.pipelines.badgeDecision"));
-  expect(meta.textContent).toContain(translate("en", "pipelineStrip.stageOf", { k: 3, n: 5 }));
-  expect(meta.textContent).toContain(translate("en", "mobile2.pipeline.started", { age: "2h" }));
+  expect(q(meta, ".pstate-word")!.textContent).toBe(translate("en", "pipelineState.needs_decision"));
+  expect(q(meta, ".pstate-word")!.getAttribute("data-pstate")).toBe("needs_decision");
+  /* "stage 3 of 5", the desktop's position words in a meta line, then the age
+     with a unit since the lane last moved (the review attempt ended an hour ago). */
+  expect(meta.textContent).toBe(`${translate("en", "pipelineState.needs_decision")}·${position(3, 5)}·1h`);
+  /* The heading is in view, so the bar does not carry the title as well. */
+  expect(q(host, "[data-mobile2-title-text]")).toBeNull();
 
-  /* The body says the rest — it never repeats the title, and there is no
-     template/spec line under the bar (README §4.7, critique P3-3). */
   const body = q(host, "[data-mobile2-pipeline-body]")!;
-  expect(body.textContent).not.toContain("Fast conversation switching");
+  const heading = q(body, "[data-pipeline-heading]")!;
+  expect(heading.tagName).toBe("H2");
+  expect(heading.textContent).toBe("Fast conversation switching");
+  expect(body.textContent!.split("Fast conversation switching").length).toBe(2);
+  /* No template or worktree line under the bar (README §4.7, critique P3-3). */
   expect(body.textContent).not.toContain("lane/p2");
   expect(body.textContent).not.toContain("/repo-w");
+  expect(q(body, "[data-stages-count]")!.textContent).toBe(`${translate("en", "mobile2.pipeline.stages")}5`);
 });
 
-test("the findings of the round that parked the chain lead, under a heading in the product's own words", () => {
+test("the passed stages before the current one fold into one row, which opens and closes in place", () => {
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
-  const block = q(host, '[data-testid="mobile-pipeline-findings"]')!;
-  expect(block).not.toBeNull();
-  expect(q(block, "[data-pipeline-findings-heading]")!.textContent).toBe(translate("en", "mobile2.pipeline.findingsHeading", {
-    stage: translate("en", "mobile2.pipeline.stageTitle", { stage: "Review" }),
-    round: 3,
-    findings: translate("en", "pipelineVerdict.findings", { count: 2 }),
-  }));
-  const items = qa(block, "li");
-  expect(items.length).toBe(2);
-  expect(items[0]!.textContent).toContain("the feed cache is dropped");
-  /* A numbered list, the prototype's own shape for the block. */
-  expect(block.querySelector("ol")).not.toBeNull();
+  const rows = () => qa(host, ".pb-stage[data-stage]").map((el) => el.getAttribute("data-stage"));
+  expect(rows()).toEqual(["review", "fix", "merge"]);
+  const fold = q(host, "[data-passed-fold]")!;
+  expect(fold.tagName).toBe("BUTTON");
+  expect(fold.getAttribute("data-passed-fold")).toBe("2");
+  expect(fold.getAttribute("aria-expanded")).toBe("false");
+  expect(q(fold, ".pb-num")!.textContent).toBe("1–2");
+  expect(q(fold, ".pb-name")!.textContent).toBe(translate("en", "pipelineBlock.passedRow", { count: 2 }));
+  expect(q(fold, ".pb-ident-words")!.textContent).toBe("Design · Implement");
+  expect(q(fold, '.pmark[data-mark="check"]')).not.toBeNull();
+
+  click(fold);
+  expect(fold.getAttribute("aria-expanded")).toBe("true");
+  expect(rows()).toEqual(["design", "implement", "review", "fix", "merge"]);
+  /* The numbers are the stages' places in the chain, folded or not. */
+  expect(qa(host, ".pb-stage[data-stage] .pb-num").map((el) => el.textContent)).toEqual(["1", "2", "3", "4", "5"]);
+  click(fold);
+  expect(rows()).toEqual(["review", "fix", "merge"]);
+
+  /* A lane with one passed stage before the current one has nothing to fold. */
+  const one = mount(<MobilePipelineScreen pipeline={runningPipeline()} files={[BUILDING]} now={NOW} onOpenConversation={() => {}} />);
+  expect(q(one, "[data-passed-fold]")).toBeNull();
+  expect(qa(one, ".pb-stage[data-stage]").map((el) => el.getAttribute("data-stage"))).toEqual(["design", "implement", "review", "fix", "merge"]);
 });
 
-test("a pipeline with nothing to decide shows no findings block", () => {
-  const running = parkedPipeline({
-    state: "running",
-    runs: [
-      { stageId: "design", attempts: [attempt({})] },
-      { stageId: "implement", attempts: [attempt({ agentPath: IMPLEMENT.path })] },
-    ],
-  } as unknown as Partial<Pipeline>);
-  const host = mount(<MobilePipelineScreen pipeline={running} files={[IMPLEMENT]} now={NOW} onOpenConversation={() => {}} />);
-  expect(q(host, '[data-testid="mobile-pipeline-findings"]')).toBeNull();
+test("the decision is answered inside the stage it parked on: its finding, then Skip stage and Retry stage", () => {
+  const answered: string[] = [];
+  const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={(entry) => answered.push(entry.path)} />);
+  const current = q(host, ".pb-stage[data-stage-current]")!;
+  expect(current.getAttribute("data-stage")).toBe("review");
+  /* The answer and its report live in the stage; nothing above the list answers. */
+  expect(qa(host, "[data-answer-action]").every((button) => current.contains(button as never))).toBe(true);
+  expect(qa(current, "[data-answer-action]").map((el) => [el.getAttribute("data-answer-action"), el.textContent])).toEqual([
+    ["skip-stage", translate("en", "mobile2.pipeline.skip")],
+    ["retry-stage", translate("en", "mobile2.pipeline.retry")],
+  ]);
+  /* The pipeline screen's 44 px buttons, Retry the primary one. */
+  expect(q(current, ".pb-actions")!.className).toContain("large");
+  expect(q(current, '[data-answer-action="retry-stage"]')!.className).toContain("primary");
+  /* The first finding with its rank, then how many more (§3.13). */
+  const finding = qa(current, ".stage-findings li");
+  expect(finding[0]!.textContent).toContain("the feed cache is dropped");
+  expect(finding[1]!.textContent).toBe(translate("en", "kanban.stageReport.moreFindings", { count: 1 }));
+  expect(q(current, ".pb-answer .stage-report")!.textContent).toBe(translate("en", "pipelineBlock.reason.failed", { stage: "Review" }) + ` · ${translate("en", "pipelineVerdict.findings", { count: 2 })}`);
+  /* Who runs the stage, and its attempt, on the stage's own line. The attempt
+     is counted the way every stage label counts it (#1865): the stage's own
+     attempts, whatever the record numbered its single one. */
+  expect(q(current, ".pb-stage-ident [data-engine-mark]")).not.toBeNull();
+  expect(q(current, ".pb-ident-words")!.textContent).toBe(`· ${translate("en", "roleCopy.reviewer.name")} · ${translate("en", "mobile2.pipeline.review")} · ${translate("en", "pipelineBlock.attempt", { n: 1 })}`);
+  /* The fail edge's budget rides the failing stage's row, and the loop words under the list. */
+  expect(q(current, ".pret")!.textContent).toBe("↺0/3");
+  expect(qa(host, ".pb-loops li").map((el) => el.textContent)).toEqual([`↺ ${translate("en", "kanban.loopRest", { from: "Review", to: "Implement", max: 3 })}`]);
+  /* Its conversation is one row under the answer. */
+  click(q(current, "[data-open-conversation]"));
+  expect(answered).toEqual([REVIEW.path]);
 });
 
-test("every reviewed stage opens its own conversation; a stage with none is a statement, and the current one carries the edge", () => {
+test("a running stage is expanded with who runs it, what it is doing and its conversation; the waiting stages stay compact", () => {
+  const opened: string[] = [];
+  const host = mount(<MobilePipelineScreen pipeline={runningPipeline()} files={[BUILDING]} now={NOW} onOpenConversation={(entry) => opened.push(entry.path)} />);
+  const current = q(host, ".pb-stage[data-stage-current]")!;
+  expect(current.getAttribute("data-stage")).toBe("implement");
+  expect(current.getAttribute("data-stage-state")).toBe("running");
+  expect(q(current, '.pmark[data-mark="dot"][data-live="1"]')).not.toBeNull();
+  expect(q(current, ".pb-stage-state")!.textContent).toBe(translate("en", "kanban.graphState.running"));
+  expect(q(current, "[data-stage-now]")!.textContent).toBe(translate("en", "kanban.stageReport.line", { who: translate("en", "roleCopy.builder.name"), outcome: translate("en", "kanban.graphState.running"), age: "6m" }));
+  expect(q(current, "[data-stage-latest]")!.textContent).toBe("“Checking the fallback path next”");
+  expect(q(current, ".pb-ident-words")!.textContent).toBe(`· ${translate("en", "roleCopy.builder.name")} · ${translate("en", "pipelineBlock.attempt", { n: 1 })}`);
+  /* The current stage's head is no control of its own: its conversation is the row under it. */
+  expect(q(current, ".pb-stage-row")!.tagName).toBe("DIV");
+  click(q(current, "[data-open-conversation]"));
+  expect(opened).toEqual([BUILDING.path]);
+  expect(q(host, "[data-answer-action]")).toBeNull();
+
+  /* Waiting stages: one row each, no body, their ⚙ the way to their settings. */
+  for (const id of ["review", "fix", "merge"]) {
+    const row = stageRow(host, id)!;
+    expect(row.querySelector(".pb-stage-body")).toBeNull();
+    expect(row.querySelector("[data-stage-configure]")!.tagName).toBe("BUTTON");
+    expect(row.querySelector(".pb-gear")).not.toBeNull();
+    expect(q(row, ".pb-stage-state")!.textContent).toBe(translate("en", "kanban.graphState.pending"));
+  }
+  /* A passed stage with no transcript left in the scan is a statement. */
+  expect(q(stageRow(host, "design")!, ".pb-stage-row")!.tagName).toBe("DIV");
+});
+
+test("a paused lane holds its stage: a hollow mark and no live tone, still expanded, with Resume in the ⋯; resumed, it is live again (§3.13)", async () => {
+  const paused = { ...runningPipeline(), state: "paused", pausedState: "running" } as Pipeline;
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  roots.push(root);
+  const store = nav();
+  const render = (pipeline: Pipeline) => flushSync(() => root.render(
+    <MobileNavContext.Provider value={store}>
+      <MobilePipelineScreen pipeline={pipeline} files={[BUILDING]} now={NOW} onOpenConversation={() => {}} />
+    </MobileNavContext.Provider>,
+  ));
+  const view = host as unknown as HTMLElement;
+  render(paused);
+
+  const held = q(view, ".pb-stage[data-stage-current]")!;
+  expect(held.getAttribute("data-stage")).toBe("implement");
+  const mark = q(held, ".pb-stage-title .pmark")!;
+  expect(mark.getAttribute("data-mark")).toBe("ring");
+  expect(mark.hasAttribute("data-live")).toBe(false);
+  expect(mark.className).toContain("tone-idle");
+  expect(held.className).toContain("tone-idle");
+  expect(held.className).not.toContain("tone-active");
+  /* The stage's own state stays in the record; the drawing is the hold's. */
+  expect(held.getAttribute("data-stage-state")).toBe("running");
+  expect(held.getAttribute("data-stage-held")).toBe("1");
+  expect(q(view, '.pmark[data-live="1"]')).toBeNull();
+  expect(q(held, ".pb-stage-state")!.textContent).toBe(translate("en", "pipelineState.paused"));
+  /* Still the expanded stage: what it last did, in the lane's word, and its conversation. */
+  expect(q(held, "[data-stage-now]")!.textContent).toBe(translate("en", "kanban.stageReport.line", { who: translate("en", "roleCopy.builder.name"), outcome: translate("en", "pipelineState.paused"), age: "6m" }));
+  expect(q(held, "[data-open-conversation]")).not.toBeNull();
+  expect(q(view, "[data-mobile2-meta] .pstate-word")!.getAttribute("data-pstate")).toBe("paused");
+  /* Resume is the ⋯'s first row. */
+  click(q(view, '[data-mobile2-open="menu"]'));
+  await settle();
+  expect(Array.from(dom.document.querySelectorAll("[data-mobile2-pipeline-menu] [data-mobile2-pipeline-action]")).map((el) => el.getAttribute("data-mobile2-pipeline-action"))).toEqual(["resume", "archive"]);
+  flushSync(() => store.closeSheet());
+  await settle();
+
+  /* Resumed: the same stage is live again, in its tone, with the pulse. */
+  render(runningPipeline());
+  const live = q(view, ".pb-stage[data-stage-current]")!;
+  expect(live.hasAttribute("data-stage-held")).toBe(false);
+  expect(live.className).toContain("tone-active");
+  const pulse = q(live, ".pb-stage-title .pmark")!;
+  expect(pulse.getAttribute("data-mark")).toBe("dot");
+  expect(pulse.getAttribute("data-live")).toBe("1");
+  expect(q(live, ".pb-stage-state")!.textContent).toBe(translate("en", "kanban.graphState.running"));
+});
+
+test("every stage that ran opens its own conversation from its row; one whose transcript is gone is a statement", () => {
   const opened: string[] = [];
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={(entry) => opened.push(entry.path)} />);
-  const stages = qa(host, "[data-mobile2-stage]");
-  expect(stages.map((el) => el.getAttribute("data-mobile2-stage"))).toEqual(["design", "implement", "review", "fix", "merge"]);
-  /* Only the stage the cursor is on carries the accent edge. */
-  expect(stages.map((el) => el.getAttribute("data-mobile2-stage-current"))).toEqual([null, null, "true", null, null]);
-  /* The two stages whose transcripts are in the scan are doors; the design
-     stage ran without one and is a statement; the two pending stages have not
-     run at all, so each is the way to its configuration (lane 10) — a control,
-     but not a door to a conversation. */
-  expect(stages.map((el) => el.getAttribute("data-mobile2-go"))).toEqual([null, "chat", "chat", null, null]);
-  expect(stages.map((el) => el.getAttribute("data-mobile2-stage-configure"))).toEqual([null, null, null, "true", "true"]);
-  expect(stages.map((el) => el.tagName)).toEqual(["DIV", "BUTTON", "BUTTON", "BUTTON", "BUTTON"]);
+  click(q(host, "[data-passed-fold]"));
+  const implement = q(stageRow(host, "implement")!, "[data-stage-open]")!;
+  expect(implement.tagName).toBe("BUTTON");
+  expect(implement.getAttribute("aria-label")).toStartWith(translate("en", "mobile2.pipeline.openStage", { stage: "Implement" }));
+  click(implement);
+  expect(opened).toEqual([IMPLEMENT.path]);
+  expect(q(stageRow(host, "design")!, "[data-stage-open], [data-stage-configure]")).toBeNull();
 
-  click(stages[2]!);
-  expect(opened).toEqual([REVIEW.path]);
-  click(stages[1]!);
-  expect(opened).toEqual([REVIEW.path, IMPLEMENT.path]);
-
-  /* Each row names its stage in the product's words and says where its round
-     stands. */
-  /* Three of the five stages are Builder stages: the role alone names none of
-     them, so the row carries the product's own identity for the stage. */
-  expect(stages.map((el) => el.textContent!.split("\n")[0])).not.toEqual(expect.arrayContaining([translate("en", "roleCopy.builder.name")]));
-  expect(stages[2]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { stage: "Review" }));
-  expect(stages[3]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { stage: "Fix" }));
-  expect(stages[4]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { stage: "Merge" }));
-  /* The role preset the title gave up leads the meta line (#1865). */
-  expect(stages[3]!.querySelector("[data-mobile2-stage-role]")!.textContent).toBe(translate("en", "roleCopy.builder.name"));
-  expect(stages[3]!.querySelector("[data-mobile2-stage-meta]")!.textContent).toBe(`${translate("en", "roleCopy.builder.name")} · ${translate("en", "pipelineChipState.pending")}`);
-  expect(stages[2]!.textContent).toContain(translate("en", "mobile2.pipeline.reviewRound", { round: 3 }));
-  expect(stages[2]!.textContent).toContain(translate("en", "pipelineChipState.failed"));
-  expect(stages[2]!.textContent).toContain(translate("en", "pipelineVerdict.findings", { count: 2 }));
+  const gone = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[]} now={NOW} onOpenConversation={() => {}} />);
+  click(q(gone, "[data-passed-fold]"));
+  expect(q(stageRow(gone, "implement")!, ".pb-stage-row")!.tagName).toBe("DIV");
+  expect(q(gone, "[data-open-conversation]")).toBeNull();
 });
 
-test("a never-run stage's row opens its configuration in a sheet — the desktop's own editor — Tab stays inside it, and Escape closes only the sheet (lane 10, PR #431, #507 F2)", async () => {
+test("a never-run stage's ⚙ opens its configuration in a sheet — the desktop's own editor — Tab stays inside it, and Escape closes only the sheet (lane 10, PR #431, #507 F2)", async () => {
   const store = nav();
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, store);
-  const fix = q(host, '[data-mobile2-stage="fix"]')!;
+  const fix = q(host, '[data-stage-configure="fix"]')!;
   /* The row names what it opens, and then who would run the stage — the marks
      beside it are never the only carrier of that (#1743). */
-  expect(fix.getAttribute("aria-label")).toContain(translate("en", "mobile2.pipeline.configure", {
-    stage: translate("en", "mobile2.pipeline.stageTitle", { stage: "Fix" }),
-  }));
+  expect(fix.getAttribute("aria-label")).toStartWith(translate("en", "mobile2.pipeline.configure", { stage: "Fix" }));
+  expect(fix.getAttribute("aria-label")).toContain("Claude");
+  expect(fix.getAttribute("aria-haspopup")).toBe("dialog");
   expect(fix.querySelector("[data-engine-mark]")).not.toBeNull();
-  expect(fix.className).toContain("min-h-[52px]");
   /* A stage that ran configures nothing: the engine snapshots its config at
      the first attempt. */
-  expect(q(host, '[data-mobile2-stage="design"]')!.getAttribute("data-mobile2-stage-configure")).toBeNull();
+  expect(q(host, '[data-stage-configure="review"]')).toBeNull();
 
   fix.focus();
   click(fix);
@@ -263,54 +381,37 @@ test("a never-run stage's row opens its configuration in a sheet — the desktop
   expect(store.getState().sheet).toBe("stage");
   const sheet = dom.document.querySelector('[data-mobile2-sheet="stage"]') as unknown as HTMLElement | null;
   expect(sheet).not.toBeNull();
-  expect(sheet!.textContent).toContain(translate("en", "mobile2.pipeline.configureTitle", {
-    stage: translate("en", "mobile2.pipeline.stageTitle", { stage: "Fix" }),
-  }));
+  expect(sheet!.textContent).toContain(translate("en", "mobile2.pipeline.configureTitle", { stage: "Fix" }));
   expect(sheet!.querySelector('[data-mobile2-stage-config="fix"] [data-pipeline-stage-card="p2::fix"]')).not.toBeNull();
-  /* A real modal dialog, as the retired dock sheet was (PR #431): it takes
-     focus on open, so the keyboard is inside it. */
+  /* A real modal dialog (PR #431): it takes focus on open. */
   expect(sheet!.getAttribute("aria-modal")).toBe("true");
   expect(sheet!.contains(dom.document.activeElement as never)).toBe(true);
 
-  /* The stage editor — what #507 F2 stacked ABOVE the dock sheet as a second
-     modal layer that fought it for Tab and Escape — unfolds INSIDE this sheet
-     now: the pane's own toggle opens the role and runtime controls in place,
-     the sheet stays the one layer, and its controls are the sheet's own. */
+  /* The stage editor unfolds INSIDE this sheet (#507 F2): one layer. */
   const toggle = sheet!.querySelector(`button[aria-label="${translate("en", "groupOverride.applyStage")}"]`) as unknown as HTMLButtonElement | null;
   expect(toggle).not.toBeNull();
-  expect(toggle!.getAttribute("aria-expanded")).toBe("false");
   click(toggle);
   await settle();
   expect(toggle!.getAttribute("aria-expanded")).toBe("true");
   expect(sheet!.querySelector('label[for="draft-role-pipeline-config::p2::fix"]')).not.toBeNull();
-  expect(store.getState().sheet).toBe("stage");
   expect(dom.document.querySelectorAll('[role="dialog"]').length).toBe(1);
 
-  /* Tab is trapped inside the sheet in both directions, editor included — the
-     retired dock sheet's contract (PR #431) and the editor's (#507 F2), now
-     one layer's: from the last control Tab wraps to the first, from the first
-     Shift+Tab wraps to the last, and focus never leaves the sheet. */
+  /* Tab is trapped inside the sheet in both directions, editor included. */
   const press = (init: { key: string; shiftKey?: boolean }) =>
     flushSync(() => dom.document.dispatchEvent(new dom.KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }) as never));
   const focusables = Array.from(sheet!.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
     .filter((el) => !el.hasAttribute("disabled") && el.getAttribute("tabindex") !== "-1") as unknown as HTMLElement[];
-  expect(focusables.length).toBeGreaterThan(1);
   const first = focusables[0]!;
   const last = focusables[focusables.length - 1]!;
-  /* The editor's controls are among the sheet's own focusables. */
   expect(focusables.some((el) => el.id === "draft-role-pipeline-config::p2::fix")).toBe(true);
   last.focus();
-  expect(dom.document.activeElement).toBe(last as never);
   press({ key: "Tab" });
   expect(dom.document.activeElement).toBe(first as never);
-  expect(sheet!.contains(dom.document.activeElement as never)).toBe(true);
   first.focus();
   press({ key: "Tab", shiftKey: true });
   expect(dom.document.activeElement).toBe(last as never);
-  expect(sheet!.contains(dom.document.activeElement as never)).toBe(true);
 
-  /* Escape closes the sheet — editor and all — and nothing else: the screen
-     is still here, and focus is back on the row that opened it. */
+  /* Escape closes the sheet and nothing else; focus returns to the row. */
   flushSync(() => dom.document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as never));
   await settle();
   expect(dom.document.querySelector('[data-mobile2-sheet="stage"]')).toBeNull();
@@ -320,11 +421,66 @@ test("a never-run stage's row opens its configuration in a sheet — the desktop
 
   /* A finished pipeline configures nothing: its never-run stages are statements. */
   const done = mount(<MobilePipelineScreen pipeline={parkedPipeline({ state: "completed", cursor: null })} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
-  expect(q(done, '[data-mobile2-stage="fix"]')!.getAttribute("data-mobile2-stage-configure")).toBeNull();
-  expect(q(done, '[data-mobile2-stage="fix"]')!.tagName).toBe("DIV");
+  expect(q(done, "[data-stage-configure]")).toBeNull();
+  expect(q(stageRow(done, "fix")!, ".pb-stage-row")!.tagName).toBe("DIV");
 });
 
-test("a stage's earlier attempts and a round's other reviewer transcript are rows under it, each opening its transcript (lane 10, #353)", () => {
+test("a spent review budget is answered inside the review stage: its heads, Close lane and One more round", () => {
+  const review = parkedPipeline({
+    state: "needs_review",
+    cursor: null,
+    runs: [
+      { stageId: "design", attempts: [attempt({})] },
+      { stageId: "implement", attempts: [attempt({ agentPath: IMPLEMENT.path })] },
+      { stageId: "review", attempts: [attempt({ n: 3, state: "passed", agentPath: REVIEW.path, reviewFlowSync: { roundCount: 3 } })] },
+    ],
+    reviewPending: { stageId: "review", attempt: 3, fixStageId: "implement", fixAttempt: 1, reviewedHead: "4f1c2a9d11", currentHead: "9b2e7d4c22", verdict: "fail", findings: 2 },
+  } as unknown as Partial<Pipeline>);
+  const host = mount(<MobilePipelineScreen pipeline={review} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
+  const answers = qa(host, "[data-answer-action]");
+  expect(answers.map((el) => [el.getAttribute("data-answer-action"), el.textContent])).toEqual([
+    ["close", translate("en", "mobile2.pipeline.archive")],
+    ["continue-review", translate("en", "pipelineBlock.oneMoreRound")],
+  ]);
+  const stage = answers[0]!.closest(".pb-stage") as unknown as HTMLElement;
+  expect(stage.getAttribute("data-stage")).toBe("review");
+  expect(stage.getAttribute("data-stage-current")).toBe("1");
+  expect(q(stage, "[data-review-heads]")!.textContent).toContain("9b2e7d4c");
+  /* The lane has no cursor; the bar counts the stage the screen expands, the
+     number its row carries. */
+  expect(q(host, "[data-mobile2-meta] .pstate-word")!.textContent).toBe(translate("en", "pipelineState.needs_review"));
+  expect(q(host, "[data-mobile2-meta]")!.textContent).toContain(position(3, 5));
+  expect(q(stage, ".pb-num")!.textContent).toBe("3");
+  /* The stage the lane waits on is amber and says the lane's state. */
+  expect(stage.className).toContain("tone-needs");
+  expect(q(stage, ".pb-stage-state")!.textContent).toBe(translate("en", "pipelineState.needs_review"));
+});
+
+test("a completed lane lists every stage with nothing expanded, and says what closed it", () => {
+  const done = parkedPipeline({
+    state: "completed",
+    cursor: null,
+    closedAt: at(1_200),
+    stages: STAGES.slice(0, 3).map((stage, index) => (index === 2 ? { ...stage, next: null } : stage)),
+    runs: [
+      { stageId: "design", attempts: [attempt({})] },
+      { stageId: "implement", attempts: [attempt({ n: 1, state: "failed", verdict: { status: "fail" } }), attempt({ n: 2, agentPath: IMPLEMENT.path })] },
+      { stageId: "review", attempts: [attempt({ n: 1, agentPath: REVIEW.path, completedAt: at(1_200) })] },
+    ],
+    stageReports: [{ seq: 1, stageId: "review", attempt: 1, at: at(1_200), status: "pass", actor: { kind: "agent", role: "reviewer" }, summary: "approved" }],
+  } as unknown as Partial<Pipeline>);
+  const host = mount(<MobilePipelineScreen pipeline={done} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
+  expect(q(host, "[data-mobile2-meta]")!.textContent).toBe(`${translate("en", "pipelineState.completed")}·20m`);
+  expect(q(host, "[data-passed-fold]")).toBeNull();
+  expect(q(host, ".pb-stage[data-stage-current]")).toBeNull();
+  expect(qa(host, ".pb-stage[data-stage]").map((el) => el.getAttribute("data-stage-state"))).toEqual(["passed", "passed", "passed"]);
+  expect(q(host, ".pb-note [data-stage-report]")!.getAttribute("data-stage-report-status")).toBe("pass");
+  /* The retried stage says which attempt passed. */
+  expect(q(stageRow(host, "implement")!, ".pb-ident-words")!.textContent).toContain(translate("en", "pipelineBlock.attempt", { n: 2 }));
+  expect(q(host, "[data-answer-action]")).toBeNull();
+});
+
+test("«Past attempts · n» comes last: every finished attempt and round, each opening its transcript, and a round's other reviewer binding (lane 10, #353)", () => {
   const PRIOR = file("/repo/implement-1.jsonl", "Implement, first try");
   const REVIEW_BOUND = { ...REVIEW, conversationId: "conversation-review-b" } as FileEntry;
   const membership = (slot: string) => ({
@@ -337,7 +493,7 @@ test("a stage's earlier attempts and a round's other reviewer transcript are row
   } as unknown as FileEntry;
   const flow = {
     id: "flow-9", implementerPath: IMPLEMENT.path, state: "reviewing",
-    rounds: [{ n: 3, reviewerPath: REVIEW_BOUND.path, reviewerConversationId: REVIEW_BOUND.conversationId }],
+    rounds: [{ n: 3, reviewerPath: REVIEW_BOUND.path, reviewerConversationId: REVIEW_BOUND.conversationId, verdict: "REQUEST_CHANGES", startedAt: at(3_700) }],
   } as unknown as Flow;
   const pipeline = parkedPipeline({
     runs: [
@@ -345,99 +501,100 @@ test("a stage's earlier attempts and a round's other reviewer transcript are row
       { stageId: "implement", attempts: [attempt({ n: 1, state: "failed", agentPath: PRIOR.path, verdict: { status: "fail", findings: ["the export endpoint returned 500"] } }), attempt({ n: 2, agentPath: IMPLEMENT.path })] },
       { stageId: "review", attempts: [attempt({ n: 3, state: "failed", agentPath: REVIEW_BOUND.path, flowId: "flow-9", verdict: { status: "fail", findings: ["one", "two"] } })] },
     ] as unknown as Pipeline["runs"],
-  });
+    taskIds: ["t1"],
+  } as unknown as Partial<Pipeline>);
+  const task = { id: "t1", project: "atlas", text: "Approve the phone prototype\nmore", status: "assigned", assignments: [], updatedAt: new Date(NOW * 1_000).toISOString() } as unknown as BoardTask;
   const opened: string[] = [];
-  const host = mount(<MobilePipelineScreen pipeline={pipeline} files={[IMPLEMENT, REVIEW_BOUND, PRIOR, PRIOR_REVIEWER]} flows={[flow]} now={NOW} onOpenConversation={(entry) => opened.push(entry.path)} />);
+  const openedTasks: string[] = [];
+  const host = mount(
+    <MobilePipelineScreen
+      pipeline={pipeline}
+      files={[IMPLEMENT, REVIEW_BOUND, PRIOR, PRIOR_REVIEWER]}
+      flows={[flow]}
+      tasks={[task]}
+      now={NOW}
+      onOpenConversation={(entry) => opened.push(entry.path)}
+      onOpenTask={(picked) => openedTasks.push(picked.id)}
+    />,
+  );
+  const body = q(host, "[data-mobile2-pipeline-body]")!;
+  /* The block, the linked tasks, then Past attempts, last. */
+  expect(Array.from(body.children).map((el) => (el.matches(".pblock") ? "block" : el.getAttribute("data-mobile2-section") ?? (el.hasAttribute("data-mobile2-past") ? "past" : el.tagName))))
+    .toEqual(["block", "tasks", "past"]);
+  click(q(host, '[data-mobile2-linked-task="t1"]'));
+  expect(openedTasks).toEqual(["t1"]);
 
-  /* The earlier attempt is a row under its stage, named by its outcome; the
-     operational attempt is the stage row itself and is never listed twice. */
-  const prior = q(host, '[data-mobile2-stage-group="implement"] [data-mobile2-stage-attempt="1"]')!;
-  expect(prior).not.toBeNull();
+  const toggle = q(host, "[data-mobile2-past-toggle]")!;
+  /* Design, the two Implement attempts, the Review attempt and its round, and the other binding. */
+  expect(toggle.textContent).toBe(translate("en", "kanban.past.head", { count: 6 }));
+  expect(toggle.className).toContain("min-h-11");
+  expect(q(host, "[data-mobile2-past-row]")).toBeNull();
+  click(toggle);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+  const prior = q(host, '[data-mobile2-past-row="p2:implement:attempt:1"]')!;
   expect(prior.tagName).toBe("BUTTON");
   expect(prior.className).toContain("min-h-11");
-  expect(prior.textContent).toContain(translate("en", "mobile2.pipeline.attempt", { n: 1, state: translate("en", "pipelineVerdict.fail") }));
-  expect(q(host, '[data-mobile2-stage-attempt="2"]')).toBeNull();
+  expect(prior.textContent).toContain(translate("en", "kanban.past.attempt", { stage: "Implement", n: 1 }));
   click(prior);
   expect(opened).toEqual([PRIOR.path]);
 
-  /* The round's other reviewer binding is a row under the review stage. */
-  const binding = q(host, `[data-mobile2-stage-group="review"] [data-mobile2-review-transcript="${PRIOR_REVIEWER.path}"]`)!;
-  expect(binding).not.toBeNull();
+  const round = q(host, '[data-mobile2-past-row="p2:review:attempt:3:round:3"]')!;
+  expect(round.textContent).toContain(translate("en", "kanban.past.verdict.REQUEST_CHANGES"));
+  const binding = q(host, `[data-mobile2-past-row="p2:review:transcript:${PRIOR_REVIEWER.path}"]`)!;
   expect(binding.textContent).toContain(translate("en", "mobile2.pipeline.reviewTranscript", { n: 3 }));
   click(binding);
   expect(opened).toEqual([PRIOR.path, PRIOR_REVIEWER.path]);
-  /* The reviewer the stage row itself opens is not listed a second time. */
-  expect(q(host, `[data-mobile2-review-transcript="${REVIEW_BOUND.path}"]`)).toBeNull();
 
   /* An attempt whose transcript left the scan is a statement, not a dead button. */
-  const gone = mount(<MobilePipelineScreen pipeline={pipeline} files={[IMPLEMENT, REVIEW_BOUND]} flows={[flow]} now={NOW} onOpenConversation={() => {}} />);
-  const orphan = q(gone, '[data-mobile2-stage-attempt="1"]')!;
-  expect(orphan.tagName).toBe("DIV");
-  expect(orphan.getAttribute("data-mobile2-go")).toBeNull();
+  const design = q(host, '[data-mobile2-past-row="p2:design:attempt:1"]')!;
+  expect(design.tagName).toBe("DIV");
+  expect(design.textContent).toContain(translate("en", "kanban.past.none"));
 });
 
-test("a stage row is titled by the stage's name, the way its board tiles read (#1865)", () => {
-  const locale = getLocale();
-  const tt = ((key: string, params?: Record<string, unknown>) => t(locale, key as never, params as never)) as never;
-  const bare = { id: "p", stages: [], runs: [] } as never;
-  /* No role: the stage's own id is the whole identity. */
-  expect(stageRowTitle(tt, bare, { id: "merge", kind: "run" } as never)).toBe("Merge");
-  /* The role preset leaves the title; it is the meta line's first segment. */
-  expect(stageRowTitle(tt, bare, { id: "fix", kind: "run", role: { roleId: "builder" } } as never)).toBe("Fix");
-  const retried = {
-    id: "p",
-    stages: [{ id: "critique", kind: "run", role: { roleId: "architect" } }],
-    runs: [{ stageId: "critique", attempts: [{ n: 1, state: "failed" }, { n: 2, state: "running" }] }],
-  } as never;
-  expect(stageRowTitle(tt, retried, { id: "critique", kind: "run", role: { roleId: "architect" } } as never)).toBe("Critique · 2");
+test("the bar's ⋯ holds the lane's own actions and leads on to the board's menu", async () => {
+  const store = nav();
+  const boardMenu = (name: string, close: () => void) => (name === "menu" ? <div data-board-menu onClick={close} /> : null);
+  const host = mount(<MobilePipelineScreen pipeline={runningPipeline()} files={[BUILDING]} now={NOW} onOpenConversation={() => {}} renderSheet={boardMenu} />, store);
+  click(q(host, '[data-mobile2-open="menu"]'));
+  await settle();
+  const sheet = dom.document.querySelector('[data-mobile2-sheet="menu"]') as unknown as HTMLElement;
+  expect(sheet.querySelector("[data-mobile2-pipeline-menu]")).not.toBeNull();
+  expect(Array.from(sheet.querySelectorAll("[data-mobile2-pipeline-action]")).map((el) => [el.getAttribute("data-mobile2-pipeline-action"), el.textContent])).toEqual([
+    ["pause", translate("en", "mobile2.pipeline.pause")],
+    ["archive", translate("en", "mobile2.pipeline.archive")],
+  ]);
+  click(sheet.querySelector('[data-mobile2-menu-row="board"]'));
+  await settle();
+  expect(dom.document.querySelector("[data-mobile2-pipeline-menu]")).toBeNull();
+  expect(dom.document.querySelector("[data-board-menu]")).not.toBeNull();
+  /* Closing the sheet puts the next ⋯ back on the lane's own face. */
+  flushSync(() => store.closeSheet());
+  await settle();
+  click(q(host, '[data-mobile2-open="menu"]'));
+  await settle();
+  expect(dom.document.querySelector("[data-mobile2-pipeline-menu]")).not.toBeNull();
 });
 
-test("the stage meta line reads the kind, the round and the verdict count from the pipeline itself", () => {
-  const pipeline = parkedPipeline();
-  const locale = getLocale();
-  const tt = ((key: string, params?: Record<string, unknown>) => t(locale, key as never, params as never)) as never;
-  const builder = translate("en", "roleCopy.builder.name");
-  /* Beside the preset a plain run needs no «run» word: its room goes to the
-     verdict and the findings count (#1865). */
-  expect(stageMetaLine(tt, pipeline, pipeline.stages[1]!)).toBe(
-    `${builder} · ${translate("en", "pipelineChipState.passed")}`,
-  );
-  expect(stageMetaLine(tt, pipeline, pipeline.stages[4]!)).toBe(
-    `${builder} · ${translate("en", "pipelineChipState.pending")}`,
-  );
-  /* A stage named after its role says the role once, in the title. */
-  const named = { ...pipeline.stages[4]!, id: "builder" };
-  expect(stageMetaLine(tt, pipeline, named)).toBe(`${translate("en", "mobile2.pipeline.run")} · ${translate("en", "pipelineChipState.pending")}`);
+test("the ⋯ actions for a lane are the board menu's pause or resume, and Close lane", () => {
+  const specs = (state: Pipeline["state"]) => mobilePipelineActions(parkedPipeline({ state, pausedState: state === "paused" ? "running" : null } as Partial<Pipeline>)).map((spec) => spec.action);
+  expect(specs("running")).toEqual(["pause", "close"]);
+  expect(specs("provisioning")).toEqual(["pause", "close"]);
+  expect(specs("needs_decision")).toEqual(["pause", "close"]);
+  expect(specs("needs_review")).toEqual(["pause", "close"]);
+  expect(specs("paused")).toEqual(["resume", "close"]);
+  /* A finished lane leaves the phone's lists by its close; a closed one has nothing left. */
+  expect(specs("completed")).toEqual(["close"]);
+  expect(specs("closed")).toEqual([]);
+  expect(specs("draft")).toEqual([]);
 });
 
-test("linked tasks come last and open the task they name", () => {
-  const task = { id: "t1", project: "atlas", text: "Approve the phone prototype\nmore", status: "assigned", assignments: [], updatedAt: new Date(NOW * 1_000).toISOString() } as unknown as BoardTask;
-  const opened: string[] = [];
-  const host = mount(
-    <MobilePipelineScreen
-      pipeline={parkedPipeline({ taskIds: ["t1"] } as unknown as Partial<Pipeline>)}
-      files={[IMPLEMENT, REVIEW]}
-      tasks={[task]}
-      now={NOW}
-      onOpenConversation={() => {}}
-      onOpenTask={(picked) => opened.push(picked.id)}
-    />,
-  );
-  const sections = qa(host, "[data-mobile2-section]").map((el) => el.getAttribute("data-mobile2-section"));
-  expect(sections).toEqual(["stages", "tasks"]);
-  const row = q(host, '[data-mobile2-linked-task="t1"]')!;
-  expect(row.textContent).toContain("Approve the phone prototype");
-  click(row);
-  expect(opened).toEqual(["t1"]);
-});
-
-test("the action set for a state is the desktop's own set for it", () => {
-  expect(mobilePipelineActions("needs_decision").map((spec) => spec.action)).toEqual(["skip-stage", "retry-stage"]);
-  expect(mobilePipelineActions("running").map((spec) => spec.action)).toEqual(["pause"]);
-  expect(mobilePipelineActions("provisioning").map((spec) => spec.action)).toEqual(["pause"]);
-  expect(mobilePipelineActions("paused").map((spec) => spec.action)).toEqual(["resume"]);
-  expect(mobilePipelineActions("completed").map((spec) => spec.action)).toEqual(["close"]);
-  expect(mobilePipelineActions("closed").map((spec) => spec.action)).toEqual(["close"]);
-  /* A draft is edited where it is written; the phone's list never lists one. */
-  expect(mobilePipelineActions("draft")).toEqual([]);
+test("in Ukrainian the stage names stay the pipeline's and every word is the desktop's Ukrainian word", () => {
+  setLocale("uk");
+  const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
+  click(q(host, "[data-passed-fold]"));
+  expect(qa(host, ".pb-stage[data-stage] .pb-name").map((el) => el.textContent)).toEqual(["Design", "Implement", "Review", "Fix", "Merge"]);
+  expect(q(host, "[data-mobile2-meta] .pstate-word")!.textContent).toBe(translate("uk", "pipelineState.needs_decision"));
+  expect(qa(host, "[data-answer-action]").map((el) => el.textContent)).toEqual([translate("uk", "mobile2.pipeline.skip"), translate("uk", "mobile2.pipeline.retry")]);
+  expect(q(host, "[data-open-conversation]")!.textContent).toBe(translate("uk", "pipelineBlock.openConversation"));
 });

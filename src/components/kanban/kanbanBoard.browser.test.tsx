@@ -7170,4 +7170,234 @@ describe("#2072 one pipeline block, desktop and phone", () => {
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);
+
+  /* The phone's pipeline screen, the Stages view (slice 6, §3.13), over the
+     same scenario's lanes: the eight-stage one running its long-named fourth
+     stage, a lane paused while a stage ran, the parked decision, the spent
+     review budget and a completed lane.
+     Each is opened from the phone's pipelines list the way the operator opens
+     it, and the whole screen, bar and body, is measured as ink: no text meets
+     another text or a control, no control meets another, every control is a
+     44 px target, no stage name is cut, and nothing scrolls sideways. The body
+     scrolls, so it is measured at its top and at its end, and the running lane
+     once more with its passed stages unfolded. */
+  const measureScreen = `(() => {
+    const screen = document.querySelector('[data-mobile2-screen="pipeline"]');
+    if (!screen) return null;
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const area = r => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+    const meets = (a, b) => area(intersect(a, b)) > 0.5;
+    const union = (a, b) => ({ top: Math.min(a.top, b.top), left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) });
+    const clipFrom = el => {
+      let clip = { top: -1e9, left: -1e9, right: 1e9, bottom: 1e9 };
+      for (let up = el; up; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, box(up));
+      }
+      return clip;
+    };
+    /* The banner slot is the shell's, on every screen, and gated with it. */
+    const banner = el => Boolean(el.closest("[data-mobile2-banner]"));
+    /* A chip's target is its box plus the reach its ::after gives it on a coarse pointer. */
+    const reach = el => {
+      const r = box(el);
+      const after = getComputedStyle(el, "::after");
+      if (after.content === "none" || after.position !== "absolute") return r;
+      const px = v => parseFloat(v) || 0;
+      return { top: r.top + px(after.top), left: r.left + px(after.left), right: r.right - px(after.right), bottom: r.bottom - px(after.bottom) };
+    };
+    const byElement = new Map();
+    const walker = document.createTreeWalker(screen, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.nodeValue || !node.nodeValue.trim()) continue;
+      const el = node.parentElement;
+      if (!el || banner(el) || getComputedStyle(el).visibility === "hidden") continue;
+      const clip = clipFrom(el);
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const raw of range.getClientRects()) {
+        const rect = intersect(clip, { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom });
+        if (area(rect) <= 0.5) continue;
+        const entry = byElement.get(el);
+        byElement.set(el, entry ? { ...entry, rect: union(entry.rect, rect) } : { el, rect, text: (el.textContent || "").trim().slice(0, 48) });
+      }
+    }
+    const ink = [...byElement.values()];
+    const controls = [...screen.querySelectorAll("button, a, [role=button]")]
+      .filter(el => !banner(el) && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden")
+      .map(el => ({ el, full: reach(el), rect: intersect(reach(el), clipFrom(el.parentElement)), text: (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 48) }))
+      .filter(entry => area(entry.rect) > 0.5);
+    const nested = (a, b) => a.contains(b) || b.contains(a);
+    const overlaps = [], escapes = [], small = [], cut = [];
+    const frame = box(screen);
+    for (let i = 0; i < ink.length; i++) {
+      const a = ink[i];
+      if (a.rect.left < frame.left - 1 || a.rect.right > frame.right + 1) escapes.push(a.text);
+      for (let j = i + 1; j < ink.length; j++) {
+        const b = ink[j];
+        if (!nested(a.el, b.el) && meets(a.rect, b.rect)) overlaps.push({ kind: "text/text", a: a.text, b: b.text });
+      }
+      for (const control of controls) {
+        if (!control.el.contains(a.el) && meets(a.rect, control.rect)) overlaps.push({ kind: "text/control", a: a.text, b: control.text });
+      }
+    }
+    for (let i = 0; i < controls.length; i++) for (let j = i + 1; j < controls.length; j++) {
+      if (!nested(controls[i].el, controls[j].el) && meets(controls[i].rect, controls[j].rect)) overlaps.push({ kind: "control/control", a: controls[i].text, b: controls[j].text });
+    }
+    /* A target is measured whole, before the scroller clips it. */
+    for (const control of controls) {
+      const height = control.full.bottom - control.full.top, width = control.full.right - control.full.left;
+      if (height < 43.5 || width < 43.5) small.push({ text: control.text, width: Math.round(width), height: Math.round(height) });
+    }
+    for (const name of screen.querySelectorAll(".pb-stage .pb-name, .pb-heading")) {
+      if (name.scrollWidth > name.clientWidth + 1) cut.push((name.textContent || "").slice(0, 48));
+    }
+    const stages = [...screen.querySelectorAll(".pb-stage[data-stage]")].map(el => el.getAttribute("data-stage"));
+    /* How the current stage is drawn, read as computed colour and motion, and
+       the tokens it is compared with, read the same way. */
+    const probe = token => {
+      const el = document.createElement("span");
+      el.style.color = "var(" + token + ")";
+      screen.appendChild(el);
+      const color = getComputedStyle(el).color;
+      el.remove();
+      return color;
+    };
+    const cur = screen.querySelector(".pb-stage[data-stage-current]");
+    const mark = cur && cur.querySelector(".pb-stage-title .pmark");
+    const tone = cur && mark ? {
+      held: cur.getAttribute("data-stage-held") === "1",
+      mark: mark.getAttribute("data-mark"),
+      live: mark.getAttribute("data-live") === "1",
+      pulse: getComputedStyle(mark, "::before").animationName,
+      markInk: getComputedStyle(mark).color,
+      word: getComputedStyle(cur.querySelector(".pb-stage-state")).color,
+      stripe: getComputedStyle(cur).boxShadow,
+    } : null;
+    const inks = { muted: probe("--color-muted"), success: probe("--color-success") };
+    return {
+      texts: ink.length, controls: controls.length, overlaps, escapes, small, cut, stages, tone, inks,
+      current: screen.querySelector(".pb-stage[data-stage-current]")?.getAttribute("data-stage") ?? null,
+      answers: [...screen.querySelectorAll("[data-answer-action]")].map(el => el.getAttribute("data-answer-action")),
+      fold: screen.querySelector("[data-passed-fold]")?.getAttribute("data-passed-fold") ?? null,
+      scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth,
+    };
+  })()`;
+  type ScreenTone = { held: boolean; mark: string | null; live: boolean; pulse: string; markInk: string; word: string; stripe: string };
+  type ScreenReading = {
+    texts: number; controls: number; overlaps: unknown[]; escapes: unknown[]; small: unknown[]; cut: unknown[];
+    stages: string[]; current: string | null; answers: string[]; fold: string | null; scrollWidth: number; innerWidth: number;
+    tone: ScreenTone | null; inks: { muted: string; success: string };
+  } | null;
+  /* `motion`: the running lane's current stage pulses in its live tone; the
+     paused lane's held stage is hollow, still and muted (§3.13). */
+  const SCREENS = [
+    { id: "p-upload", name: "running", current: "verify-backward-compatibility-and-migrations", answers: [], fold: "3", completed: false, motion: "live" },
+    { id: "p-md-accept", name: "paused", current: "accept", answers: [], fold: null, completed: false, motion: "held" },
+    { id: "p-md-decision", name: "decision", current: "implement", answers: ["skip-stage", "retry-stage"], fold: null, completed: false, motion: null },
+    { id: "p-review-spent", name: "review", current: "critique", answers: ["close", "continue-review"], fold: null, completed: false, motion: null },
+    { id: "p-compact", name: "done", current: null, answers: [], fold: null, completed: true, motion: null },
+  ] as const;
+
+  browserTest("the phone's pipeline screen: no text meets another's ink or a control, every control is 44 px, no stage name is cut, and a paused lane's stage is still, at 390 and 430 px, in en and uk", async () => {
+    const out = path.resolve(".artifacts/pipeline-screen");
+    const pngDir = process.env.PIPELINE_SCREEN_PNG_DIR ?? "/var/tmp/llv-pipeline-screen-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=pipeline-block`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, ScreenReading> = {};
+    const failures: string[] = [];
+    const gate = (label: string, reading: ScreenReading, want: (typeof SCREENS)[number]) => {
+      frames[label] = reading;
+      if (!reading) {
+        failures.push(`${label}: no pipeline screen drawn`);
+        return;
+      }
+      if (reading.current !== want.current) failures.push(`${label}: the current stage is ${reading.current}, expected ${want.current}`);
+      if (JSON.stringify(reading.answers) !== JSON.stringify(want.answers)) failures.push(`${label}: answers ${JSON.stringify(reading.answers)}, expected ${JSON.stringify(want.answers)}`);
+      if (reading.overlaps.length) failures.push(`${label}: ${reading.overlaps.length} overlaps — ${JSON.stringify(reading.overlaps.slice(0, 3))}`);
+      if (reading.escapes.length) failures.push(`${label}: ${reading.escapes.length} texts paint outside the screen — ${JSON.stringify(reading.escapes.slice(0, 3))}`);
+      if (reading.small.length) failures.push(`${label}: ${reading.small.length} controls under 44 px — ${JSON.stringify(reading.small.slice(0, 4))}`);
+      if (reading.cut.length) failures.push(`${label}: ${reading.cut.length} names are cut — ${JSON.stringify(reading.cut.slice(0, 3))}`);
+      if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
+      const { tone, inks } = reading;
+      if (want.motion === "held" && (!tone || !tone.held || tone.mark !== "ring" || tone.live || tone.pulse !== "none"
+        || tone.markInk !== inks.muted || tone.word !== inks.muted || !tone.stripe.includes(inks.muted))) {
+        failures.push(`${label}: the held stage is drawn ${JSON.stringify(tone)}, expected a still hollow ring with the mark, the word and the stripe in ${inks.muted}`);
+      }
+      if (want.motion === "live" && (!tone || tone.held || tone.mark !== "dot" || !tone.live || tone.pulse === "none"
+        || tone.markInk !== inks.success || tone.word !== inks.success || !tone.stripe.includes(inks.success))) {
+        failures.push(`${label}: the running stage is drawn ${JSON.stringify(tone)}, expected a pulsing dot with the mark, the word and the stripe in ${inks.success}`);
+      }
+    };
+    const bodyTo = (page: Page, where: "top" | "end") => page.evaluate((to) => {
+      const body = document.querySelector("[data-mobile2-pipeline-body]");
+      if (body) body.scrollTop = to === "top" ? 0 : body.scrollHeight;
+    }, where);
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const [width, height, scheme] of [[390, 844, "dark"], [390, 844, "light"], [430, 932, "dark"]] as const) {
+          const { context, page, pageErrors } = await openFixture(browser, base, { width, height }, scheme, lang, "no-preference", true);
+          try {
+            await page.waitForSelector('[data-mobile2-row="pipelines"]', { timeout: 30_000 });
+            await page.waitForTimeout(500);
+            await page.locator('[data-mobile2-row="pipelines"]').first().evaluate((element) => (element as HTMLElement).click());
+            await page.waitForSelector("[data-mobile2-pipelines] [data-mobile2-pipeline-row]", { timeout: 10_000 });
+            for (const screen of SCREENS) {
+              const label = `${screen.name}-${width}-${lang}-${scheme}`;
+              if (screen.completed && !(await page.locator(`[data-mobile2-pipeline-row="${screen.id}"]`).count())) {
+                await page.locator("[data-mobile2-completed-toggle]").evaluate((element) => (element as HTMLElement).click());
+              }
+              await page.locator(`[data-mobile2-pipeline-row="${screen.id}"]`).first().evaluate((element) => (element as HTMLElement).click());
+              await page.waitForSelector(`[data-mobile2-screen="pipeline"][data-mobile2-pipeline="${screen.id}"] .pblock`, { timeout: 10_000 });
+              await page.waitForTimeout(400);
+              const name = `pipeline-${screen.name}-${width}-${lang}${scheme === "light" ? "-light" : ""}`;
+              if (width === 390) await page.screenshot({ path: path.join(pngDir, `${name}.png`) });
+              gate(`${label}-top`, await page.evaluate(measureScreen) as ScreenReading, screen);
+              await bodyTo(page, "end");
+              await page.waitForTimeout(150);
+              gate(`${label}-end`, await page.evaluate(measureScreen) as ScreenReading, screen);
+              const folded = frames[`${label}-top`]?.fold ?? null;
+              if (folded !== screen.fold) failures.push(`${label}: the passed fold is ${folded}, expected ${screen.fold}`);
+              /* The whole scroll at 390 px, folded, the way the round-2 "-full" frames draw it. */
+              if (width === 390 && screen.name === "running") {
+                const tall = await page.evaluate(() => {
+                  const body = document.querySelector("[data-mobile2-pipeline-body]");
+                  return body ? body.scrollHeight - body.clientHeight : 0;
+                });
+                await page.setViewportSize({ width, height: height + tall });
+                await page.waitForTimeout(300);
+                await page.screenshot({ path: path.join(pngDir, `${name.replace(`-${width}-`, `-${width}-full-`)}.png`) });
+                await page.setViewportSize({ width, height });
+              }
+              if (screen.fold) {
+                await bodyTo(page, "top");
+                await page.locator("[data-passed-fold]").evaluate((element) => (element as HTMLElement).click());
+                await page.waitForTimeout(200);
+                const open = await page.evaluate(measureScreen) as ScreenReading;
+                gate(`${label}-unfolded`, open, screen);
+                if ((open?.stages.length ?? 0) !== 8) failures.push(`${label}: unfolded, ${open?.stages.length} stages are listed, expected 8`);
+              }
+              await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+              await page.waitForSelector("[data-mobile2-pipelines]", { timeout: 10_000 });
+              await page.waitForTimeout(250);
+            }
+            if (pageErrors.length) failures.push(`${width}-${lang}-${scheme}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/pipeline-block", { recursive: true });
+    fs.writeFileSync("evidence/pipeline-block/pipeline-screen.json", `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
 });

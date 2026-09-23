@@ -1,6 +1,6 @@
 "use client";
 
-import { Check } from "lucide-react";
+import { Check, CircleAlert } from "lucide-react";
 import { useSyncExternalStore } from "react";
 
 import { useLocale } from "@/lib/i18n";
@@ -23,15 +23,18 @@ export const RECEIPT_MS = 4_000;
 
 export type ReceiptInverse = "respawn" | "reopen" | "restore" | "switchBack" | "retryStage";
 
-export interface ReceiptAction {
-  kind: ReceiptInverse;
-  run: () => void;
-}
+/** The inverse named by its kind, or an action that carries its own words:
+    the board's pipeline actions answer with «Retry» or «Check again» (#2072). */
+export type ReceiptAction =
+  | { kind: ReceiptInverse; run: () => void }
+  | { kind: "act"; label: string; run: () => void };
 
 export interface Receipt {
   id: number;
   text: string;
   inverse: ReceiptAction | null;
+  /** A refusal or a failure: the danger mark and edge instead of the check. */
+  error?: boolean;
 }
 
 export interface ReceiptTimers {
@@ -42,7 +45,7 @@ export interface ReceiptTimers {
 export interface ReceiptStore {
   getState(): Receipt | null;
   subscribe(listener: () => void): () => void;
-  show(text: string, inverse?: ReceiptAction | null): Receipt;
+  show(text: string, inverse?: ReceiptAction | null, options?: { error?: boolean }): Receipt;
   dismiss(): void;
   /** Run the inverse action and take the receipt down. */
   undo(): void;
@@ -75,10 +78,10 @@ export function createReceiptStore(timers: ReceiptTimers = REAL_TIMERS): Receipt
         listeners.delete(listener);
       };
     },
-    show(text, inverse = null) {
+    show(text, inverse = null, options) {
       if (handle !== null) timers.clear(handle);
       seq += 1;
-      const receipt: Receipt = { id: seq, text, inverse };
+      const receipt: Receipt = { id: seq, text, inverse, ...(options?.error ? { error: true } : {}) };
       handle = timers.set(() => {
         handle = null;
         if (current?.id === receipt.id) set(null);
@@ -98,8 +101,8 @@ export function createReceiptStore(timers: ReceiptTimers = REAL_TIMERS): Receipt
 /** The tab's one receipt slot. */
 export const receipts: ReceiptStore = createReceiptStore();
 
-export function showReceipt(text: string, inverse?: ReceiptAction | null): Receipt {
-  return receipts.show(text, inverse);
+export function showReceipt(text: string, inverse?: ReceiptAction | null, options?: { error?: boolean }): Receipt {
+  return receipts.show(text, inverse, options);
 }
 
 export function useReceipt(store: ReceiptStore = receipts): Receipt | null {
@@ -113,6 +116,12 @@ const PLACEMENT = {
   sheet: "mx-4 mt-1.5 shadow-[inset_3px_0_0_var(--color-success),0_0_0_1px_var(--border-default)]",
 } as const;
 
+/* A refusal keeps the placement and takes the danger edge. */
+const ERROR_PLACEMENT = {
+  flow: "mx-3 my-1.5 shadow-[inset_3px_0_0_var(--color-danger),var(--shadow-2)]",
+  sheet: "mx-4 mt-1.5 shadow-[inset_3px_0_0_var(--color-danger),0_0_0_1px_var(--border-default)]",
+} as const;
+
 export function MobileReceipt({ store = receipts, placement = "flow" }: { store?: ReceiptStore; placement?: keyof typeof PLACEMENT }) {
   const { t } = useLocale();
   const receipt = useReceipt(store);
@@ -122,9 +131,12 @@ export function MobileReceipt({ store = receipts, placement = "flow" }: { store?
       role="status"
       data-mobile2-receipt
       data-mobile2-receipt-placement={placement}
-      className={`flex min-h-11 shrink-0 items-center gap-2 rounded-[12px] bg-raised pl-3 pr-1 text-ui font-semibold text-primary ${PLACEMENT[placement]}`}
+      data-mobile2-receipt-error={receipt.error ? "true" : undefined}
+      className={`flex min-h-11 shrink-0 items-center gap-2 rounded-[12px] bg-raised pl-3 pr-1 text-ui font-semibold text-primary ${(receipt.error ? ERROR_PLACEMENT : PLACEMENT)[placement]}`}
     >
-      <Check className="h-4 w-4 shrink-0 text-success" aria-hidden />
+      {receipt.error
+        ? <CircleAlert className="h-4 w-4 shrink-0 text-danger" aria-hidden />
+        : <Check className="h-4 w-4 shrink-0 text-success" aria-hidden />}
       <span className="min-w-0 flex-1">{receipt.text}</span>
       {receipt.inverse ? (
         <button
@@ -133,7 +145,7 @@ export function MobileReceipt({ store = receipts, placement = "flow" }: { store?
           className="ml-auto inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-[8px] px-2.5 font-bold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           onClick={() => store.undo()}
         >
-          {t(`mobile2.receipt.${receipt.inverse.kind}`)}
+          {receipt.inverse.kind === "act" ? receipt.inverse.label : t(`mobile2.receipt.${receipt.inverse.kind}`)}
         </button>
       ) : null}
     </div>
