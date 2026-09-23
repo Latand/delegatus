@@ -70,6 +70,11 @@ export interface StructuredMessageRequest {
       command and replays it at drain time, so a held operator message never
       resurfaces as a system row nor a held relay as an operator bubble. */
   origin?: MessageOrigin;
+  /** Set only by a spawn delivering its own first message: the launch whose
+      account choice the lazy move onto the routed account leaves standing
+      (#2051). The registry honours it only for the launch that created the
+      conversation's current generation, on that generation's account. */
+  launchId?: string;
 }
 
 export type StructuredMessageResult =
@@ -416,7 +421,7 @@ async function holdDuringRuntimeSynchronization(
     const generation = conversation.generations.at(-1);
     const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
     if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
-      conversation = registry.requestConversationMigrationToActiveAccount(conversation.id);
+      conversation = registry.requestConversationMigrationToActiveAccount(conversation.id, { launchId: request.launchId });
     }
     const place = () => registry.holdDelivery(
       conversation.id,
@@ -924,7 +929,7 @@ export async function enqueueStructuredMessage(
      recovery. An accepted migration fence assigns this send to the successor. */
   if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
     try {
-      conversation = registry.requestConversationMigrationToActiveAccount(conversation.id);
+      conversation = registry.requestConversationMigrationToActiveAccount(conversation.id, { launchId: request.launchId });
     } catch (error) {
       return deliveryFailure(error);
     }
