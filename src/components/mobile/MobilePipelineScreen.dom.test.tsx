@@ -293,6 +293,56 @@ test("a running stage is expanded with who runs it, what it is doing and its con
   expect(q(stageRow(host, "design")!, ".pb-stage-row")!.tagName).toBe("DIV");
 });
 
+test("a paused lane holds its stage: a hollow mark and no live tone, still expanded, with Resume in the ⋯; resumed, it is live again (§3.13)", async () => {
+  const paused = { ...runningPipeline(), state: "paused", pausedState: "running" } as Pipeline;
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  roots.push(root);
+  const store = nav();
+  const render = (pipeline: Pipeline) => flushSync(() => root.render(
+    <MobileNavContext.Provider value={store}>
+      <MobilePipelineScreen pipeline={pipeline} files={[BUILDING]} now={NOW} onOpenConversation={() => {}} />
+    </MobileNavContext.Provider>,
+  ));
+  const view = host as unknown as HTMLElement;
+  render(paused);
+
+  const held = q(view, ".pb-stage[data-stage-current]")!;
+  expect(held.getAttribute("data-stage")).toBe("implement");
+  const mark = q(held, ".pb-stage-title .pmark")!;
+  expect(mark.getAttribute("data-mark")).toBe("ring");
+  expect(mark.hasAttribute("data-live")).toBe(false);
+  expect(mark.className).toContain("tone-idle");
+  expect(held.className).toContain("tone-idle");
+  expect(held.className).not.toContain("tone-active");
+  /* The stage's own state stays in the record; the drawing is the hold's. */
+  expect(held.getAttribute("data-stage-state")).toBe("running");
+  expect(held.getAttribute("data-stage-held")).toBe("1");
+  expect(q(view, '.pmark[data-live="1"]')).toBeNull();
+  expect(q(held, ".pb-stage-state")!.textContent).toBe(translate("en", "pipelineState.paused"));
+  /* Still the expanded stage: what it last did, in the lane's word, and its conversation. */
+  expect(q(held, "[data-stage-now]")!.textContent).toBe(translate("en", "kanban.stageReport.line", { who: translate("en", "roleCopy.builder.name"), outcome: translate("en", "pipelineState.paused"), age: "6m" }));
+  expect(q(held, "[data-open-conversation]")).not.toBeNull();
+  expect(q(view, "[data-mobile2-meta] .pstate-word")!.getAttribute("data-pstate")).toBe("paused");
+  /* Resume is the ⋯'s first row. */
+  click(q(view, '[data-mobile2-open="menu"]'));
+  await settle();
+  expect(Array.from(dom.document.querySelectorAll("[data-mobile2-pipeline-menu] [data-mobile2-pipeline-action]")).map((el) => el.getAttribute("data-mobile2-pipeline-action"))).toEqual(["resume", "archive"]);
+  flushSync(() => store.closeSheet());
+  await settle();
+
+  /* Resumed: the same stage is live again, in its tone, with the pulse. */
+  render(runningPipeline());
+  const live = q(view, ".pb-stage[data-stage-current]")!;
+  expect(live.hasAttribute("data-stage-held")).toBe(false);
+  expect(live.className).toContain("tone-active");
+  const pulse = q(live, ".pb-stage-title .pmark")!;
+  expect(pulse.getAttribute("data-mark")).toBe("dot");
+  expect(pulse.getAttribute("data-live")).toBe("1");
+  expect(q(live, ".pb-stage-state")!.textContent).toBe(translate("en", "kanban.graphState.running"));
+});
+
 test("every stage that ran opens its own conversation from its row; one whose transcript is gone is a statement", () => {
   const opened: string[] = [];
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={(entry) => opened.push(entry.path)} />);

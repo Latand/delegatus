@@ -14,6 +14,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -34,6 +47,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -57,9 +83,82 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "paused-390-en-dark-top": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(139, 139, 152)",
+        "stripe": "rgb(139, 139, 152) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "paused-390-en-dark-end": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(139, 139, 152)",
+        "stripe": "rgb(139, 139, 152) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -74,6 +173,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(224, 174, 69)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -94,6 +206,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(224, 174, 69)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -114,6 +239,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -134,6 +272,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -155,6 +306,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -173,6 +329,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -193,6 +354,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(23, 122, 55)",
+        "word": "rgb(23, 122, 55)",
+        "stripe": "rgb(23, 122, 55) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -213,6 +387,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(23, 122, 55)",
+        "word": "rgb(23, 122, 55)",
+        "stripe": "rgb(23, 122, 55) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -236,9 +423,82 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(23, 122, 55)",
+        "word": "rgb(23, 122, 55)",
+        "stripe": "rgb(23, 122, 55) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "paused-390-en-light-top": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(108, 108, 121)",
+        "word": "rgb(108, 108, 121)",
+        "stripe": "rgb(108, 108, 121) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "paused-390-en-light-end": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(108, 108, 121)",
+        "word": "rgb(108, 108, 121)",
+        "stripe": "rgb(108, 108, 121) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -253,6 +513,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(138, 95, 0)",
+        "word": "rgb(138, 95, 0)",
+        "stripe": "rgb(138, 95, 0) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -273,6 +546,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(138, 95, 0)",
+        "word": "rgb(138, 95, 0)",
+        "stripe": "rgb(138, 95, 0) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -293,6 +579,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(108, 108, 121)",
+        "word": "rgb(138, 95, 0)",
+        "stripe": "rgb(138, 95, 0) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -313,6 +612,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(108, 108, 121)",
+        "word": "rgb(138, 95, 0)",
+        "stripe": "rgb(138, 95, 0) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -334,6 +646,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -352,6 +669,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -372,6 +694,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -392,6 +727,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -415,9 +763,82 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
+      "scrollWidth": 430,
+      "innerWidth": 430
+    },
+    "paused-430-en-dark-top": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(139, 139, 152)",
+        "stripe": "rgb(139, 139, 152) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
+      "scrollWidth": 430,
+      "innerWidth": 430
+    },
+    "paused-430-en-dark-end": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(139, 139, 152)",
+        "stripe": "rgb(139, 139, 152) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
       "scrollWidth": 430,
       "innerWidth": 430
     },
@@ -432,6 +853,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(224, 174, 69)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -452,6 +886,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(224, 174, 69)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -472,6 +919,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -492,6 +952,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -513,6 +986,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -531,6 +1009,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -551,6 +1034,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -571,6 +1067,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -594,9 +1103,82 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "paused-390-uk-dark-top": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(139, 139, 152)",
+        "stripe": "rgb(139, 139, 152) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "paused-390-uk-dark-end": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(139, 139, 152)",
+        "stripe": "rgb(139, 139, 152) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -611,6 +1193,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(224, 174, 69)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -631,6 +1226,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(224, 174, 69)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -651,6 +1259,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -671,6 +1292,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -692,6 +1326,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -710,6 +1349,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -730,6 +1374,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(23, 122, 55)",
+        "word": "rgb(23, 122, 55)",
+        "stripe": "rgb(23, 122, 55) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -750,6 +1407,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(23, 122, 55)",
+        "word": "rgb(23, 122, 55)",
+        "stripe": "rgb(23, 122, 55) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -773,9 +1443,82 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(23, 122, 55)",
+        "word": "rgb(23, 122, 55)",
+        "stripe": "rgb(23, 122, 55) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "paused-390-uk-light-top": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(108, 108, 121)",
+        "word": "rgb(108, 108, 121)",
+        "stripe": "rgb(108, 108, 121) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
+      "scrollWidth": 390,
+      "innerWidth": 390
+    },
+    "paused-390-uk-light-end": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(108, 108, 121)",
+        "word": "rgb(108, 108, 121)",
+        "stripe": "rgb(108, 108, 121) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -790,6 +1533,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(138, 95, 0)",
+        "word": "rgb(138, 95, 0)",
+        "stripe": "rgb(138, 95, 0) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -810,6 +1566,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(138, 95, 0)",
+        "word": "rgb(138, 95, 0)",
+        "stripe": "rgb(138, 95, 0) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -830,6 +1599,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(108, 108, 121)",
+        "word": "rgb(138, 95, 0)",
+        "stripe": "rgb(138, 95, 0) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -850,6 +1632,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(108, 108, 121)",
+        "word": "rgb(138, 95, 0)",
+        "stripe": "rgb(138, 95, 0) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -871,6 +1666,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -889,6 +1689,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(108, 108, 121)",
+        "success": "rgb(23, 122, 55)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -909,6 +1714,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -929,6 +1747,19 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
@@ -952,9 +1783,82 @@
         "docs",
         "merge"
       ],
+      "tone": {
+        "held": false,
+        "mark": "dot",
+        "live": true,
+        "pulse": "pb-live",
+        "markInk": "rgb(79, 195, 111)",
+        "word": "rgb(79, 195, 111)",
+        "stripe": "rgb(79, 195, 111) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "verify-backward-compatibility-and-migrations",
       "answers": [],
       "fold": "3",
+      "scrollWidth": 430,
+      "innerWidth": 430
+    },
+    "paused-430-uk-dark-top": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(139, 139, 152)",
+        "stripe": "rgb(139, 139, 152) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
+      "scrollWidth": 430,
+      "innerWidth": 430
+    },
+    "paused-430-uk-dark-end": {
+      "texts": 27,
+      "controls": 7,
+      "overlaps": [],
+      "escapes": [],
+      "small": [],
+      "cut": [],
+      "stages": [
+        "accept",
+        "review"
+      ],
+      "tone": {
+        "held": true,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(139, 139, 152)",
+        "stripe": "rgb(139, 139, 152) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
+      "current": "accept",
+      "answers": [],
+      "fold": null,
       "scrollWidth": 430,
       "innerWidth": 430
     },
@@ -969,6 +1873,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(224, 174, 69)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -989,6 +1906,19 @@
         "implement",
         "review"
       ],
+      "tone": {
+        "held": false,
+        "mark": "alert",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(224, 174, 69)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "implement",
       "answers": [
         "skip-stage",
@@ -1009,6 +1939,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -1029,6 +1972,19 @@
         "build",
         "critique"
       ],
+      "tone": {
+        "held": false,
+        "mark": "ring",
+        "live": false,
+        "pulse": "none",
+        "markInk": "rgb(139, 139, 152)",
+        "word": "rgb(224, 174, 69)",
+        "stripe": "rgb(224, 174, 69) 3px 0px 0px 0px inset"
+      },
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": "critique",
       "answers": [
         "close",
@@ -1050,6 +2006,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": null,
       "answers": [],
       "fold": null,
@@ -1068,6 +2029,11 @@
         "review",
         "verify"
       ],
+      "tone": null,
+      "inks": {
+        "muted": "rgb(139, 139, 152)",
+        "success": "rgb(79, 195, 111)"
+      },
       "current": null,
       "answers": [],
       "fold": null,

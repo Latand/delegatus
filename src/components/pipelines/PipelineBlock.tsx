@@ -643,6 +643,11 @@ function ScreenBlock(props: PipelineBlockProps & {
     }];
   });
 
+  /* A paused lane holds its stage (§3.13): the stage draws no live tone and no
+     pulse, its mark is hollow and it says the lane's word, "paused". It keeps
+     its place, its expansion and its conversation; Resume is the bar's ⋯. */
+  const held = (chip: KanbanStageChip): boolean => pipeline.state === "paused" && LIVE.has(chip.state);
+
   /* What the current stage last did: its own report for its latest attempt,
      else the attempt as it stands, "Builder running · 6m". */
   const stageNow = (chip: KanbanStageChip) => {
@@ -656,7 +661,7 @@ function ScreenBlock(props: PipelineBlockProps & {
     return (
       <>
         <p className="stage-report" data-stage-now={chip.stage.id}>
-          {t("kanban.stageReport.line", { who: stageChipLabel(t, chip.stage), outcome: graphStateWord(t, chip.state), age })}
+          {t("kanban.stageReport.line", { who: stageChipLabel(t, chip.stage), outcome: held(chip) ? pipelineStateLabel(t, pipeline.state) : graphStateWord(t, chip.state), age })}
         </p>
         <FindingList findings={stageFindings(pipeline, chip.stage.id)} shown={ANSWER_FINDINGS} />
       </>
@@ -674,8 +679,10 @@ function ScreenBlock(props: PipelineBlockProps & {
     /* The stage a lane that needs the operator stands on takes the lane's
        amber and its state word; its mark keeps the stage's own shape. */
     const waitsOnYou = needs && stage.id === parked?.id;
-    const tone = waitsOnYou ? "needs" : STAGE_TONE[chip.state];
-    const state = waitsOnYou ? pipelineStateLabel(t, pipeline.state) : graphStateWord(t, chip.state);
+    const isHeld = held(chip);
+    const shown: StageChipState = isHeld ? "pending" : chip.state;
+    const tone = waitsOnYou ? "needs" : STAGE_TONE[shown];
+    const state = waitsOnYou || isHeld ? pipelineStateLabel(t, pipeline.state) : graphStateWord(t, shown);
     const identity = stage.effectiveRole ? stageIdentity(pipeline, stage) : null;
     const who = whoRuns(t, pipeline, stage);
     const place = stageLatestAttemptPlace(pipeline, stage.id);
@@ -690,7 +697,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         <span className="pb-num">{index + 1}</span>
         <span className="pb-stage-main">
           <span className="pb-stage-title">
-            <StageToneMark state={chip.state} />
+            <StageToneMark state={shown} />
             <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}</span>
             {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
             {suffix ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
@@ -727,6 +734,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         className={`pb-stage tone-${tone}${isCurrent ? " current" : ""}`}
         data-stage={stage.id}
         data-stage-state={chip.state}
+        data-stage-held={isHeld ? "1" : undefined}
         data-stage-current={isCurrent ? "1" : undefined}
       >
         {control}

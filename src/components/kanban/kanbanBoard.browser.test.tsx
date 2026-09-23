@@ -7173,7 +7173,8 @@ describe("#2072 one pipeline block, desktop and phone", () => {
 
   /* The phone's pipeline screen, the Stages view (slice 6, §3.13), over the
      same scenario's lanes: the eight-stage one running its long-named fourth
-     stage, the parked decision, the spent review budget and a completed lane.
+     stage, a lane paused while a stage ran, the parked decision, the spent
+     review budget and a completed lane.
      Each is opened from the phone's pipelines list the way the operator opens
      it, and the whole screen, bar and body, is measured as ink: no text meets
      another text or a control, no control meets another, every control is a
@@ -7253,26 +7254,53 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       if (name.scrollWidth > name.clientWidth + 1) cut.push((name.textContent || "").slice(0, 48));
     }
     const stages = [...screen.querySelectorAll(".pb-stage[data-stage]")].map(el => el.getAttribute("data-stage"));
+    /* How the current stage is drawn, read as computed colour and motion, and
+       the tokens it is compared with, read the same way. */
+    const probe = token => {
+      const el = document.createElement("span");
+      el.style.color = "var(" + token + ")";
+      screen.appendChild(el);
+      const color = getComputedStyle(el).color;
+      el.remove();
+      return color;
+    };
+    const cur = screen.querySelector(".pb-stage[data-stage-current]");
+    const mark = cur && cur.querySelector(".pb-stage-title .pmark");
+    const tone = cur && mark ? {
+      held: cur.getAttribute("data-stage-held") === "1",
+      mark: mark.getAttribute("data-mark"),
+      live: mark.getAttribute("data-live") === "1",
+      pulse: getComputedStyle(mark, "::before").animationName,
+      markInk: getComputedStyle(mark).color,
+      word: getComputedStyle(cur.querySelector(".pb-stage-state")).color,
+      stripe: getComputedStyle(cur).boxShadow,
+    } : null;
+    const inks = { muted: probe("--color-muted"), success: probe("--color-success") };
     return {
-      texts: ink.length, controls: controls.length, overlaps, escapes, small, cut, stages,
+      texts: ink.length, controls: controls.length, overlaps, escapes, small, cut, stages, tone, inks,
       current: screen.querySelector(".pb-stage[data-stage-current]")?.getAttribute("data-stage") ?? null,
       answers: [...screen.querySelectorAll("[data-answer-action]")].map(el => el.getAttribute("data-answer-action")),
       fold: screen.querySelector("[data-passed-fold]")?.getAttribute("data-passed-fold") ?? null,
       scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth,
     };
   })()`;
+  type ScreenTone = { held: boolean; mark: string | null; live: boolean; pulse: string; markInk: string; word: string; stripe: string };
   type ScreenReading = {
     texts: number; controls: number; overlaps: unknown[]; escapes: unknown[]; small: unknown[]; cut: unknown[];
     stages: string[]; current: string | null; answers: string[]; fold: string | null; scrollWidth: number; innerWidth: number;
+    tone: ScreenTone | null; inks: { muted: string; success: string };
   } | null;
+  /* `motion`: the running lane's current stage pulses in its live tone; the
+     paused lane's held stage is hollow, still and muted (§3.13). */
   const SCREENS = [
-    { id: "p-upload", name: "running", current: "verify-backward-compatibility-and-migrations", answers: [], fold: "3", completed: false },
-    { id: "p-md-decision", name: "decision", current: "implement", answers: ["skip-stage", "retry-stage"], fold: null, completed: false },
-    { id: "p-review-spent", name: "review", current: "critique", answers: ["close", "continue-review"], fold: null, completed: false },
-    { id: "p-compact", name: "done", current: null, answers: [], fold: null, completed: true },
+    { id: "p-upload", name: "running", current: "verify-backward-compatibility-and-migrations", answers: [], fold: "3", completed: false, motion: "live" },
+    { id: "p-md-accept", name: "paused", current: "accept", answers: [], fold: null, completed: false, motion: "held" },
+    { id: "p-md-decision", name: "decision", current: "implement", answers: ["skip-stage", "retry-stage"], fold: null, completed: false, motion: null },
+    { id: "p-review-spent", name: "review", current: "critique", answers: ["close", "continue-review"], fold: null, completed: false, motion: null },
+    { id: "p-compact", name: "done", current: null, answers: [], fold: null, completed: true, motion: null },
   ] as const;
 
-  browserTest("the phone's pipeline screen: no text meets another's ink or a control, every control is 44 px and no stage name is cut, at 390 and 430 px, in en and uk", async () => {
+  browserTest("the phone's pipeline screen: no text meets another's ink or a control, every control is 44 px, no stage name is cut, and a paused lane's stage is still, at 390 and 430 px, in en and uk", async () => {
     const out = path.resolve(".artifacts/pipeline-screen");
     const pngDir = process.env.PIPELINE_SCREEN_PNG_DIR ?? "/var/tmp/llv-pipeline-screen-evidence";
     fs.mkdirSync(out, { recursive: true });
@@ -7295,6 +7323,15 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       if (reading.small.length) failures.push(`${label}: ${reading.small.length} controls under 44 px — ${JSON.stringify(reading.small.slice(0, 4))}`);
       if (reading.cut.length) failures.push(`${label}: ${reading.cut.length} names are cut — ${JSON.stringify(reading.cut.slice(0, 3))}`);
       if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
+      const { tone, inks } = reading;
+      if (want.motion === "held" && (!tone || !tone.held || tone.mark !== "ring" || tone.live || tone.pulse !== "none"
+        || tone.markInk !== inks.muted || tone.word !== inks.muted || !tone.stripe.includes(inks.muted))) {
+        failures.push(`${label}: the held stage is drawn ${JSON.stringify(tone)}, expected a still hollow ring with the mark, the word and the stripe in ${inks.muted}`);
+      }
+      if (want.motion === "live" && (!tone || tone.held || tone.mark !== "dot" || !tone.live || tone.pulse === "none"
+        || tone.markInk !== inks.success || tone.word !== inks.success || !tone.stripe.includes(inks.success))) {
+        failures.push(`${label}: the running stage is drawn ${JSON.stringify(tone)}, expected a pulsing dot with the mark, the word and the stripe in ${inks.success}`);
+      }
     };
     const bodyTo = (page: Page, where: "top" | "end") => page.evaluate((to) => {
       const body = document.querySelector("[data-mobile2-pipeline-body]");
