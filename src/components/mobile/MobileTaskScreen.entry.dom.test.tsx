@@ -322,4 +322,9 @@ test("a conversation's task strip opens the task screen above the conversation, 
   noOldEditor(root);
   await back(root);
   expect(await waitFor(() => top().kind === "chat")).toBe(true);
+  /* The whole stack, not only its top: the task is still under the conversation. */
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "task", id: "t-data" }, { kind: "chat", id: agentFile.path }]);
+  await back(root);
+  expect(await waitFor(() => onTask(root, "t-data"))).toBe(true);
+  expect(getMobileNav().getState().stack.map((screen) => screen.kind)).toEqual(["board", "task"]);
 });

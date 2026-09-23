@@ -77,6 +77,28 @@ export function readMobileNavEntry(state: unknown): MobileNavEntry | null {
   return { d, screen: ("id" in screen && WITH_ID.has(screen.kind) ? { kind: screen.kind, id: screen.id } : { kind: screen.kind }) as MobileScreen };
 }
 
+/**
+ * What the Viewer's resolver does to the phone's stack when it lands a
+ * conversation (a deep link, a catalog open, #866's Back/Forward replay). A
+ * fresh open goes home: the conversation it shows is pushed over the board.
+ * A REPLAY that lands on an entry this stack wrote for a screen above the
+ * board is the stack's own traversal — a conversation opened from a task or a
+ * pipeline, reached again by ‹ from a screen pushed over it — and the stack
+ * has already put that conversation on top with its task or pipeline under
+ * it. Going home there would leave [board, chat], and the next ‹ would skip
+ * the task. So the stack stays, and after the resolver re-types the entry
+ * (`record`, which replaces its state whole) the entry is stamped again so it
+ * keeps its place. An entry without the phone's key — every desktop entry —
+ * goes home exactly as before.
+ */
+export function landResolvedConversation(nav: MobileNav, replay: boolean, state: unknown, record: () => void): void {
+  const entry = replay ? readMobileNavEntry(state) : null;
+  const own = entry !== null && entry.screen.kind !== "board";
+  if (!own) nav.home();
+  record();
+  if (own) nav.stamp();
+}
+
 export function screenKey(screen: MobileScreen): string {
   return "id" in screen ? `${screen.kind}:${screen.id}` : screen.kind;
 }
