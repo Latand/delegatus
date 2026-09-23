@@ -224,11 +224,20 @@ Options considered:
 from the same `MOBILE_LAYOUT_QUERY` constant `useIsMobile` uses, so the
 breakpoint cannot drift. On a phone it draws the 52 px bar, the board skeleton
 (D3) and the dock placeholder. On a desktop it draws the 248 px rail with row
-skeletons, a 48 px header and the kanban skeleton. An inline script placed
-directly after the title cell reads `location.hash` (`#p=`), `llvProject`,
-`llv_lang` and the name cache (D2), then writes the title text before first
-paint. This follows the existing `ROLE_FRAME_BOOT_SCRIPT` pattern in
-`src/app/layout.tsx`, and the title element carries `suppressHydrationWarning`.
+skeletons, a 48 px header and the kanban skeleton. An inline script at the end
+of the shell reads `location.hash` (`#p=`), `llvProject`, `llv_lang` and the
+name cache (D2) before first paint. This follows the existing
+`ROLE_FRAME_BOOT_SCRIPT` pattern in `src/app/layout.tsx`. The script writes
+only to `<html lang>` and to the shell root: attributes, plus custom
+properties (`--boot-name`, `--seat-h`, the column tracks). The root carries
+`suppressHydrationWarning`. The stylesheet draws everything else from those:
+- the name as `::before` content;
+- the seat and the column tracks through inherited custom properties;
+- one of four pre-rendered board modes.
+
+Nothing under the root is written, so hydration adopts the server DOM. An
+earlier revision wrote the title text and board classes into the subtree, and
+hydration failed and regenerated the tree (review round 1).
 
 The real tree mounts only on the client. Its state initialisers can therefore
 read the hash and `localStorage` synchronously
@@ -395,10 +404,11 @@ the runtime bus `connection`/`lastEventAt` and a new `firstFailureAt` that
 `useFiles` keeps beside `catalogFailures`.
 
 - `ok`: the bus is live or disabled, and no files failure is outstanding.
-- `reconnecting`: the bus has been `reconnecting`/`degraded` for more than
-  2 s, or a files poll failed while data is on screen, and less than 60 s have
-  passed since the first failure. The 2 s floor keeps a one-off blip from
-  drawing anything.
+- `reconnecting`: the bus has been `reconnecting` for more than 2 s, or a
+  files poll failed while data is on screen, and less than 60 s have passed
+  since the first failure. The 2 s floor keeps a one-off blip from drawing
+  anything. `degraded` is the bus's healthy polling fallback (the snapshot is
+  polled every 10 s), so it reads `ok` unless a files read also fails.
 - `offline`: 60 s or more since the first failure, or the bus is `offline`.
   This is the bus's own `OFFLINE_AFTER_MS`.
 
@@ -409,7 +419,8 @@ Presentation:
   `text-label text-muted` line with a static 6 px `bg-warning` dot and
   `reach.reconnecting` ("reconnecting · showing {time}" / "перепідключення ·
   показано стан на {time}"). `{time}` is the last good answer as `HH:MM`, the
-  format `MobileShell` already uses. On the chat screen the same line replaces
+  format `MobileShell` already uses. For a files streak that is the last files
+  success; for a stream outage it is the stream's last event. On the chat screen the same line replaces
   the meta line, which `ChatBarTitle` already blanks while offline
   (`MobileFocusView.tsx:847-866`). This causes zero layout shift and covers
   nothing. The in-flow banner stays for `offline` only (`bannerKind` drops the
@@ -613,12 +624,12 @@ root and a port the OS assigned. Phone 390×844 at DPR 2, 4× CPU throttling,
 | metric | before | after |
 | --- | --- | --- |
 | wrong frames at 390 px (desktop rail, first run, raw key) | 55 frames, 1750 ms | **0** |
-| phone shell painted | 1699 | **287** |
-| name in the title, `reopen-reload` | 1977 | **285** (first paint) |
-| name in the title, first visit | 2048 (raw key before it) | 1832 (placeholder bar before it) |
-| first conversation row, `cold` | 2048 | 1832 |
-| first conversation row, `reopen-reload` | 1977 | 1677 |
-| CLS over 5 s, `cold` / `reopen-reload` | 0.0004 / 0.0004 | 0.0001 / 0.0005 |
+| phone shell painted | 1699 | **281** |
+| name in the title, `reopen-reload` | 1977 | **281** (first paint) |
+| name in the title, first visit | 2048 (raw key before it) | 1797 (placeholder bar before it) |
+| first conversation row, `cold` | 2048 | 1797 |
+| first conversation row, `reopen-reload` | 1977 | 1639 |
+| CLS over 5 s, `cold` / `reopen-reload` | 0.0004 / 0.0004 | 0.0001 / 0.0011 |
 | `/api/files` on `reopen-reload`, nothing changed | 200, full body | **304, 0 bytes** |
 | `/api/*` requests in the first 5 s | 15 | 9 |
 

@@ -62,6 +62,16 @@ const COLUMN_CARDS: Record<(typeof COLUMNS)[number], number> = { inbox: 2, assig
  *   `repo-`/`dir-` key stays a placeholder bar);
  * - the i18n detection (`llv_lang`, then the browser language);
  * - `kanbanLayoutMode` and `seatCollapsed` for the columns and the seat.
+ *
+ * It writes ONLY to `<html lang>` and to the shell root, which carries
+ * `suppressHydrationWarning`: attributes and custom properties. Everything
+ * below the root is React's to hydrate, so the stylesheet draws the rest from
+ * those: the name as `::before` content from `--boot-name`, the seat height
+ * and the column tracks as inherited custom properties, and the one board
+ * mode shown out of the four the server rendered. A text node or a class
+ * written into the subtree made hydration fail and regenerate the tree.
+ * The source carries no `<`, so the script's own text compares equal to what
+ * React rendered in every parser.
  */
 export const BOOT_SHELL_SCRIPT = `(function(){try{
 var d=document,r=d.querySelector("[data-boot-shell]");if(!r)return;
@@ -78,32 +88,33 @@ var t=null;
 if(!ov){var n={};try{n=JSON.parse(g(${JSON.stringify(PROJECT_NAMES_STORAGE_KEY)})||"{}")||{}}catch(e){}
 t=typeof n[p]==="string"&&n[p].trim()?n[p].trim():null;
 if(!t&&!/^(?:repo|dir)-[0-9a-f]{16,}$/.test(p)){t=p==="project_unresolved"?"Unresolved project":p.indexOf("-agents-tools-")===0&&p.length>14?p.slice(14):(p.replace(/^-+/,"")||p)}}
-var ts=r.querySelectorAll("[data-boot-title]");
-for(var i=0;i<ts.length;i++){if(t){ts[i].textContent=t;ts[i].setAttribute("data-boot-named","")}}
+if(t){r.style.setProperty("--boot-name",JSON.stringify(t.replace(/[\\n\\r]+/g," ")));r.setAttribute("data-boot-named","")}
 var hidden=g(${JSON.stringify(RAIL_HIDDEN_STORAGE_KEY)})==="hidden";if(hidden)r.setAttribute("data-boot-rail","hidden");
 var w=window.innerWidth-(hidden?34:248),md=w>=1400?"wide":w>=1200?"narrow":w>=768?"scroll":"tabs";
-var TR=ov?${JSON.stringify(OVERVIEW_TRACKS)}:${JSON.stringify(TRACKS)};
-var kb=r.querySelector("[data-boot-kb]"),bd=r.querySelector("[data-boot-board]"),nav=r.querySelector("[data-boot-tabs]");
-if(kb)kb.setAttribute("data-mode",md);
-if(bd){bd.className="board"+(md==="wide"?"":" "+md);var tr=TR[md];if(tr)for(var k in tr)bd.style.setProperty(k,tr[k])}
-if(nav){nav.className="tabs-nav"+(md==="scroll"?" jump":"");nav.style.display=md==="wide"||md==="narrow"?"none":""}
-var st=r.querySelector("[data-boot-seat]");
-if(st&&!ov){var rc={};try{rc=JSON.parse(g(${JSON.stringify(SEAT_STORAGE_KEY)})||"{}")||{}}catch(e){}
-var c=rc.collapsed&&typeof rc.collapsed[p]==="boolean"?rc.collapsed[p]:window.innerHeight<${SEAT_SHORT_WINDOW};
-if(c)st.className="seat folded";else if(rc.heightV===${SEAT_HEIGHT_VERSION}&&typeof rc.height==="number")st.style.setProperty("--seat-h",rc.height+"px")}
+r.setAttribute("data-boot-mode",md);
+var tr=(ov?${JSON.stringify(OVERVIEW_TRACKS)}:${JSON.stringify(TRACKS)})[md];if(tr)for(var k in tr)r.style.setProperty(k,tr[k]);
+if(!ov){var rc={};try{rc=JSON.parse(g(${JSON.stringify(SEAT_STORAGE_KEY)})||"{}")||{}}catch(e){}
+var c=rc.collapsed&&typeof rc.collapsed[p]==="boolean"?rc.collapsed[p]:${SEAT_SHORT_WINDOW}>window.innerHeight;
+if(c)r.setAttribute("data-boot-seat-folded","");else if(rc.heightV===${SEAT_HEIGHT_VERSION}&&typeof rc.height==="number")r.style.setProperty("--seat-h",rc.height+"px")}
 }catch(e){}})();`;
 
-/* Which shell shows, which language shows, and what the project view adds
-   over the overview. The query is `useIsMobile`'s own, so the shell the
-   server picks is the layout the app mounts. */
+/* Which shell shows, which language shows, what the project view adds over
+   the overview, the name, the seat's fold and the board mode: all keyed on
+   the root's attributes the script sets. The query is `useIsMobile`'s own, so
+   the shell the server picks is the layout the app mounts. Without the script
+   (no JavaScript) the wide board shows. */
 const BOOT_SHELL_STYLE = `
 [data-boot-shell] [data-boot-phone]{display:none}
 @media ${MOBILE_LAYOUT_QUERY}{[data-boot-shell] [data-boot-phone]{display:flex}[data-boot-shell] [data-boot-desk]{display:none}}
 [data-boot-shell][data-boot-locale="uk"] [data-boot-lang="en"],[data-boot-shell]:not([data-boot-locale="uk"]) [data-boot-lang="uk"]{display:none}
 [data-boot-shell]:not([data-boot-view="project"]) [data-boot-project-only],[data-boot-shell][data-boot-view="project"] [data-boot-overview-only]{display:none}
-[data-boot-shell] [data-boot-title]:not([data-boot-named])+[data-boot-title-bar]{display:inline-block}
+[data-boot-shell] [data-boot-title]::before{content:var(--boot-name,"")}
 [data-boot-shell] [data-boot-title-bar]{display:none}
+[data-boot-shell]:not([data-boot-named]) [data-boot-title-bar]{display:inline-block}
 [data-boot-shell][data-boot-rail="hidden"] [data-boot-rail-aside]{display:none}
+[data-boot-shell][data-boot-seat-folded] .kb [data-boot-seat]{height:auto}
+[data-boot-shell] .kb [data-boot-board-mode]{display:none}
+${MODES.map((mode) => `[data-boot-shell][data-boot-mode="${mode}"] .kb [data-boot-board-mode="${mode}"]`).join(",")},[data-boot-shell]:not([data-boot-mode]) .kb [data-boot-board-mode="wide"]{display:flex}
 `;
 
 function PhoneShell() {
@@ -172,7 +183,7 @@ function DeskShell() {
         <div data-boot-overview-only="" className="flex h-10 shrink-0 items-center gap-2.5 border-b border-border bg-card px-4">
           <h1 className="min-w-0 shrink truncate text-[13.5px] font-bold"><Label k="rail.overview" /></h1>
         </div>
-        <div className="kb" data-boot-kb="" data-mode="wide">
+        <div className="kb">
           <div role="status" aria-busy="true" className="kb-body">
             <span className="sr-only"><Label k="dash.loadingBoard" /></span>
             <div className="kb-page">
@@ -184,24 +195,30 @@ function DeskShell() {
                 </div>
               </section>
               <div className="board-frame">
-                <div className="scroll-wrap">
-                  <div data-boot-tabs="" className="tabs-nav" style={{ display: "none" }} aria-hidden>
-                    {COLUMNS.map((status) => <button key={status} type="button" tabIndex={-1}><Label k={`kanban.status.${status}`} /></button>)}
+                {/* One per layout mode; the stylesheet shows the one the root's
+                    `data-boot-mode` names, and the tracks inherit from it. */}
+                {MODES.map((mode) => (
+                  <div key={mode} data-boot-board-mode={mode} className="scroll-wrap">
+                    {mode === "scroll" || mode === "tabs" ? (
+                      <div className={`tabs-nav${mode === "scroll" ? " jump" : ""}`} aria-hidden>
+                        {COLUMNS.map((status) => <button key={status} type="button" tabIndex={-1}><Label k={`kanban.status.${status}`} /></button>)}
+                      </div>
+                    ) : null}
+                    <div className={`board${mode === "wide" ? "" : ` ${mode}`}`}>
+                      {COLUMNS.map((status, column) => (
+                        <section key={status} className={`column${status === "assigned" ? " active" : ""}`} data-status={status}>
+                          <div className="col-head"><h2><Label k={`kanban.status.${status}`} /></h2></div>
+                          {Array.from({ length: COLUMN_CARDS[status] }, (_, index) => (
+                            <div key={index} aria-hidden className="mx-3 mb-2 flex flex-col gap-2 rounded-[10px] border border-border bg-card p-3 shadow-1">
+                              <Bar width={`${[68, 58, 72, 62][(column * 2 + index) % 4]}%`} height={12} />
+                              <Bar width={`${[42, 38, 46, 40][(column * 2 + index) % 4]}%`} height={10} />
+                            </div>
+                          ))}
+                        </section>
+                      ))}
+                    </div>
                   </div>
-                  <div data-boot-board="" className="board">
-                    {COLUMNS.map((status, column) => (
-                      <section key={status} className={`column${status === "assigned" ? " active" : ""}`} data-status={status}>
-                        <div className="col-head"><h2><Label k={`kanban.status.${status}`} /></h2></div>
-                        {Array.from({ length: COLUMN_CARDS[status] }, (_, index) => (
-                          <div key={index} aria-hidden className="mx-3 mb-2 flex flex-col gap-2 rounded-[10px] border border-border bg-card p-3 shadow-1">
-                            <Bar width={`${[68, 58, 72, 62][(column * 2 + index) % 4]}%`} height={12} />
-                            <Bar width={`${[42, 38, 46, 40][(column * 2 + index) % 4]}%`} height={10} />
-                          </div>
-                        ))}
-                      </section>
-                    ))}
-                  </div>
-                </div>
+                ))}
               </div>
             </div>
           </div>
@@ -213,7 +230,9 @@ function DeskShell() {
 
 export function BootShell() {
   return (
-    <div data-boot-shell="" className="flex h-full min-h-0 min-w-0">
+    /* The only node the boot script writes to (attributes and custom
+       properties), so the only one whose server attributes may differ. */
+    <div data-boot-shell="" className="flex h-full min-h-0 min-w-0" suppressHydrationWarning>
       <style dangerouslySetInnerHTML={{ __html: BOOT_SHELL_STYLE }} />
       <PhoneShell />
       <DeskShell />

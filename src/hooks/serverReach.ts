@@ -4,7 +4,13 @@ import { createContext, useContext, useEffect, useState } from "react";
 
 import type { Locale, TFunction } from "@/lib/i18n";
 
+import { getRuntimeBus, isRuntimeUiEnabled } from "./runtimeBus";
 import { useRuntimeSelector } from "./useRuntime";
+
+function streamLastEvent(): number | null {
+  if (typeof window === "undefined" || !isRuntimeUiEnabled()) return null;
+  return getRuntimeBus().getState().lastEventAt ?? null;
+}
 
 /*
  * Can this tab reach the server right now (#2071,
@@ -16,12 +22,18 @@ import { useRuntimeSelector } from "./useRuntime";
  * board keeps what it last had and says, quietly, that it is reconnecting.
  * Only a long outage turns loud.
  *
- * - `ok`: the stream is live (or off) and no files read is failing.
+ * - `ok`: no files read is failing, and the stream is live, off, or
+ *   `degraded`. Degraded is the stream's healthy fallback: it polls the
+ *   snapshot every ten seconds, so the data on screen is fresh and saying
+ *   otherwise would be false for as long as SSE stays blocked (a proxy).
  * - `reconnecting`: a files read failed while less than a minute has passed
- *   since the first failure, or the stream has been down for more than two
- *   seconds (the floor keeps a one-off blip from drawing anything).
+ *   since the first failure, or the stream has been `reconnecting` for more
+ *   than two seconds (the floor keeps a one-off blip from drawing anything).
  * - `offline`: a minute or more of failures, or the stream says offline; the
  *   stream's own `OFFLINE_AFTER_MS`.
+ *
+ * The time a reconnecting line shows is the last good answer: the last files
+ * success for a files streak, the stream's last event for a stream outage.
  */
 
 export const RECONNECT_FLOOR_MS = 2_000;
@@ -42,6 +54,8 @@ export interface ServerReachInput {
   connection: "live" | "reconnecting" | "degraded" | "offline";
   /** When the stream left "live", or null while it is live. */
   streamDownSince: number | null;
+  /** The stream's last event or heartbeat before it went down, when known. */
+  streamLastEventAt: number | null;
   /** The files failure streak's first failure, or null while reads answer. */
   filesFailingSince: number | null;
   /** The last good files answer, when known. */
@@ -50,13 +64,13 @@ export interface ServerReachInput {
 }
 
 export function deriveServerReach(input: ServerReachInput): ServerReach {
-  const { connection, streamDownSince, filesFailingSince, filesLastSuccessAt, now } = input;
-  const lastGoodAt = filesFailingSince !== null ? filesLastSuccessAt : streamDownSince;
+  const { connection, streamDownSince, streamLastEventAt, filesFailingSince, filesLastSuccessAt, now } = input;
+  const lastGoodAt = filesFailingSince !== null ? filesLastSuccessAt : streamLastEventAt;
   if (connection === "offline") return { kind: "offline", lastGoodAt };
   if (filesFailingSince !== null) {
     return { kind: now - filesFailingSince >= OFFLINE_AFTER_MS ? "offline" : "reconnecting", lastGoodAt };
   }
-  if (connection !== "live" && streamDownSince !== null && now - streamDownSince >= RECONNECT_FLOOR_MS) {
+  if (connection === "reconnecting" && streamDownSince !== null && now - streamDownSince >= RECONNECT_FLOOR_MS) {
     return { kind: "reconnecting", lastGoodAt };
   }
   return SERVER_REACH_OK;
@@ -68,7 +82,7 @@ export function nextReachBoundary(input: ServerReachInput): number | null {
   const { connection, streamDownSince, filesFailingSince, now } = input;
   const candidates: number[] = [];
   if (filesFailingSince !== null && now - filesFailingSince < OFFLINE_AFTER_MS) candidates.push(filesFailingSince + OFFLINE_AFTER_MS);
-  if (connection !== "live" && connection !== "offline" && streamDownSince !== null && now - streamDownSince < RECONNECT_FLOOR_MS) {
+  if (connection === "reconnecting" && streamDownSince !== null && now - streamDownSince < RECONNECT_FLOOR_MS) {
     candidates.push(streamDownSince + RECONNECT_FLOOR_MS);
   }
   return candidates.length ? Math.min(...candidates) : null;
@@ -82,15 +96,18 @@ export function nextReachBoundary(input: ServerReachInput): number | null {
  */
 export function useDerivedServerReach(files: { catalogFailures: number; failingSince?: number; lastSuccessAt?: number | null }): ServerReach {
   const connection = useRuntimeSelector<ServerReachInput["connection"]>((state) => (state.enabled ? state.connection : "live"), "live");
-  const [streamDownSince, setStreamDownSince] = useState<number | null>(null);
-  const down = connection !== "live";
+  /* When the stream went down, and its last event before that. Read once at
+     the transition, so a stream event never re-renders the Viewer. */
+  const [streamDown, setStreamDown] = useState<{ since: number; lastEventAt: number | null } | null>(null);
+  const down = connection === "reconnecting";
   useEffect(() => {
     /* eslint-disable-next-line react-hooks/set-state-in-effect */
-    setStreamDownSince((since) => (down ? since ?? Date.now() : null));
+    setStreamDown((current) => (down ? current ?? { since: Date.now(), lastEventAt: streamLastEvent() } : null));
   }, [down]);
+  const streamDownSince = streamDown?.since ?? null;
   const filesFailingSince = files.catalogFailures > 0 ? files.failingSince ?? null : null;
   const [now, setNow] = useState(() => Date.now());
-  const input: ServerReachInput = { connection, streamDownSince, filesFailingSince, filesLastSuccessAt: files.lastSuccessAt ?? null, now };
+  const input: ServerReachInput = { connection, streamDownSince, streamLastEventAt: streamDown?.lastEventAt ?? null, filesFailingSince, filesLastSuccessAt: files.lastSuccessAt ?? null, now };
   const boundary = nextReachBoundary(input);
   useEffect(() => {
     if (boundary === null) return;
