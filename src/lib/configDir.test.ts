@@ -1,5 +1,6 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import * as fsNamespace from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -233,6 +234,23 @@ test("a next build phase is refused the link step", () => {
     closeStateMutationActivationForTests();
     if (phase === undefined) delete process.env.NEXT_PHASE;
     else process.env.NEXT_PHASE = phase;
+  }
+  expect(fs.existsSync(path.join(root, "delegatus"))).toBe(false);
+});
+
+test("a process that may not make the link pays no lstat per statePath() after the first (#1987)", () => {
+  /* An existing install with no link yet, read by a process the barrier
+     refuses (no Viewer activation): the link stays pending for it, so its
+     check must cost nothing on the hot path. */
+  const { root } = existingInstall("no-owner-hot-path-config");
+  useConfigRoot(root);
+  expect(stateDir()).toBe(path.join(root, "agent-log-viewer", "state"));
+  const lstat = spyOn(fsNamespace, "lstatSync");
+  try {
+    for (let call = 0; call < 5; call += 1) statePath("tasks.json");
+    expect(lstat).toHaveBeenCalledTimes(0);
+  } finally {
+    lstat.mockRestore();
   }
   expect(fs.existsSync(path.join(root, "delegatus"))).toBe(false);
 });

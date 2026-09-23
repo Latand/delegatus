@@ -75,18 +75,17 @@ const linkedRoots = new Set<string>();
  */
 export function ensureAppDirLink(root: string = configRoot()): void {
   if (linkedRoots.has(root)) return;
-  /* Two lstats settle the common cases for good: the link (or a new
-     install's real dir) is already there, or there is no existing install. */
-  if (!appDirLinkPending(root)) {
-    linkedRoots.add(root);
-    return;
-  }
   const link = path.join(root, APP_DIR);
+  /* The ownership gates first: they touch no filesystem, and a process that
+     may not make the link stands down here on every `statePath()` call, so
+     anything slower in front of them would be paid on each one (#1987). */
   if (!mayRunStateStartupMutation(link)) return;
   if (stateMutationRefusal(link) !== null) return;
-  const outcome = linkAppDirIn(root);
-  if (outcome === "failed") {
-    console.error(`[delegatus] could not link ${link} to the existing app dir; the existing name keeps working`);
+  if (appDirLinkPending(root)) {
+    const outcome = linkAppDirIn(root);
+    if (outcome === "failed") {
+      console.error(`[delegatus] could not link ${link} to the existing app dir; the existing name keeps working`);
+    }
   }
   linkedRoots.add(root);
 }
