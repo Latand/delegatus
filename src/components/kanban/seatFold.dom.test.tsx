@@ -75,7 +75,7 @@ mock.module("@/hooks/useLogTail", () => ({
 }));
 
 const { KanbanSeat } = await import("./KanbanSeat");
-const { SEAT_STORAGE_KEY, SEAT_STORAGE_KEY_V1 } = await import("./kanbanSeatStore");
+const { SEAT_HEIGHT_VERSION, SEAT_STORAGE_KEY, SEAT_STORAGE_KEY_V1 } = await import("./kanbanSeatStore");
 const { popoverLeft } = await import("./kanbanMenus");
 const { MobilePreviousSeatsRow, MobilePreviousSeatsScreen } = await import("@/components/orchestrator/PreviousSeats");
 
@@ -326,12 +326,23 @@ test("the seat docks at the side and back, remembered per browser, and each plac
   expect(section(host).getAttribute("data-placement")).toBe("top");
 });
 
-test("the v1 seat record carries its height and collapsed flags into v2 once", async () => {
+test("the v1 seat record carries its collapsed flags into v2 once; its old-default height is dropped", async () => {
   dom.localStorage.setItem(SEAT_STORAGE_KEY_V1, JSON.stringify({ height: 300, collapsed: { [PROJECT]: true } }));
   const host = mountSeat();
   await settle();
   expect(section(host).getAttribute("data-collapsed")).toBe("1");
-  expect(JSON.parse(dom.localStorage.getItem(SEAT_STORAGE_KEY) ?? "{}")).toEqual({ height: 300, collapsed: { [PROJECT]: true }, placement: "top", width: null });
+  expect(JSON.parse(dom.localStorage.getItem(SEAT_STORAGE_KEY) ?? "{}")).toEqual({ height: null, collapsed: { [PROJECT]: true }, placement: "top", width: null });
+});
+
+test("a height dragged before the taller default is dropped; one dragged since is kept", async () => {
+  dom.localStorage.setItem(SEAT_STORAGE_KEY, JSON.stringify({ height: 300, collapsed: {}, placement: "top", width: null }));
+  const stale = mountSeat();
+  await settle();
+  expect(section(stale).style.getPropertyValue("--seat-h")).toBe("");
+  dom.localStorage.setItem(SEAT_STORAGE_KEY, JSON.stringify({ height: 420, collapsed: {}, placement: "top", width: null, heightV: SEAT_HEIGHT_VERSION }));
+  const kept = mountSeat();
+  await settle();
+  expect(section(kept).style.getPropertyValue("--seat-h")).toBe("420px");
 });
 
 /* `currentTask` is the answer's own account of the live seat's notes task: its
