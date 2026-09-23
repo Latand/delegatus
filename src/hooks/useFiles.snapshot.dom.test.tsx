@@ -115,12 +115,32 @@ test("a changed catalog replaces the snapshot with the full answer", async () =>
   expect(after.cached).toBeFalsy();
 });
 
-test("a refused browser drops what it stored", async () => {
-  const accessDenied = mock(() => {});
-  const cache = createFilesClientCache(recordingFetcher(() => new Response("", { status: 401 })).fetcher, { accessDenied });
-  cache.hydrate(record());
+test("a refused browser drops what it stored and stops painting the restored answer", async () => {
+  for (const status of [401, 403]) {
+    const accessDenied = mock(() => {});
+    const cache = createFilesClientCache(recordingFetcher(() => new Response("", { status })).fetcher, { accessDenied });
+    cache.hydrate(record());
+    const seen: number[] = [];
+    cache.subscribe((data) => seen.push(data.files.length));
+    await cache.revalidate().catch(() => undefined);
+    expect(accessDenied).toHaveBeenCalledTimes(1);
+    const after = cache.readScope();
+    expect(after.files).toEqual([]);
+    expect(after.cached).toBeFalsy();
+    expect(after.loaded).toBe(false);
+    expect(seen).toContain(0);
+    /* Nothing is left to revalidate conditionally, or to store back. */
+    expect(cache.certifiedGlobal()).toBeNull();
+  }
+});
+
+test("a refusal after this document certified its own answer leaves that answer alone", async () => {
+  let status = 200;
+  const cache = createFilesClientCache(async () => (status === 200 ? new Response(JSON.stringify(BODY), { status: 200, headers: { ETag: ETAG } }) : new Response("", { status })));
+  await cache.revalidate();
+  status = 403;
   await cache.revalidate().catch(() => undefined);
-  expect(accessDenied).toHaveBeenCalledTimes(1);
+  expect(cache.readScope().files.length).toBe(2);
 });
 
 test("a snapshot is never painted over an answer this document already has", async () => {

@@ -351,7 +351,10 @@ library):
   and on idle time.
 - **Bounds.** `text` at most 24 MB, otherwise not stored. A record older than
   7 days or with a different `version` is dropped on read. A `401`/`403` from
-  `/api/files` clears the store.
+  `/api/files` clears the store, and a restored answer the page has not
+  certified leaves the screen. That covers a refusal the running page sees.
+  A device refused before any script runs (its token rotated, so the page
+  HTML is refused) keeps its record until the 7 days run out.
 - **Restore.** `createFilesClientCache` gets `hydrate(record)`. It parses
   `text` through the existing `parsedFilesData` and calls
   `rememberRepresentation(url, data, etag, raw)`, so the first fetch is

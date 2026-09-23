@@ -1129,7 +1129,7 @@ function ViewerApp() {
       {!isMobile && orchestratorOpen && !kanbanFace && project !== OVERVIEW ? (
         <OrchestratorDock
           project={project}
-          projectName={projectTitle(project, projectDisplayNames[project], cachedProjectName(project)) ?? t("dash.projectUnnamed")}
+          projectName={projectTitle(project, projectDisplayNames[project], cachedProjectName(project)) ?? (loaded ? t("dash.projectUnnamed") : "…")}
           projectCwd={projectCwds[project]}
           files={files}
           onClose={toggleOrchestrator}

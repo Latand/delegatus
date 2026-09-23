@@ -269,8 +269,12 @@ export function AccountRowsSkeleton({ rows = 2, className = "" }: { rows?: numbe
   );
 }
 
+/** The title bar's bars sit on the header, not on a card, so they take the
+    raised surface: on the canvas the sunken one all but disappears. */
+export const TITLE_SKELETON_BAR = "skeleton-pulse rounded-[4px] bg-raised motion-reduce:animate-none";
+
 /** The title bar's placeholder while a project's name is not known yet: a
     96 × 12 px bar where the name will be, never the canonical key. */
 export function TitleSkeleton() {
-  return <span aria-hidden data-title-skeleton="" className={`inline-block h-3 w-24 shrink-0 align-middle ${SKELETON_BAR}`} />;
+  return <span aria-hidden data-title-skeleton="" className={`inline-block h-3 w-24 shrink-0 align-middle ${TITLE_SKELETON_BAR}`} />;
 }

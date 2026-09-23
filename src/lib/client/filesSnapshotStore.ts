@@ -10,9 +10,12 @@
  * otherwise. The payload is unchanged and no request is added.
  *
  * Bounded like the conversation tails of #1821: one record, at most 24 MB of
- * text, dropped when older than seven days or written by another version, and
- * cleared when the server refuses this browser (401/403). Pinned deep-link
- * scopes are never stored. The body carries nothing the page was not already
+ * text, dropped when older than seven days or written by another version.
+ * It is cleared when a running page's `/api/files` read is refused (401/403),
+ * and that page stops painting it. A device refused before the page loads
+ * (its token rotated, so the HTML itself is refused) never runs this code:
+ * its record stays until the seven days run out. Pinned deep-link scopes are
+ * never stored. The body carries nothing the page was not already
  * served (`servedPayloadSecrets.test.ts`).
  */
 

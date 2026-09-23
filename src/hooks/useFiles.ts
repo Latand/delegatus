@@ -613,8 +613,17 @@ export function createFilesClientCache(
       }
       return snapshot;
     }
-    /* A browser the server refuses must not keep painting what it was served. */
-    if (response.status === 401 || response.status === 403) hooks.accessDenied?.();
+    /* A browser the server refuses must not keep painting what an earlier
+       document was served: the stored snapshot is cleared (`accessDenied`),
+       and a restored answer this document never certified leaves the screen. */
+    if (response.status === 401 || response.status === 403) {
+      hooks.accessDenied?.();
+      if (snapshot.cached) {
+        snapshot = { ...EMPTY };
+        representations.clear();
+        publish(undefined, "urgent");
+      }
+    }
     if (!response.ok) throw new Error(`files request failed: ${response.status}`);
     const etag = response.headers.get("ETag");
     const text = await response.text();

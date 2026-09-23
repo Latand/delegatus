@@ -473,7 +473,10 @@ function ProjectDashboardView({
     providedProjectName ?? projectCatalogEntries.find((entry) => entry.project === project)?.displayName,
     cachedProjectName(project),
   );
-  const projectName = knownProjectName ?? t("dash.projectUnnamed");
+  /* The surfaces that take the name as a string (the focus view, sheets, the
+     seat) say "Unnamed project" only once the catalog is certified; before
+     that, a neutral ellipsis rather than a verdict. */
+  const projectName = knownProjectName ?? (loaded ? t("dash.projectUnnamed") : "…");
   const projectTitleNode = knownProjectName ?? (loaded ? projectName : <TitleSkeleton />);
   /* Durable flow/pipeline records freeze member transcript paths at launch; an
      account migration rotates a conversation onto a new path and every

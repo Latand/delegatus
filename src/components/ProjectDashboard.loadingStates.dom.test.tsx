@@ -180,6 +180,11 @@ for (const phone of [true, false]) {
     mobile = phone;
     const { host } = mount({ loaded: false });
     expect(title(host).querySelector("[data-title-skeleton]")).not.toBeNull();
+    /* The bar sits on the header, so it takes the raised surface to show. */
+    expect(title(host).querySelector("[data-title-skeleton]")!.className).toContain("bg-raised");
+    /* No surface passes a verdict before the answer: "Unnamed project" waits
+       for a certified catalog. */
+    expect(host.textContent).not.toContain(en["dash.projectUnnamed"]);
     expect(header(host).textContent ?? "").not.toMatch(RAW_KEY);
     expect(host.textContent ?? "").not.toMatch(RAW_KEY);
   });

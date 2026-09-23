@@ -10,7 +10,7 @@ import { kanbanColumnTracks, type KanbanLayoutMode } from "./kanban/kanbanLayout
 import { SEAT_HEIGHT_VERSION, SEAT_SHORT_WINDOW, SEAT_STORAGE_KEY } from "./kanban/kanbanSeatStore";
 import { OVERVIEW } from "./projectModel";
 import { RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
-import { SKELETON_BAR, SkeletonRow } from "./skeletons";
+import { SKELETON_BAR, SkeletonRow, TITLE_SKELETON_BAR } from "./skeletons";
 
 /*
  * The first frame of the app (#2071, docs/design/skeletons-and-transitions.md
@@ -124,7 +124,7 @@ function PhoneShell() {
         <div className="flex h-11 min-w-0 flex-1 items-center gap-1 rounded-[8px] px-1.5">
           <span data-boot-project-only="" className="flex min-w-0 items-center">
             <span data-boot-title="" className="min-w-0 truncate text-title font-semibold leading-tight text-primary" />
-            <span data-boot-title-bar="" aria-hidden className={`h-3 w-24 ${SKELETON_BAR}`} />
+            <span data-boot-title-bar="" aria-hidden className={`h-3 w-24 ${TITLE_SKELETON_BAR}`} />
           </span>
           <span data-boot-overview-only="" className="min-w-0 truncate text-title font-semibold leading-tight text-primary"><Label k="rail.overview" /></span>
           <ChevronDown className="h-4 w-4 shrink-0 text-muted" aria-hidden />
@@ -178,7 +178,7 @@ function DeskShell() {
       <main className="flex min-w-0 flex-1 flex-col">
         <div data-boot-project-only="" className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-4">
           <h1 data-boot-title="" className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" />
-          <span data-boot-title-bar="" aria-hidden className={`h-3 w-24 ${SKELETON_BAR}`} />
+          <span data-boot-title-bar="" aria-hidden className={`h-3 w-24 ${TITLE_SKELETON_BAR}`} />
         </div>
         <div data-boot-overview-only="" className="flex h-10 shrink-0 items-center gap-2.5 border-b border-border bg-card px-4">
           <h1 className="min-w-0 shrink truncate text-[13.5px] font-bold"><Label k="rail.overview" /></h1>
