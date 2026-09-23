@@ -23,6 +23,7 @@ import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
+import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
 import { cleanTitle } from "@/components/utils";
@@ -116,6 +117,9 @@ export interface KanbanBoardProps {
   /** Board clock, epoch seconds. */
   now: number;
   loaded: boolean;
+  /** The files drawn are a restored answer being confirmed (#2071): the bar
+      says «updating…» beside the count. */
+  updating?: boolean;
   catalogFailures: number;
   selection: ReadonlySet<string>;
   /** The Board / Conversations switch, given whether the bar is wide enough for labels. */
@@ -282,8 +286,14 @@ function useBands(props: KanbanBoardProps) {
 }
 
 export function KanbanBoard(props: KanbanBoardProps) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
+  /* The bar's word on the server (#2071 D7): a reconnect in progress is a
+     quiet note, a long outage the red alert it always was. */
+  const reach = useServerReach();
+  const reachStatus = reach.kind === "reconnecting"
+    ? <span className="bar-note" data-bar-reach="reconnecting">{reachLineText(t, locale, reach)}</span>
+    : catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : null;
   /* `+ Task` (K9a): a task this board created is drawn at once, on the tasks it was created against. The next
      tasks payload is the authority: it carries the task, or the task is gone (deleted, moved to another project)
      and so is its card. */
@@ -2238,7 +2248,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
             <span aria-hidden="true">·</span>
             <span className="num">{t("kanban.overviewTasks", { count: model.totals.onBoard })}</span>
           </span>
-          {catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : null}
+          {reachStatus}
           <span className="grow" />
           <div className="bar-tools">
             {searchField()}
@@ -2257,10 +2267,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
         <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined}>
           {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead(barWide)}</div> : null}
           <span className="summary" data-bar-group="status">
-            {catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : (
+            {reachStatus ?? (
               <>
                 <span className="dot" aria-hidden="true" />
                 <span className="num" data-bar-working="">{t("kanban.summaryWorking", { count: model.totals.working })}</span>
+                {props.updating ? <span className="bar-note" data-bar-updating="">{t("dash.updating")}</span> : null}
               </>
             )}
           </span>

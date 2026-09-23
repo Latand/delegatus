@@ -11,6 +11,7 @@ import { WORKFLOWS_CHANGED_EVENT } from "@/components/workflows/workflowModel";
 import { applyFilesDelta, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER, type FilesDelta } from "@/lib/filesDelta";
 import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
+import { FILES_SNAPSHOT_MAX_BYTES, FILES_SNAPSHOT_VERSION, indexedDbFilesSnapshotStore, type FilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -71,6 +72,17 @@ export interface FilesData {
       failed fetch, and the UI must say so instead of presenting the affirmative
       "nothing is running right now" / "No logs yet" idle copy. */
   catalogFailures: number;
+  /** The rows above are the last answer an earlier document certified,
+      restored from this browser's snapshot (#2071) and not yet confirmed by
+      the network in this one. `loaded` stays false meanwhile, so everything
+      that ACTS on data keeps waiting; only rendering reads `loaded || cached`. */
+  cached?: boolean;
+  /** While `catalogFailures` is above zero: when the first failure of this
+      streak happened, and when the last good answer landed (epoch ms, null
+      if none in this document). They date the reconnecting state (#2071);
+      both are absent while the catalog answers. */
+  failingSince?: number;
+  lastSuccessAt?: number | null;
 }
 
 const HEALTHY_SYSTEM = { tmux: { status: "healthy" as const } };
@@ -132,6 +144,13 @@ export interface FilesClientCache {
       stale or reconnecting feed can only delay the confirmation, never orphan
       the launch. */
   applySpawnedConversation(file: FileEntry): void;
+  /** Paint an answer an earlier document certified (#2071): published as
+      `cached` and remembered under its ETag, so the first request of this
+      document is conditional. Ignored once anything has loaded. */
+  hydrate(record: { etag: string; text: string }): boolean;
+  /** The global scope's representation, when the network certified it in
+      this document: what the snapshot store keeps. */
+  certifiedGlobal(): { etag: string; raw: Record<string, unknown> } | null;
   /** The tab hid: abort completion retries in flight and park every retry
       chain until {@link resumeCompletionRetries}. Idempotent. */
   pauseCompletionRetries(): void;
@@ -233,7 +252,10 @@ function restoreNotModified(current: FilesData, representation: FilesData, reque
 }
 
 /** Session-wide stale-while-revalidate cache over the global scan snapshot. */
-export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache {
+export function createFilesClientCache(
+  fetcher: FilesFetcher,
+  hooks: { accessDenied?: () => void } = {},
+): FilesClientCache {
   let snapshot = EMPTY;
   let disposed = false;
   const representations = new Map<string, Representation>();
@@ -271,9 +293,21 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
      snapshot rather than inside it: a failure produces no new representation,
      so it has to be composed onto whatever each scope last certified. */
   let catalogFailures = 0;
+  let failingSince: number | undefined;
+  /* Kept silently on every success, published only once failures start, so a
+     healthy poll never re-renders anything for it. */
+  let lastSuccessAt: number | null = null;
 
-  const withCatalogFailures = (data: FilesData): FilesData =>
-    data.catalogFailures === catalogFailures ? data : { ...data, catalogFailures };
+  const withCatalogFailures = (data: FilesData): FilesData => {
+    if (catalogFailures === 0) {
+      return data.catalogFailures === 0 && data.failingSince === undefined
+        ? data
+        : { ...data, catalogFailures: 0, failingSince: undefined, lastSuccessAt: undefined };
+    }
+    return data.catalogFailures === catalogFailures && data.failingSince === failingSince
+      ? data
+      : { ...data, catalogFailures, failingSince, lastSuccessAt };
+  };
 
   const pipelinesWithOverlays = (pipelines: readonly Pipeline[]): Pipeline[] => {
     if (!pipelineOverlays.size) return [...pipelines];
@@ -352,6 +386,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
        snapshot minus the rows only ITS pin admitted: a pin-only row belongs to
        the request that asked for it and must never leak into another scope. */
     const base = representations.get(filesApiUrl())?.data ?? snapshot;
+    /* A restored snapshot stands in too, still flagged `cached`. */
     const pinOnly = new Set(base.pinOverlayPaths);
     const files = pinOnly.size ? base.files.filter((file) => !pinOnly.has(file.path)) : base.files;
     standIn = { source: snapshot, requestScope, data: { ...base, files, pinOverlayPaths: [], requestScope, scopeCertified: false } };
@@ -362,7 +397,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     const representation = representations.get(requestScope)?.data
       ?? (snapshot.requestScope === requestScope
         ? snapshot
-        : snapshot.loaded ? standInFor(requestScope) : { ...EMPTY, requestScope });
+        : snapshot.loaded || snapshot.cached ? standInFor(requestScope) : { ...EMPTY, requestScope });
     return withCatalogFailures(withPipelineOverlays(withSpawnedOverlays(representation)));
   };
 
@@ -387,8 +422,11 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
      that lets a consumer tell a failed fetch from an idle installation. */
   const noteCatalogOutcome = (ok: boolean) => {
     if (disposed) return;
+    if (ok) lastSuccessAt = Date.now();
     const next = ok ? 0 : catalogFailures + 1;
     if (next === catalogFailures) return;
+    if (catalogFailures === 0) failingSince = Date.now();
+    if (next === 0) failingSince = undefined;
     catalogFailures = next;
     publish(undefined, "urgent");
   };
@@ -543,6 +581,11 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
       if (snapshot !== representation.data || snapshot.requestScope !== url) {
         snapshot = restoreNotModified(snapshot, representation.data, url);
       }
+      /* The answer a restored snapshot carried is still the server's: the
+         same rows, now certified, identities kept (#2071). */
+      if (!snapshot.loaded || snapshot.cached) {
+        snapshot = { ...snapshot, loaded: true, cached: false, scopeCertified: true };
+      }
       appliedGeneration = generation;
       rememberRepresentation(url, snapshot, representation.etag, representation.raw);
       settleServerPipelines(logicalGeneration ?? generation, !generationIncomplete);
@@ -565,6 +608,8 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
       }
       return snapshot;
     }
+    /* A browser the server refuses must not keep painting what it was served. */
+    if (response.status === 401 || response.status === 403) hooks.accessDenied?.();
     if (!response.ok) throw new Error(`files request failed: ${response.status}`);
     const etag = response.headers.get("ETag");
     const text = await response.text();
@@ -790,6 +835,31 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     publish(undefined, "urgent");
   };
 
+  const hydrate = (record: { etag: string; text: string }): boolean => {
+    const url = filesApiUrl();
+    if (disposed || snapshot.loaded || snapshot.cached || representations.has(url) || !record.etag) return false;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(record.text);
+    } catch {
+      return false;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    const data: FilesData = { ...parsedFilesData(parsed as FilesResponse, url), loaded: false, cached: true, scopeCertified: false };
+    snapshot = data;
+    serverPipelines = data.pipelines;
+    serverTasks = data.tasks;
+    rememberRepresentation(url, data, record.etag, rawSharingRows(parsed as RawFilesResponse, data));
+    publish(undefined, "urgent");
+    return true;
+  };
+
+  const certifiedGlobal = () => {
+    const representation = representations.get(filesApiUrl());
+    if (!representation?.data.loaded || representation.data.cached || !representation.etag || !representation.raw) return null;
+    return { etag: representation.etag, raw: representation.raw };
+  };
+
   const subscribe = (
     listener: (data: FilesData, priority?: "background" | "urgent") => void,
     pinnedPath?: string | null,
@@ -811,15 +881,91 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     listeners.clear();
   };
 
-  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, pauseCompletionRetries, resumeCompletionRetries, dispose };
+  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
-let filesClientCache = createFilesClientCache(defaultFilesFetcher);
 
-export function resetFilesClientCacheForTests(): void {
+/* The cached-first board (#2071, D4). The browser's snapshot store is read the
+   moment this module loads, before React mounts; the first request waits for
+   that read (bounded), so it can ask conditionally. */
+const RESTORE_WAIT_MS = 1_500;
+let snapshotStore: FilesSnapshotStore | null = typeof window === "undefined" ? null : indexedDbFilesSnapshotStore();
+let persistedEtag: string | null = null;
+let persistScheduled = false;
+let firstPersistDone = false;
+
+function newFilesClientCache(): FilesClientCache {
+  return createFilesClientCache(defaultFilesFetcher, {
+    accessDenied: () => {
+      persistedEtag = null;
+      void snapshotStore?.clear();
+    },
+  });
+}
+
+function restoreFilesSnapshot(cache: FilesClientCache, store: FilesSnapshotStore | null): Promise<void> {
+  if (!store) return Promise.resolve();
+  const read = store.read().then((record) => {
+    if (!record) return;
+    if (cache.hydrate(record)) persistedEtag = record.etag;
+  }, () => undefined);
+  const bound = new Promise<void>((resolve) => setTimeout(resolve, RESTORE_WAIT_MS));
+  return Promise.race([read, bound]);
+}
+
+let filesClientCache = newFilesClientCache();
+let snapshotRestore = restoreFilesSnapshot(filesClientCache, snapshotStore);
+
+/** Write what this document certified, when it differs from what is stored. */
+function persistFilesSnapshot(): void {
+  const store = snapshotStore;
+  const current = filesClientCache.certifiedGlobal();
+  if (!store || !current || current.etag === persistedEtag) return;
+  let text: string;
+  try {
+    text = JSON.stringify(current.raw);
+  } catch {
+    return;
+  }
+  if (text.length > FILES_SNAPSHOT_MAX_BYTES) return;
+  persistedEtag = current.etag;
+  void store.write({ version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: current.etag, text });
+}
+
+/** After the first certified load of a document, on idle time: once. Later
+    answers are written when the tab hides (below), not on every revision. */
+function persistAfterFirstLoad(): void {
+  if (firstPersistDone || persistScheduled || !snapshotStore) return;
+  persistScheduled = true;
+  const run = () => {
+    persistScheduled = false;
+    firstPersistDone = true;
+    persistFilesSnapshot();
+  };
+  if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 5_000 });
+  else setTimeout(run, 1_000);
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") persistFilesSnapshot();
+  });
+}
+
+export function resetFilesClientCacheForTests(store: FilesSnapshotStore | null = null): void {
   filesClientCache.dispose();
-  filesClientCache = createFilesClientCache(defaultFilesFetcher);
+  snapshotStore = store;
+  persistedEtag = null;
+  persistScheduled = false;
+  firstPersistDone = false;
+  filesClientCache = newFilesClientCache();
+  snapshotRestore = restoreFilesSnapshot(filesClientCache, store);
+}
+
+/** Test seam: write the certified answer now instead of on idle or hide. */
+export function persistFilesSnapshotForTests(): void {
+  persistFilesSnapshot();
 }
 
 /**
@@ -963,7 +1109,12 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
         return false;
       }
       try {
+        /* The first request of a document asks conditionally when a snapshot
+           was restored; after that this has long settled. */
+        await snapshotRestore;
+        if (!alive) return true;
         await cache.revalidate(pinnedPath, revision, inflight.signal);
+        persistAfterFirstLoad();
         return true;
       } catch {
         /* keep previous list; a read the hiding tab cancelled is owed */

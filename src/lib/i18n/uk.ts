@@ -2587,8 +2587,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.banner.offlineTitle": "Офлайн · перепідключення",
   "mobile2.banner.offlineBody": "Показано останній отриманий стан",
   "mobile2.banner.offlineBodyAt": "Показано останній отриманий стан · {time}",
-  "mobile2.banner.degradedTitle": "Рантайм деградований · опитування",
-  "mobile2.banner.degradedBody": "Оновлення надходять кожні 10 с",
   "mobile2.sheet.close": "Закрити",
   "mobile2.receipt.respawn": "Перезапустити",
   "mobile2.receipt.reopen": "Відкрити знову",

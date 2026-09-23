@@ -177,9 +177,14 @@ test("the badge is hidden at zero, and a screen without search keeps two targets
   expect(bar.querySelectorAll("button").length).toBe(3);
 });
 
-test("the banner slot: offline outranks degraded outranks an arrival; the board never shows an arrival; nothing while the runtime UI is off", () => {
+test("the banner slot: offline outranks an arrival; a reconnect is no banner; the board never shows an arrival; nothing while the runtime UI is off", () => {
   expect(bannerKind(true, "offline", true, "chat")).toBe("offline");
-  expect(bannerKind(true, "degraded", true, "chat")).toBe("degraded");
+  /* #2071: a stream still reconnecting is the quiet line in the bar's title
+     cell, never a banner that pushes the screen down. */
+  expect(bannerKind(true, "degraded", true, "chat")).toBe("arrival");
+  expect(bannerKind(true, "degraded", false, "chat")).toBeNull();
+  /* A minute of failed reads is offline even with the stream flag off. */
+  expect(bannerKind(false, "live", false, "board", true)).toBe("offline");
   expect(bannerKind(true, "live", true, "chat")).toBe("arrival");
   expect(bannerKind(true, "live", true, "accounts")).toBe("arrival");
   expect(bannerKind(true, "reconnecting", false, "chat")).toBeNull();
@@ -188,7 +193,7 @@ test("the banner slot: offline outranks degraded outranks an arrival; the board 
      drops the arrival kind and keeps the runtime kinds. */
   expect(bannerKind(true, "live", true, "board")).toBeNull();
   expect(bannerKind(false, "live", true, "board")).toBeNull();
-  expect(bannerKind(true, "degraded", true, "board")).toBe("degraded");
+  expect(bannerKind(true, "degraded", true, "board")).toBeNull();
   expect(bannerKind(true, "offline", true, "board")).toBe("offline");
 
   const { root, nav, b, rerender } = mount(shellHost({ arrival: <div data-testid="arrival">Needs you · plan approval</div> }));
@@ -207,17 +212,15 @@ test("the banner slot: offline outranks degraded outranks an arrival; the board 
   expect(arrival).not.toBeNull();
   expect(q(root, '[data-testid="arrival"]')).not.toBeNull();
   expect(q(root, "[data-mobile2-bar]")!.compareDocumentPosition(arrival as never) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  /* The runtime states outrank it, and they show on every screen, the board included. */
+  /* A degraded stream is a reconnect in progress (#2071): no banner, so the
+     arrival keeps the slot and the board keeps nothing. */
   runtime = { ...runtime, enabled: true, connection: "degraded" };
   rerender();
-  const degraded = q(root, "[data-mobile2-banner]")!;
-  expect(degraded.getAttribute("data-mobile2-banner-kind")).toBe("degraded");
-  expect(degraded.getAttribute("data-connection")).toBe("degraded");
-  expect(degraded.textContent).toContain(translate("en", "mobile2.banner.degradedTitle"));
-  expect(q(root, '[data-testid="arrival"]')).toBeNull();
+  expect(q(root, "[data-mobile2-banner]")!.getAttribute("data-mobile2-banner-kind")).toBe("arrival");
   flushSync(() => b.back());
   expect(q(root, '[data-mobile2-screen="board"]')).not.toBeNull();
-  expect(q(root, "[data-mobile2-banner]")!.getAttribute("data-mobile2-banner-kind")).toBe("degraded");
+  expect(q(root, "[data-mobile2-banner]")).toBeNull();
+  /* Offline outranks it, on every screen, the board included. */
   runtime = { ...runtime, connection: "offline", lastEventAt: Date.UTC(2100, 0, 2, 14, 2) };
   rerender();
   const offline = q(root, "[data-mobile2-banner]")!;

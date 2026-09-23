@@ -11,6 +11,7 @@ import { useArchivedProjects } from "@/hooks/useArchivedProjects";
 import { useProjectCuration } from "@/hooks/useProjectCuration";
 import { useEffectiveFlows } from "@/components/flows/flowModel";
 import { useFiles } from "@/hooks/useFiles";
+import { ServerReachProvider, useDerivedServerReach } from "@/hooks/serverReach";
 import { publishConversationAvailability } from "@/lib/mcp/availability";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -166,7 +167,10 @@ function ViewerApp() {
     return initial.filePath || initial.conversationId ? initial : null;
   });
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
-  const { files: allFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, loaded, scopeCertified, catalogFailures } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  const { files: allFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  /* Whether the server answers (#2071 D7): one reading for every surface, from
+     the files streak above and the runtime stream; no request of its own. */
+  const reach = useDerivedServerReach({ catalogFailures, failingSince, lastSuccessAt });
   /* Crown/create curation (server-durable): the optimistic client seam plus
      the overlay entries for projects created before the next catalog poll. */
   const { crownedProjects, toggleCrown, createProject, createdCatalog } = useProjectCuration(serverCrownedProjects, polledProjectCatalog);
@@ -1175,6 +1179,7 @@ function ViewerApp() {
             tasks={tasks}
             flows={flows}
             loaded={loaded}
+            cached={cached}
             now={clock}
             catalogFailures={catalogFailures}
             onSelectProject={selectProject}
@@ -1195,6 +1200,7 @@ function ViewerApp() {
             projectCwd={projectCwds[project]}
             project={project}
             loaded={loaded}
+            cached={cached}
             catalogFailures={catalogFailures}
             openNonce={openNonce}
             focusRequest={focusRequest?.catalog && catalogPin?.path !== focusRequest.path ? null : focusRequest}
@@ -1298,5 +1304,9 @@ function ViewerApp() {
      unmounts every time the «⋯» menu closes — reads a controller that outlives
      the menu. `shell` is built above, so a status change re-renders this provider
      and its context consumers only, never the board. */
-  return <KeepAwakeProvider>{shell}</KeepAwakeProvider>;
+  return (
+    <KeepAwakeProvider>
+      <ServerReachProvider value={reach}>{shell}</ServerReachProvider>
+    </KeepAwakeProvider>
+  );
 }

@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { projectDisplayName } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
 import type { Flow } from "@/lib/flows/types";
@@ -44,6 +45,9 @@ interface Props {
   flows?: Flow[];
   /** Whether the scan has settled; the board holds a skeleton until it has. */
   loaded?: boolean;
+  /** The rows are a restored earlier answer, not yet confirmed (#2071): the
+      board draws them, and the first run still waits for `loaded`. */
+  cached?: boolean;
   /** Attention clock owned by Viewer — keeps summary badges in step with the queue. */
   now: number;
   /** Consecutive `/api/files` failures (issue #696). Above zero the board is
@@ -73,11 +77,16 @@ const NO_FLOWS: Flow[] = [];
  * that used to live here was a second, smaller board beside the real one, and
  * the rail already lists the projects it listed.
  */
-export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, tasks = NO_TASKS, flows = NO_FLOWS, loaded = true, now, catalogFailures = 0, onSelectProject, onOpenSearch, mobileShell = null }: Props) {
-  const { t } = useLocale();
+export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, tasks = NO_TASKS, flows = NO_FLOWS, loaded = true, cached = false, now, catalogFailures = 0, onSelectProject, onOpenSearch, mobileShell = null }: Props) {
+  const { t, locale } = useLocale();
   const isMobile = useIsMobile();
   const mobileNav = useMobileNavStore();
   const mobileNavState = useMobileNav();
+  /* A reconnect in progress with a board on screen is said quietly (#2071
+     D7); the failure notice and the red line are for a long outage, or for
+     an empty screen that has nothing else to say. */
+  const reach = useServerReach();
+  const reconnecting = reach.kind === "reconnecting";
   const degraded = catalogFailures > 0;
   const allSummaries = useMemo(
     () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames),
@@ -110,7 +119,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           not render the same screen. While the catalog is unreachable the
           board states the failure and offers the recovery action; the
           first-run panel is held back until a fetch actually succeeds. */}
-      {degraded ? (
+      {degraded && !(reconnecting && projects.length) ? (
         <CatalogFailureNotice failures={catalogFailures} className={`shrink-0 px-3 ${projects.length ? "pt-2" : "mt-[12vh]"}`} />
       ) : null}
       {projects.length ? (
@@ -121,7 +130,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           tasks={tasks}
           flows={flows}
           pipelines={pipelines}
-          loaded={loaded}
+          loaded={loaded || cached}
           catalogFailures={catalogFailures}
           onSelectProject={onSelectProject}
           onOpenConversations={onOpenSearch ?? noop}
@@ -233,16 +242,21 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
             header actions and pushed the board past the viewport. Above
             360px it truncates rather than growing the row. */}
         <span
-          className={`hidden min-w-0 shrink truncate text-[11.5px] min-[360px]:block ${degraded ? "font-semibold text-danger" : "text-muted"}`}
+          className={`hidden min-w-0 shrink truncate text-[11.5px] min-[360px]:block ${degraded && !reconnecting ? "font-semibold text-danger" : "text-muted"}`}
           data-degraded={degraded ? "true" : undefined}
+          data-reach={reach.kind}
         >
           {/* Issue #696: a failed catalog fetch never borrows the affirmative
               "nothing is running right now" copy. */}
-          {degraded
+          {reconnecting
+            ? reachLineText(t, locale, reach)
+            : degraded
             ? t("catalog.unreachable")
-            : !loaded && !projects.length
+            : !loaded && !cached
               ? t("common.loadingCap")
-              : totalLive
+              : !loaded
+                ? t("dash.updating")
+                : totalLive
               ? t("overview.branchesLiveIn", { count: totalLive, projects: t("overview.projects", { count: liveProjects }) })
               : t("common.nothingRunning")}
           {!degraded && archivedCount ? ` ${t("overview.archived", { count: archivedCount })}` : ""}

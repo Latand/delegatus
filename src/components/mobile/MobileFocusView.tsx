@@ -25,6 +25,7 @@ import { DraftAgentPane } from "@/components/DraftAgentPane";
 import { isWorkflowDraftId } from "@/components/workflows/workflowModel";
 import { WorkflowDraftPane } from "@/components/workflows/WorkflowDraftPane";
 import { RoundDeck } from "@/components/flows/RoundDeck";
+import { useServerReach } from "@/hooks/serverReach";
 import { BoardRowsSkeleton } from "../skeletons";
 import { MIN_TRANSCRIPT_SHARE } from "./chatBudget";
 import { ChatEngineMark } from "./chatEngineMark";
@@ -48,7 +49,7 @@ import type { SubagentTrayApi } from "@/components/scheme/SubagentTrayView";
 
 import { WakeupChip, wakeupChipKey } from "@/components/WakeupChip";
 
-import { MobileBarTitle, MobileShell, useMobileShellChrome, type MobileShellHost, type SheetRenderer } from "./MobileShell";
+import { MobileBarTitle, MobileShell, ReachLine, useMobileShellChrome, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { RoleFrameMark } from "../RoleFrameMark";
 import { MobileConversationMenu } from "./MobileConversationMenu";
 import { MobileOrchestratorSheet } from "./MobileOrchestratorSheet";
@@ -844,6 +845,10 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
 export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null }) {
   const { t } = useLocale();
   const bits = chatStateBits(t, file, { offline });
+  /* While the server is being reconnected (#2071 D7) the quiet reconnecting
+     line takes the meta line's place: the state it would show is the state
+     from before the outage. */
+  const reach = useServerReach();
   return (
     <span
       data-mobile2-chat-title
@@ -857,6 +862,7 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
         </span>
         <ChatAccountTag file={file} />
       </span>
+      {reach.kind === "reconnecting" ? <ReachLine reach={reach} /> : (
       <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
         <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
@@ -883,6 +889,7 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
           <WakeupChip key={wakeupChipKey(file.pendingWakeup)} wakeup={file.pendingWakeup} interactive={false} className="ml-0.5" />
         ) : null}
       </span>
+      )}
     </span>
   );
 }
