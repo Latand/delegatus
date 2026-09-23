@@ -1885,19 +1885,25 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
     try {
       for (const scheme of ["light", "dark"] as const) {
         await production(scheme, `retry graph ${scheme}`, async (page) => {
-          /* Binding correction 4: every card starts on the compact summary. */
+          /* Binding correction 4: every card starts on the summary. The lane
+             row (#2072) draws the summary as its chain of pills with no graph
+             slot, and its toggle puts the graph in the chain's place. */
           await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.waitForTimeout(300);
-          const fresh = await page.evaluate((selector) => ({
-            compact: document.querySelector(`${selector} .pblock`)?.classList.contains("compact") ?? null,
-            nodes: document.querySelectorAll(`${selector} .pnode`).length,
-            pressed: document.querySelector(`${selector} [data-graph-toggle]`)?.getAttribute("aria-pressed") ?? null,
-            chips: document.querySelectorAll(`${selector} .pb-pills .pb-pill`).length,
-          }), card("t-search"));
+          const view = (selector: string) => page.evaluate((scope) => ({
+            chain: document.querySelectorAll(`${scope} .pblock .pb-chain`).length,
+            graphs: document.querySelectorAll(`${scope} .pblock .pb-graph`).length,
+            nodes: document.querySelectorAll(`${scope} .pnode`).length,
+            pressed: document.querySelector(`${scope} [data-graph-toggle]`)?.getAttribute("aria-pressed") ?? null,
+            chips: document.querySelectorAll(`${scope} .pb-chain .pb-pills .pb-pill`).length,
+          }), selector);
+          const fresh = await view(card("t-search"));
           await shot(page, "production", "summary-default", scheme);
-          if (!fresh.compact || fresh.nodes !== 0 || fresh.pressed !== "false" || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
+          if (fresh.chain !== 1 || fresh.graphs !== 0 || fresh.nodes !== 0 || fresh.pressed !== "false" || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
           frames[`summary-default-${scheme}`] = { production: fresh };
           await openGraph(page, "t-search");
+          const opened = await view(card("t-search"));
+          if (opened.chain !== 0 || opened.graphs !== 1 || opened.pressed !== "true") failures.push(`retry card graph ${scheme}: the graph did not take the summary's place ${JSON.stringify(opened)}`);
           const graph = await measureGraph(page, card("t-search"));
           await shot(page, "production", "graph-branch-retry", scheme);
           frames[`graph-branch-retry-${scheme}`] = { production: graph };
@@ -1916,6 +1922,11 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           if (!fail?.dashed || !/\bback\b/.test(fail.classes) || !/\btaken\b/.test(fail.classes)) failures.push(`retry graph ${scheme}: fail edge ${JSON.stringify(fail)}`);
           if (graph.edges.filter((edge) => !edge.dashed).length !== 3) failures.push(`retry graph ${scheme}: pass edges ${JSON.stringify(graph.edges)}`);
           if (!graph.labels.includes("fail · retry 1 of 2")) failures.push(`retry graph ${scheme}: labels ${JSON.stringify(graph.labels)}`);
+          /* The same toggle brings the summary back, all four stages with it. */
+          await page.click(`${card("t-search")} .pblock [data-graph-toggle]`);
+          await page.waitForSelector(`${card("t-search")} .pblock .pb-chain`, { timeout: 5_000 });
+          const back = await view(card("t-search"));
+          if (back.chain !== 1 || back.graphs !== 0 || back.nodes !== 0 || back.pressed !== "false" || back.chips !== 4) failures.push(`retry card summary again ${scheme}: ${JSON.stringify(back)}`);
         });
         await prototype("scrollto=t-search", scheme, `prototype retry graph ${scheme}`, async (page) => {
           await page.locator(`${protoCard("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
@@ -6917,6 +6928,14 @@ describe("PR and issue chips on pipelines and task cards", () => {
    committed), with the variant renders' file names; the readings go to
    `evidence/pipeline-block/geometry.json`. */
 describe("#2072 one pipeline block, desktop and phone", () => {
+  /* Two lanes of the pipeline-block scenario stand on a long-named stage. The
+     eight-stage one's 44 characters leave no room for "✓3" and "+4" beside it
+     in a 390 px card, so the card settles on the stage alone; the two-stage
+     one's 86 characters do not fit even alone, so the name wraps in its pill. */
+  const LONG_STAGES = {
+    "verify-backward-compatibility-and-migrations": { name: "Verify backward compatibility and migrations", wrap: false },
+    "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": { name: "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge", wrap: true },
+  } as const;
   const measureBlocks = `(() => {
     const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
     const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
@@ -6958,12 +6977,43 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       .map(el => ({ el, rect: intersect(box(el), clipFrom(el.parentElement)), text: (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 48) }))
       .filter(entry => area(entry.rect) > 0.5);
     const nested = (a, b) => a.contains(b) || b.contains(a);
+    /* The ink above is what paints, so it cannot see a text that does not
+       paint at all. A card's chain (phone-kanban §3.13) cuts no name or count:
+       each text in a card-density block is seen where it is laid out — its
+       natural rects, clipped by nothing up to its card — and its own box does
+       not hide a sideways overflow behind an ellipsis. */
+    const clippedOf = (block, card) => {
+      const out = [];
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const el = node.parentElement;
+        if (!el || getComputedStyle(el).visibility === "hidden") continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rects = [...range.getClientRects()].filter(r => r.width * r.height > 0.5).map(r => ({ top: r.top, left: r.left, right: r.right, bottom: r.bottom }));
+        if (!rects.length) continue;
+        const natural = rects.reduce(union);
+        let clip = { top: -1e9, left: -1e9, right: 1e9, bottom: 1e9 };
+        for (let up = el; up; up = up.parentElement) {
+          const style = getComputedStyle(up);
+          if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, box(up));
+          if (up === card) break;
+        }
+        const visible = intersect(natural, clip);
+        const lost = Math.max(visible.left - natural.left, natural.right - visible.right, visible.top - natural.top, natural.bottom - visible.bottom);
+        const own = getComputedStyle(el);
+        const ellipsis = own.overflowX !== "visible" && el.scrollWidth > el.clientWidth + 1;
+        if (lost > 1 || ellipsis) out.push({ text: node.nodeValue.trim().slice(0, 48), natural: Math.round(natural.right - natural.left), visible: Math.round(Math.max(0, visible.right - visible.left)), lost: Math.round(lost), ellipsis });
+      }
+      return out;
+    };
     /* A desktop lane row is its own scope; a phone card is the scope of the
        block inside it, with its title and badge. */
     const scopes = [...new Set([...document.querySelectorAll("[data-kanban-board] .card [data-pipeline], [data-mobile2-pipeline-row]")]
       .filter(el => el.getClientRects().length)
       .map(el => el.closest("[data-mobile2-pipeline-row]") || el))];
-    const overlaps = [], escapes = [];
+    const overlaps = [], escapes = [], clipped = [], unsettled = [];
     let texts = 0, controls = 0;
     for (const scope of scopes) {
       scope.scrollIntoView({ block: "center" });
@@ -6973,6 +7023,16 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       const hits = controlsOf(scope);
       texts += ink.length; controls += hits.length;
       const where = scope.getAttribute("data-pipeline") || scope.getAttribute("data-mobile2-pipeline-row");
+      for (const block of scope.querySelectorAll('.pblock[data-density="card"]')) {
+        for (const entry of clippedOf(block, card)) clipped.push({ where, ...entry });
+        /* Every fold the card settled on fits its box. */
+        for (const fold of block.querySelectorAll(".pb-pills.fold")) {
+          if (fold.scrollWidth > fold.clientWidth + 1) {
+            const line = fold.closest(".pb-line");
+            unsettled.push({ where, scrollWidth: fold.scrollWidth, clientWidth: fold.clientWidth, level: line?.getAttribute("data-fold-level"), alone: line?.getAttribute("data-alone"), wrap: line?.getAttribute("data-wrap") });
+          }
+        }
+      }
       for (let i = 0; i < ink.length; i++) {
         const a = ink[i];
         if (a.rect.left < frame.left - 1 || a.rect.right > frame.right + 1 || a.rect.top < frame.top - 1 || a.rect.bottom > frame.bottom + 1) escapes.push({ where, text: a.text });
@@ -6990,12 +7050,31 @@ describe("#2072 one pipeline block, desktop and phone", () => {
     }
     const lanes = document.querySelectorAll('.pblock[data-density="task"]').length;
     const cards = document.querySelectorAll('[data-mobile2-pipeline-row] .pblock[data-density="card"]').length;
-    return { scopes: scopes.length, lanes, cards, texts, controls, overlaps, escapes, scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth };
+    /* Each long-named current stage, as its card drew it. */
+    const longStages = {};
+    for (const id of ${JSON.stringify(Object.keys(LONG_STAGES))}) {
+      const pill = document.querySelector('[data-mobile2-pipeline-row] .pblock[data-density="card"] .pb-pill[data-stage="' + id + '"]');
+      const line = pill && pill.closest(".pb-line");
+      longStages[id] = pill && line ? {
+        text: pill.querySelector(".pb-name")?.textContent ?? null,
+        level: line.getAttribute("data-fold-level"),
+        alone: line.getAttribute("data-alone") === "1",
+        wrap: line.getAttribute("data-wrap") === "1",
+        items: [...line.querySelectorAll(".pb-pills.fold .pb-pill")].map(item => item.textContent.trim()),
+        height: Math.round(pill.getBoundingClientRect().height),
+      } : null;
+    }
+    return { scopes: scopes.length, lanes, cards, texts, controls, overlaps, escapes, clipped, unsettled, longStages, scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth };
   })()`;
-  type Reading = { scopes: number; lanes: number; cards: number; texts: number; controls: number; overlaps: unknown[]; escapes: unknown[]; scrollWidth: number; innerWidth: number };
+  type LongStage = { text: string | null; level: string | null; alone: boolean; wrap: boolean; items: string[]; height: number };
+  type Reading = {
+    scopes: number; lanes: number; cards: number; texts: number; controls: number; overlaps: unknown[]; escapes: unknown[];
+    clipped: unknown[]; unsettled: unknown[]; longStages: Record<string, LongStage | null>;
+    scrollWidth: number; innerWidth: number;
+  };
   const CARDS = ["t-mobile", "t-review-spent", "t-many", "t-upload", "t-search", "t-export", "t-links", "t-limits", "t-attach"];
 
-  browserTest("no text of a pipeline block meets another's ink or a control, at 390, 1080 and 1440 px, in en and uk", async () => {
+  browserTest("no text of a pipeline block meets another's ink or a control, and no card cuts a name or count, at 390, 1080 and 1440 px, in en and uk", async () => {
     const out = path.resolve(".artifacts/pipeline-block");
     const pngDir = process.env.PIPELINE_BLOCK_PNG_DIR ?? "/var/tmp/llv-pipeline-block-evidence";
     fs.mkdirSync(out, { recursive: true });
@@ -7005,13 +7084,24 @@ describe("#2072 one pipeline block, desktop and phone", () => {
     const browser = await chromium.launch(LAUNCH);
     const frames: Record<string, Reading> = {};
     const failures: string[] = [];
-    const gate = (label: string, reading: Reading, need: { lanes?: number; cards?: number }) => {
+    const gate = (label: string, reading: Reading, need: { lanes?: number; cards?: number; longStages?: boolean }) => {
       frames[label] = reading;
       /* Nothing measured is no verdict: the block has to be on the page. */
       if (need.lanes !== undefined && reading.lanes < need.lanes) failures.push(`${label}: ${reading.lanes} lane rows drawn, expected at least ${need.lanes}`);
       if (need.cards !== undefined && reading.cards < need.cards) failures.push(`${label}: ${reading.cards} pipeline cards drawn, expected at least ${need.cards}`);
       if (reading.overlaps.length) failures.push(`${label}: ${reading.overlaps.length} overlaps — ${JSON.stringify(reading.overlaps.slice(0, 3))}`);
       if (reading.escapes.length) failures.push(`${label}: ${reading.escapes.length} texts paint outside their card — ${JSON.stringify(reading.escapes.slice(0, 3))}`);
+      if (reading.clipped.length) failures.push(`${label}: ${reading.clipped.length} card texts are cut — ${JSON.stringify(reading.clipped.slice(0, 3))}`);
+      if (reading.unsettled.length) failures.push(`${label}: ${reading.unsettled.length} card chains settled wider than their box — ${JSON.stringify(reading.unsettled.slice(0, 3))}`);
+      /* Each long current stage is drawn whole, on the line of its own that
+         the fold reached: alone for the one that fits, wrapped for the one
+         that does not. */
+      if (need.longStages) {
+        for (const [id, want] of Object.entries(LONG_STAGES)) {
+          const got = reading.longStages[id];
+          if (got?.text !== want.name || !got.alone || got.wrap !== want.wrap || got.items.length !== 1) failures.push(`${label}: ${id} settled as ${JSON.stringify(got)}, expected its whole name alone on its line${want.wrap ? ", wrapped" : ""}`);
+        }
+      }
       if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
     };
     const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
@@ -7060,7 +7150,11 @@ describe("#2072 one pipeline block, desktop and phone", () => {
             await page.waitForTimeout(400);
             await page.evaluate(() => document.querySelector("[data-mobile2-pipelines]")?.scrollTo(0, 0));
             await page.screenshot({ path: path.join(pngDir, `phone-pipelines-390-${suffix}.png`) });
-            gate(`${label}-pipelines`, await page.evaluate(measureBlocks) as Reading, { cards: 8 });
+            gate(`${label}-pipelines`, await page.evaluate(measureBlocks) as Reading, { cards: 8, longStages: true });
+            for (const id of Object.keys(LONG_STAGES)) {
+              const row = page.locator(`[data-mobile2-pipelines] [data-mobile2-pipeline-row]:has(.pb-pill[data-stage="${id}"])`);
+              if (await row.count()) await row.first().screenshot({ path: path.join(pngDir, `phone-card-390-${await row.first().getAttribute("data-mobile2-pipeline-row")}-${suffix}.png`) });
+            }
             if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
           } finally {
             await context.close();

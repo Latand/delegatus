@@ -563,6 +563,14 @@ const flatPipelines: Pipeline[] = FLAT ? (() => {
   ];
 })() : [];
 
+/* The pipeline block's case (#2072) runs the eight-stage chain with its
+   current stage named in 44 characters: too long to keep "✓3" and "+4" beside
+   it in a 390 px card, so the card's fold has to reach the stage alone. */
+const UPLOAD_UI = FLAT ? "verify-backward-compatibility-and-migrations" : "build-ui";
+/* And a two-stage lane whose current stage is named in 86 characters: too long
+   for a 390 px card's line even alone, so its name wraps inside the pill. */
+const ATTACH_VERIFY = FLAT ? "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge" : "verify";
+
 const pipelines: Pipeline[] = [
   ...flatPipelines,
   ...reviewSpentPipelines,
@@ -585,14 +593,14 @@ const pipelines: Pipeline[] = [
     ],
     { stageId: "verify", state: "running", input: null, activatedBy: null }),
   pipeline("p-upload", "Redesign attachment upload for large files", "t-upload", "running",
-    [stage("plan", "architect", "build-api"), stage("build-api", "builder", "review-api"), stage("review-api", "reviewer", "build-ui"), stage("build-ui", "builder", "review-ui"), stage("review-ui", "reviewer", "verify"), stage("verify", "verifier", "docs", { onFail: { to: "build-ui", maxRounds: 2 } }), stage("docs", "builder", "merge"), stage("merge", "cleaner", null)],
+    [stage("plan", "architect", "build-api"), stage("build-api", "builder", "review-api"), stage("review-api", "reviewer", UPLOAD_UI), stage(UPLOAD_UI, "builder", "review-ui"), stage("review-ui", "reviewer", "verify"), stage("verify", "verifier", "docs", { onFail: { to: UPLOAD_UI, maxRounds: 2 } }), stage("docs", "builder", "merge"), stage("merge", "cleaner", null)],
     [
       { stageId: "plan", attempts: [attempt(1, "passed", uploadPlan)] },
       { stageId: "build-api", attempts: [attempt(1, "passed", uploadApi)] },
       { stageId: "review-api", attempts: [attempt(1, "passed", uploadRevApi, { ...flowOf("flow-upload-review-api"), reviewFlowSync: { generation: "g2", roundCount: 2, implementerHeadSha: null, reviewerHeadSha: null, verdict: null, relayState: "approved", terminalState: null } })] },
-      { stageId: "build-ui", attempts: [attempt(1, "running", uploadUi)] },
+      { stageId: UPLOAD_UI, attempts: [attempt(1, "running", uploadUi)] },
     ],
-    { stageId: "build-ui", state: "running", input: null, activatedBy: null }),
+    { stageId: UPLOAD_UI, state: "running", input: null, activatedBy: null }),
   pipeline("p-links", "Repair old links in the release notes", "t-links", "needs_decision",
     [stage("implement", "builder", "review"), stage("review", "reviewer", null)],
     [{ stageId: "implement", attempts: [attempt(1, "needs_decision", linksImpl)] }],
@@ -605,9 +613,9 @@ const pipelines: Pipeline[] = [
     ],
     { stageId: "diagnose", state: "running", input: null, activatedBy: null }),
   pipeline("p-attach", "Finish responsive native attachment delivery", "t-attach", "running",
-    [stage("build", "builder", "verify"), stage("verify", "verifier", null)],
-    [{ stageId: "build", attempts: [attempt(1, "passed", attachBuild)] }, { stageId: "verify", attempts: [attempt(1, "running", attachVerify)] }],
-    { stageId: "verify", state: "running", input: null, activatedBy: null }),
+    [stage("build", "builder", ATTACH_VERIFY), stage(ATTACH_VERIFY, "verifier", null)],
+    [{ stageId: "build", attempts: [attempt(1, "passed", attachBuild)] }, { stageId: ATTACH_VERIFY, attempts: [attempt(1, "running", attachVerify)] }],
+    { stageId: ATTACH_VERIFY, state: "running", input: null, activatedBy: null }),
   pipeline("p-compact", "Compact board stages and separate history from live work", "t-compact", "completed",
     [stage("build", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", null)],
     [

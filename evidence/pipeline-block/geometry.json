@@ -8,6 +8,12 @@
       "controls": 101,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": null,
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": null
+      },
       "scrollWidth": 1440,
       "innerWidth": 1440
     },
@@ -19,6 +25,12 @@
       "controls": 101,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": null,
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": null
+      },
       "scrollWidth": 1080,
       "innerWidth": 1080
     },
@@ -30,6 +42,12 @@
       "controls": 0,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": null,
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": null
+      },
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -37,10 +55,34 @@
       "scopes": 13,
       "lanes": 0,
       "cards": 13,
-      "texts": 100,
+      "texts": 94,
       "controls": 0,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": {
+          "text": "Verify backward compatibility and migrations",
+          "level": "4",
+          "alone": true,
+          "wrap": false,
+          "items": [
+            "Verify backward compatibility and migrations"
+          ],
+          "height": 22
+        },
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": {
+          "text": "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge",
+          "level": "2",
+          "alone": true,
+          "wrap": true,
+          "items": [
+            "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge"
+          ],
+          "height": 38
+        }
+      },
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -52,6 +94,12 @@
       "controls": 0,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": null,
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": null
+      },
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -59,10 +107,34 @@
       "scopes": 13,
       "lanes": 0,
       "cards": 13,
-      "texts": 100,
+      "texts": 94,
       "controls": 0,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": {
+          "text": "Verify backward compatibility and migrations",
+          "level": "4",
+          "alone": true,
+          "wrap": false,
+          "items": [
+            "Verify backward compatibility and migrations"
+          ],
+          "height": 22
+        },
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": {
+          "text": "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge",
+          "level": "2",
+          "alone": true,
+          "wrap": true,
+          "items": [
+            "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge"
+          ],
+          "height": 38
+        }
+      },
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -74,6 +146,12 @@
       "controls": 101,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": null,
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": null
+      },
       "scrollWidth": 1440,
       "innerWidth": 1440
     },
@@ -85,6 +163,12 @@
       "controls": 101,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": null,
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": null
+      },
       "scrollWidth": 1080,
       "innerWidth": 1080
     },
@@ -96,6 +180,12 @@
       "controls": 0,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": null,
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": null
+      },
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -103,10 +193,34 @@
       "scopes": 13,
       "lanes": 0,
       "cards": 13,
-      "texts": 100,
+      "texts": 94,
       "controls": 0,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": {
+          "text": "Verify backward compatibility and migrations",
+          "level": "4",
+          "alone": true,
+          "wrap": false,
+          "items": [
+            "Verify backward compatibility and migrations"
+          ],
+          "height": 22
+        },
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": {
+          "text": "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge",
+          "level": "2",
+          "alone": true,
+          "wrap": true,
+          "items": [
+            "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge"
+          ],
+          "height": 38
+        }
+      },
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -118,6 +232,12 @@
       "controls": 0,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": null,
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": null
+      },
       "scrollWidth": 390,
       "innerWidth": 390
     },
@@ -125,10 +245,34 @@
       "scopes": 13,
       "lanes": 0,
       "cards": 13,
-      "texts": 100,
+      "texts": 94,
       "controls": 0,
       "overlaps": [],
       "escapes": [],
+      "clipped": [],
+      "unsettled": [],
+      "longStages": {
+        "verify-backward-compatibility-and-migrations": {
+          "text": "Verify backward compatibility and migrations",
+          "level": "4",
+          "alone": true,
+          "wrap": false,
+          "items": [
+            "Verify backward compatibility and migrations"
+          ],
+          "height": 22
+        },
+        "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge": {
+          "text": "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge",
+          "level": "2",
+          "alone": true,
+          "wrap": true,
+          "items": [
+            "Confirm each attachment arrives whole on the phone the desktop and the telegram bridge"
+          ],
+          "height": 38
+        }
+      },
       "scrollWidth": 390,
       "innerWidth": 390
     }
