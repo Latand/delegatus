@@ -593,6 +593,52 @@ test("a stable scope serves its prior conditional representation while projectio
   expect(second.headers.get("x-llv-files-projection-cache")).toBe("stale");
 });
 
+/* #2072: a stale answer used to carry only the live scan's generation, so the
+   client could not tell it from a current one and painted the board as it stood
+   minutes earlier. Each projection now names what it was built from. */
+test("a stale projection answer carries the generation its own body was built from", async () => {
+  const store = globalThis as typeof globalThis & {
+    __llvFilesProjectionInflight?: Map<string, Promise<unknown>>;
+  };
+  const builtOf = (response: Response) => {
+    const match = /^([0-9a-z]+)\.(\d+)\.(\d+)$/.exec(response.headers.get("x-llv-files-built") ?? "");
+    return match ? { epoch: match[1], generation: Number(match[2]), sequence: Number(match[3]) } : null;
+  };
+  scannedFiles = [file("/sessions/generation-1.jsonl")];
+  const first = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  const firstBody = await first.text();
+  expect(first.headers.get("x-llv-files-generation")).toBe("1");
+  expect(builtOf(first)?.generation).toBe(1);
+
+  scannedFiles = [file("/sessions/generation-2.jsonl")];
+  await currentFileScan({ fresh: true });
+  const stale = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "if-none-match": '"a-representation-this-scope-never-served"' },
+  }));
+
+  expect(stale.status).toBe(200);
+  expect(stale.headers.get("x-llv-files-projection-cache")).toBe("stale");
+  expect(stale.headers.get("x-llv-files-generation")).toBe("2");
+  expect(await stale.text()).toBe(firstBody);
+  expect(builtOf(stale)).toEqual(builtOf(first));
+
+  await Promise.all([...(store.__llvFilesProjectionInflight?.values() ?? [])]);
+  const rebuilt = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  const rebuiltStamp = builtOf(rebuilt);
+  expect(rebuilt.headers.get("x-llv-files-projection-cache")).toBe("hit");
+  expect(await rebuilt.text()).toContain("generation-2.jsonl");
+  expect(rebuiltStamp?.epoch).toBe(builtOf(first)?.epoch);
+  expect(rebuiltStamp?.generation).toBe(2);
+  expect(rebuiltStamp!.sequence).toBeGreaterThan(builtOf(first)!.sequence);
+
+  /* A 304 names the representation it confirms, which is the client's own. */
+  const confirmed = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "if-none-match": rebuilt.headers.get("etag")! },
+  }));
+  expect(confirmed.status).toBe(304);
+  expect(builtOf(confirmed)).toEqual(rebuiltStamp);
+});
+
 test("generation completion retries skip the stale projection while its refresh is running", async () => {
   scannedFiles = [file("/sessions/generation-1.jsonl")];
   const initial = await GET(new Request("http://127.0.0.1/api/files"));
