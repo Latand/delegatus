@@ -778,7 +778,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   type="button"
                   data-phone-task-title=""
                   aria-label={pendingTitle ? t("kanban.renamePending") : t("kanban.renameAria", { title })}
-                  className={`w-full rounded-[8px] px-1 py-0.5 text-left text-title leading-[1.3] [overflow-wrap:anywhere] active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${pendingTitle ? "font-normal italic text-muted" : "font-semibold text-primary"}`}
+                  className={`min-h-11 w-full rounded-[8px] px-1 py-0.5 text-left text-title leading-[1.3] [overflow-wrap:anywhere] active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${pendingTitle ? "font-normal italic text-muted" : "font-semibold text-primary"}`}
                   onClick={() => startEdit("title")}
                 >
                   {title}
