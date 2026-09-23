@@ -361,7 +361,7 @@ export class SqliteAgentRegistryStore {
       baseline otherwise assembles, clones and decides the whole file, per read:
       sixty such rows cost startup half a minute of blocked event loop. */
   private grantDecisions: GrantDecisions | null = null;
-  private readonly grantJournalReady: boolean;
+  private grantJournalReady = false;
 
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   /** Runtime half of {@link DecidedRegistryFile}: the files this store has
@@ -409,7 +409,7 @@ export class SqliteAgentRegistryStore {
         const db = new Database(filename, { readonly: true, strict: true });
         db.exec("PRAGMA busy_timeout = 5000");
         return db;
-      });
+      }, { reopened: (db) => this.onDatabaseReopened(db) });
       const table = this.db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_meta'").get();
       if (!table || !this.imported()) {
         this.db.close();
@@ -436,29 +436,30 @@ export class SqliteAgentRegistryStore {
           PRIMARY KEY(collection, row_key)
         );
       `);
+      // A restored pre-upgrade database can arrive under a held connection.
+      // Install the journal on each connection, including one opened after a
+      // file replacement, before any mutation can use it.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS registry_grant_changes (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT,
+          collection TEXT NOT NULL,
+          row_key TEXT NOT NULL
+        );
+        CREATE TRIGGER IF NOT EXISTS registry_grant_insert AFTER INSERT ON registry_rows
+          WHEN NEW.collection IN ('entries', 'receipts', 'conversations', 'lineageEdges') BEGIN
+          INSERT INTO registry_grant_changes(collection, row_key) VALUES (NEW.collection, NEW.row_key);
+        END;
+        CREATE TRIGGER IF NOT EXISTS registry_grant_update AFTER UPDATE ON registry_rows
+          WHEN NEW.collection IN ('entries', 'receipts', 'conversations', 'lineageEdges') BEGIN
+          INSERT INTO registry_grant_changes(collection, row_key) VALUES (NEW.collection, NEW.row_key);
+        END;
+        CREATE TRIGGER IF NOT EXISTS registry_grant_delete AFTER DELETE ON registry_rows
+          WHEN OLD.collection IN ('entries', 'receipts', 'conversations', 'lineageEdges') BEGIN
+          INSERT INTO registry_grant_changes(collection, row_key) VALUES (OLD.collection, OLD.row_key);
+        END;
+      `);
       return db;
-    });
-    // Triggers observe every connection, including a predecessor release or a
-    // direct SQLite repair that changes a grant input without bumping revision.
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS registry_grant_changes (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        collection TEXT NOT NULL,
-        row_key TEXT NOT NULL
-      );
-      CREATE TRIGGER IF NOT EXISTS registry_grant_insert AFTER INSERT ON registry_rows
-        WHEN NEW.collection IN ('entries', 'receipts', 'conversations', 'lineageEdges') BEGIN
-        INSERT INTO registry_grant_changes(collection, row_key) VALUES (NEW.collection, NEW.row_key);
-      END;
-      CREATE TRIGGER IF NOT EXISTS registry_grant_update AFTER UPDATE ON registry_rows
-        WHEN NEW.collection IN ('entries', 'receipts', 'conversations', 'lineageEdges') BEGIN
-        INSERT INTO registry_grant_changes(collection, row_key) VALUES (NEW.collection, NEW.row_key);
-      END;
-      CREATE TRIGGER IF NOT EXISTS registry_grant_delete AFTER DELETE ON registry_rows
-        WHEN OLD.collection IN ('entries', 'receipts', 'conversations', 'lineageEdges') BEGIN
-        INSERT INTO registry_grant_changes(collection, row_key) VALUES (OLD.collection, OLD.row_key);
-      END;
-    `);
+    }, { reopened: (db) => this.onDatabaseReopened(db) });
     this.grantJournalReady = true;
     const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(registry_rows)").all();
     if (!columns.some((column) => column.name === "row_order")) {
@@ -549,6 +550,18 @@ export class SqliteAgentRegistryStore {
 
   close(): void {
     this.db.close();
+  }
+
+  private onDatabaseReopened(db: BunDatabase): void {
+    // A restored file may have the same revision and counter stamp as the file
+    // it replaced. No parsed row or assembled grant from the old inode holds.
+    this.rowCache.clear();
+    this.revisionCache = null;
+    this.readOnlyCache = null;
+    this.grantDecisions = null;
+    this.grantJournalReady = Boolean(db.query(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'",
+    ).get());
   }
 
   snapshot(): SqliteRegistrySnapshot {
