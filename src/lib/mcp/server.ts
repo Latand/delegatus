@@ -3664,7 +3664,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   account_limits: z.object({
     clientRequestId: clientRequestIdSchema,
-    engine: z.enum(["claude", "codex"]).optional().describe("Only this engine's accounts."),
+    engine: z.enum(["claude", "codex", "copilot"]).optional().describe("Only this engine's accounts."),
     accountId: z.string().trim().min(1).optional().describe("Only this account."),
   }).passthrough(),
 };

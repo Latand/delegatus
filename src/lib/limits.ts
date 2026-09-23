@@ -6,6 +6,8 @@ import path from "node:path";
 import { accountForSpawn, type CodexAccount } from "@/lib/accounts/codex";
 import { claudeAccountForSpawn, type ClaudeAccount } from "@/lib/accounts/claude";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
+import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
+import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
 import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
 import { statePath } from "@/lib/configDir";
@@ -422,6 +424,9 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
   const now = clock();
   const claudeAccount = claudeAccountForSpawn();
   const codexAccount = accountForSpawn();
+  const copilotAccountId = activeCopilotAccountId();
+  const copilotAccount = listCopilotAccounts().find((account) => account.id === copilotAccountId) ?? null;
+  const copilotRead = copilotAccount ? readCopilotTranscriptLimits(copilotAccount.sessionStateDir) : null;
   const [resolvedClaude, resolvedCodex] = await Promise.all([
     resolveClaudeRead(claudeAccount, now, clock),
     resolveEngineRead("codex", codexAccount.id, now, clock, () => readCodexLimits({ account: codexAccount, liveReader: options.codexLiveReader, now: clock })),
@@ -431,7 +436,15 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
     codex: resolvedCodex.data,
     claudeAccountId: claudeAccount.id,
     codexAccountId: codexAccount.id,
-    provenance: { claude: resolvedClaude.meta, codex: resolvedCodex.meta },
+    copilot: copilotRead?.data ?? null,
+    copilotAccountId: copilotAccount?.id ?? null,
+    provenance: {
+      claude: resolvedClaude.meta,
+      codex: resolvedCodex.meta,
+      copilot: copilotRead
+        ? { source: copilotRead.source, reason: copilotRead.reason, staleSince: null }
+        : { source: "unavailable", reason: "no active Copilot account", staleSince: null },
+    },
     staleSince: resolvedClaude.meta.staleSince ?? resolvedCodex.meta.staleSince,
   };
 }

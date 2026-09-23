@@ -55,6 +55,7 @@ export function windowLabel(t: TFunction, key: WindowKey, windowMinutes: number 
   const canonical = canonicalWindowMinutes(windowMinutes) ?? windowMinutes;
   if (canonical === WEEKLY_WINDOW_MINUTES) return t("limits.week");
   if (canonical === SESSION_WINDOW_MINUTES) return t("limits.5h");
+  if (windowMinutes >= 28 * 1440 && windowMinutes <= 31 * 1440) return t("limits.month");
   if (windowMinutes % 1440 === 0) return t("limits.windowDays", { n: windowMinutes / 1440 });
   if (windowMinutes >= 60) return t("limits.windowHours", { n: Math.round(windowMinutes / 60) });
   return t("limits.windowMinutes", { n: Math.round(windowMinutes) });

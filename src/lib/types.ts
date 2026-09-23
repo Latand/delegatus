@@ -692,13 +692,17 @@ export const LIMITS_REAUTH_REQUIRED_REASON = "oauth-reauthentication-required";
 export interface LimitsPayload {
   claude: EngineLimits | null;
   codex: EngineLimits | null;
+  /** Optional on legacy browser/test payloads; the server now always sends it. */
+  copilot?: EngineLimits | null;
   /** The Claude account whose values appear in this payload. */
   claudeAccountId: string | null;
   /** The account whose Codex values appear in this payload. The server always
       stamps it; null remains accepted while a legacy cached/browser payload is
       being replaced after an upgrade. */
   codexAccountId: string | null;
-  provenance: { claude: LimitsProvenance; codex: LimitsProvenance };
+  /** The Copilot account whose latest transcript snapshot appears here. */
+  copilotAccountId?: string | null;
+  provenance: { claude: LimitsProvenance; codex: LimitsProvenance; copilot?: LimitsProvenance };
   /** ISO timestamp from the first failed refresh behind this fallback payload. */
   staleSince?: string | null;
 }

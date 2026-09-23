@@ -28,6 +28,7 @@ import {
   type RuntimeEventStore,
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
+import { readCopilotTranscriptQuotaSnapshot } from "@/lib/limits/copilotTranscriptLimits";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
 
@@ -497,6 +498,19 @@ export class CopilotAcpHost implements EngineHost {
       },
       (error) => {
         if (firstPrompt) this.firstPromptFailure = safeError(error);
+        const message = safeError(error);
+        // The CLI has not yet supplied a real exhaustion example; retain this
+        // conservative match only as evidence capture, never as launch policy.
+        if (/quota|rate.?limit|limit (reached|exceeded)|exhausted|premium request/i.test(message)) {
+          this.emit({ kind: "limits", snapshot: { engine: "copilot", exhausted: true, message: message.slice(0, 300) } });
+          const rpcCode = (error as Error & { rpcCode?: unknown }).rpcCode;
+          const quotaSnapshots = readCopilotTranscriptQuotaSnapshot(path.join(this.options.copilotHome, "session-state"));
+          console.warn("[copilot] possible quota rejection", JSON.stringify({
+            code: typeof rpcCode === "number" ? rpcCode : null,
+            message: message.slice(0, 300),
+            quotaSnapshots,
+          }));
+        }
         this.finishTurn(running, this.cancelledTurns.has(turnId) ? "interrupted" : "error");
         settle();
       },
@@ -768,7 +782,11 @@ export class CopilotAcpHost implements EngineHost {
       this.pending.delete(id as number);
       if (pending.timer) clearTimeout(pending.timer);
       const error = record(message.error);
-      if (error) pending.reject(new Error(`Copilot ${pending.method} failed: ${stringField(error, "message") ?? "error"}`));
+      if (error) {
+        const failure = new Error(`Copilot ${pending.method} failed: ${stringField(error, "message") ?? "error"}`) as Error & { rpcCode?: unknown };
+        failure.rpcCode = error.code;
+        pending.reject(failure);
+      }
       else pending.resolve(message.result);
       return;
     }

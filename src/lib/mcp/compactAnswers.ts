@@ -220,7 +220,7 @@ export function compactLiveness(snapshot: AgentLivenessSnapshot) {
   };
 }
 
-export type AccountLimitEngine = "claude" | "codex";
+export type AccountLimitEngine = "claude" | "codex" | "copilot";
 
 export type AccountLimitsInput = {
   engine?: AccountLimitEngine;
@@ -246,7 +246,7 @@ function windowRow(window: LimitWindow | null | undefined) {
  * reaches a provider.
  */
 export function accountLimitRows(input: AccountLimitsInput) {
-  const engines: AccountLimitEngine[] = input.engine ? [input.engine] : ["claude", "codex"];
+  const engines: AccountLimitEngine[] = input.engine ? [input.engine] : ["claude", "codex", "copilot"];
   return engines.flatMap((engine) => input.accounts[engine]
     .filter((account) => !input.accountId || account.accountId === input.accountId)
     .map((account) => {

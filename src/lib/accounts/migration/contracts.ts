@@ -1,4 +1,5 @@
 import type { AgentEngine } from "@/lib/agent/cli";
+import type { QuotaEngine } from "./quotaPolicy";
 import { grantedMcpServers, type McpGrantPolicy } from "@/lib/agent/mcpAllowlist";
 import { grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
@@ -296,7 +297,7 @@ export interface TurnState {
 }
 
 export interface DurableQuotaObservation {
-  engine: MigrationEngine;
+  engine: QuotaEngine;
   accountId: string;
   authenticated: boolean;
   authCheckedAt: string;

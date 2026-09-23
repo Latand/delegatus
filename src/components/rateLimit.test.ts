@@ -29,16 +29,19 @@ test("a rounded week still reads as a week, not as 168 hours", () => {
   expect(windowLabel(uk, "weekly", 10_081)).toBe("Тиждень");
   expect(windowLabel(en, "session", 299)).toBe("5h");
   // A horizon of its own is never absorbed into a canonical one.
-  expect(windowLabel(en, "weekly", 43_200)).toBe("30d");
+  expect(windowLabel(en, "weekly", 43_200)).toBe("Month");
+  expect(windowLabel(en, "weekly", 30 * 1440)).toBe("Month");
+  expect(windowLabel(en, "weekly", 31 * 1440)).toBe("Month");
+  expect(windowLabel(en, "weekly", 7 * 1440)).toBe("Week");
   expect(windowLabel(en, "session", 1440)).toBe("1d");
 });
 
 test("other declared lengths are spelled out in the reader's units", () => {
   expect(windowLabel(en, "session", 60)).toBe("1h");
   expect(windowLabel(en, "session", 45)).toBe("45m");
-  expect(windowLabel(en, "weekly", 43_200)).toBe("30d");
+  expect(windowLabel(en, "weekly", 43_200)).toBe("Month");
   expect(windowLabel(uk, "session", 45)).toBe("45 хв");
-  expect(windowLabel(uk, "weekly", 43_200)).toBe("30 д");
+  expect(windowLabel(uk, "weekly", 43_200)).toBe("Місяць");
   expect(windowLabel(uk, "session", 10_080)).toBe("Тиждень");
 });
 
