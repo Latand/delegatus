@@ -90,6 +90,26 @@ test("stale partial or reset-expired Copilot snapshots are unknown", () => {
   });
 });
 
+test("stale signed-out observations remain unknown for every engine; fresh sign-out is unavailable", () => {
+  const staleSignedOut = (engine: DurableQuotaObservation["engine"]): DurableQuotaObservation => ({
+    ...observation("default", 50),
+    engine,
+    authenticated: false,
+    authCheckedAt: new Date(NOW - 60 * 60_000).toISOString(),
+    observedAt: new Date(NOW - 60 * 60_000).toISOString(),
+    provenance: { source: "cache", reason: null, staleSince: null },
+  });
+  const singleAccount = [{ id: "default", authPresent: true }];
+  for (const engine of ["claude", "codex", "copilot"] as const) {
+    expect(selectHeadlessAccount(singleAccount, [staleSignedOut(engine)], "default", [], NOW)).toEqual({
+      kind: "available",
+      accountId: "default",
+    });
+  }
+  const freshSignedOut = { ...staleSignedOut("copilot"), authCheckedAt: new Date(NOW - 1_000).toISOString(), observedAt: new Date(NOW - 1_000).toISOString(), provenance: { source: "live" as const, reason: null, staleSince: null } };
+  expect(selectHeadlessAccount(singleAccount, [freshSignedOut], "default", [], NOW)).toEqual({ kind: "unavailable" });
+});
+
 test("headless selection reports the earliest account recovery when every account is exhausted", () => {
   const firstReset = Math.floor(NOW / 1_000) + 900;
   const secondReset = Math.floor(NOW / 1_000) + 1_800;

@@ -23,7 +23,13 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
   if (!Number.isFinite(observedAt) || !Number.isFinite(authCheckedAt) || now < observedAt || now < authCheckedAt) {
     return { kind: "unknown" };
   }
-  if (!observation.authenticated) return { kind: "unavailable" };
+  const observationFresh = now - observedAt <= FRESH_QUOTA_MS;
+  const authFresh = now - authCheckedAt <= FRESH_QUOTA_MS;
+  const copilotTranscript = observation.engine === "copilot" && observation.provenance.source === "transcript";
+  /* Freshness is decided before auth: an old negative auth probe says unknown,
+     preserving the account as a fallback while its next probe is pending. */
+  if (!authFresh || (!observationFresh && !copilotTranscript)) return { kind: "unknown" };
+  if (!observation.authenticated) return observationFresh ? { kind: "unavailable" } : { kind: "unknown" };
   if (!observation.limits) return { kind: "unknown" };
   /* A tier weekly (issues #1358, #1796) gates an unattended spawn like the
      general week does, but only the tier the spawn's own model draws on
@@ -36,8 +42,6 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
   }
   const remaining = Math.min(...windows.map((window) => 100 - window.usedPercent));
   const nowSeconds = Math.floor(now / 1_000);
-  const observationFresh = now - observedAt <= FRESH_QUOTA_MS && now - authCheckedAt <= FRESH_QUOTA_MS;
-  const copilotTranscript = observation.engine === "copilot" && observation.provenance.source === "transcript";
   const exhaustedWindows = windows.filter((window) => window.usedPercent >= 100);
   /* Copilot writes a new monthly snapshot after model calls. Stale partial
      balances become unknown; a stale 100% window with a future reset remains a
