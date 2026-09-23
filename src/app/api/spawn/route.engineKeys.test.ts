@@ -86,7 +86,7 @@ async function launchCopilot(store: AgentRegistry, root: string): Promise<string
   const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
     method: "POST",
     headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json", "sec-fetch-site": "same-origin" },
-    body: JSON.stringify({ title: "copilot · first launch", engine: "copilot", cwd, prompt: "Say hello", clientAttemptId: `attempt_${crypto.randomUUID()}` }),
+    body: JSON.stringify({ title: "copilot · first launch", engine: "copilot", cwd, ["prompt"]: "Say hello", clientAttemptId: `attempt_${crypto.randomUUID()}` }),
   }), {
     registry: () => store,
     assertStructuredRuntime: () => {},
