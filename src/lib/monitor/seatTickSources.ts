@@ -742,6 +742,7 @@ const SEAT_DEPLOY_LIMIT = 5;
 function settledSeatDeploys(
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
+  context: { now: number; backlogAfterMs: number },
   sources: SeatTickSources,
 ): SeatTickDeployInput[] {
   if (!seat || !sources.seatDeployments || !sources.deployment) return [];
@@ -754,6 +755,13 @@ function settledSeatDeploys(
   }
   for (const record of records) {
     if (announced.includes(record.deploymentId)) continue;
+    /* A deployment settles after it is requested, so one requested past the
+       backlog bound has settled past it too, and the decision would drop it.
+       Skipping it before the ledger read keeps a deploy that settled while
+       ticking was off from costing a read on every check until the record
+       ages out. */
+    const requestedAt = Date.parse(record.requestedAt);
+    if (!Number.isFinite(requestedAt) || context.now - requestedAt >= context.backlogAfterMs) continue;
     const read = sources.deployment(record.deploymentId);
     const status = read.state === "ok" ? read.value : undefined;
     if (!status || !status.terminal) continue;
@@ -1722,7 +1730,7 @@ export async function gatherSeatTickInput(
   }));
 
   const ownLanes = ownSettledLanes(canonical, seat, state.announcedLanes ?? [], sources);
-  const settledDeploys = settledSeatDeploys(seat, state.announcedDeploys ?? [], sources);
+  const settledDeploys = settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
 
   /* The open set spans EVERY project, not this one's lanes: an event is history
      because its own lane finished, and reading a lane from another project as

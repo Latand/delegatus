@@ -1898,3 +1898,30 @@ test("a finished child whose transcript is gone still wakes the seat, with the r
   expect(line?.label).toContain("reviewer two — spawned child finished, transcript not readable: the transcript file is no longer on disk");
   expect(check.decision.verdict.skippedChildren.unreadable).toBe(0);
 });
+
+test("a seat's settled deploy is gathered, and one requested past the backlog bound is never read off the ledger (#2063)", async () => {
+  const ledgerReads: string[] = [];
+  const record = (deploymentId: string, minutesAgo: number, conversationId = CONVERSATION) => ({
+    deploymentId, conversationId, project: PROJECT, revision: "c".repeat(40),
+    requestedAt: new Date(NOW - minutesAgo * 60_000).toISOString(),
+  });
+  const records = [
+    record("deploy-stale", 4 * 24 * 60),
+    record("deploy-fresh", 10),
+    record("deploy-announced", 30),
+    record("deploy-other-seat", 10, "conversation_other_seat"),
+  ];
+  const base = sources({});
+  const input = await gatherSeatTickInput(PROJECT, { ...emptySeatTickState(), announcedDeploys: ["deploy-announced"] }, DEFAULT_SEAT_TICK_POLICY, {
+    ...base,
+    seatDeployments: (conversationId) => records.filter((row) => row.conversationId === conversationId),
+    deployment: (deploymentId) => {
+      ledgerReads.push(deploymentId);
+      return { state: "ok", value: { deploymentId, phase: "succeeded", terminal: true, revision: "c".repeat(40), error: null, updatedAt: new Date(NOW - 60_000).toISOString() } } as never;
+    },
+  });
+  expect(input.settledDeploys).toEqual([{
+    deploymentId: "deploy-fresh", phase: "succeeded", sha: "c".repeat(40), error: null, settledAt: new Date(NOW - 60_000).toISOString(),
+  }]);
+  expect(ledgerReads).toEqual(["deploy-fresh"]);
+});
