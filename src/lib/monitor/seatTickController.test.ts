@@ -22,6 +22,7 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
 fs.mkdirSync(SESSIONS, { recursive: true });
 
+const { SEAT_TICK_NO_SELF_SCHEDULE } = await import("./report");
 const { reconcileSeatTick, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, wakeReached } = await import("./seatTickController");
 const { DEFAULT_SEAT_TICK_POLICY } = await import("./seatTick");
 const { defaultSeatTickSettings } = await import("./seatTickSettings");
@@ -1883,10 +1884,24 @@ test("a seat whose mandate predates the contract gets its clauses in the wake; a
     const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, seat });
     await runSeatTickCheck(PROJECT, rig.deps);
     const text = rig.sent[0]!.text;
-    expect(text).toContain("\nContract:\n");
+    expect(text).toContain(`\nContract:\n- ${SEAT_TICK_NO_SELF_SCHEDULE}\n`);
     for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(text.split(clause)).toHaveLength(2);
     expect(text).not.toContain("section of your mandate governs this turn");
   }
+  /* What that costs until the seat rotates: its unchanged-note tick, on the
+     board the 1.2 KB case measures. */
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "note-unchanged-v20-")), "seat-tick.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, accounting: undefined }, stateFile);
+  const settings = { ...promptSettings(), monitorPrompt: LEDGER_NOTE };
+  const ticks: string[] = [];
+  for (const now of [NOW, NOW + 61 * MINUTE]) {
+    const rig = harness({ stateFile, now, pipelines: busyBoard(now - MINUTE), settings, seat: v20Seat });
+    await runSeatTickCheck(PROJECT, rig.deps);
+    ticks.push(rig.sent[0]!.text);
+  }
+  expect(ticks[1]).toContain("Standing monitor note unchanged since your last wake");
+  expect(Buffer.byteLength(ticks[1]!)).toBeLessThanOrEqual(1_700);
+  console.log(`[#2030] v20 seat tick bytes: note shown ${Buffer.byteLength(ticks[0]!)}, note unchanged ${Buffer.byteLength(ticks[1]!)}`);
   const current = harness({ pipelines: OPEN_LANE, state: OVERDUE, seat: CURRENT_SEAT });
   await runSeatTickCheck(PROJECT, current.deps);
   expect(current.sent[0]!.text).toContain("section of your mandate governs this turn");

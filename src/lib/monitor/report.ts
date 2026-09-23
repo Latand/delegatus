@@ -163,11 +163,15 @@ export const SEAT_TICK_CONTRACT_POINTER = `Contract: the "${ORCHESTRATOR_VIEWER_
 /** The foot of a wake: the pointer when the seat's mandate states the
     contract, the clauses themselves when it may not — a seat still running on
     what it was delivered before v21, one carried forward on an older mandate,
-    or bespoke rules. */
+    or bespoke rules. The mandate states the ban on scheduling yourself in the
+    clock section's own paragraph; a wake listing the clauses cannot count on
+    that paragraph surviving a seat's edit, so it states the ban too. */
+export const SEAT_TICK_NO_SELF_SCHEDULE = "Do not schedule yourself. The Viewer ticks this seat; a self-scheduled monitor is refused practice.";
+
 function seatTickContractLines(mandateCarriesContract: boolean): string[] {
   return mandateCarriesContract
     ? ["", SEAT_TICK_CONTRACT_POINTER]
-    : ["", "Contract:", ...ORCHESTRATOR_SEAT_TICK_CONTRACT.map((clause) => `- ${clause}`)];
+    : ["", "Contract:", `- ${SEAT_TICK_NO_SELF_SCHEDULE}`, ...ORCHESTRATOR_SEAT_TICK_CONTRACT.map((clause) => `- ${clause}`)];
 }
 
 function seatTickBullet(item: SeatTickItem): string {

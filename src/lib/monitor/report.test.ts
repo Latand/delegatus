@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { seatTickProposalRef } from "./cards";
 import { ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_VIEWER_CLOCK_HEADING } from "@/lib/orchestrator/prompt";
 
-import { SEAT_TICK_CONTRACT_POINTER, SEAT_TICK_PROMPT_PREVIEW_LIMIT, seatTickProposalMessage, seatTickWakeMessage } from "./report";
+import { SEAT_TICK_CONTRACT_POINTER, SEAT_TICK_NO_SELF_SCHEDULE, SEAT_TICK_PROMPT_PREVIEW_LIMIT, seatTickProposalMessage, seatTickWakeMessage } from "./report";
 
 /**
  * The seat tick's two briefs (#1245), rendered by the module that already
@@ -15,7 +15,7 @@ const PROJECT = "viewer";
 /** A wake to a seat whose mandate may not state the contract ends with every
     clause, the last of them last, so nothing was lopped off the foot. */
 function expectContractClauses(text: string): void {
-  expect(text).toContain("\nContract:\n");
+  expect(text).toContain(`\nContract:\n- ${SEAT_TICK_NO_SELF_SCHEDULE}\n`);
   for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(text.split(clause)).toHaveLength(2);
   expect(text.endsWith(`- ${ORCHESTRATOR_SEAT_TICK_CONTRACT.at(-1)}`)).toBe(true);
   expect(text).not.toContain(SEAT_TICK_CONTRACT_POINTER);
@@ -53,6 +53,7 @@ test("a wake says why, lists the items, and names the mandate section holding it
   expect(named.endsWith(SEAT_TICK_CONTRACT_POINTER)).toBe(true);
   expect(ORCHESTRATOR_VIEWER_CLOCK_HEADING).toContain(SEAT_TICK_CONTRACT_POINTER.split('"')[1]!);
   for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(named).not.toContain(clause);
+  expect(named).not.toContain(SEAT_TICK_NO_SELF_SCHEDULE);
   expect(named).toBe(`${text.slice(0, text.indexOf("\n\nContract:\n"))}\n\n${SEAT_TICK_CONTRACT_POINTER}`);
 });
 
