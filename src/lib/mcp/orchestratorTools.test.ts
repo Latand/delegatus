@@ -411,16 +411,17 @@ test("the adoption target reaches the authorized seat route while prompt provena
   expect(rotate!.body).not.toHaveProperty("promptVersion");
 });
 
-/* #1452: the route's own default is the incumbent's text, which is how a seat
-   created under mandate v3 («you do not talk to the user») rotated v3 into
-   every successor. The tool decides the default from the incumbent's recorded
-   version, and the incumbent's text stays one explicit argument away. */
-test("rotate_orchestrator over a STALE seat sends the current default mandate (#1452)", async () => {
+/* #1452, #2030: a seat created under mandate v3 («you do not talk to the user»)
+   once rotated v3 into every successor. The ROUTE now rebuilds a stale core
+   from the current default and keeps the rotation history behind it
+   (`seatCommand.test.ts`), so the tool names no mandate: sending the default
+   from here replaced the whole mandate and dropped that history. */
+test("rotate_orchestrator over a STALE seat leaves the core rebuild to the route (#1452, #2030)", async () => {
   seatActive("proj-a", SEATED_ID, null, 3);
   const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
   await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-stale", project: "proj-a" });
   expect(posts).toHaveLength(1);
-  expect(posts[0]!.body.mandate).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(posts[0]!.body).not.toHaveProperty("mandate");
   expect(posts[0]!.body).not.toHaveProperty("keepIncumbentMandate");
 });
 
@@ -443,7 +444,7 @@ test("keepIncumbentMandate carries a STALE incumbent's text forward explicitly, 
   const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
   await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-keep", project: "proj-a", keepIncumbentMandate: true });
   expect(posts[0]!.body).not.toHaveProperty("mandate");
-  expect(posts[0]!.body).not.toHaveProperty("keepIncumbentMandate");
+  expect(posts[0]!.body.keepIncumbentMandate).toBe(true);
 
   await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-named", project: "proj-a", mandate: "run it my way" });
   expect(posts[1]!.body.mandate).toBe("run it my way");
