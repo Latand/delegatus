@@ -1,7 +1,8 @@
 # Rename to Delegatus: sliced plan with migration
 
-Status: design. Slices 1 and 3 are implemented; §12 and §13 record where the
-code on `main` differed from this plan and what each slice did about it. Counted at `main`
+Status: design. Slices 1, 3 and 4 are implemented; §12, §13 and §14 record
+where the code on `main` differed from this plan and what each slice did
+about it. Counted at `main`
 7374c5d4 (2026-09-23); every count below comes from `git grep` on that tree
 unless it says otherwise.
 
@@ -880,3 +881,25 @@ Slice 1 followed the code wherever the two disagreed:
   which records every call. The host runs its deployment adapter through the
   adapter's `#!/usr/bin/env bun-container` line, so the rehearsal also links
   `bun-container` to the interpreter under test.
+
+---
+
+## 14. Slice 4: where the code differed from this plan
+
+- **The alias is not a precondition.** GitHub renamed the repository on
+  2026-09-23, but a checkout keeps minting the old key until its origin is
+  re-pointed, and only then does the forge-proven alias join the keys. So
+  that slice 4 can merge before O7, `src/lib/projects/viewerRepository.ts`
+  gives the release's own identity both GitHub names: a remote naming
+  Delegatus under either name yields the keys of both, and any other remote
+  (a fork, a mirror) yields only its own. `deploy_exact_sha` accepts a seat
+  under any of them. The incident card of `durability.ts` goes to whichever
+  key this machine's `project-remotes.json` holds, the current name first.
+  Once the alias exists, both keys fold into one and nothing changes.
+- **Pipeline delivery is untouched.** It keys a delivery by the repository
+  key its checkout minted, never by comparing URL strings, so a pipeline
+  recorded under the old key keeps its owner, and its recorded push remote
+  keeps working through the redirect.
+- **`homepage` and `bugs`** were added to `package.json` beside
+  `repository.url`, and the version moved to 1.3.0 for the first
+  `delegatus-cli` release.

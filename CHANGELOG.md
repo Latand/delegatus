@@ -7,6 +7,8 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-09-23
+
 ### Added
 - An **Update** surface, reached from the rail menu and the phone's board
   menus beside the setup guide. It checks the canonical repository for a newer
@@ -27,6 +29,12 @@ guarantees for the 1.x series.
   Ukrainian (#2007).
 
 ### Changed
+- The product is Delegatus, published on npm as `delegatus-cli`. Its bins are
+  `delegatus` (also `dlg`) and `delegatus-mcp`. `agent-log-viewer` and
+  `agent-log-viewer-mcp` keep working and say once that the command was renamed. The repository moved to
+  `github.com/Latand/delegatus`; GitHub redirects the old name, so existing
+  clones, the self-update check and deploys keep working, and a seat recorded
+  under the old repository name still deploys the Viewer.
 - Board placements are stored in SQLite (`state.sqlite`, collection `board`),
   one row per project, instead of `board.json`. A pin, a hidden group or a
   view-mode change commits only that project's row in one transaction, so a
@@ -780,7 +788,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Latand/delegatus/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Latand/live-log-viewer-next/compare/v1.1.0...v1.2.0

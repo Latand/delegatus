@@ -284,7 +284,7 @@ async function main(): Promise<void> {
   const prodStateDir = path.join(appDirIn(configRoot), "state");
   const stagingStateDir = process.env.LLV_STAGING_STATE_DIR || path.join(appDirIn(configRoot), "state-staging");
   const paths = stagingStatePaths(stagingStateDir);
-  const remote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/live-log-viewer-next.git";
+  const remote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/delegatus.git";
   const endpoint = `http://127.0.0.1:${STAGING_FRONT_PORT}`;
 
   const before = collectProdState(prodStateDir);

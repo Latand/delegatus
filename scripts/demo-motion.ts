@@ -284,7 +284,7 @@ export const STORYBOARDS: Storyboard[] = [
       { do: "waitText", text: "atlas" },
     ],
     steps: [
-      { do: "card", title: "bunx agent-log-viewer", subtitle: "Local-first. No database. Reads ~/.claude and ~/.codex.", note: "github.com/Latand/live-log-viewer-next", ms: 3200 },
+      { do: "card", title: "bunx agent-log-viewer", subtitle: "Local-first. No database. Reads ~/.claude and ~/.codex.", note: "github.com/Latand/delegatus", ms: 3200 },
     ],
     pixels: null,
   },

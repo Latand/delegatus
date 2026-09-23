@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
 
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { readReaperReport } from "@/lib/reaperRuntime";
 
 import { SqliteHandoffQueueStore } from "@/lib/runtime/handoffQueueStore";
@@ -25,6 +26,7 @@ import {
   stateDatabases,
   sweepStaleTempFiles,
   type StateDatabase,
+  type StorageIncident,
 } from "./durability";
 import { readJsonCache, writeJsonDurably } from "./durableJson";
 
@@ -305,6 +307,35 @@ test("the activation hook restores before the stores open, and the incident card
   expect(cards).toHaveLength(1);
   expect(cards[0]?.text).toContain("2026-09-19T10:00:00.000Z");
   expect(cards[0]).toMatchObject({ project: "proj", status: "inbox", placement: "unplaced" });
+});
+
+test("an incident card with no named project lands on the Viewer's key this machine resolved, under either GitHub name", async () => {
+  /* The release names Latand/delegatus while a checkout cloned before the
+     GitHub rename still resolves Latand/live-log-viewer-next, and no alias
+     joins the two yet. The card belongs on the board the operator sees. */
+  const restoreRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE;
+  delete process.env.LLV_VIEWER_CANONICAL_REMOTE;
+  try {
+    const incident: StorageIncident = {
+      kind: "database-fresh", database: "state.sqlite", at: "2026-09-23T10:00:00.000Z", message: "fresh",
+      corruptFiles: [], backup: null, backupAt: null, backupAgeMs: null, detail: null,
+    };
+    const cardProject = async (ledger: Record<string, string>): Promise<string | undefined> => {
+      const directory = sandbox();
+      fs.writeFileSync(path.join(directory, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: ledger }));
+      await raiseStorageIncidentCard(directory, incident);
+      return loadTasks(path.join(directory, "tasks.json")).find((task) => task.text.includes("state.sqlite"))?.project;
+    };
+    const oldKey = projectIdentityFromRemote("https://github.com/Latand/live-log-viewer-next.git", os.tmpdir())!;
+    const newKey = projectIdentityFromRemote("https://github.com/Latand/delegatus.git", os.tmpdir())!;
+
+    expect(await cardProject({ [oldKey.project]: oldKey.canonicalRemote })).toBe(oldKey.project);
+    expect(await cardProject({ [newKey.project]: newKey.canonicalRemote, [oldKey.project]: oldKey.canonicalRemote })).toBe(newKey.project);
+    expect(await cardProject({})).toBe(newKey.project);
+  } finally {
+    if (restoreRemote === undefined) delete process.env.LLV_VIEWER_CANONICAL_REMOTE;
+    else process.env.LLV_VIEWER_CANONICAL_REMOTE = restoreRemote;
+  }
 });
 
 /* ---- the swap under other processes' connections (review round 1) -------- */

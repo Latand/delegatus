@@ -20,7 +20,7 @@ Reuse `LLV_DEPLOY_IDEMPOTENCY_KEY` after a client timeout to receive the origina
 
 `POST /api/runtime/deployments` takes the same target two ways: `{"revision": "<full commit SHA>", "idempotencyKey": "..."}` pins a commit, and `{"ref": "refs/heads/<branch>", "idempotencyKey": "..."}` names a branch of the canonical repository, which the host adapter resolves in the canonical mirror. A request carrying both is refused. Only `refs/heads/*` of the canonical repository is accepted — no tags, no remote-tracking refs, no revision expressions. Whichever way the request named its target, the deployment ledger records the requested target and the exact resolved SHA that was built and promoted.
 
-The canonical remote defaults to `https://github.com/Latand/live-log-viewer-next.git` for both the adapter's mirror and `scripts/rebuild.sh`. Set `LLV_VIEWER_CANONICAL_REMOTE` when a different public or private mirror is required.
+The canonical remote defaults to `https://github.com/Latand/delegatus.git` for both the adapter's mirror and `scripts/rebuild.sh`. Set `LLV_VIEWER_CANONICAL_REMOTE` when a different public or private mirror is required.
 
 The runtime host serializes deployment requests and journals every phase before invoking the host adapter. Its stable listener reads `state/viewer-release.json` for each new connection, so promotion and rollback use an atomic target-file rename. Candidate and previous Viewer containers stay under Docker ownership on alternate loopback ports.
 

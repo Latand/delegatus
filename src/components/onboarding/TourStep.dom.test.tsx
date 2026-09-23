@@ -75,8 +75,8 @@ test("four cards say what the product is, in its own words, each with a picture"
   expect(host.querySelector("[data-tour-start] svg")).not.toBeNull();
   const links = Array.from(host.querySelectorAll("[data-tour-links] a")).map((anchor) => anchor.getAttribute("href"));
   expect(links).toEqual([
-    "https://github.com/Latand/live-log-viewer-next#how-agents-are-driven",
-    "https://github.com/Latand/live-log-viewer-next/blob/main/docs/orchestrator.md",
+    "https://github.com/Latand/delegatus#how-agents-are-driven",
+    "https://github.com/Latand/delegatus/blob/main/docs/orchestrator.md",
   ]);
 });
 
