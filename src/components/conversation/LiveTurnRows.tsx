@@ -399,7 +399,7 @@ function LiveToolRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeL
     <>
       {row}
       <div data-live-tool-image className={`${indent}min-w-0 pl-[22px]`}>
-        <ImageCard path={picture} inset />
+        <ImageCard path={picture} inset quietOutsideRoots />
       </div>
     </>
   );

@@ -361,3 +361,25 @@ test("on the phone the live line and its picture run edge to edge, where the set
     (dom as unknown as { matchMedia: unknown }).matchMedia = original;
   }
 });
+
+test("a live picture the route's fence refuses draws nothing, since its settled echo shows the transcript's bytes", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: "fixture", code: "access-denied" }),
+    { status: 403, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  try {
+    const host = mount([{
+      itemId: "toolu_tmp", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,
+      tool: { name: "Read", engine: "claude", status: "run", args: { file_path: "/tmp/capture.png" } },
+    }]);
+    const img = host.querySelector("[data-live-tool-image] img")!;
+    flushSync(() => img.dispatchEvent(new dom.Event("error") as unknown as Event));
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync(() => {});
+    expect(host.querySelector("[data-live-tool-image] img")).toBeNull();
+    expect(host.querySelector("[data-image-unavailable]")).toBeNull();
+    /* The line itself stays. */
+    expect(host.querySelector("[data-live-tool=Read]")).toBeTruthy();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

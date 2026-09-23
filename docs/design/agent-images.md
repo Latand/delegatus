@@ -371,6 +371,28 @@ file as a pill naming it, and the viewer opening on tap.
 - **Moving markdown images from `/api/image` to `/api/artifact`**: a separate
   hardening with no bearing on this requirement.
 
+## Known limits
+
+- **Live pictures outside the served folders.** A live row's picture loads from
+  disk, and the route serves only files under `$HOME`. For a file elsewhere (a
+  `/tmp` capture, a clipboard file), the live row draws the line alone. It
+  shows no pill that would vanish a moment later, and the settled row then
+  draws the picture from the transcript's inline bytes.
+- **Live caption without a size.** A picture drawn from disk captions
+  `W×H` only. Its settled inline copy adds `· N kB`. The layout does not move.
+- **Runtime-built paths in code mode.** `viewedPaths` holds only literal
+  `tools.view_image` paths. A path built at runtime (a loop variable, a
+  `${…}` template) is not recoverable. Its live `imageView` row stays
+  unclaimed beside the settled exec until the transcript moves past it, and
+  shows the picture a second time for that stretch. Paths are compared as
+  written, so a `~/x.png` literal does not claim a live row that reports the
+  expanded absolute path.
+- **Inline thumbnails mount decoded.** A capture run's inline frames now open
+  as thumbnails, as the requirement asks. `loading="lazy"` does not keep a
+  data URI out of the DOM. The feed's render window and `content-visibility`
+  bound what is laid out. Memory on a long capture conversation on the phone
+  is worth a look after deploy.
+
 ## Validation against the requirement
 
 - *"Whenever an agent looks at an image … whatever engine, engine version or

@@ -41,9 +41,12 @@ async function pathFailure(path: string): Promise<ImageFailure> {
  * which loads lazily through the artifact route, the same fenced route the
  * document preview reads. A file that cannot be drawn becomes a pill naming
  * the file and why, never its full path. `inset` drops the feed-gutter indent
- * for a card that already sits under a tool line.
+ * for a card that already sits under a tool line. `quietOutsideRoots` draws
+ * nothing for a file the route's fence refuses: a live row's settled echo
+ * shows that picture from the transcript's own bytes, so a pill there would
+ * only flash and vanish.
  */
-export function ImageCard({ inset = false, ...source }: ImageSource & { inset?: boolean }) {
+export function ImageCard({ inset = false, quietOutsideRoots = false, ...source }: ImageSource & { inset?: boolean; quietOutsideRoots?: boolean }) {
   const [view, setView] = useState<ImageView>("thumb");
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [failure, setFailure] = useState<ImageFailure | null>(null);
@@ -61,6 +64,7 @@ export function ImageCard({ inset = false, ...source }: ImageSource & { inset?: 
   const label = `${tr("render.image")} ${dims || name}`.trim();
   const gutter = inset ? "" : "ml-9 ";
 
+  if (failure === "outside" && quietOutsideRoots) return null;
   if (failure) {
     return (
       <div className={`my-2 ${gutter}min-w-0`}>
