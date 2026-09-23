@@ -241,10 +241,9 @@ export interface SeatTickItem {
       same child again an hour later under the other heading is the repeat this
       exists to stop. Only child items have any. */
   stateTokens?: readonly string[];
-  /** `provisioning` is the outcome of the seat's own create call (#1799): the
-      lane it asked for is provisioned and its first stage has launched. It is
-      announced once — see {@link SeatTickProjectState.announcedLanes} — because
-      there is nothing for the seat to close out, only something to know. */
+  /** The lane and settled state this visible line announces on delivery. */
+  laneAnnouncement?: string;
+  /** `provisioning` is the outcome of the seat's own create call (#1799). */
   kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy";
   id: string;
   label: string;
@@ -795,7 +794,7 @@ export interface SeatTickWakeCommit {
   /** Terminal children this wake names (#1465). A landing records them as
       harvested; a wake that never lands leaves them owed. */
   children: string[];
-  /** The lanes whose provisioning this wake announces (#1799). Recorded by a
+  /** The lane settlement states this wake announces (#2081). Recorded by a
       landing and by nothing else, exactly as the harvested children are: an
       announcement the delivery layer never delivered told the seat nothing,
       and the lane stays announceable. */
@@ -922,10 +921,9 @@ export const SEAT_TICK_RETIRED_WAKE_LIMIT = 20;
     which is the failure mode this bound is chosen to have. */
 export const SEAT_TICK_CHILDREN_SHOWN_LIMIT = 64;
 
-/** How many announced lanes a project's row keeps (#1799). Past it the oldest
-    may be announced once more, which is a repeated line rather than a lost
-    obligation — an announcement carries no obligation at all. */
-export const SEAT_TICK_ANNOUNCED_LANES_LIMIT = 64;
+/** Settled deployment history has its own bounded announcement window. Lane
+    announcements instead live for the lane's entire eligibility window. */
+export const SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT = 64;
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
@@ -1029,21 +1027,16 @@ export interface SeatTickProjectState {
    */
   childrenShown: string[];
   /**
-   * Lanes whose provisioning a delivered wake has already announced (#1799),
-   * newest last, bounded to {@link SEAT_TICK_ANNOUNCED_LANES_LIMIT}.
+   * Lane and settlement-state pairs a delivered wake announced (#2081).
+   * Kept while the lane remains eligible, even when more than 64 settle.
    *
-   * A provisioned lane is the one own-lane settlement with no obligation
-   * behind it: the seat asked for the lane, the lane is running, and there is
-   * nothing to close out. So it has no discharge of its own, and without this
-   * row it would be a wake reason every interval for as long as the backlog
-   * bound held it — the reason nothing can discharge that the bound exists to
-   * refuse. Announced once, it is never offered again; the lane's later
-   * settlements are unaffected, because they are different settlements.
+   * Legacy bare lane ids mean provisioning only. A completed lane's automatic
+   * closedAt is not evidence that its creator heard it completed.
    */
   announcedLanes: string[];
   /**
    * Settled deployments of the seat's a delivered wake has already announced
-   * (#2063), newest last, bounded to {@link SEAT_TICK_ANNOUNCED_LANES_LIMIT}.
+   * (#2063), newest last, bounded to {@link SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT}.
    * A settled deployment stays settled for ever, so this is the only discharge
    * its reason has: announced once, it is never offered again. Absent reads as
    * empty.

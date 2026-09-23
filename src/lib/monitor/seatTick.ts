@@ -4,7 +4,7 @@ import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SE
 import { evidenceStallReason } from "./classify";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
-  SEAT_TICK_ANNOUNCED_LANES_LIMIT,
+  SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickCard,
@@ -636,8 +636,8 @@ function isActionableChild(child: SeatTickChildInput, seat: SeatTickSeatInput | 
  * The backlog bound is the one {@link isUnstarted} applies to an assigned card,
  * and for the same reason: "the seat launched a lane and it completed" is true
  * for ever, so without a bound it is a wake reason nothing can discharge. Past
- * the bound the lane is history; inside it, closing, dismissing or moving the
- * lane is what discharges it, and each of those makes it recent again.
+ * the bound the lane is history; inside it, a delivered announcement for its
+ * current state discharges that news. A later state has its own announcement.
  */
 function ownSettledLanes(input: SeatTickCheckInput): readonly SeatTickOwnLaneInput[] {
   return input.ownLanes.filter((lane) => {
@@ -660,7 +660,7 @@ function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
     return `${lane.title} — lane you launched: last review failed, head unreviewed: ${verdict}current head ${short(review?.currentHead)} was never reviewed. pipeline_action continue-review with addRounds resumes it`;
   }
   const settled = lane.settled === "completed"
-    ? "completed, and nobody has closed it out"
+    ? "completed"
     : lane.settled === "failed"
       ? "a stage failed"
       : "parked on a decision";
@@ -1476,10 +1476,12 @@ function wakeItems(context: {
      and leaves the seat to rediscover which would have cost most of the same
      turn. The lane that produced it travels with it for the same reason. */
   for (const pullRequest of input.pullRequests) {
+    const lane = context.ownLanes.find((entry) => entry.id === pullRequest.pipelineId);
     items.push({
       kind: "pull-request",
       id: `#${pullRequest.number}`,
       label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished`,
+      ...(lane ? { laneAnnouncement: `${lane.id}:${lane.settled}` } : {}),
     });
   }
   /* A lane whose open pull request is already on the agenda is that pull
@@ -1494,7 +1496,7 @@ function wakeItems(context: {
        special: it rides the same reason, the same agenda order and the same
        per-wake bound as every other own-lane line, and the bound cutting it is
        what leaves it unannounced and offerable next time. */
-    items.push({ kind: lane.settled === "provisioned" ? "provisioning" : "pipeline", id: lane.id, label: ownLaneLabel(lane) });
+    items.push({ kind: lane.settled === "provisioned" ? "provisioning" : "pipeline", id: lane.id, label: ownLaneLabel(lane), laneAnnouncement: `${lane.id}:${lane.settled}` });
   }
   for (const event of context.laneEvents) {
     items.push({ kind: "event", id: event.pipelineId ?? event.type, label: `${event.type}: ${event.summary}` });
@@ -1611,10 +1613,9 @@ export function seatTickWakeCommitPlan(
     .flatMap((item) => (item.outcomeIds?.length ? item.outcomeIds : [item.outcomeId ?? item.id]))
     .filter((id) => terminal.has(id));
   /* Read off the items the wake actually CARRIES, never off the check's own
-     list (#1799): a provisioned lane the per-wake bound held back was not
-     announced, and recording it here would be the announcement nobody ever
-     received. Same rule the harvested children live under. */
-  const announcedLanes = verdict.items.filter((item) => item.kind === "provisioning").map((item) => item.id);
+     list (#2081): a settled lane the per-wake bound held back was not
+     announced. A pull request line can carry its lane's settlement too. */
+  const announcedLanes = verdict.items.flatMap((item) => item.laneAnnouncement ? [item.laneAnnouncement] : []);
   /* The same rule for a settled deploy (#2063): the landing of the wake that
      carried it is what announces it, once. */
   const announcedDeploys = verdict.items.filter((item) => item.kind === "deploy").map((item) => item.id);
@@ -1690,15 +1691,15 @@ export function seatTickWakeCommit(
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
-    announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? []),
+    announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
   };
 }
 
-/** The lanes (#1799) or deployments (#2063) announced after a landing,
-    newest last and bounded. */
-function announced(before: readonly string[], landed: readonly string[]): string[] {
-  return [...new Set([...before.filter((id) => !landed.includes(id)), ...landed])]
-    .slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT);
+/** Keep each lane announcement until source eligibility expires. Deployments
+    retain their separate bounded history. */
+function announced(before: readonly string[], landed: readonly string[], limit?: number): string[] {
+  const merged = [...new Set([...before.filter((id) => !landed.includes(id)), ...landed])];
+  return limit === undefined ? merged : merged.slice(-limit);
 }
 
 /** The harvest cursor after a landing (#1465): the children this wake named,

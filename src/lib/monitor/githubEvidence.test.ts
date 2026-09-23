@@ -90,17 +90,17 @@ describe("open issues for the proactive slot", () => {
       run: async (args) => {
         calls.push(args);
         return JSON.stringify([
-          { number: 1289, title: "wake on a merge that is waiting", headRefName: "topic-merge-queue", updatedAt: "2026-08-29T10:00:00Z" },
-          { number: 1285, title: "stop replaying closed lanes", headRefName: "topic-closed-lanes", updatedAt: null },
+          { number: 1289, title: "wake on a merge that is waiting", headRefName: "topic-merge-queue", createdAt: "2026-08-27T10:00:00Z", updatedAt: "2026-08-29T10:00:00Z" },
+          { number: 1285, title: "stop replaying closed lanes", headRefName: "topic-closed-lanes", createdAt: "2026-08-27T11:00:00Z", updatedAt: null },
         ]);
       },
     });
-    expect(calls[0]).toEqual(["pr", "list", "--state", "open", "--limit", "60", "--json", "number,title,headRefName,updatedAt"]);
+    expect(calls[0]).toEqual(["pr", "list", "--state", "open", "--limit", "60", "--json", "number,title,headRefName,createdAt,updatedAt"]);
     expect(pullRequests).toEqual({
       ok: true,
       pullRequests: [
-        { number: 1289, title: "wake on a merge that is waiting", headRefName: "topic-merge-queue", updatedAt: "2026-08-29T10:00:00Z" },
-        { number: 1285, title: "stop replaying closed lanes", headRefName: "topic-closed-lanes", updatedAt: null },
+        { number: 1289, title: "wake on a merge that is waiting", headRefName: "topic-merge-queue", createdAt: "2026-08-27T10:00:00Z", updatedAt: "2026-08-29T10:00:00Z" },
+        { number: 1285, title: "stop replaying closed lanes", headRefName: "topic-closed-lanes", createdAt: "2026-08-27T11:00:00Z", updatedAt: null },
       ],
     });
     /* Read-only, like every other question asked of this seam. */
@@ -115,6 +115,8 @@ describe("open issues for the proactive slot", () => {
       .toEqual({ ok: false, unavailable: "malformed-output" });
     expect(await openPullRequestsForRepo({ cwd: "/srv/repo", run: async () => JSON.stringify([{ title: "no number", headRefName: "topic" }]) }))
       .toEqual({ ok: false, unavailable: "malformed-output" });
+    expect(await openPullRequestsForRepo({ cwd: "/srv/repo", run: async () => JSON.stringify([{ number: 1289, headRefName: "topic" }]) }))
+      .toEqual({ ok: false, unavailable: "malformed-output" });
     expect(await openPullRequestsForRepo({ cwd: "/srv/repo", run: async () => JSON.stringify(["a string"]) }))
       .toEqual({ ok: false, unavailable: "malformed-output" });
   });
@@ -124,21 +126,17 @@ describe("open issues for the proactive slot", () => {
      pull request that might still be open. */
   test("one unusable row among valid ones fails the whole read rather than shortening it", async () => {
     const mixed = JSON.stringify([
-      { number: 1289, title: "kept", headRefName: "topic-merge-queue" },
+      { number: 1289, title: "kept", headRefName: "topic-merge-queue", createdAt: "2026-08-27T10:00:00Z" },
       { number: 1290, title: "no head" },
     ]);
     expect(await openPullRequestsForRepo({ cwd: "/srv/repo", run: async () => mixed }))
       .toEqual({ ok: false, unavailable: "malformed-output" });
   });
 
-  /* The other edge of the same rule, so refusing the unusable row does not
-     grow into refusing a usable one: the number and the head branch are what
-     attribute a pull request to a lane, and a row carrying both is read even
-     with the two decorative fields missing. A read that failed over a missing
-     title would be a `gh` outage invented out of a complete answer. */
-  test("a row with a number and a head branch is read even with no title and no timestamp", async () => {
-    expect(await openPullRequestsForRepo({ cwd: "/srv/repo", run: async () => JSON.stringify([{ number: 1289, headRefName: "topic" }]) }))
-      .toEqual({ ok: true, pullRequests: [{ number: 1289, title: "", headRefName: "topic", updatedAt: null }] });
+  /* Title and update time do not decide which lane owned the head. */
+  test("a row with creation time is read even without title or update time", async () => {
+    expect(await openPullRequestsForRepo({ cwd: "/srv/repo", run: async () => JSON.stringify([{ number: 1289, headRefName: "topic", createdAt: "2026-08-27T10:00:00Z" }]) }))
+      .toEqual({ ok: true, pullRequests: [{ number: 1289, title: "", headRefName: "topic", createdAt: "2026-08-27T10:00:00Z", updatedAt: null }] });
   });
 
   /* The distinction the whole reason rests on: a repository with everything
