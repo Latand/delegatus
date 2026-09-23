@@ -496,7 +496,7 @@ function BulkFlowPopover({
             {t("common.cancel")}
           </button>
           <button
-            className="h-8 rounded-[8px] border border-accent bg-accent px-2.5 text-[11.5px] font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
+            className="h-8 rounded-[8px] border border-brand bg-brand px-2.5 text-[11.5px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
             disabled={disabled || !count}
             onClick={() =>
               onStart({

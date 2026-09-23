@@ -252,7 +252,7 @@ export function FlowDialog({ file, onClose }: { file: FileEntry; onClose: () => 
           {t("common.cancel")}
         </button>
         <button
-          className="rounded-[8px] border border-accent bg-accent px-3 py-1.5 text-[12px] font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
+          className="rounded-[8px] border border-brand bg-brand px-3 py-1.5 text-[12px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
           disabled={busy}
           onClick={() => void create()}
         >

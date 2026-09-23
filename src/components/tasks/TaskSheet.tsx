@@ -388,7 +388,7 @@ function TaskDetailView({
         <button
           type="button"
           disabled={!checked.size || sending}
-          className="mt-1 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] border border-accent bg-accent text-[12px] font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
+          className="mt-1 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] border border-brand bg-brand text-[12px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
           onClick={() => void send()}
         >
           {sending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Send className="h-4 w-4" aria-hidden />}

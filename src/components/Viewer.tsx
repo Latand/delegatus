@@ -55,6 +55,7 @@ import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
 import { DeploymentStatusPill } from "./runtime/DeploymentStatusPill";
 import { StagingBadge } from "./StagingBadge";
 import { activityDot, cleanTitle } from "./utils";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 const PROJECT_KEY = "llvProject";
 
@@ -637,7 +638,7 @@ export function Viewer() {
   );
 
   useEffect(() => {
-    document.title = queue.length ? `(${queue.length}) Agent Log Viewer` : "Agent Log Viewer";
+    document.title = queue.length ? `(${queue.length}) ${PRODUCT_NAME}` : PRODUCT_NAME;
   }, [queue.length]);
 
   useEffect(() => {
