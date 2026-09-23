@@ -167,7 +167,7 @@ export const STORYBOARDS: Storyboard[] = [
       { do: "waitText", text: "forge" },
     ],
     steps: [
-      { do: "card", title: "Agent Log Viewer", subtitle: "Every coding agent on your machine — one live board.", note: "bunx agent-log-viewer", ms: 2800 },
+      { do: "card", title: "Delegatus", subtitle: "Every coding agent on your machine — one live board.", note: "bunx delegatus-cli", ms: 2800 },
     ],
     pixels: null,
   },

@@ -14,9 +14,9 @@ const REVIEW_FENCES = [
 // correctness for a UI diff stopped at the code and the author's evidence had
 // never mounted one of the surfaces the requirement named.
 const REVIEW_FRAME_RULES =
-  "Three standing rules. (1) Anchor the frame: when the assignment carries the requester's originating requirement, validate the work against that verbatim requirement, never against the artifact's previous revision — WRONG-PREMISE (\"this does not serve the original requirement\") is an expected verdict and outranks any finding about internal rigour. (2) Over-engineering pass: on every review, flag machinery heavier than the problem it solves (a library plus wrapper where a native primitive does), name the simpler mechanism, and report what to cut — OVER-BUILT is a first-class verdict, and a round that only removes scope is a successful round. (3) Rendered surfaces are part of correctness: when the diff touches UI (components, styles, layout), the review covers the rendered result and the code alike. Check that the author's rendered evidence reaches every surface and every viewport the requirement names; evidence that skips a named surface is REQUEST_CHANGES on its own. Where that evidence is missing and a harness exists, render from an export of the reviewed HEAD — never the live worktree, never the operator's Viewer — and report overflow, clipped or zero-width controls, overlap and unreadable states as severity-ranked findings carrying the viewport and the measured numbers.";
+  "Three standing rules. (1) Anchor the frame: when the assignment carries the requester's originating requirement, validate the work against that verbatim requirement, never against the artifact's previous revision — WRONG-PREMISE (\"this does not serve the original requirement\") is an expected verdict and outranks any finding about internal rigour. (2) Over-engineering pass: on every review, flag machinery heavier than the problem it solves (a library plus wrapper where a native primitive does), name the simpler mechanism, and report what to cut — OVER-BUILT is a first-class verdict, and a round that only removes scope is a successful round. (3) Rendered surfaces are part of correctness: when the diff touches UI (components, styles, layout), the review covers the rendered result and the code alike. Check that the author's rendered evidence reaches every surface and every viewport the requirement names; evidence that skips a named surface is REQUEST_CHANGES on its own. Where that evidence is missing and a harness exists, render from an export of the reviewed HEAD — never the live worktree, never the operator's Delegatus — and report overflow, clipped or zero-width controls, overlap and unreadable states as severity-ranked findings carrying the viewport and the measured numbers.";
 
-// #1428 — the Viewer indexes every message of every conversation on this machine,
+// #1428 — Delegatus indexes every message of every conversation on this machine,
 // and stages kept re-solving what an earlier one had already solved. Pipeline
 // stages inherit the scaffold, so the sentence lives here once.
 const SEARCH_PRIOR_CONVERSATIONS =
@@ -41,7 +41,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "orchestrator",
     name: "Orchestrator",
-    description: "Coordinates fresh agents through the Viewer control plane.",
+    description: "Coordinates fresh agents through the Delegatus control plane.",
     config: { engine: "claude", model: "opus", effort: "high" },
     parameters: [
       { key: "mode", label: "Mode", description: "Operating mode for the coordination run.", kind: "select", options: ["standard", "plan-tickets", "wayfind", "backlog-campaign"] },
@@ -52,9 +52,9 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "mergePolicy", label: "Merge policy", description: "Delivery policy for backlog-campaign mode.", kind: "select", options: ["pr", "merge"] },
       { key: "completionPolicy", label: "Completion policy", description: "Terminal policy for backlog-campaign mode.", kind: "select", options: ["pr-opened", "merged", "released"] },
     ],
-    promptScaffold: `You are the Orchestrator. Drive work through the production Viewer MCP tools. Use fresh empty sessions with src lineage; forks are disabled. Keep every worker visible and controllable in the Viewer.\n\nMode: {{mode}}\nRepository: {{repo}}\nIssue query: {{issueQuery}}\nUrgent list: {{urgent}}\nMaximum workers: {{maxWorkers}}\nMerge policy: {{mergePolicy}}\nCompletion policy: {{completionPolicy}}\n\nFor backlog-campaign mode, inventory dependencies before assignment, use Opus/Sol gates, route backend work to Terra and frontend work to Opus, complete one review round, and require root release checks. Before a Viewer replacement, preserve the external-worker deployment barrier. ${PROCESS_CLEANUP_RULE}`,
+    promptScaffold: `You are the Orchestrator. Drive work through the production Delegatus MCP tools (MCP key \`viewer\`). Use fresh empty sessions with src lineage; forks are disabled. Keep every worker visible and controllable in Delegatus.\n\nMode: {{mode}}\nRepository: {{repo}}\nIssue query: {{issueQuery}}\nUrgent list: {{urgent}}\nMaximum workers: {{maxWorkers}}\nMerge policy: {{mergePolicy}}\nCompletion policy: {{completionPolicy}}\n\nFor backlog-campaign mode, inventory dependencies before assignment, use Opus/Sol gates, route backend work to Terra and frontend work to Opus, complete one review round, and require root release checks. Before a Delegatus replacement, preserve the external-worker deployment barrier. ${PROCESS_CLEANUP_RULE}`,
     safetyFences: [
-      "Viewer control uses the Viewer MCP tools with src lineage.",
+      "Delegatus control uses the Delegatus MCP tools with src lineage.",
       "Fresh empty sessions only; forks are disabled.",
       "One owner holds a file at a time across active worktrees.",
     ],
@@ -96,7 +96,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "mode", label: "Mode", description: "Implementation discipline.", kind: "select", options: ["plain", "apply-fixes", "tdd", "diagnose", "prototype", "merge-resolve"] },
       { key: "domain", label: "Domain", description: "Product domain for the implementation.", kind: "select", options: ["general", "frontend"] },
     ],
-    promptScaffold: `You are a Builder in {{mode}} mode. Implement the scoped product directive with focused checks. Keep changes within the assigned file ownership, run a self-review, and report the verification evidence. Hand over a file as its absolute path, with :line or #heading when you mean a place in it; the Viewer opens that in its preview. ${SEARCH_PRIOR_CONVERSATIONS} ${HUMAN_IN_THE_LOOP} ${PROCESS_CLEANUP_RULE}`,
+    promptScaffold: `You are a Builder in {{mode}} mode. Implement the scoped product directive with focused checks. Keep changes within the assigned file ownership, run a self-review, and report the verification evidence. Hand over a file as its absolute path, with :line or #heading when you mean a place in it; Delegatus opens that in its preview. ${SEARCH_PRIOR_CONVERSATIONS} ${HUMAN_IN_THE_LOOP} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: ["Product source changes stay inside the assigned scope.", "A deployment requires a Deployer role and explicit operator approval."],
     capabilities: [],
   },

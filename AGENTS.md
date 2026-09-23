@@ -3,6 +3,13 @@
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
+# The product is Delegatus
+
+This repository is Delegatus, called Agent Log Viewer before the rename
+(`docs/design/rename-delegatus.md`). Text a person or an agent reads names it
+Delegatus. In code, and in these notes, "the Viewer" still names the web server
+process as distinct from the runtime host, and the MCP server keeps the key
+`viewer`, so its tools stay `mcp__viewer__*`.
 
 <!-- BEGIN:worktree-grouping -->
 # Worktree → project grouping (canonical — do not re-break)

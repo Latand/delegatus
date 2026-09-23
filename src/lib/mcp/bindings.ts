@@ -735,7 +735,7 @@ function productionCallerProject(): string | null {
 }
 
 /**
- * The canonical project of the Agent Log Viewer this process IS — the one
+ * The canonical project of the Delegatus install this process IS — the one
  * question `deploy_exact_sha` refuses on (#1321), and the only caller there is.
  *
  * The cwd cannot answer it. An MCP client launches wherever the CALLER works,
@@ -2409,7 +2409,7 @@ async function deployExactSha(
   const viewerProject = dependencies.viewerProject ? dependencies.viewerProject() : viewerOwnProject();
   if (seat.project !== viewerProject) {
     throw new McpToolRefusal(
-      "this tool deploys the Agent Log Viewer application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Viewer surface can. Report the request over the bridge instead.",
+      "this tool deploys the Delegatus application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Delegatus surface can. Report the request over the bridge instead.",
       { code: "deploy_foreign_project", revision },
     );
   }

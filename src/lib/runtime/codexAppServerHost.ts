@@ -1430,7 +1430,7 @@ export class CodexAppServerHost implements EngineHost {
     const provisional = new CodexAppServerHost(child, { threadId: threadId ?? "pending", path: null }, options);
     try {
       const initialized = record(await provisional.rpc("initialize", {
-        clientInfo: { name: "llv-structured-host", title: "Live Log Viewer", version: "0.11.7" },
+        clientInfo: { name: "llv-structured-host", title: "Delegatus", version: "0.11.7" },
         capabilities: { experimentalApi: true },
       }));
       provisional.protocolVersion = protocolVersionFromInitialize(initialized);

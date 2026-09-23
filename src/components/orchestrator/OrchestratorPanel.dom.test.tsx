@@ -1471,8 +1471,12 @@ test("the dock renders the delivered mandate as the seat's own card, not as the 
      which is why the board's pane names the same mandate the same way. */
   expect(card!.textContent).toContain(`Mandate v${ORCHESTRATOR_PROMPT_VERSION}`);
   expect(card!.textContent).toContain("sent at seat creation");
-  /* Folded away, and the rotation handoff is a section of the SAME card. */
-  expect(host.textContent).not.toContain("You are the viewer's built-in Manager");
+  /* Folded away, and the rotation handoff is a section of the SAME card. The
+     opening is read off the prompt itself, so a reworded mandate keeps this
+     check able to fail. */
+  const mandateOpening = ORCHESTRATOR_SYSTEM_PROMPT.split(" (issues")[0]!;
+  expect(mandateOpening.length).toBeGreaterThan(20);
+  expect(host.textContent).not.toContain(mandateOpening);
   expect(host.textContent).not.toContain("You are replacing orchestrator conversation");
   expect(card!.textContent).toContain("Rotation handoff");
   /* The operator's bubble is gone from the row entirely. */

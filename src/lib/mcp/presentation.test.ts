@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { describeMcpCall } from "./presentation";
+import { describeMcpCall, isViewerMcpServer } from "./presentation";
 
 describe("describeMcpCall", () => {
   test("describes a spawned reviewer and links its durable conversation", () => {
@@ -78,4 +78,16 @@ describe("describeMcpCall", () => {
       links: [],
     });
   });
+});
+
+/* Delegatus rename (docs/design/rename-delegatus.md §6.4): the key stays
+   `viewer`, and a server registered under either product name still renders
+   as this server's calls. */
+test("the Viewer MCP server is recognized under viewer, agent-log-viewer and delegatus keys", () => {
+  for (const name of ["viewer", "viewer-dev", "agent-log-viewer", "agent-log-viewer-dev", "delegatus", "delegatus-dev"]) {
+    expect(isViewerMcpServer(name)).toBe(true);
+  }
+  for (const name of ["delegatusx", "telegram", "viewerish"]) {
+    expect(isViewerMcpServer(name)).toBe(false);
+  }
 });

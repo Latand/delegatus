@@ -1,4 +1,4 @@
-# Agent Log Viewer — Next.js rewrite
+# Delegatus (formerly Agent Log Viewer) — Next.js rewrite
 
 Rewrite of the working Python prototype at
 `the original single-file Python prototype (../live-log-viewer/server.py)` (READ IT FIRST — it is the
@@ -42,7 +42,7 @@ TypeScript 5 strict, bun.
 
 ## bin/
 
-`bin/cli.mjs` is the published `agent-log-viewer` entrypoint. It resolves the
+`bin/cli.mjs` is the published `delegatus` (and `dlg`) entrypoint. It resolves the
 package root from its own file location, chooses a standalone server when one is
 available, falls back to local `next start`, sets `PORT` and `HOSTNAME`
 explicitly for the child, polls readiness on `127.0.0.1`, and owns shutdown for
