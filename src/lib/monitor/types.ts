@@ -425,6 +425,9 @@ export interface SeatTickSeatInput {
   designatedAt: string | null;
   turn: "busy" | "idle" | "terminal" | "unknown";
   activity: SeatTickActivity | null;
+  /** Whether the mandate this seat was delivered states the tick contract
+      (#2030). Absent or false, its wakes carry the clauses themselves. */
+  mandateCarriesTickContract?: boolean;
 }
 
 /**

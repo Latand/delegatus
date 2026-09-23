@@ -43,6 +43,7 @@ const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/re
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { sessionKeyFromTranscript } = await import("@/lib/agent/sessionKey");
 const { projectForCwd } = await import("@/lib/scanner/describe");
+const { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_SYSTEM_PROMPT, ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE } = await import("@/lib/orchestrator/prompt");
 import type { AgentHostStatus, DurableMembershipInput } from "@/lib/agent/registry";
 import type { SeatTickSettings } from "./seatTickSettings";
 import type { SeatTickControllerDependencies } from "./seatTickController";
@@ -86,7 +87,7 @@ interface Harness {
   cards: { project: string; card: SeatTickCard }[];
   written: SeatTickProjectState[];
   withdrawn: { wake: SeatTickOutstandingWake; reason: string }[];
-  seat: { conversationId: string; seatEpoch: number; path: string | null; designatedAt?: string | null } | null;
+  seat: { conversationId: string; seatEpoch: number; path: string | null; designatedAt?: string | null; mandate?: string; promptVersion?: number | null } | null;
   /** Every liveness read the check made, in order (#1465). */
   liveness: { project?: string; conversationId?: string }[];
   /** Registry snapshot reads the check made (#1465). */
@@ -129,7 +130,7 @@ function pipelineRecord(entry: PipelineFixture) {
 }
 
 function harness(options: {
-  seat?: { conversationId: string; seatEpoch: number; path: string | null; designatedAt?: string | null } | null;
+  seat?: { conversationId: string; seatEpoch: number; path: string | null; designatedAt?: string | null; mandate?: string; promptVersion?: number | null } | null;
   turn?: "busy" | "idle";
   seatActivity?: Partial<AgentLivenessRecord> | null;
   pipelines?: PipelineFixture[];
@@ -1828,12 +1829,15 @@ function busyBoard(movedAt: number): PipelineFixture[] {
   }));
 }
 
+/** A seat delivered the current default, whose mandate states the contract. */
+const CURRENT_SEAT = { conversationId: CONVERSATION, seatEpoch: 7, path: null, mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: ORCHESTRATOR_PROMPT_VERSION };
+
 test("a note the seat's last landed wake carried is one line on the next wake, and a tick with it is about 1.2 KB (#2030)", async () => {
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "note-unchanged-")), "seat-tick.json");
   writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, accounting: undefined }, stateFile);
   const settings = { ...promptSettings(), monitorPrompt: LEDGER_NOTE };
   const check = async (now: number, over: Parameters<typeof harness>[0] = {}) => {
-    const rig = harness({ stateFile, now, pipelines: busyBoard(now - MINUTE), settings, ...over });
+    const rig = harness({ stateFile, now, pipelines: busyBoard(now - MINUTE), settings, seat: CURRENT_SEAT, ...over });
     await runSeatTickCheck(PROJECT, rig.deps);
     expect(rig.sent).toHaveLength(1);
     return rig.sent[0]!.text;
@@ -1849,6 +1853,7 @@ test("a note the seat's last landed wake carried is one line on the next wake, a
   expect(second).not.toContain("lane 1: pipeline_0000ab");
   expect(second).toContain(`Standing monitor note unchanged since your last wake (${LEDGER_NOTE.length} chars;`);
   expect(second).toContain("Contract: the \"The Viewer's clock\" section of your mandate governs this turn.");
+  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(second).not.toContain(clause);
   const unchangedBytes = Buffer.byteLength(second);
   expect(unchangedBytes).toBeLessThanOrEqual(1_200);
   console.log(`[#2030] tick bytes: note shown ${Buffer.byteLength(first)}, note unchanged ${unchangedBytes}`);
@@ -1860,11 +1865,32 @@ test("a note the seat's last landed wake carried is one line on the next wake, a
 
   /* A successor never received it: its first wake carries the note whole. */
   const successor = await check(NOW + 183 * MINUTE, {
-    seat: { conversationId: SUCCESSOR, seatEpoch: 8, path: null },
+    seat: { ...CURRENT_SEAT, conversationId: SUCCESSOR, seatEpoch: 8 },
     settings: { ...settings, monitorPrompt: edited },
   });
   expect(successor).toContain(PROMPT_HEADING);
   expect(successor).toContain("lane 1: pipeline_0000ab — merged");
+});
+
+/* #2030 review: a seat still running on a v20 mandate — or carried forward on
+   one — was delivered the old clock paragraph, which states none of the
+   clauses. Its wakes keep them until its mandate does. */
+test("a seat whose mandate predates the contract gets its clauses in the wake; a current one gets the line naming them (#2030)", async () => {
+  const v20Clock = `${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(0, 4).join("\n")}\nBetween wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
+  const v20Seat = { ...CURRENT_SEAT, mandate: ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, v20Clock), promptVersion: 20 };
+  const bespoke = { ...CURRENT_SEAT, mandate: "Run this board my way.", promptVersion: null };
+  for (const seat of [v20Seat, bespoke]) {
+    const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, seat });
+    await runSeatTickCheck(PROJECT, rig.deps);
+    const text = rig.sent[0]!.text;
+    expect(text).toContain("\nContract:\n");
+    for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(text.split(clause)).toHaveLength(2);
+    expect(text).not.toContain("section of your mandate governs this turn");
+  }
+  const current = harness({ pipelines: OPEN_LANE, state: OVERDUE, seat: CURRENT_SEAT });
+  await runSeatTickCheck(PROJECT, current.deps);
+  expect(current.sent[0]!.text).toContain("section of your mandate governs this turn");
+  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(current.sent[0]!.text).not.toContain(clause);
 });
 
 test("a wake the layer never landed leaves the note to be shown again (#2030)", async () => {

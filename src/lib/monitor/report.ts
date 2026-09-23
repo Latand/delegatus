@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { ORCHESTRATOR_VIEWER_CLOCK_HEADING } from "@/lib/orchestrator/prompt";
+import { ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_VIEWER_CLOCK_HEADING } from "@/lib/orchestrator/prompt";
 
 import { MONITOR_REF_PREFIX, seatTickProposalRef, stateLabel } from "./cards";
 import type { ProposalIssue } from "./githubEvidence";
@@ -156,9 +156,19 @@ function boundedSeatTickMessage(dynamic: readonly string[], reserved: readonly s
   return head.length <= budget ? `${head}${tail}` : `${head.slice(0, budget - 1).trimEnd()}…${tail}`;
 }
 
-/** The one line that stands where the contract's six clauses used to (#2030).
-    Delivery gives every seat's mandate the section it names. */
+/** The one line that stands where the contract's clauses used to (#2030),
+    for a seat whose delivered mandate states them. */
 export const SEAT_TICK_CONTRACT_POINTER = `Contract: the "${ORCHESTRATOR_VIEWER_CLOCK_HEADING.replace(/^## /, "").split(" — ")[0]}" section of your mandate governs this turn.`;
+
+/** The foot of a wake: the pointer when the seat's mandate states the
+    contract, the clauses themselves when it may not — a seat still running on
+    what it was delivered before v21, one carried forward on an older mandate,
+    or bespoke rules. */
+function seatTickContractLines(mandateCarriesContract: boolean): string[] {
+  return mandateCarriesContract
+    ? ["", SEAT_TICK_CONTRACT_POINTER]
+    : ["", "Contract:", ...ORCHESTRATOR_SEAT_TICK_CONTRACT.map((clause) => `- ${clause}`)];
+}
 
 function seatTickBullet(item: SeatTickItem): string {
   const bullet = `- [${item.kind}] ${item.id} — ${item.label}`;
@@ -240,6 +250,9 @@ export function seatTickWakeMessage(input: {
   monitorPrompt?: string | null;
   /** The seat's last landed wake already showed this exact note (#2030). */
   monitorPromptUnchanged?: boolean;
+  /** The seat's delivered mandate states the contract (#2030); otherwise the
+      wake carries its clauses. */
+  mandateCarriesContract?: boolean;
 }): string {
   const lines = [
     `Seat tick — ${input.project}.`,
@@ -284,8 +297,7 @@ export function seatTickWakeMessage(input: {
   }
   return boundedSeatTickMessage(lines, [
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
-    "",
-    SEAT_TICK_CONTRACT_POINTER,
+    ...seatTickContractLines(input.mandateCarriesContract === true),
   ]);
 }
 
@@ -312,6 +324,9 @@ export function seatTickProposalMessage(input: {
   monitorPrompt?: string | null;
   /** The seat's last landed wake already showed this exact note (#2030). */
   monitorPromptUnchanged?: boolean;
+  /** The seat's delivered mandate states the contract (#2030); otherwise the
+      wake carries its clauses. */
+  mandateCarriesContract?: boolean;
 }): string {
   const lines = [
     `Seat tick — ${input.project}. No lane is open and no board task is waiting, and the proposal slot is due.`,
@@ -335,7 +350,6 @@ export function seatTickProposalMessage(input: {
     `Put this exact line at the foot of the card so the next tick recognizes it: ${MONITOR_REF_PREFIX} ${seatTickProposalRef(input.slot)}`,
     "Open no GitHub issue and start no pipeline from this — the operator moves a card to assigned when they want it, and the next tick starts it.",
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
-    "",
-    SEAT_TICK_CONTRACT_POINTER,
+    ...seatTickContractLines(input.mandateCarriesContract === true),
   ]);
 }

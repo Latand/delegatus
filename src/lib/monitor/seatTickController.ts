@@ -1364,6 +1364,7 @@ async function check(
         gaps: verdict.gaps,
         monitorPrompt: input.settings.monitorPrompt,
         monitorPromptUnchanged,
+        mandateCarriesContract: input.seat.mandateCarriesTickContract === true,
       })
       : seatTickProposalMessage({
         project: input.project,
@@ -1373,6 +1374,7 @@ async function check(
         slot: String(Math.floor(input.now / policy.proposalIntervalMs)),
         monitorPrompt: input.settings.monitorPrompt,
         monitorPromptUnchanged,
+        mandateCarriesContract: input.seat.mandateCarriesTickContract === true,
       });
 
     /* The prompt above came off the settings row this check read, not out of

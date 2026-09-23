@@ -3650,12 +3650,12 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Your own additional prompt for this project's monitor: what every later scheduler-fired wake should look at, appended to the reasons and items the tick derives. Send a new one to replace it, null to clear it. Redacted before it is stored; refused, not truncated, when over the limit. It never changes whether or when a wake is sent, and needs no reason."),
     replaceLine: z.object({
       prefix: z.string().min(1).optional().describe("Replace the one note line starting with this text (leading spaces ignored). More or fewer than one match is refused."),
-      index: z.number().int().min(0).optional().describe("Or the zero-based line number."),
+      index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
       text: z.string().describe("The new line."),
     }).optional().describe("Replace one line of the stored note without resending the rest."),
     removeLine: z.object({
       prefix: z.string().min(1).optional().describe("Remove the one note line starting with this text (leading spaces ignored)."),
-      index: z.number().int().min(0).optional().describe("Or the zero-based line number."),
+      index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
     }).optional().describe("Remove one line of the stored note."),
     appendLine: z.string().min(1).optional()
       .describe("Append one line to the stored note. Edits apply in the order replaceLine, removeLine, appendLine, under the monitorPrompt limit and redaction; not combined with monitorPrompt."),

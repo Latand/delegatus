@@ -136,11 +136,35 @@ export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
  * not already carry the heading, at most once, whatever version the seat
  * records.
  */
-export const ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE = `${ORCHESTRATOR_VIEWER_CLOCK_HEADING}
+/** The clock section's opening — who wakes the seat, the ban on scheduling
+    itself, and the handover — unchanged since v11, and shared by every text
+    of the section that has shipped. */
+const CLOCK_OPENING = `${ORCHESTRATOR_VIEWER_CLOCK_HEADING}
 The Viewer wakes you. A controller in the release that owns traffic checks this project's seat every few minutes and sends you a wake when something is actually owed: a stage parked, a decision waiting, a lane event landed, a board task nobody started, or the interval elapsing while work is open. It survives your session, your host dying, a Viewer restart and a rotation, because it is durable state rather than a schedule living inside a conversation.
 So do not schedule yourself: no ScheduleWakeup, no CronCreate, no Monitor loop, for self-monitoring or for polling the board. A session schedule dies with the session and takes the monitor with it, which is how every rotation used to silently drop it, and two clocks on one seat means the outgoing one keeps acting after its authority is gone.
-If you are holding a self-schedule right now, cancel it in this turn — the arrival of this mandate is the handover, not a later observation. Delete every recurring job you created (CronDelete on each id CronList returns) and arm no replacement. Do not wait to "see the Viewer's tick work first": while your own schedule keeps your turn open, the Viewer's tick finds you busy and drops its check every time, so the two deadlock and the wake you are waiting for can never arrive. Yours goes first.
-Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. ${ORCHESTRATOR_SEAT_TICK_CONTRACT.join(" ")} This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
+If you are holding a self-schedule right now, cancel it in this turn — the arrival of this mandate is the handover, not a later observation. Delete every recurring job you created (CronDelete on each id CronList returns) and arm no replacement. Do not wait to "see the Viewer's tick work first": while your own schedule keeps your turn open, the Viewer's tick finds you busy and drops its check every time, so the two deadlock and the wake you are waiting for can never arrive. Yours goes first.`;
+const CLOCK_IDLE = "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing.";
+const CLOCK_OUTRANKS = "This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.";
+
+export const ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE = `${CLOCK_OPENING}
+${CLOCK_IDLE} ${ORCHESTRATOR_SEAT_TICK_CONTRACT.join(" ")} ${CLOCK_OUTRANKS}`;
+
+/**
+ * The clock section exactly as it shipped before v21 (#2030): v11–v16, then
+ * v17–v20. Neither carries the tick contract the wake stopped repeating, and
+ * delivery appends the current section only to a mandate WITHOUT the heading,
+ * which every mandate composed from one of these bodies has. So delivery
+ * replaces these texts, by exact string match and by nothing else, the way it
+ * removes the shipped deploy section: a seat that reworded its clock section
+ * keeps its wording, and only text the Viewer put there is taken back.
+ */
+const SHIPPED_CLOCK_SECTIONS: readonly string[] = [
+  `${CLOCK_OPENING}\n${CLOCK_IDLE} When a wake arrives, act on the items it lists and nothing else, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. ${CLOCK_OUTRANKS}`,
+  `${CLOCK_OPENING}\n${CLOCK_IDLE} When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. ${CLOCK_OUTRANKS}`,
+];
+
+/** The first default version whose clock section states the tick contract. */
+export const ORCHESTRATOR_TICK_CONTRACT_VERSION = 21;
 
 /** Identifies the task-ownership section below inside a mandate, however its
     body was edited — the same reason the clock heading exists: a caller who
@@ -402,7 +426,10 @@ const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
     body is replayed verbatim on a pending retry and carried through a rotation,
     so the version bump alone would leave those bytes in front of managers who
     must never read them. The removal is an exact string match against what
-    shipped, and delivery asks nothing about whose project this is.
+    shipped, and delivery asks nothing about whose project this is. The clock
+    section as it shipped up to v20 is replaced the same way (#2030), by exact
+    match with the current one, which states the tick contract the wake no
+    longer repeats.
 
     Last, delivery renders the role table (#1880) from `roles` and puts it at
     the end, replacing any table the mandate already carried. Server callers
@@ -417,12 +444,33 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
     byte-identical to the first attempt whatever the registry says now; null
     is a pending intent recorded before tables existed, which was sent none. */
 export function orchestratorMandateWithRoleTable(mandate: string, roleTable: string | null): string {
-  const withoutShippedDeploys = mandate
-    .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
-    .split(SHIPPED_DEPLOYS_SECTION).join("");
+  const withoutShipped = SHIPPED_CLOCK_SECTIONS.reduce(
+    (text, shipped) => text.split(shipped).join(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE),
+    mandate
+      .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
+      .split(SHIPPED_DEPLOYS_SECTION).join(""),
+  );
   const withDirectives = DELIVERED_DIRECTIVES.reduce(
     (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),
-    withoutRoleTable(withoutShippedDeploys),
+    withoutRoleTable(withoutShipped),
   );
   return roleTable === null ? withDirectives : `${withDirectives}\n\n${roleTable}`;
+}
+
+
+/**
+ * Whether the mandate a seat was delivered states the tick contract (#2030),
+ * which is what lets its wakes name the section instead of repeating it.
+ *
+ * Only a seat recorded on v21 or later can have been delivered by a release
+ * that states it, so an older or unversioned seat — one still running on what
+ * it was delivered before, or one carried forward with keepIncumbentMandate,
+ * or bespoke rules — answers false and its wakes keep the clauses. A current
+ * seat whose own edit took a clause out answers false too.
+ */
+export function orchestratorMandateCarriesTickContract(seat: { mandate?: unknown; promptVersion?: unknown }): boolean {
+  if (typeof seat.promptVersion !== "number" || seat.promptVersion < ORCHESTRATOR_TICK_CONTRACT_VERSION) return false;
+  if (typeof seat.mandate !== "string") return false;
+  const delivered = orchestratorMandateWithRoleTable(seat.mandate, null);
+  return ORCHESTRATOR_SEAT_TICK_CONTRACT.every((clause) => delivered.includes(clause));
 }

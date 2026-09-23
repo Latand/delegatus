@@ -111,6 +111,17 @@ test("seat_tick_settings acknowledges a write in 300 B, edits one note line for 
     expect(ambiguous.failed).toBe(true);
     expect(JSON.stringify(ambiguous.payload)).toContain("matches 10 lines");
     expect(readSeatTickSettings(PROJECT)).toEqual(before);
+    /* An index read off an older copy of the note names the wrong lane: with
+       the prefix beside it, the pair must agree or nothing moves. */
+    const stale = await mcp.call("seat_tick_settings", { replaceLine: { index: 3, prefix: "lane 7:", text: "lane 7: gone" } });
+    expect(stale.failed).toBe(true);
+    expect(JSON.stringify(stale.payload)).toContain("line 3 of the note does not start with the prefix");
+    expect((await mcp.call("seat_tick_settings", { removeLine: { index: 3, prefix: "lane 7:" } })).failed).toBe(true);
+    expect(readSeatTickSettings(PROJECT)).toEqual(before);
+    /* Agreeing, they edit that line. */
+    const agreed = await mcp.call("seat_tick_settings", { replaceLine: { index: 5, prefix: "lane 7:", text: "lane 7: pipeline_0006ab — deployed." } });
+    expect(agreed.failed).toBe(false);
+    expect(readSeatTickSettings(PROJECT).monitorPrompt!.split("\n")[5]).toBe("lane 7: pipeline_0006ab — deployed.");
     /* So is an edit alongside a whole note. */
     expect((await mcp.call("seat_tick_settings", { monitorPrompt: "x", appendLine: "y" })).failed).toBe(true);
 

@@ -481,7 +481,8 @@ export function applySeatTickSettingsChange(
 
 /** Where a line edit lands in the note: the one line starting with `prefix`
     (leading whitespace ignored on both sides), or the line at the zero-based
-    `index`. */
+    `index`. Given both, the line at `index` must start with `prefix`, so an
+    index read off an older copy of the note cannot edit the wrong lane. */
 export interface SeatTickNoteLineTarget {
   prefix?: string;
   index?: number;
@@ -500,13 +501,16 @@ export interface SeatTickNoteLineEdits {
 }
 
 function locateNoteLine(lines: readonly string[], target: SeatTickNoteLineTarget, edit: string): { ok: true; index: number } | { ok: false; error: string } {
+  const prefix = typeof target.prefix === "string" ? target.prefix.trimStart() : "";
   if (target.index !== undefined) {
     if (!Number.isInteger(target.index) || target.index < 0 || target.index >= lines.length) {
       return { ok: false, error: `${edit}.index ${target.index} is outside the note, which has ${lines.length} line(s) numbered from 0. Nothing was stored` };
     }
+    if (prefix && !lines[target.index]!.trimStart().startsWith(prefix)) {
+      return { ok: false, error: `${edit}: line ${target.index} of the note does not start with the prefix given beside it. Nothing was stored` };
+    }
     return { ok: true, index: target.index };
   }
-  const prefix = typeof target.prefix === "string" ? target.prefix.trimStart() : "";
   if (!prefix) return { ok: false, error: `${edit} needs a non-empty prefix or an index` };
   const matches = lines.flatMap((line, index) => (line.trimStart().startsWith(prefix) ? [index] : []));
   if (matches.length !== 1) {

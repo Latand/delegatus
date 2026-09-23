@@ -21,6 +21,7 @@ import {
   ORCHESTRATOR_TASK_OWNERSHIP_HEADING,
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   ORCHESTRATOR_VIEWER_CLOCK_HEADING,
+  orchestratorMandateCarriesTickContract,
   orchestratorMandateForDelivery,
   orchestratorMandateWithRoleTable,
   orchestratorMandateStale,
@@ -149,6 +150,57 @@ test("every clause the tick contract carried lives in the mandate, and reaches e
   const delivered = orchestratorMandateForDelivery(bespoke);
   for (const [, stated] of CLAUSE_IN_MANDATE) expect(delivered.split(stated)).toHaveLength(2);
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+});
+
+/** The clock section's last paragraph as it shipped in v11–v16 and in
+    v17–v20, copied verbatim from those bodies. The three paragraphs before it
+    never changed, so each shipped section is the current opening plus one of
+    these. */
+const SHIPPED_CLOCK_LAST_PARAGRAPHS = [
+  "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists and nothing else, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.",
+  "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.",
+];
+const shippedClockSection = (lastParagraph: string) =>
+  `${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(0, 4).join("\n")}\n${lastParagraph}`;
+
+/* #2030 review: every mandate composed from a v20-or-older body carries the
+   clock HEADING with the old paragraph under it, so appending by heading gave
+   those seats none of the clauses their wakes stopped repeating. */
+test("delivery replaces the clock section an older mandate carries, so it states every contract clause once (#2030)", () => {
+  for (const lastParagraph of SHIPPED_CLOCK_LAST_PARAGRAPHS) {
+    const stored = `You run the conveyor for this project.\n\n${shippedClockSection(lastParagraph)}\n\n## Fences\n- Report, never ask.`;
+    for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(stored).not.toContain(clause);
+    const delivered = orchestratorMandateForDelivery(stored);
+    for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(delivered.split(clause)).toHaveLength(2);
+    expect(delivered).not.toContain(lastParagraph);
+    expect(delivered.split(ORCHESTRATOR_VIEWER_CLOCK_HEADING)).toHaveLength(2);
+    expect(delivered).toStartWith(`You run the conveyor for this project.\n\n${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}\n\n## Fences\n- Report, never ask.`);
+    expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  }
+  /* The real v20 body: its whole clock section is the second shipped text. */
+  const v20Core = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, shippedClockSection(SHIPPED_CLOCK_LAST_PARAGRAPHS[1]!));
+  expect(v20Core).not.toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  const delivered = orchestratorMandateForDelivery(v20Core);
+  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(delivered.split(clause)).toHaveLength(2);
+  /* A seat's own rewording under the heading is not what shipped, and stays. */
+  const reworded = `${ORCHESTRATOR_VIEWER_CLOCK_HEADING}\nWake only when the Viewer tells you to.`;
+  expect(orchestratorMandateForDelivery(reworded)).toStartWith(reworded);
+});
+
+test("only a seat delivered a mandate that states the contract is spared its clauses in the wake (#2030)", () => {
+  expect(orchestratorMandateCarriesTickContract({ mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: ORCHESTRATOR_PROMPT_VERSION })).toBe(true);
+  /* Still running on what it was delivered before v21, or carried forward on
+     an older mandate: the text now delivers the clauses, the seat never read
+     them. */
+  const v20Core = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, shippedClockSection(SHIPPED_CLOCK_LAST_PARAGRAPHS[1]!));
+  expect(orchestratorMandateCarriesTickContract({ mandate: v20Core, promptVersion: 20 })).toBe(false);
+  expect(orchestratorMandateCarriesTickContract({ mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: 20 })).toBe(false);
+  /* Bespoke rules claim no version and cannot say when they were delivered. */
+  expect(orchestratorMandateCarriesTickContract({ mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: null })).toBe(false);
+  /* A current seat whose own edit reworded the section lost the clauses. */
+  const reworded = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, `${ORCHESTRATOR_VIEWER_CLOCK_HEADING}\nWake only when told.`);
+  expect(orchestratorMandateCarriesTickContract({ mandate: reworded, promptVersion: ORCHESTRATOR_PROMPT_VERSION })).toBe(false);
+  expect(orchestratorMandateCarriesTickContract({ promptVersion: ORCHESTRATOR_PROMPT_VERSION })).toBe(false);
 });
 
 /* #1428 v13 — the index over every message of every transcript existed, and no
