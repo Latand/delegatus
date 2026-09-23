@@ -10,7 +10,6 @@ import {
   durableProjectAliasCandidates,
   persistProjectAliases,
   projectAliasesCanAccept,
-  recordedProjectRemote,
   recordProjectRemote,
   type ProjectAliasRegistration,
 } from "@/lib/projects/aliases";
@@ -20,7 +19,13 @@ import {
   scheduleForgeRenames,
   type ForgeRenameCandidate,
 } from "@/lib/projects/forgeRename";
-import { displayNameFromProjectIdentity, projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
+import {
+  displayNameFromProjectIdentity,
+  isRepositoryProjectId,
+  localRepositoryProjectId,
+  projectIdentityFromRepositoryRoot,
+  repositoryRootForPath,
+} from "@/lib/projects/identity";
 import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/succession";
 
 import type { Engine, Fmt, ProjectCatalogEntry } from "../types";
@@ -450,6 +455,20 @@ function claudeSlug(raw: RawEntry): string | null {
   return path.relative(raw.root, raw.path).split(path.sep)[0] || null;
 }
 
+/** Whether `project` is the local repository id some folder in `folders`
+    minted: of the folder itself, or of the repository it sits in while it
+    exists. */
+function pathDerivedRepositoryKey(project: string, folders: Iterable<string | null | undefined>): boolean {
+  for (const folder of folders) {
+    if (!folder?.trim()) continue;
+    const roots = new Set([folder, repositoryRootForPath(folder)].filter((root): root is string => Boolean(root)));
+    for (const root of roots) {
+      if (localRepositoryProjectId(root) === project) return true;
+    }
+  }
+  return false;
+}
+
 /** Project roots whose remote this process has already put in the ledger. */
 const ledgerRecordedRoots = new Set<string>();
 
@@ -503,8 +522,13 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
   const rootCandidates = new Map<string, Map<string, { count: number; newest: number }>>();
   const projectByPath = new Map<string, string>();
   const previousProjects = new Map<string, string | undefined>();
+  /* The folders a file's previous record named, read before it is
+     re-described: what proves a changed key was minted from a path. */
+  const previousFolders = new Map<string, Array<string | null | undefined>>();
   await forEachCooperatively(raw, (entry) => {
-    previousProjects.set(entry.path, state.files[entry.path]?.project);
+    const previous = state.files[entry.path];
+    previousProjects.set(entry.path, previous?.project);
+    previousFolders.set(entry.path, [previous?.projectRoot, previous?.cwd]);
   });
   const files = await mapCooperatively(raw, (entry) => cachedFile(entry, state, stateKey));
   const complete = options.complete !== false && files.every((file) => file.summaryVersion === PROJECT_SUMMARY_VERSION);
@@ -520,6 +544,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
     if (project) files[index]!.project = project;
   });
   const changes = new Map<string, Set<string>>();
+  const changedSourceFolders = new Map<string, Set<string>>();
   const projectsByCwd = new Map<string, Set<string>>();
   await forEachCooperatively(files, (file) => {
     nextFiles[file.path] = {
@@ -556,6 +581,11 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
       const targets = changes.get(previousProject) ?? new Set<string>();
       targets.add(file.project);
       changes.set(previousProject, targets);
+      const folders = changedSourceFolders.get(previousProject) ?? new Set<string>();
+      for (const folder of [...(previousFolders.get(file.path) ?? []), file.cwd, file.projectRoot]) {
+        if (folder?.trim()) folders.add(folder);
+      }
+      changedSourceFolders.set(previousProject, folders);
     }
     const project = file.project || "other";
     projectByPath.set(file.path, project);
@@ -653,15 +683,18 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
         if (plan.conflicts.length > 0) throw new Error("ambiguous catalog project identity");
         const migrations = plan.migrations;
         /* A file re-described under a new key is the same unproven evidence
-           as the durable pass's: when both keys are remotes this machine has
-           recorded, the origin changed, and only the forge may join them
-           (§2.4, #2035). */
+           as the durable pass's (§2.4, #2035). Between two repository ids the
+           move is kept only when the old key is path-derived: the local id of
+           the target's checkout, or of a folder the moved files' own records
+           name (a checkout that once resolved as its own repository). Anything
+           else is a changed origin, which only the forge may join; with no
+           ledger entry for the old key it is never asked, and nothing moves. */
         for (const [source, target] of [...migrations]) {
-          const sourceRemote = recordedProjectRemote(source);
-          const targetRemote = recordedProjectRemote(target);
-          if (!sourceRemote || !targetRemote || sourceRemote === targetRemote) continue;
+          if (!isRepositoryProjectId(source) || !isRepositoryProjectId(target)) continue;
+          const targetRoot = groups.get(target)?.projectRoot ?? null;
+          if (pathDerivedRepositoryKey(source, [targetRoot, ...(changedSourceFolders.get(source) ?? [])])) continue;
           migrations.delete(source);
-          const candidate = forgeRenameCandidateFor(source, groups.get(target)?.projectRoot);
+          const candidate = forgeRenameCandidateFor(source, targetRoot);
           if (candidate) forgeCandidates.push(candidate);
         }
         const registrations: ProjectAliasRegistration[] = [...migrations].map(([source, target]) => ({

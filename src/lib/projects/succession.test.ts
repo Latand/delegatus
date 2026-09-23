@@ -194,6 +194,58 @@ test("a re-pointed fork does not merge", async () => {
   expect(split.projectCatalog.map((entry) => entry.project)).toEqual([fork]);
 });
 
+test("a re-pointed fork whose old key predates the ledger does not merge, and nobody is asked", async () => {
+  /* The upgrade path: the ledger is new, so a key recorded before it has no
+     remote behind it. A re-pointed checkout's grown conversation is still
+     re-described under the fork's key, and that alone must not alias. */
+  const repo = repositoryAt("gizmos", "gizmos");
+  const original = projectForCwd(repo)!;
+  const forgeAnswers = forge({ "acme/gizmos": 6100, "acme/gizmos-fork": 6200 });
+  setForgeLookupForTests(forgeAnswers);
+  const before = await transcript("gizmos-before", repo);
+  await scan([before]);
+  fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "project-remotes.json"), { force: true });
+  expect(recordedProjectRemote(original)).toBeNull();
+
+  repoint(repo, "gizmos-fork");
+  const fork = projectForCwd(repo)!;
+  for (const cache of ["meta-transcript-v7", "project-overlay-v2", "title-v5"]) globalCache(cache).clear();
+  fs.appendFileSync(before.path, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "still here" } }) + "\n");
+  fs.utimesSync(before.path, transcriptClock + 50, transcriptClock + 50);
+  const grown = { ...before, st: fs.statSync(before.path) } as RawEntry;
+  const scanned = await scan([grown]);
+
+  /* The catalog did re-describe the file under the fork's key... */
+  expect(scanned.projectCatalog.map((entry) => entry.project)).toEqual([fork]);
+  /* ...and still joined nothing, asked nobody and wrote no history line. */
+  expect(canonicalProject(original)).toBe(original);
+  expect(forgeAnswers.asked).toEqual([]);
+  expect(moved(fork)).toEqual([]);
+});
+
+test("through the same re-description, a repository that gained its origin still moves its local key", async () => {
+  const repo = repositoryAt("doohickeys", "doohickeys");
+  git("-C", repo, "remote", "remove", "origin");
+  const local = projectForCwd(repo)!;
+  const forgeAnswers = forge({});
+  setForgeLookupForTests(forgeAnswers);
+  const before = await transcript("doohickeys-before", repo);
+  await scan([before]);
+
+  git("-C", repo, "remote", "add", "origin", "https://github.com/acme/doohickeys.git");
+  const remote = projectForCwd(repo)!;
+  expect(remote).not.toBe(local);
+  for (const cache of ["meta-transcript-v7", "project-overlay-v2", "title-v5"]) globalCache(cache).clear();
+  fs.appendFileSync(before.path, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "still here" } }) + "\n");
+  fs.utimesSync(before.path, transcriptClock + 50, transcriptClock + 50);
+  const grown = { ...before, st: fs.statSync(before.path) } as RawEntry;
+  const scanned = await scan([grown]);
+
+  expect(scanned.projectCatalog.map((entry) => entry.project)).toEqual([remote]);
+  expect(canonicalProject(local)).toBe(remote);
+  expect(forgeAnswers.asked).toEqual([]);
+});
+
 test("an unreachable forge records nothing, and the next scan asks again", async () => {
   const repo = repositoryAt("sprockets", "sprockets");
   const old = projectForCwd(repo)!;
