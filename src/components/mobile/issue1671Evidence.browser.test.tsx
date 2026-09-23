@@ -1963,3 +1963,181 @@ browserTest("#2072 slice 5: the task screen, opened from its card, in en and uk 
   fs.writeFileSync(path.join(COLUMNS_EVIDENCE, "task-screen.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * #2098 — the Overview on the phone is the phone kanban over every project
+ * (docs/design/phone-kanban.md §3; issue #2098). The fixture's board spread
+ * over three projects (`?overview=1`), at 390 × 667 and 430 × 735, en and uk,
+ * dark. Each tab at rest carries the columns' gates (no sideways overflow,
+ * whole controls at least 44 × 44 and none crossing, the ink of every text
+ * meeting no other ink and no control, titles two lines at most, tab labels
+ * whole, chains on one line, no clock-like ages, the pin first), and the
+ * Overview's own: every card names its project by its display name and no
+ * key shows, and nothing of the desktop board is on the page. A card opens
+ * its task screen (the slice 5 gates) and ‹ lands on the column it left; a
+ * row no task owns opens its conversation full screen, its feed the screen's
+ * width and inside no card. Frames go to `LLV_OVERVIEW_FRAMES` (default
+ * `.artifacts/phone-overview`, not committed); readings to
+ * `evidence/issue-2098/overview.json`.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2098"
+ */
+const OVERVIEW_OUT = path.resolve(process.env.LLV_OVERVIEW_FRAMES || ".artifacts/phone-overview");
+const OVERVIEW_EVIDENCE = path.resolve("evidence/issue-2098");
+const OVERVIEW_NAMES = ["delegatus", "forge-api", "atlas-docs"];
+
+const readOverviewCards = (page: Page) => page.evaluate(() => {
+  const board = document.querySelector<HTMLElement>("[data-phone-kanban]")!;
+  const column = board.querySelector<HTMLElement>(`[data-phone-kanban-column="${board.getAttribute("data-phone-kanban-active")}"]`)!;
+  return {
+    projects: [...column.querySelectorAll<HTMLElement>("[data-phone-card]")].map((card) => card.querySelector("[data-phone-card-project]")?.textContent ?? null),
+    keyShown: /repo-[0-9a-f]{8,}/.test(board.textContent ?? ""),
+    desktop: [...document.querySelectorAll("[data-kanban-board], [data-kanban-search], [data-hidden-pill], [data-kanban-reader]")].length,
+  };
+});
+
+const readConversationScreen = (page: Page) => page.evaluate(() => {
+  const screen = document.querySelector<HTMLElement>('[data-mobile2-screen="chat"]');
+  const feed = screen?.querySelector<HTMLElement>("[data-feed-state]") ?? null;
+  const rect = feed?.getBoundingClientRect() ?? null;
+  return {
+    open: Boolean(screen),
+    back: Boolean(screen?.querySelector("[data-mobile2-back]")),
+    board: Boolean(document.querySelector("[data-phone-kanban]")),
+    feedWidth: rect?.width ?? 0,
+    feedInCard: Boolean(feed?.closest("[data-phone-card], [data-kanban-card]")),
+    overflowX: document.documentElement.scrollWidth - innerWidth,
+    /* The screen reaches the page's bottom: a band under it is a keyboard
+       inset nobody opened. */
+    bandBelow: innerHeight - (screen?.getBoundingClientRect().bottom ?? 0),
+    innerHeight,
+  };
+});
+
+browserTest("#2098: the phone's Overview is the phone kanban over three projects, and what a card opens opens full screen", async () => {
+  fs.mkdirSync(OVERVIEW_OUT, { recursive: true });
+  fs.mkdirSync(OVERVIEW_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = ([{ width: 390, height: 667 }, { width: 430, height: 735 }] as const).flatMap((viewport) =>
+    (["en", "uk"] as const).map((lang) => ({ viewport, lang })));
+  try {
+    for (const { viewport, lang } of cases) {
+      const key = `${viewport.width}-${lang}`;
+      const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: "dark" });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/?overview=1`);
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+        await pause(page, 800);
+        for (const status of COLUMN_ORDER) {
+          await page.locator(`[data-phone-kanban-tab="${status}"]`).click();
+          await page.waitForFunction((wanted) => document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active") === wanted, status);
+          await pagerAtRest(page);
+          await page.mouse.move(0, 0);
+          for (let stop = 0; stop < 8; stop += 1) {
+            const fail = (label: string) => failures.push(`${key} ${status} @${stop}: ${label}`);
+            const reading = await readColumn(page);
+            const cards = await readOverviewCards(page);
+            await page.screenshot({ path: path.join(OVERVIEW_OUT, `overview-${key}-${status}${stop ? `-${stop}` : ""}.png`) });
+            if (Math.abs(reading.pagerAligned) > 1) fail(`the pager rests ${reading.pagerAligned} px off its column`);
+            if (reading.overflowX > 0.5) fail(`the page overflows sideways by ${reading.overflowX} px`);
+            if (reading.columnOverflowX > 0.5) fail(`the column overflows sideways by ${reading.columnOverflowX} px`);
+            if (reading.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(reading.smallControls)}`);
+            if (reading.crossingControls.length) fail(`controls crossing: ${JSON.stringify(reading.crossingControls)}`);
+            if (reading.inkOverlaps.length) fail(`text over text: ${JSON.stringify(reading.inkOverlaps.slice(0, 6))}`);
+            if (reading.inkOnControls.length) fail(`text over a control: ${JSON.stringify(reading.inkOnControls.slice(0, 6))}`);
+            if (reading.truncatedTabs.length) fail(`tab labels cut: ${JSON.stringify(reading.truncatedTabs)}`);
+            if (reading.chainOverflow.length) fail(`chains off their line: ${JSON.stringify(reading.chainOverflow)}`);
+            if (reading.cutCurrentStage.length) fail(`current stage names cut: ${JSON.stringify(reading.cutCurrentStage)}`);
+            if (reading.clockAges.length) fail(`ages that read as clocks: ${JSON.stringify(reading.clockAges)}`);
+            const tall = reading.cards.filter((card) => card.titleLines > 2);
+            if (tall.length) fail(`titles over two lines: ${JSON.stringify(tall)}`);
+            if (!reading.pinnedFirst) fail("what the tab's ⚠ counts is not the column's first cards");
+            const unnamed = cards.projects.filter((name) => !name || !OVERVIEW_NAMES.includes(name));
+            if (unnamed.length) fail(`cards that do not name their project: ${JSON.stringify(unnamed)}`);
+            if (cards.keyShown) fail("a project key is on the board");
+            if (cards.desktop) fail(`${cards.desktop} pieces of the desktop board are on the phone`);
+            if ((status === "inbox" || status === "assigned") && reading.empty) fail(`${status} holds live work and says it is empty`);
+            results.push({ key, status, stop, viewport, lang, ...reading, overview: cards });
+            const moved = await page.evaluate((wanted) => {
+              const column = document.querySelector<HTMLElement>(`[data-phone-kanban-column="${wanted}"]`)!;
+              const before = column.scrollTop;
+              column.scrollTop = before + Math.round(column.clientHeight * 0.85);
+              return column.scrollTop !== before;
+            }, status);
+            if (!moved) break;
+            await pause(page, 350);
+          }
+          await page.evaluate((wanted) => { document.querySelector<HTMLElement>(`[data-phone-kanban-column="${wanted}"]`)!.scrollTop = 0; }, status);
+        }
+
+        /* A card opens its task over the Overview; ‹ lands on the column. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pagerAtRest(page);
+        await page.locator('[data-phone-card="task:t-favicon"]').click();
+        await page.waitForSelector('[data-mobile2-task="t-favicon"] [data-phone-task-body="t-favicon"]', { timeout: 10_000 });
+        await page.mouse.move(0, 0);
+        await pause(page, 600);
+        const task = await readTaskScreen(page);
+        await page.screenshot({ path: path.join(OVERVIEW_OUT, `overview-${key}-task.png`) });
+        const taskFail = (label: string) => failures.push(`${key} task: ${label}`);
+        if (task.overflowX > 0.5) taskFail(`the page overflows sideways by ${task.overflowX} px`);
+        if (task.smallControls.length) taskFail(`controls under 44 px: ${JSON.stringify(task.smallControls)}`);
+        if (task.crossingControls.length) taskFail(`controls crossing: ${JSON.stringify(task.crossingControls)}`);
+        if (task.inkOverlaps.length) taskFail(`text over text: ${JSON.stringify(task.inkOverlaps.slice(0, 6))}`);
+        if (task.inkOnControls.length) taskFail(`text over a control: ${JSON.stringify(task.inkOnControls.slice(0, 6))}`);
+        await page.locator("[data-mobile2-back]").first().click();
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 10_000 });
+        const backOn = await page.evaluate(() => document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active"));
+        if (backOn !== "assigned") taskFail(`‹ from the task landed on ${backOn}`);
+
+        /* A row no task owns opens its conversation full screen. */
+        await page.locator('[data-phone-kanban-tab="inbox"]').click();
+        await pagerAtRest(page);
+        const row = page.locator(`[data-phone-card-agent="${RUNNING_PATH}"]`);
+        await row.scrollIntoViewIfNeeded();
+        await row.click();
+        await page.waitForSelector('[data-mobile2-screen="chat"] [data-feed-state]', { timeout: 10_000 });
+        await page.mouse.move(0, 0);
+        await pause(page, 900);
+        const conversation = await readConversationScreen(page);
+        await page.screenshot({ path: path.join(OVERVIEW_OUT, `overview-${key}-conversation.png`) });
+        const chatFail = (label: string) => failures.push(`${key} conversation: ${label}`);
+        if (!conversation.open || !conversation.back) chatFail(`the conversation is not a screen with ‹: ${JSON.stringify(conversation)}`);
+        if (conversation.board) chatFail("the Overview's board is still drawn beside the conversation");
+        if (conversation.feedInCard) chatFail("the feed is drawn inside a card");
+        if (conversation.feedWidth < viewport.width - 24) chatFail(`the feed is ${conversation.feedWidth} px wide on a ${viewport.width} px page`);
+        if (conversation.overflowX > 0.5) chatFail(`the page overflows sideways by ${conversation.overflowX} px`);
+        if (conversation.bandBelow > 0.5 || conversation.innerHeight !== viewport.height) chatFail(`${conversation.bandBelow} px of empty band under the conversation (innerHeight ${conversation.innerHeight})`);
+        await page.locator("[data-mobile2-back]").first().click();
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 10_000 });
+
+        /* ⋯ › Hidden tasks, over the Overview. */
+        await page.locator('[data-mobile2-open="menu"]').click();
+        await page.locator('[data-mobile2-open="hidden"]').click();
+        await page.waitForSelector("[data-phone-hidden-sheet]", { timeout: 5_000 });
+        await pause(page, 500);
+        const hidden = await page.evaluate(() => [...document.querySelectorAll("[data-phone-hidden-row]")].map((row) => row.getAttribute("data-phone-hidden-row")));
+        await page.screenshot({ path: path.join(OVERVIEW_OUT, `overview-${key}-hidden.png`) });
+        if (hidden.join(",") !== "t-seat,t-quota") failures.push(`${key} hidden: the sheet lists ${hidden.join(",")}`);
+        if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+        results.push({ key, viewport, lang, task, backOn, conversation, hidden });
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(OVERVIEW_EVIDENCE, "overview.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);

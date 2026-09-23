@@ -1,0 +1,2493 @@
+{
+  "results": [
+    {
+      "key": "390-en",
+      "status": "inbox",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "active": "inbox",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-systemd",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-39",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-38",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-37",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-36",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "pipeline:lane-flake",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "lineage:conversation_running",
+          "height": 76.5,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "atlas-docs",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-en",
+      "status": "inbox",
+      "stop": 1,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "active": "inbox",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-systemd",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-39",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-38",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-37",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-36",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "pipeline:lane-flake",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "lineage:conversation_running",
+          "height": 76.5,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "atlas-docs",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-en",
+      "status": "assigned",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "active": "assigned",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-data",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-copilot",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-many",
+          "height": 139.25,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-favicon",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-kanban",
+          "height": 98.25,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-long",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-skeletons",
+          "height": 100.5,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-uk",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-upload",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "forge-api",
+          "delegatus",
+          "delegatus",
+          "delegatus",
+          "atlas-docs",
+          "forge-api",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-en",
+      "status": "assigned",
+      "stop": 1,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "active": "assigned",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-data",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-copilot",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-many",
+          "height": 139.25,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-favicon",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-kanban",
+          "height": 98.25,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-long",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-skeletons",
+          "height": 100.5,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-uk",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-upload",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "forge-api",
+          "delegatus",
+          "delegatus",
+          "delegatus",
+          "atlas-docs",
+          "forge-api",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-en",
+      "status": "blocked",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "active": "blocked",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": true,
+      "more": null,
+      "overview": {
+        "projects": [],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-en",
+      "status": "done",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "active": "done",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": true,
+      "more": null,
+      "overview": {
+        "projects": [],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-en",
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "en",
+      "task": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 610,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-favicon"
+        ],
+        "scrollHeight": 513,
+        "clientHeight": 513
+      },
+      "backOn": "assigned",
+      "conversation": {
+        "open": true,
+        "back": true,
+        "board": false,
+        "feedWidth": 388,
+        "feedInCard": false,
+        "overflowX": 0,
+        "bandBelow": 0,
+        "innerHeight": 667
+      },
+      "hidden": [
+        "t-seat",
+        "t-quota"
+      ]
+    },
+    {
+      "key": "390-uk",
+      "status": "inbox",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "active": "inbox",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-systemd",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-39",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-38",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-37",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-36",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "pipeline:lane-flake",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "lineage:conversation_running",
+          "height": 76.5,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "atlas-docs",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-uk",
+      "status": "inbox",
+      "stop": 1,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "active": "inbox",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-systemd",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-39",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-38",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-37",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-36",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "pipeline:lane-flake",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "lineage:conversation_running",
+          "height": 76.5,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "atlas-docs",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-uk",
+      "status": "assigned",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "active": "assigned",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-data",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-copilot",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-many",
+          "height": 155.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-favicon",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-kanban",
+          "height": 98.25,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-long",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-skeletons",
+          "height": 100.5,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-uk",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-upload",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "forge-api",
+          "delegatus",
+          "delegatus",
+          "delegatus",
+          "atlas-docs",
+          "forge-api",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-uk",
+      "status": "assigned",
+      "stop": 1,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "active": "assigned",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-data",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-copilot",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-many",
+          "height": 155.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-favicon",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-kanban",
+          "height": 98.25,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-long",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-skeletons",
+          "height": 100.5,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-uk",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-upload",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "forge-api",
+          "delegatus",
+          "delegatus",
+          "delegatus",
+          "atlas-docs",
+          "forge-api",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-uk",
+      "status": "blocked",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "active": "blocked",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": true,
+      "more": null,
+      "overview": {
+        "projects": [],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-uk",
+      "status": "done",
+      "stop": 0,
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "active": "done",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": true,
+      "more": null,
+      "overview": {
+        "projects": [],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "390-uk",
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "lang": "uk",
+      "task": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 610,
+          "width": 390,
+          "height": 57
+        },
+        "lanes": [
+          "lane-favicon"
+        ],
+        "scrollHeight": 513,
+        "clientHeight": 513
+      },
+      "backOn": "assigned",
+      "conversation": {
+        "open": true,
+        "back": true,
+        "board": false,
+        "feedWidth": 388,
+        "feedInCard": false,
+        "overflowX": 0,
+        "bandBelow": 0,
+        "innerHeight": 667
+      },
+      "hidden": [
+        "t-seat",
+        "t-quota"
+      ]
+    },
+    {
+      "key": "430-en",
+      "status": "inbox",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "active": "inbox",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-systemd",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-39",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-38",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-37",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-36",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "pipeline:lane-flake",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "lineage:conversation_running",
+          "height": 76.5,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "atlas-docs",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-en",
+      "status": "inbox",
+      "stop": 1,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "active": "inbox",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-systemd",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-39",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-38",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-37",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-36",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "pipeline:lane-flake",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "lineage:conversation_running",
+          "height": 76.5,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "atlas-docs",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-en",
+      "status": "assigned",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "active": "assigned",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-data",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-copilot",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-many",
+          "height": 125.75,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "task:t-favicon",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-kanban",
+          "height": 98.25,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-long",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-skeletons",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-uk",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-upload",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "forge-api",
+          "delegatus",
+          "delegatus",
+          "delegatus",
+          "atlas-docs",
+          "forge-api",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-en",
+      "status": "assigned",
+      "stop": 1,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "active": "assigned",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-data",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-copilot",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-many",
+          "height": 125.75,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "task:t-favicon",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-kanban",
+          "height": 98.25,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-long",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-skeletons",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-uk",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-upload",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "forge-api",
+          "delegatus",
+          "delegatus",
+          "delegatus",
+          "atlas-docs",
+          "forge-api",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-en",
+      "status": "blocked",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "active": "blocked",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": true,
+      "more": null,
+      "overview": {
+        "projects": [],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-en",
+      "status": "done",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "active": "done",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": true,
+      "more": null,
+      "overview": {
+        "projects": [],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-en",
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "en",
+      "task": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 678,
+          "width": 430,
+          "height": 57
+        },
+        "lanes": [
+          "lane-favicon"
+        ],
+        "scrollHeight": 581,
+        "clientHeight": 581
+      },
+      "backOn": "assigned",
+      "conversation": {
+        "open": true,
+        "back": true,
+        "board": false,
+        "feedWidth": 428,
+        "feedInCard": false,
+        "overflowX": 0,
+        "bandBelow": 0,
+        "innerHeight": 735
+      },
+      "hidden": [
+        "t-seat",
+        "t-quota"
+      ]
+    },
+    {
+      "key": "430-uk",
+      "status": "inbox",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "active": "inbox",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-systemd",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-39",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-38",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-37",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-36",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "pipeline:lane-flake",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "lineage:conversation_running",
+          "height": 76.5,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "atlas-docs",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-uk",
+      "status": "inbox",
+      "stop": 1,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "active": "inbox",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-systemd",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-39",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-38",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-37",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "lineage:conversation_kanban-36",
+          "height": 81.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "pipeline:lane-flake",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "lineage:conversation_running",
+          "height": 76.5,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "forge-api",
+          "delegatus",
+          "atlas-docs",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-uk",
+      "status": "assigned",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "active": "assigned",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-data",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-copilot",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-many",
+          "height": 142.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "task:t-favicon",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-kanban",
+          "height": 98.25,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-long",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-skeletons",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-uk",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-upload",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "forge-api",
+          "delegatus",
+          "delegatus",
+          "delegatus",
+          "atlas-docs",
+          "forge-api",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-uk",
+      "status": "assigned",
+      "stop": 1,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "active": "assigned",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [
+        {
+          "key": "task:t-data",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-copilot",
+          "height": 116.75,
+          "titleLines": 2,
+          "needs": true
+        },
+        {
+          "key": "task:t-many",
+          "height": 142.25,
+          "titleLines": 1,
+          "needs": true
+        },
+        {
+          "key": "task:t-favicon",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-kanban",
+          "height": 98.25,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-long",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-skeletons",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        },
+        {
+          "key": "task:t-uk",
+          "height": 92.75,
+          "titleLines": 2,
+          "needs": false
+        },
+        {
+          "key": "task:t-upload",
+          "height": 82,
+          "titleLines": 1,
+          "needs": false
+        }
+      ],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": false,
+      "more": null,
+      "overview": {
+        "projects": [
+          "delegatus",
+          "forge-api",
+          "forge-api",
+          "delegatus",
+          "delegatus",
+          "delegatus",
+          "atlas-docs",
+          "forge-api",
+          "forge-api"
+        ],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-uk",
+      "status": "blocked",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "active": "blocked",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": true,
+      "more": null,
+      "overview": {
+        "projects": [],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-uk",
+      "status": "done",
+      "stop": 0,
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "active": "done",
+      "pagerAligned": 0,
+      "overflowX": 0,
+      "columnOverflowX": 0,
+      "cards": [],
+      "smallControls": [],
+      "crossingControls": [],
+      "inkOverlaps": [],
+      "inkOnControls": [],
+      "truncatedTabs": [],
+      "chainOverflow": [],
+      "cutCurrentStage": [],
+      "clockAges": [],
+      "dock": null,
+      "tabs": [
+        {
+          "status": "inbox",
+          "count": "1",
+          "working": "2",
+          "needs": "5"
+        },
+        {
+          "status": "assigned",
+          "count": "9",
+          "working": "8",
+          "needs": "3"
+        },
+        {
+          "status": "blocked",
+          "count": "0",
+          "working": null,
+          "needs": null
+        },
+        {
+          "status": "done",
+          "count": "0",
+          "working": null,
+          "needs": null
+        }
+      ],
+      "pinnedFirst": true,
+      "empty": true,
+      "more": null,
+      "overview": {
+        "projects": [],
+        "keyShown": false,
+        "desktop": 0
+      }
+    },
+    {
+      "key": "430-uk",
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "lang": "uk",
+      "task": {
+        "overflowX": 0,
+        "bodyOverflowX": 0,
+        "smallControls": [],
+        "crossingControls": [],
+        "inkOverlaps": [],
+        "inkOnControls": [],
+        "dock": {
+          "x": 0,
+          "y": 678,
+          "width": 430,
+          "height": 57
+        },
+        "lanes": [
+          "lane-favicon"
+        ],
+        "scrollHeight": 581,
+        "clientHeight": 581
+      },
+      "backOn": "assigned",
+      "conversation": {
+        "open": true,
+        "back": true,
+        "board": false,
+        "feedWidth": 428,
+        "feedInCard": false,
+        "overflowX": 0,
+        "bandBelow": 0,
+        "innerHeight": 735
+      },
+      "hidden": [
+        "t-seat",
+        "t-quota"
+      ]
+    }
+  ],
+  "failures": []
+}
