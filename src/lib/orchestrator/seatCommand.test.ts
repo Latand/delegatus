@@ -15,6 +15,7 @@ import {
   HANDOFF_HEADING,
   HISTORY_BUDGET_BYTES,
   HISTORY_HEADING,
+  splitMandate,
   type HandoffDigestRequest,
 } from "./handoffDigest";
 import {
@@ -696,9 +697,9 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
 });
 
 /* #1452: the recorded version follows the TEXT. A stale seat rotated onto the
-   built-in default is on the current version; a rotation that names no
-   mandate keeps the incumbent's text AND version — the current-default
-   choice belongs to the callers (the dock, the sheet, `rotate_orchestrator`). */
+   built-in default is on the current version. #2030: a rotation that names no
+   mandate over a stale incumbent rebuilds the core from the current default;
+   `keepIncumbentMandate: true` keeps the incumbent's text AND version. */
 test("a rotation onto the built-in default records the CURRENT version, whatever the incumbent ran on", async () => {
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
@@ -724,7 +725,7 @@ test("a rotation onto the built-in default records the CURRENT version, whatever
   expect(active?.mandate).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
 });
 
-test("a rotation that names no mandate keeps the incumbent's text and version", async () => {
+test("a rotation asked to keep the incumbent's mandate keeps its text and version", async () => {
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
     ...spawnRequest("req_00000033"),
@@ -736,12 +737,48 @@ test("a rotation that names no mandate keeps the incumbent's text and version", 
   const { deps } = dependencies({
     spawn: async () => ({ status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-kept.jsonl" } }),
   });
-  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000034" }, deps);
+  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000034", keepIncumbentMandate: true }, deps);
 
   expect(result.status).toBe(200);
   const active = orchestratorSeatFor("proj-a").active;
   expect(active).toMatchObject({ conversationId: successor, promptVersion: 3 });
   expect(active?.mandate).toStartWith("v3 rules: you do not talk to the user");
+});
+
+/* #2030: v20's text was rewritten without a bump, and every rotation after it
+   carried the incumbent's older core forward. With no mandate named, a stale
+   incumbent's core is rebuilt from the current default byte for byte, while
+   its rotation history — the part that is not a default at all — is kept. */
+test("a rotation that names no mandate over an older default rebuilds the core byte for byte and keeps the history", async () => {
+  const olderCore = "You are the viewer's built-in Manager.\n\nCall list_tasks for this project with NO status filter and limit: 200.";
+  const seeded = dependencies();
+  await executeOrchestratorSeatRequest({
+    ...spawnRequest("req_00000037"),
+    mandate: `${olderCore}\n\n${HISTORY_HEADING}\nThe seat before last merged the exporter lane.\n\n${HANDOFF_HEADING}\nThe last seat left the digest lane parked on review.`,
+    promptVersion: ORCHESTRATOR_PROMPT_VERSION - 1,
+  }, seeded.deps);
+
+  const successor = "conversation_66666666-6666-4666-8666-666666666666";
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      return { status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-rebuilt.jsonl" } };
+    },
+  });
+  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000038" }, deps);
+
+  expect(result.status).toBe(200);
+  const active = orchestratorSeatFor("proj-a").active;
+  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
+  expect(splitMandate(active!.mandate).core).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(active!.mandate).not.toContain("limit: 200");
+  /* The history survives the rebuild: both prior sections were handed to the
+     summarizer, and its fallback kept their text. */
+  expect(recorded.digests).toHaveLength(1);
+  expect(active!.mandate).toContain("merged the exporter lane");
+  expect(active!.mandate).toContain("digest lane parked on review");
+  /* And what the successor was delivered opens with the same bytes. */
+  expect(String(recorded.spawns[0]!.prompt)).toContain(ORCHESTRATOR_SYSTEM_PROMPT);
 });
 
 test("an EDITED mandate over a stale seat records no version, so the successor is neither flagged stale nor prefilled over on the next rotation (#1452)", async () => {

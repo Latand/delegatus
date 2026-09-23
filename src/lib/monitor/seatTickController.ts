@@ -26,7 +26,7 @@ import { openIssuesForProposal, type ProposalIssue } from "./githubEvidence";
 import { appendSeatTickRecord } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
 import { withChildFinalMessages } from "./childFinalMessage";
-import { seatTickProposalMessage, seatTickWakeMessage } from "./report";
+import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakeMessage } from "./report";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
 import { effectiveSeatTickSettings, readSeatTickSettingsFile, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
@@ -1330,6 +1330,11 @@ async function check(
   const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
 
   if ((verdict.kind === "wake" || verdict.kind === "proactive") && input.seat) {
+    /* The note is shown in full only when this seat's last landed wake did not
+       already carry this exact text (#2030). The row is the epoch-scoped one,
+       so a successor's first wake still carries it. */
+    const noteShown = seatTickNoteRevision(input.settings.monitorPrompt);
+    const monitorPromptUnchanged = noteShown !== null && input.state.noteShown === noteShown;
     const clientMessageId = wakeClientMessageId(input.project, input.seat.seatEpoch, verdict, {
       fingerprint: input.changeFingerprint,
       lastWakeAt: input.state.lastWakeAt,
@@ -1358,6 +1363,7 @@ async function check(
            from it. */
         gaps: verdict.gaps,
         monitorPrompt: input.settings.monitorPrompt,
+        monitorPromptUnchanged,
       })
       : seatTickProposalMessage({
         project: input.project,
@@ -1366,6 +1372,7 @@ async function check(
         items: policy.itemsPerWake,
         slot: String(Math.floor(input.now / policy.proposalIntervalMs)),
         monitorPrompt: input.settings.monitorPrompt,
+        monitorPromptUnchanged,
       });
 
     /* The prompt above came off the settings row this check read, not out of
@@ -1404,6 +1411,7 @@ async function check(
       fingerprint: input.changeFingerprint,
       eventsThrough: input.events.at(-1)?.seq ?? state.eventsThrough ?? 0,
       terminalChildren,
+      noteShown,
     });
     /* The refusal circuit: attempts released one after another on the same
        permanent refusal. A seat that cannot take a wake is not sent another

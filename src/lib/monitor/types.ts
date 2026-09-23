@@ -764,6 +764,11 @@ export interface SeatTickWakeCommit {
       delivered showed the seat nothing, and must leave its children offerable
       exactly as #1465 requires of the harvest. */
   shownChildren?: string[];
+  /** The revision of the monitor note this wake carries (#2030), or null when
+      it carries none. Recorded by a landing and by nothing else, so the next
+      wake shows the note again unless the seat actually received it. Absent
+      on a plan written before this field existed, which records nothing. */
+  noteShown?: string | null;
 }
 
 /**
@@ -991,6 +996,14 @@ export interface SeatTickProjectState {
    * settlements are unaffected, because they are different settlements.
    */
   announcedLanes: string[];
+  /**
+   * The revision of the monitor note the last landed wake carried to THIS
+   * seat (#2030), or null/absent when none did. A wake whose note has this
+   * revision says "unchanged" in one line instead of repeating the note. It is
+   * the seat's, like {@link childrenShown}: a rotation reads it empty, so a
+   * successor's first wake shows the note it never received.
+   */
+  noteShown?: string | null;
   /** The project's unbroken run of attempts released on the same permanent
       refusal, or null/absent when there is none. See
       {@link SeatTickRefusalRun}. */

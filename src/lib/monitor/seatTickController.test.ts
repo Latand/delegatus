@@ -1802,6 +1802,82 @@ test("a project with no monitor prompt is woken with exactly the message it was 
 });
 
 /* ------------------------------------------------------------------------- *
+ * The note a seat already holds is not echoed back (#2030).
+ *
+ * One seat's 110 wakes carried its own 1.24 KB note every time, 33 of them
+ * identical to the wake before. These checks run the production controller
+ * against one durable row, so "already shown" is decided the way production
+ * decides it: by what the last LANDED wake recorded, for this seat epoch.
+ * ------------------------------------------------------------------------- */
+
+/** A lane ledger the size an orchestrator seat actually keeps there (2.26 KB
+    measured), one line per lane. */
+const LEDGER_NOTE = Array.from({ length: 24 }, (_, lane) =>
+  `lane ${lane + 1}: pipeline_${String(lane).padStart(4, "0")}ab — review round 2 of 4, PR open, waiting on CI; next: merge on green.`,
+).join("\n");
+
+/** Five open lanes whose last move lands between the two checks, so the second
+    wake is owed for the same reason the first was and shows the same board. */
+function busyBoard(movedAt: number): PipelineFixture[] {
+  return Array.from({ length: 5 }, (_, index) => ({
+    id: `pipeline_${String(index).padStart(4, "0")}ab`,
+    state: "running",
+    createdAt: "2026-08-28T09:00:00.000Z",
+    movedAt: new Date(movedAt - index * MINUTE).toISOString(),
+    branch: `pipeline/lane-${index}`,
+  }));
+}
+
+test("a note the seat's last landed wake carried is one line on the next wake, and a tick with it is about 1.2 KB (#2030)", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "note-unchanged-")), "seat-tick.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, accounting: undefined }, stateFile);
+  const settings = { ...promptSettings(), monitorPrompt: LEDGER_NOTE };
+  const check = async (now: number, over: Parameters<typeof harness>[0] = {}) => {
+    const rig = harness({ stateFile, now, pipelines: busyBoard(now - MINUTE), settings, ...over });
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent).toHaveLength(1);
+    return rig.sent[0]!.text;
+  };
+
+  const first = await check(NOW);
+  expect(first).toContain(PROMPT_HEADING);
+  expect(first).toContain("lane 1: pipeline_0000ab");
+  expect(readSeatTickState(PROJECT, stateFile).noteShown).toBeString();
+
+  const second = await check(NOW + 61 * MINUTE);
+  expect(second).not.toContain(PROMPT_HEADING);
+  expect(second).not.toContain("lane 1: pipeline_0000ab");
+  expect(second).toContain(`Standing monitor note unchanged since your last wake (${LEDGER_NOTE.length} chars;`);
+  expect(second).toContain("Contract: the \"The Viewer's clock\" section of your mandate governs this turn.");
+  const unchangedBytes = Buffer.byteLength(second);
+  expect(unchangedBytes).toBeLessThanOrEqual(1_200);
+  console.log(`[#2030] tick bytes: note shown ${Buffer.byteLength(first)}, note unchanged ${unchangedBytes}`);
+
+  /* One replaced line is a different note, and the next wake shows it. */
+  const edited = LEDGER_NOTE.replace("lane 1: pipeline_0000ab — review round 2 of 4", "lane 1: pipeline_0000ab — merged");
+  const third = await check(NOW + 122 * MINUTE, { settings: { ...settings, monitorPrompt: edited } });
+  expect(third).toContain("lane 1: pipeline_0000ab — merged");
+
+  /* A successor never received it: its first wake carries the note whole. */
+  const successor = await check(NOW + 183 * MINUTE, {
+    seat: { conversationId: SUCCESSOR, seatEpoch: 8, path: null },
+    settings: { ...settings, monitorPrompt: edited },
+  });
+  expect(successor).toContain(PROMPT_HEADING);
+  expect(successor).toContain("lane 1: pipeline_0000ab — merged");
+});
+
+test("a wake the layer never landed leaves the note to be shown again (#2030)", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "note-unlanded-")), "seat-tick.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, accounting: undefined }, stateFile);
+  const settings = { ...promptSettings(), monitorPrompt: LEDGER_NOTE };
+  const refused = harness({ stateFile, now: NOW, pipelines: busyBoard(NOW - MINUTE), settings, deliveryThrows: true });
+  await runSeatTickCheck(PROJECT, refused.deps);
+  expect(refused.sent[0]!.text).toContain(PROMPT_HEADING);
+  expect(readSeatTickState(PROJECT, stateFile).noteShown ?? null).toBeNull();
+});
+
+/* ------------------------------------------------------------------------- *
  * Replacing and clearing the prompt while a wake is outstanding (#1280).
  *
  * The delivery layer's idempotency key is what says which two sends are the

@@ -49,7 +49,9 @@
  * and a task is done only once its result shows on prod. v20 (#1880) makes
  * "role per the role table" name a table that exists: delivery renders one
  * from the live role registry, so a seat that omits a runtime knows the
- * engine, model and effort it is choosing. */
+ * engine, model and effort it is choosing. v21 (#2030) states the seat tick
+ * contract every wake used to repeat at its foot, in the clock section, and
+ * the wake names that section instead. */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "@/lib/roles/paramConfig";
@@ -67,9 +69,13 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
 
 /** Version of the approved default mandate below. Bump on ANY edit to
     `ORCHESTRATOR_SYSTEM_PROMPT`: seats record the version their mandate was
-    based on, and `get_orchestrator` reports it so a stale incumbent is visible
-    without diffing prompts. */
-export const ORCHESTRATOR_PROMPT_VERSION = 20;
+    based on, `get_orchestrator` reports it so a stale incumbent is visible
+    without diffing prompts, and a rotation over a stale incumbent rebuilds the
+    core from the current default. An edit without a bump reaches no seat,
+    which is how v20's rewrite never left the source (#2030), so
+    `prompt.test.ts` pins the text's fingerprint per version and fails until
+    the bump and a new fingerprint land together. */
+export const ORCHESTRATOR_PROMPT_VERSION = 21;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -94,6 +100,31 @@ Use the actual project name in place of {project}. For a ROTATION, when work rem
 export const ORCHESTRATOR_VIEWER_CLOCK_HEADING = "## The Viewer's clock — you never schedule yourself";
 
 /**
+ * The contract every seat tick wake used to end with (#1245, #1275, #1749), as
+ * the clock section below states it. Each clause answers a way the
+ * session-scheduled monitor actually failed: it left outcomes only in its own
+ * transcript, it kept re-running an action that had already failed, it re-armed
+ * its own schedule, and it once stopped inside a tick to ask the operator a
+ * question. "Do not schedule yourself" is the section's own second paragraph.
+ *
+ * It was the same 893 bytes on every wake — 98 KB over 110 wakes of one seat
+ * (#2030) — so it lives here, once per seat, and the wake names this section
+ * instead. It replaces the section's shorter paraphrase of the same rules
+ * rather than sitting beside it: a rotation composes this text plus a bounded
+ * history and handoff into one 32,000-byte envelope, and every byte the core
+ * grows is a byte of history a full rotation drops.
+ */
+export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
+  "When a wake arrives, handle the items it lists first, then make ONE bounded pass over this project's whole board and act on what stands still: "
+    + "list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, "
+    + "list_flows, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running.",
+  "Record every outcome on the board card or the pipeline, not only in this conversation.",
+  "If an item cannot be done, mark its task blocked with the reason: that is the stop, and the only one.",
+  "Never wait on the operator inside a wake's turn.",
+  "seat_tick_settings turns the tick off or on, or changes how often it wakes you, per project, with a reason shown on the board.",
+];
+
+/**
  * The clock handover (#1245), delivered on the same terms as the initial-status
  * directive above and for a sharper reason.
  *
@@ -109,7 +140,7 @@ export const ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE = `${ORCHESTRATOR_VIEWER_CLOCK_
 The Viewer wakes you. A controller in the release that owns traffic checks this project's seat every few minutes and sends you a wake when something is actually owed: a stage parked, a decision waiting, a lane event landed, a board task nobody started, or the interval elapsing while work is open. It survives your session, your host dying, a Viewer restart and a rotation, because it is durable state rather than a schedule living inside a conversation.
 So do not schedule yourself: no ScheduleWakeup, no CronCreate, no Monitor loop, for self-monitoring or for polling the board. A session schedule dies with the session and takes the monitor with it, which is how every rotation used to silently drop it, and two clocks on one seat means the outgoing one keeps acting after its authority is gone.
 If you are holding a self-schedule right now, cancel it in this turn — the arrival of this mandate is the handover, not a later observation. Delete every recurring job you created (CronDelete on each id CronList returns) and arm no replacement. Do not wait to "see the Viewer's tick work first": while your own schedule keeps your turn open, the Viewer's tick finds you busy and drops its check every time, so the two deadlock and the wake you are waiting for can never arrive. Yours goes first.
-Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
+Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. ${ORCHESTRATOR_SEAT_TICK_CONTRACT.join(" ")} This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
 
 /** Identifies the task-ownership section below inside a mandate, however its
     body was edited — the same reason the clock heading exists: a caller who
@@ -354,8 +385,9 @@ const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
   { marker: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
 ];
 
-/** Every seat receives the initial-status contract, the clock handover AND the
-    task-ownership section (#1720), whatever mandate it holds. Each is appended
+/** Every seat receives the initial-status contract, the clock handover with
+    the seat tick contract (#2030) AND the task-ownership section (#1720),
+    whatever mandate it holds. Each is appended
     at the seat lifecycle moments that deliver a mandate — a spawn, an adoption,
     a rotation — so a seat that is already running receives it at its next one.
     Delivery checks the text itself because a caller-edited mandate may retain
