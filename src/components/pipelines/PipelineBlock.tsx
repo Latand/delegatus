@@ -171,9 +171,11 @@ function ChainPills({ summary, nameOf, suffixes, selected, onOpenStage }: {
 /**
  * The card's chain on one line (§3.13): the widest fold that fits, measured,
  * never cutting the current stage. A card gets its width late (the board lays
- * cards out lazily), so a new width starts the fold over; and when even the
- * narrowest fold does not fit beside the age and the PR, the chain takes the
- * line alone and they move to the line below.
+ * cards out lazily), so a new width starts the fold over. When the counted
+ * fold does not fit beside the age and the PR, the chain takes the line alone,
+ * they move to the line below, and the folds are tried again down to the
+ * current stage alone. A name too long even for that wraps inside its pill:
+ * no pill in the fold ellipsizes, so every fold that settles shows it whole.
  */
 function CardLine({ summary, nameOf, suffixes, age, tail }: {
   summary: KanbanPipeline;
@@ -186,8 +188,11 @@ function CardLine({ summary, nameOf, suffixes, age, tail }: {
   const levels = useMemo(() => cardChainLevels(cardChain(summary)), [summary]);
   /* A chain that changed starts the fold over, as a new width does. */
   const key = `${summary.pipeline.id}|${levels.map((level) => level.map((item) => (item.kind === "stage" ? `${item.chip.stage.id}:${item.chip.state}` : `${item.kind}${item.n}`)).join(",")).join("/")}`;
-  const [fit, setFit] = useState({ key, width: 0, level: 0, alone: false });
-  const current = fit.key === key ? fit : { key, width: fit.width, level: 0, alone: false };
+  const [fit, setFit] = useState({ key, width: 0, level: 0, alone: false, wrap: false });
+  const current = fit.key === key ? fit : { key, width: fit.width, level: 0, alone: false, wrap: false };
+  /* The current stage alone waits for a line of its own: beside the age and
+     the PR, the counts around it are worth more than the one line. */
+  const lastBeside = levels.length > 1 ? levels.length - 2 : 0;
   const line = useRef<HTMLSpanElement>(null);
   const pills = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
@@ -195,7 +200,7 @@ function CardLine({ summary, nameOf, suffixes, age, tail }: {
     if (!element) return;
     const measure = () => {
       const width = Math.round(element.clientWidth);
-      setFit((previous) => (previous.width === width ? previous : { key: previous.key, width, level: 0, alone: false }));
+      setFit((previous) => (previous.width === width ? previous : { key: previous.key, width, level: 0, alone: false, wrap: false }));
     };
     measure();
     if (typeof ResizeObserver !== "function") return;
@@ -209,8 +214,9 @@ function CardLine({ summary, nameOf, suffixes, age, tail }: {
     if (element.scrollWidth <= element.clientWidth + 0.5) return;
     setFit((previous) => {
       const base = previous.key === key ? previous : { ...current };
-      if (base.level < levels.length - 1) return { ...base, level: base.level + 1 };
-      return base.alone ? base : { ...base, level: 0, alone: true };
+      if (base.level < (base.alone ? levels.length - 1 : lastBeside)) return { ...base, level: base.level + 1 };
+      if (!base.alone) return { ...base, level: 0, alone: true };
+      return base.wrap ? base : { ...base, wrap: true };
     });
   });
   const items = levels[Math.min(current.level, levels.length - 1)]!;
@@ -233,7 +239,7 @@ function CardLine({ summary, nameOf, suffixes, age, tail }: {
   );
   return (
     <>
-      <span className="pb-line" ref={line} data-fold-level={current.level} data-alone={current.alone ? "1" : undefined}>
+      <span className="pb-line" ref={line} data-fold-level={current.level} data-alone={current.alone ? "1" : undefined} data-wrap={current.wrap ? "1" : undefined}>
         <span className="pb-pills fold" ref={pills}>{items.map(item)}</span>
         {current.alone ? null : <>{age}<span className="pb-grow" />{tail}</>}
       </span>

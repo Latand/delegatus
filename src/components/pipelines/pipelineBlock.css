@@ -163,7 +163,14 @@
 .pblock .pb-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .pblock .pb-line.sub { font-size: var(--text-label); }
 .pblock .pb-pills.fold { flex: 0 1 auto; flex-wrap: nowrap; overflow: hidden; }
-.pblock .pb-pills.fold .pb-step { flex: none; }
+/* No pill in the fold ellipsizes: a name that does not fit overflows the chain,
+   and the overflow is what moves the card to the next fold. */
+.pblock .pb-pills.fold .pb-step, .pblock .pb-pills.fold .pb-pill { flex: none; max-width: none; }
+/* The last fold: the current stage alone on its own line, its name still too
+   long for it, wraps inside its pill rather than lose a word. */
+.pblock .pb-line[data-wrap="1"] .pb-pills.fold .pb-step, .pblock .pb-line[data-wrap="1"] .pb-pills.fold .pb-pill { flex: 0 1 auto; max-width: 100%; }
+.pblock .pb-line[data-wrap="1"] .pb-pills.fold .pb-pill { height: auto; min-height: 22px; padding-block: 2px; }
+.pblock .pb-line[data-wrap="1"] .pb-pills.fold .pb-name { white-space: normal; overflow-wrap: anywhere; }
 .pblock .pb-age, .pblock .pb-ended { flex: none; font-size: var(--text-label); color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pblock .pb-ended { display: inline-flex; align-items: center; gap: 5px; color: var(--color-secondary); }
 .pblock .pb-ended .pmark { color: var(--color-muted); }

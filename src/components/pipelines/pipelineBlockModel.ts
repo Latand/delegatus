@@ -102,9 +102,11 @@ export type ChainItem =
 /**
  * How a card's chain folds to fit one line (phone-kanban §3.13): the whole
  * chain; the passed stages before the current one as "✓n"; the current stage,
- * the next and "+m"; the current stage and "+m"; the current stage alone with
- * what comes before and after it counted. The card tries them in order until
- * one fits, and the current stage is in every one of them.
+ * the next and "+m"; the current stage and "+m"; the current stage with what
+ * comes before and after it counted; the current stage alone. The card tries
+ * them in order until one fits, and the current stage is in every one of them.
+ * A chain of more than one stage always ends on the current stage alone, which
+ * the card draws only once the chain has a line of its own.
  */
 export function cardChainLevels(chips: readonly KanbanStageChip[]): ChainItem[][] {
   if (!chips.length) return [[]];
@@ -119,17 +121,19 @@ export function cardChainLevels(chips: readonly KanbanStageChip[]): ChainItem[][
   if (afterNext > 0) levels.push([...lead, stage(chips[current]!), stage(chips[current + 1]!), { kind: "more", n: afterNext }]);
   const after = chips.length - current - 1;
   if (after > 0) levels.push([...lead, stage(chips[current]!), { kind: "more", n: after }]);
-  /* The narrowest: the current stage alone between what comes before it and
-     what comes after, each as one count — "+2 → (!) Diagnose" on a lane that
-     stopped on a fail branch. */
-  const last: ChainItem[] = [
+  /* The current stage between what comes before it and what comes after, each
+     as one count — "+2 → (!) Diagnose" on a lane that stopped on a fail branch. */
+  const counted: ChainItem[] = [
     ...(foldable ? lead : before.length ? [{ kind: "more", n: before.length } as ChainItem] : []),
     stage(chips[current]!),
     ...(after > 0 ? [{ kind: "more", n: after } as ChainItem] : []),
   ];
-  if (chips.length > 1) levels.push(last);
+  if (chips.length > 1) levels.push(counted);
   const key = (level: ChainItem[]) => level.map((item) => (item.kind === "stage" ? item.chip.stage.id : `${item.kind}${item.n}`)).join(",");
-  return levels.filter((level, index) => index === 0 || key(level) !== key(levels[index - 1]!));
+  const folds = levels.filter((level, index) => index === 0 || key(level) !== key(levels[index - 1]!));
+  /* The narrowest: the current stage alone, for a name too long to share its
+     line with even the counts. Every level before it holds two items or more. */
+  return chips.length > 1 ? [...folds, [stage(chips[current]!)]] : folds;
 }
 
 /** A finding list as the stage reported it: ranked when it was, else the

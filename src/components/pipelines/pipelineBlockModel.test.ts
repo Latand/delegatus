@@ -29,14 +29,21 @@ test("the card's chain folds in the design's order, and every fold keeps the cur
     "✓3 build-ui review-ui verify docs merge",
     "✓3 build-ui review-ui +3",
     "✓3 build-ui +4",
+    "build-ui",
   ]);
-  /* A lane stopped on a fail branch: the narrowest fold counts what came before. */
+  /* A lane stopped on a fail branch: the counted fold counts what came before. */
   const branch = [chip("build", "failed"), chip("review", "pending"), chip("diagnose", "needs_decision", true)];
   expect(currentChipIndex(branch)).toBe(2);
-  expect(cardChainLevels(branch).map(read)).toEqual(["build review diagnose", "+2 diagnose"]);
-  /* Two stages: nothing to fold beyond the whole chain and the current one with its neighbour counted. */
-  expect(cardChainLevels([chip("implement", "running"), chip("review", "pending")]).map(read)).toEqual(["implement review", "implement +1"]);
+  expect(cardChainLevels(branch).map(read)).toEqual(["build review diagnose", "+2 diagnose", "diagnose"]);
+  /* Two stages: the whole chain, the current one with its neighbour counted, then the current one alone. */
+  expect(cardChainLevels([chip("implement", "running"), chip("review", "pending")]).map(read)).toEqual(["implement review", "implement +1", "implement"]);
   expect(cardChainLevels([chip("only", "running")]).map(read)).toEqual(["only"]);
+  /* The current stage alone is only ever the last fold: every level before it
+     holds two items or more, which is how a card knows it waits for its own line. */
+  for (const levels of [cardChainLevels(eight), cardChainLevels(branch)]) {
+    expect(levels.at(-1)!.length).toBe(1);
+    for (const level of levels.slice(0, -1)) expect(level.length).toBeGreaterThan(1);
+  }
   for (const levels of [cardChainLevels(eight), cardChainLevels(branch)]) {
     for (const level of levels) expect(level.some((item) => item.kind === "stage" && (item.chip.state === "running" || item.chip.state === "needs_decision"))).toBe(true);
   }
