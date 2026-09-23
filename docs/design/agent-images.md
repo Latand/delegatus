@@ -326,17 +326,21 @@ expectations flip to thumbnails; the live cases in
 `liveTurnHandoff.test.ts`; the placeholder in a DOM test beside `ImageCard`;
 the keys in the existing i18n completeness test.
 
-**Rendered evidence** goes through the existing drivers, with a case added to
-each and no new script:
-
-- phone: 390×844 and 430×932, both colour schemes, in
-  `scripts/capture-mobile-v2.ts`, seeded with one transcript per engine that
-  covers shapes 1, 4, 10 (a gone file) and 11;
-- desktop: 1280×800 in `scripts/demo-capture.ts`.
+**Rendered evidence** goes through the existing conversation-window driver,
+`src/components/conversation/conversationWindow.browser.test.tsx`, as one more
+`describe` block over an `agent-images` case of
+`conversationWindowEvidence.fixture.tsx`. The case renders one conversation per
+engine (shapes 1, 3, 4, 10 with a served file and a gone one, 11) and a live
+`view_image` row through the production parser and feed rows. Its rasters are
+drawn on a canvas at load time, and the driver answers `/api/artifact` from a
+PNG it encodes in place, so no raster is committed. Frames: 390×844 in both
+colour schemes, 430×932 and 1280×800, in en and uk.
 
 Before and after frames stay local under `/var/tmp/agent-images/`. The gates
-to check are: no sideways overflow, every control at least 44 px on the phone,
-the thumbnail visible with its line closed, and the lightbox opening on tap.
+the driver asserts are: no sideways overflow, every image control at least
+44 px on the phone, every thumbnail drawn and outside a closed disclosure, no
+"show" chip and no "[image output]" text, no folded command group, the gone
+file as a pill naming it, and the viewer opening on tap.
 
 **Gates:**
 

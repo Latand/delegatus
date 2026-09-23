@@ -240,3 +240,35 @@ test("supplied reasoning streaming text renders once; native text and other item
   const moved: FeedEntry[] = [{ ...feed[0], item: { kind: "think", text: "", members: [{ ...member, anchorKey: "row:99:0" }] } }];
   expect(enrichCanonicalReasoning(moved, null, enriched)).toBe(moved);
 });
+
+/* #2075: Codex reports each `tools.view_image` inside a code-mode exec as a
+   live `imageView` row with an id of its own. The settled exec claims those
+   rows by the file it viewed; a view that started after the exec's result is
+   a later call, and a different file is someone else's. */
+test("a settled code-mode exec claims the live view_image rows of the files it viewed", () => {
+  const input = 'const r = await tools.view_image({path: "/w/shot.png"});\nimage(r.image_url);';
+  const call = JSON.stringify({ type: "response_item", timestamp: "2026-09-20T10:00:00.000Z",
+    payload: { type: "custom_tool_call", call_id: "exec-call", name: "exec", input } });
+  const output = JSON.stringify({ type: "response_item", timestamp: "2026-09-20T10:00:05.000Z",
+    payload: { type: "custom_tool_call_output", call_id: "exec-call", output: [{ type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" }] } });
+  const view = (itemId: string, path: string, startedAt: string | null) => ({
+    itemId, text: "", phase: "awaiting-echo" as const, startedAt, completedAt: null,
+    tool: { name: "view_image", engine: "codex" as const, status: "ok" as const, args: { path } },
+  });
+  const live: RuntimeLiveTurn = {
+    turnId: "turn-2075",
+    text: "",
+    items: [
+      view("exec-view-a", "/w/shot.png", "2026-09-20T10:00:01.000Z"),
+      view("exec-view-b", "/w/other.png", null),
+      view("exec-view-c", "/w/shot.png", "2026-09-20T10:00:09.000Z"),
+    ],
+  };
+  const feedOf = (lines: string[]) => createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" }).feed(lines, 0, false).items;
+  const ids = (feed: readonly FeedEntry[]) => visibleRuntimeLiveTurnItems(live, feed, undefined, "running").map((item) => item.itemId);
+
+  /* While the exec runs, every live view shows. */
+  expect(ids(feedOf([call]))).toEqual(["exec-view-a", "exec-view-b", "exec-view-c"]);
+  /* Once it lands, only its own view of its own file is claimed. */
+  expect(ids(feedOf([call, output]))).toEqual(["exec-view-b", "exec-view-c"]);
+});

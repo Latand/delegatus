@@ -298,3 +298,37 @@ test("an MCP call whose outcome was dropped says so in the reader's language, an
     expect(generic.textContent).toContain(translate(lang, "feed.liveToolOutcomeOmitted"));
   }
 });
+
+/* #2075: a live row that opened a picture file draws it under the line from
+   disk, the same card the settled row draws from the transcript's bytes. */
+test("a live view_image or image Read draws the file under its line; a text Read or a failed view draws none", () => {
+  const host = mount([
+    {
+      itemId: "exec-view-1", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: AT,
+      tool: { name: "view_image", engine: "codex", status: "ok", args: { path: "/w/shot.png" } },
+    },
+    {
+      itemId: "toolu_png", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,
+      tool: { name: "Read", engine: "claude", status: "run", args: { file_path: "~/w/frame.jpg" } },
+    },
+    {
+      itemId: "toolu_ts", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: AT,
+      tool: { name: "Read", engine: "claude", status: "ok", args: { file_path: "/w/src/app.ts" } },
+    },
+    {
+      itemId: "toolu_err", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: AT,
+      tool: { name: "Read", engine: "claude", status: "err", args: { file_path: "/w/missing.png" } },
+    },
+  ]);
+  const pictures = [...host.querySelectorAll<HTMLElement>("[data-live-tool-image] img")];
+  expect(pictures.map((img) => img.getAttribute("src"))).toEqual([
+    "/api/artifact?path=%2Fw%2Fshot.png",
+    "/api/artifact?path=%7E%2Fw%2Fframe.jpg",
+  ]);
+  /* Each picture sits right under the line that opened it. */
+  const rows = [...host.querySelectorAll<HTMLElement>("[data-live-turn]")];
+  expect(rows[0]!.nextElementSibling?.hasAttribute("data-live-tool-image")).toBe(true);
+  expect(rows[1]!.nextElementSibling?.hasAttribute("data-live-tool-image")).toBe(true);
+  expect(rows[2]!.nextElementSibling?.hasAttribute("data-live-tool-image")).toBe(false);
+  expect(rows[3]!.nextElementSibling).toBeNull();
+});

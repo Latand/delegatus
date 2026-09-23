@@ -2506,8 +2506,8 @@ describe("tool results carry their images (#1498)", () => {
     /* The card owns the picture: no standalone image row is pushed around it. */
     expect(itemsOfKind(feed, "image")).toHaveLength(0);
     expect(read?.outputPreview).not.toContain(frameData);
-    /* A result that carries a picture opens on the desktop the way an edit's diff does. */
-    expect(read?.open).toBe(true);
+    /* The picture is drawn on the line itself (#2075), so it no longer opens the body. */
+    expect(read?.open).toBe(false);
     assertParity(claudeFile, lines, { chunks: [1] });
   });
 
@@ -2581,6 +2581,169 @@ describe("tool results carry their images (#1498)", () => {
   });
 });
 
+
+/* #2075: every shape in which an agent views an image ends in an image block,
+   inline or by path, on the call that viewed it. Every fixture is invented: a
+   placeholder base64 body, paths under /w, short ids. */
+describe("every image an agent looks at (#2075)", () => {
+  const png = "iVBORw0KGgo=";
+  const dataUrl = `data:image/png;base64,${png}`;
+  const toolItems = (feed: ReturnType<typeof buildFeed>) =>
+    feed.items.flatMap((item): Extract<Item, { kind: "tool" }>[] => (item.kind === "tool" ? [item] : item.kind === "cmd-group" ? item.calls : []));
+  const tool = (feed: ReturnType<typeof buildFeed>, id: string) => toolItems(feed).find((item) => item.id === id);
+  const claudeRead = (id: string, file: string) => JSON.stringify({
+    type: "assistant", timestamp: "2026-09-20T10:00:00.000Z",
+    message: { content: [{ type: "tool_use", id, name: "Read", input: { file_path: file } }] },
+  });
+  const claudeToolUse = (id: string, name: string, input: Record<string, unknown>) => JSON.stringify({
+    type: "assistant", timestamp: "2026-09-20T10:00:00.000Z",
+    message: { content: [{ type: "tool_use", id, name, input }] },
+  });
+  const claudeResult = (id: string, content: unknown[], file?: Record<string, unknown>) => JSON.stringify({
+    type: "user", timestamp: "2026-09-20T10:00:01.000Z",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content }] },
+    ...(file ? { toolUseResult: { type: "image", file } } : {}),
+  });
+  const claudeImage = { type: "image", source: { type: "base64", media_type: "image/png", data: png } };
+  const response = (payload: Record<string, unknown>, timestamp = "2026-09-20T10:00:00.000Z") => JSON.stringify({ type: "response_item", timestamp, payload });
+  const event = (payload: Record<string, unknown>, timestamp = "2026-09-20T10:00:00.500Z") => JSON.stringify({ type: "event_msg", timestamp, payload });
+
+  test("shape 1: two adjacent Claude Reads of images stay two rows, never a folded command group", () => {
+    const lines = [
+      claudeRead("toolu-a", "/w/a.png"),
+      claudeResult("toolu-a", [claudeImage], { base64: png, type: "image/png", originalSize: 8, dimensions: { originalWidth: 1, originalHeight: 1 } }),
+      claudeRead("toolu-b", "/w/b.png"),
+      claudeResult("toolu-b", [claudeImage]),
+    ];
+    const feed = buildFeed(claudeFile, lines, false, "");
+    expect(itemsOfKind(feed, "cmd-group")).toHaveLength(0);
+    expect(itemsOfKind(feed, "tool")).toHaveLength(2);
+    /* The duplicate `toolUseResult.file.base64` is not a second picture. */
+    expect(tool(feed, "toolu-a")?.outputBlocks).toEqual([{ type: "image", media: "image/png", data: png, w: 1, h: 1, bytes: 8 }]);
+    expect(itemsOfKind(feed, "image")).toHaveLength(0);
+    assertParity(claudeFile, lines, { chunks: [1] });
+  });
+
+  test("shape 1: a Read with a picture breaks a run, and its neighbours still fold", () => {
+    const bash = (id: string) => claudeToolUse(id, "Bash", { command: "ls" });
+    const lines = [bash("b1"), bash("b2"), claudeRead("toolu-pic", "/w/pic.png"), claudeResult("toolu-pic", [claudeImage]), bash("b3"), bash("b4")];
+    const feed = buildFeed(claudeFile, lines, false, "");
+    expect(feed.items.map((item) => item.kind)).toEqual(["cmd-group", "tool", "cmd-group"]);
+  });
+
+  test("shape 3: a Claude MCP screenshot keeps its text and draws its picture, in order", () => {
+    const lines = [
+      claudeToolUse("toolu-shot", "mcp__browser__take_screenshot", {}),
+      claudeResult("toolu-shot", [{ type: "text", text: "Took a screenshot" }, claudeImage]),
+    ];
+    const feed = buildFeed(claudeFile, lines, false, "");
+    expect(tool(feed, "toolu-shot")?.outputBlocks).toEqual([{ type: "text", text: "Took a screenshot" }, { type: "image", media: "image/png", data: png }]);
+  });
+
+  test("shape 4: a code-mode exec that views an image carries the picture and the path it viewed", () => {
+    const input = 'const r = await tools.view_image({path: "/w/shot.png", detail: "high"});\nimage(r.image_url);';
+    const lines = [
+      response({ type: "custom_tool_call", call_id: "exec-call", name: "exec", input }),
+      response({ type: "custom_tool_call_output", call_id: "exec-call", output: [{ type: "input_text", text: "Script completed" }, { type: "input_image", image_url: dataUrl }] }, "2026-09-20T10:00:02.000Z"),
+    ];
+    const feed = buildFeed(codexFile, lines, false, "");
+    const exec = tool(feed, "exec-call");
+    expect(exec?.viewedPaths).toEqual(["/w/shot.png"]);
+    expect(exec?.outputBlocks?.filter((block) => block.type === "image")).toEqual([{ type: "image", media: "image/png", data: png }]);
+    assertParity(codexFile, lines, { chunks: [1] });
+  });
+
+  test("shape 4: a path built at runtime is not a viewed path, and several images all survive", () => {
+    const input = 'for (const p of ["/w/1.png", "/w/2.png", "/w/3.png"]) { const r = await tools.view_image({path: p}); image(r.image_url); }\nawait tools.view_image({path: `/w/${name}.png`});';
+    const lines = [
+      response({ type: "custom_tool_call", call_id: "exec-multi", name: "exec", input }),
+      response({ type: "custom_tool_call_output", call_id: "exec-multi", output: [1, 2, 3].map(() => ({ type: "input_image", image_url: dataUrl })) }),
+    ];
+    const exec = tool(buildFeed(codexFile, lines, false, ""), "exec-multi");
+    expect(exec?.viewedPaths).toBeUndefined();
+    expect(exec?.outputBlocks?.filter((block) => block.type === "image")).toHaveLength(3);
+  });
+
+  test("shape 5: a wait continuation whose output carries a picture draws it on the wait row", () => {
+    const lines = [
+      response({ type: "custom_tool_call", call_id: "exec-yield", name: "exec", input: 'await tools.exec_command({cmd: "bun run capture"});' }),
+      response({ type: "custom_tool_call_output", call_id: "exec-yield", output: "Script running with cell ID 7" }),
+      response({ type: "custom_tool_call", call_id: "wait-7", name: "wait", input: '{"cell_id":"7"}' }),
+      response({ type: "custom_tool_call_output", call_id: "wait-7", output: [{ type: "input_text", text: "Script completed" }, { type: "input_image", image_url: dataUrl }] }),
+    ];
+    const feed = buildFeed(codexFile, lines, false, "");
+    const wait = tool(feed, "wait-7");
+    expect(wait?.outputBlocks?.some((block) => block.type === "image" && block.data === png)).toBe(true);
+    expect(feed.items.some((item) => item.kind === "tool" && item.id === "wait-7")).toBe(true);
+  });
+
+  test("shape 6: a direct view_image draws its picture; a failed view keeps its text and draws nothing", () => {
+    const lines = [
+      response({ type: "function_call", call_id: "vi-ok", name: "view_image", arguments: JSON.stringify({ path: "/w/shot.png" }) }),
+      response({ type: "function_call_output", call_id: "vi-ok", output: [{ type: "input_image", image_url: dataUrl }] }),
+      response({ type: "function_call", call_id: "vi-gone", name: "view_image", arguments: JSON.stringify({ path: "/w/gone.png" }) }),
+      response({ type: "function_call_output", call_id: "vi-gone", output: "unable to locate image at `/w/gone.png`: No such file or directory" }),
+    ];
+    const feed = buildFeed(codexFile, lines, false, "");
+    expect(tool(feed, "vi-ok")?.outputBlocks).toEqual([{ type: "image", media: "image/png", data: png }]);
+    expect(tool(feed, "vi-gone")?.outputPreview).toContain("unable to locate image");
+    expect(tool(feed, "vi-gone")?.outputBlocks).toBeUndefined();
+  });
+
+  test("shape 7: view_image_tool_call is no record card, before or after the output", () => {
+    const call = response({ type: "function_call", call_id: "vi-7", name: "view_image", arguments: JSON.stringify({ path: "/w/shot.png" }) });
+    const viewed = event({ type: "view_image_tool_call", call_id: "vi-7", path: "/w/shot.png" });
+    const inline = response({ type: "function_call_output", call_id: "vi-7", output: [{ type: "input_image", image_url: dataUrl }] });
+    for (const lines of [[call, viewed, inline], [call, inline, viewed]]) {
+      const feed = buildFeed(codexFile, lines, false, "");
+      expect(itemsOfKind(feed, "record")).toHaveLength(0);
+      expect(tool(feed, "vi-7")?.outputBlocks).toEqual([{ type: "image", media: "image/png", data: png }]);
+      assertParity(codexFile, lines, { chunks: [1] });
+    }
+  });
+
+  test("shape 7: with no inline picture in the output, the viewed file is drawn by path, either order", () => {
+    const call = response({ type: "function_call", call_id: "vi-p", name: "view_image", arguments: JSON.stringify({ path: "/w/shot.png" }) });
+    const viewed = event({ type: "view_image_tool_call", call_id: "vi-p", path: "/w/shot.png" });
+    const text = response({ type: "function_call_output", call_id: "vi-p", output: "attached local image path" });
+    for (const lines of [[call, viewed, text], [call, text, viewed]]) {
+      const feed = buildFeed(codexFile, lines, false, "");
+      expect(itemsOfKind(feed, "record")).toHaveLength(0);
+      expect(tool(feed, "vi-p")?.outputBlocks?.filter((block) => block.type === "image")).toEqual([{ type: "image", path: "/w/shot.png" }]);
+      assertParity(codexFile, lines, { chunks: [1] });
+    }
+  });
+
+  test("shape 9: a non-Viewer mcp_tool_call_end with an image result stays a hidden service row", () => {
+    const line = event({ type: "mcp_tool_call_end", call_id: "mcp-1", invocation: { server: "playwright", tool: "browser_take_screenshot", arguments: {} },
+      result: { Ok: { content: [{ type: "image", data: png, mimeType: "image/png" }] } } });
+    const feed = buildFeed(codexFile, [line], false, "");
+    expect(feed.items).toHaveLength(0);
+    expect(feed.hiddenServiceCount).toBe(1);
+  });
+
+  test("shape 10: an app-server imageView item is a tool row that draws the file, with no raw path as its output", () => {
+    const lines = [event({ type: "item_completed", item: { type: "imageView", id: "exec-1", path: "/w/shot.png" } })];
+    const feed = buildFeed(codexFile, lines, false, "");
+    const view = tool(feed, "exec-1");
+    expect(view?.outputBlocks).toEqual([{ type: "image", path: "/w/shot.png" }]);
+    expect(view?.outputPreview).not.toContain("/w/shot.png");
+    assertParity(codexFile, lines, { chunks: [1] });
+  });
+
+  test("shape 10: an imageView of a file that is not a raster keeps its path as text", () => {
+    const feed = buildFeed(codexFile, [event({ type: "item_completed", item: { type: "imageView", id: "exec-2", path: "/w/diagram.svg" } })], false, "");
+    expect(tool(feed, "exec-2")?.outputBlocks).toBeUndefined();
+    expect(tool(feed, "exec-2")?.outputPreview).toContain("/w/diagram.svg");
+  });
+
+  test("shape 14: a thread-item localImage outside the inbox is a picture by path, with no attachment note", () => {
+    const line = event({ type: "item_completed", item: { type: "UserMessage", id: "user-14", content: [{ type: "text", text: "look at this" }, { type: "localImage", path: "/w/shot.png" }] } });
+    const feed = buildFeed(codexFile, [line], false, "");
+    expect(itemsOfKind(feed, "image")).toEqual([{ kind: "image", path: "/w/shot.png" }]);
+    expect(itemsOfKind(feed, "note")).toHaveLength(0);
+  });
+});
 
 describe("compact identified reasoning (#1534)", () => {
   const reasoning = (id: string, text = "", turnId = "turn-a") => JSON.stringify({
