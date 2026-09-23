@@ -71,6 +71,9 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
        existed announces none, so nothing a landing could not have shown is
        recorded as having been shown. */
     announcedLanes: conversationIds(raw.announcedLanes),
+    /* Same direction for a settled deploy (#2063): a plan from before it
+       existed announces none. */
+    announcedDeploys: conversationIds(raw.announcedDeploys),
     /* A plan from before #2030 records no note, so the next wake shows it. */
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
   };
@@ -245,6 +248,9 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     /* Absent on every row from before #1799, and absent reads as empty: a seat
        that has been told nothing about its lanes is told about all of them. */
     announcedLanes: conversationIds(raw.announcedLanes).slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT),
+    /* Absent on every row from before #2063, and absent reads as empty: a
+       settled deploy nobody announced is announced. */
+    announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT),
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),

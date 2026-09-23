@@ -1563,3 +1563,25 @@ test("a child seen stalled once does not shorten the bound until the stall is co
   expect(seatTickDecision(input({ children: [orphan], state: stateWith({ lastWakeAt, stalledSeen: [`child:${orphan.conversationId}`] }) })).verdict)
     .toMatchObject({ kind: "wake", reasons: [{ kind: "stalled" }] });
 });
+
+test("a settled deploy of the seat's own wakes it inside the hour, and one past the backlog bound wakes nobody (#2063)", () => {
+  const deploy = (settledMinutesAgo: number) => ({
+    deploymentId: "deploy-1", phase: "rolled-back", sha: "b".repeat(40), error: "candidate health failed",
+    settledAt: new Date(NOW - settledMinutesAgo * MINUTE).toISOString(),
+  });
+  /* The last wake was ten minutes ago: the hour has not elapsed, and the
+     settled bound has. */
+  const recent = stateWith({ lastWakeAt: new Date(NOW - 10 * MINUTE).toISOString() });
+  const fresh = seatTickDecision(input({ settledDeploys: [deploy(2)], state: recent }));
+  expect(fresh.verdict).toMatchObject({ kind: "wake", reasons: [{ kind: "deploy-settled", detail: "a deployment you started ended rolled-back" }] });
+  const verdict = fresh.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
+  expect(verdict.items[0]).toMatchObject({
+    kind: "deploy",
+    id: "deploy-1",
+    deploy: { deploymentId: "deploy-1", phase: "rolled-back", sha: "b".repeat(40), error: "candidate health failed" },
+  });
+  expect(seatTickWakeCommitPlan(fresh.verdict, { fingerprint: "fp-1", eventsThrough: 0 })!.announcedDeploys).toEqual(["deploy-1"]);
+
+  const stale = seatTickDecision(input({ settledDeploys: [deploy(4 * 24 * 60)], state: stateWith({ lastWakeAt: new Date(NOW - 2 * 60 * MINUTE).toISOString() }) }));
+  expect(stale.verdict.kind).not.toBe("wake");
+});

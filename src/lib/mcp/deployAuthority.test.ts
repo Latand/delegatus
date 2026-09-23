@@ -6,6 +6,7 @@ import { expect, test } from "bun:test";
 
 import viewerPackageManifest from "../../../package.json";
 
+import type { SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 
@@ -34,6 +35,7 @@ const SHA = "4f3c1b9a8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a";
 const VIEWER_PROJECT = "proj-a";
 
 let posted: { pathname: string; body: Record<string, unknown> }[] = [];
+let recorded: SeatDeploymentRecord[] = [];
 
 function bindings(options: {
   kind: "manager" | "agent" | "gateway" | "unidentified";
@@ -42,15 +44,17 @@ function bindings(options: {
   viewerProject?: string | null;
   seats?: { conversationId: string; path: string | null; project: string }[];
   replayed?: boolean;
+  receiptState?: "accepted" | "busy";
 }) {
   posted = [];
+  recorded = [];
   const control: ViewerControlDependencies = {
     async post(pathname, body) {
       posted.push({ pathname, body });
       return {
         deploymentId: "deploy-1",
         revision: body.revision,
-        state: "accepted",
+        state: options.receiptState ?? "accepted",
         ...(options.replayed === undefined ? {} : { replayed: options.replayed }),
       };
     },
@@ -67,6 +71,7 @@ function bindings(options: {
     authorizedSeats: () => options.seats ?? [
       { conversationId: "conversation_seat", path: null, project: VIEWER_PROJECT },
     ],
+    recordSeatDeployment: (record: SeatDeploymentRecord) => { recorded.push(record); },
   } as never);
 }
 
@@ -88,6 +93,25 @@ test("the designated seat deploys directly: revision and idempotency key, nothin
     pathname: "/api/runtime/deployments",
     body: { revision: SHA, idempotencyKey: "d1" },
   }]);
+});
+
+test("an accepted deploy records the seat that started it, so the tick can wake it on settle (#2063)", async () => {
+  const tools = bindings({ kind: "manager", callerProject: VIEWER_PROJECT });
+  const receipt = await tools.deploy_exact_sha({ clientRequestId: "d1", revision: SHA });
+  expect(receipt).toMatchObject({ deploymentId: "deploy-1", wakeOnSettle: true });
+  expect(recorded).toEqual([{
+    deploymentId: "deploy-1",
+    conversationId: "conversation_seat",
+    project: VIEWER_PROJECT,
+    revision: SHA,
+    requestedAt: expect.any(String),
+  }]);
+
+  /* A busy receipt names the deployment already running, which is someone
+     else's: nothing is recorded, and the seat is told it will not be woken. */
+  const busy = bindings({ kind: "manager", callerProject: VIEWER_PROJECT, receiptState: "busy" });
+  await expect(busy.deploy_exact_sha({ clientRequestId: "d2", revision: SHA })).resolves.toMatchObject({ state: "busy", wakeOnSettle: false });
+  expect(recorded).toEqual([]);
 });
 
 test("a session attributed as an agent, the gateway, or nobody may not execute a deploy", async () => {

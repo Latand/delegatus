@@ -196,7 +196,11 @@ export type SeatTickWakeReasonKind =
   | "child-terminal"
   /** A lane the seat itself launched whose stage completed, failed or parked
       on a decision (#1749), and which nobody has closed out. */
-  | "own-lane-settled";
+  | "own-lane-settled"
+  /** A deployment the seat itself started with deploy_exact_sha reached a
+      terminal phase (#2063). The seat ended its turn so the promotion could
+      replace its host, and this is the wake that brings it back, once. */
+  | "deploy-settled";
 
 export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "lane-event",
@@ -206,6 +210,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "interval",
   "child-terminal",
   "own-lane-settled",
+  "deploy-settled",
 ];
 
 export interface SeatTickWakeReason {
@@ -240,7 +245,7 @@ export interface SeatTickItem {
       lane it asked for is provisioned and its first stage has launched. It is
       announced once — see {@link SeatTickProjectState.announcedLanes} — because
       there is nothing for the seat to close out, only something to know. */
-  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning";
+  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy";
   id: string;
   label: string;
   /** A settled child's readable transcript (#1881): the controller attaches
@@ -249,6 +254,9 @@ export interface SeatTickItem {
   finalMessageFrom?: { path: string; engine: string | null };
   /** That final message, bounded and redacted, once the controller read it. */
   finalMessage?: string;
+  /** Only on a `deploy` line (#2063): the settled deployment as the ledger
+      records it. `id` is its deployment id. */
+  deploy?: { deploymentId: string; phase: string; sha: string; error: string | null };
 }
 
 /** A spawned child a wake names as unreadable, and why (#1881). */
@@ -447,6 +455,36 @@ export interface SeatTickPipelineInput {
       stage, or null when no stage is running or the plane had no answer. */
   stageActivity: SeatTickActivity | null;
   stageId: string | null;
+  /**
+   * Who paused the lane, read off its pause record (#2063); absent when it is
+   * not paused. `seat` is the seat this check is about: a lane it paused, for a
+   * deploy or anything else, is owed work until it is resumed, so every wake
+   * lists it. `operator` is excluded from the seat's work altogether: the
+   * operator stopped it, and only the operator's resume starts it again.
+   * `other` is anyone else, a predecessor seat among them, and is read as any
+   * parked lane is.
+   */
+  pausedBy?: "seat" | "operator" | "other";
+}
+
+/**
+ * A deployment the seat started that reached a terminal phase and that no
+ * landed wake has announced yet (#2063).
+ *
+ * The ledger does not know who asked for a deployment, so `deploy_exact_sha`
+ * records the seat's conversation beside the deployment id when the runtime
+ * host accepts it, and the gather joins the two.
+ */
+export interface SeatTickDeployInput {
+  deploymentId: string;
+  /** The terminal phase: succeeded, rolled-back or failed. */
+  phase: string;
+  /** The exact revision the ledger resolved. */
+  sha: string;
+  error: string | null;
+  /** When the ledger last moved the deployment, which for a terminal one is
+      when it settled. */
+  settledAt: string | null;
 }
 
 /**
@@ -762,6 +800,10 @@ export interface SeatTickWakeCommit {
       announcement the delivery layer never delivered told the seat nothing,
       and the lane stays announceable. */
   announcedLanes?: string[];
+  /** The settled deployments this wake announces (#2063), recorded by a
+      landing and by nothing else, so a deploy whose wake never arrived is
+      offered again. */
+  announcedDeploys?: string[];
   /** The state tokens of every child line this wake carries (#1783 round two),
       recorded by a landing and by nothing else — a wake the layer never
       delivered showed the seat nothing, and must leave its children offerable
@@ -1000,6 +1042,14 @@ export interface SeatTickProjectState {
    */
   announcedLanes: string[];
   /**
+   * Settled deployments of the seat's a delivered wake has already announced
+   * (#2063), newest last, bounded to {@link SEAT_TICK_ANNOUNCED_LANES_LIMIT}.
+   * A settled deployment stays settled for ever, so this is the only discharge
+   * its reason has: announced once, it is never offered again. Absent reads as
+   * empty.
+   */
+  announcedDeploys?: string[];
+  /**
    * The revision of the monitor note the last landed wake carried to THIS
    * seat (#2030), or null/absent when none did. A wake whose note has this
    * revision says "unchanged" in one line instead of repeating the note. It is
@@ -1075,6 +1125,9 @@ export interface SeatTickCheckInput {
       a seat that launched nothing and for lanes some other hand created: the
       obligation is the seat's own, and it is the one the tick was blind to. */
   ownLanes: readonly SeatTickOwnLaneInput[];
+  /** Deployments the seat started that settled and were not announced yet
+      (#2063). Absent reads as none. */
+  settledDeploys?: readonly SeatTickDeployInput[];
   /** The seat's own standalone children (#1465), bounded and project-scoped,
       with already-harvested terminal ones removed. Empty when the seat spawned
       nothing, and empty when the registry could not be read — the field below

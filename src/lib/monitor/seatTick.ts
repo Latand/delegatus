@@ -12,6 +12,7 @@ import {
   type SeatTickChildInput,
   type SeatTickChildrenGap,
   type SeatTickDecision,
+  type SeatTickDeployInput,
   type SeatTickEventInput,
   type SeatTickEvidenceGap,
   type SeatTickItem,
@@ -164,8 +165,39 @@ export function seatTickPolicy(env: Readonly<Record<string, string | undefined>>
   };
 }
 
+/**
+ * A lane that is the seat's work. A lane the operator paused is not (#2063):
+ * the operator stopped it and only the operator's resume starts it again, so
+ * it raises no stall, holds no interval open and is not on the agenda.
+ */
 function isOpenLane(pipeline: SeatTickPipelineInput): boolean {
-  return pipeline.state !== "terminal";
+  return pipeline.state !== "terminal" && pipeline.pausedBy !== "operator";
+}
+
+/**
+ * The lanes this seat paused and has not resumed (#2063). A seat pauses its
+ * lanes before a deploy and has to resume them after it, from a new turn; the
+ * lanes are that turn's work, so every wake lists them until they move.
+ */
+function seatPausedLanes(input: SeatTickCheckInput): SeatTickPipelineInput[] {
+  return input.pipelines.filter((pipeline) => isOpenLane(pipeline) && pipeline.pausedBy === "seat");
+}
+
+/**
+ * The seat's settled deploys that are still news (#2063), under the backlog
+ * bound own lanes live under: a deploy that settled days ago while ticking was
+ * off is history, and the bound keeps it from waking anyone for ever.
+ */
+function seatSettledDeploys(input: SeatTickCheckInput): readonly SeatTickDeployInput[] {
+  return (input.settledDeploys ?? []).filter((deploy) => {
+    const settledAt = deploy.settledAt ? Date.parse(deploy.settledAt) : Number.NaN;
+    return Number.isFinite(settledAt) && input.now - settledAt < input.policy.backlogAfterMs;
+  });
+}
+
+function deployLabel(deploy: SeatTickDeployInput): string {
+  const outcome = deploy.phase === "succeeded" ? "succeeded" : `ended ${deploy.phase}`;
+  return `deploy settled: the deployment you started ${outcome}, sha ${deploy.sha}${deploy.error ? `, error: ${deploy.error}` : ""}`;
 }
 
 /** A standalone child with a live host behind it (#1465): open work, exactly
@@ -234,6 +266,7 @@ function hasOpenWork(input: SeatTickCheckInput): boolean {
     || input.tasks.some((task) => task.status === "inbox" || task.status === "assigned")
     || input.pullRequests.length > 0
     || ownSettledLanes(input).length > 0
+    || seatSettledDeploys(input).length > 0
     /* Both child clauses ask the same question of the child as the item list
        does (#1749, #1783): a child no seat can read, or whose own clock is a
        predecessor's board, is not this seat's work whether it is still running
@@ -1104,7 +1137,11 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      that moves every check it would wake the seat four times an hour about a
      condition nothing but the seat's own cleanup ends. It keeps the project's
      own interval, as it did before. */
-  const childrenSettled = harvest.length > 0 || persistedChildStalls.length > 0;
+  /* A deployment the seat started settling is the same kind of news (#2063):
+     the seat ended its turn for it, and an hour-long bound turned a five-minute
+     deploy into thirty minutes of paused lanes. */
+  const settledDeploys = seatSettledDeploys(input);
+  const childrenSettled = harvest.length > 0 || persistedChildStalls.length > 0 || settledDeploys.length > 0;
   const liveChildren = runningChildren.filter((child) => !isStalledActivity(child.activity));
   const childInterval = childrenSettled
     ? SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS
@@ -1148,7 +1185,14 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        by the check itself at no cost, and the check that reaches it names it.
        A wake that says only "something is waiting further down" is the empty
        agenda this whole mechanism exists to stop sending. */
-    /* First, and ahead of the lane events, because it is the seat's own work
+    /* The seat's own deploy leads (#2063): the seat ended its turn waiting on
+       exactly this, and the lanes it paused for the deploy wait on its answer. */
+    if (settledDeploys.length > 0) {
+      const newest = settledDeploys.at(-1)!;
+      const more = settledDeploys.length > 1 ? ` and ${settledDeploys.length - 1} more` : "";
+      candidates.push({ kind: "deploy-settled", detail: `a deployment you started ${newest.phase === "succeeded" ? "succeeded" : `ended ${newest.phase}`}${more}` });
+    }
+    /* Then, and ahead of the lane events, because it is the seat's own work
        (#1749): a lane it launched that settled and is standing there is the
        obligation the tick was blind to for the whole of the evidence in that
        issue, while five slots went to children of seats two weeks retired. */
@@ -1412,6 +1456,21 @@ function wakeItems(context: {
 }): SeatTickItem[] {
   const { input } = context;
   const items: SeatTickItem[] = [];
+  /* The seat's own deploy first, then the lanes it paused (#2063): the wake a
+     deploy owes is "it settled, now resume what you paused for it", and the
+     per-wake bound must never cut either half. A paused lane is listed on
+     every wake until it is resumed, whatever the reason the wake carries. */
+  for (const deploy of seatSettledDeploys(input)) {
+    items.push({
+      kind: "deploy",
+      id: deploy.deploymentId,
+      label: deployLabel(deploy),
+      deploy: { deploymentId: deploy.deploymentId, phase: deploy.phase, sha: deploy.sha, error: deploy.error },
+    });
+  }
+  for (const pipeline of seatPausedLanes(input)) {
+    items.push({ kind: "pipeline", id: pipeline.id, label: `${pipeline.title} — paused by you; resume it with pipeline_action resume once what you paused it for is done` });
+  }
   /* Named, not merely counted (#1289). The twelve hours were spent because the
      seat had no way to know a pull request was waiting; a wake that says one is
      and leaves the seat to rediscover which would have cost most of the same
@@ -1470,6 +1529,7 @@ function wakeItems(context: {
   const owned = new Set(context.ownLanes.map((lane) => lane.id));
   for (const entry of context.stalled) {
     if (owned.has(entry.pipeline.id)) continue;
+    if (items.some((item) => item.kind === "pipeline" && item.id === entry.pipeline.id)) continue;
     items.push({ kind: "pipeline", id: entry.pipeline.id, label: `${entry.pipeline.title} — ${entry.reason}` });
   }
   /* One line per child here too (#1783 round two). A child whose host died
@@ -1530,7 +1590,7 @@ export function seatTickWakeCommitPlan(
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
   const note = context.noteShown === undefined ? {} : { noteShown: context.noteShown };
-  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], shownChildren: [], ...note };
+  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], shownChildren: [], ...note };
   if (verdict.kind !== "wake") return null;
   const terminal = new Set(context.terminalChildren ?? []);
   /* What each child line SHOWS, for the clause that asks whether anything has
@@ -1555,7 +1615,10 @@ export function seatTickWakeCommitPlan(
      announced, and recording it here would be the announcement nobody ever
      received. Same rule the harvested children live under. */
   const announcedLanes = verdict.items.filter((item) => item.kind === "provisioning").map((item) => item.id);
-  return { proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, shownChildren, ...note };
+  /* The same rule for a settled deploy (#2063): the landing of the wake that
+     carried it is what announces it, once. */
+  const announcedDeploys = verdict.items.filter((item) => item.kind === "deploy").map((item) => item.id);
+  return { proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, shownChildren, ...note };
 }
 
 /**
@@ -1626,13 +1689,15 @@ export function seatTickWakeCommit(
     releasedWake: null,
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
-    announcedLanes: announcedLanes(state.announcedLanes ?? [], commit.announcedLanes ?? []),
+    announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
+    announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? []),
   };
 }
 
-/** The lanes announced after a landing (#1799), newest last and bounded. */
-function announcedLanes(before: readonly string[], announced: readonly string[]): string[] {
-  return [...new Set([...before.filter((id) => !announced.includes(id)), ...announced])]
+/** The lanes (#1799) or deployments (#2063) announced after a landing,
+    newest last and bounded. */
+function announced(before: readonly string[], landed: readonly string[]): string[] {
+  return [...new Set([...before.filter((id) => !landed.includes(id)), ...landed])]
     .slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT);
 }
 
