@@ -225,3 +225,32 @@ test("the rehearsal report is read back out of a stream of host output", () => {
   expect(parseRuntimeHostRehearsalReport(output).runtime).toBe("bun 1.4.0");
   expect(() => parseRuntimeHostRehearsalReport("nothing here")).toThrow("produced no report");
 });
+
+const recoveryEvidence = {
+  retained: { image: "agent-log-viewer:rehearsal-a", revision: "a".repeat(40), container: "llv-runtime-host-a" },
+  failed: { image: "delegatus:rehearsal-d", revision: "d".repeat(40), container: "delegatus-runtime-host-d" },
+  docker: ["container rm -f delegatus-runtime-host-d"],
+};
+
+test("rename slice 3: a host that held its endpoints but skipped its rollback fails the rehearsal", async () => {
+  const { ports } = harness({ listener: [true] });
+  ports.recovery = async () => ({ evidence: recoveryEvidence, failure: "no generation ran docker container rm … delegatus-runtime-host-d" });
+
+  const report = await rehearseRuntimeHost(ports, options);
+
+  expect(report.ok).toBe(false);
+  expect(report.succession.completed).toBe(true);
+  expect(report.detail).toBe("no generation ran docker container rm … delegatus-runtime-host-d under bun 1.4.0");
+  expect(report.recovery).toEqual(recoveryEvidence);
+  expect(report.log).toEqual(["successor: line one"]);
+});
+
+test("rename slice 3: the rollback a passing rehearsal carried out is part of its evidence", async () => {
+  const { ports } = harness({ listener: [true] });
+  ports.recovery = async () => ({ evidence: recoveryEvidence, failure: null });
+
+  const report = await rehearseRuntimeHost(ports, options);
+
+  expect(report.ok).toBe(true);
+  expect(report.recovery).toEqual(recoveryEvidence);
+});

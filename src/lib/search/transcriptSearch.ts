@@ -13,7 +13,7 @@ export const TRANSCRIPT_SEARCH_FIELDS = ["message.body"] as const;
 export interface TranscriptIndexSource {
   path: string;
   project: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   size: number;
   mtimeMs: number;
 }
@@ -32,7 +32,7 @@ export interface TranscriptSearchItem {
   byteOffset: number;
   lineNumber: number;
   project: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
 }
 
 export interface TranscriptCorpusStats {
@@ -102,7 +102,7 @@ type HitRow = [
 
 type TranscriptFileRow = {
   project: string;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   mtime_ms: number;
 };
 
@@ -126,7 +126,7 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
   return sqlite.Database;
 }
 
-const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 3;
+const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 4;
 const TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE = 256;
 
 function normalizedBodyHash(body: string): string {
@@ -146,6 +146,7 @@ function hasBodyHashColumn(db: Database): boolean {
 function migrateSearchSchema(db: Database): void {
   const currentVersion = schemaVersion(db);
   if (currentVersion >= TRANSCRIPT_SEARCH_SCHEMA_VERSION && hasBodyHashColumn(db)) return;
+  if (currentVersion < 4) db.exec("PRAGMA foreign_keys = OFF");
   db.exec("BEGIN IMMEDIATE");
   try {
     if (!hasBodyHashColumn(db)) db.exec("ALTER TABLE transcript_messages ADD COLUMN body_hash TEXT");
@@ -170,6 +171,41 @@ function migrateSearchSchema(db: Database): void {
           (SELECT mtime_ms / 1000.0 FROM transcript_files WHERE path = transcript_path));
       `);
     }
+    if (currentVersion < 4) {
+      db.exec(`
+        ALTER TABLE transcript_messages RENAME TO transcript_messages_previous;
+        ALTER TABLE transcript_files RENAME TO transcript_files_previous;
+        CREATE TABLE transcript_files (
+          path TEXT PRIMARY KEY,
+          size INTEGER NOT NULL,
+          mtime_ms REAL NOT NULL,
+          project TEXT NOT NULL,
+          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+          messages_count INTEGER NOT NULL,
+          indexed_at INTEGER NOT NULL
+        );
+        INSERT INTO transcript_files SELECT * FROM transcript_files_previous;
+        CREATE TABLE transcript_messages (
+          id INTEGER PRIMARY KEY,
+          transcript_path TEXT NOT NULL,
+          message_index INTEGER NOT NULL,
+          speaker TEXT NOT NULL CHECK(speaker IN ('user', 'assistant')),
+          timestamp INTEGER,
+          byte_offset INTEGER NOT NULL,
+          line_number INTEGER NOT NULL,
+          body TEXT NOT NULL,
+          body_hash TEXT NOT NULL,
+          sort_timestamp REAL,
+          UNIQUE(transcript_path, message_index),
+          FOREIGN KEY(transcript_path) REFERENCES transcript_files(path) ON DELETE CASCADE
+        );
+        INSERT INTO transcript_messages SELECT * FROM transcript_messages_previous;
+        DROP TABLE transcript_messages_previous;
+        DROP TABLE transcript_files_previous;
+        CREATE INDEX IF NOT EXISTS transcript_messages_path
+          ON transcript_messages(transcript_path, message_index);
+      `);
+    }
     db.exec(`
       CREATE TABLE IF NOT EXISTS transcript_search_sequence (
         singleton INTEGER PRIMARY KEY CHECK(singleton = 1), last_id INTEGER NOT NULL
@@ -181,8 +217,10 @@ function migrateSearchSchema(db: Database): void {
       PRAGMA user_version = ${Math.max(currentVersion, TRANSCRIPT_SEARCH_SCHEMA_VERSION)};
       COMMIT;
     `);
+    if (currentVersion < 4) db.exec("PRAGMA foreign_keys = ON");
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ }
+    if (currentVersion < 4) db.exec("PRAGMA foreign_keys = ON");
     throw error;
   }
 }
@@ -200,7 +238,7 @@ function openWriterDatabase(): Database {
         size INTEGER NOT NULL,
         mtime_ms REAL NOT NULL,
         project TEXT NOT NULL,
-        engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex')),
+        engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
         messages_count INTEGER NOT NULL,
         indexed_at INTEGER NOT NULL
       );
@@ -298,10 +336,10 @@ function messageFromRecord(
   source: TranscriptIndexSource,
   byteOffset: number,
   lineNumber: number,
-): (ParsedTranscriptMessage & { representation: "claude" | "response" | "event" }) | null {
+): (ParsedTranscriptMessage & { representation: "claude" | "response" | "event" | "copilot" }) | null {
   let speaker: "user" | "assistant" | null = null;
   let body = "";
-  let representation: "claude" | "response" | "event" = "claude";
+  let representation: "claude" | "response" | "event" | "copilot" = "claude";
   if (source.engine === "claude" && (parsed.type === "user" || parsed.type === "assistant")) {
     speaker = parsed.type;
     body = textContent(record(parsed.message)?.content);
@@ -325,6 +363,10 @@ function messageFromRecord(
       speaker = "assistant";
       body = typeof payload.message === "string" ? payload.message.trim() : "";
     }
+  } else if (source.engine === "copilot" && (parsed.type === "user.message" || parsed.type === "assistant.message")) {
+    representation = "copilot";
+    speaker = parsed.type === "user.message" ? "user" : "assistant";
+    body = textContent(record(parsed.data)?.content);
   }
   if (!speaker || !body) return null;
   return {
@@ -377,7 +419,7 @@ async function* transcriptLines(pathname: string): AsyncGenerator<{ bytes: Buffe
 }
 
 async function* readTranscriptMessages(source: TranscriptIndexSource): AsyncGenerator<ParsedTranscriptMessage> {
-  type RecentMessage = { representation: "response" | "event"; timestamp: number | null; lineNumber: number };
+  type RecentMessage = { representation: "response" | "event" | "copilot"; timestamp: number | null; lineNumber: number };
   const recent = new Map<string, RecentMessage>();
   const recentOrder: Array<{ key: string; message: RecentMessage }> = [];
   for await (const line of transcriptLines(source.path)) {
@@ -606,7 +648,7 @@ function transcriptFiles(db: Database, paths: ReadonlySet<string>): Map<string, 
     return files;
   }
   const rows = db.query("SELECT path, project, engine, mtime_ms FROM transcript_files").values() as Array<
-    [string, string, "claude" | "codex", number]
+    [string, string, "claude" | "codex" | "copilot", number]
   >;
   for (const [pathname, project, engine, mtime_ms] of rows) {
     if (paths.has(pathname)) files.set(pathname, { project, engine, mtime_ms });

@@ -7,7 +7,17 @@
    singleton-fence succession between them, and holds the stable listener the
    succession handed over. Everything it touches is created here and removed
    here: a private state directory, a private socket, an ephemeral loopback
-   port. It never reads the operator's state directory and never binds 8898. */
+   port. It never reads the operator's state directory and never binds 8898.
+
+   The succession is a rollback across the two Docker spellings
+   (docs/design/rename-delegatus.md §6.6). The first generation is a release
+   that switched to the `delegatus` names; it boots, completes the handoff from
+   the generation before it and records that one as its rollback target. The
+   second is that retained generation, this release, started from an
+   `agent-log-viewer:*` image the way `scripts/rollback-runtime-host.ts` starts
+   it: it has to find the failed generation, stop it, take the fence and remove
+   it. Both generations reach Docker only through a stub on their PATH, which
+   records each call and touches no daemon. */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -15,7 +25,11 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import type { ViewerRuntimeHostHealthEvidence } from "@/lib/runtime/contracts";
+import type {
+  RuntimeHostGenerationIdentity,
+  ViewerRuntimeHostHealthEvidence,
+  ViewerRuntimeHostRecoveryEvidence,
+} from "@/lib/runtime/contracts";
 
 import {
   RUNTIME_HOST_REHEARSAL_LOG_LINES,
@@ -24,8 +38,22 @@ import {
   type RuntimeHostRehearsalGeneration,
   type RuntimeHostRehearsalPorts,
 } from "./hostRehearsal";
+import { DELEGATUS_DOCKER_NAMES, LEGACY_DOCKER_NAMES, type DockerNameSpelling } from "./dockerNames";
 import { RUNTIME_HOST_FENCE_WAIT_ENV } from "./fenceWait";
-import { RUNTIME_HOST_CONTAINER_ENV } from "./hostRelease";
+import {
+  readRuntimeHostRelease,
+  readRuntimeHostRollbackTarget,
+  RUNTIME_HOST_CONTAINER_ENV,
+  RUNTIME_HOST_IMAGE_ENV,
+  RUNTIME_HOST_REVISION_ENV,
+  writeRuntimeHostHandoffIntent,
+  writeRuntimeHostRelease,
+  writeRuntimeHostRollbackIntent,
+  type RuntimeHostReleaseRecord,
+  type RuntimeHostRollbackTarget,
+} from "./hostRelease";
+import { requestRuntimeHostRollback } from "./hostRollback";
+import { runtimeHostSuccessorName } from "./hostSuccessor";
 
 /** The successor's own fence wait has to outlast the succession budget, or it
     fails its container before the predecessor has finished releasing. */
@@ -61,12 +89,52 @@ export interface RuntimeHostRehearsalRunOptions {
   holdWindowMs?: number;
 }
 
+/** Everything the rehearsal hands its generations, under its state directory. */
+export function runtimeHostRehearsalFiles(stateDir: string) {
+  return {
+    release: path.join(stateDir, "runtime-host-release.json"),
+    rollbackTarget: path.join(stateDir, "runtime-host-rollback-target.json"),
+    rollbackIntent: path.join(stateDir, "runtime-host-rollback-intent.json"),
+    handoffIntent: path.join(stateDir, "runtime-host-handoff-intent.json"),
+    /** Ahead of everything else on the generations' PATH. */
+    tools: path.join(stateDir, "bin"),
+    dockerCalls: path.join(stateDir, "docker-calls.log"),
+  };
+}
+
+function rehearsalRelease(names: DockerNameSpelling, revision: string, port: number, stagedAt: string): RuntimeHostReleaseRecord {
+  const image = `${names.imageRepository}:rehearsal-${revision.slice(0, 12)}`;
+  return {
+    revision,
+    image,
+    container: runtimeHostSuccessorName(revision, image, names),
+    endpoint: `http://127.0.0.1:${port}`,
+    stagedAt,
+  };
+}
+
+/** The two generations, one per spelling. `failed` serves first and is the
+    release that switched names; `retained` is this release, which the
+    rollback brings back. */
+export function runtimeHostRehearsalGenerations(port: number, stagedAt = "2026-01-01T00:00:00.000Z"): {
+  failed: RuntimeHostReleaseRecord;
+  retained: RuntimeHostReleaseRecord;
+} {
+  return {
+    failed: rehearsalRelease(DELEGATUS_DOCKER_NAMES, "d".repeat(40), port, stagedAt),
+    retained: rehearsalRelease(LEGACY_DOCKER_NAMES, "a".repeat(40), port, stagedAt),
+  };
+}
+
 export function runtimeHostRehearsalEnvironment(
   options: RuntimeHostRehearsalRunOptions,
   role: "predecessor" | "successor",
 ): Record<string, string | undefined> {
+  const files = runtimeHostRehearsalFiles(options.stateDir);
+  const { failed, retained } = runtimeHostRehearsalGenerations(options.port);
+  const generation = role === "predecessor" ? failed : retained;
   const environment: Record<string, string | undefined> = {
-    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    PATH: [files.tools, process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"].join(path.delimiter),
     // The environment is built rather than inherited, so the rehearsal cannot
     // pick up a live socket, journal or state dir from whoever started it.
     // The image pins production, and the host under test must see the same.
@@ -77,15 +145,24 @@ export function runtimeHostRehearsalEnvironment(
     LLV_RUNTIME_HOST_SOCKET: path.join(options.stateDir, "runtime-host.sock"),
     LLV_RUNTIME_JOURNAL: path.join(options.stateDir, "runtime-events.sqlite"),
     /* The stable listener exists only when deployments are enabled, and the
-       listener is the point. The adapter is never invoked: no deployment is
-       requested, and the release target file is deliberately absent, so the
-       proxy answers its own 503 — which is the raw-write path that took the
-       host down, exercised on every probe. */
+       listener is the point. The adapter runs only the boot-time handoff
+       completion: no deployment is requested, and the release target file is
+       deliberately absent, so the proxy answers its own 503 — which is the
+       raw-write path that took the host down, exercised on every probe. */
     LLV_VIEWER_DEPLOYMENTS: "1",
     LLV_VIEWER_DEPLOY_ADAPTER: path.join(options.root, "scripts", "runtime-host-viewer-adapter.ts"),
     LLV_VIEWER_DEPLOY_TARGET: path.join(options.stateDir, "viewer-release.json"),
     LLV_VIEWER_PORT: String(options.port),
-    [RUNTIME_HOST_CONTAINER_ENV]: `rehearsal-${role}`,
+    LLV_RUNTIME_HOST_RELEASE_TARGET: files.release,
+    LLV_RUNTIME_HOST_ROLLBACK_TARGET: files.rollbackTarget,
+    LLV_RUNTIME_HOST_ROLLBACK_INTENT_TARGET: files.rollbackIntent,
+    LLV_RUNTIME_HOST_HANDOFF_INTENT_TARGET: files.handoffIntent,
+    /* The identity dockerd injects into a managed generation. With the release
+       record naming it, the host is a tracked generation and runs the handoff
+       and rollback steps at boot. */
+    [RUNTIME_HOST_IMAGE_ENV]: generation.image,
+    [RUNTIME_HOST_REVISION_ENV]: generation.revision,
+    [RUNTIME_HOST_CONTAINER_ENV]: generation.container,
     ...(role === "successor" ? { [RUNTIME_HOST_FENCE_WAIT_ENV]: String(REHEARSAL_FENCE_WAIT_MS) } : {}),
   };
   Reflect.deleteProperty(environment, "NODE_ENV");
@@ -232,10 +309,138 @@ async function seedJournal(socketPath: string): Promise<void> {
   }
 }
 
+function executablePath(command: string): string | null {
+  if (command.includes("/")) return path.resolve(command);
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, command);
+    try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch { /* not here */ }
+  }
+  return null;
+}
+
+/**
+ * The tools a tracked generation reaches for at boot. `docker` is a stub that
+ * appends each call to a log and answers an inspect with the id it was asked
+ * about, so the rehearsal can never reach a daemon, least of all the
+ * operator's. `bun-container` is the interpreter under test: the host runs
+ * its deployment adapter as an executable whose `#!/usr/bin/env bun-container`
+ * line names the image's own Bun, which a checkout outside the image lacks.
+ */
+function installRehearsalTools(options: RuntimeHostRehearsalRunOptions): void {
+  const files = runtimeHostRehearsalFiles(options.stateDir);
+  fs.mkdirSync(files.tools, { recursive: true, mode: 0o700 });
+  const quotedLog = `'${files.dockerCalls.replaceAll("'", `'\\''`)}'`;
+  fs.writeFileSync(path.join(files.tools, "docker"), [
+    "#!/bin/sh",
+    `printf '%s\\n' "$*" >> ${quotedLog}`,
+    'if [ "$1" = container ] && [ "$2" = inspect ]; then',
+    '  for target in "$@"; do :; done',
+    `  printf '[{"Id":"%s","Name":"/%s"}]\\n' "$target" "$target"`,
+    "fi",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  const runtime = executablePath(options.runtimeBin);
+  const link = path.join(files.tools, "bun-container");
+  if (runtime && runtime !== link) {
+    fs.rmSync(link, { force: true });
+    fs.symlinkSync(runtime, link);
+  }
+}
+
+function identity(release: RuntimeHostReleaseRecord): RuntimeHostGenerationIdentity {
+  return { image: release.image, revision: release.revision, container: release.container };
+}
+
+function readLines(filename: string): string[] {
+  try { return fs.readFileSync(filename, "utf8").split("\n").filter(Boolean); } catch { return []; }
+}
+
+/**
+ * What the retained generation should have done, checked against what it did.
+ * `null` when it found the rollback target the failed generation recorded,
+ * stopped and removed that generation and nothing else, and cleared the
+ * rollback it carried out.
+ */
+export function runtimeHostRecoveryFailure(input: {
+  failed: RuntimeHostGenerationIdentity;
+  retained: RuntimeHostGenerationIdentity;
+  /** The rollback target the failed generation recorded, as the rollback read it. */
+  found: RuntimeHostRollbackTarget | null;
+  docker: string[];
+  /** The durable release record once the hold is over. */
+  release: RuntimeHostGenerationIdentity | null;
+  rollbackIntentLeft: boolean;
+  rollbackTargetLeft: boolean;
+}): string | null {
+  const { failed, retained, found } = input;
+  if (!found) return `${failed.container} never recorded ${retained.container} as its rollback target`;
+  if (found.active.container !== failed.container || found.previous.container !== retained.container) {
+    return `the rollback target named ${found.active.container} → ${found.previous.container} instead of ${failed.container} → ${retained.container}`;
+  }
+  const target = (line: string) => line.split(" ").at(-1);
+  const expected: Array<[string, string]> = [
+    ["container inspect", failed.container],
+    ["container update", failed.container],
+    ["container stop", failed.container],
+    ["container rm", failed.container],
+  ];
+  let next = 0;
+  for (const line of input.docker) {
+    const step = expected[next];
+    if (step && line.startsWith(step[0]) && target(line) === step[1]) next += 1;
+  }
+  if (next < expected.length) {
+    const [verb, container] = expected[next]!;
+    return `no generation ran docker ${verb} … ${container} (it ran: ${input.docker.join("; ") || "nothing"})`;
+  }
+  const againstRetained = input.docker.find((line) => /^container (update|stop|rm|kill)\b/.test(line) && target(line) === retained.container);
+  if (againstRetained) return `the rollback turned on the generation it kept: docker ${againstRetained}`;
+  if (input.rollbackIntentLeft) return "the retained generation never cleared the rollback intent";
+  if (input.rollbackTargetLeft) return "the retained generation never cleared the rollback target";
+  if (input.release?.container !== retained.container) {
+    return `the durable release record names ${input.release?.container ?? "nothing"} instead of ${retained.container}`;
+  }
+  return null;
+}
+
 export function runtimeHostRehearsalPorts(options: RuntimeHostRehearsalRunOptions): RuntimeHostRehearsalPorts {
   const socketPath = path.join(options.stateDir, "runtime-host.sock");
+  const files = runtimeHostRehearsalFiles(options.stateDir);
+  installRehearsalTools(options);
+  const { failed, retained } = runtimeHostRehearsalGenerations(options.port, new Date().toISOString());
+  let found: RuntimeHostRollbackTarget | null = null;
   return {
-    start: async (role) => startGeneration(options, role),
+    start: async (role) => {
+      if (role === "predecessor") {
+        /* A handoff to the failed generation, as its predecessor staged it:
+           it completes this at boot and keeps `retained` as its rollback target. */
+        writeRuntimeHostRelease(failed, files.release);
+        writeRuntimeHostHandoffIntent({
+          revision: failed.revision,
+          image: failed.image,
+          successorContainer: failed.container,
+          predecessorId: retained.container,
+          previousRelease: retained,
+          successorRelease: failed,
+          recordedAt: failed.stagedAt,
+        }, files.handoffIntent);
+        return startGeneration(options, role);
+      }
+      /* The rollback, as `scripts/rollback-runtime-host.ts --execute` requests
+         it, with starting the retained container standing in for dockerd. A
+         target that is not there is reported by `recovery`. */
+      try { found = readRuntimeHostRollbackTarget(files.rollbackTarget); } catch { found = null; }
+      if (!found) return startGeneration(options, role);
+      const started: { generation?: RuntimeHostRehearsalGeneration } = {};
+      await requestRuntimeHostRollback(found, {
+        writeIntent: (intent) => writeRuntimeHostRollbackIntent(intent, files.rollbackIntent),
+        writeRelease: (release) => writeRuntimeHostRelease(release, files.release),
+        enablePreviousRestart: async () => {},
+        startPrevious: async () => { started.generation = startGeneration(options, role); },
+      });
+      return started.generation ?? startGeneration(options, role);
+    },
     seed: () => seedJournal(socketPath),
     probeListener: (probe) => probeStableListener(options.port, probe),
     /* The snapshot, because it is the large answer: a peer that leaves during
@@ -243,6 +448,27 @@ export function runtimeHostRehearsalPorts(options: RuntimeHostRehearsalRunOption
     probeSocket: (probe) => probeRuntimeSocket(socketPath, { id: "rehearsal-snapshot", method: "snapshot", params: {} }, probe),
     now: () => Date.now(),
     sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    recovery: async () => {
+      const evidence: ViewerRuntimeHostRecoveryEvidence = {
+        retained: identity(retained),
+        failed: identity(failed),
+        docker: readLines(files.dockerCalls),
+      };
+      let release: RuntimeHostGenerationIdentity | null = null;
+      try { release = readRuntimeHostRelease(files.release); } catch { release = null; }
+      return {
+        evidence,
+        failure: runtimeHostRecoveryFailure({
+          failed: evidence.failed,
+          retained: evidence.retained,
+          found,
+          docker: evidence.docker,
+          release,
+          rollbackIntentLeft: fs.existsSync(files.rollbackIntent),
+          rollbackTargetLeft: fs.existsSync(files.rollbackTarget),
+        }),
+      };
+    },
   };
 }
 

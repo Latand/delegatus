@@ -1,7 +1,7 @@
 # Rename to Delegatus: sliced plan with migration
 
-Status: design. Slice 1 is implemented; §12 records where the code on `main`
-differed from this plan and what slice 1 did about it. Counted at `main`
+Status: design. Slices 1 and 3 are implemented; §12 and §13 record where the
+code on `main` differed from this plan and what each slice did about it. Counted at `main`
 7374c5d4 (2026-09-23); every count below comes from `git grep` on that tree
 unless it says otherwise.
 
@@ -830,3 +830,53 @@ Slice 1 followed the code wherever the two disagreed:
 - **Tests.** `src/lib/projects/succession.test.ts` did not exist and was
   created. `viewerOwnProject` is not exported, so it is tested through
   `productionDomainDependencies.viewerProject`.
+
+---
+
+## 13. Slice 3: where the code on `main` differed from this plan
+
+- **Nothing found its targets by name.** §6.6 says the runtime host finds
+  rollback targets and cleanup candidates by these names. It does not.
+  Rollback reads the target and intent it recorded, handoff cleanup removes
+  the predecessor by the id in the handoff intent, Viewer release cleanup
+  lists containers by the `dev.live-log-viewer.managed` label, compose
+  snapshots are keyed by a hash of the container name, and succession finds
+  its predecessor by the fence owner's pid. Each already works under either
+  spelling, so slice 3 changes none of them. What it adds is the proof, and one
+  place for the names: `src/runtime-host/dockerNames.ts` holds both spellings,
+  and every producer (`llv-deploy-`, `llv-runtime-host-`,
+  `agent-log-viewer:deploy-`, `:staging-`, `:hostboot-`, `:node22`) reads it,
+  so slice 5 changes one constant. The one real name filter was the running
+  container check in `scripts/cutover-shared-claude-projects.ts`, which
+  matched `llv-` only and now matches `delegatus-` too.
+- **Networks.** Every Compose service uses `network_mode: host`, so Compose
+  creates no project network, and a successor copies its predecessor's network
+  mode. There is no network name to recognize.
+- **`rebuild.sh` and the bootstrap run no Compose command.** `rebuild.sh`
+  posts a revision to the running host, and the bootstrap stages a successor
+  by cloning the predecessor container, so an exported `DELEGATUS_CONFIG_DIR`
+  would reach nothing in either. Compose runs in two places. One is the
+  operator's shell, where `docs/docker.md` exports the value printed by
+  `scripts/app-config-dir.mjs`, which asks `bin/appDir.mjs`. The other is the
+  nested `docker compose config` a deployment runs inside the runtime host.
+  The host folds `DELEGATUS_` names into `LLV_` names at boot and deletes the
+  originals (§5), so the runtime-host service passes the app dir on as
+  `LLV_CONFIG_DIR`, and every default reads
+  `${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME}/.config/delegatus}}`.
+  With the value exported, `docker compose config` renders every service
+  exactly as before on an existing install, apart from the added
+  `LLV_CONFIG_DIR`. A running host keeps the socket, journal, target and env
+  file paths its own container was given, because each of them is passed on
+  explicitly.
+- **The rehearsal.** `verify-runtime-host.ts`, the `bun-runtime` job and the
+  in-image gate in `verify-candidate` now rehearse a rollback across the two
+  spellings. The first generation is named `delegatus-runtime-host-*` from a
+  `delegatus:*` image. It completes a handoff and records an
+  `llv-runtime-host-*` rollback target. The second generation is that
+  retained one, started from an `agent-log-viewer:*` image as
+  `rollback-runtime-host.ts --execute` starts it. It must stop the failed
+  generation, take the fence, remove it, clear the rollback and never touch
+  itself. Both generations reach Docker only through a stub on their PATH,
+  which records every call. The host runs its deployment adapter through the
+  adapter's `#!/usr/bin/env bun-container` line, so the rehearsal also links
+  `bun-container` to the interpreter under test.

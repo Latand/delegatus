@@ -1,5 +1,5 @@
 import { effortScale } from "./efforts";
-import { ENGINE_MODELS, isCodexLaunchModel, normalizeClaudeLaunchModel, type AgentModelOption } from "./models";
+import { ENGINE_MODELS, isCodexLaunchModel, normalizeClaudeLaunchModel, validateLaunchModel, type AgentModelOption } from "./models";
 
 export interface AgentReconfiguration {
   model: string;
@@ -9,19 +9,27 @@ export interface AgentReconfiguration {
 }
 
 export function reconfigurationFromBody(
-  engine: "claude" | "codex",
+  engine: "claude" | "codex" | "copilot",
   body: { model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown },
+  copilotModelEfforts?: readonly string[] | null,
 ): { value?: AgentReconfiguration; error?: string } {
   const model = typeof body.model === "string" ? body.model.trim() : "";
-  const validModel = engine === "claude" ? normalizeClaudeLaunchModel(model) : isCodexLaunchModel(model) ? model : null;
-  const known = (ENGINE_MODELS[engine] as readonly AgentModelOption[]).some((option) => option.id === validModel);
+  const validModel = engine === "claude" ? normalizeClaudeLaunchModel(model)
+    : engine === "codex" ? isCodexLaunchModel(model) ? model : null
+      : (() => {
+          const result = validateLaunchModel("copilot", model);
+          return "error" in result ? null : result.model;
+        })();
+  const known = engine === "copilot"
+    ? validModel !== null
+    : (ENGINE_MODELS[engine] as readonly AgentModelOption[]).some((option) => option.id === validModel);
   if (!validModel || !known) return { error: `model is not supported by ${engine}` };
 
   const effort = typeof body.effort === "string" ? body.effort.trim() : "";
-  if (!effortScale(engine, validModel)?.includes(effort)) {
+  if (!effortScale(engine, validModel, engine === "copilot" ? copilotModelEfforts : undefined)?.includes(effort)) {
     return { error: `effort is not supported by ${engine} model ${validModel}` };
   }
-  if (engine === "claude" && body.fast !== undefined && body.fast !== null) {
+  if (engine !== "codex" && body.fast !== undefined && body.fast !== null) {
     return { error: "speed is only supported by codex" };
   }
   if (engine === "codex" && typeof body.fast !== "boolean") {

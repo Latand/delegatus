@@ -46,6 +46,20 @@ const CODEX_MODEL_SCALES: readonly (readonly [RegExp, readonly string[]])[] = [
   [/^gpt-5\.6\b/, ["low", "medium", "high", "xhigh", "max"]],
 ];
 
+/* Captured `modelInfo` effort ladders. Model catalogues can add more from
+   Copilot transcripts; this known background model remains useful to the
+   transcript/runtime helpers even though it is not picker-enabled. */
+const COPILOT_MODEL_SCALES: Readonly<Record<string, readonly string[]>> = {
+  "gpt-5.4-nano": ["none", "low", "medium", "high", "xhigh"],
+};
+const COPILOT_CATALOG_SCALES = new Map<string, readonly string[]>();
+
+/** Seed per-model ladders returned by a Copilot account catalogue. Model ids
+    are globally stable, so one account's observed ladder applies to the same id. */
+export function registerCopilotEffortScales(models: readonly { id: string; efforts: readonly string[] | null }[]): void {
+  for (const model of models) if (model.efforts?.length) COPILOT_CATALOG_SCALES.set(model.id, [...model.efforts]);
+}
+
 /* OpenClaw's `--thinking` ladder, kept out of ENGINE_EFFORTS because it is a
    display scale: the Viewer reads a recorded tier off the transcript and
    offers no OpenClaw selector. `off` is the bottom rung; `adaptive` hands the
@@ -58,10 +72,13 @@ const OPENCLAW_EFFORTS: readonly string[] = ["off", "minimal", "low", "medium", 
     for engines without a reasoning dial (shell). Model may be the viewer's
     display-shortened id — matching is prefix-based on the codex slug, and
     claude models all share one CLI scale. */
-export function effortScale(engine: string, model: string | null | undefined): readonly string[] | null {
+export function effortScale(engine: string, model: string | null | undefined, copilotModelEfforts?: readonly string[] | null): readonly string[] | null {
   if (engine === "claude") return ENGINE_EFFORTS.claude;
   if (engine === "openclaw") return OPENCLAW_EFFORTS;
-  if (engine === "copilot") return ENGINE_EFFORTS.copilot;
+  if (engine === "copilot") {
+    const id = (model ?? "").trim().toLowerCase();
+    return copilotModelEfforts ?? COPILOT_CATALOG_SCALES.get(id) ?? COPILOT_MODEL_SCALES[id] ?? ENGINE_EFFORTS.copilot;
+  }
   if (engine !== "codex") return null;
   const id = (model ?? "").trim().toLowerCase();
   for (const [re, scale] of CODEX_MODEL_SCALES) {

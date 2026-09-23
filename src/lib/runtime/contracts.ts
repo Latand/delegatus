@@ -714,10 +714,26 @@ export interface ViewerRuntimeHostHealthEvidence {
   listener: ViewerRuntimeHostListenerEvidence;
   /** The runtime socket, whose answers are the large ones. */
   socket: ViewerRuntimeHostProbeEvidence;
+  /** The rollback the successor carried out at boot, when the rehearsal
+      staged one (docs/design/rename-delegatus.md §6.6). */
+  recovery?: ViewerRuntimeHostRecoveryEvidence;
   ok: boolean;
   detail?: string;
   /** Bounded tail of the failing generation's own output. */
   log?: string[];
+}
+
+/** A runtime-host rollback across the two Docker spellings: the generation that
+    served under one name failed, and the retained one under the other name
+    found it, stopped it and removed it. */
+export interface ViewerRuntimeHostRecoveryEvidence {
+  /** The generation the rollback kept; the host that did the work ran as it. */
+  retained: RuntimeHostGenerationIdentity;
+  /** The generation that failed, which the retained one stopped and removed. */
+  failed: RuntimeHostGenerationIdentity;
+  /** Every Docker call a generation made, in order, as the stub on its PATH
+      recorded it. */
+  docker: string[];
 }
 
 export interface RuntimeHostGenerationIdentity {

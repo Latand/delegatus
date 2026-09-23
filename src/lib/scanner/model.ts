@@ -38,6 +38,7 @@ function pickModel(entry: FileEntry, obj: Record<string, unknown>): string | nul
     /* `selectedModel` on start/resume, then the newest model change or the
        model an assistant message names. */
     const data = recordValue(obj.data);
+    if (obj.type === "session.auto_mode_resolved") return stringValue(data?.chosenModel);
     if (obj.type === "session.model_change") return stringValue(data?.newModel);
     if (obj.type === "assistant.message") return stringValue(data?.model);
     if (obj.type === "session.start" || obj.type === "session.resume") return stringValue(data?.selectedModel);

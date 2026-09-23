@@ -90,14 +90,13 @@ export async function applyStructuredReconfigure(
   const conversation = registry.conversation(conversationId);
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) throw new Error("viewer conversation is unknown");
-  /* A Copilot conversation's model, effort and account are fixed at launch in
-     slice 1 (docs/design/copilot-engine.md 3.8); admission refuses the
-     reconfigure, so reaching here is a stale effect. */
-  if (conversation.engine === "copilot") throw new Error("a Copilot conversation cannot be reconfigured yet");
   const engine = conversation.engine;
   const key = { engine, sessionId: generation.id } as const;
   const targetAccountId = effect.accountId ?? generation.accountId;
   const switchingAccount = Boolean(effect.accountId && effect.accountId !== generation.accountId);
+  if (engine === "copilot" && switchingAccount) {
+    throw new Error("a Copilot session stays in its account's COPILOT_HOME; account changes require a new conversation");
+  }
   const ownsOperation = dependencies.ownsOperation ?? (async () => true);
   const release = dependencies.releaseHost ?? releaseStructuredHost;
   const recover = dependencies.recover ?? recoverDeadStructuredConversation;
@@ -146,7 +145,7 @@ export async function applyStructuredReconfigure(
 
   if (switchingAccount) {
     try {
-      await (dependencies.validateAccount ?? validateAccountAuthentication)(engine, targetAccountId!);
+      await (dependencies.validateAccount ?? validateAccountAuthentication)(engine as "claude" | "codex", targetAccountId!);
       (dependencies.resolveAccount ?? accountManager.resolveSpawn)(engine, targetAccountId);
     } catch (error) {
       await settle("failed", error);

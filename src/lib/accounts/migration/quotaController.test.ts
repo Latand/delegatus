@@ -76,6 +76,7 @@ test("Copilot quota probe reads its transcript and never starts an engine probe"
       home,
       sessionStateDir: sessions,
       createdAt: 1,
+      auth: "signed_in",
     }, Date.now());
     expect(observation).toMatchObject({ engine: "copilot", authenticated: true, provenance: { source: "transcript" }, limits: { weekly: { usedPercent: 16 } } });
     expect(spawnProbe).not.toHaveBeenCalled();

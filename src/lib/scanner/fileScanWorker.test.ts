@@ -116,6 +116,53 @@ test("a current incomplete worker scan schedules a non-deleting transcript feed"
   }]);
 });
 
+test("the production worker publishes Copilot catalog entries through the shared transcript feed", async () => {
+  const transcript = {
+    path: "/sessions/copilot/events.jsonl",
+    root: "copilot-sessions" as const,
+    name: "events.jsonl",
+    project: "repo-copilot",
+    title: "Copilot session",
+    firstPrompt: "",
+    engine: "copilot" as const,
+    kind: "session",
+    fmt: "copilot" as const,
+    mtime: 1_780_000_000,
+    size: 321,
+  };
+  const completion = JSON.stringify({
+    type: "complete",
+    snapshot: { files: [], projectCatalog: [], conversationCatalog: [transcript], complete: true },
+  });
+  const { directory, workerPath } = fixtureWorker(`
+    process.stdin.resume();
+    process.stdin.on("end", () => process.stdout.write(${JSON.stringify(`${completion}\n`)}));
+  `);
+  const feeds: unknown[] = [];
+
+  await collectFileScanInWorker(
+    { persist: false, persistIndex: false },
+    undefined,
+    {
+      launch: { executable: process.execPath, workerPath },
+      cwd: directory,
+      timeoutMs: 2_000,
+      transcriptIndexScheduler: (feed) => { feeds.push(feed); },
+    },
+  );
+
+  expect(feeds).toEqual([{
+    complete: true,
+    sources: [{
+      path: transcript.path,
+      project: transcript.project,
+      engine: "copilot",
+      size: transcript.size,
+      mtimeMs: transcript.mtime * 1_000,
+    }],
+  }]);
+});
+
 test("an obsolete worker scan finishing last cannot delete newer transcript index results", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-file-scan-worker-overlap-"));
   directories.push(directory);

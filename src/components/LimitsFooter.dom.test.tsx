@@ -25,7 +25,8 @@ const NOW = Math.round(Date.now() / 1000);
 
 let limits: LimitsPayload;
 let limitsUnavailable = false;
-let copilotAccountsReady = false;
+let copilotAccountsResponse: Record<string, unknown> = { cli: { present: false, reason: null }, active: "", accounts: [] };
+const copilotActions: Record<string, unknown>[] = [];
 const baseAccount = {
   id: "account-a",
   label: "Account A",
@@ -50,13 +51,14 @@ const accounts = {
 
 // The singleton account stores resolve the active global fetch at request time,
 // so this lifecycle-owned stub remains valid regardless of import order.
-globalThis.fetch = (async (input: RequestInfo | URL) => {
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   if (url === "/api/limits") return limitsUnavailable ? new Response(null, { status: 503 }) : Response.json(limits);
   if (url === "/api/accounts") return Response.json(accounts);
-  if (url === "/api/accounts/copilot") return Response.json(copilotAccountsReady
-    ? { cli: { present: true, reason: null }, active: "copilot-a", accounts: [{ id: "copilot-a", label: "Copilot", kind: "managed", active: true, loginCommand: null }] }
-    : { cli: { present: false, reason: null }, active: "", accounts: [] });
+  if (url === "/api/accounts/copilot") {
+    if (init?.method === "POST") copilotActions.push(JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>);
+    return Response.json(copilotAccountsResponse);
+  }
   return new Response(null, { status: 404 });
 }) as unknown as typeof fetch;
 
@@ -69,7 +71,8 @@ afterEach(async () => {
   document.body.replaceChildren();
   accounts.codex.accounts = [baseAccount];
   limitsUnavailable = false;
-  copilotAccountsReady = false;
+  copilotAccountsResponse = { cli: { present: false, reason: null }, active: "", accounts: [] };
+  copilotActions.length = 0;
   setSystemTime();
 });
 
@@ -86,7 +89,11 @@ async function render(): Promise<HTMLElement> {
 }
 
 test("the Copilot footer renders its monthly transcript allowance", async () => {
-  copilotAccountsReady = true;
+  copilotAccountsResponse = {
+    cli: { present: true, reason: null },
+    active: "copilot-a",
+    accounts: [{ id: "copilot-a", label: "Copilot", kind: "managed", active: true, loginCommand: null }],
+  };
   limits = {
     claude: null,
     codex: null,
@@ -125,6 +132,34 @@ test("a weekly-horizon Codex window is labelled Week in the footer, never 5h", a
   expect(text).toContain("Week");
   expect(text).not.toContain("5h");
   expect(text).toContain("85%"); // 100 − 15 remaining, under the weekly label
+});
+
+test("the Accounts panel requires explicit consent for plaintext Copilot token storage", async () => {
+  copilotAccountsResponse = {
+    cli: { present: true, reason: null },
+    active: "copilot-fixture",
+    accounts: [{
+      id: "copilot-fixture", label: "Copilot Fixture", kind: "managed", active: true,
+      auth: "signed_out", user: null, loginCommand: "copilot login --device-code",
+      login: { operationId: "copilot-login-fixture", phase: "awaiting_storage_choice", loginUrl: null, userCode: null, deadlineAt: "soon" },
+    }],
+  };
+  const host = await render();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  const copilot = [...host.querySelectorAll("button")].find((button) => button.getAttribute("aria-label")?.includes("Copilot"));
+  expect(copilot).toBeDefined();
+  await act(async () => { copilot?.click(); });
+  const dialog = host.querySelector('[role="dialog"][aria-label="GitHub Copilot accounts"]');
+  expect(dialog?.textContent).toContain("The system keychain is unavailable");
+  expect(dialog?.textContent).toContain("Store in plain text");
+  expect(dialog?.textContent).toContain("Cancel sign-in");
+  expect(copilotActions).toEqual([]);
+
+  const accept = [...(dialog?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Store in plain text");
+  await act(async () => { accept?.click(); });
+  expect(copilotActions).toEqual([{
+    action: "choose-plaintext-storage", operationId: "copilot-login-fixture", acceptPlaintext: true,
+  }]);
 });
 
 test("a genuine 5-hour window keeps the 5h label", async () => {
