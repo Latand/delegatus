@@ -146,6 +146,8 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
         data-kanban-seat={project}
         data-collapsed={seat.collapsed ? "1" : "0"}
         data-placement={seat.placement}
+        data-role-host="seat"
+        data-role="orchestrator"
         style={style}
       >
         <OrchestratorPanel

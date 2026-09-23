@@ -366,18 +366,22 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
     callerProject: () => PROJECT,
     readTickSettings: (project: string) => readSeatTickSettings(project, settingsFile),
   } as never);
-  const tool = await bindings.seat_tick_settings({ clientRequestId: "tick-parity", project: PROJECT }) as unknown as {
-    settings: SeatTickSettingsAnswer["settings"];
+  /* The tool's full read carries the note once, at the top level (#2030); the
+     browser control reads it inside both records. */
+  const tool = await bindings.seat_tick_settings({ clientRequestId: "tick-parity", project: PROJECT, verbose: true }) as unknown as {
+    settings: Omit<SeatTickSettingsAnswer["settings"], "monitorPrompt">;
+    monitorPrompt: string | null;
     effective: Record<string, unknown>;
     defaultWakeIntervalMinutes: number;
     monitorPromptLength: number;
   };
-  expect(body.settings).toEqual(tool.settings);
+  expect(body.settings).toEqual({ ...tool.settings, monitorPrompt: tool.monitorPrompt });
   expect(body.defaultWakeIntervalMinutes).toBe(tool.defaultWakeIntervalMinutes);
   expect(body.monitorPromptLength).toBe(tool.monitorPromptLength);
-  for (const field of ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "isDefault"] as const) {
+  for (const field of ["enabled", "wakeIntervalMinutes", "reason", "until", "isDefault"] as const) {
     expect(body.effective[field] as unknown, field).toEqual(tool.effective[field]);
   }
+  expect(body.effective.monitorPrompt).toBe(tool.monitorPrompt);
   /* The card the board carries while this stands, in the card's own words. */
   expect(body.cardText).toContain("This project's seat tick is not on its default settings");
   expect(body.cardText).toContain("one every 240 minute(s)");

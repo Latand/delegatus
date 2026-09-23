@@ -50,7 +50,7 @@ export function SupersededBannerView({
         <button
           type="button"
           onClick={onOpenSuccessor}
-          className="inline-flex min-h-11 items-center gap-1 rounded-control border border-accent bg-accent px-2.5 text-label font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:min-h-8"
+          className="inline-flex min-h-11 items-center gap-1 rounded-control border border-brand bg-brand px-2.5 text-label font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:min-h-8"
         >
           {t("superseded.open")} <ArrowRight className="h-3.5 w-3.5" aria-hidden />
         </button>

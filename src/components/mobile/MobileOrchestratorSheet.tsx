@@ -340,7 +340,7 @@ function SeatStatusSheet({
                 data-orchestrator-confirm
                 disabled={primary.busy}
                 onClick={primary.run}
-                className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-body font-semibold text-white shadow-1 active:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+                className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-body font-semibold text-on-brand shadow-1 active:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
               >
                 {primary.busy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden /> : <Bot className="h-4 w-4" aria-hidden />}
                 <span className="truncate">{t(primary.key)}</span>
@@ -634,7 +634,7 @@ function SeatDraftSheet({
                     type="submit"
                     data-orchestrator-confirm
                     disabled={primary.busy}
-                    className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-body font-semibold text-white shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+                    className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-body font-semibold text-on-brand shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
                   >
                     {primary.busy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden /> : <Bot className="h-4 w-4" aria-hidden />}
                     <span className="truncate">{t(primary.key)}</span>
@@ -823,7 +823,7 @@ function RotateDraft({
             data-orchestrator-confirm
             onClick={confirm}
             disabled={submitting}
-            className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-body font-semibold text-white shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+            className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-body font-semibold text-on-brand shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
           >
             {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden /> : <RefreshCw className="h-4 w-4" aria-hidden />}
             <span className="truncate">{t(errored ? "orchPanel.confirmRetry" : "orchPanel.rotateConfirm")}</span>

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -13,12 +14,14 @@ import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_ROLE_TABLE_HEADING,
+  ORCHESTRATOR_SEAT_TICK_CONTRACT,
   ORCHESTRATOR_SPAWN_CONFIG,
   ORCHESTRATOR_SYSTEM_PROMPT,
   ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE,
   ORCHESTRATOR_TASK_OWNERSHIP_HEADING,
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   ORCHESTRATOR_VIEWER_CLOCK_HEADING,
+  orchestratorMandateCarriesTickContract,
   orchestratorMandateForDelivery,
   orchestratorMandateWithRoleTable,
   orchestratorMandateStale,
@@ -68,19 +71,136 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 20, and a v19 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(20);
+test("the default mandate is at version 21, and a v20 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(21);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
      v18 carries (#1834): the card's text is the human's and agent context goes
      in the task's separate details field. v19 (#1843) adds the human-in-the-loop
      section. v20 (#1880) points "role per the role table" at the table
-     delivery renders. */
-  expect(orchestratorMandateStale(19)).toBe(true);
-  expect(orchestratorMandateStale(20)).toBe(false);
+     delivery renders. v21 (#2030) carries the seat tick contract. */
+  expect(orchestratorMandateStale(20)).toBe(true);
+  expect(orchestratorMandateStale(21)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("act on the items it lists and nothing else");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("AGENT CONTEXT GOES IN details");
+});
+
+/**
+ * The text each version shipped with, as a SHA-256 of `ORCHESTRATOR_SYSTEM_PROMPT`
+ * (#2030). v20's text was rewritten without a bump, so no seat ever received
+ * the rewrite: rotation rebuilds a core only when the recorded version is
+ * behind. An edit to the prompt fails this until the version is bumped and the
+ * new text's fingerprint is ADDED here. Never rewrite an existing entry — that
+ * is the unbumped edit this exists to refuse. v20 is the text at the merge
+ * base of #2030, the last one that version named.
+ */
+const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
+  20: "e49277d58a32cd581d1d9a3ab6658528b2d42de6465350e8108d00cffebdcfca",
+  21: "99305652476c390cccbe283e49771f6abe408cb6ff8bdd14ed6fb4394dd7704c",
+};
+
+test("any edit to the default mandate text moves its version (#2030)", () => {
+  const fingerprint = createHash("sha256").update(ORCHESTRATOR_SYSTEM_PROMPT).digest("hex");
+  const pinned = PROMPT_FINGERPRINTS[ORCHESTRATOR_PROMPT_VERSION];
+  expect(
+    pinned,
+    `ORCHESTRATOR_SYSTEM_PROMPT is ${fingerprint}. After an edit, bump ORCHESTRATOR_PROMPT_VERSION and add ${ORCHESTRATOR_PROMPT_VERSION + 1}: "<new fingerprint>" to PROMPT_FINGERPRINTS; never rewrite an existing entry.`,
+  ).toBe(fingerprint);
+  /* One text per version and one version per text: an entry copied forward
+     with the old fingerprint would let an edit ride an existing number. */
+  const versions = Object.keys(PROMPT_FINGERPRINTS).map(Number);
+  expect(Math.max(...versions)).toBe(ORCHESTRATOR_PROMPT_VERSION);
+  expect(new Set(Object.values(PROMPT_FINGERPRINTS)).size).toBe(versions.length);
+});
+
+/** The contract every seat tick wake ended with until #2030, copied verbatim
+    from `src/lib/monitor/report.ts` at the merge base, so a clause dropped or
+    reworded on its way into the mandate fails here rather than silently. */
+const SHIPPED_TICK_CONTRACT = [
+  "Handle the listed items first, then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, list_flows, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running.",
+  "Record every outcome where it belongs — on the board card or on the pipeline — not only in this conversation.",
+  "If an item cannot be done, mark its task blocked with the reason. That is the stop, and it is the only one.",
+  "Do not schedule yourself. The Viewer ticks this seat; a self-scheduled monitor is refused practice.",
+  "This tick is yours to govern: seat_tick_settings turns it off, changes how often it wakes you, or turns it back on, per project, with a reason that shows on the board.",
+  "Do not wait on the operator inside this turn.",
+];
+
+/* Each shipped clause, and where the clock section now says it. The wording is
+   the mandate's own (a wake no longer quotes it), so this maps rule to rule. */
+const CLAUSE_IN_MANDATE: readonly [string, string][] = [
+  [SHIPPED_TICK_CONTRACT[0]!, "then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, list_flows, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running."],
+  [SHIPPED_TICK_CONTRACT[1]!, "Record every outcome on the board card or the pipeline, not only in this conversation."],
+  [SHIPPED_TICK_CONTRACT[2]!, "mark its task blocked with the reason: that is the stop, and the only one."],
+  [SHIPPED_TICK_CONTRACT[3]!, "So do not schedule yourself"],
+  [SHIPPED_TICK_CONTRACT[4]!, "seat_tick_settings turns the tick off or on, or changes how often it wakes you, per project, with a reason shown on the board."],
+  [SHIPPED_TICK_CONTRACT[5]!, "Never wait on the operator inside a wake's turn."],
+];
+
+test("every clause the tick contract carried lives in the mandate, and reaches every seat once (#2030)", () => {
+  expect(CLAUSE_IN_MANDATE.map(([shipped]) => shipped)).toEqual(SHIPPED_TICK_CONTRACT);
+  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE).toContain(clause);
+  for (const [, stated] of CLAUSE_IN_MANDATE) {
+    expect(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE).toContain(stated);
+    expect(ORCHESTRATOR_SYSTEM_PROMPT.split(stated)).toHaveLength(2);
+  }
+  /* A bespoke mandate is exactly the one without it, and delivery is what gives
+     it the section, once. */
+  const bespoke = "A seat's own mandate, carried through a rotation.";
+  const delivered = orchestratorMandateForDelivery(bespoke);
+  for (const [, stated] of CLAUSE_IN_MANDATE) expect(delivered.split(stated)).toHaveLength(2);
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+});
+
+/** The clock section's last paragraph as it shipped in v11–v16 and in
+    v17–v20, copied verbatim from those bodies. The three paragraphs before it
+    never changed, so each shipped section is the current opening plus one of
+    these. */
+const SHIPPED_CLOCK_LAST_PARAGRAPHS = [
+  "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists and nothing else, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.",
+  "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.",
+];
+const shippedClockSection = (lastParagraph: string) =>
+  `${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(0, 4).join("\n")}\n${lastParagraph}`;
+
+/* #2030 review: every mandate composed from a v20-or-older body carries the
+   clock HEADING with the old paragraph under it, so appending by heading gave
+   those seats none of the clauses their wakes stopped repeating. */
+test("delivery replaces the clock section an older mandate carries, so it states every contract clause once (#2030)", () => {
+  for (const lastParagraph of SHIPPED_CLOCK_LAST_PARAGRAPHS) {
+    const stored = `You run the conveyor for this project.\n\n${shippedClockSection(lastParagraph)}\n\n## Fences\n- Report, never ask.`;
+    for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(stored).not.toContain(clause);
+    const delivered = orchestratorMandateForDelivery(stored);
+    for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(delivered.split(clause)).toHaveLength(2);
+    expect(delivered).not.toContain(lastParagraph);
+    expect(delivered.split(ORCHESTRATOR_VIEWER_CLOCK_HEADING)).toHaveLength(2);
+    expect(delivered).toStartWith(`You run the conveyor for this project.\n\n${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}\n\n## Fences\n- Report, never ask.`);
+    expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  }
+  /* The real v20 body: its whole clock section is the second shipped text. */
+  const v20Core = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, shippedClockSection(SHIPPED_CLOCK_LAST_PARAGRAPHS[1]!));
+  expect(v20Core).not.toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  const delivered = orchestratorMandateForDelivery(v20Core);
+  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(delivered.split(clause)).toHaveLength(2);
+  /* A seat's own rewording under the heading is not what shipped, and stays. */
+  const reworded = `${ORCHESTRATOR_VIEWER_CLOCK_HEADING}\nWake only when the Viewer tells you to.`;
+  expect(orchestratorMandateForDelivery(reworded)).toStartWith(reworded);
+});
+
+test("only a seat delivered a mandate that states the contract is spared its clauses in the wake (#2030)", () => {
+  expect(orchestratorMandateCarriesTickContract({ mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: ORCHESTRATOR_PROMPT_VERSION })).toBe(true);
+  /* Still running on what it was delivered before v21, or carried forward on
+     an older mandate: the text now delivers the clauses, the seat never read
+     them. */
+  const v20Core = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, shippedClockSection(SHIPPED_CLOCK_LAST_PARAGRAPHS[1]!));
+  expect(orchestratorMandateCarriesTickContract({ mandate: v20Core, promptVersion: 20 })).toBe(false);
+  expect(orchestratorMandateCarriesTickContract({ mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: 20 })).toBe(false);
+  /* Bespoke rules claim no version and cannot say when they were delivered. */
+  expect(orchestratorMandateCarriesTickContract({ mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: null })).toBe(false);
+  /* A current seat whose own edit reworded the section lost the clauses. */
+  const reworded = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, `${ORCHESTRATOR_VIEWER_CLOCK_HEADING}\nWake only when told.`);
+  expect(orchestratorMandateCarriesTickContract({ mandate: reworded, promptVersion: ORCHESTRATOR_PROMPT_VERSION })).toBe(false);
+  expect(orchestratorMandateCarriesTickContract({ promptVersion: ORCHESTRATOR_PROMPT_VERSION })).toBe(false);
 });
 
 /* #1428 v13 — the index over every message of every transcript existed, and no

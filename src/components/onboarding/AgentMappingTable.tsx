@@ -394,7 +394,7 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
             <span>{t("onboarding.agents.banner", { count: blockedRows.length, missing: ENGINE_NAME[missing] })}</span>
           </p>
           <div className="flex flex-wrap items-center gap-2 max-sm:flex-col max-sm:items-stretch">
-            <button type="button" data-mapping-move="" onClick={moveAll} className="inline-flex h-8 items-center justify-center rounded-[8px] bg-accent px-3 text-ui font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11">
+            <button type="button" data-mapping-move="" onClick={moveAll} className="inline-flex h-8 items-center justify-center rounded-[8px] bg-brand px-3 text-ui font-semibold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11">
               {t("onboarding.agents.move", { connected: ENGINE_NAME[connected] })}
             </button>
             <button type="button" onClick={() => onConnect(missing)} className="inline-flex h-8 items-center justify-center rounded-[8px] border border-border bg-card px-3 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11">

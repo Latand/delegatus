@@ -9,6 +9,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { ProjectRail } from "./ProjectRail";
 import { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } from "@/lib/attention/eligibility";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 /* Presentation names on the rail (issue #345): the leading-dash canonical key
    `-agents-tools-live-log-viewer-next` must render as `live-log-viewer-next`
@@ -171,7 +172,8 @@ test("390px drawer in Ukrainian keeps the display name and the localized landmar
   const container = renderRail();
   const nav = container.querySelector("nav");
   expect(nav?.getAttribute("aria-label")).toBe("Проєкти");
-  expect(container.textContent).toContain("Логи агентів");
+  /* The product name is a brand: Ukrainian keeps the Latin «Delegatus». */
+  expect(container.querySelector("[data-rail-brand]")?.textContent).toBe(PRODUCT_NAME);
   const rows = railRows(container);
   const viewerRow = rows.find((row) => row.textContent?.includes("live-log-viewer-next"));
   expect(viewerRow).toBeDefined();

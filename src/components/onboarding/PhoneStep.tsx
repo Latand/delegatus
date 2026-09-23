@@ -227,7 +227,7 @@ export function PhoneStep({ onSkip, onState, pollMs = 5_000 }: {
           data-phone-enable=""
           disabled={busy !== null}
           onClick={() => void act("enable")}
-          className={`${BUTTON} bg-accent text-white hover:opacity-90 disabled:opacity-70`}
+          className={`${BUTTON} bg-brand text-on-brand hover:opacity-90 disabled:opacity-70`}
         >
           {busy === "enable" ? t("onboarding.phone.busy") : failure ? t("onboarding.phone.retry") : other ? t("onboarding.phone.otherButton") : t("onboarding.phone.enable")}
         </button>

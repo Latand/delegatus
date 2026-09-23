@@ -42,11 +42,14 @@
   /* ── §1.4 Surfaces & elevation ─────────────────────────────────────────── */
   /* The doc-canonical `--surface-*` names carry the literal values (design doc
      §1.4); the `--color-*` forms below alias them so Tailwind still emits
-     bg-canvas/bg-card/bg-sunken/bg-raised utilities from the color namespace. */
-  --surface-canvas: #f3f3f6; /* app background; darker than before so cards lift */
-  --surface-card: #ffffff; /*   the ONE primary surface (panes, rows, composer) */
-  --surface-sunken: #f7f7fa; /* code blocks, collapsed strips, canvas bands     */
-  --surface-raised: #ffffff; /* menus, popovers, sheets, toasts                 */
+     bg-canvas/bg-card/bg-sunken/bg-raised utilities from the color namespace.
+     Light surfaces are the Delegatus warm paper and dark ones lean towards the
+     emblem's slate; every text role keeps its 4.5:1 floor on all of them
+     (tokens.contrast.test), the tightest being text-muted on the well. */
+  --surface-canvas: #f4f1ec; /* app background; darker than before so cards lift */
+  --surface-card: #fffdfa; /*   the ONE primary surface (panes, rows, composer) */
+  --surface-sunken: #f8f5f0; /* code blocks, collapsed strips, canvas bands     */
+  --surface-raised: #fffdfa; /* menus, popovers, sheets, toasts                 */
 
   /* ── Depth ladder (issue #962): scheme canvas → container well → card ──────
      Three fixed levels so a dense board reads by depth, not by outline. The
@@ -54,9 +57,9 @@
      dark; a well is the faint filled interior of a pipeline/branch container;
      quiet is the receded surface of an inactive card. Each value clears the
      4.5:1 small-text floor for muted/success/warning (tokens.contrast.test). */
-  --surface-board: #f3f3f6; /* scheme canvas behind the dot grid              */
-  --surface-well: #f0f0f4; /*  container-well fill under grouped cards        */
-  --surface-quiet: #fafafb; /* inactive card, no attention: recedes off white */
+  --surface-board: #f4f1ec; /* scheme canvas behind the dot grid              */
+  --surface-well: #f2efe9; /*  container-well fill under grouped cards        */
+  --surface-quiet: #faf8f4; /* inactive card, no attention: recedes off white */
 
   --color-canvas: var(--surface-canvas);
   --color-card: var(--surface-card);
@@ -79,13 +82,20 @@
   --color-muted: #6c6c79; /*     text-muted     */
   /* Border roles: literals on the doc-canonical `--border-*` names (design doc
      §1.5); `--color-*` aliases keep border-border/border-strong utilities. */
-  --border-default: #e6e6ea;
-  --border-strong: #c9c9d1;
+  --border-default: #e5dfd5;
+  --border-strong: #cbc3b7;
   --color-border: var(--border-default);
   --color-strong: var(--border-strong);
 
   --color-accent: #5a51e0;
   --color-accent-soft: #ecebfb;
+  /* Delegatus brand fill (the mascot emblem's slate and cream): the filled
+     primary action — `bg-brand text-on-brand`. The accent above stays the
+     link, focus and running-state colour, so a brand button never reads as a
+     state and the danger red stays the only red in the chrome. 12.3:1 in both
+     schemes, pinned by tokens.contrast.test. */
+  --color-brand: #262a36;
+  --color-on-brand: #fbebdd;
   /* Same floor, same reason (issue #700): "working…"/"live tail" measured
      4.42:1 and "waiting"/"waiting for a reply" 4.30:1, both also used as text
      on their own -soft fills. Now 4.83:1 and 5.17:1 at their worst surface. */
@@ -137,7 +147,7 @@
   /* ── Durable extra roles (referenced by name in components) ────────────────
      The user-message bubble keeps a distinct fill (design doc §3.4); it is a
      first-class token, not a legacy alias, so it gets a dark value below. */
-  --color-user: #e9e9ef;
+  --color-user: #ede7de;
 
   /* Slice 3 deletes the legacy `--color-*` aliases (design doc §1, §5): every
      component now names a role directly (bg-card/text-muted/border-border/…),
@@ -169,16 +179,16 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
 
-    --surface-canvas: #101014;
-    --surface-card: #17171c;
-    --surface-sunken: #121216;
-    --surface-raised: #1d1d24;
+    --surface-canvas: #111218;
+    --surface-card: #191b23;
+    --surface-sunken: #14151b;
+    --surface-raised: #20232c;
 
     /* Dark depth ladder: the board dips below the canvas so cards and wells
        climb from it — board < well < card. */
-    --surface-board: #0d0d11;
-    --surface-well: #131318;
-    --surface-quiet: #141419;
+    --surface-board: #0d0e13;
+    --surface-well: #15161d;
+    --surface-quiet: #16181e;
 
     --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
     --shadow-2: 0 8px 32px rgb(0 0 0 / 0.55), 0 1px 2px rgb(0 0 0 / 0.4);
@@ -186,11 +196,13 @@
     --color-primary: #e8e8ec;
     --color-secondary: #a2a2ae;
     --color-muted: #8b8b98; /* issue #700: 3.60:1 on the dark card → 5.31:1 */
-    --border-default: #26262e;
-    --border-strong: #3a3a44;
+    --border-default: #292c36;
+    --border-strong: #3c404c;
 
     --color-accent: #8f88ff;
     --color-accent-soft: #262347;
+    --color-brand: #fbebdd;
+    --color-on-brand: #262a36;
     --color-success: #4fc36f;
     --color-success-soft: #14261a;
     --color-warning: #e0ae45;
@@ -213,7 +225,7 @@
     --engine-fill-ink: #121620;
     --effort-empty: #64646f;
 
-    --color-user: #2a2a33;
+    --color-user: #262a36;
 
     --color-diff-add: #3fb950;
     --color-diff-add-soft: #12261a;
@@ -230,16 +242,16 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --surface-canvas: #101014;
-  --surface-card: #17171c;
-  --surface-sunken: #121216;
-  --surface-raised: #1d1d24;
+  --surface-canvas: #111218;
+  --surface-card: #191b23;
+  --surface-sunken: #14151b;
+  --surface-raised: #20232c;
 
   /* Dark depth ladder: the board dips below the canvas so cards and wells
      climb from it — board < well < card. */
-  --surface-board: #0d0d11;
-  --surface-well: #131318;
-  --surface-quiet: #141419;
+  --surface-board: #0d0e13;
+  --surface-well: #15161d;
+  --surface-quiet: #16181e;
 
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-2: 0 8px 32px rgb(0 0 0 / 0.55), 0 1px 2px rgb(0 0 0 / 0.4);
@@ -247,11 +259,13 @@
   --color-primary: #e8e8ec;
   --color-secondary: #a2a2ae;
   --color-muted: #8b8b98; /* issue #700: 3.60:1 on the dark card → 5.31:1 */
-  --border-default: #26262e;
-  --border-strong: #3a3a44;
+  --border-default: #292c36;
+  --border-strong: #3c404c;
 
   --color-accent: #8f88ff;
   --color-accent-soft: #262347;
+  --color-brand: #fbebdd;
+  --color-on-brand: #262a36;
   --color-success: #4fc36f;
   --color-success-soft: #14261a;
   --color-warning: #e0ae45;
@@ -274,7 +288,7 @@
   --engine-fill-ink: #121620;
   --effort-empty: #64646f;
 
-  --color-user: #2a2a33;
+  --color-user: #262a36;
 
   --color-diff-add: #3fb950;
   --color-diff-add-soft: #12261a;
