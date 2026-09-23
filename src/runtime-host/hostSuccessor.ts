@@ -4,6 +4,7 @@ import type { ViewerReleaseIdentity } from "@/lib/runtime/contracts";
 import { withoutWakatimeCredentialEntries } from "@/lib/wakatime/credential";
 
 import { AGENT_REGISTRY_SQLITE_ENV, type AgentRegistryBackendMode } from "./candidateContainer";
+import { DOCKER_NAMES, type DockerNameSpelling } from "./dockerNames";
 import { RUNTIME_HOST_FENCE_PARK_ENV, RUNTIME_HOST_FENCE_WAIT_ENV } from "./fenceWait";
 
 import {
@@ -94,9 +95,13 @@ export interface RuntimeHostPredecessorIdentity {
   image: string;
 }
 
-export function runtimeHostSuccessorName(revision: string, image: string): string {
+export function runtimeHostSuccessorName(
+  revision: string,
+  image: string,
+  names: DockerNameSpelling = DOCKER_NAMES,
+): string {
   const generation = createHash("sha256").update(image).digest("hex").slice(0, 12);
-  return `llv-runtime-host-${revision.slice(0, 12)}-${generation}`;
+  return `${names.runtimeHostPrefix}${revision.slice(0, 12)}-${generation}`;
 }
 
 /** Complete cleanup only from the successor generation after it owns the

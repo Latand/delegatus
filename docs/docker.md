@@ -34,7 +34,14 @@ on an available alternate port, runs the full health gate, and atomically
 writes `state/viewer-release.json`. It retires the candidate when verification
 fails and leaves the legacy listener in place.
 
+Compose reads the app dir from `DELEGATUS_CONFIG_DIR`. Export it first, in
+every shell that runs `docker compose` here: an install from before the rename
+keeps its data in `~/.config/agent-log-viewer`, and the socket, journal and
+release-target paths the runtime host is given have to keep that spelling.
+Without it Compose defaults to `~/.config/delegatus`.
+
 ```bash
+export DELEGATUS_CONFIG_DIR="$(bun scripts/app-config-dir.mjs)"
 export LLV_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
 docker compose --profile runtime-host build runtime-host
 printf '%s\n' '{"revision":"origin/main"}' | \
@@ -42,7 +49,7 @@ printf '%s\n' '{"revision":"origin/main"}' | \
     -e LLV_DEPLOYMENT_ADAPTER_PROTOCOL=1 \
     runtime-host \
     bun-container run scripts/runtime-host-viewer-adapter.ts bootstrap-release
-test -s "${LLV_VIEWER_DEPLOY_TARGET:-$HOME/.config/agent-log-viewer/state/viewer-release.json}"
+test -s "${LLV_VIEWER_DEPLOY_TARGET:-$DELEGATUS_CONFIG_DIR/state/viewer-release.json}"
 ```
 
 The bootstrap action refuses to replace an existing target. After it returns a
