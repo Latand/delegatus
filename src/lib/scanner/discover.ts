@@ -187,21 +187,17 @@ function canonicalizerFor(roots: Roots | RootEntries): TranscriptPathCanonicaliz
   return createTranscriptPathCanonicalizer(rootEntries(roots).map(([, root]) => root));
 }
 
-function transcriptIndexFeed(
+export function transcriptIndexFeed(
   catalog: readonly ConversationCatalogEntry[],
   complete: boolean,
   projectByPath?: ReadonlyMap<string, string>,
 ): TranscriptIndexFeed {
   return {
     complete,
-    /* The full-text transcript index parses per-engine record shapes and pins
-       its engine column to the two it can parse, so an OpenClaw transcript is
-       excluded from it rather than inserted as an unparseable row. OpenClaw
-       conversations stay searchable through the catalog's title and
-       first-prompt text; full-text search over their bodies moves with the
-       index's own schema migration. Copilot transcripts are left out the same
-       way until the index can parse their record shape. */
-    sources: catalog.flatMap((entry) => (entry.engine === "openclaw" || entry.engine === "copilot" ? [] : [{
+    /* The full-text transcript index parses per-engine record shapes. OpenClaw
+       is excluded because its body parser is not implemented; Copilot user and
+       assistant message records are indexed by the Copilot parser. */
+    sources: catalog.flatMap((entry) => (entry.engine === "openclaw" ? [] : [{
       path: entry.path,
       project: projectByPath?.get(entry.path) ?? entry.project,
       engine: entry.engine,
@@ -211,7 +207,7 @@ function transcriptIndexFeed(
   };
 }
 
-function publishTranscriptIndexFeed(
+export function publishTranscriptIndexFeed(
   catalog: readonly ConversationCatalogEntry[],
   complete: boolean,
   scanToken: ProjectCatalogScanToken,

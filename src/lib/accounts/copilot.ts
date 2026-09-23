@@ -34,10 +34,13 @@ export interface CopilotAccount {
   /** `<home>/session-state`, the transcript root the scanner reads. */
   sessionStateDir: string;
   createdAt: number;
+  auth: "signed_in" | "signed_out" | "unknown";
 }
 
-/** The login recorded by the Copilot CLI, without exposing token material. */
-export function copilotSignedInUser(home: string): string | null {
+export interface CopilotSignedInIdentity { host: string; login: string }
+
+/** Return the listed last user from the CLI config without reading token data. */
+export function copilotSignedInIdentity(home: string): CopilotSignedInIdentity | null {
   try {
     const text = fs.readFileSync(path.join(home, "config.json"), "utf8").replace(/^\s*\/\/.*(?:\r?\n|$)/gm, "");
     const parsed = JSON.parse(text) as {
@@ -47,9 +50,14 @@ export function copilotSignedInUser(home: string): string | null {
     const last = parsed.lastLoggedInUser;
     if (typeof last?.host !== "string" || typeof last.login !== "string" || !last.login.trim()) return null;
     return Array.isArray(parsed.loggedInUsers) && parsed.loggedInUsers.some((user) => user?.host === last.host && user.login === last.login)
-      ? last.login
+      ? { host: last.host, login: last.login }
       : null;
   } catch { return null; }
+}
+
+/** The login recorded by the Copilot CLI, without exposing token material. */
+export function copilotSignedInUser(home: string): string | null {
+  return copilotSignedInIdentity(home)?.login ?? null;
 }
 
 interface StoredAccount { id: string; label: string; createdAt: number }
@@ -79,6 +87,22 @@ function registryPath(): string {
 
 function managedHome(id: string): string {
   return path.join(copilotAccountsRoot(), id);
+}
+
+export function copilotConfigCheckedAt(home: string): string | null {
+  try { return fs.statSync(path.join(home, "config.json")).mtime.toISOString(); }
+  catch { return null; }
+}
+
+function authState(home: string): CopilotAccount["auth"] {
+  try {
+    fs.accessSync(path.join(home, "config.json"));
+  } catch { return "unknown"; }
+  try {
+    const raw = fs.readFileSync(path.join(home, "config.json"), "utf8").replace(/^\s*\/\/.*$/gm, "");
+    JSON.parse(raw);
+  } catch { return "unknown"; }
+  return copilotSignedInUser(home) ? "signed_in" : "signed_out";
 }
 
 /** The operator's own Copilot home: `$COPILOT_HOME`, else `~/.copilot`. */
@@ -118,6 +142,7 @@ function legacyAccount(): CopilotAccount | null {
     home,
     sessionStateDir: path.join(home, "session-state"),
     createdAt: 0,
+    auth: authState(home),
   };
 }
 
@@ -129,6 +154,7 @@ export function listCopilotAccounts(): CopilotAccount[] {
     home: managedHome(stored.id),
     sessionStateDir: path.join(managedHome(stored.id), "session-state"),
     createdAt: stored.createdAt,
+    auth: authState(managedHome(stored.id)),
   }));
   const legacy = legacyAccount();
   return legacy ? [legacy, ...managed] : managed;

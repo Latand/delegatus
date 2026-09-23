@@ -97,3 +97,27 @@ test("an OpenClaw session with only synthetic records reports no model", () => {
   ]);
   expect(entryModels(entry)).toEqual({ display: null, launch: null });
 });
+
+test("Copilot auto resolves to the model the session actually ran, not a nano background call", () => {
+  const pathname = path.join(SANDBOX, "copilot-auto-model.jsonl");
+  const records = [
+    { type: "session.model_change", data: { newModel: "auto" } },
+    { type: "session.auto_mode_resolved", data: { chosenModel: "mai-code-1.1-flash" } },
+    { type: "model.model_call_started", data: { model: "gpt-5.4-nano", modelInfo: { id: "gpt-5.4-nano" } } },
+    { type: "assistant.message", data: { model: "mai-code-1.1-flash", content: "answer" } },
+  ];
+  fs.writeFileSync(pathname, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  const stat = fs.statSync(pathname);
+  const entry: FileEntry = {
+    path: pathname, root: "copilot-sessions", name: path.basename(pathname), project: "proj", title: "session",
+    engine: "copilot", kind: "session", fmt: "copilot", parent: null, mtime: stat.mtimeMs / 1000,
+    size: stat.size, activity: "idle", proc: null, pid: null, model: null, pendingQuestion: null, waitingInput: null,
+  };
+  expect(entryModels(entry)).toEqual({ display: "mai-code-1.1-flash", launch: "mai-code-1.1-flash" });
+
+  const autoOnly = { ...entry, path: path.join(SANDBOX, "copilot-auto-only.jsonl") };
+  fs.writeFileSync(autoOnly.path, records.slice(0, 3).map((record) => JSON.stringify(record)).join("\n") + "\n");
+  const autoStat = fs.statSync(autoOnly.path);
+  autoOnly.size = autoStat.size; autoOnly.mtime = autoStat.mtimeMs / 1000;
+  expect(entryModels(autoOnly)).toEqual({ display: "mai-code-1.1-flash", launch: "mai-code-1.1-flash" });
+});

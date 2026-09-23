@@ -11,6 +11,7 @@ import {
   COPILOT_NATIVE_MULTI_AGENT_TOOLS,
   CopilotAcpHost,
   copilotChildEnv,
+  copilotMcpConfig,
   copilotTranscriptPath,
   type CopilotAcpHostOptions,
 } from "./copilotAcpHost";
@@ -49,6 +50,7 @@ class FakeCopilot extends EventEmitter {
   readonly inputs: Rpc[] = [];
   readonly prompts: Rpc[] = [];
   sessionId = crypto.randomUUID();
+  sessionNewResult: Record<string, unknown> = { sessionId: this.sessionId };
   answerCancel = true;
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
@@ -71,7 +73,7 @@ class FakeCopilot extends EventEmitter {
   private accept(message: Rpc): void {
     this.inputs.push(message);
     if (message.method === "initialize") return this.reply(message.id!, { protocolVersion: 1, agentInfo: { name: "Copilot", version: "1.0.87" } });
-    if (message.method === "session/new") return this.reply(message.id!, { sessionId: this.sessionId });
+    if (message.method === "session/new") return this.reply(message.id!, this.sessionNewResult);
     if (message.method === "session/load") {
       this.update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "replayed history" } });
       this.update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "replayed answer" } });
@@ -155,6 +157,17 @@ function kinds(events: RuntimeEvent[] | undefined): string[] {
 }
 
 describe("CopilotAcpHost", () => {
+  test("converts granted stdio MCP servers to local and preserves HTTP definitions", () => {
+    const viewer = { command: "bun", args: ["viewer-mcp"], env: { LLV_STATE_DIR: "/isolated/state" } };
+    expect(copilotMcpConfig(viewer, null, {
+      telegram: { command: "bun", args: ["telegram-mcp"], env: { FIXTURE: "value" } },
+    }, ["viewer", "telegram"]).mcpServers.telegram).toEqual({
+      type: "local", command: "bun", args: ["telegram-mcp"], env: { FIXTURE: "value" }, tools: ["*"],
+    });
+    const http = { type: "http", url: "https://mcp.fixture.invalid/mcp", headers: { Authorization: "fixture" } };
+    expect(copilotMcpConfig(viewer, null, { telegram: http }, ["viewer", "telegram"]).mcpServers.telegram).toEqual(http);
+  });
+
   test("starts over ACP with the launch flags, strips credentials and attaches the Viewer MCP by file", async () => {
     const child = new FakeCopilot();
     const opts = options(child, {
@@ -218,6 +231,27 @@ describe("CopilotAcpHost", () => {
     expect(await host.health()).toMatchObject({ status: "idle", protocolVersion: "1.0.87", pid: child.pid, activeTurnRef: null });
     await host.release();
     expect(fs.existsSync(configPath)).toBe(false);
+  });
+
+  test("a catalogue persistence error does not fail session startup", async () => {
+    const child = new FakeCopilot();
+    child.sessionNewResult = {
+      sessionId: child.sessionId,
+      configOptions: [{ id: "model", category: "model", options: [{ value: "model.fixture" }] }],
+    };
+    const blockedState = path.join(sandbox, "state-is-a-file");
+    fs.writeFileSync(blockedState, "fixture");
+    const priorState = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = blockedState;
+    const opts = options(child, { accountId: "fixture-account" });
+    try {
+      const host = await CopilotAcpHost.start(opts);
+      expect((await host.health()).status).toBe("idle");
+      await host.release();
+    } finally {
+      if (priorState === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = priorState;
+    }
   });
 
   /* Runs the default Viewer attachment with the process environment and
@@ -403,6 +437,20 @@ describe("CopilotAcpHost", () => {
     await expect(host.interrupt(receipt.turnId)).rejects.toThrow("did not stop within 20ms");
     expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: receipt.turnId });
     await host.release();
+  });
+
+  test("the third failed interrupt releases the host so recovery can adopt the session", async () => {
+    const child = new FakeCopilot();
+    child.answerCancel = false;
+    const host = await CopilotAcpHost.start(options(child, { interruptTimeoutMs: 20 }));
+    const receipt = await host.send({ id: "entry-1", text: "long task" }) as { turnId: string };
+    await until(() => child.prompts.length === 1, "the prompt");
+    await expect(host.interrupt(receipt.turnId)).rejects.toThrow("did not stop within 20ms");
+    await expect(host.interrupt(receipt.turnId)).rejects.toThrow("did not stop within 20ms");
+    await expect(host.interrupt(receipt.turnId)).rejects.toThrow("host released");
+    expect(await host.health()).toMatchObject({ status: "dead", activeTurnRef: null });
+    expect(child.signals).toContain("SIGTERM");
+    expect(await host.send({ id: "entry-2", text: "retry after adoption" })).toEqual({ outcome: "rejected", reason: "dead-host" });
   });
 
   test("interrupt of a turn that is not running is a no-op", async () => {

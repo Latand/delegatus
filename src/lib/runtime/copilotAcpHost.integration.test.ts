@@ -21,6 +21,8 @@ import { CopilotAcpHost } from "./copilotAcpHost";
 import type { RuntimeEvent } from "./engineHost";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
+import { applyStructuredReconfigure } from "./structuredReconfigure";
+import type { StructuredReconfigureEffect } from "./structuredDeliveryQueue";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 import { spawnStructuredConversation, startCopilotStructuredHost, type StructuredSpawnInput } from "./structuredSpawn";
@@ -366,6 +368,33 @@ describe.skipIf(!BIN)("Copilot CLI over ACP through the structured spawn path (B
       expect(resumedTypes).toContain("session.resume");
       expect(transcriptRecords(artifactPath).filter((line) => line.type === "user.message").at(-1)?.data.content).toBe("after resume PLAIN");
 
+      /* Model/effort changes restart the child at the same idle boundary and
+         load this session again with the patched launch flags. */
+      const beforeSwitch = provider.requests.length;
+      const reconfigure: StructuredReconfigureEffect = {
+        kind: "reconfigure", operationId: `reconfigure-${crypto.randomUUID()}`, conversationId,
+        model: MODEL, effort: "low", fast: null, eventSeq: 10_000,
+      };
+      await applyStructuredReconfigure(reconfigure, {
+        registry,
+        releaseHost: async () => { await resumed.release(); return true; },
+        recover: (request, dependencies) => recoverDeadStructuredConversation(request, {
+          registry, client, transport: () => "structured", resolveAccount: () => accountA,
+          spawn: (input) => spawnStructuredConversation(input, { startHost }),
+          requestDeliveryDrain: () => kickStructuredDeliveryQueue(),
+          ...dependencies,
+        }),
+      });
+      const switched = started.at(-1)!;
+      expect(switched).not.toBe(resumed);
+      expect(switched.identity.sessionId).toBe(host.identity.sessionId);
+      const switchedOp = await send(conversationId, artifactPath, "after effort switch PLAIN");
+      expect(await settled(switchedOp)).toMatchObject({ status: "delivered" });
+      await until(() => switched.health(), (state) => state.status === "idle", "the effort-switched turn");
+      expect(provider.requests.slice(beforeSwitch).some((request) => request.effort === "low")).toBe(true);
+      expect(transcriptRecords(artifactPath).some((line) => line.type === "session.resume")).toBe(true);
+      expect(new Set(fs.readdirSync(path.join(accountA.home, "session-state")))).toEqual(new Set([host.identity.sessionId]));
+
       /* 7: the transcript is scanned and rendered in the same run. */
       const root = path.join(accountA.home, "session-state");
       const described = describeTranscript("copilot-sessions", root, artifactPath, fs.statSync(artifactPath));
@@ -389,7 +418,7 @@ describe.skipIf(!BIN)("Copilot CLI over ACP through the structured spawn path (B
       expect(sessionsIn(accountB.home)).toEqual([hostB.identity.sessionId]);
       expect(hostB.identity.sessionId).not.toBe(host.identity.sessionId);
       await hostB.release();
-      await resumed.release();
+      await switched.release();
       await bindStructuredDeliveryQueue([]);
     } finally {
       journal.close();

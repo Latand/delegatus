@@ -44,7 +44,7 @@ export function profileKey(file: FileEntry): string {
 
 /** The observed/boot model id the running (or recorded) agent resolves to. */
 export function observedModelId(file: FileEntry): string | null {
-  const engine = file.engine as "claude" | "codex";
+  const engine = file.engine as "claude" | "codex" | "copilot";
   return engine === "claude"
     ? normalizeClaudeLaunchModel(file.launchModel ?? file.model) ?? file.model ?? null
     : file.model ?? null;
@@ -54,10 +54,10 @@ export function observedModelId(file: FileEntry): string | null {
     catalog entry, else the first catalog model; the observed effort when it is
     in that model's scale, else the scale's lowest tier. */
 export function defaults(file: FileEntry): RuntimeDraft {
-  const engine = file.engine as "claude" | "codex";
+  const engine = file.engine as "claude" | "codex" | "copilot";
   const models = ENGINE_MODELS[engine];
   const observed = observedModelId(file);
-  const model = models.some((item) => item.id === observed) ? observed! : models[0]!.id;
+  const model = models.some((item) => item.id === observed) || (engine === "copilot" && !!observed && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(observed)) ? observed! : models[0]!.id;
   const efforts = effortScale(engine, model) ?? [];
   return { model, effort: efforts.includes(file.effort ?? "") ? file.effort! : efforts[0]!, fast: file.fast ?? false };
 }
@@ -67,8 +67,8 @@ export function readDraft(file: FileEntry): RuntimeDraft {
   const fallback = defaults(file);
   try {
     const value = JSON.parse(localStorage.getItem(storageKey(file)) ?? "null") as Partial<RuntimeDraft> | null;
-    const engine = file.engine as "claude" | "codex";
-    const model = ENGINE_MODELS[engine].some((item) => item.id === value?.model) ? value!.model! : fallback.model;
+    const engine = file.engine as "claude" | "codex" | "copilot";
+    const model = ENGINE_MODELS[engine].some((item) => item.id === value?.model) || (engine === "copilot" && typeof value?.model === "string" && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(value.model)) ? value!.model! : fallback.model;
     const efforts = effortScale(engine, model) ?? [];
     return {
       model,
@@ -101,8 +101,8 @@ function readConcreteProfile(file: FileEntry, key: string): RuntimeDraft | null 
   try {
     const value = JSON.parse(localStorage.getItem(key) ?? "null") as Partial<RuntimeDraft> | null;
     if (!value) return null;
-    const engine = file.engine as "claude" | "codex";
-    const model = ENGINE_MODELS[engine].some((item) => item.id === value.model) ? value.model! : fallback.model;
+    const engine = file.engine as "claude" | "codex" | "copilot";
+    const model = ENGINE_MODELS[engine].some((item) => item.id === value.model) || (engine === "copilot" && typeof value.model === "string" && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(value.model)) ? value.model! : fallback.model;
     const efforts = effortScale(engine, model) ?? [];
     return {
       model,
@@ -119,9 +119,9 @@ export function readProfile(file: FileEntry): RuntimeProfile | null {
   try {
     const value = JSON.parse(localStorage.getItem(profileKey(file)) ?? "null") as RuntimeProfile | null;
     if (!value || typeof value !== "object") return null;
-    const engine = file.engine as "claude" | "codex";
+    const engine = file.engine as "claude" | "codex" | "copilot";
     const profile: RuntimeProfile = {};
-    if (ENGINE_MODELS[engine].some((item) => item.id === value.model)) profile.model = value.model;
+    if (ENGINE_MODELS[engine].some((item) => item.id === value.model) || (engine === "copilot" && typeof value.model === "string" && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(value.model))) profile.model = value.model;
     const scale = effortScale(engine, profile.model ?? readModelFor(file, value)) ?? [];
     if (typeof value.effort === "string" && scale.includes(value.effort)) profile.effort = value.effort;
     if (engine === "codex" && typeof value.fast === "boolean") profile.fast = value.fast;
@@ -132,8 +132,8 @@ export function readProfile(file: FileEntry): RuntimeProfile | null {
 }
 
 function readModelFor(file: FileEntry, value: RuntimeProfile): string {
-  const engine = file.engine as "claude" | "codex";
-  return ENGINE_MODELS[engine].some((item) => item.id === value.model) ? value.model! : defaults(file).model;
+  const engine = file.engine as "claude" | "codex" | "copilot";
+  return ENGINE_MODELS[engine].some((item) => item.id === value.model) || (engine === "copilot" && typeof value.model === "string" && /^[a-z0-9][a-z0-9.-]{0,127}$/.test(value.model)) ? value.model! : defaults(file).model;
 }
 
 /** Merge and persist explicitly-selected fields into the sparse profile.
@@ -142,7 +142,7 @@ function readModelFor(file: FileEntry, value: RuntimeProfile): string {
 export function writeProfile(file: FileEntry, patch: RuntimeProfile): RuntimeProfile {
   const current = readProfile(file) ?? {};
   const next: RuntimeProfile = { ...current, ...patch };
-  const engine = file.engine as "claude" | "codex";
+  const engine = file.engine as "claude" | "codex" | "copilot";
   if (patch.model !== undefined && next.effort !== undefined) {
     next.effort = clampEffortToScale(engine, next.model, next.effort) ?? next.effort;
   }
@@ -159,7 +159,7 @@ export function writeProfile(file: FileEntry, patch: RuntimeProfile): RuntimePro
     the first explicit selection materializes the current display draft and
     edits it — auto-apply IS the save (issue #390 §5). */
 export function writeResumeProfile(file: FileEntry, patch: RuntimeProfile): RuntimeDraft {
-  const engine = file.engine as "claude" | "codex";
+  const engine = file.engine as "claude" | "codex" | "copilot";
   const current = savedResumeProfile(file) ?? defaults(file);
   const next: RuntimeDraft = { ...current, ...patch };
   if (patch.model !== undefined) {
@@ -180,7 +180,7 @@ export function effectiveProfile(file: FileEntry): RuntimeDraft {
   const base = defaults(file);
   const profile = readProfile(file);
   if (!profile) return base;
-  const engine = file.engine as "claude" | "codex";
+  const engine = file.engine as "claude" | "codex" | "copilot";
   const model = profile.model ?? base.model;
   const efforts = effortScale(engine, model) ?? [];
   const effort = profile.effort && efforts.includes(profile.effort)
@@ -195,7 +195,7 @@ export function effectiveProfile(file: FileEntry): RuntimeDraft {
 export function sendRuntimeFrom(file: FileEntry): RuntimeProfile | undefined {
   const profile = readProfile(file);
   if (!profile) return undefined;
-  const engine = file.engine as "claude" | "codex";
+  const engine = file.engine as "claude" | "codex" | "copilot";
   const runtime: RuntimeProfile = {};
   if (profile.model) runtime.model = profile.model;
   if (profile.effort) runtime.effort = profile.effort;

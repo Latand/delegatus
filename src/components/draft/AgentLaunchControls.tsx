@@ -5,9 +5,10 @@ import { useEffect, useState } from "react";
 import { ReasoningControls, type SpeedChoice } from "@/components/ReasoningControls";
 import { Select } from "@/components/ui/Select";
 import { engineTintOf } from "@/components/utils";
-import { effortScale } from "@/lib/agent/efforts";
+import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
 import { defaultModelFor } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
+import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
 
 /**
  * THE shared «which agent am I launching» control set (PRD #976 slice A).
@@ -336,6 +337,37 @@ export function AgentLaunchControls({
   stacked?: boolean;
 }) {
   const { t } = useLocale();
+  const catalogAccountId = draft.launchAccountId || draft.activeAccountId;
+  const [copilotModels, setCopilotModels] = useState<CopilotModelEntry[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (draft.engine !== "copilot" || !catalogAccountId) { setCopilotModels(null); return; }
+    setCopilotModels(null);
+    void fetch(`/api/accounts/copilot/models?account=${encodeURIComponent(catalogAccountId)}`)
+      .then(async (response) => {
+        if (!response.ok || cancelled) return;
+        const body = await response.json() as { models?: unknown };
+        if (Array.isArray(body.models)) {
+          const models = body.models.filter((item): item is CopilotModelEntry => Boolean(item)
+            && typeof item === "object" && typeof (item as CopilotModelEntry).id === "string"
+            && typeof (item as CopilotModelEntry).name === "string");
+          registerCopilotEffortScales(models);
+          setCopilotModels(models);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [draft.engine, catalogAccountId]);
+  useEffect(() => {
+    if (draft.engine !== "copilot" || !copilotModels?.length) return;
+    if (!copilotModels.some((model) => model.id === draft.model)) {
+      draft.setModel("auto");
+      if (draft.effort) draft.setEffort("");
+      return;
+    }
+    const selected = copilotModels.find((model) => model.id === draft.model);
+    if (draft.effort && selected?.efforts && !selected.efforts.includes(draft.effort)) draft.setEffort("");
+  }, [draft.engine, draft.model, draft.effort, copilotModels, draft.setModel, draft.setEffort]);
   if (!stacked) {
     return (
       <div className="flex flex-wrap items-center gap-1.5">
@@ -350,6 +382,7 @@ export function AgentLaunchControls({
           onModel={draft.setModel}
           onEffort={draft.setEffort}
           onSpeed={draft.setSpeed}
+          copilotModels={draft.engine === "copilot" ? copilotModels : undefined}
         />
       </div>
     );
@@ -376,6 +409,7 @@ export function AgentLaunchControls({
             onModel={draft.setModel}
             onEffort={draft.setEffort}
             onSpeed={draft.setSpeed}
+            copilotModels={draft.engine === "copilot" ? copilotModels : undefined}
           />
         </div>
       </Field>

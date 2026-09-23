@@ -24,6 +24,7 @@ const { POST: createClaude } = await import("./claude/route");
 const { updateMigrationAction } = await import("../account-migrations/[intentId]/action");
 const { activeClaudeAccountId, createManagedClaudeAccount, setActiveClaudeAccount } = await import("@/lib/accounts/claude");
 const { activeCodexAccountId, createManagedCodexAccount, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } = await import("@/lib/accounts/codex");
+const { createManagedCopilotAccount } = await import("@/lib/accounts/copilot");
 const { selectAccount } = await import("@/lib/accounts/manager");
 const { CodexAppServerClient } = await import("@/lib/accounts/codexAppServer");
 const { ManagedCodexRuntime, setManagedCodexRuntimeForTests } = await import("@/lib/accounts/codexRuntime");
@@ -687,6 +688,12 @@ test("GET projects the per-engine quick-switch catalog: active id plus secret-fr
   // A signed-out profile stays listed (history preserved) but is marked, so the
   // UI can offer it for sign-in instead of dropping it.
   expect(body.claude.accounts.find((row) => row.id === claudeSpare.id)).toEqual(expect.objectContaining({ label: "Claude Spare", authPresent: false }));
+});
+
+test("Copilot accounts with unknown auth stay selectable until known signed out", async () => {
+  const copilot = createManagedCopilotAccount("Auth state unknown");
+  const body = await (await GET()).json() as { copilot: { accounts: Array<{ id: string; authPresent: boolean }> } };
+  expect(body.copilot.accounts.find((row) => row.id === copilot.id)).toMatchObject({ id: copilot.id, authPresent: true });
 });
 
 test("a damaged binding record leaves the accounts panel readable, and never claims an account is bound to nothing", async () => {

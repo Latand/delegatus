@@ -1521,6 +1521,7 @@ export function copilotHostOptions(
     binary: resolveCopilotBinary(process.env),
     cwd: input.spec.cwd,
     copilotHome: input.account.home,
+    accountId: input.account.accountId,
     model: profile.model ?? undefined,
     effort: profile.effort ?? undefined,
     /* The bypass mode is the only one that grants every tool up front; any

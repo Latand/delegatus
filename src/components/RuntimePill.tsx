@@ -11,8 +11,10 @@ import { conversationIdentity } from "@/lib/accounts/identity";
 import {
   isQuietReconfigureFailure, onAccountChoiceRequest, pickApplying, readPickedAccount, requestAccountChoice, setPickedAccount, useIntendedAccount,
 } from "@/lib/accounts/intendedAccount";
-import { effortScale } from "@/lib/agent/efforts";
+import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
 import { ENGINE_MODELS, normalizeClaudeLaunchModel } from "@/lib/agent/models";
+import type { AgentModelOption } from "@/lib/agent/models";
+import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { RuntimeSettingsCapability } from "@/lib/runtime/contracts";
 import type { FileEntry, RateLimitState } from "@/lib/types";
@@ -105,11 +107,11 @@ export function tierWord(t: TFunction, tier: string, phone: boolean): string {
   return phone ? tier : reasoningTierLabel(t, tier);
 }
 
-function modelShortLabel(engine: "claude" | "codex", modelId: string): string {
+function modelShortLabel(engine: "claude" | "codex" | "copilot", modelId: string): string {
   return ENGINE_MODELS[engine].find((m) => m.id === modelId)?.shortLabel ?? modelId;
 }
 
-function modelLabel(engine: "claude" | "codex", modelId: string): string {
+function modelLabel(engine: "claude" | "codex" | "copilot", modelId: string): string {
   return ENGINE_MODELS[engine].find((m) => m.id === modelId)?.label ?? modelId;
 }
 
@@ -139,7 +141,7 @@ export function RuntimePill({
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
-  const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
+  const engine = file.engine === "claude" || file.engine === "codex" || file.engine === "copilot" ? file.engine : null;
   const pillSurface: PillSurface | null =
     surface === "structured" ? "structured"
     : surface === "resume" ? "resume"
@@ -178,6 +180,37 @@ export function RuntimePill({
      runtime surface named it before, so the operator could not tell which
      account a message was about to go to (#1795). */
   const runsOnAccount = accountIdFromPath(file.path);
+  const [copilotModels, setCopilotModels] = useState<CopilotModelEntry[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (engine !== "copilot" || !runsOnAccount) { setCopilotModels(null); return; }
+    setCopilotModels(null);
+    void fetch(`/api/accounts/copilot/models?account=${encodeURIComponent(runsOnAccount)}`)
+      .then(async (response) => {
+        if (!response.ok || cancelled) return;
+        const body = await response.json() as { models?: unknown };
+        if (!Array.isArray(body.models)) return;
+        const models = body.models.filter((item): item is CopilotModelEntry => Boolean(item)
+          && typeof item === "object" && typeof (item as CopilotModelEntry).id === "string"
+          && typeof (item as CopilotModelEntry).name === "string");
+        registerCopilotEffortScales(models);
+        setCopilotModels(models);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [engine, runsOnAccount]);
+  const effortScaleForModel = useCallback((model: string | null | undefined) => {
+    const catalogEfforts = engine === "copilot" ? copilotModels?.find((entry) => entry.id === model)?.efforts : null;
+    return engine ? effortScale(engine, model, catalogEfforts) ?? [] : [];
+  }, [engine, copilotModels]);
+  const modelOptions: readonly AgentModelOption[] = engine === "copilot" && copilotModels
+    ? [
+        ...copilotModels.map((model) => ({ id: model.id, label: model.name, shortLabel: model.name, use: "general" as const })),
+        ...(file.model && !copilotModels.some((model) => model.id === file.model)
+          ? [{ id: file.model, label: file.model, shortLabel: file.model, use: "general" as const }]
+          : []),
+      ]
+    : engine ? ENGINE_MODELS[engine] : [];
   /* #1846: the account the operator picked for this conversation, shown the moment it is tapped. It stands
      until the runtime session projects the same choice, which every other page then reads too.
      The pick is shared with the page's other account surfaces, so the header and the card badge say it too. */
@@ -185,7 +218,7 @@ export function RuntimePill({
   /** Where the next message goes: the intended account while one waits, else the one it runs on. */
   const { next: nextAccount } = useIntendedAccount(cardId, runsOnAccount, projectedIntent);
   /* Accounts are named by label on every surface, the id only for one the list does not enumerate. */
-  const nameOf = useAccountName(engine ?? "claude");
+  const nameOf = useAccountName(engine === "codex" ? "codex" : "claude");
   const moving = nextAccount !== runsOnAccount;
   /* A pick a message already engaged is moving the conversation: too late to take back (#1846 review). */
   const switchApplying = pillSurface === "structured" && pickApplying(runtimeSession, file);
@@ -392,14 +425,17 @@ export function RuntimePill({
     if (!engine) return { model: "", effort: "", fast: false };
     // A failed live reconfigure reverts the face to the observed runtime (§6) —
     // the pill never keeps advertising a draft the pane rejected.
-    if (pillSurface === "live-root" || pillSurface === "structured") return applyState === "error" ? defaults(file) : liveDraft;
-    if (pillSurface === "resume") return readResumeDraft(file);
-    return effectiveProfile(file);
+    const draft = pillSurface === "live-root" || pillSurface === "structured"
+      ? applyState === "error" ? defaults(file) : liveDraft
+      : pillSurface === "resume" ? readResumeDraft(file) : effectiveProfile(file);
+    if (engine !== "copilot" || !copilotModels) return draft;
+    const scale = effortScaleForModel(draft.model);
+    return scale.includes(draft.effort) ? draft : { ...draft, effort: scale[0] ?? draft.effort };
     // version re-reads the persisted profile after a commit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engine, pillSurface, applyState, liveDraft, file, version]);
+  }, [engine, pillSurface, applyState, liveDraft, file, version, copilotModels, effortScaleForModel]);
 
-  const efforts = useMemo(() => (engine ? effortScale(engine, face.model) ?? [] : []), [engine, face.model]);
+  const efforts = useMemo(() => effortScaleForModel(face.model), [effortScaleForModel, face.model]);
   const speedShown = engine === "codex";
 
   // Structured reconfigure restarts at an idle boundary, so every launch-level
@@ -444,7 +480,7 @@ export function RuntimePill({
       };
       rollbackRef.current = rollback;
       writeBrowserProfileRollback(file, rollback);
-      const scale = patch.model ? effortScale(engine, patch.model) ?? [] : effortScale(engine, current.model) ?? [];
+      const scale = effortScaleForModel(patch.model ?? current.model);
       const next: RuntimeDraft = {
         ...current,
         ...patch,
@@ -462,13 +498,17 @@ export function RuntimePill({
     }
     // Resume keeps a client-side profile that the next host launch consumes.
     if (pillSurface === "resume") {
-      announceCommit(writeResumeProfile(file, patch));
+      const scale = effortScaleForModel(patch.model ?? face.model);
+      const nextPatch = patch.model && patch.effort === undefined && !scale.includes(face.effort)
+        ? { ...patch, effort: scale[0] ?? face.effort }
+        : patch;
+      announceCommit(writeResumeProfile(file, nextPatch));
     } else {
       writeProfile(file, patch);
       announceCommit(effectiveProfile(file));
     }
     setVersion((v) => v + 1);
-  }, [engine, pillSurface, file, announceCommit, applyReconfigure, runtimeSession]);
+  }, [engine, pillSurface, file, announceCommit, applyReconfigure, runtimeSession, effortScaleForModel, face]);
 
   /**
    * #1846: an account pick for THIS conversation. It is shown in the same frame and sent as the
@@ -516,7 +556,7 @@ export function RuntimePill({
     pillRef.current?.focus();
   }, []);
 
-  const accountChoice: AccountChoice | null = pillSurface === "structured"
+  const accountChoice: AccountChoice | null = pillSurface === "structured" && engine !== "copilot"
     ? {
         runsOn: runsOnAccount,
         next: nextAccount,
@@ -662,6 +702,7 @@ export function RuntimePill({
           owner={pillRef.current?.ownerDocument ?? document}
           t={t}
           engine={engine}
+          modelOptions={modelOptions}
           account={runsOnAccount}
           nameOf={nameOf}
           accountChoice={accountChoice}
@@ -685,6 +726,7 @@ export function RuntimePill({
         <RuntimeSheet
           t={t}
           engine={engine}
+          modelOptions={modelOptions}
           account={runsOnAccount}
           nameOf={nameOf}
           accountChoice={accountChoice}
@@ -798,7 +840,8 @@ function accountLine(t: TFunction, account: string, choice: AccountChoice | null
 
 interface PanelProps {
   t: TFunction;
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
+  modelOptions: readonly AgentModelOption[];
   /** The account this conversation runs on, which both surfaces name (#1795). */
   account: string;
   /** The name an account goes by: its label, else its id (#1846). */
@@ -819,7 +862,7 @@ interface PanelProps {
 }
 
 function RuntimePopover({
-  t, engine, account, nameOf, accountChoice, face, efforts, speedShown, panel, setPanel,
+  t, engine, modelOptions, account, nameOf, accountChoice, face, efforts, speedShown, panel, setPanel,
   effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
 }: PanelProps & {
@@ -837,10 +880,10 @@ function RuntimePopover({
 
   // Rows for the current panel (document order), each with an enabled flag.
   const rows = useMemo(() => buildRows({
-    t, engine, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
+    t, engine, modelOptions, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
     onSelectEffort, onSelectModel, onSelectFast, onOpenPanel: setPanel, accountChoice, accountOptions, nameOf,
   }), [t, engine, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
-    onSelectEffort, onSelectModel, onSelectFast, setPanel, accountChoice, accountOptions, nameOf]);
+    onSelectEffort, onSelectModel, onSelectFast, setPanel, accountChoice, accountOptions, nameOf, modelOptions]);
 
   const focusableIndexes = useMemo(
     () => rows.map((row, index) => (row.enabled ? index : -1)).filter((index) => index >= 0),
@@ -922,9 +965,11 @@ function RuntimePopover({
           {/* Which account the conversation runs on (#1795). The desktop card
               carries the badge in its header; the popover is where the runtime
               is chosen, so it says it here too. */}
-          <div className="px-2 pb-1 pt-1.5 text-label text-muted" data-runtime-popover-account>
-            {accountLine(t, account, accountChoice, nameOf)}
-          </div>
+          {engine !== "copilot" ? (
+            <div className="px-2 pb-1 pt-1.5 text-label text-muted" data-runtime-popover-account>
+              {accountLine(t, account, accountChoice, nameOf)}
+            </div>
+          ) : null}
           <RowGroup label={t("composer.reasoningGroup")}>
             {rows.filter((row) => row.kind === "tier").map((row) => (
               <MenuRow key={row.key} row={row} active={rows.indexOf(row) === activeIndex} refFor={(el) => { rowRefs.current[rows.indexOf(row)] = el; }} />
@@ -937,7 +982,7 @@ function RuntimePopover({
         </>
       ) : (
         <div role="group" aria-label={panel === "model" ? t("composer.modelGroup") : panel === "account" ? t("mobile2.composer.accountGroup") : t("composer.speedGroup")}>
-          {panel === "account" && accountChoice ? <EngineAccountsFeed engine={engine} onAccounts={setAccountOptions} /> : null}
+          {panel === "account" && accountChoice && engine !== "copilot" ? <EngineAccountsFeed engine={engine} onAccounts={setAccountOptions} /> : null}
           {rows.map((row, index) => (
             <MenuRow key={row.key} row={row} active={index === activeIndex} refFor={(el) => { rowRefs.current[index] = el; }} />
           ))}
@@ -996,7 +1041,7 @@ function EngineAccountsFeed({ engine, onAccounts }: {
 }
 
 function buildRows({
-  t, engine, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
+  t, engine, modelOptions, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onOpenPanel, accountChoice, accountOptions, nameOf,
 }: Omit<PanelProps, "onClose" | "account"> & {
   panel: Panel;
@@ -1013,7 +1058,7 @@ function buildRows({
   if (panel === "model") {
     return [
       back(t("composer.modelGroup")),
-      ...ENGINE_MODELS[engine].map((model): Row => ({
+      ...modelOptions.map((model): Row => ({
         key: model.id,
         kind: "model",
         label: model.label,
@@ -1075,7 +1120,7 @@ function buildRows({
   const submenus: Row[] = [
     {
       key: "model", kind: "submenu", label: t("composer.modelGroup"),
-      detail: ENGINE_MODELS[engine].find((m) => m.id === face.model)?.shortLabel ?? face.model,
+      detail: modelOptions.find((m) => m.id === face.model)?.shortLabel ?? face.model,
       checked: false, enabled: true, submenu: "model", role: "menuitem", activate: () => onOpenPanel("model"),
     },
   ];
@@ -1162,7 +1207,7 @@ function MenuRow({
 // ---------------------------------------------------------------------------
 
 function RuntimeSheet({
-  t, engine, account, nameOf, accountChoice, owner, face, efforts, speedShown,
+  t, engine, modelOptions, account, nameOf, accountChoice, owner, face, efforts, speedShown,
   effortLocked, modelLocked, speedLocked, lockReason, limit = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose,
 }: PanelProps & { limit?: RateLimitState | null; owner: Document }) {
@@ -1233,10 +1278,10 @@ function RuntimeSheet({
           </div>
         </div>
 
-        <AccountSection t={t} engine={engine} account={account} nameOf={nameOf} limit={limit} choice={accountChoice ?? null} />
+        {engine !== "copilot" ? <AccountSection t={t} engine={engine} account={account} nameOf={nameOf} limit={limit} choice={accountChoice ?? null} /> : null}
 
         <SheetSection label={t("composer.modelGroup")}>
-          {ENGINE_MODELS[engine].map((model) => (
+          {modelOptions.map((model) => (
             <SheetRow
               key={model.id}
               label={model.label}
