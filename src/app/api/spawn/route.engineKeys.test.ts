@@ -79,7 +79,7 @@ async function launchCopilot(store: AgentRegistry, root: string): Promise<string
     kind: "managed" as const,
     home,
     transcriptRoot: path.join(home, "session-state"),
-    env: { NODE_ENV: "test" },
+    env: { NODE_ENV: "test" as const },
   };
   const deferred: Promise<unknown>[] = [];
   let failure: unknown = null;
