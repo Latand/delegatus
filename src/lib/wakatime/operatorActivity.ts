@@ -24,7 +24,7 @@ export interface DirectOperatorWakatimeInput {
   idempotencyKey?: string;
   /** Attribution resolved at a trusted server ingress before a conversation
       exists, such as a new-agent spawn or task fan-out. */
-  resolvedAttribution?: { engine: "claude" | "codex"; project: string };
+  resolvedAttribution?: { engine: "claude" | "codex" | "copilot"; project: string };
   fallbackEntry?: FileEntry;
 }
 
@@ -71,7 +71,7 @@ export function recordDirectOperatorWakatimeActivity(
 
   const resolvedAttribution = input.resolvedAttribution;
   if (resolvedAttribution
-    && ((resolvedAttribution.engine !== "claude" && resolvedAttribution.engine !== "codex")
+    && ((resolvedAttribution.engine !== "claude" && resolvedAttribution.engine !== "codex" && resolvedAttribution.engine !== "copilot")
       || !resolvedAttribution.project.trim()
       || resolvedAttribution.project === UNRESOLVED_PROJECT)) {
     throw new Error("direct operator activity attribution is invalid");
@@ -99,7 +99,7 @@ export function recordDirectOperatorWakatimeActivity(
   const conversation = byId ?? byPath;
   const fallback = input.fallbackEntry;
   const engine = resolvedAttribution?.engine ?? conversation?.engine
-    ?? (fallback?.engine === "claude" || fallback?.engine === "codex" ? fallback.engine : null);
+    ?? (fallback?.engine === "claude" || fallback?.engine === "codex" || fallback?.engine === "copilot" ? fallback.engine : null);
   if (!engine) throw new Error("direct operator activity target is unavailable");
   const generation = conversation?.generations.at(-1);
   const project = resolvedAttribution?.project.trim() ?? resolveProjectAttribution({

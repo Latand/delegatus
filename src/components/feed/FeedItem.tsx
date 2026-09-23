@@ -100,9 +100,10 @@ function internalCard(ts: unknown, text: string, senderRole: string | undefined)
 /* Mobile v2 (#1439, lane 4): the engine mark is the only avatar left on the
    phone — a 16 px glyph in secondary colour beside the engine's name in the
    message header (README §5). Proper nouns, so no locale entry. */
-const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw", string> = {
+const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", string> = {
   claude: "Claude",
   codex: "Codex",
+  copilot: "Copilot",
   openclaw: "OpenClaw",
 };
 

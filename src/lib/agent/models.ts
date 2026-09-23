@@ -33,7 +33,14 @@ export function codexModelSupportsImages(model: string | null | undefined): bool
   return CODEX_IMAGE_INPUT_MODELS.has(model.trim());
 }
 
-export const ENGINE_MODELS: Record<"claude" | "codex", readonly AgentModelOption[]> = {
+export const COPILOT_AUTO_MODEL = "auto";
+
+/* A Copilot model id as the CLI takes it: dotted, lower case (`gpt-5.4`,
+   `claude-sonnet-5`). The CLI is the arbiter of whether the account's plan
+   offers it; a refused id fails the spawn with the CLI's own message. */
+const COPILOT_MODEL_ID = /^[a-z0-9][a-z0-9.-]*$/;
+
+export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly AgentModelOption[]> = {
   claude: [
     // Claude Code 2.1.280 resolves the `opus` alias to claude-opus-5-5 on
     // first-party auth, so the alias row names what it launches.
@@ -57,16 +64,28 @@ export const ENGINE_MODELS: Record<"claude" | "codex", readonly AgentModelOption
     { id: CODEX_TERRA_MODEL, label: "GPT-5.6-Terra", shortLabel: "5.6-Terra", use: "implement" },
     { id: CODEX_LUNA_MODEL, label: "GPT-5.6-Luna", shortLabel: "5.6-Luna", use: "general" },
   ],
+  // `auto` heads the list because it is the one value every Copilot plan
+  // accepts, Free included. The ids after it are unverified against a
+  // logged-in catalogue (docs/design/copilot-engine.md 3.8); slice 2 reads
+  // the account's real one.
+  copilot: [
+    { id: COPILOT_AUTO_MODEL, label: "Auto", shortLabel: "Auto", use: "general" },
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5", shortLabel: "Sonnet 5", use: "implement" },
+    { id: "gpt-5.4", label: "GPT-5.4", shortLabel: "5.4", use: "review" },
+    { id: "claude-haiku-4.5", label: "Claude Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
+    { id: "gpt-5-mini", label: "GPT-5 mini", shortLabel: "5 mini", use: "general" },
+  ],
 };
 
 export type LaunchModelValidation = { model: string } | { error: string };
 
 /** Validate a fresh-launch model against the catalog rendered by the Viewer.
     Resume and migration paths deliberately do not call this helper. */
-export function validateLaunchModel(engine: "claude" | "codex", model: string): LaunchModelValidation {
+export function validateLaunchModel(engine: "claude" | "codex" | "copilot", model: string): LaunchModelValidation {
   const requested = model.trim();
   const validIds = ENGINE_MODELS[engine].map((option) => option.id);
   if (validIds.includes(requested)) return { model: requested };
+  if (engine === "copilot" && requested.length <= 128 && COPILOT_MODEL_ID.test(requested)) return { model: requested };
   return {
     error: `invalid ${engine} model id ${JSON.stringify(requested)}; valid ${engine} model ids: ${validIds.join(", ")}`,
   };
@@ -74,7 +93,8 @@ export function validateLaunchModel(engine: "claude" | "codex", model: string): 
 
 /** A fresh Codex conversation starts on the architecture/review profile —
     the model the account itself reports as default. */
-export function defaultModelFor(engine: "claude" | "codex"): string {
+export function defaultModelFor(engine: "claude" | "codex" | "copilot"): string {
+  if (engine === "copilot") return COPILOT_AUTO_MODEL;
   return engine === "codex" ? CODEX_ASTRA_MODEL : "opus";
 }
 

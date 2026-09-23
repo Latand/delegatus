@@ -23,6 +23,7 @@ import { nativeCodexSessionMetaResult } from "./codexNative";
 import { HEAD_READ_CHUNK_BYTES, headFingerprint, readHead, type HeadReadResult } from "./head";
 import { readJsonResult, recordValue, recordsValue, stringValue } from "./json";
 import { openclawMessage } from "./openclawNative";
+import { copilotWorkspaceTitle } from "./copilotNative";
 import { projectResolutionStateKey } from "./projectState";
 
 export interface FileDescription {
@@ -743,7 +744,10 @@ function cwdFromLines(lines: string[]): string | null {
     try {
       const parsed = JSON.parse(line);
       const record = recordValue(parsed);
-      const cwd = stringValue(record?.cwd) ?? stringValue(recordValue(record?.payload)?.cwd);
+      const cwd = stringValue(record?.cwd)
+        ?? stringValue(recordValue(record?.payload)?.cwd)
+        /* Copilot: `session.start` / `session.resume` carry `data.context.cwd`. */
+        ?? stringValue(recordValue(recordValue(record?.data)?.context)?.cwd);
       if (cwd) return cwd;
     } catch {
       continue;
@@ -758,6 +762,12 @@ function goodTitle(text: unknown): string | null {
 }
 
 function userPromptFromRecord(obj: Record<string, unknown>, engine: TranscriptEngine): string | null {
+  if (engine === "copilot") {
+    /* `data.content` is what the operator typed; `transformedContent` adds
+       the CLI's own datetime preamble and is not the prompt. */
+    if (obj.type !== "user.message") return null;
+    return stringValue(recordValue(obj.data)?.content)?.trim() || null;
+  }
   if (engine === "openclaw") {
     /* OpenClaw wraps every role, the operator's included, in a top-level
        `message` envelope, so the Claude arm's `type === "user"` never fires. */
@@ -1090,6 +1100,30 @@ function deriveTranscriptMetadata(
       title = titleRead.value;
     }
     title ??= "OpenClaw session";
+  } else if (rootName === "copilot-sessions") {
+    /* `session.start.data.context.cwd` names the directory; the title is the
+       CLI's own `workspace.yaml` name, else the first user prompt. */
+    const cwdRead = complete
+      ? transcriptCwd(pathname, st)
+      : { value: null, complete: false, headPreserved: false };
+    complete &&= cwdRead.complete;
+    cwdComplete = cwdRead.complete;
+    cwd = cwdRead.value ?? undefined;
+    if (complete) {
+      const startedAtRead = transcriptStartedAt(pathname, st);
+      complete &&= startedAtRead.complete;
+      sessionStartedAt = startedAtRead.value;
+    }
+    engine = "copilot";
+    kind = "session";
+    fmt = "copilot";
+    title = copilotWorkspaceTitle(pathname);
+    if (!title && complete) {
+      const titleRead = scanJsonlTitle(pathname, st, "copilot");
+      complete &&= titleRead.complete;
+      title = titleRead.value;
+    }
+    title ??= "Copilot session";
   } else if (rootName === "claude-tasks") {
     engine = "shell";
     kind = "background";
@@ -1141,6 +1175,10 @@ function resolveProjectOverlay(
       ?? (worktreeInfo
         ? aliasedProjectInfo(worktreeInfo.project, worktreeInfo.worktree, worktreeInfo.repo)
         : aliasedProjectInfo(projectFromSlug(slug)));
+  } else if (rootName === "copilot-sessions") {
+    /* The same one algorithm as every other engine: a Copilot session started
+       in a worktree groups under its parent repository. */
+    info = (cwd ? projectInfoFromCwd(cwd, stateKey) : null) ?? projectInfoFromTranscript(pathname, stateKey);
   } else if (rootName === "openclaw-sessions") {
     /* The workspace recognizer inside `projectInfoFromCwd` is what gives an
        OpenClaw session a stable project, and it only runs if this branch calls

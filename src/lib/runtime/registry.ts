@@ -16,6 +16,7 @@ import {
 
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
+import type { CopilotAcpHost } from "./copilotAcpHost";
 import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost";
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
@@ -62,6 +63,20 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
 export function claudeHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
     kind: "claude-broker",
+    endpoint: state.endpoint,
+    process: state.pid === null ? null : captureProcessIdentity(state.pid, undefined, state.processStartIdentity),
+    eventCursor: state.eventCursor,
+    protocolVersion: state.protocolVersion,
+    writerClaimEpoch,
+    activeTurnRef: state.activeTurnRef,
+    pendingAttention: state.pendingAttention,
+    activeFlags: state.activeFlags,
+  };
+}
+
+export function copilotHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
+  return {
+    kind: "copilot-acp",
     endpoint: state.endpoint,
     process: state.pid === null ? null : captureProcessIdentity(state.pid, undefined, state.processStartIdentity),
     eventCursor: state.eventCursor,
@@ -280,6 +295,27 @@ export async function bindClaudeHostPersistence(
     writerClaimEpoch,
     releasedStatus,
     claudeHostColumns,
+    options,
+  );
+}
+
+export async function bindCopilotHostPersistence(
+  registry: AgentRegistry,
+  key: SessionKey,
+  host: CopilotAcpHost,
+  claimOwner: string,
+  writerClaimEpoch: number,
+  releasedStatus: "unhosted" | "dead" = "unhosted",
+  options: StructuredHostPersistenceOptions = {},
+): Promise<() => void> {
+  return bindStructuredHostPersistence(
+    registry,
+    key,
+    host,
+    claimOwner,
+    writerClaimEpoch,
+    releasedStatus,
+    copilotHostColumns,
     options,
   );
 }

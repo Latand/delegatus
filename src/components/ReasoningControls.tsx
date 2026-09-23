@@ -27,7 +27,7 @@ export function ReasoningControls({
   onEffort,
   onSpeed,
 }: {
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "copilot";
   model: string;
   effort: string;
   speed: SpeedChoice;

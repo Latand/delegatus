@@ -27,6 +27,7 @@ import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { currentMcpHttpCaller } from "./callerContext";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
@@ -932,13 +933,24 @@ const productionCanonicalSeatConversationId = seatIdentityResolver(
   (conversationId) => agentRegistry().canonicalConversationId(conversationId),
 );
 
+/** The spawn capability that names the current caller: the one an HTTP
+    request presented (see `./callerContext`), else the one this stdio process
+    inherited from the agent that launched it. */
+function callerCapability(): string | undefined {
+  return currentMcpHttpCaller()?.capability ?? process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+}
+
 function attentionCallerSources(): AttentionCallerSources {
+  const httpCaller = currentMcpHttpCaller();
   return {
-    ancestry: () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
+    /* An HTTP call is served from the Viewer's own process, whose ancestry
+       leads to no agent host; the capability alone names that caller, exactly
+       as it does for a stdio agent whose host pids were never recorded. */
+    ancestry: httpCaller ? () => [] : () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
     rootConversationId: () => liveRootSession(rootSessionSource())?.conversationId ?? null,
     hosted: () => hostedConversationsFromSnapshot(agentRegistry().readOnlySnapshot()),
     capabilityCallerConversationId: capabilityConversationResolver(
-      process.env[VIEWER_SPAWN_CAPABILITY_ENV],
+      callerCapability(),
       (digest) => agentRegistry().conversationIdForSpawnCapabilityDigest(digest),
     ),
   };
@@ -1084,11 +1096,11 @@ function text(value: unknown): string {
 function validateExplicitMcpLaunchModel(args: McpToolArgs, fallbackRole?: string): void {
   const model = text(args.model);
   if (!model) return;
-  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex") return;
+  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot") return;
   const roleId = text(args.role) || fallbackRole;
   const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams }) : null;
-  let engine: "claude" | "codex" | null = null;
-  if (args.engine === "claude" || args.engine === "codex") engine = args.engine;
+  let engine: "claude" | "codex" | "copilot" | null = null;
+  if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot") engine = args.engine;
   else if (role?.ok && role.value) engine = role.value.config.engine;
   if (!engine) return;
   const validation = validateLaunchModel(engine, model);
@@ -1996,7 +2008,7 @@ async function listConversations(
   const conversations = source.items
     .filter(objectRecord) as unknown as FileEntry[];
   const rows = conversations
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
     .slice(0, limit)
     .map((entry) => ({
       conversationId: entry.conversationId ?? null,
@@ -2163,9 +2175,10 @@ function conversationDeliverability(
 const CONVERSATION_MESSAGE_KINDS = ["message", "reasoning", "tool_call", "tool_result", "trace"] as const;
 const CONVERSATION_MESSAGE_ROLES = ["user", "assistant", "system", "tool"] as const;
 
-function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | null {
+function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | "copilot" | null {
   if (rootName === "codex-sessions") return "codex";
   if (rootName === "claude-projects") return "claude";
+  if (rootName === "copilot-sessions") return "copilot";
   return null;
 }
 
@@ -2215,7 +2228,7 @@ async function conversationMessages(
 
   let transcriptPath = requestedPath;
   let conversationId: string | null = null;
-  let engine: "claude" | "codex" | null = null;
+  let engine: "claude" | "codex" | "copilot" | null = null;
   if (requestedId) {
     const target = selectedConversationTarget({ conversationId: requestedId }, selectedDependencies);
     transcriptPath = target.path!;
@@ -2234,7 +2247,7 @@ async function conversationMessages(
     if (!engine) {
       engine = conversationEngineForRoot(pinned.rootName);
       if (!engine) {
-        throw new McpToolRefusal("conversation_messages supports Claude and Codex transcripts only.", {
+        throw new McpToolRefusal("conversation_messages supports Claude, Codex and Copilot transcripts only.", {
           code: "conversation_messages_engine_unsupported",
         });
       }
@@ -2603,7 +2616,7 @@ function spawnControlHeaders(): Record<string, string> {
  * operator told to rotate performs it here and the shell fallback is gone.
  */
 function callerCapabilityHeaders(): Record<string, string> {
-  const capability = process.env[VIEWER_SPAWN_CAPABILITY_ENV]?.trim() ?? "";
+  const capability = callerCapability()?.trim() ?? "";
   return {
     ...internalServiceHeaders("mcp"),
     ...(/^[A-Za-z0-9_-]{43}$/.test(capability) ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {}),
@@ -3201,7 +3214,7 @@ async function boardSnapshot(
   }
   const files = (await dependencies.completedFileScan()).snapshot.files;
   const conversations = files
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
     .filter((entry) => !project || entry.project === project)
     .filter((entry) => !activity || entry.activity === activity)
     .filter((entry) => !liveOnly || entry.activity === "live" || entry.activity === "stalled")

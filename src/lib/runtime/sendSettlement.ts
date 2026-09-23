@@ -3,6 +3,7 @@ import {
   readOnlyConversationLookupFromSnapshot,
   type AgentRegistry,
   type DeliveryOperationOwner,
+  type DeliveryRoute,
   type DeliveryTerminalDisposition,
   type RegistryFile,
 } from "@/lib/agent/registry";
@@ -14,6 +15,7 @@ import { structuredContentDigest } from "./structuredContent";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import {
   RUNTIME_DELIVERY_DISCARDED_REASON,
+  type RuntimeDeliveryMode,
   type RuntimeOperationReceipt,
   type RuntimeReceiptStatus,
 } from "./contracts";
@@ -181,6 +183,33 @@ export interface SendReceipt {
       was asked and answered during the query, `delivery-record` when the
       durable reservation and its owner row were the whole evidence. */
   evidence: "delivery-journal" | "delivery-record";
+  /** How the message reaches a running turn when that takes more than a plain
+      send: `interrupt-then-turn-started` on an engine without steer (Copilot),
+      whose message interrupts the running turn and starts the next one. Never
+      `steered`. Present while that delivery is in flight and after it
+      settles; absent on every other send. */
+  delivery?: RuntimeDeliveryMode;
+  /** The running turn that delivery interrupted. */
+  interruptedTurnId?: string;
+}
+
+type RouteSource = { delivery?: unknown; interruptedTurnId?: unknown } | null | undefined;
+
+/** The receipt fields for a recorded delivery route, or none. */
+function routeFields(source: RouteSource): Pick<SendReceipt, "delivery" | "interruptedTurnId"> {
+  if (source?.delivery !== "interrupt-then-turn-started") return {};
+  return {
+    delivery: source.delivery,
+    ...(typeof source.interruptedTurnId === "string" && source.interruptedTurnId
+      ? { interruptedTurnId: source.interruptedTurnId }
+      : {}),
+  };
+}
+
+/** The route a journal receipt recorded, in the shape the delivery record keeps. */
+export function deliveryRouteOf(receipt: RouteSource): DeliveryRoute | null {
+  const fields = routeFields(receipt);
+  return fields.delivery ? { delivery: fields.delivery, interruptedTurnId: fields.interruptedTurnId ?? null } : null;
 }
 
 export interface SendSettlementPorts {
@@ -288,6 +317,7 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
       duplicateRisk: false,
       resend: "not-needed",
       evidence: "delivery-record",
+      ...routeFields(attempt ?? owner),
     };
   }
   if (terminalState === "failed") {
@@ -343,6 +373,8 @@ export function runtimeReceiptForSend(receipt: SendReceipt): RuntimeOperationRec
     at: receipt.settledAt ?? receipt.acceptedAt ?? new Date(0).toISOString(),
     ...(receipt.acceptedAt ? { admittedAt: receipt.acceptedAt } : {}),
     ...(receipt.resend ? { resend: receipt.resend } : {}),
+    ...(receipt.delivery ? { delivery: receipt.delivery } : {}),
+    ...(receipt.interruptedTurnId ? { interruptedTurnId: receipt.interruptedTurnId } : {}),
     revision: 1,
   };
 }
@@ -557,11 +589,13 @@ export async function resolveSendReceipt(
   const receipt = journal.readable ? journal.value?.receipt ?? null : null;
   const status = receipt?.status ?? null;
   const verdict = journalVerdict(status, receipt?.reason);
-  if (verdict) return settleProjection(registry, operationId, projected, verdict);
+  if (verdict) return settleProjection(registry, operationId, projected, verdict, "delivery-journal", deliveryRouteOf(receipt));
 
   const file = registry.readOnlySnapshot();
   const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
-  if (!subject || !pastSettlementDeadline(registry, file, subject, ports)) return projected;
+  /* Still in flight: the journal's receipt already says how this send is
+     reaching a running turn, recorded when its delivery began. */
+  if (!subject || !pastSettlementDeadline(registry, file, subject, ports)) return { ...projected, ...routeFields(receipt) };
   /* Past the deadline, and the journal has no terminal answer of its own. What
      the settlement may CLAIM depends on what it could see. */
   const unsettleable: JournalVerdict = {
@@ -618,6 +652,7 @@ function settleProjection(
   projected: SendReceipt,
   verdict: JournalVerdict,
   evidence: SendReceipt["evidence"] = "delivery-journal",
+  route: DeliveryRoute | null = null,
 ): SendReceipt {
   const file = registry.readOnlySnapshot();
   /* A retry attempt settles on its OWN row. Its reservation belongs to the
@@ -625,18 +660,18 @@ function settleProjection(
      verdict there would overwrite what that earlier attempt proved with what
      this one did. */
   if (retryAttemptOwner(file, operationId)) {
-    registry.settleDeliveryRetryAttempt(operationId, verdict.state, verdict.reason, verdict.disposition);
+    registry.settleDeliveryRetryAttempt(operationId, verdict.state, verdict.reason, verdict.disposition, route);
     const reconciled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
     if (reconciled) return { ...reconciled, evidence };
   }
   const delivery = deliveryForOperation(file, operationId);
   if (delivery && SETTLEABLE_DELIVERY_STATES.has(delivery.state)) {
-    registry.recordDeliveryOutcome(delivery.id, verdict.state, verdict.reason, verdict.disposition);
+    registry.recordDeliveryOutcome(delivery.id, verdict.state, verdict.reason, verdict.disposition, route);
     const reconciled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
     if (reconciled) return { ...reconciled, evidence };
   }
   if (verdict.state === "delivered") {
-    return { ...projected, state: "delivered", reason: null, duplicateRisk: false, resend: "not-needed", evidence };
+    return { ...projected, state: "delivered", reason: null, duplicateRisk: false, resend: "not-needed", evidence, ...routeFields(route) };
   }
   return {
     ...projected,
@@ -769,9 +804,9 @@ async function projectCurrentSend(
   if (!journal.readable) return journal;
   const receipt = journal.value?.receipt ?? null;
   const verdict = journalVerdict(receipt?.status ?? null, receipt?.reason);
-  if (!verdict) return { readable: true, value: { ...projected, evidence: "delivery-journal" } };
+  if (!verdict) return { readable: true, value: { ...projected, evidence: "delivery-journal", ...routeFields(receipt) } };
   if (verdict.state === "delivered") {
-    return { readable: true, value: { ...projected, state: "delivered", reason: null, duplicateRisk: false, resend: "not-needed", evidence: "delivery-journal" } };
+    return { readable: true, value: { ...projected, state: "delivered", reason: null, duplicateRisk: false, resend: "not-needed", evidence: "delivery-journal", ...routeFields(receipt) } };
   }
   return {
     readable: true,

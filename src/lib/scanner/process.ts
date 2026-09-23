@@ -11,7 +11,7 @@ import { ROOTS } from "./roots";
 const HOLDERS_TTL_MS = 12_000;
 const MAX_PATH_HOLDER_CANDIDATES = 256;
 
-export type AgentEngine = "claude" | "codex";
+export type AgentEngine = "claude" | "codex" | "copilot";
 
 /** A live claude/codex process observed via the proc backend. `tty` is 0 without a terminal. */
 export interface AgentProcess {

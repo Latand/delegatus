@@ -100,7 +100,7 @@ export interface SnapshotSpawnStub {
     state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
     error: string | null;
     retrySafe: boolean;
-    engine: Extract<Engine, "claude" | "codex">;
+    engine: Extract<Engine, "claude" | "codex" | "copilot">;
     cwd: string;
     createdAt: string;
   };
@@ -118,7 +118,7 @@ export interface ViewerSnapshotV1 {
   /** Additive (#342): unresolved spawn placeholders in scope. `truncated` and
       `omittedCount` then cover only genuine budget truncation. */
   stubs: SnapshotSpawnStub[];
-  siblings: { selfResolution: "matched" | "unmatched" | "omitted"; agents: Array<{ transcriptPath: string; engine: "claude" | "codex"; project: string | null; title: string | null; activity: string | null; pid: number; self: boolean }> };
+  siblings: { selfResolution: "matched" | "unmatched" | "omitted"; agents: Array<{ transcriptPath: string; engine: "claude" | "codex" | "copilot"; project: string | null; title: string | null; activity: string | null; pid: number; self: boolean }> };
   scanner: { scannedAt: string; ageMs: number; durationMs: number; entryCount: number };
 }
 

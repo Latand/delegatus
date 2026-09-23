@@ -741,6 +741,7 @@ export const en = {
   "draft.speedStandard": "standard",
 
   // Reasoning tier display names (submitted values stay the CLI tokens)
+  "effortTier.none": "none",
   "effortTier.minimal": "minimal",
   "effortTier.low": "low",
   "effortTier.medium": "medium",
@@ -864,6 +865,18 @@ export const en = {
   // Telegram connector (#1059)
   "telegram.title": "Telegram",
   "telegram.rowAria": "Telegram connection",
+  "copilot.accounts.rowAria": "GitHub Copilot accounts",
+  "copilot.accounts.title": "GitHub Copilot accounts",
+  "copilot.accounts.none": "no account",
+  "copilot.accounts.hint": "Each account is its own Copilot home. Sign it in by running its login command in a terminal; launches use the active account.",
+  "copilot.accounts.active": "active",
+  "copilot.accounts.use": "Use",
+  "copilot.accounts.copyLogin": "Copy login",
+  "copilot.accounts.copied": "Copied",
+  "copilot.accounts.copyFailed": "The login command could not be copied.",
+  "copilot.accounts.labelPlaceholder": "New account label",
+  "copilot.accounts.add": "Add",
+  "copilot.accounts.failed": "The Copilot account change did not go through.",
   "telegram.close": "Close",
   "telegram.readOnlyNote": "Read-only · operator sessions only",
   "telegram.status.disconnected": "Not connected",
@@ -1296,6 +1309,7 @@ export const en = {
   "render.compactSummary": "conversation summary",
   "render.stdinSession": "stdin → session {id}",
   "render.record": "record",
+  "render.turnInterrupted": "Turn interrupted",
   "render.transcriptRecord": "transcript record",
   "render.recordDetails": "record details",
   "render.protocol": "protocol",
@@ -2588,6 +2602,8 @@ export const en = {
   "queue.steerHint": "Adds to the turn already running instead of interrupting it.",
   "queue.steerUnsupported": "This agent cannot be steered; a send interrupts the running turn instead.",
   "queue.steerIdle": "Nothing is running to steer.",
+  "queue.interruptResendMessage": "Interrupt and send",
+  "queue.interruptResendHint": "This agent cannot steer: the running turn stops and your message starts the next one.",
 
   /* Native history injection (#1560). The wording keeps the one distinction
      the operation actually supports: the text becomes part of what the model

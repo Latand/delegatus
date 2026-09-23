@@ -34,7 +34,7 @@ function durableEvidenceHead(value: string | null | undefined): string | null {
   return durableSemanticTitle(firstNonEmptyLine, 120);
 }
 
-export function titleFromTranscriptHead(pathname: string, engine: "claude" | "codex"): string | null {
+export function titleFromTranscriptHead(pathname: string, engine: "claude" | "codex" | "copilot"): string | null {
   try {
     const stat = fs.statSync(pathname);
     if (!stat.isFile()) return null;
@@ -87,7 +87,7 @@ export interface IdentityWaveStartupDependencies {
   registry: Pick<AgentRegistry, "runIdentityWaveMigration">;
   seats(): readonly IdentityWaveSeat[];
   now(): string;
-  transcriptTitle(pathname: string, engine: "claude" | "codex"): string | null;
+  transcriptTitle(pathname: string, engine: "claude" | "codex" | "copilot"): string | null;
   sharedPath(pathname: string): IdentityWaveSharedPathCandidate | null;
   commitExternalPathRekeys(rekeys: readonly IdentityWavePathRekey[]): void;
   log(message: string, detail: Record<string, unknown>): void;

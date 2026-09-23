@@ -256,7 +256,7 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
           title={t(`pipelineChipState.${state}`)}
         />
         {configOpen ? (
-          <EngineRadioGroup engine={engine as "claude" | "codex"} disabled={!editable || busy} onChange={changeEngine} />
+          <EngineRadioGroup engine={engine as "claude" | "codex"} disabled={!editable || busy} onChange={(next) => changeEngine(next as FlowEngine)} />
         ) : (
           <span className="shrink-0 rounded-full border border-border bg-card/70 px-1.5 py-0.5 text-caption font-bold capitalize text-muted">
             {engine}

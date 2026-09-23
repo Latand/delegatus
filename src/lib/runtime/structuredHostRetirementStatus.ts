@@ -109,7 +109,7 @@ export function projectRetirementStatus(request: RetirementStatusRequest, source
       || group === 2 && !["runtime", "process-group", "already-exited"].includes(row.via ?? "")) {
       scopeUnknown = true; continue;
     }
-    const key = /^(claude|codex):([0-9a-f-]{36})$/i.exec(row.key);
+    const key = /^(claude|codex|copilot):([0-9a-f-]{36})$/i.exec(row.key);
     if (!key) { scopeUnknown = true; continue; }
     let subject: Subject;
     try { subject = sources.subject(row.conversationId, row.key); }
