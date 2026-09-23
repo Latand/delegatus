@@ -1800,9 +1800,9 @@ function ProjectDashboardView({
     if (seatState.kind === "live" && seatFile) openBoardRow(seatFile);
     else mobileNav.openSheet(seatState.kind === "draft" ? "rotate" : "seat");
   };
-  /* What a board row reveals under a left swipe and lists on a long-press
-     (#1671). Closing a card is the board's own close, the one ⋯ › Close card
-     sends. A close the server refuses is shed by the outbox and the row comes
+  /* What a board row no task owns lists on its long-press (#1671; the
+     column pager owns the sideways swipe since #2072 slice 4). Closing a card
+     is the board's own close, the one ⋯ › Close card sends. A close the server refuses is shed by the outbox and the row comes
      back on its own; the paths closed from here are held until the board
      settles, so that return also gets a receipt. */
   const swipeClosesRef = useRef(new Map<string, string>());
