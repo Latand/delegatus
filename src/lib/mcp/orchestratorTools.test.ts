@@ -102,7 +102,9 @@ test("get_orchestrator with nothing designated says so and names the current def
     health: null,
     rotation: null,
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
-    lineage: [],
+    pendingIntent: null,
+    intentHistoryCount: 0,
+    lineageCount: 0,
   });
 });
 
@@ -166,7 +168,12 @@ test("get_orchestrator surfaces bidirectional predecessor lineage after a replac
   completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "seed_0000002", conversationId: SEATED_ID, path: null, now: AT });
 
   const { control } = controlStub();
-  const result = await bindingsWith(control).get_orchestrator({ clientRequestId: "get-3", project: "proj-a" }) as Record<string, unknown>;
+  const compact = await bindingsWith(control).get_orchestrator({ clientRequestId: "get-3", project: "proj-a" }) as Record<string, unknown>;
+  expect(compact.predecessorConversationId).toBe("conversation_old");
+  expect(compact.lineageCount).toBe(1);
+  expect(compact.lineage).toBeUndefined();
+
+  const result = await bindingsWith(control).get_orchestrator({ clientRequestId: "get-3-full", project: "proj-a", full: true }) as Record<string, unknown>;
   expect(result.predecessorConversationId).toBe("conversation_old");
   expect(result.lineage).toEqual([{
     conversationId: "conversation_old",

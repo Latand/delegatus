@@ -2670,16 +2670,34 @@ function allowedSeatFields(args: McpToolArgs, keys: readonly string[]): Record<s
 }
 
 /**
+ * A seat record without its two long texts (#2064): the mandate (about 25 KB
+ * for the default one) and the role table. Their lengths stay, so a caller can
+ * see that they exist and ask for them with full:true.
+ */
+function compactOrchestratorSeat(seat: OrchestratorSeat | null): Record<string, unknown> | null {
+  if (!seat) return null;
+  const { mandate, roleTable, ...rest } = seat;
+  return { ...rest, mandateLength: mandate.length, roleTableLength: roleTable?.length ?? null };
+}
+
+/**
  * get_orchestrator (two-axis contract): the designation, its health, and a
  * BOUNDED rotation recommendation. Read-only; every inferred number is
  * labelled an estimate with its basis, and nothing here — or anywhere — may
  * act on the recommendation automatically.
+ *
+ * Compact by default (#2064), like the other read tools. The whole answer
+ * inlined the mandate, the role table, every terminalized intent with its own
+ * copy of the mandate and the full lineage, about 183 KB for a real seat, which
+ * the MCP client refuses. The default keeps what a seat asks this tool for and
+ * counts the history; full:true returns every record whole.
  */
 async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
+  const full = fullAnswer(args);
   const { active, pending, history } = orchestratorSeatFor(project);
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
-  const base = {
+  const base = full ? {
     project,
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: pending,
@@ -2697,6 +2715,13 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
       triggeredBy: revocation.triggeredBy ?? null,
       successorConversationId: revocation.successorConversationId ?? null,
     })),
+  } : {
+    project,
+    defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
+    pendingIntent: compactOrchestratorSeat(pending),
+    intentHistoryCount: history.length,
+    lineageCount: revocations.length,
+    readMore: "get_orchestrator with full:true returns the mandate, the role table, the pending intent, intentHistory and lineage in full.",
   };
   if (!active?.conversationId) {
     return redactPayload({ ...base, designated: false, seat: null, health: null, rotation: null });
@@ -2745,7 +2770,8 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   return redactPayload({
     ...base,
     designated: true,
-    seat: active,
+    seat: full ? active : compactOrchestratorSeat(active),
+    seatEpoch: active.seatEpoch,
     conversationId: active.conversationId,
     transcriptPath,
     engine,
