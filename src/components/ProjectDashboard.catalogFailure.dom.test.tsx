@@ -9,7 +9,7 @@ import { en } from "@/lib/i18n/en";
  * Issue #696, review finding 1. `catalogFailures` reached the overview board and
  * the rail, but not `ProjectDashboard` — and the dashboard is the DEFAULT entry
  * path: a project restored from `localStorage` or a `#p=` hash lands straight
- * on it. With a dead server it rendered `SchemeSkeleton` indefinitely, and on a
+ * on it. With a dead server it rendered its skeleton indefinitely, and on a
  * phone the rail is behind a drawer, so nothing on screen named the failure at
  * all. These tests pin the truthful screen, and pin that a genuine first load
  * still gets the skeleton.
@@ -28,7 +28,7 @@ Object.assign(globalThis, {
 });
 
 const { CatalogFailureNotice } = await import("./CatalogFailureNotice");
-const { SchemeSkeleton } = await import("./scheme/SchemeSkeleton");
+const { BoardRowsSkeleton } = await import("./skeletons");
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -38,7 +38,7 @@ afterEach(() => {
 function boardFallback(catalogFailures: number) {
   return catalogFailures > 0
     ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" />
-    : <SchemeSkeleton />;
+    : <BoardRowsSkeleton />;
 }
 
 function render(node: React.ReactNode): HTMLElement {
@@ -55,11 +55,12 @@ test("a project screen behind a failing catalog names the failure and offers the
   expect(host.textContent).toContain(en["catalog.retry"]);
   expect(host.textContent).toContain("2 failed attempts");
   /* Not a skeleton pretending to still be loading. */
-  expect(host.querySelector(".animate-pulse")).toBeNull();
+  expect(host.querySelector('[aria-busy="true"]')).toBeNull();
 });
 
 test("a genuine first load still shows the skeleton", () => {
   const host = render(boardFallback(0));
+  expect(host.querySelector('[aria-busy="true"]')).toBeTruthy();
   expect(host.querySelector('[data-catalog-error="true"]')).toBeNull();
   expect(host.textContent).not.toContain(en["catalog.errorTitle"]);
 });
@@ -135,8 +136,8 @@ test("every catalog surface is fed the failure count", async () => {
   /* Every skeleton site must yield to the notice. Comparing the two derived
      counts — not either against a literal — means a correctly guarded third
      site keeps passing and an unguarded one fails. */
-  const skeletons = dashboard.match(/<SchemeSkeleton\b/g) ?? [];
-  const guarded = dashboard.match(/catalogFailures > 0 \? <CatalogFailureNotice[^\n]*?\/> : <SchemeSkeleton\b/g) ?? [];
+  const skeletons = dashboard.match(/<(?:BoardRowsSkeleton|KanbanSkeleton)\b/g) ?? [];
+  const guarded = dashboard.match(/catalogFailures > 0 \? <CatalogFailureNotice[^\n]*?\/> : [^\n]*?<(?:BoardRowsSkeleton|KanbanSkeleton)\b/g) ?? [];
   expect(skeletons.length, "the dashboard renders no skeleton at all").toBeGreaterThan(0);
   expect(guarded.length, "a skeleton site does not yield to the catalog failure notice").toBe(skeletons.length);
 

@@ -21,6 +21,8 @@ import { isPlacedTask } from "@/components/scheme/taskGeometry";
 import { updateTask } from "@/components/tasks/taskApi";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
+import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
+import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { useKanbanSeat } from "./kanbanSeatStore";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
 import { cleanTitle } from "@/components/utils";
@@ -67,61 +69,7 @@ import { usePipelineActions } from "./usePipelineActions";
  * and a hidden group that needs the operator again comes back with its reason.
  */
 
-export type KanbanLayoutMode = "wide" | "narrow" | "scroll" | "tabs";
-
-/** Prototype `layoutMode`, measured on the board's own width. Below 768 px the
-    desktop board is tabbed; the phone layout starts below 640 px and never
-    mounts this component. */
-export function kanbanLayoutMode(width: number): KanbanLayoutMode {
-  if (width >= 1400) return "wide";
-  if (width >= 1200) return "narrow";
-  if (width >= 768) return "scroll";
-  return "tabs";
-}
-
-/** The grid's four column tracks, written onto the board as `--c-<status>`.
-    Only the grid modes have tracks; the scroller and the tabs lay their
-    columns out as flex items.
-
-    A project board in the wide mode balances its columns: each shelf grows
-    from its 264 px by an equal third of 35 % of what Assigned held beyond the
-    shelves, so Assigned keeps 65 % of the width it had with the shelves
-    capped (`--shelf-balanced` in kanbanBoard.css), and never less than
-    `--work-min`. The narrow mode keeps its fixed 220 px shelves, and the
-    cross-project Overview keeps its capped shelves.
-
-    A shelf holding reading (an open conversation, an agent draft, `+ Task`
-    composing) gets at least the reading width and never less than a balanced
-    shelf. The wide share (#1841) goes to the shelf the operator widened, and
-    Assigned takes a shelf's track. */
-export function kanbanColumnTracks(
-  mode: KanbanLayoutMode,
-  { overview, wide, reading }: { overview: boolean; wide: TaskStatus | null; reading: ReadonlySet<TaskStatus> },
-): Record<`--c-${TaskStatus}`, string> | null {
-  if (mode !== "wide" && mode !== "narrow") return null;
-  const balanced = mode === "wide" && !overview;
-  const shelf = mode === "narrow" ? "220px" : balanced ? "minmax(232px, var(--shelf-balanced))" : "minmax(232px, var(--shelf-w))";
-  const work = mode === "narrow" ? "minmax(440px, 1fr)" : "minmax(var(--work-min), 1fr)";
-  const tracks: Record<`--c-${TaskStatus}`, string> = { "--c-inbox": shelf, "--c-assigned": work, "--c-blocked": shelf, "--c-done": shelf };
-  if (reading.size) {
-    tracks["--c-assigned"] = "minmax(440px, 1fr)";
-    for (const status of reading) tracks[`--c-${status}`] = balanced ? "minmax(420px, max(460px, var(--shelf-balanced)))" : "minmax(420px, 460px)";
-  }
-  if (wide) {
-    tracks["--c-assigned"] = shelf;
-    tracks[`--c-${wide}`] = work;
-  }
-  return tracks;
-}
-
-/** The columns' mode beside a seat docked at the side (#1841). The seat is the
-    operator's choice, so it never costs them the columns: where the board
-    alone would still show them, what the seat leaves scrolls rather than
-    folding into tabs. */
-export function kanbanLayoutModeBeside(width: number, seatWidth: number): KanbanLayoutMode {
-  const mode = kanbanLayoutMode(width - seatWidth);
-  return mode === "tabs" && seatWidth > 0 && kanbanLayoutMode(width) !== "tabs" ? "scroll" : mode;
-}
+export { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
 
 /**
  * Cross-project mode (#1820). Present ⇒ this board's columns carry the cards
@@ -2344,7 +2292,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       {seatSide ? null : seatView}
       <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")}>
       {!loaded ? (
-        <div className="board-loading" role="status">{t("kanban.loading")}</div>
+        /* The columns it is loading, in the tracks this width gives them (#2071). */
+        <KanbanColumnsSkeleton mode={mode} style={boardStyle} />
       ) : (
         /* One tree for every width: the navigation above the columns changes with the mode and the columns
            stay mounted, so crossing a breakpoint keeps every card, its draft panes and their launches. */

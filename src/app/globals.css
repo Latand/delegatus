@@ -307,6 +307,26 @@ body {
   }
 }
 
+/* Loading placeholders (#2071): only the bars pulse, slowly, and only once a
+   load has taken longer than 400 ms, so a quick one never flickers. The
+   reduced-motion rule is here as well as on the element (`motion-reduce:
+   animate-none`), because this unlayered rule outranks a utility. */
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.skeleton-pulse {
+  animation: skeleton-pulse 1.6s ease-in-out 400ms infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-pulse {
+    animation: none;
+  }
+}
+
 /* A node entering the scheme canvas fades in instead of popping. */
 @keyframes scheme-in {
   from {

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight, Crown, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
 import { createTraversalFence, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, retargetRecordedProject } from "@/lib/navigation/focusHistory";
@@ -16,13 +16,15 @@ import { useBoardState } from "@/hooks/useBoardState";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useViewPresence } from "@/hooks/useViewPresence";
 import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
-import { projectDisplayName } from "@/lib/displayNames";
+import { projectDisplayName, projectTitle } from "@/lib/displayNames";
+import { cachedProjectName, rememberProjectNames } from "@/lib/client/projectNameCache";
 import { canonicalClientProject } from "@/lib/projects/clientAliases";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 import { advanceAttentionCycle, attentionExpiries, attentionId, buildAttentionQueue, type AttentionItem } from "./attention";
 import { AttentionHost } from "./attention/AttentionHost";
+import { BootShell } from "./BootShell";
 import { AttentionIsland, AttentionQueueRow } from "./attention/AttentionIsland";
 import { AttentionToast } from "./attention/AttentionToast";
 import { buildMobileAttentionQueue } from "./attention/attentionQueue";
@@ -121,7 +123,30 @@ const STALE_FOCUS_REPLAY_MS = 8_000;
     put lands the tab back on the silent default view this fix exists to kill. */
 const UNKNOWN_FRAGMENT_NOTICE_MS = 6_000;
 
+const noSubscription = () => () => {};
+
+/* Client-mount gate for everything that reads the browser (#2071, D1). The
+   server and the hydration render agree on `false` and draw the boot shell;
+   the client re-renders with `true` right after hydrating and mounts the app,
+   whose state then starts from the hash and storage instead of from a guess. */
+function useMounted(): boolean {
+  return useSyncExternalStore(noSubscription, () => true, () => false);
+}
+
+/** The storage the first frame reads, or null in private mode. */
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 export function Viewer() {
+  return useMounted() ? <ViewerApp /> : <BootShell />;
+}
+
+function ViewerApp() {
   const { t, locale } = useLocale();
   /* There is no operator credential to claim: same-origin IS the operator (see
      `operatorAuthority`), and no key, secret, cookie or paste exists anywhere in
@@ -132,11 +157,14 @@ export function Viewer() {
      that the board/scheme/mobile components report into and ships an ephemeral
      per-tab snapshot to the server. Renders nothing. */
   useViewPresence();
-  /* URL fragments and localStorage do not exist in the server render. Start
-     from the same Overview shell on both sides, then apply the saved/hash
-     project in the mount effect below so hydration never discards the tree. */
-  const [project, setProject] = useState<string>(OVERVIEW);
-  const [pendingHash, setPendingHash] = useState<ConversationHash | null>(null);
+  /* This tree only ever renders in the browser (the server draws the boot
+     shell), so the first frame already stands on the hash or the stored
+     project: no Overview frame before the project, no restore effect. */
+  const [project, setProject] = useState<string>(() => initialProjectFromState(location.hash, readStored(PROJECT_KEY)));
+  const [pendingHash, setPendingHash] = useState<ConversationHash | null>(() => {
+    const initial = readHash();
+    return initial.filePath || initial.conversationId ? initial : null;
+  });
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
   const { files: allFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, loaded, scopeCertified, catalogFailures } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
   /* Crown/create curation (server-durable): the optimistic client seam plus
@@ -190,6 +218,11 @@ export function Viewer() {
     dashboardFilesRef.current = { project, files: stable };
     return stable;
   }, [files, project]);
+  /* Every certified answer refreshes the names this browser remembers, so
+     the next cold start names the project before its first answer (#2071). */
+  useEffect(() => {
+    if (loaded) rememberProjectNames(polledProjectDisplayNames);
+  }, [loaded, polledProjectDisplayNames]);
   useEffect(() => {
     publishConversationAvailability(new Set(allFiles.flatMap((file) => file.conversationId ? [file.conversationId] : [])));
   }, [allFiles]);
@@ -264,7 +297,7 @@ export function Viewer() {
   const [staleFocusNotice, setStaleFocusNotice] = useState(false);
   /* A pasted URL whose fragment the app cannot interpret (issue #884): name
      the failure instead of quietly showing the default view. */
-  const [unknownFragmentNotice, setUnknownFragmentNotice] = useState(false);
+  const [unknownFragmentNotice, setUnknownFragmentNotice] = useState(() => !recognizedFragment(location.hash));
   /* Mirrors for the popstate replay path, which must read the latest values
      from stable event listeners without re-registering them per poll. */
   const filesRef = useRef<FileEntry[]>([]);
@@ -285,16 +318,6 @@ export function Viewer() {
   }, [pendingHash]);
 
   /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    const initial = readHash();
-    if (initial.filePath || initial.conversationId) setPendingHash(initial);
-    const savedProject = initial.project ?? localStorage.getItem(PROJECT_KEY);
-    /* The restored project answers for its own dock through the same
-       per-project read a later switch uses — see `orchestratorOpenProject`. */
-    if (savedProject) setProject(savedProject);
-    if (!recognizedFragment(location.hash)) setUnknownFragmentNotice(true);
-  }, []);
-
   useEffect(() => {
     const canonical = canonicalClientProject(project, projectAliases);
     if (canonical === project) return;
@@ -435,17 +458,10 @@ export function Viewer() {
   /* The whole rail goes away behind one control (issue #1819): while a stream
      is watching, no project name, count, limit or account name may be on the
      screen at all. Hidden means UNMOUNTED — the rail's footers stop fetching
-     with it — and the choice is this browser's, read in an effect so the
-     server's first paint and hydration stay identical. A missing or unreadable
-     value means shown. */
-  const [railHidden, setRailHidden] = useState(false);
-  useEffect(() => {
-    try {
-      setRailHidden(window.localStorage.getItem(RAIL_HIDDEN_STORAGE_KEY) === "hidden");
-    } catch {
-      /* private mode: the rail stays shown for this page */
-    }
-  }, []);
+     with it — and the choice is this browser's, read on the first client
+     frame (the server draws the boot shell, which reads it too). A missing or
+     unreadable value means shown. */
+  const [railHidden, setRailHidden] = useState(() => readStored(RAIL_HIDDEN_STORAGE_KEY) === "hidden");
   const toggleRail = useCallback(() => {
     setRailHidden((hidden) => {
       const next = !hidden;
@@ -1108,7 +1124,7 @@ export function Viewer() {
       {!isMobile && orchestratorOpen && !kanbanFace && project !== OVERVIEW ? (
         <OrchestratorDock
           project={project}
-          projectName={projectDisplayName(project, projectDisplayNames[project])}
+          projectName={projectTitle(project, projectDisplayNames[project], cachedProjectName(project)) ?? t("dash.projectUnnamed")}
           projectCwd={projectCwds[project]}
           files={files}
           onClose={toggleOrchestrator}

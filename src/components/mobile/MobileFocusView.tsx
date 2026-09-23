@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { Loader2 } from "@/components/icons";
 import { TaskSheet, type TaskSheetView } from "@/components/tasks/TaskSheet";
 import { taskRelationsByPath } from "@/components/tasks/taskRelations";
 import { accountIdFromPath } from "@/lib/accounts/badge";
@@ -26,6 +25,7 @@ import { DraftAgentPane } from "@/components/DraftAgentPane";
 import { isWorkflowDraftId } from "@/components/workflows/workflowModel";
 import { WorkflowDraftPane } from "@/components/workflows/WorkflowDraftPane";
 import { RoundDeck } from "@/components/flows/RoundDeck";
+import { BoardRowsSkeleton } from "../skeletons";
 import { MIN_TRANSCRIPT_SHARE } from "./chatBudget";
 import { ChatEngineMark } from "./chatEngineMark";
 import { paneState, type PaneState } from "@/components/paneState";
@@ -655,10 +655,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
        the dock that used to fill this branch went with lane 10. */
     <div className="flex flex-1 items-center justify-center text-center text-body text-muted">{t("mobile.noConvos")}</div>
   ) : (
-    <div className="flex flex-1 items-center justify-center gap-2 text-center text-body text-muted">
-      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-      {t("common.loading")}
-    </div>
+    <BoardRowsSkeleton variant="list" />
   );
 
   return (

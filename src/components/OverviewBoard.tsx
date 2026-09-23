@@ -12,6 +12,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
+import { BoardRowsSkeleton, KanbanSkeleton } from "./skeletons";
 import { FolderPlus, Search } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
@@ -125,7 +126,11 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           onSelectProject={onSelectProject}
           onOpenConversations={onOpenSearch ?? noop}
         />
-      ) : degraded || allSummaries.length ? null : (
+      ) : degraded || allSummaries.length ? null : !loaded ? (
+        /* Not answered yet (#2071): the shape of the board, never the first
+           run, which is a claim that nothing exists. */
+        isMobile ? <BoardRowsSkeleton variant="list" /> : <KanbanSkeleton overview />
+      ) : (
         /* First run (issue #1162). A board with nothing on it used to state
            the fact and stop there; it now says where sessions come from and
            offers the one next step. The button steers the rail's existing
@@ -235,7 +240,9 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
               "nothing is running right now" copy. */}
           {degraded
             ? t("catalog.unreachable")
-            : totalLive
+            : !loaded && !projects.length
+              ? t("common.loadingCap")
+              : totalLive
               ? t("overview.branchesLiveIn", { count: totalLive, projects: t("overview.projects", { count: liveProjects }) })
               : t("common.nothingRunning")}
           {!degraded && archivedCount ? ` ${t("overview.archived", { count: archivedCount })}` : ""}

@@ -12,7 +12,8 @@ import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { useRuntimeSelector } from "@/hooks/useRuntime";
 import { DelegatusBadge } from "@/components/brand/BrandMark";
 import { ProjectAccounts } from "@/components/ProjectAccounts";
-import { projectDisplayName } from "@/lib/displayNames";
+import { projectTitle } from "@/lib/displayNames";
+import { cachedProjectName } from "@/lib/client/projectNameCache";
 import type { Flow } from "@/lib/flows/types";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -70,7 +71,7 @@ import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
-import { SchemeSkeleton } from "./scheme/SchemeSkeleton";
+import { BoardRowsSkeleton, FeedSkeleton, KanbanSkeleton, TitleSkeleton } from "./skeletons";
 import { Switchboard } from "./Switchboard";
 import {
   buildArchiveBranchGroups,
@@ -450,10 +451,17 @@ function ProjectDashboardView({
      a mount (`useOrchestratorSeat`). One request per interval per tab. */
   const desktopSeatRead = useOrchestratorSeat(isMobile ? null : project, projectCwd);
   const inlineCatalog = useMobileInlineCatalog(project, isMobile && loaded);
-  const projectName = projectDisplayName(
+  /* The header never shows the canonical key (#2071): the live name, then the
+     one this browser remembered, then a readable key. An opaque `repo-`/`dir-`
+     key with neither is a placeholder bar until the catalog is certified, and
+     "Unnamed project" after. Every other surface takes the string. */
+  const knownProjectName = projectTitle(
     project,
     providedProjectName ?? projectCatalogEntries.find((entry) => entry.project === project)?.displayName,
+    cachedProjectName(project),
   );
+  const projectName = knownProjectName ?? t("dash.projectUnnamed");
+  const projectTitleNode = knownProjectName ?? (loaded ? projectName : <TitleSkeleton />);
   /* Durable flow/pipeline records freeze member transcript paths at launch; an
      account migration rotates a conversation onto a new path and every
      projection that string-matches the frozen one (halos, decks, claiming,
@@ -2024,7 +2032,7 @@ function ProjectDashboardView({
   const panelTasks = useMemo(() => (seatTaskIds.size ? tasks.filter((task) => !seatTaskIds.has(task.id)) : tasks), [seatTaskIds, tasks]);
   const barLead = (wide: boolean) => (
     <>
-      <h1 className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" title={projectName}>{projectName}</h1>
+      <h1 className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" title={knownProjectName ?? undefined}>{projectTitleNode}</h1>
       {wide ? <ProjectAccounts project={project} appearance="bar" /> : null}
     </>
   );
@@ -2136,6 +2144,8 @@ function ProjectDashboardView({
             <span data-bar-group="status" className={`${wide || !narrowStatus ? "min-w-16 shrink" : "shrink-0"} truncate whitespace-nowrap text-[12px] ${catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
               {catalogFailures > 0
                 ? t("catalog.unreachable")
+                /* Loading never borrows «nothing is running» (#2071 D6). */
+                : !loaded ? t("common.loadingCap")
                 : (wide ? (statusBits.length ? statusBits.join(" · ") : null) : narrowStatus) ?? (statusBits[0] ?? t("common.nothingRunning"))}
             </span>
           )}
@@ -2218,7 +2228,7 @@ function ProjectDashboardView({
                lane 3 makes that screen its own, with the title cell and the
                meta line. */
             back={mobileConversationKey !== null}
-            title={<MobileBarTitle>{projectName}</MobileBarTitle>}
+            title={<MobileBarTitle>{projectTitleNode}</MobileBarTitle>}
             titleLabel={t("mobile2.bar.switchProject")}
             titleOpens={mobileShell ? "projects" : undefined}
             host={mobileShell}
@@ -2235,11 +2245,17 @@ function ProjectDashboardView({
                 ? <MobileBoardDock onTell={() => openBoardRow(seatFile)} />
                 : <MobileBoardDock create={seatState.kind === "draft"} unresolved={seatState.kind !== "draft"}
                     onTell={() => mobileNav.openSheet(seatState.kind === "draft" ? "rotate" : "seat")} />
-              : undefined}
+              /* While the board loads the footer is already there, neutral, so
+                 the bottom edge never pops in when the rows land (#2071). */
+              : !boardReady && mobileConversationKey === null
+                ? <MobileBoardDock unresolved onTell={() => mobileNav.openSheet("seat")} />
+                : undefined}
           >
             {pipelinesAlert}
               {!boardReady ? (
-                catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
+                /* The shape of what is coming: the board's sections and rows,
+                   or a conversation's feed when one is on top. */
+                catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : mobileConversationKey === null ? <BoardRowsSkeleton /> : <FeedSkeleton />
               ) : mobileBoardLeaf ? (
                 <MobileBoard
                   {...mobileBoardProps}
@@ -2353,7 +2369,7 @@ function ProjectDashboardView({
         <div className="flex min-h-0 min-w-0 flex-1">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {!boardReady ? (
-              catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
+              catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <KanbanSkeleton project={project} />
             ) : kanbanLeaf ? (
               <KanbanBoard
                 layout={pipelineLayout}

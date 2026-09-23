@@ -11,6 +11,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "../projectModel";
+import { BoardRowsSkeleton } from "../skeletons";
 import { fmtAge } from "../utils";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 
@@ -126,12 +127,7 @@ export function MobileProjectSheet({
       <MobileSheetDivider />
       {crowned.map((summary) => row(summary))}
       {rest.map((summary) => row(summary))}
-      {!loaded && !summaries.length ? (
-        <div className="flex items-center justify-center gap-2 px-4 py-3 text-ui text-muted">
-          <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
-          {t("common.loading")}
-        </div>
-      ) : null}
+      {!loaded && !summaries.length ? <BoardRowsSkeleton variant="list" rows={4} className="flex-none" /> : null}
       {catalogFailures > 0 && !summaries.length ? <div className="px-4 py-3 text-ui font-semibold text-danger">{t("catalog.unreachable")}</div> : null}
       <MobileSheetDivider />
       {archived.length ? (
