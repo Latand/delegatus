@@ -516,6 +516,51 @@ for (const mode of ["off", "sqlite"] as const) {
   });
 }
 
+for (const mode of ["off", "sqlite"] as const) {
+  test(`${mode === "off" ? "JSON" : "SQLite"}: an engine-wide drain committed while a launch awaits its first message takes it only once it settles (#2051)`, () => {
+    const store = new AgentRegistry(registryFile(), undefined, undefined, { sqliteMode: mode });
+    store.reconcileConversations([observation("/sessions/ordinary.jsonl", "pooled")]);
+    const ordinary = store.conversationForPath("/sessions/ordinary.jsonl")!.id;
+    const begun = beginLegacySpawnFixture(store, {
+      engine: "codex",
+      cwd: "/repo/checkout",
+      transport: "structured",
+      accountId: "pooled",
+      accountPin: false,
+    });
+    if (begun.kind !== "created") throw new Error("expected launch receipt");
+    const entry = {
+      key: { engine: "codex" as const, sessionId: "settling-session" },
+      artifactPath: "/sessions/settling-session.jsonl",
+      cwd: "/repo/checkout",
+      accountId: "pooled",
+      status: "idle" as const,
+      host: null,
+      claimEpoch: 0,
+      claimOwner: null,
+      pendingAction: "spawn" as const,
+    };
+    const staged = store.stageStructuredSpawn(begun.receipt.launchId, entry);
+    if (staged.kind !== "settled") throw new Error("expected launch staging");
+
+    const intent = store.commitMigrationIntent({
+      engine: "codex",
+      targetId: "routed",
+      origin: "manual",
+      requestId: `drain-after-staging-${mode}`,
+      expectedRevision: store.engineRouting("codex").revision,
+    });
+    expect(intent.state).toBe("draining");
+    expect(store.conversation(ordinary)?.migration).toMatchObject({ intentId: intent.id, targetId: "routed" });
+    expect(store.conversation(staged.conversation.id)?.migration).toBeNull();
+
+    const settled = store.settleSpawn(begun.receipt.launchId, entry);
+    if (settled.kind !== "settled") throw new Error("expected launch settlement");
+    expect(settled.receipt.state).toBe("completed");
+    expect(settled.conversation.migration).toMatchObject({ intentId: intent.id, targetId: "routed" });
+  });
+}
+
 test("resume generation rollover cannot revive delivery cancelled by Stop", () => {
   const { store, id } = seededRegistry("off", registryFile());
   const intent = store.commitMigrationIntent({

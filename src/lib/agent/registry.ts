@@ -1529,6 +1529,17 @@ function enrollSettledSpawnInDrain(file: RegistryFile, conversation: RegistryCon
     on the account its current generation runs on (#2051). A settled launch no
     longer speaks for the account: from then on the conversation is ordinary
     work the lazy move may carry. */
+/** The account each conversation's fresh launch chose, for every launch still
+    settling: staged, its first message not yet delivered (#2051). */
+function settlingLaunchAccounts(file: RegistryFile): Map<ViewerConversationId, string | null> {
+  const accounts = new Map<ViewerConversationId, string | null>();
+  for (const receipt of Object.values(file.receipts)) {
+    if (receipt.purpose !== "launch" || (receipt.state !== "starting" && receipt.state !== "path-pending")) continue;
+    accounts.set(resolveConversationAlias(file, receipt.conversationId), receipt.accountId);
+  }
+  return accounts;
+}
+
 function settlingLaunchChoseAccount(
   file: RegistryFile,
   conversationId: ViewerConversationId,
@@ -5903,6 +5914,7 @@ export class AgentRegistry {
       /* The drain enrollment staging deferred for a fresh launch (#2051). */
       if (receipt.purpose === "launch" && enrollSettledSpawnInDrain(file, conversation, entry.updatedAt)) {
         file.conversationRevision[conversation.engine] += 1;
+        file.engineRouting[conversation.engine].revision += 1;
       }
       if (receipt.supersedes) {
         stageOrRecordSupersedenceInFile(file, receipt.supersedes.conversationId, receipt.conversationId, receipt.supersedes.reason);
@@ -5946,6 +5958,7 @@ export class AgentRegistry {
       receipt.completionMode = receipt.completionMode ?? "route-recovered";
       if (receipt.purpose === "launch" && enrollSettledSpawnInDrain(file, conversation, entry.updatedAt)) {
         file.conversationRevision[conversation.engine] += 1;
+        file.engineRouting[conversation.engine].revision += 1;
       }
       if (receipt.supersedes) {
         stageOrRecordSupersedenceInFile(file, receipt.supersedes.conversationId, receipt.conversationId, receipt.supersedes.reason);
@@ -7478,6 +7491,7 @@ export class AgentRegistry {
       route.revision += 1;
 
       let scoped = 0;
+      const settlingLaunches = settlingLaunchAccounts(file);
       for (const conversation of Object.values(file.conversations)) {
         if (conversation.engine !== input.engine) continue;
         if (conversation.pinnedAccountId) continue;
@@ -7496,6 +7510,11 @@ export class AgentRegistry {
           }
           continue;
         }
+        /* A launch still waiting on its first message stays where the pool put
+           it (#2051): a migration now would hold that message behind a move
+           that waits for the turn it starts. Finalization enrolls it into this
+           drain once the message is delivered. */
+        if (settlingLaunches.has(conversation.id) && settlingLaunches.get(conversation.id) === source.accountId) continue;
         /* The decision the engine-wide loop was missing, taken here at the
            per-conversation boundary because that is the only place the project
            is known: this conversation's own project's pool, and whether the

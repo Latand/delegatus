@@ -20,7 +20,7 @@ import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { terminalClaudeExitReason } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import { StructuredHostAdoptionCleanupError, type DeliveryReceipt, type HostState, type QueueEntry, type RuntimeEvent } from "./engineHost";
-import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, releaseStructuredDeliveryHost } from "./structuredDeliveryController";
+import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost } from "./structuredDeliveryController";
 import { dispatchStructuredControl } from "./structuredControls";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { readStructuredHostRecords, terminateStructuredHostTree } from "./structuredHostControl";
@@ -5764,16 +5764,20 @@ test.each(["healthy", "uncertain acknowledgement", "payload timeout"] as const)(
  * before its first turn.
  */
 describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed account (%s viewer transport)", (transport) => {
-  /* `drain`: an engine-wide migration toward the routed account is already
-     running when the launch stages, as every automatic account switch leaves
-     one for a while. Staging used to enroll the launch into it, which fenced
-     the first message behind the same unfinishable migration. */
+  /* `drain`: an engine-wide migration toward the routed account, as every
+     automatic account switch leaves one for a while. It is either already
+     running when the launch stages, which staging used to enroll the launch
+     into, or committed after staging and before the first message, which the
+     drain itself used to enroll. Both fenced the first message behind the
+     same unfinishable migration. */
   test.each([
-    ["no drain running", false],
-    ["an engine-wide drain running", true],
-  ] as const)("starts its first turn on that account and materializes its transcript (%s)", async (_label, drain) => {
+    ["no drain", "none"],
+    ["a drain running before staging", "before-staging"],
+    ["a drain committed after staging", "after-staging"],
+  ] as const)("starts its first turn on that account and materializes its transcript (%s)", async (_label, drainMode) => {
+    const drain = drainMode !== "none";
     const id = crypto.randomUUID();
-    const root = path.join(sandbox, `non-routed-first-turn-${transport}-${drain ? "drain" : "plain"}-${id}`);
+    const root = path.join(sandbox, `non-routed-first-turn-${transport}-${drainMode}-${id}`);
     const cwd = path.join(root, "project");
     const home = path.join(root, "account-b");
     fs.mkdirSync(cwd, { recursive: true });
@@ -5812,7 +5816,7 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
     try {
       /* Account A is routed; the pool placed this launch on account B. */
       registry.setEngineRouting("claude", "account-a");
-      if (drain) {
+      const commitDrain = () => {
         /* A drain with nothing to move completes at once; this one has work. */
         registry.reconcileConversations([{
           engine: "claude",
@@ -5830,7 +5834,8 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
           expectedRevision: registry.engineRouting("claude").revision,
         });
         expect(intent.state).toBe("draining");
-      }
+      };
+      if (drainMode === "before-staging") commitDrain();
       const begun = beginLegacySpawnFixture(registry, {
         engine: "claude",
         cwd,
@@ -5850,7 +5855,14 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
         "prompt": "start on the account the pool chose",
         registry,
         client,
-      });
+      }, drainMode === "after-staging" ? {
+        /* The production publication, with the switch landing in the window
+           between staging and the first message. */
+        publishHost: (key, host, ownsOperation) => {
+          commitDrain();
+          return publishStructuredDeliveryHost({ key, host }, ownsOperation);
+        },
+      } : {});
 
       const receipt = registry.snapshot().receipts[begun.receipt.launchId]!;
       const sessionId = receipt.key!.sessionId;
