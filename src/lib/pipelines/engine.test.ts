@@ -2195,6 +2195,41 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   expect(loadPipelines()[0]!.dismissedAt).toBeUndefined();
 });
 
+test("attach-link and detach-link keep manual PR and issue links on a lane in any state, normalizing what a person types (#2059)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  const callsBefore = h.calls.length;
+  /* The harness remote is not GitHub, so a bare number names nothing yet. */
+  const bare = await patchPipeline(created.id, { action: "attach-link", link: "#2059" }, h.ports);
+  expect(bare).toMatchObject({ status: 400, code: "WORK_LINK_INVALID" });
+  expect(bare.error).toContain("owner/repo#2059");
+  const stored = loadPipelines()[0]!;
+  savePipelines([{ ...stored, delivery: { ...stored.delivery!, target: { ...stored.delivery!.target, remote: "https://github.com/acme/widgets.git" } } }]);
+
+  for (const link of ["#2059", "2059", "https://github.com/acme/widgets/issues/2059"]) {
+    const attached = await patchPipeline(created.id, { action: "attach-link", link }, h.ports);
+    expect(attached.error).toBeUndefined();
+  }
+  expect(loadPipelines()[0]!.workLinks).toEqual([{ repository: "acme/widgets", number: 2059, kind: "issue", addedAt: expect.any(String), addedBy: "operator" }]);
+  /* Nothing but the record moved: no host, git or forge call. */
+  expect(h.calls.length).toBe(callsBefore);
+  const again = await patchPipeline(created.id, { action: "attach-link", link: "acme/widgets#2059" }, h.ports);
+  expect(again.unchanged).toBe(true);
+
+  const agent = await patchPipeline(created.id, { action: "attach-link", link: ["PR 12", "other-org/tools#3"] }, h.ports, { kind: "agent", conversationId: "conversation_fixture", role: null } as never);
+  expect(agent.pipeline!.workLinks!.map((link) => [link.repository, link.number, link.kind, link.addedBy])).toEqual([
+    ["acme/widgets", 2059, "issue", "operator"], ["acme/widgets", 12, "pr", "agent"], ["other-org/tools", 3, null, "agent"],
+  ]);
+
+  const closed = await closeAndDrain(created.id, { action: "close" }, h.ports);
+  expect(closed.pipeline!.state).toBe("closed");
+  const detached = await patchPipeline(created.id, { action: "detach-link", link: ["12", "other-org/tools#3", "#2059"] }, h.ports);
+  expect(detached.error).toBeUndefined();
+  expect("workLinks" in loadPipelines()[0]!).toBe(false);
+  expect((await patchPipeline(created.id, { action: "attach-link", link: "0" }, h.ports)).status).toBe(400);
+  expect((await patchPipeline(created.id, { action: "attach-link" }, h.ports)).status).toBe(400);
+});
+
 test("an explicit draft base remains pinned when the draft starts", async () => {
   const h = harness();
   savePipelines([]);

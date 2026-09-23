@@ -675,3 +675,39 @@ state set `LLV_STATE_DIR` to a temp directory. Fixtures use invented
    the existing drivers.
 
 Slices 1 and 2 can land together. Slice 3 depends on them.
+
+## 12. What the build changed (2026-09-23)
+
+Four things the build met that this note did not know. The rest landed as
+written above.
+
+- **A renamed repository.** This repository was renamed on GitHub after its
+  records were written, so a pipeline's remote still carries the old name.
+  `gh pr list --repo <old name>` without `--search` follows the rename, but
+  with `--search "sort:updated-desc"` it answers `[]`. The incremental read in
+  §4.2 step 3 would then fail its overlap check and fall back to a full read on
+  every sweep. The sweep learns the name GitHub answers with from the PR URLs
+  of its first full read, stores it as `canonical` on the cache entry, and
+  searches under that name after that. Once PRs are known, an empty page no
+  longer counts as proof of coverage. Links and URLs use the canonical name, so
+  a pasted URL under the new name and a record under the old name dedupe to
+  one chip.
+- **The header chips sit on their own line** (§6.1). They sit directly under
+  the header line, never inside it. The header line already holds the title,
+  the state chip, the stage note and three buttons. Measured in Chromium with
+  the chips placed inline after `.pstate-chip`, the title collapsed to 0 px at
+  768, 1080 and 1440 px in en and uk, and a "no PR" mark was cut to nothing in
+  a shelf column. On their own line they never take width from the title.
+- **The phone draws every chip, wrapping** (§6.4). It has no "+N". An "Attach
+  PR or issue…" link beside the chips opens the list and the form in a sheet.
+  On measured data the most links a lane carries is three.
+- **The evidence driver could not build** while this was built. `LogFeed`
+  imports a Next.js `"use server"` action, and a plain `bun build` pulled the
+  action's body, with the state directory code, into the browser bundle. #2009
+  landed the same fix on main in parallel: the harness stubs server actions the
+  way Next does. The chip case runs on that harness.
+
+Reads also carry the links. `list_pipelines` compact rows add
+`pr: "#2059 open" | "no PR"` only when there is one. Full and `compact:false`
+rows add `workLinks`. So do `get_pipeline` in both forms and `get_task`
+without `compact`.

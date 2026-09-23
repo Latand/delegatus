@@ -42,6 +42,8 @@ import type { StageSlot } from "../scheme/layout";
 import { humanizeDuration } from "../turnDuration";
 import { pipelineHiddenFromBoard } from "./mobileBoardModel";
 import { RECEIPT_MS, showReceipt, type ReceiptTimers } from "./MobileReceipt";
+import { WorkLinkRow, WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
+import { useWorkLinks } from "@/components/workLinks/workLinksContext";
 import { MobileSheet } from "./MobileSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { useMobileNav, useMobileNavStore } from "./mobileNav";
@@ -394,6 +396,7 @@ export function MobilePipelineScreen({
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const pending = usePendingPipelineAct(acts);
+  const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
   /* The stage-configuration sheet (lane 10). The nav store says a sheet is
      open (§3.3: a sheet creates no history, and back takes it with the
      screen); this says which stage. The pane inside is the desktop's own
@@ -408,6 +411,15 @@ export function MobilePipelineScreen({
     nav.openSheet("stage");
   };
   const sheets: SheetRenderer = (name, close) => {
+    if (name === "links") {
+      return (
+        <MobileSheet name="links" title={t("workLinks.listTitle")} onClose={close}>
+          <div data-mobile2-links-sheet={pipeline.id} className="px-3 pb-3 [&_button]:min-h-11 [&_input]:min-h-11">
+            <WorkLinksPanel target={{ kind: "pipeline", id: pipeline.id }} resolved={links} />
+          </div>
+        </MobileSheet>
+      );
+    }
     if (name !== "stage") return renderSheet?.(name, close) ?? null;
     if (!configStage) return null;
     const slot: StageSlot = {
@@ -500,6 +512,20 @@ export function MobilePipelineScreen({
       renderSheet={sheets}
     >
       <div data-mobile2-pipeline-body className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5 overflow-y-auto overflow-x-hidden pb-3">
+        {/* #2059: the lane's PR and issues, the phone's clickable chips; they
+            wrap under each other rather than squeeze, and the list with the
+            attach form is one sheet away. */}
+        <div data-mobile2-links={pipeline.id} className="mx-3 mt-2.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <WorkLinkRow resolved={links} showNoPr testId={pipeline.id} className="min-w-0" />
+          <button
+            type="button"
+            data-mobile2-links-open={pipeline.id}
+            className="ml-auto inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-2 text-label font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => nav.openSheet("links")}
+          >
+            {t("workLinks.attach")}
+          </button>
+        </div>
         {findings.length && cursorStage ? (
           <div className="mx-3 mt-2.5 rounded-[12px] bg-danger-soft px-3 py-2">
             <VerdictFindings

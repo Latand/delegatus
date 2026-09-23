@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { pipelineWorkLinks } from "@/lib/forge/resolve";
+import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { getPipeline, patchPipeline, type PipelineCloseReport } from "@/lib/pipelines/engine";
 import type { LegacyReviewPreview } from "@/lib/pipelines/legacyReviewDefinition";
@@ -19,7 +21,8 @@ const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review"]);
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED;
+  code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
+    | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT";
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before the action was admitted,
@@ -53,7 +56,7 @@ export async function GET(
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit } | PipelineApiError>> {
+): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit; workLinks?: ResolvedWorkLinks } | PipelineApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   let body: PatchPipelineRequest;
@@ -84,7 +87,7 @@ export async function PATCH(
       ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}),
     }, { status: result.status ?? 400 });
     if (CONTROLLER_ACTIONS.has(body.action)) requestPipelineTick();
-    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}) });
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? { workLinks: pipelineWorkLinks(result.pipeline) } : {}) });
   } catch (error) {
     /* #1766: nothing was admitted, so the same action may be repeated. */
     if (error instanceof StoreBusyBeforeAdmissionError) {

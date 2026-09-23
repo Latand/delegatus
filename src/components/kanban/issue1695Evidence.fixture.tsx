@@ -5,6 +5,7 @@ import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { runFocusTransaction } from "@/components/attention/navigate";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
+import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
@@ -59,7 +60,13 @@ const LOOSE = SCENARIO === "loose";
    chain and on Build → Review with a fail loop that fired, beside the task
    carrying five pipelines and a shelf of long-titled cards. */
 const BALANCE = SCENARIO === "balance";
-const MANY = SCENARIO === "issue1765" || BALANCE;
+/* PR and issue chips: the five pipelines of t-many carry an open PR with two
+   issues, a lane with no PR, a merged PR two lanes share, a closed attempt and
+   a merged fix, so the card aggregates seven links behind "+N"; the longest
+   Inbox title carries an attached draft, so chips are read under the longest
+   titles in the narrowest column. */
+const WORK_LINKS = SCENARIO === "work-links";
+const MANY = SCENARIO === "issue1765" || BALANCE || WORK_LINKS;
 /* #1743: one task whose pipelines exercise the whole identity/edge vocabulary —
    a fail edge fired twice of three, one whose budget is spent, mixed engines,
    all five effort levels, a long uncatalogued model, a stage edited after its
@@ -1020,6 +1027,50 @@ function fixtureStageDigest(stage: Pipeline["stages"][number]): string {
   return hex;
 }
 
+/* The links go through the board's own resolver, over an invented forge
+   cache: the same rules and the same shapes `/api/files` answers with. */
+function fixtureWorkLinks(): FilesWorkLinks {
+  const repository = "acme/atlas";
+  const pr = (number: number, head: string, state: CachedPullRequest["state"], closes: number[] = []): CachedPullRequest => ({
+    number, url: `https://github.com/${repository}/pull/${number}`, headRefName: head, createdAt: iso(7 * 60 * MIN), state, closes, checkedAt: iso(2 * MIN),
+  });
+  const prs = [
+    pr(2201, "pipeline/p-many-pills", "open", [2059, 2060]),
+    pr(2188, "fix/shared-pill-head", "merged"),
+    pr(2170, "pipeline/p-many-collapse", "closed"),
+    pr(2150, "pipeline/p-many-report", "merged", [2045]),
+    pr(2190, "pipeline/p-search", "open", [2044]),
+    /* The lane the phone's queue opens: three chips beside the attach link. */
+    pr(2195, "pipeline/p-links", "draft", [2046, 2047]),
+  ];
+  const view: ForgeRepositoryView = {
+    canonical: repository,
+    completeSince: iso(24 * 60 * MIN),
+    pr: (number) => prs.find((entry) => entry.number === number),
+    byHead: (head) => prs.filter((entry) => entry.headRefName === head),
+    isIssue: () => false,
+  };
+  const cache: ForgeCacheView = { repository: (name) => (name === repository ? view : null) };
+  const delivered = (lane: Pipeline) => ({
+    ...lane,
+    delivery: { target: { repository: PROJECT, remote: `https://github.com/${repository}.git`, branch: `refs/heads/${lane.id === "p-many-pill" || lane.id === "p-many-collapse" ? "fix/shared-pill-head" : lane.branch}` } },
+  } as Pipeline);
+  const out: FilesWorkLinks = { pipelines: {}, tasks: {} };
+  const byTask = new Map<string, ResolvedWorkLinks[]>();
+  for (const lane of pipelines) {
+    const resolved = resolvePipelineLinks(delivered(lane), repository, cache);
+    if (resolved.links.length || resolved.noPr) out.pipelines[lane.id] = resolved;
+    for (const taskId of lane.taskIds) byTask.set(taskId, [...(byTask.get(taskId) ?? []), resolved]);
+  }
+  for (const entry of tasks) {
+    const own = entry.id === "t-longtitle" ? { workLinks: [{ repository, number: 2210, kind: "pr" as const, addedAt: iso(MIN), addedBy: "operator" as const }] } : {};
+    const resolved = resolveTaskLinks(own, byTask.get(entry.id) ?? [], cache);
+    if (resolved.links.length) out.tasks[entry.id] = resolved;
+  }
+  return out;
+}
+const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
+
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
@@ -1053,7 +1104,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
         tasks,
       };
-    const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } } });
+    const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } }, ...(workLinks ? { workLinks } : {}) });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }

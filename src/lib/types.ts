@@ -437,6 +437,8 @@ export interface FilesResponse {
   pipelinesError?: string;
   workflows: Workflow[];
   tasks: BoardTask[];
+  /** Resolved PR and issue links of the carried pipelines and tasks (#2059). */
+  workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
   systemHealth: {
     tmux: TmuxEndpointHealth;
     registry?: Omit<
