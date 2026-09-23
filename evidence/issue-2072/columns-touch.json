@@ -14,7 +14,7 @@
       "afterLeft": "blocked",
       "afterRight": "assigned",
       "vertical": {
-        "scrollTop": 275,
+        "scrollTop": 274,
         "active": "assigned",
         "sheet": false,
         "before": 0
@@ -63,7 +63,7 @@
       "afterLeft": "blocked",
       "afterRight": "assigned",
       "vertical": {
-        "scrollTop": 272,
+        "scrollTop": 275,
         "active": "assigned",
         "sheet": false,
         "before": 0
