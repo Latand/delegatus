@@ -1,0 +1,311 @@
+{
+  "results": [
+    {
+      "key": "390x667-dark-en",
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "following": null,
+      "anchoring": {
+        "mounted": true,
+        "before": 1199,
+        "after": 1199,
+        "rowMoved": 0
+      },
+      "away": {
+        "strip": {
+          "x": 1,
+          "y": 501.25,
+          "width": 388,
+          "height": 44
+        },
+        "control": {
+          "x": 155.03125,
+          "y": 501.75,
+          "width": 79.9375,
+          "height": 44
+        },
+        "pill": {
+          "x": 159.03125,
+          "y": 507.75,
+          "width": 71.9375,
+          "height": 32
+        },
+        "feed": {
+          "x": 1,
+          "y": 57,
+          "width": 388,
+          "height": 444.25
+        },
+        "composerTop": 576,
+        "inkOnStrip": [],
+        "controlsCrossing": [],
+        "overflowX": 0,
+        "label": "down"
+      },
+      "back": {
+        "strip": false,
+        "fromBottom": 0
+      }
+    },
+    {
+      "key": "390x667-light-en",
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "scheme": "light",
+      "lang": "en",
+      "following": null,
+      "anchoring": {
+        "mounted": true,
+        "before": 1199,
+        "after": 1199,
+        "rowMoved": 0
+      },
+      "away": {
+        "strip": {
+          "x": 1,
+          "y": 501.25,
+          "width": 388,
+          "height": 44
+        },
+        "control": {
+          "x": 155.03125,
+          "y": 501.75,
+          "width": 79.9375,
+          "height": 44
+        },
+        "pill": {
+          "x": 159.03125,
+          "y": 507.75,
+          "width": 71.9375,
+          "height": 32
+        },
+        "feed": {
+          "x": 1,
+          "y": 57,
+          "width": 388,
+          "height": 444.25
+        },
+        "composerTop": 576,
+        "inkOnStrip": [],
+        "controlsCrossing": [],
+        "overflowX": 0,
+        "label": "down"
+      },
+      "back": {
+        "strip": false,
+        "fromBottom": 0
+      }
+    },
+    {
+      "key": "430x735-dark-en",
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "following": null,
+      "anchoring": {
+        "mounted": true,
+        "before": 1123,
+        "after": 1123,
+        "rowMoved": 0
+      },
+      "away": {
+        "strip": {
+          "x": 1,
+          "y": 569.25,
+          "width": 428,
+          "height": 44
+        },
+        "control": {
+          "x": 175.03125,
+          "y": 569.75,
+          "width": 79.9375,
+          "height": 44
+        },
+        "pill": {
+          "x": 179.03125,
+          "y": 575.75,
+          "width": 71.9375,
+          "height": 32
+        },
+        "feed": {
+          "x": 1,
+          "y": 57,
+          "width": 428,
+          "height": 512.25
+        },
+        "composerTop": 644,
+        "inkOnStrip": [],
+        "controlsCrossing": [],
+        "overflowX": 0,
+        "label": "down"
+      },
+      "back": {
+        "strip": false,
+        "fromBottom": 0
+      }
+    },
+    {
+      "key": "390x667-dark-uk",
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "scheme": "dark",
+      "lang": "uk",
+      "following": null,
+      "anchoring": {
+        "mounted": true,
+        "before": 1199,
+        "after": 1199,
+        "rowMoved": 0
+      },
+      "away": {
+        "strip": {
+          "x": 1,
+          "y": 501.25,
+          "width": 388,
+          "height": 44
+        },
+        "control": {
+          "x": 156.84375,
+          "y": 501.75,
+          "width": 76.296875,
+          "height": 44
+        },
+        "pill": {
+          "x": 160.84375,
+          "y": 507.75,
+          "width": 68.296875,
+          "height": 32
+        },
+        "feed": {
+          "x": 1,
+          "y": 57,
+          "width": 388,
+          "height": 444.25
+        },
+        "composerTop": 576,
+        "inkOnStrip": [],
+        "controlsCrossing": [],
+        "overflowX": 0,
+        "label": "вниз"
+      },
+      "back": {
+        "strip": false,
+        "fromBottom": 0
+      }
+    },
+    {
+      "key": "390x667-light-uk",
+      "viewport": {
+        "width": 390,
+        "height": 667
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "following": null,
+      "anchoring": {
+        "mounted": true,
+        "before": 1199,
+        "after": 1199,
+        "rowMoved": 0
+      },
+      "away": {
+        "strip": {
+          "x": 1,
+          "y": 501.25,
+          "width": 388,
+          "height": 44
+        },
+        "control": {
+          "x": 156.84375,
+          "y": 501.75,
+          "width": 76.296875,
+          "height": 44
+        },
+        "pill": {
+          "x": 160.84375,
+          "y": 507.75,
+          "width": 68.296875,
+          "height": 32
+        },
+        "feed": {
+          "x": 1,
+          "y": 57,
+          "width": 388,
+          "height": 444.25
+        },
+        "composerTop": 576,
+        "inkOnStrip": [],
+        "controlsCrossing": [],
+        "overflowX": 0,
+        "label": "вниз"
+      },
+      "back": {
+        "strip": false,
+        "fromBottom": 0
+      }
+    },
+    {
+      "key": "430x735-dark-uk",
+      "viewport": {
+        "width": 430,
+        "height": 735
+      },
+      "scheme": "dark",
+      "lang": "uk",
+      "following": null,
+      "anchoring": {
+        "mounted": true,
+        "before": 1123,
+        "after": 1123,
+        "rowMoved": 0
+      },
+      "away": {
+        "strip": {
+          "x": 1,
+          "y": 569.25,
+          "width": 428,
+          "height": 44
+        },
+        "control": {
+          "x": 176.84375,
+          "y": 569.75,
+          "width": 76.296875,
+          "height": 44
+        },
+        "pill": {
+          "x": 180.84375,
+          "y": 575.75,
+          "width": 68.296875,
+          "height": 32
+        },
+        "feed": {
+          "x": 1,
+          "y": 57,
+          "width": 428,
+          "height": 512.25
+        },
+        "composerTop": 644,
+        "inkOnStrip": [],
+        "controlsCrossing": [],
+        "overflowX": 0,
+        "label": "вниз"
+      },
+      "back": {
+        "strip": false,
+        "fromBottom": 0
+      }
+    }
+  ],
+  "failures": []
+}
