@@ -1,3 +1,7 @@
+/* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
+   environment (docs/design/rename-delegatus.md §5). */
+import "./envAlias.mjs";
+
 import { spawn } from "node:child_process";
 import { constants, existsSync } from "node:fs";
 import { access, chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -5,6 +9,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
+import { appDirIn } from "./appDir.mjs";
 import { viewerChildProcessOptions } from "./server-runtime.mjs";
 
 /* Dependency-free localization, mirroring bin/cli.mjs: English by default,
@@ -425,7 +430,7 @@ function configRoot() {
 }
 
 function tokenPath() {
-  return join(configRoot(), "agent-log-viewer", "token");
+  return join(appDirIn(configRoot()), "token");
 }
 
 /**
@@ -434,7 +439,7 @@ function tokenPath() {
  * one-button phone step, beside the token.
  */
 export function phoneAccessFlagPath() {
-  return join(configRoot(), "agent-log-viewer", "phone-access");
+  return join(appDirIn(configRoot()), "phone-access");
 }
 
 export async function readPhoneAccessFlag() {

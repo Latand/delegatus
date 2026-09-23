@@ -264,7 +264,7 @@ on a per-deploy candidate port behind the runtime host:
   the Viewer exits with status 78 rather than serve the live mapping ungated;
   fix the key file or remove the `phone-access` file to turn phone access off.
 
-## Agents reach the Viewer MCP tools over HTTP
+## Agents reach the Delegatus MCP tools over HTTP
 
 By default every spawned agent starts its own `bin/mcp-server.mjs` over stdio,
 a Bun process (plus a file-scan worker once it reads transcripts) per agent.
@@ -299,14 +299,14 @@ agent side: a call made while the releases swap fails, and the next one
 reaches the new release. Agents already running keep the transport they were
 launched with. Removing the flag alone takes new spawns back to stdio; run the
 script with `LLV_MCP_TRANSPORT=stdio` to register the launcher again for Codex
-sessions started outside the Viewer.
+sessions started outside Delegatus.
 
 A Viewer launch stays on stdio whatever the flag says when the shared endpoint
 could not serve it: its environment carries no capability (a Claude command
 pasted into a terminal by the attach/resume flow, a host the registry cannot
 match), or `LLV_TOKEN` is configured and the local entry is not trusted. A Codex
-session started outside the Viewer with an account whose registration the
-script removed has no Viewer tools until the script is run with
+session started outside Delegatus with an account whose registration the
+script removed has no Delegatus tools until the script is run with
 `LLV_MCP_TRANSPORT=stdio`.
 
 The gate is read at each launch from the running Viewer, so a key put in place
@@ -329,7 +329,7 @@ The installation command requires `--install` and a later operator approval. It 
 
 ## Attach to a Viewer pane
 
-Use the attach command copied by the Viewer for a live pane. It includes the configured endpoint and the pane's current display target. For example:
+Use the attach command Delegatus copies for a live pane. It includes the configured endpoint and the pane's current display target. For example:
 
 ```bash
 TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -t 'agents:2.0'
@@ -353,7 +353,7 @@ LLV_TMUX_TMPDIR=/run/user/1000/agent-log-viewer \
 
 External-host mode fails closed when `agents` cannot be found through the dedicated endpoint. It never creates a replacement tmux server from the Viewer container. The migration preflight records a nonce-bound approval token; the later operator runbook must checkpoint the root, verify its successor uses the same engine-native thread, and roll back on any failed verification.
 
-If marker and endpoint state drift apart, `/api/files` reports degraded tmux health and the Viewer displays an operator alert. Delivery continues through the configured endpoint so a stale marker cannot disable every legacy pane.
+If marker and endpoint state drift apart, `/api/files` reports degraded tmux health and Delegatus displays an operator alert. Delivery continues through the configured endpoint so a stale marker cannot disable every legacy pane.
 
 The `scripts/e2e-viewer-replacement.ts` helper provides prepare and verify snapshots for that later runbook. Its normal modes only inspect state. It does not recreate a container, send a root message, or kill a pane.
 

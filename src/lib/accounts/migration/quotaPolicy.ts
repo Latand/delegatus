@@ -10,6 +10,9 @@ export const AUTO_BALANCE_RETURN_ERC = 35;
 export const AUTO_BALANCE_SAMPLE_GAP_MS = 60 * 1000;
 export const AUTO_BALANCE_FRESH_MS = 5 * 60 * 1000;
 
+/** Engines with durable quota observations. Migration remains two-engine. */
+export type QuotaEngine = "claude" | "codex" | "copilot";
+
 /** Usage-limit reset credits an account holds (issue #1373), as the Codex
     app-server reports them beside the rate limits. `expiresAt` is the soonest
     expiry among the available credits, Unix seconds, or null when none expires. */
@@ -19,7 +22,7 @@ export interface QuotaResetCredits {
 }
 
 export interface QuotaObservation {
-  engine: MigrationEngine;
+  engine: QuotaEngine;
   accountId: string;
   authenticated: boolean;
   limits: EngineLimits | null;
@@ -50,7 +53,7 @@ export interface EffectiveRemainingOptions {
     not evidence about this spawn, and treating it as one refused Sonnet and
     Haiku launches the provider would have accepted. */
 export function gatingWindows(
-  engine: MigrationEngine,
+  engine: QuotaEngine,
   limits: EngineLimits | null | undefined,
   model?: string | null,
 ): { window: QuotaWindowKey; value: LimitWindow | null | undefined }[] {

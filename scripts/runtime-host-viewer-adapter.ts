@@ -9,6 +9,7 @@ import "../src/lib/state/owner/deployAdapter";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { appDirIn } from "../bin/appDir.mjs";
 import { processIdentityStatus } from "../src/lib/processIdentity";
 
 import type {
@@ -53,7 +54,7 @@ import { McpHealthProbeAdmissions } from "../src/runtime-host/mcpHealthProbeAdmi
 import type { McpHealthProbeAdmissionConsumer } from "../src/runtime-host/mcpHealthProbeAdmissionChannel";
 import { VIEWER_CONTROL_TOKEN_ENV } from "../src/lib/mcp/controlEndpoint";
 import { probeControlUrl, probeMcpRuntime } from "../src/runtime-host/mcpRuntimeProbe";
-import { McpRuntimeReleaseStore } from "../src/runtime-host/mcpRuntimeRelease";
+import { McpRuntimeReleaseStore, stableMcpRuntimeRoot } from "../src/runtime-host/mcpRuntimeRelease";
 import {
   clearRuntimeHostHandoffIntent,
   readRuntimeHostHandoffIntent,
@@ -105,7 +106,7 @@ import {
 import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 
 const defaultConfigDir = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "/home/user", ".config");
-const stateDir = process.env.LLV_STATE_DIR || path.join(defaultConfigDir, "agent-log-viewer", "state");
+const stateDir = process.env.LLV_STATE_DIR || path.join(appDirIn(defaultConfigDir), "state");
 const deploymentDir = path.join(stateDir, "deployments");
 const mirrorDir = path.join(deploymentDir, "canonical.git");
 const targetFile = process.env.LLV_VIEWER_DEPLOY_TARGET || path.join(stateDir, "viewer-release.json");
@@ -113,7 +114,7 @@ const canonicalRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://gith
 const runtimeSocket = process.env.LLV_RUNTIME_HOST_SOCKET || path.join(stateDir, "runtime-host.sock");
 const stableEndpoint = `http://127.0.0.1:${Number(process.env.LLV_VIEWER_PORT || 8898)}`;
 const runtimeHostImageTag = process.env.LLV_RUNTIME_HOST_IMAGE_TAG || "agent-log-viewer:node22";
-const mcpRuntimeRoot = process.env.LLV_MCP_RUNTIME_ROOT || path.join(process.env.HOME || "/home/user", ".agents", "tools", "llv-mcp-runtime");
+const mcpRuntimeRoot = stableMcpRuntimeRoot();
 const mcpRuntimeStore = new McpRuntimeReleaseStore({ stateDir, stableRuntimeRoot: mcpRuntimeRoot });
 const deploymentPackageRoot = process.env.LLV_DEPLOYMENT_PACKAGE_ROOT || path.resolve(import.meta.dir, "..");
 const releaseSwitchIntentFile = path.join(stateDir, "viewer-release-switch-intent.json");

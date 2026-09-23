@@ -163,3 +163,31 @@ test("slice 3: the Dictation menu mode shows the Voice step alone, without the s
   flushSync(() => root.unmount());
   host.remove();
 });
+
+/* Delegatus rename, slice 2: the guide names the product Delegatus in both
+   languages, in its title and on the tour step that says what the product is,
+   and the former name is gone from what it renders. */
+test("the guide's title and tour heading name Delegatus, in en and in uk", async () => {
+  const { setLocale } = await import("@/lib/i18n");
+  const cases = [
+    { locale: "en" as const, title: "Set up Delegatus", heading: "What Delegatus is" },
+    { locale: "uk" as const, title: "Налаштування Delegatus", heading: "Що таке Delegatus" },
+  ];
+  try {
+    for (const { locale, title, heading } of cases) {
+      setLocale(locale);
+      const host = document.createElement("div");
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="tour" marker={null} onClose={() => {}} />));
+      const panel = host.querySelector<HTMLElement>("[role=dialog]")!;
+      expect(panel.getAttribute("aria-label")).toBe(title);
+      expect(panel.querySelector("h2")?.textContent).toBe(heading);
+      expect(host.textContent).not.toContain("Agent Log Viewer");
+      flushSync(() => root.unmount());
+      host.remove();
+    }
+  } finally {
+    setLocale("en");
+  }
+});

@@ -7,7 +7,15 @@ import os from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 import type { ProcessIdentity } from "@/lib/agent/registry";
-import { resolveClaudeMcpServers, viewerMcpServerEntry, VIEWER_SPAWN_CAPABILITY_ENV, type ViewerMcpServerEntry } from "@/lib/agent/spawnPolicy";
+import {
+  resolveClaudeMcpServers,
+  viewerMcpHttpUrl,
+  viewerMcpServerEntry,
+  viewerMcpTransportForLaunch,
+  VIEWER_SPAWN_CAPABILITY_ENV,
+  VIEWER_SPAWN_CAPABILITY_HEADER,
+  type ViewerMcpServerEntry,
+} from "@/lib/agent/spawnPolicy";
 import { grantedMcpServers } from "@/lib/agent/mcpAllowlist";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
@@ -30,6 +38,7 @@ import {
   type RuntimeEventStore,
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
+import { readCopilotTranscriptQuotaSnapshot } from "@/lib/limits/copilotTranscriptLimits";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { copilotModelsFromConfigOptions, writeCopilotModelCatalog } from "@/lib/agent/copilotModels";
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
@@ -98,8 +107,9 @@ export interface CopilotAcpHostOptions {
       environment can never reach a spawned Copilot. */
   providerEnv?: Record<string, string>;
   /** The Viewer MCP server definition; null attaches none. Defaults to the
-      package's own launcher. */
-  viewerMcpServer?: ViewerMcpServerEntry | null;
+      shared endpoint when this launch takes the HTTP transport, else to the
+      launcher `viewerMcpServerEntry` resolves. */
+  viewerMcpServer?: CopilotViewerMcpServer | null;
   releaseCleanup?: () => void;
   requestTimeoutMs?: number;
   /** Bound on the wait for a cancelled `session/prompt` to return. */
@@ -167,11 +177,24 @@ export function copilotChildEnv(
   return env;
 }
 
+/** A stdio launcher, or the Viewer's shared HTTP endpoint. */
+export type CopilotViewerMcpServer = ViewerMcpServerEntry | { url: string };
+
+/** The Viewer server for one launch, from the environment its agent runs
+    with: the shared endpoint when `viewerMcpTransportForLaunch` admits HTTP,
+    the resolved stdio launcher otherwise. */
+export function copilotViewerMcpServer(launchEnv: Readonly<Record<string, string | undefined>>): CopilotViewerMcpServer {
+  return viewerMcpTransportForLaunch(launchEnv) === "http" ? { url: viewerMcpHttpUrl() } : viewerMcpServerEntry();
+}
+
 /** The `--additional-mcp-config` document. ACP `session/new` rejects stdio
     servers, so the Viewer MCP attaches at process start instead. The spawn
-    capability rides the server's own `env` table, never a command line. */
+    capability rides the server's own `env` table, never a command line; over
+    HTTP it rides the same header Claude sends. The value is written into the
+    0600 file itself, because the capability is removed from the child's
+    environment and no reference to it could resolve there. */
 export function copilotMcpConfig(
-  viewer: ViewerMcpServerEntry | null,
+  viewer: CopilotViewerMcpServer | null,
   capability: string | null,
   registered: Record<string, unknown> = {},
   allowlist: readonly string[] = ["viewer"],
@@ -197,13 +220,20 @@ export function copilotMcpConfig(
     }
   }
   if (!viewer || !granted.has("viewer")) return { mcpServers };
-  mcpServers.viewer = {
-    type: "local",
-    command: viewer.command,
-    args: viewer.args,
-    tools: ["*"],
-    env: { ...viewer.env, ...(capability ? { [VIEWER_SPAWN_CAPABILITY_ENV]: capability } : {}) },
-  };
+  mcpServers.viewer = "url" in viewer
+    ? {
+        type: "http",
+        url: viewer.url,
+        headers: capability ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {},
+        tools: ["*"],
+      }
+    : {
+        type: "local",
+        command: viewer.command,
+        args: viewer.args,
+        tools: ["*"],
+        env: { ...viewer.env, ...(capability ? { [VIEWER_SPAWN_CAPABILITY_ENV]: capability } : {}) },
+      };
   return { mcpServers };
 }
 
@@ -376,7 +406,7 @@ export class CopilotAcpHost implements EngineHost {
     let child: ChildProcessWithoutNullStreams;
     try {
       const viewer = options.viewerMcpServer === undefined
-        ? (options.mcpServers ?? ["viewer"]).includes("viewer") ? viewerMcpServerEntry() : null
+        ? (options.mcpServers ?? ["viewer"]).includes("viewer") ? copilotViewerMcpServer(options.env ?? {}) : null
         : options.viewerMcpServer;
       {
         const registered = resolveClaudeMcpServers(os.homedir(), options.cwd, path.join(os.homedir(), ".claude.json"));
@@ -530,6 +560,19 @@ export class CopilotAcpHost implements EngineHost {
       },
       (error) => {
         if (firstPrompt) this.firstPromptFailure = safeError(error);
+        const message = safeError(error);
+        // The CLI has not yet supplied a real exhaustion example; retain this
+        // conservative match only as evidence capture, never as launch policy.
+        if (/quota|rate.?limit|limit (reached|exceeded)|exhausted|premium request/i.test(message)) {
+          this.emit({ kind: "limits", snapshot: { engine: "copilot", exhausted: true, message: message.slice(0, 300) } });
+          const rpcCode = (error as Error & { rpcCode?: unknown }).rpcCode;
+          const quotaSnapshots = readCopilotTranscriptQuotaSnapshot(path.join(this.options.copilotHome, "session-state"));
+          console.warn("[copilot] possible quota rejection", JSON.stringify({
+            code: typeof rpcCode === "number" ? rpcCode : null,
+            message: message.slice(0, 300),
+            quotaSnapshots,
+          }));
+        }
         this.finishTurn(running, this.cancelledTurns.has(turnId) ? "interrupted" : "error");
         settle();
       },
@@ -811,7 +854,11 @@ export class CopilotAcpHost implements EngineHost {
       this.pending.delete(id as number);
       if (pending.timer) clearTimeout(pending.timer);
       const error = record(message.error);
-      if (error) pending.reject(new Error(`Copilot ${pending.method} failed: ${stringField(error, "message") ?? "error"}`));
+      if (error) {
+        const failure = new Error(`Copilot ${pending.method} failed: ${stringField(error, "message") ?? "error"}`) as Error & { rpcCode?: unknown };
+        failure.rpcCode = error.code;
+        pending.reject(failure);
+      }
       else pending.resolve(message.result);
       return;
     }

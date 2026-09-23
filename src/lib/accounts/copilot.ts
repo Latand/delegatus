@@ -18,8 +18,9 @@ import type { AccountContext } from "./contracts";
  * operator's own `$COPILOT_HOME` or `~/.copilot`: it is scanned when it
  * exists and launched into only when the operator selects it.
  *
- * Authentication metadata is read from config.json. Copilot keeps the token
- * in the desktop keyring, so this projection never reads or exposes it.
+ * Authentication and quota are read from the account's own config and
+ * transcript. The token itself stays in the desktop keyring and is never read
+ * by this module.
  */
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -34,6 +35,29 @@ export interface CopilotAccount {
   sessionStateDir: string;
   createdAt: number;
   auth: "signed_in" | "signed_out" | "unknown";
+}
+
+export interface CopilotSignedInIdentity { host: string; login: string }
+
+/** Return the listed last user from the CLI config without reading token data. */
+export function copilotSignedInIdentity(home: string): CopilotSignedInIdentity | null {
+  try {
+    const text = fs.readFileSync(path.join(home, "config.json"), "utf8").replace(/^\s*\/\/.*(?:\r?\n|$)/gm, "");
+    const parsed = JSON.parse(text) as {
+      lastLoggedInUser?: { host?: unknown; login?: unknown };
+      loggedInUsers?: Array<{ host?: unknown; login?: unknown }>;
+    };
+    const last = parsed.lastLoggedInUser;
+    if (typeof last?.host !== "string" || typeof last.login !== "string" || !last.login.trim()) return null;
+    return Array.isArray(parsed.loggedInUsers) && parsed.loggedInUsers.some((user) => user?.host === last.host && user.login === last.login)
+      ? { host: last.host, login: last.login }
+      : null;
+  } catch { return null; }
+}
+
+/** The login recorded by the Copilot CLI, without exposing token material. */
+export function copilotSignedInUser(home: string): string | null {
+  return copilotSignedInIdentity(home)?.login ?? null;
 }
 
 interface StoredAccount { id: string; label: string; createdAt: number }
@@ -63,25 +87,6 @@ function registryPath(): string {
 
 function managedHome(id: string): string {
   return path.join(copilotAccountsRoot(), id);
-}
-
-export interface CopilotSignedInUser { host: string; login: string }
-
-/** Return the account marker Copilot CLI writes after login, without touching
-    the keyring or treating a partial config file as a sign-in. */
-export function copilotSignedInUser(home: string): CopilotSignedInUser | null {
-  try {
-    const raw = fs.readFileSync(path.join(home, "config.json"), "utf8").replace(/^\s*\/\/.*$/gm, "");
-    const config = JSON.parse(raw) as { lastLoggedInUser?: unknown; loggedInUsers?: unknown };
-    const last = config.lastLoggedInUser;
-    if (!last || typeof last !== "object" || Array.isArray(last)) return null;
-    const user = last as Record<string, unknown>;
-    if (typeof user.host !== "string" || !user.host || typeof user.login !== "string" || !user.login) return null;
-    if (!Array.isArray(config.loggedInUsers)) return null;
-    const included = config.loggedInUsers.some((item) => item && typeof item === "object" && !Array.isArray(item)
-      && (item as Record<string, unknown>).host === user.host && (item as Record<string, unknown>).login === user.login);
-    return included ? { host: user.host, login: user.login } : null;
-  } catch { return null; }
 }
 
 export function copilotConfigCheckedAt(home: string): string | null {

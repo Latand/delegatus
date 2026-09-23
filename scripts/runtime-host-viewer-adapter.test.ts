@@ -725,7 +725,9 @@ function successorPackage(prefix: string, options: { revision: string; bundle?: 
   fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
   fs.mkdirSync(state, { recursive: true });
   fs.copyFileSync(path.join(root, "bin", "mcp-server.mjs"), path.join(packageRoot, "bin", "mcp-server.mjs"));
-  fs.copyFileSync(path.join(root, "bin", "server-runtime.mjs"), path.join(packageRoot, "bin", "server-runtime.mjs"));
+  for (const name of ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs"]) {
+    fs.copyFileSync(path.join(root, "bin", name), path.join(packageRoot, "bin", name));
+  }
   if (options.bundle === undefined) fs.copyFileSync(path.join(root, "dist", "mcp-server.mjs"), path.join(packageRoot, "dist", "mcp-server.mjs"));
   else fs.writeFileSync(path.join(packageRoot, "dist", "mcp-server.mjs"), options.bundle);
   fs.copyFileSync(path.join(root, "package.json"), path.join(packageRoot, "package.json"));
@@ -915,6 +917,8 @@ test("candidate build stages the matching MCP package and stable dispatcher", as
   fs.mkdirSync(path.join(template, "bin"), { recursive: true });
   fs.writeFileSync(path.join(template, "bin", "mcp-server.mjs"), "process.stdout.write('dispatcher\\n');\n");
   fs.writeFileSync(path.join(template, "bin", "server-runtime.mjs"), "export const runtime = true;\n");
+  fs.writeFileSync(path.join(template, "bin", "appDir.mjs"), "export const appDir = true;\n");
+  fs.writeFileSync(path.join(template, "bin", "envAlias.mjs"), "export const envAlias = true;\n");
   fs.writeFileSync(path.join(template, "package.json"), JSON.stringify({
     name: "mcp-build-fixture",
     type: "module",

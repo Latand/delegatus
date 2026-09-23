@@ -29,6 +29,7 @@ import "../src/lib/state/owner/tool";
 import fs from "node:fs";
 import path from "node:path";
 
+import { appDirIn } from "../bin/appDir.mjs";
 import type { ViewerReleaseIdentity } from "../src/lib/runtime/contracts";
 import { ensureCanonicalMirror, resolveCanonicalRevision } from "../src/runtime-host/canonicalMirror";
 import {
@@ -56,7 +57,7 @@ import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 const USAGE = "usage: bun scripts/bootstrap-runtime-host.ts [origin/main|<40-hex sha>] [--stage|--hand-over]";
 
 const defaultConfigDir = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "", ".config");
-const stateDir = process.env.LLV_STATE_DIR || path.join(defaultConfigDir, "agent-log-viewer", "state");
+const stateDir = process.env.LLV_STATE_DIR || path.join(appDirIn(defaultConfigDir), "state");
 const deploymentDir = path.join(stateDir, "deployments");
 const mirrorDir = path.join(deploymentDir, "canonical.git");
 const canonicalRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/live-log-viewer-next.git";

@@ -133,7 +133,7 @@ test("#1321: a designated seat OF another project is refused before any deployme
   expect(error.details).toMatchObject({ code: "deploy_foreign_project", revision: SHA });
   /* It learns what this tool deploys, not "revision not found" from a mirror it
      should never have reached. */
-  expect(error.message).toContain("Agent Log Viewer");
+  expect(error.message).toContain("the Delegatus application that serves this MCP");
   expect(posted).toEqual([]);
 });
 

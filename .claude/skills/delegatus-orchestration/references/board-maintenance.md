@@ -6,19 +6,19 @@ with the report defined below.
 
 ## Safety contract
 
-Maintenance is reversible Viewer metadata work.
+Maintenance is reversible Delegatus metadata work.
 
 - Never delete a transcript, branch, worktree, pull request, flow, pipeline, or task.
 - Never interrupt, kill, resume, message, merge, deploy, or restart a process or service.
 - Never run a task, flow, pipeline, lifecycle, or runtime action.
 - Preserve every active conversation when its title, role, or association is unclear.
 - Hide a card only after the supersession proof in this runbook succeeds.
-- Use Viewer APIs for mutations. Direct edits to state files, transcript files, or registry stores
+- Use Delegatus APIs for mutations. Direct edits to state files, transcript files, or registry stores
   are forbidden.
 - Record the previous value and the successful read-back for every mutation so an operator can
   reverse it.
 - Stop the affected item and report ambiguity whenever evidence supports multiple targets.
-- Return `needs_decision` when a required repair has no supported Viewer API or would create,
+- Return `needs_decision` when a required repair has no supported Delegatus API or would create,
   start, stop, or delete a task, flow, pipeline, process, or worktree.
 
 ## 1. Fix the scope
@@ -41,7 +41,7 @@ Start from the operator's current view.
 more. Batch every visible path before declaring the visible layer inspected.
 
 For a large set, the orchestrator may delegate read-only inventory to one fresh, fast model
-through the Viewer's normal visible delegation path. Give it bounded transcript excerpts and the
+through Delegatus's normal visible delegation path. Give it bounded transcript excerpts and the
 current metadata read models. It may propose titles, association repairs, and supersession groups.
 It must perform zero mutations. The orchestrator validates every proposal and owns every write.
 
@@ -51,7 +51,7 @@ project grouping.
 
 ## 2. Build the evidence inventory
 
-Read these Viewer surfaces before changing anything:
+Read these Delegatus surfaces before changing anything:
 
 - `viewer.snapshot` for operator-visible order, attention, activity, and bounded transcript text;
 - `GET /api/files?project=<project>` for canonical path, conversation identity, title revision,
@@ -59,7 +59,7 @@ Read these Viewer surfaces before changing anything:
 - `GET /api/board?project=<project>` for the revision fence and hidden/manual/expanded state;
 - `GET /api/flows`, `GET /api/pipelines`, and `GET /api/tasks` for durable associations, rounds,
   exact reviewed heads, assignments, and current container state;
-- GitHub pull-request state only when transcript and Viewer metadata identify a repository and PR.
+- GitHub pull-request state only when transcript and Delegatus metadata identify a repository and PR.
 
 For each in-scope card, record an internal inventory row with:
 
@@ -82,7 +82,7 @@ Use the strongest available evidence:
 
 1. durable flow or pipeline membership, stage attempt, exact review head, and recorded lineage;
 2. explicit review marker/verdict, PR URL, branch, commit, or worktree evidence corroborated by
-   current Viewer or GitHub state;
+   current Delegatus or GitHub state;
 3. durable task assignment and task–pipeline membership;
 4. bounded transcript statements corroborated by another current source;
 5. prompt or current-title inference.
@@ -154,7 +154,7 @@ The supersession proof must name the surviving card, the superseded card, matchi
 review heads, both terminal/activity states, and the evidence source. Any missing field makes the
 pair ambiguous.
 
-When Viewer already folds a flow or pipeline reviewer into its durable round/stage group and the
+When Delegatus already folds a flow or pipeline reviewer into its durable round/stage group and the
 card is absent from the rendered board, preserve that state. A second board hide would add no
 compaction value.
 
@@ -203,7 +203,7 @@ when uniqueness is unavailable.
 
 ### Supported repairs
 
-| Repair | Viewer mechanism | Required proof and verification |
+| Repair | Delegatus mechanism | Required proof and verification |
 |---|---|---|
 | Stale title after a PR/workstream change | `PATCH /api/session/title` | Chronological owned-PR inventory identifies the current/final outcome; verify in `/api/files`. |
 | Superseded card visibility | `PATCH /api/board` with `close`; `restore` is the rollback | Full review-lane supersession proof; verify `prefs.hidden`. |
@@ -219,7 +219,7 @@ must never be combined with `start`, `resume`, `retry-stage`, flow actions, deli
 
 ### Unsupported repairs
 
-The current Viewer has no general safe maintenance mutation for:
+Delegatus currently has no general safe maintenance mutation for:
 
 - a generic PR↔conversation association record;
 - arbitrary reviewer↔implementer or reviewer↔review-subject lineage;

@@ -25,9 +25,10 @@ test("staging mode pins the state dir to its own state-staging default", () => {
   process.env.XDG_CONFIG_HOME = xdg;
   process.env.LLV_STAGING = "1";
   delete process.env.LLV_STATE_DIR;
-  expect(stateDir()).toBe(path.join(xdg, "agent-log-viewer", "state-staging"));
+  /* A fresh config root is a new install, so the app dir is `delegatus`. */
+  expect(stateDir()).toBe(path.join(xdg, "delegatus", "state-staging"));
   expect(statePath("agent-registry.json"))
-    .toBe(path.join(xdg, "agent-log-viewer", "state-staging", "agent-registry.json"));
+    .toBe(path.join(xdg, "delegatus", "state-staging", "agent-registry.json"));
 });
 
 test("staging mode never migrates or copies prod legacy state", () => {
@@ -40,6 +41,7 @@ test("staging mode never migrates or copies prod legacy state", () => {
      Staging resolution must be pure: no dir creation, no sentinel, no copy. */
   expect(fs.existsSync(resolved)).toBe(false);
   expect(fs.existsSync(path.join(xdg, "agent-log-viewer", "state"))).toBe(false);
+  expect(fs.existsSync(path.join(xdg, "delegatus", "state"))).toBe(false);
 });
 
 test("staging mode refuses the production state dir", () => {
@@ -49,6 +51,8 @@ test("staging mode refuses the production state dir", () => {
   process.env.LLV_STATE_DIR = path.join(xdg, "agent-log-viewer", "state");
   expect(() => stateDir()).toThrow(/staging/i);
   process.env.LLV_STATE_DIR = path.join(xdg, "agent-log-viewer", "state", "");
+  expect(() => stateDir()).toThrow(/staging/i);
+  process.env.LLV_STATE_DIR = path.join(xdg, "delegatus", "state");
   expect(() => stateDir()).toThrow(/staging/i);
 });
 
@@ -73,6 +77,6 @@ test("staging mode keeps the inbox inside the staging state dir", () => {
   process.env.XDG_CONFIG_HOME = xdg;
   process.env.LLV_STAGING = "1";
   delete process.env.LLV_STATE_DIR;
-  expect(inboxDir()).toBe(path.join(xdg, "agent-log-viewer", "state-staging", "inbox"));
-  expect(fs.existsSync(path.join(xdg, "agent-log-viewer", "inbox"))).toBe(false);
+  expect(inboxDir()).toBe(path.join(xdg, "delegatus", "state-staging", "inbox"));
+  expect(fs.existsSync(path.join(xdg, "delegatus", "inbox"))).toBe(false);
 });

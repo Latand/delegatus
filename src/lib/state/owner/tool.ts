@@ -1,3 +1,6 @@
+/* Fold DELEGATUS_* into LLV_* before the claim below reads the environment
+   (docs/design/rename-delegatus.md §5). */
+import "../../../../bin/envAlias.mjs";
 import { claimStateOwner } from "@/lib/stateOwnership";
 
 /**

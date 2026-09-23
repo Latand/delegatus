@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import type { ViewerMcpRuntimeIdentity, ViewerReleaseIdentity } from "@/lib/runtime/contracts";
@@ -17,6 +18,14 @@ export interface McpRuntimeLauncherPublicationEvidence {
   launcherDigest: string;
   publishedAt: string;
   durable: true;
+}
+
+/** Where the stable MCP launcher is published (`LLV_MCP_RUNTIME_ROOT`, default
+    `~/.agents/tools/llv-mcp-runtime`): the root `install-mcp.sh` registers for
+    Claude and Codex, and the one an unregistered spawn is given. */
+export function stableMcpRuntimeRoot(source: Readonly<Record<string, string | undefined>> = process.env): string {
+  return source.LLV_MCP_RUNTIME_ROOT?.trim()
+    || path.join(source.HOME?.trim() || os.homedir(), ".agents", "tools", "llv-mcp-runtime");
 }
 
 export interface McpRuntimeReleaseStoreOptions {
@@ -160,13 +169,16 @@ export class McpRuntimeReleaseStore {
   installStableLauncher(sourceRoot: string): McpRuntimeLauncherPublicationEvidence {
     const sourceBin = path.join(sourceRoot, "bin");
     const sourceLauncher = path.join(sourceBin, "mcp-server.mjs");
-    const sourceRuntime = path.join(sourceBin, "server-runtime.mjs");
-    if (!fs.statSync(sourceLauncher).isFile() || !fs.statSync(sourceRuntime).isFile()) {
+    /* Every module the launcher imports, published before the launcher itself
+       so a launcher never lands beside a missing import. */
+    const launcherImports = ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs"];
+    if (!fs.statSync(sourceLauncher).isFile()
+      || !launcherImports.every((name) => fs.statSync(path.join(sourceBin, name)).isFile())) {
       throw new Error("prepared MCP runtime launcher is incomplete");
     }
     const targetBin = path.join(this.options.stableRuntimeRoot, "bin");
     fs.mkdirSync(targetBin, { recursive: true, mode: 0o700 });
-    this.publishExecutable(sourceRuntime, path.join(targetBin, "server-runtime.mjs"));
+    for (const name of launcherImports) this.publishExecutable(path.join(sourceBin, name), path.join(targetBin, name));
 
     const targetLauncher = path.join(targetBin, "mcp-server.mjs");
     const temporary = `${targetLauncher}.${process.pid}.${randomUUID()}.tmp`;

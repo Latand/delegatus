@@ -88,6 +88,30 @@ async function render(): Promise<HTMLElement> {
   return host;
 }
 
+test("the Copilot footer renders its monthly transcript allowance", async () => {
+  copilotAccountsResponse = {
+    cli: { present: true, reason: null },
+    active: "copilot-a",
+    accounts: [{ id: "copilot-a", label: "Copilot", kind: "managed", active: true, loginCommand: null }],
+  };
+  limits = {
+    claude: null,
+    codex: null,
+    copilot: { session: null, weekly: { usedPercent: 0.2, resetsAt: NOW + 10 * 86_400, windowMinutes: 30 * 1440, observedAt: NOW }, tiers: [], plan: null, capturedAt: NOW },
+    claudeAccountId: "claude-a",
+    codexAccountId: "account-a",
+    copilotAccountId: "copilot-a",
+    provenance: {
+      claude: { source: "unavailable", reason: null, staleSince: null },
+      codex: { source: "unavailable", reason: null, staleSince: null },
+      copilot: { source: "transcript", reason: null, staleSince: null },
+    },
+  };
+  const host = await render();
+  expect(host.textContent).toContain("Month");
+  expect(host.textContent).toContain("100%");
+});
+
 test("a weekly-horizon Codex window is labelled Week in the footer, never 5h", async () => {
   // The production shape of #606: the only window the plan reports is a weekly
   // one, and it arrives in the session field. The footer row must be named by

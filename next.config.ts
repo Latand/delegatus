@@ -1,5 +1,9 @@
 import type { NextConfig } from "next";
 
+/* DELEGATUS_STANDALONE and DELEGATUS_DEV_ORIGINS fold into the LLV_ names
+   read below (docs/design/rename-delegatus.md §5). */
+import "./bin/envAlias.mjs";
+
 const nextConfig: NextConfig = {
   // Conditional standalone output keeps `bun run build && bun start` warning-free while packaging can still opt in.
   output: process.env.LLV_STANDALONE === "1" ? "standalone" : undefined,

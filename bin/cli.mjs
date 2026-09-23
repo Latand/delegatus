@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+/* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
+   environment (docs/design/rename-delegatus.md §5). */
+import "./envAlias.mjs";
+
 import { spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import http from "node:http";
@@ -84,7 +88,7 @@ const LANG = detectLang();
 
 const MESSAGES = {
   en: {
-    usage: () => `Usage: agent-log-viewer [options]
+    usage: () => `Usage: delegatus [options]
 
 Options:
   -p, --port <n>       Port for the local server (default ${DEFAULT_PORT})
@@ -101,11 +105,11 @@ Options:
     flagNeedsValue: (flag) => `Option ${flag} requires a value.`,
     hostnameNeedsValue: () => "Option --hostname requires a value.",
     unknownOption: (arg) => `Unknown option: ${arg}`,
-    noPackageJson: () => "Couldn't find package.json for agent-log-viewer.",
+    noPackageJson: () => "Couldn't find package.json for delegatus-cli.",
     readPackageJsonErr: (detail) => `Couldn't read package.json: ${detail}`,
     readPackageJsonErrGeneric: () => "Couldn't read package.json.",
     noServer: () => "No standalone server.js or local next found.",
-    portBusy: (port) => `Port ${port} is busy. Try: bunx agent-log-viewer --port ${port + 1}`,
+    portBusy: (port) => `Port ${port} is busy. Try: bunx delegatus-cli --port ${port + 1}`,
     serverStartFail: (detail) => `Couldn't start the server: ${detail}`,
     serverTimeout: (seconds) => `The server didn't respond within ${seconds} seconds.`,
     bannerOpened: (url) => `  Opened:    ${url}`,
@@ -118,11 +122,11 @@ Options:
     bindCheckFail: (detail) => `Couldn't verify the server bind: ${detail}. Startup was stopped.`,
     bindCheckSkipped: (addresses) => `Warning: the exposure check skipped addresses this machine would not answer for: ${addresses}.`,
     serverNotReady: () => "Server not ready.",
-    runtimeHostEntryMissing: () => "The runtime host is missing from this install. Reinstall agent-log-viewer and try again.",
+    runtimeHostEntryMissing: () => "The runtime host is missing from this install. Reinstall delegatus-cli and try again.",
     runtimeHostStartFail: (detail) => `Couldn't start the structured runtime host: ${detail}`,
     runtimeHostTimeout: (socketPath) => `the runtime host did not bind ${socketPath} within ${RUNTIME_HOST_READINESS_TIMEOUT_MS / 1_000} seconds; check the socket directory permissions`,
     runtimeHostExited: (detail) => `the runtime host exited before its socket was ready${detail ? `: ${detail}` : ""}`,
-    runtimeHostOwnerMismatch: (ownerPid, childPid) => `the runtime host socket is owned by pid ${ownerPid}, while this CLI spawned pid ${childPid}; stop the other agent-log-viewer instance for this installation and try again`,
+    runtimeHostOwnerMismatch: (ownerPid, childPid) => `the runtime host socket is owned by pid ${ownerPid}, while this CLI spawned pid ${childPid}; stop the other delegatus instance for this installation and try again`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; restarting in ${delay}ms`,
     runtimeHostRestartFail: (detail) => `[runtime host] restart failed: ${detail}`,
     phoneAccessSkipped: (detail) => `Phone access is turned on in the setup guide, and Tailscale is not ready, so this start is local only:\n${detail}`,
@@ -130,7 +134,7 @@ Options:
     phoneServeFailed: (detail) => `Phone access is turned on in the setup guide, and publishing in the tailnet failed: ${detail}`,
   },
   uk: {
-    usage: () => `Використання: agent-log-viewer [опції]
+    usage: () => `Використання: delegatus [опції]
 
 Опції:
   -p, --port <n>       Порт для локального сервера (типово ${DEFAULT_PORT})
@@ -147,11 +151,11 @@ Options:
     flagNeedsValue: (flag) => `Опція ${flag} потребує значення.`,
     hostnameNeedsValue: () => "Опція --hostname потребує значення.",
     unknownOption: (arg) => `Невідома опція: ${arg}`,
-    noPackageJson: () => "Не вдалося знайти package.json для agent-log-viewer.",
+    noPackageJson: () => "Не вдалося знайти package.json для delegatus-cli.",
     readPackageJsonErr: (detail) => `Не вдалося прочитати package.json: ${detail}`,
     readPackageJsonErrGeneric: () => "Не вдалося прочитати package.json.",
     noServer: () => "Не знайдено standalone server.js або локальний next.",
-    portBusy: (port) => `Порт ${port} зайнятий. Спробуйте: bunx agent-log-viewer --port ${port + 1}`,
+    portBusy: (port) => `Порт ${port} зайнятий. Спробуйте: bunx delegatus-cli --port ${port + 1}`,
     serverStartFail: (detail) => `Не вдалося запустити сервер: ${detail}`,
     serverTimeout: (seconds) => `Сервер не відповів за ${seconds} секунд.`,
     bannerOpened: (url) => `  Відкрито:  ${url}`,
@@ -164,11 +168,11 @@ Options:
     bindCheckFail: (detail) => `Не вдалося перевірити адресу сервера: ${detail}. Запуск зупинено.`,
     bindCheckSkipped: (addresses) => `Увага: перевірка на відкритість пропустила адреси, на які ця машина не відповідає: ${addresses}.`,
     serverNotReady: () => "Сервер не готовий.",
-    runtimeHostEntryMissing: () => "У цьому пакеті немає runtime host. Перевстановіть agent-log-viewer і повторіть спробу.",
+    runtimeHostEntryMissing: () => "У цьому пакеті немає runtime host. Перевстановіть delegatus-cli і повторіть спробу.",
     runtimeHostStartFail: (detail) => `Не вдалося запустити structured runtime host: ${detail}`,
     runtimeHostTimeout: (socketPath) => `runtime host не створив ${socketPath} за ${RUNTIME_HOST_READINESS_TIMEOUT_MS / 1_000} секунд; перевірте права каталогу сокета`,
     runtimeHostExited: (detail) => `runtime host завершився до готовності сокета${detail ? `: ${detail}` : ""}`,
-    runtimeHostOwnerMismatch: (ownerPid, childPid) => `сокетом runtime host володіє процес ${ownerPid}, а цей CLI запустив процес ${childPid}; зупиніть інший agent-log-viewer для цієї інсталяції та повторіть спробу`,
+    runtimeHostOwnerMismatch: (ownerPid, childPid) => `сокетом runtime host володіє процес ${ownerPid}, а цей CLI запустив процес ${childPid}; зупиніть інший delegatus для цієї інсталяції та повторіть спробу`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; повторний запуск за ${delay} мс`,
     runtimeHostRestartFail: (detail) => `[runtime host] помилка повторного запуску: ${detail}`,
     phoneAccessSkipped: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але Tailscale не готовий, тому цей запуск лише локальний:\n${detail}`,
@@ -728,7 +732,7 @@ function localUrl(options, runtime) {
 }
 
 function printBanner(version, options, runtime) {
-  console.log(`  ✳ Agent Log Viewer v${version}`);
+  console.log(`  ✳ Delegatus v${version}`);
   console.log(m.bannerOpened(localUrl(options, runtime)));
   console.log(m.bannerReads());
   console.log(m.bannerStop());

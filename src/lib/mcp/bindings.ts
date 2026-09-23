@@ -12,6 +12,7 @@ import viewerPackageManifest from "../../../package.json";
 
 import { activeClaudeAccountId, listClaudeAccounts } from "@/lib/accounts/claude";
 import { activeCodexAccountId, listCodexAccounts } from "@/lib/accounts/codex";
+import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
 import {
   accountProjectBindings,
@@ -734,7 +735,7 @@ function productionCallerProject(): string | null {
 }
 
 /**
- * The canonical project of the Agent Log Viewer this process IS — the one
+ * The canonical project of the Delegatus install this process IS — the one
  * question `deploy_exact_sha` refuses on (#1321), and the only caller there is.
  *
  * The cwd cannot answer it. An MCP client launches wherever the CALLER works,
@@ -2408,7 +2409,7 @@ async function deployExactSha(
   const viewerProject = dependencies.viewerProject ? dependencies.viewerProject() : viewerOwnProject();
   if (seat.project !== viewerProject) {
     throw new McpToolRefusal(
-      "this tool deploys the Agent Log Viewer application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Viewer surface can. Report the request over the bridge instead.",
+      "this tool deploys the Delegatus application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Delegatus surface can. Report the request over the bridge instead.",
       { code: "deploy_foreign_project", revision },
     );
   }
@@ -3079,10 +3080,12 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
     accounts: {
       claude: listClaudeAccounts().map((account) => ({ accountId: account.id })),
       codex: listCodexAccounts().map((account) => ({ accountId: account.id })),
+      copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {
       claude: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
       codex: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
+      copilot: snapshot.engineRouting.copilot.activeAccountId ?? activeCopilotAccountId(),
     },
     observations: snapshot.quotaObservations,
     now: Date.now(),
@@ -3096,15 +3099,15 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
  */
 function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const engine = text(args.engine);
-  if (engine && engine !== "claude" && engine !== "codex") throw new Error("engine must be claude or codex");
+  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot") throw new Error("engine must be claude, codex or copilot");
   const accountId = text(args.accountId);
   const source = (dependencies.accountLimitsSource ?? productionAccountLimitsSource)();
   const accounts = accountLimitRows({
     ...source,
-    ...(engine ? { engine: engine as "claude" | "codex" } : {}),
+    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" } : {}),
     ...(accountId ? { accountId } : {}),
   });
-  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude or codex"} account has the id ${accountId}`);
+  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex or copilot"} account has the id ${accountId}`);
   return redactPayload({ count: accounts.length, accounts });
 }
 

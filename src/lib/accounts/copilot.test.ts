@@ -9,6 +9,7 @@ import {
   copilotAccountForSpawn,
   copilotLoginCommand,
   copilotSessionRoots,
+  copilotSignedInIdentity,
   copilotSignedInUser,
   createManagedCopilotAccount,
   listCopilotAccounts,
@@ -76,7 +77,8 @@ test("the login command signs in exactly the account's own home", () => {
 test("Copilot auth uses only a listed last user and strips config comment lines", () => {
   const home = fs.mkdtempSync(path.join(sandbox, "auth-fixture-"));
   fs.writeFileSync(path.join(home, "config.json"), '// CLI comment\n{"lastLoggedInUser":{"host":"github.com","login":"fixture-user"},"loggedInUsers":[{"host":"github.com","login":"fixture-user"}]}\n');
-  expect(copilotSignedInUser(home)).toEqual({ host: "github.com", login: "fixture-user" });
+  expect(copilotSignedInIdentity(home)).toEqual({ host: "github.com", login: "fixture-user" });
+  expect(copilotSignedInUser(home)).toBe("fixture-user");
   expect(listCopilotAccounts()).toEqual([]);
 });
 

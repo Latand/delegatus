@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 
 import type { AccountContext } from "@/lib/accounts/contracts";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
@@ -555,4 +556,115 @@ describe.skipIf(!BIN || !REAL_HOME)("Copilot CLI over ACP through the structured
       journal.close();
     }
   }, 900_000);
+});
+
+/** A streamable-HTTP MCP server standing in for the Viewer's `/api/mcp`: JSON
+    answers, one tool, and the capability header each request carried. */
+function startHttpMcp() {
+  const capabilities: Array<string | undefined> = [];
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    req.on("end", () => {
+      if (req.method !== "POST") { res.writeHead(405).end(); return; }
+      capabilities.push(req.headers[VIEWER_SPAWN_CAPABILITY_HEADER] as string | undefined);
+      const message = JSON.parse(raw) as { id?: number | string; method?: string; params?: { protocolVersion?: string } };
+      if (message.id === undefined) { res.writeHead(202).end(); return; }
+      const result = message.method === "initialize"
+        ? { protocolVersion: message.params?.protocolVersion ?? "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer-http-stub", version: "1" } }
+        : message.method === "tools/list"
+          ? { tools: [{ name: "http_ping", description: "stub", inputSchema: { type: "object", properties: {} } }] }
+          : {};
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+    });
+  });
+  return {
+    capabilities,
+    listen: () => new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as { port: number }).port))),
+    close: () => { server.closeAllConnections?.(); server.close(); },
+  };
+}
+
+/*
+ * #2052: the Viewer attachment a production launch writes, with no test
+ * override of the server definition. The stdio case resolves the launcher the
+ * way a Docker install does, from a published runtime root outside the
+ * package, and that launcher is the real Viewer MCP server; the HTTP case takes
+ * the shared-endpoint entry. Each proves its server's tools reach the model.
+ */
+describe.skipIf(!BIN)("Copilot CLI reaches the Viewer MCP server through the production attachment (BYOK stub)", () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-copilot-mcp-"));
+  const provider = startProvider();
+  let providerPort: Promise<number> | null = null;
+  const hosts: CopilotAcpHost[] = [];
+  const saved = Object.fromEntries(["LLV_MCP_RUNTIME_ROOT", "LLV_MCP_TRANSPORT", "LLV_MCP_HTTP_URL", "LLV_TOKEN"].map((name) => [name, process.env[name]]));
+  afterAll(async () => {
+    for (const host of hosts) await host.release().catch(() => {});
+    provider.close();
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  async function firstTurnTools(label: string): Promise<{ tools: string[]; config: Record<string, unknown> }> {
+    providerPort ??= provider.listen();
+    const port = await providerPort;
+    const cwd = path.join(sandbox, `work-${label}`);
+    const copilotHome = path.join(sandbox, `copilot-${label}`);
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.mkdirSync(copilotHome, { recursive: true, mode: 0o700 });
+    const before = provider.requests.length;
+    const host = await CopilotAcpHost.start({
+      binary: BIN,
+      cwd,
+      copilotHome,
+      model: MODEL,
+      allowAll: true,
+      mcpServers: ["viewer"],
+      env: { ...process.env, LLV_SPAWN_CAPABILITY: crypto.randomBytes(32).toString("base64url") },
+      providerEnv: { COPILOT_PROVIDER_BASE_URL: `http://127.0.0.1:${port}/v1`, COPILOT_PROVIDER_TYPE: "openai", COPILOT_OFFLINE: "true" },
+    });
+    hosts.push(host);
+    const configDir = path.join(copilotHome, "llv-mcp");
+    const config = JSON.parse(fs.readFileSync(path.join(configDir, fs.readdirSync(configDir)[0]!), "utf8")) as { mcpServers: { viewer: Record<string, unknown> } };
+    /* Copilot connects its MCP servers while the session starts; the first
+       turn's tool list is what the model is offered. */
+    expect(await host.send({ id: `entry-${label}`, text: "hello" })).toMatchObject({ outcome: "turn-started" });
+    await until(() => host.health(), (state) => state.status === "idle", `the ${label} turn`, 60_000);
+    const request = provider.requests.slice(before).at(0);
+    await host.release();
+    return { tools: request?.tools ?? [], config: config.mcpServers.viewer };
+  }
+
+  test("stdio: the resolved host launcher is the real Viewer server and its tools reach the model", async () => {
+    /* A published runtime outside the package, as ~/.agents/tools/llv-mcp-runtime is. */
+    const runtimeRoot = path.join(sandbox, "llv-mcp-runtime");
+    fs.symlinkSync(path.resolve(import.meta.dir, "../../.."), runtimeRoot);
+    process.env.LLV_MCP_RUNTIME_ROOT = runtimeRoot;
+    delete process.env.LLV_MCP_TRANSPORT;
+    const { tools, config } = await firstTurnTools("stdio");
+    expect(config).toMatchObject({ type: "local", args: [path.join(runtimeRoot, "bin", "mcp-server.mjs")] });
+    expect(tools.some((name) => name.includes("stage_report"))).toBe(true);
+    expect(tools.some((name) => name.includes("list_tasks"))).toBe(true);
+  }, 120_000);
+
+  test("http: the shared-endpoint entry connects with the capability header and its tools reach the model", async () => {
+    const endpoint = startHttpMcp();
+    try {
+      const port = await endpoint.listen();
+      process.env.LLV_MCP_TRANSPORT = "http";
+      process.env.LLV_MCP_HTTP_URL = `http://127.0.0.1:${port}/api/mcp`;
+      delete process.env.LLV_TOKEN;
+      const { tools, config } = await firstTurnTools("http");
+      expect(config).toMatchObject({ type: "http", url: `http://127.0.0.1:${port}/api/mcp` });
+      expect(tools.some((name) => name.includes("http_ping"))).toBe(true);
+      expect(endpoint.capabilities.length).toBeGreaterThan(0);
+      expect(endpoint.capabilities.every((value) => typeof value === "string" && value.length === 43)).toBe(true);
+    } finally {
+      endpoint.close();
+    }
+  }, 120_000);
 });

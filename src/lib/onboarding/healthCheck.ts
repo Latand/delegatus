@@ -650,7 +650,7 @@ class RowFailed extends Error {}
 /* ── Production ports ─────────────────────────────────────────────────── */
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-c", "user.name=Agent Log Viewer", "-c", "user.email=health-check@localhost", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return execFileSync("git", ["-c", "user.name=Delegatus", "-c", "user.email=health-check@localhost", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
 /** The scratch repository: `state/onboarding/viewer-health-check`, its own

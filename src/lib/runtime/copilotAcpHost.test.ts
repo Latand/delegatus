@@ -15,6 +15,8 @@ import {
   copilotTranscriptPath,
   type CopilotAcpHostOptions,
 } from "./copilotAcpHost";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+
 import type { RuntimeEventStore } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
 
@@ -252,6 +254,81 @@ describe("CopilotAcpHost", () => {
     }
   });
 
+  /* Runs the default Viewer attachment with the process environment and
+     working directory a Docker install gives the Viewer, and hands back the
+     document written for Copilot. */
+  async function writtenViewerConfig(setup: { appRoot: string; home: string; env?: Record<string, string> }): Promise<Record<string, unknown>> {
+    const names = ["HOME", "LLV_MCP_RUNTIME_ROOT", "LLV_MCP_TRANSPORT", "LLV_MCP_HTTP_URL", "LLV_TOKEN", "LLV_VIEWER_PORT", ...Object.keys(setup.env ?? {})];
+    const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    const cwd = process.cwd();
+    for (const name of names) delete process.env[name];
+    Object.assign(process.env, { HOME: setup.home, ...setup.env });
+    process.chdir(setup.appRoot);
+    try {
+      const child = new FakeCopilot();
+      const opts = options(child, {
+        viewerMcpServer: undefined,
+        env: { PATH: "/usr/bin", HOME: setup.home, LLV_SPAWN_CAPABILITY: "c".repeat(43) } as unknown as NodeJS.ProcessEnv,
+      });
+      const host = await CopilotAcpHost.start(opts);
+      const args = opts.captured.args!;
+      const written = JSON.parse(fs.readFileSync(args[args.indexOf("--additional-mcp-config") + 1]!.slice(1), "utf8")) as { mcpServers: Record<string, Record<string, unknown>> };
+      await host.release();
+      return written.mcpServers.viewer!;
+    } finally {
+      process.chdir(cwd);
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  }
+
+  function dockerShape(): { appRoot: string; home: string; hostLauncher: string } {
+    const root = fs.mkdtempSync(path.join(sandbox, "docker-"));
+    /* The image's package root, launcher included, as the Viewer sees it. */
+    const appRoot = path.join(root, "app");
+    fs.mkdirSync(path.join(appRoot, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(appRoot, "bin", "mcp-server.mjs"), "");
+    /* The home the compose file mounts at the same path on both sides. */
+    const home = path.join(root, "home");
+    const hostLauncher = path.join(home, ".agents", "tools", "llv-mcp-runtime", "bin", "mcp-server.mjs");
+    fs.mkdirSync(path.dirname(hostLauncher), { recursive: true });
+    fs.writeFileSync(hostLauncher, "");
+    return { appRoot, home, hostLauncher };
+  }
+
+  test("on a Docker install the stdio launcher is the host runtime, never the image's package root (#2052)", async () => {
+    const shape = dockerShape();
+    const viewer = await writtenViewerConfig(shape);
+    expect(viewer).toMatchObject({ type: "local", command: "bun", args: [shape.hostLauncher], tools: ["*"] });
+    expect(JSON.stringify(viewer.args)).not.toContain(shape.appRoot);
+    expect((viewer.env as Record<string, string>).LLV_SPAWN_CAPABILITY).toBe("c".repeat(43));
+
+    /* An explicit runtime root wins over the home default, as in install-mcp.sh. */
+    const pinned = path.join(fs.mkdtempSync(path.join(sandbox, "runtime-")), "bin", "mcp-server.mjs");
+    fs.mkdirSync(path.dirname(pinned), { recursive: true });
+    fs.writeFileSync(pinned, "");
+    const overridden = await writtenViewerConfig({ ...shape, env: { LLV_MCP_RUNTIME_ROOT: path.dirname(path.dirname(pinned)) } });
+    expect(overridden.args).toEqual([pinned]);
+
+    /* With no runtime published the package launcher is all there is. */
+    fs.rmSync(shape.hostLauncher);
+    const fallback = await writtenViewerConfig(shape);
+    expect(fallback.args).toEqual([path.join(fs.realpathSync(shape.appRoot), "bin", "mcp-server.mjs")]);
+  });
+
+  test("with the HTTP transport selected Copilot gets the shared endpoint and the capability header Claude sends", async () => {
+    const viewer = await writtenViewerConfig({ ...dockerShape(), env: { LLV_MCP_TRANSPORT: "http" } });
+    expect(viewer).toEqual({
+      type: "http",
+      url: "http://127.0.0.1:8898/api/mcp",
+      headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) },
+      tools: ["*"],
+    });
+    expect(viewer).not.toHaveProperty("command");
+  });
+
   test("allowSubagents keeps the native sub-agent tools; a non-bypass profile omits --allow-all", async () => {
     const child = new FakeCopilot();
     const opts = options(child, { allowSubagents: true });
@@ -297,6 +374,26 @@ describe("CopilotAcpHost", () => {
     expect(events!.find((event) => event.kind === "delta")).toMatchObject({ turnId, text: "Hi " });
     expect(events!.filter((event) => event.kind === "item").map((event) => (event as { phase: string }).phase)).toEqual(["started", "completed"]);
     await host.release();
+  });
+
+  test("quota rejection emits exhausted limits evidence and ends the turn as an error", async () => {
+    const child = new FakeCopilot();
+    const opts = options(child);
+    const host = await CopilotAcpHost.start(opts);
+    try {
+      await host.send({ id: "quota-failure", content: { text: "work", images: [] } } as never);
+      await until(() => child.prompts.length === 1, "quota test prompt");
+      const prompt = child.prompts[0]!;
+      child.send({ jsonrpc: "2.0", id: prompt.id, error: { code: -32000, message: "Premium request quota exceeded" } });
+      const store = opts.eventStore as MemoryEventStore;
+      await until(() => store.events.get(child.sessionId)?.some((event) => event.kind === "turn-ended") ?? false, "quota error turn end");
+      const events = store.events.get(child.sessionId) ?? [];
+      expect(events.find((event) => event.kind === "limits")).toMatchObject({
+        kind: "limits",
+        snapshot: { engine: "copilot", exhausted: true, message: expect.stringMatching(/Premium request quota exceeded/) },
+      });
+      expect(events.find((event) => event.kind === "turn-ended")).toMatchObject({ kind: "turn-ended", status: "error" });
+    } finally { await host.release(); }
   });
 
   test("a send while a prompt is in flight is refused stale-turn and writes nothing", async () => {

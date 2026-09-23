@@ -25,9 +25,15 @@
  * Viewer's reader (`src/lib/selfUpdate/launcher.ts`) agrees with this writer on
  * the JSON shape alone.
  */
+/* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
+   environment (docs/design/rename-delegatus.md §5). */
+import "./envAlias.mjs";
+
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+
+import { appDirIn } from "./appDir.mjs";
 
 export const RECORD_VERSION = 1;
 const REQUEST_ROLES = new Set(["web", "runtime-host"]);
@@ -43,7 +49,7 @@ export function selfUpdatePaths({ stateDirectory, cacheDirectory, installId }) {
     releasePointer: join(base, `release-${installId}.json`),
     /* Each release holds its own node_modules and .next (well over a
        gigabyte), so they live in the cache, not in the state directory. */
-    releasesDir: join(cacheDirectory, "agent-log-viewer", "self-update", installId, "releases"),
+    releasesDir: join(appDirIn(cacheDirectory), "self-update", installId, "releases"),
   };
 }
 

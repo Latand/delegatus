@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { appDirIn } from "../../../bin/appDir.mjs";
+
 /**
  * What a Viewer's boot does with the remembered phone-access choice (#2024),
  * readable from outside the Viewer. `restorePhoneAccessGate` gates a booting
@@ -44,7 +46,7 @@ export function viewerBootGateKey(environment: Readonly<Record<string, string | 
   if (environment.LLV_TOKEN) return environment.LLV_TOKEN;
   const root = configRoot(environment);
   if (!root) return null;
-  const directory = path.join(root, "agent-log-viewer");
+  const directory = appDirIn(root);
   if (!phoneAccessFlagMayBeSet(path.join(directory, "phone-access"))) return null;
   try {
     const key = fs.readFileSync(path.join(directory, "token"), "utf8").trim();

@@ -4,6 +4,9 @@ import path from "node:path";
 
 import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
+import { LEGACY_APP_DIR } from "../../../bin/appDir.mjs";
+import { DELEGATUS_ENV_PREFIX } from "../../../bin/envAlias.mjs";
+
 /**
  * The spawn boundary's half of #1905.
  *
@@ -89,7 +92,17 @@ export function withAgentConfigSandbox(
        would be worse than the directory arriving late. */
   }
   env.XDG_CONFIG_HOME = configHome;
-  env.LLV_STATE_DIR = path.join(configHome, "agent-log-viewer", "state");
+  /* A fixed name, never probed on disk (see GH_CONFIG_DIR below): the agent is
+     handed this path and resolves no app dir of its own, so the spelling is
+     the one every release before the Delegatus rename used. */
+  env.LLV_STATE_DIR = path.join(configHome, LEGACY_APP_DIR, "state");
+  /* The new prefix never reaches an agent: an inherited DELEGATUS_STATE_DIR
+     would win over the sandbox value above at the agent's own entry point
+     (rename-delegatus.md §5). Entry points fold and delete it at the root;
+     this holds for an environment built from anywhere else too. */
+  for (const name of Object.keys(env)) {
+    if (name.startsWith(DELEGATUS_ENV_PREFIX)) delete env[name];
+  }
   /* An agent is no owner: whatever the Viewer claimed for itself stops here,
      so a command the agent runs cannot resolve the real directories even if it
      points itself back at them. */

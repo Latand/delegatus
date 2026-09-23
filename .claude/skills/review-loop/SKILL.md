@@ -1,23 +1,23 @@
 ---
 name: review-loop
-description: Drive Agent Log Viewer's implement→review flows — start a review cycle for a conversation, monitor rounds, relay verdicts, and recover stuck rounds. Use when the user asks to run a review loop / review cycle on agent work, wants a fresh reviewer per round, or asks to orchestrate implement→review with the viewer.
+description: Drive Delegatus's implement→review flows — start a review cycle for a conversation, monitor rounds, relay verdicts, and recover stuck rounds. Use when the user asks to run a review loop / review cycle on agent work, wants a fresh reviewer per round, or asks to orchestrate implement→review with Delegatus.
 ---
 
 # Review loops (implement → review flows)
 
-Agent Log Viewer ships a flow engine that orchestrates the implement→review
+Delegatus ships a flow engine that orchestrates the implement→review
 cycle: one long-lived implementer agent writes code, a fresh reviewer session
 audits the full diff each round, findings are relayed back automatically, and
 the cycle repeats until the reviewer approves. This skill explains how to
 drive it from an agent.
 
-The viewer must be running (default `http://127.0.0.1:8898`). All endpoints
+Delegatus must be running (default `http://127.0.0.1:8898`). All endpoints
 are same-origin: call them from localhost without an Origin header.
 
 ## Concepts
 
 - **Implementer** — an interactive CLI agent (claude or codex) on a
-  viewer-owned structured host, tracked by its transcript path. It lives across
+  Delegatus-owned structured host, tracked by its transcript path. It lives across
   all rounds.
 - **Reviewer** — a fresh session per round, headless by default
   (`codex exec` / `claude -p` with approval-free command access). The prompt
@@ -91,7 +91,7 @@ From an agent:
 
 ## Recovering stuck rounds
 
-- Restarting the viewer service (`systemctl --user restart agent-log-viewer`)
+- Restarting the Delegatus service (`systemctl --user restart agent-log-viewer`)
   kills in-flight headless reviewers too — they live in the unit's cgroup.
   Cancel the round first or let it finish; after an unavoidable restart the
   artifact stays empty and the only path is `retry-round`.
@@ -115,4 +115,4 @@ From an agent:
 - One orchestrator: while the implementer fixes, do not edit the same files
   yourself.
 - Keep flow panes/windows around after completion; the user inspects them in
-  the viewer.
+  Delegatus.

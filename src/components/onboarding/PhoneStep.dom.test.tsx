@@ -108,7 +108,7 @@ test("ready: the one press turns access on, shows its wait, and comes back with 
   await act(async () => { release(jsonResponse(access("serving"))); await settle(); });
   expect(stateOf(host)).toBe("serving");
   expect(host.textContent).toContain("Ready. Scan with your phone's camera");
-  expect(host.textContent).toContain("Phone access stays on the next time you start the Viewer.");
+  expect(host.textContent).toContain("Phone access stays on the next time you start Delegatus.");
   expect(host.textContent).toContain("Other browsers on this computer now need this link too");
   expect(host.querySelector<HTMLInputElement>("[data-phone-link]")?.value).toBe(LINK);
   expect(host.querySelector("[data-phone-copy]")).not.toBeNull();
@@ -120,13 +120,13 @@ test("serving-other names the other port and warns before the press", async () =
   const host = await mount();
   expect(host.textContent).toContain("Tailscale already publishes another local port (3000) at this computer's address.");
   expect(host.textContent).toContain("That other service stops being reachable at the Tailscale address.");
-  expect(host.querySelector("[data-phone-enable]")?.textContent).toBe("Point it at the Viewer");
+  expect(host.querySelector("[data-phone-enable]")?.textContent).toBe("Point it at Delegatus");
 });
 
 const failures: Array<[string, string, string]> = [
   ["OPERATOR_RIGHTS", "Access denied", "Tailscale lets only an operator publish services."],
-  ["SERVE_FAILED", "error: listener already in use", "Tailscale could not publish the Viewer: error: listener already in use."],
-  ["VERIFY_FAILED", "nothing published", "Tailscale reported success, and the published address does not point at the Viewer yet."],
+  ["SERVE_FAILED", "error: listener already in use", "Tailscale could not publish Delegatus: error: listener already in use."],
+  ["VERIFY_FAILED", "nothing published", "Tailscale reported success, and the published address does not point at Delegatus yet."],
   ["TIMEOUT", "", "Tailscale did not answer within 15 seconds."],
   ["TOKEN_WRITE_FAILED", "EACCES", "Could not save the access key: EACCES."],
   ["PERSIST_FAILED", "EROFS", "Could not remember the choice: EROFS. Nothing was turned on."],
@@ -188,7 +188,7 @@ test("exposed: a mapping this start does not gate says so, and the button re-bin
   harness.setRoute((url) => url.endsWith("/api/access") ? jsonResponse(access("exposed")) : undefined);
   const host = await mount();
   expect(stateOf(host)).toBe("exposed");
-  expect(host.textContent).toContain("Tailscale already publishes this Viewer at this computer's address, and this start does not ask for the access key.");
+  expect(host.textContent).toContain("Tailscale already publishes this Delegatus install at this computer's address, and this start does not ask for the access key.");
   expect(host.querySelector("[data-phone-enable]")?.textContent).toBe("Turn on phone access");
   /* One sentence and one press: no terminal command here either. */
   expect(host.querySelector("code")).toBeNull();
@@ -202,5 +202,5 @@ test("a failed press that left the key on says the key stays on", async () => {
   });
   const host = await mount();
   await click(host.querySelector("[data-phone-enable]"));
-  expect(host.querySelector("[data-phone-failure]")?.textContent).toContain("The access key stays on for this run, in case Tailscale published the Viewer anyway: other browsers on this computer need the link from the terminal.");
+  expect(host.querySelector("[data-phone-failure]")?.textContent).toContain("The access key stays on for this run, in case Tailscale published Delegatus anyway: other browsers on this computer need the link from the terminal.");
 });

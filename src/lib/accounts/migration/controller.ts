@@ -49,7 +49,7 @@ export async function reconcileAccountMigrationCycle(
      leave the account panel without fresh limits readings. Migration
      decisions already consume the previous tick's durable observations, so
      ordering between the two is immaterial. */
-  const quotaTicks = Promise.all([quota.tick("claude"), quota.tick("codex")]);
+  const quotaTicks = Promise.all([quota.tick("claude"), quota.tick("codex"), quota.tick("copilot")]);
   try {
     await reconcileMigrations(provider, delivery, registry);
   } finally {

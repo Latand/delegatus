@@ -79,7 +79,7 @@ function install() {
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs"]) {
+  for (const name of ["cli.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   writeFileSync(path.join(checkout, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" }));
@@ -177,7 +177,7 @@ async function start(fixture: ReturnType<typeof install>) {
   let output = "";
   child.stdout?.on("data", (chunk) => { output += String(chunk); });
   child.stderr?.on("data", (chunk) => { output += String(chunk); });
-  await until(() => output.includes("Agent Log Viewer"), 20_000).catch((error) => { throw new Error(`${String(error)}\n${output}`); });
+  await until(() => output.includes("Delegatus v"), 20_000).catch((error) => { throw new Error(`${String(error)}\n${output}`); });
   return { port, child, output: () => output };
 }
 

@@ -10,9 +10,22 @@ import {
   durableProjectAliasCandidates,
   persistProjectAliases,
   projectAliasesCanAccept,
+  recordProjectRemote,
   type ProjectAliasRegistration,
 } from "@/lib/projects/aliases";
-import { displayNameFromProjectIdentity } from "@/lib/projects/identity";
+import {
+  forgeRenameCandidateFor,
+  forgeRenameCandidatesFromMoves,
+  scheduleForgeRenames,
+  type ForgeRenameCandidate,
+} from "@/lib/projects/forgeRename";
+import {
+  displayNameFromProjectIdentity,
+  isRepositoryProjectId,
+  localRepositoryProjectId,
+  projectIdentityFromRepositoryRoot,
+  repositoryRootForPath,
+} from "@/lib/projects/identity";
 import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/succession";
 
 import type { Engine, Fmt, ProjectCatalogEntry } from "../types";
@@ -442,6 +455,23 @@ function claudeSlug(raw: RawEntry): string | null {
   return path.relative(raw.root, raw.path).split(path.sep)[0] || null;
 }
 
+/** Whether `project` is the local repository id some folder in `folders`
+    minted: of the folder itself, or of the repository it sits in while it
+    exists. */
+function pathDerivedRepositoryKey(project: string, folders: Iterable<string | null | undefined>): boolean {
+  for (const folder of folders) {
+    if (!folder?.trim()) continue;
+    const roots = new Set([folder, repositoryRootForPath(folder)].filter((root): root is string => Boolean(root)));
+    for (const root of roots) {
+      if (localRepositoryProjectId(root) === project) return true;
+    }
+  }
+  return false;
+}
+
+/** Project roots whose remote this process has already put in the ledger. */
+const ledgerRecordedRoots = new Set<string>();
+
 function migrationPlan(
   changes: ReadonlyMap<string, ReadonlySet<string>>,
   groups: ReadonlyMap<string, ProjectCatalogEntry>,
@@ -492,8 +522,13 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
   const rootCandidates = new Map<string, Map<string, { count: number; newest: number }>>();
   const projectByPath = new Map<string, string>();
   const previousProjects = new Map<string, string | undefined>();
+  /* The folders a file's previous record named, read before it is
+     re-described: what proves a changed key was minted from a path. */
+  const previousFolders = new Map<string, Array<string | null | undefined>>();
   await forEachCooperatively(raw, (entry) => {
-    previousProjects.set(entry.path, state.files[entry.path]?.project);
+    const previous = state.files[entry.path];
+    previousProjects.set(entry.path, previous?.project);
+    previousFolders.set(entry.path, [previous?.projectRoot, previous?.cwd]);
   });
   const files = await mapCooperatively(raw, (entry) => cachedFile(entry, state, stateKey));
   const complete = options.complete !== false && files.every((file) => file.summaryVersion === PROJECT_SUMMARY_VERSION);
@@ -509,6 +544,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
     if (project) files[index]!.project = project;
   });
   const changes = new Map<string, Set<string>>();
+  const changedSourceFolders = new Map<string, Set<string>>();
   const projectsByCwd = new Map<string, Set<string>>();
   await forEachCooperatively(files, (file) => {
     nextFiles[file.path] = {
@@ -545,6 +581,11 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
       const targets = changes.get(previousProject) ?? new Set<string>();
       targets.add(file.project);
       changes.set(previousProject, targets);
+      const folders = changedSourceFolders.get(previousProject) ?? new Set<string>();
+      for (const folder of [...(previousFolders.get(file.path) ?? []), file.cwd, file.projectRoot]) {
+        if (folder?.trim()) folders.add(folder);
+      }
+      changedSourceFolders.set(previousProject, folders);
     }
     const project = file.project || "other";
     projectByPath.set(file.path, project);
@@ -621,11 +662,41 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
   publishConversationCatalogForScan(conversationCatalog, scanToken, complete);
   if (isCurrentPersistence && persistIndex && complete) {
     let boardHealed = true;
+    const forgeCandidates: ForgeRenameCandidate[] = [];
     if (options.persist !== false) {
+      /* Fill the remote ledger a forge-proven rename reads its old remote from
+         (rename-delegatus.md §2.3), once per project root per process. */
+      for (const group of groups.values()) {
+        if (!group.projectRoot) continue;
+        const seen = `${group.project}\0${group.projectRoot}`;
+        if (ledgerRecordedRoots.has(seen)) continue;
+        ledgerRecordedRoots.add(seen);
+        try {
+          const identity = projectIdentityFromRepositoryRoot(group.projectRoot);
+          if (identity) recordProjectRemote(identity);
+        } catch {
+          ledgerRecordedRoots.delete(seen);
+        }
+      }
       try {
         const plan = migrationPlan(changes, groups);
         if (plan.conflicts.length > 0) throw new Error("ambiguous catalog project identity");
         const migrations = plan.migrations;
+        /* A file re-described under a new key is the same unproven evidence
+           as the durable pass's (§2.4, #2035). Between two repository ids the
+           move is kept only when the old key is path-derived: the local id of
+           the target's checkout, or of a folder the moved files' own records
+           name (a checkout that once resolved as its own repository). Anything
+           else is a changed origin, which only the forge may join; with no
+           ledger entry for the old key it is never asked, and nothing moves. */
+        for (const [source, target] of [...migrations]) {
+          if (!isRepositoryProjectId(source) || !isRepositoryProjectId(target)) continue;
+          const targetRoot = groups.get(target)?.projectRoot ?? null;
+          if (pathDerivedRepositoryKey(source, [targetRoot, ...(changedSourceFolders.get(source) ?? [])])) continue;
+          migrations.delete(source);
+          const candidate = forgeRenameCandidateFor(source, targetRoot);
+          if (candidate) forgeCandidates.push(candidate);
+        }
         const registrations: ProjectAliasRegistration[] = [...migrations].map(([source, target]) => ({
           source,
           target,
@@ -636,6 +707,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
            on every scan, so skipping it here loses nothing while the clean
            registrations, the board migration, and the catalog write proceed. */
         const durable = durableProjectAliasCandidates();
+        forgeCandidates.push(...forgeRenameCandidatesFromMoves(durable.remoteMoves));
         let deferredSources = durable.conflicts.length;
         for (const registration of durable.registrations) {
           const held = migrations.get(registration.source);
@@ -665,13 +737,21 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
          so a scan costs nothing while no folder has moved; the next scan
          re-projects the old key's conversations through the recorded alias. */
       try {
-        recordProjectSuccessions([...projectsByCwd]
-          .filter(([, projects]) => projects.size > 1)
+        const movedCwds = [...projectsByCwd].filter(([, projects]) => projects.size > 1);
+        recordProjectSuccessions(movedCwds
           .flatMap(([cwd, projects]) => [...projects].map((project) => projectSuccessionFor(project, cwd))));
+        /* The same signal, for a remote that changed: a candidate for the
+           forge, which alone may prove it a rename. */
+        forgeCandidates.push(...movedCwds
+          .flatMap(([cwd, projects]) => [...projects].map((project) => forgeRenameCandidateFor(project, cwd)))
+          .filter((candidate): candidate is ForgeRenameCandidate => candidate !== null));
       } catch {
         console.error("[project catalog] project identity succession deferred; a later scan will retry");
       }
     }
+    /* Network work, so detached from the scan and after its persistence; an
+       unanswered lookup decides nothing and the next scan asks again. */
+    scheduleForgeRenames(forgeCandidates);
     if (boardHealed) {
       writeState({ version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: nextFiles });
     } else {

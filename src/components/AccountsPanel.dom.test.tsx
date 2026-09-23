@@ -210,7 +210,7 @@ const REFUSALS: Array<[AccountRemovalRefusal, string]> = [
   [{ accountId: "acc", label: "Acc", reasons: ["accounts_locked"] }, "The accounts registry needs repair"],
   [{ accountId: "acc", label: "Acc", reasons: ["unknown_account"] }, "Acc is no longer in the list."],
   [{ accountId: "acc", label: "Acc", reasons: ["removal_failed"], errno: "EACCES" }, "Removing Acc failed at a file step (EACCES)."],
-  [{ accountId: "acc", label: "Acc", reasons: ["no_answer"] }, "The Viewer did not answer."],
+  [{ accountId: "acc", label: "Acc", reasons: ["no_answer"] }, "Delegatus did not answer."],
 ];
 
 test("each refusal renders its own message inside the refused row, unclamped", async () => {

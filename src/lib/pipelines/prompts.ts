@@ -6,7 +6,7 @@ const RELAY_PLACEHOLDER = "{{prev.output}}";
 export function pipelineDeliveryGuidance(pipeline: Pipeline): string[] {
   if (pipeline.delivery?.publish !== "disabled") return [];
   return [
-    `Delivery target ${pipeline.delivery.target.branch} is owned by ${pipeline.delivery.ownerId} at epoch ${pipeline.delivery.epoch}. ${pipeline.delivery.disposition === "comparison" ? "This is a comparison lane." : "This lane's publication claim has been released."} Do not push to that branch. Viewer publication is disabled for this lane.`,
+    `Delivery target ${pipeline.delivery.target.branch} is owned by ${pipeline.delivery.ownerId} at epoch ${pipeline.delivery.epoch}. ${pipeline.delivery.disposition === "comparison" ? "This is a comparison lane." : "This lane's publication claim has been released."} Do not push to that branch. Delegatus publication is disabled for this lane.`,
     "This instruction is guidance; your host tools and network access are unchanged. Local tests and commits remain available.",
   ];
 }
@@ -80,7 +80,7 @@ export function renderStagePrompt(
        unconditional fenced block let a stage treat the block as the real answer
        and skip the call, which is where every unreadable-verdict park fell. The
        engine still reads the block exactly as before when no report arrived. */
-    "Report this stage's completion with the Viewer MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }. That call is the only way to complete this stage.",
+    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }. That call is the only way to complete this stage.",
     "The server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.",
     "The call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.",
     "Use pass when the stage contract is complete, fail for a retryable stage failure, and needs_decision when operator judgment is required. Pass carries no findings, so use fail or needs_decision when findings describe unresolved work.",

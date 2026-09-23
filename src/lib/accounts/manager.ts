@@ -2,7 +2,7 @@ import { accountForSpawn, activeCodexAccountId, codexAccountsMutationLocked, cod
 import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountsMutationLocked, claudeHomeOwningTranscript, claudeManagedEnvironment, CorruptClaudeAccountsError, createManagedClaudeAccount, listClaudeAccounts, setActiveClaudeAccount, UnknownClaudeAccountError } from "./claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "./claudeLogin";
 import { managedCodexRuntime } from "./codexRuntime";
-import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, copilotConfigCheckedAt, copilotHomeOwningSessionPath, copilotLoginCommand, createManagedCopilotAccount, listCopilotAccounts, setActiveCopilotAccount, UnknownCopilotAccountError } from "./copilot";
+import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, copilotConfigCheckedAt, copilotHomeOwningSessionPath, copilotLoginCommand, copilotSignedInUser, createManagedCopilotAccount, listCopilotAccounts, setActiveCopilotAccount, UnknownCopilotAccountError } from "./copilot";
 import { copilotLoginSupervisor } from "./copilotLogin";
 import type { AccountContext, AccountEngineName, AccountManager, AccountSummary, CopilotAccountSummary, ProjectSpawnResolution } from "./contracts";
 import { unavailableLimits } from "./contracts";
@@ -69,10 +69,21 @@ export async function resolveHealthySpawnAccount(
   project: string | null = null,
   model?: string | null,
 ): Promise<HealthySpawnAccountResolution> {
-  /* Copilot has no limit signal and no health probe yet (design 3.9, 3.11):
-     a launch names its account or uses the selected one, and nothing picks
-     automatically from a project pool. */
-  if (engine === "copilot") return copilotAccountForSpawn(requested ?? null);
+  if (engine === "copilot") {
+    const selected = selectProjectAccount({
+      project: null,
+      engine: "copilot",
+      accounts: listCopilotAccounts().map((account) => ({ id: account.id, authPresent: copilotSignedInUser(account.home) !== null })),
+      observations: agentRegistry().quotaObservations("copilot"),
+      bindings: [],
+      requestedId: requested ?? null,
+      preferredId: activeCopilotAccountId(),
+      unbound: "capacity",
+      model,
+    });
+    if (selected.kind !== "available") throw new Error(`no signed-in Copilot account is available${selected.kind === "exhausted" ? " before its quota resets" : ""}`);
+    return copilotAccountForSpawn(selected.accountId);
+  }
   const named = requested === undefined || requested === null ? null : requested;
   /* A DAMAGED record means two different things to this seam's two callers. To
      the automatic pick it means "no pool can be seen", and nothing may be
@@ -262,13 +273,18 @@ export class ProjectAccountRefusedError extends Error {
  * is still the fence — the pick simply comes from inside it.
  */
 export function resolveProjectSpawnAccount(
-  engine: "claude" | "codex",
+  engine: AccountEngineName,
   project: string | null,
   preferredAccountId?: string | null,
   model?: string | null,
 ): AccountContext {
   const resolution = accountManager.resolveProjectSpawn(engine, { project, preferredId: preferredAccountId ?? null, model });
-  if (resolution.kind !== "available") throw new ProjectAccountRefusedError(resolution, engine, project);
+  if (resolution.kind !== "available") {
+    if (engine === "copilot") throw new Error(resolution.kind === "exhausted"
+      ? "all signed-in Copilot accounts have exhausted their monthly quota"
+      : "no signed-in Copilot account is available");
+    throw new ProjectAccountRefusedError(resolution, engine, project);
+  }
   return resolution.account;
 }
 
@@ -299,8 +315,7 @@ export function resolveContinuityAccount(
   project: string | null,
 ): AccountContext {
   if (accountId !== null) return accountManager.resolveSpawn(engine, accountId);
-  /* Copilot has no project pool: the selected account (design 3.9). */
-  if (engine === "copilot") return accountManager.resolveSpawn(engine, null);
+  if (engine === "copilot") return resolveProjectSpawnAccount(engine, project);
   return resolveProjectSpawnAccount(engine, project);
 }
 
@@ -363,6 +378,9 @@ export function resolveResumeAccountId(
 function copilotSummary(id: string): CopilotAccountSummary {
   const account = listCopilotAccounts().find((item) => item.id === id);
   if (!account) throw new UnknownCopilotAccountError(id);
+  const observation = agentRegistry().readOnlySnapshot().quotaObservations.copilot[id];
+  const observedMs = observation ? Date.parse(observation.observedAt) : Number.NaN;
+  const fresh = observation?.authenticated === true && Number.isFinite(observedMs) && Date.now() >= observedMs && Date.now() - observedMs <= 5 * 60_000;
   return {
     id: account.id,
     label: account.label,
@@ -375,7 +393,12 @@ function copilotSummary(id: string): CopilotAccountSummary {
       plan: null,
       checkedAt: copilotConfigCheckedAt(account.home),
     },
-    limits: unavailableLimits(),
+    limits: observation?.limits ? {
+      state: fresh ? "fresh" : "stale",
+      session: observation.limits.session,
+      weekly: observation.limits.weekly,
+      checkedAt: observation.observedAt,
+    } : unavailableLimits(),
     login: null,
     loginCommand: account.kind === "managed" ? copilotLoginCommand(account.home) : null,
   };
@@ -491,9 +514,21 @@ export const accountManager: AccountManager = {
     return contextForSpawn(engine, requested ?? agentRegistry().engineRouting(engine).activeAccountId ?? undefined);
   },
   resolveHeadlessSpawn(engine, requested, excludedIds, project, model) {
-    /* No capacity signal exists for Copilot, so an automatic pick cannot be
-       honest (design 3.9). */
-    if (engine === "copilot") return { kind: "unavailable" };
+    if (engine === "copilot") {
+      const selected = selectProjectAccount({
+        project: null,
+        engine: "copilot",
+        accounts: listCopilotAccounts().map((account) => ({ id: account.id, authPresent: copilotSignedInUser(account.home) !== null })),
+        observations: agentRegistry().quotaObservations("copilot"),
+        bindings: [],
+        preferredId: requested ?? activeCopilotAccountId(),
+        excludedIds,
+        unbound: "capacity",
+        model,
+      });
+      if (selected.kind === "available") return { kind: "available", account: copilotAccountForSpawn(selected.accountId) };
+      return selected.kind === "exhausted" ? { kind: "exhausted", resetsAt: selected.resetsAt } : { kind: "unavailable" };
+    }
     const selected = selectProjectAccount({
       project,
       engine,
@@ -524,8 +559,21 @@ export const accountManager: AccountManager = {
      resolved by widening the set. */
   resolveProjectSpawn(engine, request) {
     if (engine === "copilot") {
-      if (!request.requestedId) return { kind: "unavailable", allowedAccountIds: [] };
-      try { return { kind: "available", account: copilotAccountForSpawn(request.requestedId) }; }
+      const selected = selectProjectAccount({
+        project: null,
+        engine: "copilot",
+        accounts: listCopilotAccounts().map((account) => ({ id: account.id, authPresent: copilotSignedInUser(account.home) !== null })),
+        observations: agentRegistry().quotaObservations("copilot"),
+        bindings: [],
+        requestedId: request.requestedId,
+        preferredId: request.preferredId ?? activeCopilotAccountId(),
+        excludedIds: request.excludedIds ?? [],
+        unavailableIds: request.unavailableIds ?? [],
+        unbound: "capacity",
+        model: request.model,
+      });
+      if (selected.kind !== "available") return { ...selected, allowedAccountIds: selected.allowedAccountIds ?? [] };
+      try { return { kind: "available", account: copilotAccountForSpawn(selected.accountId) }; }
       catch { return { kind: "unavailable", allowedAccountIds: [] }; }
     }
     const selected = selectProjectAccount({

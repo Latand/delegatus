@@ -1,9 +1,9 @@
 # The orchestrator
 
-Every project in Agent Log Viewer can designate one agent as its
+Every project in Delegatus can designate one agent as its
 **orchestrator**. You tell it what you want shipped, in a dock beside the
 board; it opens a lane per issue, spawns the implementer, runs a fresh reviewer
-each round, merges on APPROVE, and reports back. It works through the Viewer's
+each round, merges on APPROVE, and reports back. It works through Delegatus's
 own HTTP API and MCP tools, so everything it starts is a card you can open,
 read, interrupt or take over.
 
@@ -15,17 +15,17 @@ what to ship, and go to the board when an agent needs a decision.
 
 ## Before you start
 
-1. **Run the Viewer.** `bunx agent-log-viewer` serves it on `127.0.0.1:8898`
+1. **Run Delegatus.** `bunx delegatus-cli` serves it on `127.0.0.1:8898`
    and supervises the structured runtime host that agents launch through — see
    [Run](../README.md#run). Neither Docker nor tmux is required for this flow.
-2. **Register the Viewer MCP server** for the engine that will hold the seat:
+2. **Register the Delegatus MCP server** (under the key `viewer`) for the engine that will hold the seat:
    `scripts/install-mcp.sh` from a clone, or the one-line `claude mcp add
    viewer …` / `[mcp_servers.viewer]` snippets in
    [Connect an orchestrator through MCP](../README.md#connect-an-orchestrator-through-mcp).
    The create draft reports what it found — `viewer MCP: registered ✓`, or the
    exact command to run when it finds none. An orchestrator without that
    registration can still talk to you; it cannot drive the board.
-3. **Open the project you want driven.** A project is a repository the Viewer
+3. **Open the project you want driven.** A project is a repository Delegatus
    has seen an agent working in, or one you add with **Create project**. The
    orchestrator spawns its lanes as git worktrees of that checkout.
 
@@ -141,7 +141,7 @@ handoff the server composes: the predecessor's identity and exact `conversation_
 the project's open board tasks, your notes, and one compact **Rotation history**
 section standing in for every earlier handoff — so a seat that has rotated a
 dozen times costs exactly what a fresh one costs. The predecessor keeps its
-conversation, its card and ordinary Viewer access; only its manager authority
+conversation, its card and ordinary Delegatus access; only its manager authority
 moves. Both cards stay linked, and the successor's header links back.
 
 Nothing rotates by itself. Crossing the threshold changes what the dock says
@@ -199,7 +199,7 @@ that outlives the run — the runtime, the flow and agent layers, the scanner.
 Those lanes hold their merge until a review round comes back with no findings
 at all, so they get the strongest model at the highest effort; the hard
 diagnostic bugs are routed the same way. This repository keeps its own merge
-bars in `.claude/skills/llv-conveyor/SKILL.md`.
+bars in `.claude/skills/delegatus-conveyor/SKILL.md`.
 
 The presets live in `src/lib/roles/defaults.ts`; a pipeline stage or a flow
 role reference resolves through them, and an explicit `engine`/`model`/`effort`

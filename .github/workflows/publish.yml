@@ -215,6 +215,10 @@ jobs:
             package/bin/cli.mjs \
             package/bin/mcp-server.mjs \
             package/bin/server-runtime.mjs \
+            package/bin/appDir.mjs \
+            package/bin/envAlias.mjs \
+            package/bin/legacy-cli.mjs \
+            package/bin/legacy-mcp-server.mjs \
             package/dist/mcp-server.mjs \
             package/dist/standalone/server.js; do
             if ! grep -Fxq "$required_entry" "$inventory"; then
@@ -232,7 +236,7 @@ jobs:
             exit 1
           fi
           cli_help="$(node "$extract_dir/package/bin/cli.mjs" --help)"
-          if [[ "$cli_help" != *"Usage: agent-log-viewer"* ]]; then
+          if [[ "$cli_help" != *"Usage: delegatus"* ]]; then
             echo "Packaged CLI help is unavailable" >&2
             exit 1
           fi

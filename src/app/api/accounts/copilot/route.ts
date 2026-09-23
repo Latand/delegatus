@@ -35,7 +35,7 @@ function copilotAccountsBody() {
       kind: account.kind,
       active: account.id === active,
       auth: account.auth,
-      "user": copilotSignedInUser(account.home)?.login ?? null,
+      "user": copilotSignedInUser(account.home),
       loginCommand: account.kind === "managed" ? copilotLoginCommand(account.home, binary) : null,
       login: copilotLoginSupervisor.forAccount(account.id),
     })),

@@ -19,7 +19,9 @@ function installedPackage(serverSource = `
   fs.mkdirSync(path.join(root, "bin"), { recursive: true });
   fs.mkdirSync(path.join(root, "dist"), { recursive: true });
   fs.copyFileSync(path.join(import.meta.dir, "mcp-server.mjs"), path.join(root, "bin", "mcp-server.mjs"));
-  fs.copyFileSync(path.join(import.meta.dir, "server-runtime.mjs"), path.join(root, "bin", "server-runtime.mjs"));
+  for (const name of ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs"]) {
+    fs.copyFileSync(path.join(import.meta.dir, name), path.join(root, "bin", name));
+  }
   fs.writeFileSync(path.join(root, "dist", "mcp-server.mjs"), serverSource, "utf8");
   return { root, launcher: path.join(root, "bin", "mcp-server.mjs") };
 }

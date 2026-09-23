@@ -1,7 +1,7 @@
 # WakaTime activity integration
 
-Agent Log Viewer can publish observed Claude and Codex turn activity to your
-WakaTime account. The integration starts only when the Viewer process has
+Delegatus can publish observed Claude and Codex turn activity to your
+WakaTime account. The integration starts only when the Delegatus process has
 `LLV_WAKATIME_ENABLED=1`.
 
 ## Setup
@@ -10,28 +10,28 @@ The key file is the supported credential source. This keeps the credential out
 of shell history, process arguments, and process environments.
 
 ```bash
-install -d -m 700 "${XDG_CONFIG_HOME:-$HOME/.config}/agent-log-viewer"
+install -d -m 700 "${XDG_CONFIG_HOME:-$HOME/.config}/delegatus"
 umask 077
 read -r -s -p "WakaTime API key: " LLV_WAKATIME_KEY_INPUT
 printf '\n'
-printf '%s\n' "$LLV_WAKATIME_KEY_INPUT" > "${XDG_CONFIG_HOME:-$HOME/.config}/agent-log-viewer/wakatime-api-key"
+printf '%s\n' "$LLV_WAKATIME_KEY_INPUT" > "${XDG_CONFIG_HOME:-$HOME/.config}/delegatus/wakatime-api-key"
 unset LLV_WAKATIME_KEY_INPUT
-chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/agent-log-viewer/wakatime-api-key"
+chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/delegatus/wakatime-api-key"
 ```
 
-Set `LLV_WAKATIME_ENABLED=1` in the environment that starts Agent Log Viewer,
-then restart the Viewer. The Viewer accepts the key file only when it is a
+Set `LLV_WAKATIME_ENABLED=1` in the environment that starts Delegatus,
+then restart Delegatus. Delegatus accepts the key file only when it is a
 directly opened regular file with exact mode `0600`. Symlinks are rejected
 before credential bytes are read.
 
-The Viewer reads credentials in its Node process. It sends the key only in the
+Delegatus reads credentials in its Node process. It sends the key only in the
 HTTPS `Authorization` header for `api.wakatime.com`. Browser payloads, local
 state, request bodies, URLs, diagnostics, and transcripts exclude it. At
-startup the Viewer discards any legacy `WAKATIME_API_KEY` value without reading
+startup Delegatus discards any legacy `WAKATIME_API_KEY` value without reading
 it, before any agent, reviewer, tmux pane, runtime host, or copied environment
 snapshot is created. Resolved Compose snapshots, deployment commands, and
 candidate container metadata also exclude the legacy variable. Replacing the
-key file is detected on the next delivery tick, including after a Viewer
+key file is detected on the next delivery tick, including after a Delegatus
 restart.
 
 ## Activity mapping
@@ -42,7 +42,7 @@ direct operator action is one point heartbeat at its admission time.
 
 | WakaTime field | Value |
 | --- | --- |
-| Project | The Viewer's canonical project attribution, including parent-repository grouping for worktrees. |
+| Project | Delegatus's canonical project attribution, including parent-repository grouping for worktrees. |
 | Entity | An opaque, stable identifier such as `agent-log-viewer/codex/0123abcd…` for agent turns or `agent-log-viewer/operator/codex/0123abcd…` for operator points. |
 | Category | `ai coding`. |
 | Language | Omitted because heartbeat attribution has no source-file language. |
@@ -65,13 +65,13 @@ unavailable attribution rejects the input.
 Recording is optional, and an outage in it never withholds a control. An
 attributed action whose heartbeat cannot be stored — a corrupt, busy, or
 unwritable state file — still sends, spawns, answers, or starts its call. The
-point is dropped, and the Viewer logs one `[wakatime]
+point is dropped, and Delegatus logs one `[wakatime]
 operator_activity_not_stored` diagnostic carrying an outcome class only
 (`state_unreadable`, an `errno` such as `EACCES`, or `unavailable`). Only an
 unattributed, conflicting, or unauthorized action is refused, and that refusal
 is unchanged.
 
-Signed internal-service provenance marks Viewer monitor, MCP and bridge, and
+Signed internal-service provenance marks Delegatus monitor, MCP and bridge, and
 orchestrator requests as background traffic. Agent capability provenance
 excludes other agent-originated requests from direct operator points. Agent and
 orchestrator work caused by that traffic remains counted through the existing
@@ -93,10 +93,10 @@ authoritative during silent long-running tool calls.
 
 ## Delivery and local state
 
-The Viewer persists work to
-`${XDG_CONFIG_HOME:-~/.config}/agent-log-viewer/state/wakatime-state.json`
+Delegatus persists work to
+`${XDG_CONFIG_HOME:-~/.config}/delegatus/state/wakatime-state.json`
 before sending it. The state directory uses mode `0700`; the state file uses
-mode `0600`. The outbox survives Viewer restarts and contains payload metadata,
+mode `0600`. The outbox survives Delegatus restarts and contains payload metadata,
 including project names and timestamps. It also stores a nonsecret hashed
 credential-generation marker derived from key-file metadata. It contains no
 credential, raw key-file stamp, or raw conversation identifier.
@@ -116,7 +116,7 @@ the next tick. Other permanent HTTP 4xx responses remove the attempted batch
 and increment a local count.
 
 The outbox retains at most 10,000 events and 5,000 streams. During a long
-outage, the Viewer compacts interior samples to ten-minute spacing and can
+outage, Delegatus compacts interior samples to ten-minute spacing and can
 drop the oldest whole streams to stay within those bounds. Scanner requests,
 agent execution, and browser responses do not wait for WakaTime delivery.
 Compact retired watermarks keep delivered stream cursors for 30 days after a
@@ -131,7 +131,7 @@ work after it acquires the released or restart-recovered lease.
 
 WakaTime's Heartbeats endpoint provides no idempotency key. Delivery therefore
 has an at-least-once window: a process exit after WakaTime accepts a request
-and before the Viewer records that acceptance can replay the in-flight batch
+and before Delegatus records that acceptance can replay the in-flight batch
 of up to 25 heartbeats. Other restart paths coalesce events through stable
 local keys.
 
@@ -143,8 +143,8 @@ records cannot be recovered without a backup.
 An unreadable file on disk is never overwritten, so nothing is lost before you
 have decided what to keep, and delivery stays stopped until you act: writes
 refuse with `state_write_failed`, and each operator action logs
-`operator_activity_not_stored`. To resume collection, stop the Viewer, move the
-file aside (keep it if you want to attempt recovery), and start the Viewer
+`operator_activity_not_stored`. To resume collection, stop Delegatus, move the
+file aside (keep it if you want to attempt recovery), and start Delegatus
 again; a missing file creates a fresh version 1 with a forward-only boundary.
 
 ## Verification
@@ -156,17 +156,17 @@ classes, HTTP status values, retry timestamps, and counts.
 Run one short turn and one turn longer than two minutes. In the WakaTime
 dashboard, confirm the canonical project, `AI coding` category, active span,
 and idle gap after excluding `agent-log-viewer-boundary`. Stop network access for one tick, restore it, and confirm that the
-queued activity arrives after recovery. Restart the Viewer during queued work
+queued activity arrives after recovery. Restart Delegatus during queued work
 to exercise durable resume.
 
 ## Disablement
 
-Unset `LLV_WAKATIME_ENABLED` and restart Agent Log Viewer. The scheduler stays
+Unset `LLV_WAKATIME_ENABLED` and restart Delegatus. The scheduler stays
 inactive and the outbox remains dormant on disk. Remove the key file when you
-also want to revoke the Viewer's local credential access:
+also want to revoke Delegatus's local credential access:
 
 ```bash
-rm "${XDG_CONFIG_HOME:-$HOME/.config}/agent-log-viewer/wakatime-api-key"
+rm "${XDG_CONFIG_HOME:-$HOME/.config}/delegatus/wakatime-api-key"
 ```
 
 Removing the local file does not revoke the key at WakaTime. Rotate or revoke

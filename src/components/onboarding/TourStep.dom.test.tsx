@@ -68,7 +68,7 @@ test("four cards say what the product is, in its own words, each with a picture"
   expect(cards.every((element) => element.querySelector("svg"))).toBe(true);
   expect(cards[0]!.textContent).toContain("An orchestrator for coding agents");
   expect(cards[0]!.textContent).toContain("The work is tasks on each project's board");
-  expect(cards[1]!.textContent).toContain("the Viewer wakes it every 5 minutes");
+  expect(cards[1]!.textContent).toContain("Delegatus wakes it every 5 minutes");
   expect(cards[2]!.textContent).toContain("Fail sends it back for another round");
   /* The corner's own word, so the card and the screen say the same thing. */
   expect(cards[3]!.textContent).toContain("“Needs you” in the corner");

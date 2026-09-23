@@ -3,16 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useLocale } from "@/lib/i18n";
+import type { EngineLimits, LimitsProvenance } from "@/lib/types";
 
 import { engineTintOf } from "./utils";
+import { LimitRow, quotaAsOfHint } from "./LimitRow";
+import { windowLabel } from "./rateLimit";
 
-/**
- * GitHub Copilot accounts in the limits footer (docs/design/copilot-engine.md
- * 3.9, slice 1). One row, shown only once the Copilot CLI is installed or an
- * account exists; opening it lists the accounts, picks the one launches use,
- * adds a managed account and hands over the command that signs it in from a
- * terminal. Copilot reports no plan limits yet, so the row carries none.
- */
+/** GitHub Copilot account switcher and monthly allowance in the footer. */
 
 interface CopilotAccountRow {
   id: string;
@@ -37,8 +34,14 @@ function isBody(value: unknown): value is CopilotAccountsBody {
   return Boolean(body && typeof body === "object" && body.cli && Array.isArray(body.accounts));
 }
 
-export function CopilotFooterRow() {
-  const { t } = useLocale();
+export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onChanged }: {
+  limits: EngineLimits | null;
+  limitsAccountId: string | null;
+  now: number;
+  provenance: LimitsProvenance;
+  onChanged: () => void;
+}) {
+  const { t, locale } = useLocale();
   const [body, setBody] = useState<CopilotAccountsBody | null>(null);
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState("");
@@ -85,7 +88,10 @@ export function CopilotFooterRow() {
         setError((next as { error?: string } | null)?.error ?? t("copilot.accounts.failed"));
         return;
       }
-      if (isBody(next)) setBody(next);
+      if (isBody(next)) {
+        setBody(next);
+        onChanged();
+      }
     } catch {
       setError(t("copilot.accounts.failed"));
     }
@@ -119,6 +125,19 @@ export function CopilotFooterRow() {
           {active ? active.label : t("copilot.accounts.none")}
         </span>
       </button>
+      {active?.id === limitsAccountId ? (
+        <div className="px-3.5 pb-2">
+          <LimitRow
+            label={windowLabel(t, "weekly", limits?.weekly?.windowMinutes)}
+            window={limits?.weekly ?? null}
+            engineColor={tint.color}
+            now={now}
+            staleHint={limits?.weekly?.observedAt != null && now - limits.weekly.observedAt > 300
+              ? quotaAsOfHint(limits.weekly.observedAt, locale)
+              : provenance.source === "unavailable" ? t("limits.noDataYet") : null}
+          />
+        </div>
+      ) : null}
       {open ? (
         <div role="dialog" aria-label={t("copilot.accounts.title")} className="flex flex-col gap-2 border-t border-border bg-sunken px-3.5 py-2.5 text-[11.5px]">
           {!body.cli.present && body.cli.reason ? <p className="text-muted">{body.cli.reason}</p> : null}
