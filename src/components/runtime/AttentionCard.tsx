@@ -206,7 +206,7 @@ export function AttentionCard({ attention, onApprove, onDeny, onAnswerQuestion, 
           })}
           {questions.length > 1 || questions.some((question) => question.multiSelect) ? (
             <button
-              className="inline-flex items-center gap-1.5 rounded-[8px] bg-accent px-3 py-1.5 text-[13px] font-bold text-white disabled:opacity-60"
+              className="inline-flex items-center gap-1.5 rounded-[8px] bg-brand px-3 py-1.5 text-[13px] font-bold text-on-brand disabled:opacity-60"
               disabled={busy || questions.some((_question, index) => !(selections[index]?.length))}
               onClick={() => onAnswerQuestions?.(questions.map((_question, index) => selections[index] ?? []))}
             >

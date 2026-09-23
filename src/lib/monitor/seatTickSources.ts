@@ -19,6 +19,7 @@ import { statePath } from "@/lib/configDir";
 import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRecord } from "@/lib/lifecycle/liveness";
+import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
 import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
@@ -794,6 +795,7 @@ async function seatInput(project: string, policy: SeatTickPolicy, sources: SeatT
     designatedAt: typeof seat.designatedAt === "string" ? seat.designatedAt : null,
     turn,
     activity,
+    mandateCarriesTickContract: orchestratorMandateCarriesTickContract(seat),
   };
 }
 

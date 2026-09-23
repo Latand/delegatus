@@ -209,7 +209,7 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
       <button
         type="submit"
         disabled={busy || !root.trim()}
-        className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] bg-accent px-4 text-body font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] bg-brand px-4 text-body font-semibold text-on-brand disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <FolderPlus className="h-4 w-4" aria-hidden />}
         {t("mobile2.projects.createSubmit")}

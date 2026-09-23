@@ -1291,7 +1291,9 @@ export class SqliteAgentRegistryStore {
       const load = () => {
         if (loaded) return;
         const stored = this.meta(field);
-        if (stored !== null) value = JSON.parse(stored) as typeof value;
+        /* Through the registry's normalizer, as every row is: a meta value
+           persisted before an engine existed has no key for it (#2045). */
+        if (stored !== null) value = this.normalize({ version: 2, entries: {}, receipts: {}, [field]: JSON.parse(stored) })[field] as typeof value;
         loaded = true;
         loadedMeta.set(field, value);
         baselineMeta.set(field, structuredClone(value));

@@ -77,8 +77,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "kind.job": "джоба",
   "kind.background": "фон",
   "kind.handoff": "хендофф",
-
-  "rail.title": "Логи агентів",
   "rail.filter": "Фільтр проєктів…",
   "rail.projects": "Проєкти",
   "rail.overview": "Огляд",
@@ -2968,6 +2966,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.notOnTaskHint": "Робота, якою ще не володіє жодна записана задача: пайплайни, цикли ревʼю та розмови, розпочаті поза задачею.",
   "kanban.untitled": "Задача без назви",
   "kanban.untitledConversation": "Розмова без назви",
+  "roleFrame.neutral": "Агент",
+  "roleFrame.markTitle": "Роль: {role}",
   "kanban.namePending": "Назва ще не визначена · її дасть перша дія агента",
   "kanban.collapsed": "згорнуто",
   "kanban.collapseCard": "Згорнути «{title}»",

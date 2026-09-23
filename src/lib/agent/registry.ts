@@ -3564,10 +3564,10 @@ export function normalizeRegistry(value: unknown, policy?: McpGrantPolicy): Regi
         ? Object.fromEntries(Object.entries(parsed.conversationAliases).filter(([alias, destination]) => alias.startsWith("conversation_") && typeof destination === "string" && destination.startsWith("conversation_"))) as RegistryFile["conversationAliases"]
         : {},
       conversationRevision: parsed.conversationRevision && typeof parsed.conversationRevision === "object"
-        ? { ...EMPTY.conversationRevision, ...parsed.conversationRevision }
+        ? normalizeConversationRevision(parsed.conversationRevision)
         : clone(EMPTY.conversationRevision),
       migrationIntents: parsed.migrationIntents && typeof parsed.migrationIntents === "object" ? parsed.migrationIntents : {},
-      engineRouting: parsed.engineRouting && typeof parsed.engineRouting === "object" ? { ...EMPTY.engineRouting, ...parsed.engineRouting } : clone(EMPTY.engineRouting),
+      engineRouting: normalizeEngineRouting(parsed.engineRouting),
       autoBalance: parsed.autoBalance && typeof parsed.autoBalance === "object"
         ? { claude: normalizePolicy(parsed.autoBalance.claude), codex: normalizePolicy(parsed.autoBalance.codex), copilot: normalizePolicy(parsed.autoBalance.copilot) }
         : {
@@ -3576,7 +3576,7 @@ export function normalizeRegistry(value: unknown, policy?: McpGrantPolicy): Regi
             copilot: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
           },
       quotaObservations: parsed.quotaObservations && typeof parsed.quotaObservations === "object"
-        ? { ...EMPTY.quotaObservations, ...parsed.quotaObservations }
+        ? normalizeQuotaObservations(parsed.quotaObservations)
         : clone(EMPTY.quotaObservations),
       heldDeliveries,
       deliveryOperationOwners: normalizeDeliveryOperationOwners(parsed.deliveryOperationOwners, heldDeliveries),
@@ -3586,6 +3586,41 @@ export function normalizeRegistry(value: unknown, policy?: McpGrantPolicy): Regi
         : {},
       pendingSupersedence: normalizePendingSupersedence(parsed.pendingSupersedence),
   }), policy);
+}
+
+/* A registry persisted before an engine existed (Copilot, #2045) carries no
+   key for it, so every per-engine record gets each engine of the union here.
+   Copies, never EMPTY's own objects: a `revision += 1` must not reach the
+   default every later read starts from. */
+function normalizeEngineRouting(value: unknown): RegistryFile["engineRouting"] {
+  const stored = value && typeof value === "object" ? value as Partial<RegistryFile["engineRouting"]> : {};
+  const routing = clone(EMPTY.engineRouting);
+  for (const engine of Object.keys(routing) as AgentEngine[]) {
+    const route = stored[engine];
+    if (!route || typeof route !== "object") continue;
+    routing[engine] = {
+      activeAccountId: typeof route.activeAccountId === "string" ? route.activeAccountId : null,
+      revision: Number.isSafeInteger(route.revision) ? route.revision : 0,
+    };
+  }
+  return routing;
+}
+
+function normalizeConversationRevision(value: Partial<RegistryFile["conversationRevision"]>): RegistryFile["conversationRevision"] {
+  const revisions = clone(EMPTY.conversationRevision);
+  for (const engine of Object.keys(revisions) as AgentEngine[]) {
+    if (Number.isSafeInteger(value[engine])) revisions[engine] = value[engine]!;
+  }
+  return revisions;
+}
+
+function normalizeQuotaObservations(value: Partial<RegistryFile["quotaObservations"]>): RegistryFile["quotaObservations"] {
+  const observations = clone(EMPTY.quotaObservations);
+  for (const engine of Object.keys(observations) as AgentEngine[]) {
+    const stored = value[engine];
+    if (stored && typeof stored === "object") observations[engine] = stored;
+  }
+  return observations;
 }
 
 function sqliteRevisionFromParsed(value: unknown): number | null {
@@ -4883,20 +4918,63 @@ export class AgentRegistry {
   }
 
   rotateSpawnCapabilityForPath(artifactPath: string): string | null {
+    return this.rotateSpawnCapabilityWhere((file) => Object.values(file.conversations)
+      .find((candidate) => conversationOwnsPath(candidate, artifactPath))?.id ?? null)?.capability ?? null;
+  }
+
+  /**
+   * Mint a capability for a conversation's newest receipt, as a relaunch does,
+   * and return the digests it replaced so a launch that does not survive can
+   * hand them back ({@link restoreSpawnCapabilityDigests}).
+   */
+  rotateSpawnCapabilityForConversation(conversationId: string): {
+    capability: string;
+    digest: string;
+    previous: Record<string, string | null>;
+  } | null {
+    return this.rotateSpawnCapabilityWhere((file) => {
+      const owner = resolveConversationAlias(file, conversationId as ViewerConversationId);
+      return file.conversations[owner] ? owner : null;
+    });
+  }
+
+  /** The one rotation: every receipt of the conversation loses its digest and
+      the newest one takes the new capability's. */
+  private rotateSpawnCapabilityWhere(conversationOf: (file: RegistryFile) => ViewerConversationId | null): {
+    capability: string;
+    digest: string;
+    previous: Record<string, string | null>;
+  } | null {
     const capability = crypto.randomBytes(32).toString("base64url");
     const digest = crypto.createHash("sha256").update(capability).digest("hex");
     return this.mutate((file) => {
-      const conversation = Object.values(file.conversations)
-        .find((candidate) => conversationOwnsPath(candidate, artifactPath));
-      if (!conversation) return null;
+      const conversationId = conversationOf(file);
+      if (!conversationId) return null;
       const receipts = Object.values(file.receipts)
-        .filter((candidate) => resolveConversationAlias(file, candidate.conversationId) === conversation.id)
+        .filter((candidate) => resolveConversationAlias(file, candidate.conversationId) === conversationId)
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
       const current = receipts[0];
       if (!current) return null;
+      const previous = Object.fromEntries(receipts.map((receipt) => [receipt.launchId, receipt.spawnCapabilityDigest ?? null]));
       for (const receipt of receipts) receipt.spawnCapabilityDigest = null;
       current.spawnCapabilityDigest = digest;
-      return capability;
+      return { capability, digest, previous };
+    });
+  }
+
+  /** Undo {@link rotateSpawnCapabilityForConversation}, and only while the
+      digest it minted is still the conversation's current one: a later launch
+      that rotated again owns the identity and is left alone. */
+  restoreSpawnCapabilityDigests(conversationId: string, rotatedDigest: string, previous: Record<string, string | null>): boolean {
+    return this.mutate((file) => {
+      const owner = resolveConversationAlias(file, conversationId as ViewerConversationId);
+      const receipts = Object.values(file.receipts)
+        .filter((candidate) => resolveConversationAlias(file, candidate.conversationId) === owner);
+      if (!receipts.some((receipt) => receipt.spawnCapabilityDigest === rotatedDigest)) return false;
+      for (const receipt of receipts) {
+        receipt.spawnCapabilityDigest = Object.hasOwn(previous, receipt.launchId) ? previous[receipt.launchId]! : null;
+      }
+      return true;
     });
   }
 

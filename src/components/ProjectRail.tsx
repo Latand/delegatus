@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { DelegatusMark } from "@/components/brand/BrandMark";
 import { Badge } from "@/components/ui/Badge";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { CreateProjectOutcome, CreateProjectRequestOptions } from "@/hooks/useProjectCuration";
 import { projectMatchesQuery } from "@/lib/displayNames";
+import { PRODUCT_NAME } from "@/lib/brand";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -188,7 +190,8 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
              that maximum still fits without clipping in the ~86px it is allotted. */
           <>
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-              <span className="min-w-0 truncate">{t("rail.title")}</span>
+              <DelegatusMark size={20} />
+              <span className="min-w-0 truncate" data-rail-brand="">{PRODUCT_NAME}</span>
               {totalLive ? (
                 <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted">{totalLive > 99 ? "99+" : totalLive}</span>
               ) : null}
@@ -202,12 +205,16 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           </>
         ) : (
           /* Six unexplained things in 240px was the complaint (issue #1819).
-             The desktop header keeps the title, the control that puts the rail
-             away, and ONE menu; the counts are gone from here, because the
-             rows below carry their own marks and the board header already says
-             how many agents work and how many need the operator. */
+             The desktop header keeps the product's mark and name, the control
+             that puts the rail away, and ONE menu; the counts are gone from
+             here, because the rows below carry their own marks and the board
+             header already says how many agents work and how many need the
+             operator. */
           <>
-            <span className="min-w-0 flex-1 truncate">{t("rail.title")}</span>
+            <span className="flex min-w-0 flex-1 items-center gap-2">
+              <DelegatusMark size={20} />
+              <span className="min-w-0 truncate" data-rail-brand="">{PRODUCT_NAME}</span>
+            </span>
             {onHide ? (
               <button
                 type="button"

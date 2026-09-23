@@ -66,7 +66,7 @@ const EDGE: Record<"warning" | "danger" | "success" | "accent", string> = {
 const BUTTON = "inline-flex h-8 shrink-0 items-center justify-center whitespace-nowrap rounded-[8px] border px-3.5 text-ui font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-55 pointer-coarse:h-11 max-sm:h-11 max-sm:w-full";
 const TONE = {
   secondary: "border-border bg-card text-primary hover:enabled:border-strong focus-visible:ring-accent/40",
-  primary: "border-accent bg-accent text-white hover:enabled:opacity-90 focus-visible:ring-accent/40",
+  primary: "border-brand bg-brand text-on-brand hover:enabled:opacity-90 focus-visible:ring-accent/40",
   warning: "border-warning bg-card text-warning focus-visible:ring-warning/40",
   warningPrimary: "border-warning bg-warning text-canvas focus-visible:ring-warning/40",
 } as const;

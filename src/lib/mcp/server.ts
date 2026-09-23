@@ -39,6 +39,7 @@ import {
   MIN_SNAPSHOT_STRING_LENGTH, VIEW_RESOLUTIONS, VIEW_SCOPE_KINDS,
 } from "@/lib/view/types";
 
+import { runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
 import type { McpToolPolicy } from "./toolAllowlist";
 
 export const MCP_SERVER_NAME = "viewer";
@@ -3000,7 +3001,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Called with no change fields it is a read. `project` defaults to your own, and naming another project's is allowed rather than refused; the answer says which of the two you did, and the record, the board card and the tick's journal all carry who changed whose tick.",
     "`enabled: false` stops every wake for that project until someone turns it back on — indefinitely, if that is the decision. `wakeIntervalMinutes` sets how often a wake may be sent (null restores the default hour); the tick cannot wake more often than it checks, so a value under the check interval simply means every check. `untilMinutes` is an optional expiry after which the setting lapses back to the default — omit it and the setting stands until it is changed.",
     "A `reason` in your own words is required whenever the settings leave the default, and it is what the board card shows: a tick that has gone quiet with nothing saying why cannot be told apart from a tick that broke. Restoring the default needs no reason.",
-    "`monitorPrompt` is your own additional prompt for this project's monitor, in your own words: it is appended to every later scheduler-fired wake beside the reasons and items the tick derives, never replacing them or the contract. Send a new `monitorPrompt` to replace it and `monitorPrompt: null` to clear it. It is redacted before it is stored and refused, never cut, when it is over the limit the error names. Writes acknowledge changedFields and revision with monitorPromptLength; the note body is omitted and counted. full:true returns it. By default every answer carries only `monitorPromptLength`, and `verbose: true` reads the stored note back in full (in `monitorPrompt`, `settings` and `effective`), and a wake shows only a marked preview of a long note. It changes what a wake says and never whether or when one is sent, so a prompt on its own needs no reason and leaves the project on the default tick — and `untilMinutes` expires the on/off and cadence setting, not the prompt.",
+    "`monitorPrompt` is your own additional prompt for this project's monitor, in your own words: it is appended to every later scheduler-fired wake beside the reasons and items the tick derives, never replacing them or the contract. Send a new `monitorPrompt` to replace it and `monitorPrompt: null` to clear it; to change one line, send `replaceLine`, `removeLine` or `appendLine` instead of the whole note. It is redacted before it is stored and refused, never cut, when it is over the limit the error names. A write answers only `{changed, revision, changedFields, monitorPromptLength}` (plus `project` and `scope` when it changed another project's tick). A read carries `monitorPromptLength`, and `verbose: true` returns the stored note once, as `monitorPrompt`. A wake shows the note only when it changed since the last wake the seat received, and then as a marked preview of a long note. It changes what a wake says and never whether or when one is sent, so a prompt on its own needs no reason and leaves the project on the default tick — and `untilMinutes` expires the on/off and cadence setting, not the prompt.",
     "A project nobody has configured runs on the defaults, which are exactly the behaviour the tick has always had.",
     "The answer carries each fact once: the reason under `effective` (and under `settings` only when an expiry has set the two apart), and a standing fence as the `fence` object. `verbose: true` adds the stored reason under `settings`, the `defaults` block, and `fenceDetail`, the fence restated as one sentence.",
   ].join(" "),
@@ -3646,9 +3647,20 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     reason: z.string().trim().min(1).nullable().optional()
       .describe("Why, in your own words. Required whenever the settings leave the default; it is what the board card shows."),
     monitorPrompt: z.string().trim().min(1).nullable().optional()
-      .describe("Your own additional prompt for this project's monitor: what every later scheduler-fired wake should look at, appended to the reasons and items the tick derives. Send a new one to replace it, null to clear it. Redacted before it is stored; refused, not truncated, when over the limit. The reply carries the stored note in full plus monitorPromptLength. It never changes whether or when a wake is sent, and needs no reason."),
+      .describe("Your own additional prompt for this project's monitor: what every later scheduler-fired wake should look at, appended to the reasons and items the tick derives. Send a new one to replace it, null to clear it. Redacted before it is stored; refused, not truncated, when over the limit. It never changes whether or when a wake is sent, and needs no reason."),
+    replaceLine: z.object({
+      prefix: z.string().min(1).optional().describe("Replace the one note line starting with this text (leading spaces ignored). More or fewer than one match is refused."),
+      index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
+      text: z.string().describe("The new line."),
+    }).optional().describe("Replace one line of the stored note without resending the rest."),
+    removeLine: z.object({
+      prefix: z.string().min(1).optional().describe("Remove the one note line starting with this text (leading spaces ignored)."),
+      index: z.number().int().min(0).optional().describe("Or the zero-based line number; given with prefix, that line must start with it."),
+    }).optional().describe("Remove one line of the stored note."),
+    appendLine: z.string().min(1).optional()
+      .describe("Append one line to the stored note. Edits apply in the order replaceLine, removeLine, appendLine, under the monitorPrompt limit and redaction; not combined with monitorPrompt."),
     verbose: z.boolean().optional()
-      .describe("true: carry the stored monitorPrompt in full. Otherwise only the call that writes it echoes it, and every answer carries monitorPromptLength."),
+      .describe("true: return the stored note once, as monitorPrompt, with the full settings. Every answer carries monitorPromptLength."),
   }).passthrough(),
   account_limits: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3685,13 +3697,24 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result, isError: true };
         }
       }
+      /* A call over the shared HTTP endpoint names its caller by the
+         capability the route authenticated; it runs as that caller so every
+         resolver reads the request's identity rather than this process's. */
+      const httpCaller = mcpHttpCallerFromAuthInfo((extra as { authInfo?: unknown }).authInfo);
       const timeoutMs = 30_000;
       const deadline = deadlineSignal(timeoutMs, {
-        signal: extra.signal,
+        /* Over stdio a client's cancel reaches `extra.signal`. Over the
+           stateless HTTP endpoint it arrives on a later POST, to another
+           server, so the route hands over a signal of its own for this call:
+           aborted by that cancel, or by the client walking away. */
+        signal: (() => {
+          const cancelled = httpCaller?.cancelSignal(extra.requestId) ?? null;
+          return cancelled ? AbortSignal.any([extra.signal, cancelled]) : extra.signal;
+        })(),
         reason: "MCP tool deadline exceeded",
       });
       try {
-        const result = await service.callTool(toolName, args as McpToolArgs, {
+        const call = () => service.callTool(toolName, args as McpToolArgs, {
           signal: deadline.signal,
           deadlineAt: Date.now() + timeoutMs,
           /* #1629: the SDK hands the request's own `_meta` through on `extra`,
@@ -3702,6 +3725,7 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
              conversation last pointed at. */
           nativeWork: nativeWorkFromRequestMeta((extra as { _meta?: unknown })._meta),
         });
+        const result = await (httpCaller ? runAsMcpHttpCaller({ capability: httpCaller.capability }, call) : call());
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
           structuredContent: result,
@@ -3715,19 +3739,39 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
   return server;
 }
 
-export async function startViewerMcpServer(): Promise<void> {
-  const { admittedMcpHealthProbe, MCP_HEALTH_PROBE_CAPABILITY_ENV } = await import("./healthProbeAdmission");
+/** The `authInfo.clientId` the HTTP route stamps on an authenticated request. */
+export const MCP_HTTP_CLIENT_ID = "llv-spawn-capability";
+
+/** The authenticated HTTP caller the route attached to this request, or null
+    for a request that did not come through it (every stdio call). */
+function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancelSignal: (requestId: unknown) => AbortSignal | null }) | null {
+  if (!authInfo || typeof authInfo !== "object") return null;
+  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown } };
+  if (clientId !== MCP_HTTP_CLIENT_ID || typeof token !== "string" || !token) return null;
+  const lookup = typeof extra?.cancelSignal === "function" ? extra.cancelSignal as (requestId: unknown) => unknown : null;
+  return {
+    capability: token,
+    cancelSignal: (requestId) => {
+      const signal = lookup?.(requestId);
+      return signal instanceof AbortSignal ? signal : null;
+    },
+  };
+}
+
+/**
+ * The production tool service: bindings, the shared SQLite receipt store every
+ * Viewer MCP server writes (so a clientRequestId replays the same way whichever
+ * process or transport it arrives on), the per-call policy, and recovery.
+ */
+export async function createProductionViewerMcpService(hostHealthProbe = false): Promise<McpToolService> {
   const {
     productionViewerControlDependencies,
     viewerMcpBindings,
     viewerMcpRecoverableTools,
     viewerMcpToolPolicy,
   } = await import("./bindings");
-  const healthProbeCapability = process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
-  delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
-  const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
-  const service = createMcpToolService(
+  return createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     new SqliteMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
@@ -3735,6 +3779,14 @@ export async function startViewerMcpServer(): Promise<void> {
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
   );
+}
+
+export async function startViewerMcpServer(): Promise<void> {
+  const { admittedMcpHealthProbe, MCP_HEALTH_PROBE_CAPABILITY_ENV } = await import("./healthProbeAdmission");
+  const healthProbeCapability = process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
+  delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
+  const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
+  const service = await createProductionViewerMcpService(hostHealthProbe);
   const server = createViewerMcpServer(service);
   const transport = new StdioServerTransport();
   await server.connect(transport);

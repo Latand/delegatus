@@ -20,6 +20,8 @@ import { useCallback, useSyncExternalStore } from "react";
 export const SEAT_STORAGE_KEY = "llv:kanban-seat:v2";
 export const SEAT_STORAGE_KEY_V1 = "llv:kanban-seat:v1";
 export const SEAT_MIN_HEIGHT = 160;
+/** Bumped when the seat's default height changes; older dragged heights are dropped. */
+export const SEAT_HEIGHT_VERSION = 2;
 export const SEAT_SIDE_DEFAULT_WIDTH = 380;
 export const SEAT_SIDE_MIN_WIDTH = 320;
 export const SEAT_SIDE_MAX_WIDTH = 560;
@@ -52,7 +54,11 @@ function parse(raw: string | null): SeatRecord {
   if (!raw) return EMPTY;
   try {
     const value = JSON.parse(raw) as Partial<SeatRecord>;
-    const height = typeof value.height === "number" && Number.isFinite(value.height) ? value.height : null;
+    /* A height dragged before the default grew to 75% (role frames) was sized
+       against the old 30vh default; it is dropped once so the new default shows.
+       Every write marks its height as current. */
+    const current = (value as { heightV?: unknown }).heightV === SEAT_HEIGHT_VERSION;
+    const height = current && typeof value.height === "number" && Number.isFinite(value.height) ? value.height : null;
     const width = typeof value.width === "number" && Number.isFinite(value.width) ? clampSeatWidth(value.width) : null;
     const collapsed: Record<string, boolean> = {};
     if (value.collapsed && typeof value.collapsed === "object") {
@@ -103,7 +109,7 @@ function read(): SeatRecord {
 
 function write(next: SeatRecord): void {
   try {
-    storage()?.setItem(SEAT_STORAGE_KEY, JSON.stringify(next));
+    storage()?.setItem(SEAT_STORAGE_KEY, JSON.stringify({ ...next, heightV: SEAT_HEIGHT_VERSION }));
   } catch {
     /* private mode: the seat still works for this page */
     cachedRaw = undefined;

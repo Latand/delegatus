@@ -2,6 +2,7 @@
 
 import { TriangleAlert } from "lucide-react";
 import { memo, type CSSProperties } from "react";
+import { DelegatusMark } from "@/components/brand/BrandMark";
 import { useLocale } from "@/lib/i18n";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -242,7 +243,9 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
       <div className={`my-3 ${indent}overflow-hidden rounded-surface border border-accent/25 bg-accent-soft shadow-1`}>
         <div className="flex items-center gap-2 px-3.5 pt-2">
           <span className="flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-            <Mail className="h-3.5 w-3.5" aria-hidden />
+            {/* Internal traffic is relayed by Delegatus itself, so it carries the
+                product's mark; a peer's own team message keeps the envelope. */}
+            {item.internal ? <DelegatusMark size={20} /> : <Mail className="h-3.5 w-3.5" aria-hidden />}
           </span>
           {/* #1117: an MCP/structured relay says outright that it is internal
               traffic, and the peer pill names the sender ROLE, so the operator

@@ -478,3 +478,74 @@ export function applySeatTickSettingsChange(
   }
   return { ok: true, settings: next };
 }
+
+/** Where a line edit lands in the note: the one line starting with `prefix`
+    (leading whitespace ignored on both sides), or the line at the zero-based
+    `index`. Given both, the line at `index` must start with `prefix`, so an
+    index read off an older copy of the note cannot edit the wrong lane. */
+export interface SeatTickNoteLineTarget {
+  prefix?: string;
+  index?: number;
+}
+
+/**
+ * Edits to one line of the monitor note (#2030), so a seat keeping its lane
+ * ledger there changes a lane line by sending that line, never the whole note:
+ * rewriting a 2.3 KB note to change one line cost one seat 337 KB of input.
+ * Applied in this order, each against the note as the previous one left it.
+ */
+export interface SeatTickNoteLineEdits {
+  replaceLine?: SeatTickNoteLineTarget & { text: string };
+  removeLine?: SeatTickNoteLineTarget;
+  appendLine?: string;
+}
+
+function locateNoteLine(lines: readonly string[], target: SeatTickNoteLineTarget, edit: string): { ok: true; index: number } | { ok: false; error: string } {
+  const prefix = typeof target.prefix === "string" ? target.prefix.trimStart() : "";
+  if (target.index !== undefined) {
+    if (!Number.isInteger(target.index) || target.index < 0 || target.index >= lines.length) {
+      return { ok: false, error: `${edit}.index ${target.index} is outside the note, which has ${lines.length} line(s) numbered from 0. Nothing was stored` };
+    }
+    if (prefix && !lines[target.index]!.trimStart().startsWith(prefix)) {
+      return { ok: false, error: `${edit}: line ${target.index} of the note does not start with the prefix given beside it. Nothing was stored` };
+    }
+    return { ok: true, index: target.index };
+  }
+  if (!prefix) return { ok: false, error: `${edit} needs a non-empty prefix or an index` };
+  const matches = lines.flatMap((line, index) => (line.trimStart().startsWith(prefix) ? [index] : []));
+  if (matches.length !== 1) {
+    return { ok: false, error: `${edit}.prefix matches ${matches.length} lines of the note; it must match exactly one. Nothing was stored` };
+  }
+  return { ok: true, index: matches[0]! };
+}
+
+/** The note after its line edits, or why they were refused. Pure: the stored
+    note is handed in, and the result is written through
+    {@link applySeatTickSettingsChange} like a whole new note, under the same
+    limit and redaction. An edit that leaves nothing clears the note. */
+export function applySeatTickNoteLineEdits(
+  note: string | null,
+  edits: SeatTickNoteLineEdits,
+): { ok: true; monitorPrompt: string | null } | { ok: false; error: string } {
+  const lines = note ? note.split("\n") : [];
+  if (edits.replaceLine !== undefined) {
+    const { text, ...target } = edits.replaceLine;
+    if (typeof text !== "string") return { ok: false, error: "replaceLine.text must be a string" };
+    if (text.includes("\n")) return { ok: false, error: "replaceLine.text must be one line" };
+    const found = locateNoteLine(lines, target, "replaceLine");
+    if (!found.ok) return found;
+    lines[found.index] = text;
+  }
+  if (edits.removeLine !== undefined) {
+    const found = locateNoteLine(lines, edits.removeLine, "removeLine");
+    if (!found.ok) return found;
+    lines.splice(found.index, 1);
+  }
+  if (edits.appendLine !== undefined) {
+    if (typeof edits.appendLine !== "string") return { ok: false, error: "appendLine must be a string" };
+    if (edits.appendLine.includes("\n")) return { ok: false, error: "appendLine must be one line" };
+    lines.push(edits.appendLine);
+  }
+  const next = lines.join("\n");
+  return { ok: true, monitorPrompt: next.trim() ? next : null };
+}

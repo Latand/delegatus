@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="public/brand/delegatus-lockup-on-dark.svg">
+    <img alt="Delegatus" src="public/brand/delegatus-lockup.svg" width="340">
+  </picture>
+</p>
+
 # Agent Log Viewer
 
 Agent Log Viewer is a local web app for running Claude Code and Codex agents

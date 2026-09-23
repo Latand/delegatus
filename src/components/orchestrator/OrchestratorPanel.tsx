@@ -24,6 +24,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
+import { RoleFrameMark } from "../RoleFrameMark";
 import { ProcessStatusControls } from "../TaskHeader";
 import { useOrchestratorDraftPrefill, useOrchestratorDraftReveal } from "./draftPrefill";
 import { IncumbentHeader } from "./IncumbentHeader";
@@ -415,6 +416,7 @@ export function OrchestratorPanel({
       data-orchestrator-state={state.kind}
       data-orchestrator-mode={rotating ? "rotate" : "default"}
       aria-label={t("orchPanel.regionAria", { project: projectName })}
+      {...(variant === "dock" ? { "data-role-host": "dock", "data-role": "orchestrator" } : {})}
     >
       {variant === "seat" && collapsed && placement === "side" ? (
         /* Side, collapsed: a 44 px rail, one button whose dots keep the state
@@ -439,6 +441,7 @@ export function OrchestratorPanel({
         </button>
       ) : variant === "seat" ? (
         <header className="seat-head" data-seat-head={collapsed ? "strip" : "full"}>
+          <RoleFrameMark role="orchestrator" />
           <span className={`av ${seatEngine === "codex" ? "codex" : "claude"}`} aria-hidden>
             <Bot />
           </span>
@@ -515,6 +518,7 @@ export function OrchestratorPanel({
         </header>
       ) : (
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+        <RoleFrameMark role="orchestrator" />
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent" aria-hidden>
           <Bot className="h-4 w-4" />
         </span>
@@ -1070,7 +1074,7 @@ function OrchestratorDraft({
             type="submit"
             data-orchestrator-confirm
             disabled={submitting}
-            className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-accent bg-accent px-3 text-body font-semibold text-white shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+            className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-body font-semibold text-on-brand shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
           >
             {submitting
               ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />

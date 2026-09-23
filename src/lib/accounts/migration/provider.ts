@@ -36,6 +36,8 @@ interface StructuredHostPublicationInput {
   profile: LaunchProfile;
   registry: AgentRegistry;
   ownsOperation?: () => Promise<boolean>;
+  /** The migrated conversation, whose capability the successor is launched with. */
+  conversationId?: string;
 }
 
 export interface ProviderDependencies {
@@ -244,6 +246,33 @@ function assertProviderLockOwned(filename: string, token: string): void {
   throw new Error("Codex provider operation lease was lost");
 }
 
+/**
+ * A fresh spawn capability for the migrated conversation, as boot adoption
+ * mints one for every host it starts. It is how the successor names itself to
+ * the Viewer: the stdio MCP server can also find it by process ancestry, the
+ * shared HTTP endpoint only by this.
+ *
+ * Minting clears the predecessor's, and the predecessor keeps serving until the
+ * migration commits. So a successor that fails to start, or is discarded
+ * afterwards, hands the old digests back (`restore`), unless a later launch has
+ * rotated again in the meantime. A conversation the registry cannot find gets
+ * none, and its launch keeps the stdio server.
+ */
+function successorCapability(input: StructuredHostPublicationInput): { capability: string | null; restore: () => void } {
+  const minted = input.conversationId
+    ? input.registry.rotateSpawnCapabilityForConversation(input.conversationId)
+    : null;
+  let restored = false;
+  return {
+    capability: minted?.capability ?? null,
+    restore: () => {
+      if (!minted || restored) return;
+      restored = true;
+      input.registry.restoreSpawnCapabilityDigests(input.conversationId!, minted.digest, minted.previous);
+    },
+  };
+}
+
 async function publishCodexSuccessorHost(input: StructuredHostPublicationInput): Promise<() => Promise<void>> {
   if (input.ownsOperation && !await input.ownsOperation()) return async () => {};
   if (!structuredHostsEnabled()) return async () => {};
@@ -292,11 +321,21 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   let host: CodexAppServerHost | null = null;
   let stopPersistence = () => {};
   let unregister = async () => {};
-  const access = materializeStructuredHostAccess(
-    structuredHostAccessPolicy(input.profile),
-    input.target.env,
-    null,
-  );
+  const identity = successorCapability(input);
+  let access: ReturnType<typeof materializeStructuredHostAccess>;
+  try {
+    access = materializeStructuredHostAccess(
+      structuredHostAccessPolicy(input.profile),
+      input.target.env,
+      identity.capability,
+    );
+  } catch (error) {
+    /* Nothing was started: the claim and the predecessor's identity go back,
+       as they do on the Claude path, where this step sits inside the try. */
+    input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+    identity.restore();
+    throw error;
+  }
   try {
     host = await CodexAppServerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
@@ -332,6 +371,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       );
       await host.release();
       stopPersistence();
+      identity.restore();
       throw error;
     }
     await unregister();
@@ -339,6 +379,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     else access.cleanup();
     stopPersistence();
     input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+    identity.restore();
     throw error;
   }
   const publishedHost = host;
@@ -346,6 +387,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     await unregister();
     await publishedHost.release();
     stopPersistence();
+    identity.restore();
   };
 }
 
@@ -399,6 +441,7 @@ async function publishClaudeSuccessorHost(
   let stopPersistence = () => {};
   let unregister = async () => {};
   let access: ReturnType<typeof materializeStructuredHostAccess> | null = null;
+  let identity: ReturnType<typeof successorCapability> | null = null;
   try {
     if (input.receipt.host.kind !== "claude-fork") {
       const tmuxHost = claudeTmuxHostFromReceipt(input.receipt);
@@ -406,10 +449,11 @@ async function publishClaudeSuccessorHost(
       if (!cleanupConfirmed(cancelled)) throw new Error("successor Claude host transition is still pending");
       await forgetResumePaneIfMatches(input.receipt.path, tmuxHost);
     }
+    identity = successorCapability(input);
     access = materializeStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
       input.target.env,
-      null,
+      identity.capability,
     );
     host = await ClaudeStreamBrokerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
@@ -456,6 +500,7 @@ async function publishClaudeSuccessorHost(
       );
       await host.release();
       stopPersistence();
+      identity?.restore();
       throw error;
     }
     await unregister();
@@ -463,13 +508,16 @@ async function publishClaudeSuccessorHost(
     else access?.cleanup();
     stopPersistence();
     input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+    identity?.restore();
     throw error;
   }
   const publishedHost = host;
+  const publishedIdentity = identity;
   return async () => {
     await unregister();
     await publishedHost.release();
     stopPersistence();
+    publishedIdentity?.restore();
   };
 }
 
@@ -1404,6 +1452,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         profile: input.launchProfile,
         registry: this.dependencies.registry ?? agentRegistry(),
         ownsOperation: input.ownsOperation,
+        conversationId: input.conversationId,
       };
       let cleanup: () => Promise<void>;
       if (input.engine === "codex") {

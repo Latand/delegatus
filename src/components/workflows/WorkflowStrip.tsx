@@ -124,7 +124,7 @@ export function WorkflowStrip({ wf }: { wf: Workflow }) {
         ) : null}
         {gate ? (
           <button
-            className="shrink-0 rounded-full border border-accent bg-accent px-3 py-1 text-[11px] font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
+            className="shrink-0 rounded-full border border-brand bg-brand px-3 py-1 text-[11px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
             disabled={busy}
             onClick={() => void run("advance")}
           >
@@ -134,7 +134,7 @@ export function WorkflowStrip({ wf }: { wf: Workflow }) {
         {wf.state === "needs_decision" ? (
           <>
             <button
-              className="shrink-0 rounded-full border border-accent bg-accent px-3 py-1 text-[11px] font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
+              className="shrink-0 rounded-full border border-brand bg-brand px-3 py-1 text-[11px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
               disabled={busy}
               onClick={() => void run("retry-stage")}
             >

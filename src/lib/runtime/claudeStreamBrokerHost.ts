@@ -8,7 +8,7 @@ import { StringDecoder } from "node:string_decoder";
 import { statePath } from "@/lib/configDir";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import type { ProcessIdentity } from "@/lib/agent/registry";
-import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS } from "@/lib/agent/spawnPolicy";
+import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
@@ -720,6 +720,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         cwd: options.cwd,
         mcpServers: options.mcpServers,
         mcpStatePath: options.mcpStatePath,
+        viewerTransport: viewerMcpTransportForLaunch(env),
       });
       args.push(
         "--settings", settings.settingsPath,

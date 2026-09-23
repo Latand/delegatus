@@ -28,6 +28,7 @@ import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { currentMcpHttpCaller } from "./callerContext";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
@@ -71,11 +72,13 @@ import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/li
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { isBridgeReportClass, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import {
+  applySeatTickNoteLineEdits,
   applySeatTickSettingsChange,
   defaultSeatTickSettings,
   effectiveSeatTickSettings,
   readSeatTickSettings,
   writeSeatTickSettings,
+  type SeatTickNoteLineEdits,
   type SeatTickSettingsActor,
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
@@ -86,7 +89,7 @@ import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orch
 import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
 import { projectSuccessionFor } from "@/lib/projects/succession";
-import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
+import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
@@ -96,7 +99,7 @@ import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, pipelineListRow } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup } from "@/lib/pipelines/store";
-import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction } from "@/lib/pipelines/types";
+import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction, PipelineCloseReport } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { listFiles } from "@/lib/scanner";
@@ -933,13 +936,24 @@ const productionCanonicalSeatConversationId = seatIdentityResolver(
   (conversationId) => agentRegistry().canonicalConversationId(conversationId),
 );
 
+/** The spawn capability that names the current caller: the one an HTTP
+    request presented (see `./callerContext`), else the one this stdio process
+    inherited from the agent that launched it. */
+function callerCapability(): string | undefined {
+  return currentMcpHttpCaller()?.capability ?? process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+}
+
 function attentionCallerSources(): AttentionCallerSources {
+  const httpCaller = currentMcpHttpCaller();
   return {
-    ancestry: () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
+    /* An HTTP call is served from the Viewer's own process, whose ancestry
+       leads to no agent host; the capability alone names that caller, exactly
+       as it does for a stdio agent whose host pids were never recorded. */
+    ancestry: httpCaller ? () => [] : () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
     rootConversationId: () => liveRootSession(rootSessionSource())?.conversationId ?? null,
     hosted: () => hostedConversationsFromSnapshot(agentRegistry().readOnlySnapshot()),
     capabilityCallerConversationId: capabilityConversationResolver(
-      process.env[VIEWER_SPAWN_CAPABILITY_ENV],
+      callerCapability(),
       (digest) => agentRegistry().conversationIdForSpawnCapabilityDigest(digest),
     ),
   };
@@ -1484,6 +1498,29 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext): 
   });
 }
 
+/** A close report as counts (#2030). Each list keeps its name, so a caller
+    that sees `stillRunning: 1` knows which list to read on the record. The
+    three every close has are always counted; the lists that only an
+    exception fills appear when something is in them. */
+function closeReportCounts(report: PipelineCloseReport) {
+  const exceptions = {
+    unconfirmed: report.unconfirmed.length,
+    stillRunning: report.stillRunning.length,
+    reviewers: report.reviewers.length,
+    acknowledged: report.acknowledged.length,
+    notes: report.notes.length,
+    uncommitted: report.worktree?.uncommitted.length ?? 0,
+  };
+  return {
+    status: report.status,
+    pending: report.pending.length,
+    stopped: report.stopped.length,
+    alreadyStopped: report.alreadyStopped.length,
+    ...Object.fromEntries(Object.entries(exceptions).filter(([, count]) => count > 0)),
+    ...(report.worktree?.truncated ? { uncommittedTruncated: true } : {}),
+  };
+}
+
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
@@ -1507,9 +1544,22 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
-  /* A close reports the stage hosts it terminated and the uncommitted work it
-     left behind (#670), so an agent driving the board sees it too. The
-     pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
+  /* A close reports what became of the stage hosts and the uncommitted work it
+     left behind (#670), as counts (#2030): the host list averaged 2.1 KB over
+     146 closes and is the record's, which get_pipeline reads. A closed lane
+     takes no guarded edit, so its digests are left out too. */
+  if (action === "close" && result.close && !fullAnswer(args)) {
+    return redactPayload({
+      pipelineId: result.pipeline.id,
+      state: result.pipeline.state,
+      closedAt: result.pipeline.closedAt ?? null,
+      revision: recordRevision(result.pipeline),
+      changedFields: changedFieldNames(beforeFields, result.pipeline),
+      close: closeReportCounts(result.close),
+      readMore: "get_pipeline(pipelineId) lists every host in closeReport.",
+    });
+  }
+  /* The pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
   return redactPayload({
     ...pipelineActionAcknowledgement(result.pipeline),
     revision: recordRevision(result.pipeline),
@@ -2605,7 +2655,7 @@ function spawnControlHeaders(): Record<string, string> {
  * operator told to rotate performs it here and the shell fallback is gone.
  */
 function callerCapabilityHeaders(): Record<string, string> {
-  const capability = process.env[VIEWER_SPAWN_CAPABILITY_ENV]?.trim() ?? "";
+  const capability = callerCapability()?.trim() ?? "";
   return {
     ...internalServiceHeaders("mcp"),
     ...(/^[A-Za-z0-9_-]{43}$/.test(capability) ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {}),
@@ -2765,6 +2815,12 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
  * replaced by the next one sent and cleared with `monitorPrompt: null`. Because it
  * cannot change whether or when a wake is sent, it needs no reason and leaves
  * the project on the default tick.
+ *
+ * #2030: seats keep their lane ledger in that note and changed it 117 times in
+ * 2.5 days, resending all of it each time and reading 1.2–1.7 KB back. So one
+ * line of it can be replaced, removed or appended on its own, and a write is
+ * acknowledged with `{changed, revision, changedFields, monitorPromptLength}`
+ * and nothing else. A verbose read carries the note once.
  */
 function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const attribution = attributionOf(dependencies);
@@ -2789,6 +2845,17 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   if (args.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = args.wakeIntervalMinutes as number | null;
   if (args.reason !== undefined) change.reason = args.reason as string | null;
   if (args.monitorPrompt !== undefined) change.monitorPrompt = args.monitorPrompt as string | null;
+  const lineEdits: SeatTickNoteLineEdits = {
+    ...(args.replaceLine !== undefined ? { replaceLine: args.replaceLine as SeatTickNoteLineEdits["replaceLine"] } : {}),
+    ...(args.removeLine !== undefined ? { removeLine: args.removeLine as SeatTickNoteLineEdits["removeLine"] } : {}),
+    ...(args.appendLine !== undefined ? { appendLine: args.appendLine as string } : {}),
+  };
+  if (Object.keys(lineEdits).length > 0) {
+    if (change.monitorPrompt !== undefined) throw new Error("send either monitorPrompt or line edits (replaceLine, removeLine, appendLine), not both");
+    const edited = applySeatTickNoteLineEdits(current.monitorPrompt, lineEdits);
+    if (!edited.ok) throw new Error(edited.error);
+    change.monitorPrompt = edited.monitorPrompt;
+  }
   if (args.untilMinutes !== undefined) {
     const minutes = args.untilMinutes as number | null;
     if (minutes === null) change.until = null;
@@ -2816,15 +2883,29 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     changed = true;
   }
 
+  const verbose = args.verbose === true || args.full === true;
+  const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
+  /* #2030: a write is acknowledged, never read back. The caller holds what it
+     sent; the revision and the stored length are what it needs to know the row
+     took it. A change to another project's tick still says so out loud. */
+  if (changed && !verbose) {
+    return redactPayload({
+      changed,
+      revision: recordRevision(settings),
+      changedFields: Object.keys(change),
+      monitorPromptLength: storedPrompt?.length ?? 0,
+      ...(own === project ? {} : { project, scope: "other-project", callerProject: own }),
+    });
+  }
+
   const now = Date.now();
   const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
   /* #1845: the note is the one large field here, and a seat changing its
      cadence was reading its own note back three times on every call. It is
-     carried only on an explicit full/verbose read; every
-     default answer carries its length, which is how a caller sees it is there. */
-  const verbose = args.verbose === true || args.full === true;
-  const echoPrompt = verbose || args.full === true;
-  const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
+     carried only on an explicit full/verbose read, and there once, as
+     `monitorPrompt` (#2030); every other answer carries its length, which is
+     how a caller sees it is there. */
+  const echoPrompt = verbose;
   /* The same rule for the other repeats: the stored reason is carried once,
      under `effective`, unless an expiry has already set the two apart, and the
      defaults block and the fence sentence are a verbose read's. */
@@ -2838,28 +2919,28 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
        caller's own is allowed, and the answer says so out loud. */
     callerProject: own,
     scope: own === project ? "own-project" : "other-project",
-    settings: verbose ? settings : compactSettings,
+    settings: verbose ? { ...settingsWithoutPrompt, reason: storedReason } : compactSettings,
     /* The stored note is an explicit read; its length acknowledges a write. The wake shows
        only a marked preview of a long note; this is the whole of it. */
     ...(echoPrompt ? { monitorPrompt: storedPrompt } : {}),
     monitorPromptLength: storedPrompt?.length ?? 0,
     revision: recordRevision(settings),
-    changedFields: Object.keys(change),
-    omittedFieldCount: echoPrompt ? 0 : 1,
-    readMore: "seat_tick_settings with verbose:true or full:true reads the complete stored note and settings.",
+    ...(changed ? { changedFields: Object.keys(change) } : {}),
+    /* A full read names nothing it left out (#2030). */
+    ...(echoPrompt ? {} : {
+      omittedFieldCount: 1,
+      readMore: "seat_tick_settings with verbose:true or full:true reads the complete stored note and settings.",
+    }),
     effective: {
       enabled: effective.enabled,
       wakeIntervalMinutes: Math.round(effective.wakeIntervalMs / 60_000),
       reason: effective.reason,
-      /* What the next scheduler-fired wake will carry (#1280), read back from
-         the record rather than echoed from the request. */
-      ...(verbose ? { monitorPrompt: effective.monitorPrompt } : {}),
       until: effective.until,
       isDefault: effective.isDefault,
     },
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
-    ...(verbose ? { defaults: defaultSeatTickSettings(project) } : {}),
+    ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
        twenty-minute interval and receiving nothing was reading a settings
@@ -2868,6 +2949,13 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
        project's wakes, since when and when it lapses on its own. */
     ...fenceAnswer,
   });
+}
+
+/** The schedule a project nobody configured runs on — the fields a restore
+    resets, without the record's empty bookkeeping (#2030). */
+function seatTickScheduleDefaults(project: string) {
+  const { enabled, wakeIntervalMinutes, reason, until } = defaultSeatTickSettings(project);
+  return { enabled, wakeIntervalMinutes, reason, until };
 }
 
 /**
@@ -3123,17 +3211,13 @@ async function sendMessageToOrchestrator(
     name, so the caller reads the attribution its rotation was recorded under. */
 async function rotateOrchestrator(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
-  const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId"]);
-  /* #1452: with no mandate named, the successor gets the CURRENT default
-     whenever the incumbent's stored mandate is based on an older version. The
-     route's own default is the incumbent's text, which is how a v3 seat rotated
-     v3 into every successor. `keepIncumbentMandate: true` is the explicit way
-     to carry that text forward; a seat on the current version, or on bespoke
-     (unversioned) rules, keeps its own text as before. */
-  if (fields.mandate === undefined && args.keepIncumbentMandate !== true) {
-    const incumbent = orchestratorSeatFor(project).active;
-    if (incumbent && orchestratorMandateStale(incumbent.promptVersion)) fields.mandate = ORCHESTRATOR_SYSTEM_PROMPT;
-  }
+  /* #1452, #2030: with no mandate named, the route rebuilds the successor's
+     core from the CURRENT default whenever the incumbent's stored mandate is
+     based on an older version, and keeps its rotation history. Sending the
+     default from here instead dropped that history. `keepIncumbentMandate:
+     true` is the explicit way to carry the old text forward; a seat on the
+     current version, or on bespoke (unversioned) rules, keeps its own text. */
+  const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId", "keepIncumbentMandate"]);
   const result = await control.post("/api/orchestrator/rotate", {
     project,
     clientRequestId: spawnAttemptId(requestId(args)),

@@ -83,7 +83,6 @@ export const en = {
   "kind.handoff": "handoff",
 
   // ProjectRail
-  "rail.title": "Agent logs",
   "rail.filter": "Filter projects…",
   "rail.projects": "Projects",
   "rail.overview": "Overview",
@@ -3061,6 +3060,8 @@ export const en = {
   "kanban.notOnTaskHint": "Work no recorded task owns yet: pipelines, review flows and conversations started outside a task.",
   "kanban.untitled": "Untitled task",
   "kanban.untitledConversation": "Untitled conversation",
+  "roleFrame.neutral": "Agent",
+  "roleFrame.markTitle": "Role: {role}",
   "kanban.namePending": "Name pending · the agent's first action names it",
   "kanban.collapsed": "collapsed",
   "kanban.collapseCard": "Collapse «{title}»",

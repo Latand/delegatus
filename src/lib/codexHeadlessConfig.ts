@@ -1,4 +1,10 @@
-import { CODEX_VIEWER_SPAWN_FEATURES, viewerMcpServerEntry, viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
+import {
+  CODEX_VIEWER_SPAWN_FEATURES,
+  viewerMcpHttpCodexEntry,
+  viewerMcpServerEntry,
+  viewerMcpServerEnv,
+  type ViewerMcpTransport,
+} from "@/lib/agent/spawnPolicy";
 import { grantedMcpServers } from "@/lib/agent/mcpAllowlist";
 import { grantedPlugins } from "@/lib/agent/pluginAllowlist";
 
@@ -35,12 +41,35 @@ function pluginTable(config: JsonObject, granted: readonly string[]): JsonObject
   return Object.fromEntries([...keys].map((key) => [key, { enabled: granted.includes(key.split("@")[0]) }]));
 }
 
+/**
+ * Whether this thread reaches the Viewer over the shared HTTP endpoint.
+ *
+ * Codex layers a thread's `config` over `config.toml` key by key; it never
+ * replaces a server's table. So once an account registers `viewer` as a stdio
+ * launcher (`command`), adding a `url` on top is refused outright — codex-cli
+ * 0.155.1 answers `thread/start` with "url is not supported for stdio" and no
+ * session starts. The reverse holds too: a registered `url` cannot be turned
+ * back into a stdio launcher for a launch that needs one. So the per-launch
+ * choice works only where the account registers no `viewer` at all, which is
+ * what `LLV_MCP_TRANSPORT=http scripts/install-mcp.sh` leaves behind: this
+ * table then materializes the Viewer server for each thread, over HTTP or as
+ * the stdio launcher. A stdio registration keeps every thread on stdio; a
+ * leftover `url` registration is replayed as it stands (the script rewrites
+ * one back to stdio).
+ */
+export function codexViewerOverHttp(configuredViewer: JsonObject | null, transport: ViewerMcpTransport): boolean {
+  return transport === "http" && (configuredViewer === null || typeof configuredViewer.command !== "string");
+}
+
 /** Builds a fail-closed thread override from Codex's effective configuration. */
 export function headlessCodexThreadConfig(
   configRead: unknown,
   allowSubagents = false,
   mcpServers: readonly string[] | undefined = undefined,
   plugins: readonly string[] | undefined = undefined,
+  /** This launch's transport (`viewerMcpTransportForLaunch`); stdio unless the
+      caller knows the thread's environment carries a capability. */
+  viewerTransport: ViewerMcpTransport = "stdio",
 ): JsonObject {
   const config = record(record(configRead)?.config);
   const servers = record(config?.mcp_servers);
@@ -49,9 +78,14 @@ export function headlessCodexThreadConfig(
      table is materialized from the re-validated list, so a launch profile
      edited by hand cannot turn a server on for this thread. */
   const enabled = new Set(grantedMcpServers(mcpServers));
-  const viewerMissing = record(servers.viewer) === null;
+  const configuredViewer = record(servers.viewer);
+  const viewerOverHttp = codexViewerOverHttp(configuredViewer, viewerTransport);
+  const viewerMissing = configuredViewer === null;
+  /* The environment pin belongs to a stdio launcher only; an account that
+     registers the Viewer over HTTP keeps that shape whatever the flag says. */
+  const viewerStdio = !viewerOverHttp && (viewerMissing || typeof configuredViewer.command === "string");
   const materializedServers = viewerMissing && enabled.has("viewer")
-    ? { ...servers, viewer: viewerMcpServerEntry() }
+    ? { ...servers, viewer: viewerOverHttp ? viewerMcpHttpCodexEntry() : viewerMcpServerEntry() }
     : servers;
   /* The plugin subsystem is off for every session that holds no grant, which
      is the default. A grant turns it on for THIS thread only — never for the
@@ -73,10 +107,13 @@ export function headlessCodexThreadConfig(
         /* The thread runs under the agent's own config and state root
            (#1905); the Viewer server keeps the real ones, so the MCP link
            still finds this machine's release. A value already configured for
-           the server wins. */
-        ...(name === "viewer"
+           the server wins. An HTTP server takes no `env` (Codex refuses it
+           there); it takes the shared endpoint's URL and the header that
+           carries this agent's capability instead. */
+        ...(name === "viewer" && viewerStdio
           ? { env: { ...viewerMcpServerEnv(), ...record(record(server)?.env) } }
           : {}),
+        ...(name === "viewer" && viewerOverHttp ? viewerMcpHttpCodexEntry() : {}),
         enabled: enabled.has(name),
         ...(approval ? { default_tools_approval_mode: approval } : {}),
       }];
