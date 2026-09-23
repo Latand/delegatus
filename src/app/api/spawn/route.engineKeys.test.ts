@@ -97,7 +97,7 @@ async function launchCopilot(store: AgentRegistry, root: string): Promise<string
     defer: (work) => { deferred.push(Promise.resolve().then(work).catch((error: unknown) => { failure = error; })); },
     storeImages: () => [],
     /* What the structured host does once the Copilot session names its
-       transcript: settle the receipt onto it. */
+       transcript file, which is to settle the receipt onto it. */
     spawnStructuredConversation: async (input) => {
       const sessionId = crypto.randomUUID();
       const artifactPath = path.join(account.transcriptRoot, sessionId, "events.jsonl");
