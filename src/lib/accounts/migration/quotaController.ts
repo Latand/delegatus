@@ -148,7 +148,9 @@ const productionProbe: QuotaProbePort = {
         authCheckedAt: now,
         limits: limits.data,
         provenance: { source: limits.source, reason: limits.reason, staleSince: null },
-        observedAt: limits.data?.capturedAt ?? now,
+        observedAt: limits.data?.capturedAt === null || limits.data?.capturedAt === undefined
+          ? now
+          : limits.data.capturedAt * 1000,
       };
     }
     const candidate = account as CodexAccount;

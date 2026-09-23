@@ -20,7 +20,7 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
   if (!observation) return { kind: "unknown" };
   const observedAt = Date.parse(observation.observedAt);
   const authCheckedAt = Date.parse(observation.authCheckedAt);
-  if (!Number.isFinite(observedAt) || !Number.isFinite(authCheckedAt) || now < observedAt || now < authCheckedAt || now - observedAt > FRESH_QUOTA_MS || now - authCheckedAt > FRESH_QUOTA_MS) {
+  if (!Number.isFinite(observedAt) || !Number.isFinite(authCheckedAt) || now < observedAt || now < authCheckedAt) {
     return { kind: "unknown" };
   }
   if (!observation.authenticated) return { kind: "unavailable" };
@@ -35,17 +35,27 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
     return { kind: "unknown" };
   }
   const remaining = Math.min(...windows.map((window) => 100 - window.usedPercent));
-  /* Transcript reconciliation is authoritative only for terminal exhaustion.
-     Ordinary transcript percentages remain unknown for automatic admission;
-     a provider rejection at 100% can safely remove that account until reset. */
-  if (observation.provenance.source !== "live"
-    && !(observation.engine === "copilot" && observation.provenance.source === "transcript")
-    && !(observation.provenance.source === "transcript" && remaining <= 0)) {
+  const nowSeconds = Math.floor(now / 1_000);
+  const observationFresh = now - observedAt <= FRESH_QUOTA_MS && now - authCheckedAt <= FRESH_QUOTA_MS;
+  const copilotTranscript = observation.engine === "copilot" && observation.provenance.source === "transcript";
+  const exhaustedWindows = windows.filter((window) => window.usedPercent >= 100);
+  /* Copilot writes a new monthly snapshot after model calls. Stale partial
+     balances become unknown; a stale 100% window with a future reset remains a
+     stop signal until that reset. A missing or passed reset is unknown. */
+  const staleCopilotExhaustion = copilotTranscript && !observationFresh && remaining <= 0
+    && exhaustedWindows.length > 0
+    && exhaustedWindows.every((window) => window.resetsAt !== null && window.resetsAt > nowSeconds)
+    && now - authCheckedAt <= FRESH_QUOTA_MS;
+  if (!observationFresh && !staleCopilotExhaustion) {
     return { kind: "unknown" };
   }
+  /* Codex transcript reconciliation remains authoritative only for terminal
+     exhaustion; ordinary transcript percentages remain unknown. */
+  if (observation.provenance.source !== "live"
+    && !(copilotTranscript && (observationFresh || staleCopilotExhaustion))
+    && !(observation.provenance.source === "transcript" && observationFresh && remaining <= 0)) return { kind: "unknown" };
   if (remaining > 0) return { kind: "available", remaining };
-  const exhaustedWindows = windows.filter((window) => window.usedPercent >= 100);
-  const nowSeconds = Math.floor(now / 1_000);
+  if (copilotTranscript && exhaustedWindows.some((window) => window.resetsAt === null || window.resetsAt <= nowSeconds)) return { kind: "unknown" };
   if (exhaustedWindows.some((window) => window.resetsAt === null || window.resetsAt <= nowSeconds)) return { kind: "exhausted", resetsAt: null };
   return { kind: "exhausted", resetsAt: Math.max(...exhaustedWindows.map((window) => window.resetsAt!)) };
 }

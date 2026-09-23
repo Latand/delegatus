@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -73,4 +74,51 @@ test("Copilot skips a fresh exhausted account and picks the account with headroo
   expect(accountManager.resolveProjectSpawn("copilot", { project: "unbound" })).toMatchObject({ kind: "available", account: { accountId: second!.id } });
   expect(await resolveHealthySpawnAccount("copilot", null, null)).toMatchObject({ accountId: second!.id });
   expect(resolveContinuityAccount("copilot", null, null)).toMatchObject({ accountId: second!.id });
+});
+
+test("Copilot capacity flows from transcript probe through the registry into headless selection", async () => {
+  const exhausted = createManagedCopilotAccount("z-exhausted");
+  const capacity = createManagedCopilotAccount("a-capacity");
+  signIn(exhausted.home);
+  signIn(capacity.home);
+  const now = Date.now();
+  const resetDate = new Date(Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth() + 2, 1)).toISOString();
+  const writeQuotaEvent = (home: string, sessionId: string, observedAt: number, remainingPercentage: number) => {
+    const sessionDir = path.join(home, "session-state", sessionId);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const data = {
+      responseUsage: {},
+      requestMessages: "fixture body",
+      quotaSnapshots: {
+        chat: { entitlementRequests: 200, remainingPercentage, resetDate, isUnlimitedEntitlement: false, overageAllowedWithExhaustedQuota: false },
+        premium_interactions: { entitlementRequests: 0, remainingPercentage: 0, resetDate, isUnlimitedEntitlement: false, overageAllowedWithExhaustedQuota: false },
+      },
+      requestId: crypto.randomUUID(),
+      copilotUsage: {},
+    };
+    const event = { type: "model.model_call_success", data, id: crypto.randomUUID(), timestamp: new Date(observedAt).toISOString(), parentId: null };
+    fs.writeFileSync(path.join(sessionDir, "events.jsonl"), `${JSON.stringify(event)}\n`);
+  };
+  const exhaustedAt = now - 10 * 60_000;
+  const capacityAt = now - 30_000;
+  writeQuotaEvent(exhausted.home, crypto.randomUUID(), exhaustedAt, 0);
+  writeQuotaEvent(capacity.home, crypto.randomUUID(), capacityAt, 90);
+  setActiveCopilotAccount(exhausted.id);
+
+  const { QuotaController, liveQuotaProbe } = await import("./migration/quotaController");
+  const registry = agentRegistry();
+  const controller = new QuotaController(registry, {
+    list: (engine) => engine === "copilot" ? [exhausted, capacity] : [],
+    active: () => exhausted.id,
+    credentialIdentity: (engine, account) => liveQuotaProbe.credentialIdentity?.(engine, account) ?? null,
+    probe: (engine, account, capturedAt, options) => liveQuotaProbe.probe(engine, account, capturedAt, options),
+  }, crypto.randomUUID(), () => now);
+
+  await controller.tick("copilot");
+  const observations = registry.readOnlySnapshot().quotaObservations.copilot;
+  expect(observations[exhausted.id]?.observedAt).toBe(new Date(exhaustedAt).toISOString());
+  expect(observations[capacity.id]?.observedAt).toBe(new Date(capacityAt).toISOString());
+  expect(observations[exhausted.id]?.limits?.weekly?.usedPercent).toBe(100);
+  expect(observations[capacity.id]?.limits?.weekly?.usedPercent).toBe(10);
+  expect(accountManager.resolveHeadlessSpawn("copilot", null, [], null)).toMatchObject({ account: { accountId: capacity.id } });
 });
