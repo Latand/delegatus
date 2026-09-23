@@ -87,6 +87,10 @@ function resolvedCompose(overrides: Record<string, string> = {}): { services: Re
      hermetic — an override still sets it explicitly when a case needs it. */
   const baseEnv = withoutWakatimeCredential(process.env);
   delete baseEnv.LLV_ALLOW_LEGACY_VIEWER;
+  /* The same for every `DELEGATUS_` input, which wins over its `LLV_` name,
+     and for the app-dir paths the config-dir cases assert. */
+  for (const key of Object.keys(baseEnv)) if (key.startsWith("DELEGATUS_")) delete baseEnv[key];
+  for (const key of ["LLV_CONFIG_DIR", "LLV_RUNTIME_HOST_SOCKET", "LLV_RUNTIME_JOURNAL", "LLV_VIEWER_DEPLOY_TARGET"]) delete baseEnv[key];
   const result = Bun.spawnSync(["docker", "compose", "--profile", "*", "config", "--format", "json"], {
     cwd: process.cwd(),
     env: { ...baseEnv, LLV_ENV_FILE: envFile, ...overrides },
@@ -270,6 +274,38 @@ test("runtime-host propagates every Viewer Compose interpolation input", () => {
   expect(config.services.viewer.group_add).toEqual(["1203"]);
   expect(config.services.viewer.environment.TMUX_TMPDIR).toBe("/run/user/1201/agent-log-viewer");
   expect(config.services.viewer.volumes.map((volume) => volume.source)).toContain("/tmp/tmux-1201");
+});
+
+test("rename slice 3: an exported app dir keeps the spelling an existing install recorded", () => {
+  const existing = "/srv/operator/.config/agent-log-viewer";
+  const exported = resolvedCompose({ HOME: "/srv/operator", DELEGATUS_CONFIG_DIR: existing }).services["runtime-host"].environment;
+  expect(exported).toMatchObject({
+    LLV_CONFIG_DIR: existing,
+    LLV_RUNTIME_HOST_SOCKET: `${existing}/state/runtime-host.sock`,
+    LLV_RUNTIME_JOURNAL: `${existing}/state/runtime-events.sqlite`,
+    LLV_VIEWER_DEPLOY_TARGET: `${existing}/state/viewer-release.json`,
+  });
+
+  /* The runtime host folds DELEGATUS_ into LLV_ when it starts, so the nested
+     `docker compose config` a deployment runs sees only LLV_CONFIG_DIR. */
+  const nested = resolvedCompose({ HOME: "/srv/operator", LLV_CONFIG_DIR: existing }).services["runtime-host"].environment;
+  expect(nested.LLV_RUNTIME_HOST_SOCKET).toBe(`${existing}/state/runtime-host.sock`);
+
+  const fresh = resolvedCompose({ HOME: "/srv/operator" }).services["runtime-host"].environment;
+  expect(fresh).toMatchObject({
+    LLV_CONFIG_DIR: "/srv/operator/.config/delegatus",
+    LLV_RUNTIME_HOST_SOCKET: "/srv/operator/.config/delegatus/state/runtime-host.sock",
+  });
+});
+
+test("rename slice 3: a DELEGATUS_ Compose input wins over its LLV_ name, and the LLV_ name still works", () => {
+  const both = resolvedCompose({ DELEGATUS_UID: "1301", LLV_UID: "1201", LLV_GID: "1202" });
+  expect(both.services["runtime-host"].environment.LLV_UID).toBe("1301");
+  expect(both.services.viewer.user).toBe("1301:1202");
+  expect(both.services.viewer.volumes.map((volume) => volume.source)).toContain("/tmp/tmux-1301");
+
+  const legacy = resolvedCompose({ LLV_UID: "1201", LLV_VIEWER_PORT: "8911" });
+  expect(legacy.services["runtime-host"].environment).toMatchObject({ LLV_UID: "1201", LLV_VIEWER_PORT: "8911" });
 });
 
 test("legacy Viewer requires a migration profile and launch grant", () => {

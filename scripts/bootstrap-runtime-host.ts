@@ -32,6 +32,7 @@ import path from "node:path";
 import { appDirIn } from "../bin/appDir.mjs";
 import type { ViewerReleaseIdentity } from "../src/lib/runtime/contracts";
 import { ensureCanonicalMirror, resolveCanonicalRevision } from "../src/runtime-host/canonicalMirror";
+import { DOCKER_NAMES, runtimeHostServiceImageTag } from "../src/runtime-host/dockerNames";
 import {
   executeRuntimeHostBootstrap,
   planRuntimeHostBootstrap,
@@ -62,7 +63,7 @@ const deploymentDir = path.join(stateDir, "deployments");
 const mirrorDir = path.join(deploymentDir, "canonical.git");
 const canonicalRemote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/delegatus.git";
 const runtimeSocket = process.env.LLV_RUNTIME_HOST_SOCKET || path.join(stateDir, "runtime-host.sock");
-const runtimeHostImageTag = process.env.LLV_RUNTIME_HOST_IMAGE_TAG || "agent-log-viewer:node22";
+const runtimeHostImageTag = process.env.LLV_RUNTIME_HOST_IMAGE_TAG || runtimeHostServiceImageTag();
 const stableEndpoint = `http://127.0.0.1:${Number(process.env.LLV_VIEWER_PORT || 8898)}`;
 const PREDECESSOR_STOP_GRACE_SECONDS = 40;
 
@@ -185,7 +186,7 @@ async function main(): Promise<number> {
       ensureMirror: () => ensureCanonicalMirror({ deploymentDir, mirrorDir, remote: canonicalRemote }, { run: command }),
     },
   );
-  const image = `agent-log-viewer:hostboot-${revision}`;
+  const image = `${DOCKER_NAMES.imageRepository}:hostboot-${revision}`;
   const predecessor = await findRuntimeHostPredecessor({ docker, fenceOwnerPid });
   const plan = planRuntimeHostBootstrap({ mode, revision, image, predecessor, stableEndpoint });
   console.log(renderRuntimeHostBootstrapPlan(plan));
