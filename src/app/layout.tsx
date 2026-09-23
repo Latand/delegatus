@@ -1,8 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 export const metadata: Metadata = {
-  title: "Agent Log Viewer",
+  title: PRODUCT_NAME,
   description: "Agent Log Viewer for Codex and Claude agent logs",
 };
 

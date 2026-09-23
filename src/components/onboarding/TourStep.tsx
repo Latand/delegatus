@@ -120,7 +120,7 @@ function StartBand({ projects, initialProject, claudeConnected, onCreated, phone
                   data-tour-create=""
                   disabled={!claudeConnected}
                   onClick={create}
-                  className={`${control} shrink-0 whitespace-nowrap bg-accent px-3.5 text-white hover:opacity-90 disabled:opacity-50`}
+                  className={`${control} shrink-0 whitespace-nowrap bg-brand px-3.5 text-on-brand hover:opacity-90 disabled:opacity-50`}
                 >
                   {t("onboarding.tour.create")}
                 </button>
