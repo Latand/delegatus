@@ -2,7 +2,14 @@
 
 Design only. The operator reviews this note and its rendered mockups before any
 build starts. Every file:line below is on `origin/main` at `fcf9c0110` (the
-merge of #2068) unless it says otherwise.
+merge of #2068) unless it says otherwise; the round-2 pipeline sections cite
+`origin/main` at `3322d7bb8`.
+
+**Round 2 (2026-09-23)** revises the pipelines after the operator's verdict and
+the critique in `docs/design/phone-kanban-critique.md`. §3.4, §3.5 and the new
+§3.13 replace round 1's pipeline presentation, and §10 maps every critique
+finding to what changed. The round-2 mockups are in
+`/var/tmp/phone-kanban/mockups-r2/` (§6).
 
 ## 0. The requirement
 
@@ -36,6 +43,16 @@ request. Verbatim:
 The stage brief adds a tall 430 px phone and iOS Safari with the bottom URL
 bar. The mockups cover both.
 
+The operator's verdict on round 1, 2026-09-23, recorded in the round-2 stage's
+specification (paraphrased in English): overall the design is fine, but the
+pipelines look bad, and pipelines must be very convenient on the phone. The
+desktop board already has something close to right for how a pipeline looks
+(the pipeline group header, the stage pills and stage chain, the Stages view,
+the PR and issue chips from #2059), and the phone should build on that. The
+example given: on the task screen each pipeline was a card with a title, a
+status pill, two wide equal stage bars and a meta line, and the needs-decision
+block above it repeated the same pipeline with "Open pipeline ›".
+
 History that this reverses: on 2026-09-14, asked whether the #1695 kanban
 should change the phone, the operator chose "Телефон не трогать вообще" (leave
 the phone alone), so below 640 px the phone kept mobile-v2 (#1439). #2072 is the
@@ -44,20 +61,21 @@ operator now asking for the phone kanban.
 ## 1. The design in one screen
 
 ```
-┌ live-log-viewer-next ⌄          ⚠ 2   🔍   ⋯ ┐ 52  bar (unchanged)
+┌ live-log-viewer-next ⌄          ⚠ 7   🔍   ⋯ ┐ 52  bar (unchanged)
 │ Inbox    │ Assigned  │ Blocked  │ Done      │ 52  column tabs: label, count,
-│ 9  ⚠1    │ 51 ●3 ⚠1  │ 3        │ 578       │     ●working ⚠needs-you dots
+│ 9  ⚠5    │ 51 ●5 ⚠2  │ 3        │ 578       │     ●working ⚠needs-you dots
 ├──────────────────────────────────────────────┤
-│▌Mobile data: stop repeated full-board   ⚠   │     needs-you cards pin first
-│▌downloads and hidden-tab traffic             │     (edge + badge)
-│  ▰▱ stage 1/2 · build · failed       no PR  │     stage track · state · PR
-│  2 agents · 41m                               │
+│▌Mobile data: stop repeated   needs a decision│     needs-you cards pin first
+│▌full-board downloads and hidden-tab traffic  │     (edge + badge)
+│▌ (!) Implement → ○ Review             no PR  │     the desktop's stage chain
+│▌ Implement failed · 1 finding · 41m  +1 paused│     the reason, amber
 │ Restore /favicon.ico with the Delegatus      │
-│  ▰▰ review · reviewing 4:12   PR #2070 open  │
-│  ✦ 1 working · 2 agents · 3m                 │     running agents on the card
+│  ✓ Implement → ◉ Review · 4m          #2070  │     running: one line, no agents line
+│ Redesign attachment upload for large files   │
+│  ✓3 → ● Build ui → ○ Review ui +3 · 6m #2201 │     long chain folds, current never cut
 │ …                                            │     ← swipe → pages columns
 ├──────────────────────────────────────────────┤
-│ 🤖 Tell the orchestrator…        ● 3    🎤   │ 64  orchestrator dock: its state,
+│ 🤖 Tell the orchestrator…        ● 5    🎤   │ 64  orchestrator dock: its state,
 │    finished the turn · 5m                    │     the composer door, working
 └──────────────────────────────────────────────┘
 ```
@@ -76,6 +94,8 @@ operator now asking for the phone kanban.
    its task's card (and on its screen). Conversations with no task sit in Inbox
    under "Not on a task", the way the desktop draws them. The full history moves
    to ⋯ › All conversations. The counts that jumped disappear with them.
+4. **One more round from the phone (round 2).** A spent review budget is
+   answered on the phone with a one-round grant beside Close lane.
 
 ## 2. Research
 
@@ -289,10 +309,12 @@ design exists, and no earlier diagnosis of the board regression.
 Board (screen)                                       bar: [project ⌄] [⚠ n] [🔍] [⋯]
  ├─ column tabs: Inbox · Assigned · Blocked · Done   (tap, or swipe the column area)
  │   └─ task card ──────────────▸ Task (screen)
- │                                   ├─ needs-you block ─▸ Conversation | Pipeline
- │                                   ├─ pipeline row ────▸ Pipeline (screen) ─▸ stage conversation
+ │                                   ├─ needs-you block ─▸ Conversation (a question or a plan only)
+ │                                   ├─ pipeline block: Retry / Skip / One more round in place
+ │                                   │    ├─ header ─────▸ Pipeline (screen: the Stages view)
+ │                                   │    └─ stage pill ─▸ stage conversation
  │                                   ├─ agent row ───────▸ Conversation (screen)
- │                                   └─ bottom bar: status (4 segments) · receipts with Undo
+ │                                   └─ bottom bar: [Assigned ▾] sheet · [+ Agent] · receipts with Undo
  │   └─ Inbox › Not on a task: a conversation ─▸ Conversation; a pipeline ─▸ Pipeline
  │   └─ long-press a card ───────▸ Card sheet: Move to… · Hide from board · Open first agent
  └─ dock: Tell the orchestrator… ─▸ orchestrator conversation, keyboard open
@@ -330,9 +352,10 @@ order and with its labels (`kanban.status.*`). Three shapes were weighed:
 A is the kanban the requirement names and the form the desktop already uses
 when it is narrow. B is the fallback if the operator prefers one scroll.
 
-Order inside a column: cards that need the operator first, oldest ask first
-(the attention queue's order, which ⚠ and Next › already walk), then the
-desktop's order (latest agent work first). The pin is the one deliberate
+Order inside a column: everything that needs the operator first, oldest ask
+first (the attention queue's order, which ⚠ and Next › already walk), task
+cards and Not on a task rows alike, so the tab's ⚠n counts exactly the first n
+items; then the desktop's order (latest agent work first). The pin is the one deliberate
 difference from the desktop: the phone shows five or six cards at a time, and a
 decision must not sit under 50 assigned tasks. Seat tasks stay out of the
 columns, as on the desktop (the dock owns the seat). Hidden groups leave the
@@ -341,7 +364,11 @@ columns and are listed at ⋯ › Hidden tasks with Show.
 Column specifics:
 
 - **Inbox** ends with "Not on a task · n" (the desktop's `unlinkedShown`): a
-  pipeline or conversation card with no task; a tap opens it directly.
+  pipeline or conversation card with no task; a tap opens it directly. A
+  pipeline there is the same card as a task's (§3.4), titled by the pipeline.
+  A conversation row is titled by its first prompt line (the rule a pipeline
+  card already follows), says its state once as the badge, and carries engine,
+  model, "not on a task" and age in its meta line.
 - **Done** shows the newest 20 cards by completion, then "Show 20 more". The
   tab count is the full count.
 
@@ -375,12 +402,19 @@ follows the tabs. Each column keeps its scroll offset.
 ### 3.4 Task card
 
 ```
-┌───────────────────────────────────────────────┐
-│▌<title, 13 px / 600, two lines at most>   [a question] │ badge only when it needs the operator
-│  ▰▰▱ review · reviewing 4:12         PR #2070 open │ newest active pipeline: stage track,
-│                                               │ stage · state phrase · age, passive PR text
-│  ✦✦ 2 working · 5 agents · 12m               │ engine marks of working agents, counts, last work
-└───────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│▌<title, 13 px / 600, two lines at most>  [badge]  │ badge only when it needs the operator
+│▌ (!) Implement → ○ Review                  no PR  │ the pipeline's stage chain · its PR, passive
+│▌ Implement failed · 1 finding · 41m     +1 paused │ needs you: the reason, amber; other pipelines
+└───────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│ Restore /favicon.ico with the Delegatus emblem    │
+│  ✓ Implement → ◉ Review · 4m              #2070   │ running: chain · age with a unit · PR
+└───────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│ PR and issue chips on pipelines and task cards    │
+│  ✓ completed · 20m                        #2068   │ finished: one muted line, no chain
+└───────────────────────────────────────────────────┘
 ```
 
 - **Left edge (3 px):** amber when the card needs the operator, red when a
@@ -389,57 +423,70 @@ follows the tabs. Each column keeps its scroll offset.
 - **Title:** two lines, then an ellipsis. A placeholder title reads in muted
   italics, as on the desktop.
 - **Badge (needs you only):** the row's reason in the existing words: "a
-  question", "plan approval", "needs a decision", "needs review", "stalled", "limit".
-- **Pipeline line (when the task has pipelines):** a stage track, one 12 × 4 px
-  segment per stage (passed = success, running/reviewing = accent, failed =
-  danger, waiting = border); then `stage · state` in the pipeline words the
-  phone already uses (`stageCardLabel`, `pipelineReviewHeads`); "+1" when more
-  pipelines are active. On the right, the #2059 link as passive text ("PR #2068
-  merged", "no PR"): a link cannot nest inside the card's button, which is the
-  rule #2059 §6.4 already set for phone rows. The chips are clickable on the
-  task screen.
-- **Agents line:** the engine marks (16 px, the shared `EngineMark`) of up to
-  three working agents, "n working" in success, "n agents" in total, and the age
-  of the latest agent work. With nothing working: "5 agents · done 2h", or "no
-  agents yet".
+  question", "plan approval", "needs a decision", "needs review", "stalled",
+  "limit". For a pipeline it is the pipeline's state word
+  (`pipelineState.*`, the desktop chip's words).
+- **Pipeline line (when the task has pipelines):** the pipeline block at card
+  density (§3.13): the stage chain, then the age with a unit ("4m", "1h 5m"),
+  then the #2059 link on the right as passive text (`pr-issue-chips.md` §6.4: a
+  link cannot nest in the card's button). The card shows the pipeline that
+  needs the operator if one does, else the newest unfinished one; "+n running",
+  "+n paused" name the others.
+- **Reason line (needs you only):** what the pipeline needs, in warning ink:
+  "Implement failed · 1 finding · 41m" for a decision, "head 9b2e7d4c
+  unreviewed · no rounds left · 12m" for a spent review budget (the #1938
+  review-heads line, shortened). The card draws one status hue: the chain's
+  parked pill, the badge, the edge and the reason are all amber.
+- **Finished:** when every pipeline of the task is completed, one muted line
+  "✓ completed · 20m" with the merged PR in muted text; no chain, no success or
+  accent colour. The card's long-press sheet then lists "Move to Done" first.
+- **Agents line:** only for work the pipeline line does not already say: a
+  task with no pipeline ("2 working · 5 agents · 12m", "no agents yet"), or
+  working agents that are not stages of the shown pipeline. A card whose
+  working agents are all its pipeline's stages draws none.
 - The whole card is one button (the task screen). A long-press opens the card
-  sheet (§3.8). Height: 74 px with a one-line title and no pipeline, 92 px with
-  two lines and a pipeline.
-
-A card in "Not on a task" is the conversation row the phone draws today
-(`ConversationRow`) or a pipeline row (`MobilePipelineQueueRow`), unchanged.
+  sheet (§3.8). Measured on the round-2 frames at 390 px: 65 px for a running
+  pipeline with a one-line title, 82 px with a two-line title, 103 px for a
+  needs-you card with a two-line title.
 
 ### 3.5 Task screen
 
-Pushed from a card. The bar reads ‹, the task title on one line and a meta line
-("Assigned · 5 agents"), and ⋯ (Rename, Colour, Details, Attach PR or issue,
-Hide from board, Copy link).
+Pushed from a card. The bar reads ‹, the task's context on one line
+("Assigned · 3 agents · 2 pipelines"), and ⋯ (Rename, Colour, Details, Attach
+PR or issue, Hide from board, Copy link). The body owns the title; once it
+scrolls out of view the bar takes it.
 
 Body, one scroll:
 
-1. **Title and description**: the title whole (15 px / 600), the description
-   clamped to three lines with "More". A tap on either edits it in place
+1. **Title**, whole (15 px / 600). A tap edits it in place
    (`PATCH /api/tasks/:id` with `expectedRevision`, as the desktop's
    `CardInlineText` does).
-2. **Links**: the #2059 `WorkLinkChip`s of the task, clickable, or "no PR"
-   when the task has none; a pipeline without a PR says so on its own row.
-3. **Needs you** (when anything on the task needs the operator): one amber-edged
-   block per item, with the reason and the one action that answers it: "Open
-   pipeline ›" for a decision, "Answer ›" for a question or a plan.
-4. **Pipelines · n**: one row per pipeline, newest active first: title, state
-   chip, stage track with stage names, "stage 2/3 · review · reviewing 4:12". A
-   tap opens the pipeline screen.
-5. **Agents · n** with "+ Agent" on the section header: the members as today's
-   conversation rows (working first), which keep their swipe actions here
-   because this screen has no pager.
-6. **Details** and **Earlier attempts**: collapsed rows.
+2. **Pipelines**: one block per pipeline at task density (§3.13), the one that
+   needs the operator first, then running, provisioning and paused, newest
+   first. A decision is answered inside its block. Completed pipelines fold
+   behind one dashed row "✓ 3 completed · #2188 · #2170 · #2150 ⌄".
+3. **Needs you** only for what has no block on this screen: a question or a
+   plan approval from a conversation, with "Answer ›".
+4. **Links**: a row of `WorkLinkChip`s only for links attached by hand, which
+   no pipeline owns. Each pipeline's links live in its block.
+5. **Description**, one line with ›; a tap opens it whole and editable.
+6. **Agents · n**: the members as today's conversation rows (working first),
+   which keep their swipe actions here because this screen has no pager.
+7. **Details** and **Earlier attempts**: collapsed rows.
 
-Bottom bar, in thumb reach: the **status control**, four segments (Inbox ·
-Assigned · Blocked · Done) with the current one filled. A tap moves the task at
-once through the desktop's optimistic, revision-guarded mutation
+Bottom bar, in thumb reach: **[Assigned ▾]**, the desktop's status pill, and
+**[+ Agent]**. A tap on the pill opens the four statuses as a sheet; a choice
+moves the task through the desktop's optimistic, revision-guarded mutation
 (`useTaskMutations`), shows a receipt in flow with Undo for 4 s, and on a
 refusal moves it back and says why (mobile-v2 rule 9: no confirmation prompts,
-receipts carry the inverse).
+receipts carry the inverse). Nothing in the bottom bar changes the status on
+one tap.
+
+Measured on `task-390-en`: the parked pipeline's whole block, answer buttons
+included, is 238 px (round 1 spent 231 px on a needs block and a row that
+could not answer); Retry stage is 165 × 44 px at y = 301 of the 667 px page
+(318 in uk); both blocks, the description row and the Agents header are inside
+the first 603 px above the bottom bar.
 
 ### 3.6 Orchestrator and composer
 
@@ -486,9 +533,13 @@ Board → Conversation for a card in Not on a task.
 ### 3.8 Gestures and one-hand reach
 
 In the page's bottom 40 % sit the dock (orchestrator, working count, mic), the
-lower cards and the task screen's status bar. The top holds the bar and the
-tabs. Every top control has a one-hand path: the swipe for columns, the pinned
-card for a decision.
+lower cards and the task screen's bottom bar ([Assigned ▾], [+ Agent]). The
+top holds the bar and the tabs. Every top control has a one-hand path: the
+swipe for columns, the pinned card for a decision. A decision's buttons sit in
+the upper middle of the task screen (y ≈ 300 of 667 at 390 px), a stretch for
+one thumb at 430; repeating them in the bottom bar would bring them into reach
+at the price of drawing the pipeline twice, so they stay in the block and the
+⚠ sheet's Next › stays the one-handed path across decisions.
 
 | Gesture | Where | Effect |
 | --- | --- | --- |
@@ -517,15 +568,16 @@ content first, no layout shift, reduced motion honoured.
   common "loading" state.
 - **Cold start, nothing cached:** the bar with the known project name, the tab
   strip with its real labels and dimmed count placeholders, card skeletons
-  filling the column in the card's own anatomy (two title bars, a stage track, a meta bar), and the
-  dock with the avatar and a dimmed state line. The pulse stops under
-  `prefers-reduced-motion`.
+  filling the column in the card's own anatomy (two title bars, a row of pill
+  shapes, a link bar), and the dock with the avatar, a dimmed state line and
+  placeholders where "● n" and the mic will be, so neither pops in later. The
+  pulse stops under `prefers-reduced-motion`.
 - **Empty column:** the desktop's own empty copy (`kanban.empty.<status>.title`
   and `.body`, en and uk already exist), centred in the column, plus one action
   where there is a next step: Inbox gets "+ New task", Assigned gets "Tell the
-  orchestrator". Under it, one muted line points at the nearest column with
-  work ("← Assigned has 51 tasks · 3 working"). The other tabs keep their
-  counts, so the operator sees where the work is.
+  orchestrator". Under it, one 44 px row opens the nearest column with work
+  ("Assigned · 51 tasks · 5 working ›"). The other tabs keep their counts, so
+  the operator sees where the work is.
 - **Empty project:** Inbox's empty state, with the dock inviting the first
   message.
 - **Error:** the catalog failure notice (`CatalogFailureNotice`) inside the
@@ -578,6 +630,127 @@ search stays the way to find any message.
 | moved receipt | Moved to {column} · Undo | Переміщено в «{column}» · Скасувати |
 | dock working | {n} working (aria) | {n} працює |
 | jump strip | ↓ down · ↓ {n} new (existing `feed.down`, `feed.newCount`) | existing uk |
+| pipeline state chip and needs-you badge | existing `pipelineState.*` ("needs a decision", "needs review", "stages running", "paused", "completed", "provisioning the worktree") | existing uk ("потребує рішення", "потребує ревʼю", …); the phone's badge uses these words too, so one card never says "потрібне" and "потребує" for one state |
+| stage state words | existing `pipelineChipState.*` | existing uk |
+| actions | existing `mobile2.pipeline.retry` / `.skip` / `.archive` / `.resume`; new "One more round" | existing uk; new «Ще один раунд» |
+| fail edge | existing `kanban.loop`, `kanban.loopRest`, `kanban.loopLive`, `kanban.loopParked` | existing uk |
+| spent review budget | existing `pipelineReview.heads` | existing uk |
+| passed fold | {n} passed | {n} пройдено |
+| card reason | {stage} failed · {count} finding(s) · {age} | {stage} провалено · {count} зауваження · {age} |
+| other pipelines | +{n} running · +{n} paused | +{n} виконуються · +{n} на паузі |
+| completed fold | existing `mobile2.pipelines.completed` | existing uk |
+| stage position | existing `kanban.stages.position` ("Stage {k} of {n}"), lower-cased in a meta line | existing uk |
+
+Stage names are pipeline data and are never translated: a uk frame reads
+"Implement", "Review", "Build ui", exactly as the desktop's uk board does
+(`desktop-card-t-many-links-open-uk.png`). Round 1 translated them. One
+separator, "·", in both languages.
+
+### 3.13 Pipelines on the phone (round 2)
+
+The phone draws a pipeline with the desktop's vocabulary and one component at
+three densities. Nothing below is a new visual language; every element names
+the desktop piece it comes from.
+
+**The stage pill** is the desktop's `.pchip` (`PipelineSection.tsx:701`,
+`kanbanBoard.css:363`): a mark, the stage's display name
+(`stageDisplayName`), the review-round count and the fail-edge suffix. The
+engine mark and the effort ladder, which cost about 40 px per pill and answer
+none of the four questions, stay on the pipeline screen's stage rows. Pills are
+joined by `→`.
+
+**One tone map.** The phone imports `STAGE_TONE` (`pipelineGraph.ts:26`) and
+the `.pdot` and `.pstate-chip` colours (`kanbanBoard.css:350-354`, `:523-528`)
+and restates neither. The mark adds shape so the state reads without colour:
+
+| Stage state | Tone (desktop) | Mark on the phone |
+| --- | --- | --- |
+| running, committing | active: success with a halo | filled dot with a halo, pulsing |
+| reviewing | review: info with a halo | filled dot with a halo, pulsing |
+| passed | ok: success | check |
+| failed | bad: danger | cross |
+| needs_decision | needs: warning with a halo | "!" in a warning disc (today's `StageMark` draws a danger cross; it moves) |
+| pending, skipped | idle: hollow | hollow ring; dashed pill when it has no conversation yet |
+
+A pipeline that needs the operator (`needs_decision`, `needs_review`) is amber
+throughout on the phone: its edge, badge, chip, parked pill, reason line, and
+the spent fail-edge suffix, which the desktop paints danger (the count "↺1/1"
+already says the budget is spent). The desktop's `needs_review` chip is grey
+today; filed as #2080. A paused pipeline draws no live tone: its held stage is
+hollow.
+
+**The fail edge** rides the pill that fails as the suffix the desktop falls
+back to when a row wraps (`ReturnSuffix`, `PipelineSection.tsx:630`): "↺ 1/2".
+On a screen, the stage's lines spell it in the desktop's loop words
+(`kanban.loopLive`: "Implement is running now because Verify failed";
+`kanban.loopRest`, `kanban.loopParked`).
+
+**Densities.**
+
+| | Board card | Task screen block | Pipeline screen |
+| --- | --- | --- | --- |
+| Pipeline title | none (the card is the task) | shown, two lines at most, omitted when it equals the task's title | the body's heading |
+| State | badge only when it needs you | the `.pstate-chip` under the title, with the age | the bar: "needs a decision · stage 1 of 2 · 41m" |
+| Chain | one line, display-only, 22 px pills | wraps, 30 px pills with 44 px targets that open the stage's conversation | a numbered stage list |
+| PR and issue | passive text, right | `WorkLinkChip`s at the end of the chain row; "no PR" as plain text | chips row with "Attach PR or issue…" |
+| Needs you | the reason line | the answer inside the block | the answer inside the parked stage |
+| Actions | none (the card is one button) | ⋯ opens the pipeline's sheet (Pause, Resume, Close lane, Open conversation) | the bar's ⋯ |
+
+**The card's chain fits one line.** The card tries, in order, until the
+chain's `scrollWidth` fits its box: the whole chain; the passed stages before
+the current one folded into "✓n"; the current stage, the next and "+m"; the
+current stage and "+m"; and if even that does not fit beside the age and the
+PR, the chain takes the line alone and the age and PR drop to the line below.
+The current stage's name is never truncated. The round-2 board carries a
+2-, 3-, 8-stage chain and a 43-character stage name; all four fit at 390 px
+(`board-390-*`).
+
+**The block answers in place.** A block whose pipeline needs a decision grows a
+panel under its chain: the parked stage's report line ("Implement · Builder
+failed · 41m ago"), the first finding as a severity chip and its text (two
+lines, then "+n more"), and two 44 px buttons, **Skip stage** and **Retry
+stage** (primary), through the same `usePipelineActions` requests the desktop
+menu sends. A spent review budget (`needs_review`, #1938) shows the heads line
+in warning ink and **Close lane** and **One more round** (primary), which calls
+the engine's `continue-review` action with `addRounds: 1` (`PATCH` action checked at `engine.ts:5624-5627`, the grant at `engine.ts:6699`,
+admitted unless `LLV_PIPELINE_CONTINUE_REVIEW=0`). Skip and Close keep today's
+deferred receipt (`MobilePipelineScreen.tsx:78-91`): the request waits out the
+receipt's four seconds and its Undo cancels it. Retry and One more round go at
+once and their receipt names what happened.
+
+**The pipeline screen is the phone's Stages view.** It replaces today's
+`MobilePipelineScreen` body:
+
+```
+‹  needs a decision · stage 1 of 2 · 41m           ⚠7  ⋯
+Stop repeated full-board downloads                     heading, the body owns the title
+no PR                             Attach PR or issue…
+Stages · 2
+┌▌1 (!) Implement              needs a decision ┐   the current stage: tone stripe,
+│▌      ✳ Opus 5.5 ▂▄▆ · Builder                │   engine, effort, role
+│▌   Builder failed · 41m ago · attempt 1       │   its latest report
+│▌   P1  The delta chain is rebuilt on the …    │   ranked findings
+│▌   [ Skip stage ]  [ Retry stage ]            │   the answer, in the stage
+│▌   Open conversation                        › │
+│ 2  ○ Review ↺0/2                 pending   ⚙  │   pending: configure, no conversation
+│      ✳ Opus 5.5 ▂▄▆ · Reviewer · review loop  │
+└───────────────────────────────────────────────┘
+↺ Review fails → Implement · up to 2 rounds
+Past attempts · 1                                 ›
+```
+
+- One row per stage, numbered, with the pill's mark and the stage's state
+  word in its tone. A row whose stage has a conversation opens it; a pending
+  row offers ⚙ (configure) instead.
+- The current stage is expanded: its report, findings, attempt, review round,
+  fail-edge lines, the answer when the pipeline is parked on it, and "Open
+  conversation ›". Its left stripe takes the stage's tone.
+- Passed stages before the current one fold into one row, "1–3 · ✓ 3 passed ·
+  Plan · Build api · Review api", which expands in place.
+- "Linked tasks" appears only when it names a task other than the one the
+  operator came from; "Past attempts · n" stays at the end.
+- The graph is not drawn (§8).
+
 
 ## 4. Slices
 
@@ -588,23 +761,36 @@ Each slice is one PR, and each leaves the phone working.
    keep the newer rows on a scope switch). Tests in §5. Independent of the rest
    and first, because every later slice reads the same payload.
 2. **The jump strip (D).** `src/components/LogFeed.tsx`. Independent.
-3. **Columns.** Move `useBands` out of `KanbanBoard.tsx` into
+3. **One pipeline block and one tone map.** `src/components/pipelines/PipelineBlock.tsx`
+   over the desktop's `KanbanPipeline` summary with a `density` of `card`,
+   `task` or `screen` (§3.13): the pill with the phone's mark, the card fold,
+   the answer panel through `usePipelineActions`, `WorkLinkChip`s. The phone's
+   `StageMark` and every phone pipeline colour switch to `STAGE_TONE` and the
+   `.pstate-chip` states; needs_decision leaves the danger cross. The block is
+   mounted first on today's phone pipeline list and Needs you rows, so it ships
+   before the columns do.
+4. **Columns.** Move `useBands` out of `KanbanBoard.tsx` into
    `src/components/kanban/useBands.ts`; a pure `src/components/mobile/phoneKanbanModel.ts`
-   over `buildKanbanModel` (needs-you pin, Done window, Not on a task, seat
-   excluded); `MobileKanban.tsx` (tabs, pager, cards, card sheet); the mobile
+   over `buildKanbanModel` (needs-you pin across the column, Done window, Not on
+   a task, seat excluded, which pipeline a card shows); `MobileKanban.tsx`
+   (tabs, pager, cards with the block at card density, card sheet); the mobile
    branch of `ProjectDashboard.tsx` renders it in place of `MobileBoard`'s
    sections. The top seat card and the old dock stay for this slice.
-4. **Task screen.** `mobileNav` gains `{ kind: "task", id }`;
-   `MobileTaskScreen.tsx` with the sections of §3.5, the status bar through
-   `useTaskMutations`, `WorkLinkChip`s, "+ Agent".
-5. **Dock.** `MobileBoardDock` takes the seat's state line and the working
+5. **Task screen.** `mobileNav` gains `{ kind: "task", id }`;
+   `MobileTaskScreen.tsx` with the sections of §3.5: the blocks at task density,
+   the completed fold, the bottom bar's status sheet through `useTaskMutations`
+   and "+ Agent".
+6. **Pipeline screen.** `MobilePipelineScreen` becomes the Stages view of
+   §3.13: the numbered stage list with the passed fold, the expanded current
+   stage with the answer in it, One more round for `needs_review`.
+7. **Dock.** `MobileBoardDock` takes the seat's state line and the working
    count; the Working sheet reuses `MobileSwitchSheet`'s rows; the seat card
    slot is removed; ⋯ gains Orchestrator seat.
-6. **History and cleanup.** ⋯ › All conversations as a screen; ⋯ › Hidden
+8. **History and cleanup.** ⋯ › All conversations as a screen; ⋯ › Hidden
    tasks; remove `buildMobileBoard`'s sections and `MobileBoard`'s Recent and
    catalog code (`mobileRowState` stays: `kanbanModel` reads it).
-7. **Loading and empty.** The phone kanban's shapes on #2071's primitives once
-   they land. If #2071 is not merged when slice 3 is built, slice 3 ships the
+9. **Loading and empty.** The phone kanban's shapes on #2071's primitives once
+   they land. If #2071 is not merged when slice 4 is built, slice 4 ships the
    empty states and a plain skeleton in the card's shape, and this slice
    switches them to #2071's primitives.
 
@@ -640,31 +826,76 @@ Run the files you touch, by path, under an isolated state directory (AGENTS.md).
   no control (the jump strip included); card titles at most two lines; tab
   labels never truncated; the dock fully inside the page; long real titles (the
   687-character p90) and Ukrainian copy in the fixtures.
+- **Pipelines (the critique's R1–R12, over the desktop fixture's pipelines
+  reused on the phone: the eight-stage chain, the parked decision, the fired
+  and the spent fail edge, the spent review budget, a review loop in round 2,
+  paused, provisioning, completed with a merged PR, five pipelines on one task,
+  and stage names of 5, 20 and 43 characters):**
+  - *Same words as the desktop:* a DOM test renders the block at each density
+    and asserts its stage names, state chip words and loop words equal what
+    `PipelineSection` renders for the same pipeline.
+  - *One tone map:* a table test over every `StageChipState` and pipeline state
+    compares the phone's tone class with `STAGE_TONE`'s; a frame gate reads the
+    computed colours inside a needs-you card and finds no success, danger,
+    accent or info ink or fill outside the PR text.
+  - *The card's chain:* one line of pills, `scrollWidth <= clientWidth`, the
+    current stage's name untruncated, for every chain length and name length.
+  - *Ages:* no card text matches `^\d{1,2}:\d{2}$`; a running card with a
+    one-line title is at most 74 px tall.
+  - *Answered in place:* on the task frame at 390 × 667 the Retry button is at
+    least 44 × 44 and inside the first 667 px; both blocks and the Agents header
+    are above the bottom bar; a tap sends the same request the desktop menu
+    sends for that pipeline and stage; Skip and Close wait out the receipt.
+  - *Once per screen:* each pipeline title and the task title occur once; "no
+    PR" occurs only inside a pipeline's block or chips row.
+  - *Pipeline screen:* frames for needs_decision, running, needs_review and
+    completed; Board → Task → Pipeline → stage conversation → ‹ ends on the
+    pipeline; every stage row with a conversation is a 44 px target.
+  - *Pin:* in the needs fixture the first five Inbox items are the five the
+    tab's ⚠5 counts; the four stalled rows have four distinct titles and say
+    "stalled" once each.
 
 ## 6. Mockups
 
-Static HTML and CSS with the values of `src/styles/tokens.css` (dark scheme,
-as on the operator's phone, plus a light board), rendered with `playwright-core`
-and `CHROME_BIN=google-chrome-stable`. The frame includes an iOS status bar and
-Safari's bottom URL bar so the page area is the real one. Synthetic data; task
-titles are public issue titles of this repository. The PNGs are not committed.
+Static HTML and CSS with the values of `src/styles/tokens.css`, rendered with
+`playwright-core` and `CHROME_BIN=google-chrome-stable`. The frame includes an
+iOS status bar and Safari's bottom URL bar so the page area is the real one.
+Synthetic data: task titles are public issue titles of this repository or the
+desktop evidence fixture's, ages agree across screens (the skeletons lane is
+21m on its card and "working 21:05" in its conversation). The PNGs are not
+committed.
 
-| Scene | 390 × 844 en | 390 × 844 uk | 430 × 932 en | 430 × 932 uk |
-| --- | --- | --- | --- | --- |
-| Board, Assigned column | `board-390-en.png` | `board-390-uk.png` | `board-430-en.png` | `board-430-uk.png` |
-| Task opened | `task-390-en.png` | `task-390-uk.png` | `task-430-en.png` | `task-430-uk.png` |
-| Needs you across columns | `needs-390-en.png` | `needs-390-uk.png` | `needs-430-en.png` | `needs-430-uk.png` |
-| Empty column (Blocked) | `empty-390-en.png` | `empty-390-uk.png` | `empty-430-en.png` | `empty-430-uk.png` |
-| Loading, cold start | `loading-390-en.png` | `loading-390-uk.png` | `loading-430-en.png` | `loading-430-uk.png` |
-| Conversation, jump strip (defect D) | `jump-390-en.png` | `jump-390-uk.png` | `jump-430-en.png` | `jump-430-uk.png` |
-| Board, light scheme | `board-light-390-en.png` | `board-light-390-uk.png` | | |
+**Round 2**, in `/var/tmp/phone-kanban/mockups-r2/` (54 frames; source and
+render script in `/var/tmp/phone-kanban/mockups-r2-src/`). Each scene at
+390 × 844 and 430 × 932, en and uk, dark (`<scene>-<width>-<lang>.png`), plus:
 
-All under `/var/tmp/phone-kanban/mockups/`, with `geometry.json` beside them.
-The §5 gates ran on the mockups themselves (page overflow, 44 px targets,
-intersecting targets, ink overlap clipped by overflow ancestors, two-line
-titles, untruncated tab labels): 26 frames, 0 findings. The first run caught one
-real defect, the task screen's "More" link at 41 × 34 px with its target
-reaching into the description, which the rendered frames now correct.
+| Scene | What it shows | Extra frames |
+| --- | --- | --- |
+| `board` | Assigned: a parked decision, a spent review budget, running chains of 2, 3 and 8 stages and a 43-character stage name, two finished tasks | `board-light-390-*` |
+| `task` | the round-1 example task: the decision answered in its block, a paused pipeline, description row, Agents, the bottom bar | `task-light-390-*`, `task-390-full-*` |
+| `task-many` | one task with seven pipelines: a spent review budget with One more round, a review loop in round 2, a fired fail edge, provisioning, three completed folded | `task-many-390-full-*` |
+| `pipeline-decision` | the pipeline screen parked on a decision, answered in the stage | |
+| `pipeline-running` | the eight-stage pipeline running stage 4, passed stages folded | `pipeline-running-390-full-*` |
+| `pipeline-review` | the pipeline screen with a spent review budget | |
+| `pipeline-done` | a completed pipeline with its merged PR | |
+| `needs` | Inbox: five needs-you items pinned first, stalled rows named by their prompts, a pipeline under Not on a task | |
+| `empty` | Blocked empty, the hint as a 44 px row | |
+| `loading` | cold start with pill-shaped skeletons and the dock's placeholders | |
+| `jump` | a stage conversation: its stage in the bar, the jump strip | |
+
+The `-full` frames render the whole scroll of the screen at 390 px.
+
+The render script runs the §5 gates on every frame, and round 2 adds the
+pipeline gates above (card chain on one line, current stage untruncated, no
+clock-like ages on cards, "no PR" only inside a pipeline, one status hue on a
+needs-you card, each title once per screen). Final run: 54 frames, 0
+findings. Earlier runs caught four real defects that the frames now correct:
+the 43-character stage name overflowed the card at every fold level (fixed by
+the last two fold levels and the own-line fallback), the spent fail-edge suffix
+painted danger on an amber card, PR chips' 44 px targets reached over the
+line below them, and the link row's targets reached into the title above.
+
+Round 1's 26 frames stay in `/var/tmp/phone-kanban/mockups/` for comparison.
 
 ## 7. Validation against the requirement
 
@@ -673,7 +904,7 @@ reaching into the description, which the rendered frames now correct.
 | "sees where every piece of work stands (by status column or equivalent)" | four columns from the task store, every drawn task in one of them, counts on the tabs |
 | "moves between columns … with one hand" | a swipe anywhere on the column area; tabs as a second path |
 | "and into a task, a pipeline or a conversation" | card → task screen → pipeline or conversation; Not on a task opens directly |
-| "and acts from there" | status move at the bottom of the task screen and in the card sheet; answer a question or a decision from the needs-you block; + Agent; the pipeline screen's actions |
+| "and acts from there" | a decision or a spent review budget is answered inside its pipeline's block on the task screen and inside the parked stage on the pipeline screen (§3.13); a question from the needs-you block; the status from the bottom bar's sheet and the card sheet; + Agent |
 | "one coherent phone surface, combined with what the phone board shows today" | one board: seat and composer in the dock, Needs you on cards and in ⚠, pipelines and working agents on cards, recent conversations on their tasks (§3.1 table) |
 | "rethink what is wrong with the current phone board" | §2.6; the sections that split one task are removed, the history leaves the work surface, the counts of the scan window go, the data stops going back in time |
 | "task cards with their pipelines, running agents and 'needs you' state" | §3.4 |
@@ -682,11 +913,14 @@ reaching into the description, which the rendered frames now correct.
 | "empty and loading states consistent with #2071" | §3.9 |
 | "explain each defect above with file:line" | §2.3 |
 | "rendered phone mockups (390 px, en and uk)" | §6, also 430 px |
+| round-1 verdict: "pipelines must be very convenient on the phone" | the chain answers what stage and whether it moves on the card; the reason says what it needs; the answer is two 44 px buttons in the block, one tap after the card (§3.13, §10) |
+| round-1 verdict: build on the desktop's group header, stage pills and chain, Stages view, PR and issue chips | every phone pipeline element names its desktop source (§3.13): `.pchip` pills and `→`, `STAGE_TONE`, `.pstate-chip`, `ReturnSuffix`, the loop words, `WorkLinkChip`s per pipeline, and the pipeline screen as the Stages view's numbered navigator |
+| round-1 verdict: the task-screen example (equal stage bars, the meta line, the needs block repeating the pipeline) | the bars are pills, the meta line is gone, the needs block for a pipeline is gone and its answer lives in the one block (`task-*`) |
 
 ## 8. Deferred — not currently justified
 
 - **Drag and drop between columns.** A long-press sheet and the task screen's
-  status bar move a task in one tap; a drag across a paged pager is fragile and
+  status sheet move a task in two taps; a drag across a paged pager is fragile and
   nothing asks for it.
 - **Search and filters inside a column.** The bar's search finds any message; a
   per-column filter is desktop parity nobody asked for on the phone.
@@ -698,8 +932,19 @@ reaching into the description, which the rendered frames now correct.
 - **Swipe actions on cards.** They fight the pager; the long-press sheet has them.
 - **Pull to refresh.** In Safari it reloads the page, the slow path #2071 is
   shortening; the board is live anyway.
-- **A stage graph on the task screen.** The pipeline screen has the stages; the
-  card and the task screen carry the track.
+- **The stage graph on the phone.** The desktop's graph toggle and the Stages
+  sheet's graph are dropped: the numbered list says the order and the fail edge
+  rides its pill. Nothing in the requirement asks for a graph at 390 px.
+- **Return arcs drawn as arcs.** The "↺ k/n" suffix carries the same count in a
+  form a thumb can read.
+- **Stage panes swiped side by side, each with its conversation.** The stage's
+  conversation is one tap away on its own screen, with the back stack of §3.7.
+- **Engine marks and effort ladders on the card's and block's pills.** They stay
+  on the pipeline screen's stage rows, where a stage's runtime is chosen.
+- **Deciding from the board card itself.** The card is one button; nesting
+  actions in it breaks that. The task screen answers one tap after the card.
+- **A grant of more than one review round from the phone.** One more round is
+  the common case; a larger grant stays a `pipeline_action` call.
 
 ## 9. Decisions for the operator
 
@@ -712,11 +957,56 @@ reaching into the description, which the rendered frames now correct.
    Inbox › Not on a task and ⋯ › All conversations (recommended), or keep a
    short Recent list under the columns.
 
-The data fix (slice 1) and the jump strip (slice 2) need no decision and can
-start at once.
+4. **Review rounds from the phone (§3.13).** A spent review budget offers One
+   more round beside Close lane, granting exactly one round through
+   `continue-review` (recommended). #1938 left the phone with Close only,
+   because a grant needs a round count; a fixed count of one answers that. The
+   alternative keeps Close only and sends the operator to the desktop or the
+   orchestrator to continue.
+
+The data fix (slice 1), the jump strip (slice 2) and the pipeline block
+(slice 3) need no decision and can start at once.
+
+## 10. Round 2: what changed and why
+
+Each finding of `docs/design/phone-kanban-critique.md`, with what round 2 did.
+"Accepted" means built as the critique recommends; "changed" means accepted
+with a different mechanism, and says why; "rejected" says why. Frames are in
+`/var/tmp/phone-kanban/mockups-r2/`.
+
+| Finding | Round 2 | Where |
+| --- | --- | --- |
+| **P1-1** the decision shown twice and answerable nowhere | Accepted. A pipeline appears once per screen; its needs-you state is its own block's state, and Skip stage and Retry stage are 44 px buttons inside it. The needs block remains only for a question or a plan approval. **Changed:** the buttons keep the existing "Retry stage" / "Skip stage" copy instead of naming the stage, because the stage is named once in the report line directly above and "Повторити етап" fits a 165 px button in uk. | §3.5, §3.13; `task-*` |
+| **P1-2** the unlabelled 12 × 4 px track | Accepted. The card's second line is the desktop chain: pills with a mark and the display name, `→` between them, folded to one line. **Changed:** the fold gained two last levels (the current stage with "+m", the current stage alone) and an own-line fallback, because the render gate found a 43-character stage name overflowing every fold level the critique listed. | §3.4, §3.13; `board-*` |
+| **P1-3** two colour mappings | Accepted. `STAGE_TONE` and the `.pstate-chip` colours, imported; shape added (check, live dot, cross, "!", ring); needs_decision leaves the danger cross. **Changed:** the spent fail-edge suffix is amber on the phone where the desktop paints it danger, so a needs-you card keeps one status hue; the gate checks that hue. The desktop's grey `needs_review` chip is filed as #2080. | §3.13; `board-*`, `task-many-*` |
+| **P1-4** the pipeline screen never drawn | Accepted. The pipeline screen is redesigned as the Stages view and drawn for needs_decision, running (eight stages), needs_review and completed. **Changed:** the decision sits inside the parked stage's expanded row instead of a block above the list, so its report and findings are drawn once, next to the attempts and fail edge they belong to. The review loop in round 2, the fired fail edge, provisioning and paused are drawn as task-screen blocks; their pipeline screens are the same layout with the current stage's lines changed and are not drawn separately. | §3.13; `pipeline-*`, `task-many-*` |
+| **P2-1** stage bars that look like buttons | Accepted. Pills; on the task screen a pill with a conversation is a 44 px target that opens it, and a pill without one is dashed and not focusable. | §3.13; `task-*` |
+| **P2-2** PR attribution contradicting itself | Accepted. Each block carries its own chips at the end of its chain row; "no PR" appears only inside the block that has none; the task-level row only for links attached by hand. | §3.5; `task-*`, `task-many-*` |
+| **P2-3** elapsed times read as clock times | Accepted. Ages carry units on cards and blocks ("4m", "41m", "2h"); the live `m:ss` stays in the conversation bar. | §3.4; `board-*`, `jump-*` |
+| **P2-4** the agents line repeating the pipeline line | Accepted. No agents line when every working agent is a stage of the shown pipeline; a running card with a one-line title measures 65 px. | §3.4; `board-*` |
+| **P2-5** a status bar that looks like the tab strip and writes | Accepted. One "Assigned ▾" pill opens a status sheet; "+ Agent" beside it in the bottom bar. | §3.5; `task-*` |
+| **P2-6** the task title drawn twice | Accepted. The bar carries the context and takes the title once the body title scrolls out. The same rule moved to the pipeline screen, whose title was truncated in the bar. | §3.5, §3.13; `task-*`, `pipeline-*` |
+| **P2-7** finished work saying nothing | Accepted. One muted line "✓ completed · 20m" with the PR in muted text, no chain; "Move to Done" first in the long-press sheet, which §3.4 specifies and no frame draws. Completed pipelines fold behind "✓ 3 completed" on the task screen. | §3.4, §3.5; `board-*`, `task-many-*` |
+| **P2-8** stalled rows identical and said three times | Accepted. Titles are the first prompt line; the state is said once, as the badge; the meta line carries engine, model, "not on a task" and age. The red edge stays as the row's attention edge, the same device needs-you cards use. | §3.2; `needs-*` |
+| **P2-9** the pin broken in its own mockup | Accepted. The pin spans the column: the five items ⚠5 counts come first, the stalled rows included. | §3.2; `needs-*` |
+| **P3-1** lower-cased stage names | Accepted. Display names; and stage names are no longer translated in uk, matching the desktop's uk board. | §3.12; `*-uk` |
+| **P3-2** "P1" as jargon | Accepted. A severity chip beside the finding's text. | §3.13; `task-*`, `pipeline-*` |
+| **P3-3** separators differing by language | Accepted. "·" in both. | §3.12 |
+| **P3-4** the stage conversation losing its pipeline | Accepted. Its bar reads "working 21:05 · stage 1 of 3 · Design"; the model left the bar because the composer's pill already shows it. | `jump-*` |
+| **P3-5** contradicting mockup data | Accepted. One data set across screens: the skeletons lane is 21m on its card and 21:05 in its conversation; the favicon review is 4m. | §6 |
+| **P3-6** the loading dock popping its controls in | Accepted. Placeholders for "● n" and the mic. | §3.9; `loading-*` |
+| **P3-7** the empty hint neither link nor text | Accepted. A 44 px row that opens Assigned. | §3.9; `empty-*` |
+| **OVER-BUILT** (§2 of the critique): the needs block for pipelines, the agents line on stage-only cards, the four-button status bar, the title drawn twice | All four removed (P1-1, P2-4, P2-5, P2-6). Round 2 also dropped the block's "Stages" text link in favour of the header's ›, and the paused block's separate note, which repeated its chip. | — |
+| **R12** frames in dark and light | **Partly.** Light frames cover the board and the task screen only (`*-light-390-*`); the pipeline screens were drawn dark only. The tone map is imported from the same tokens in both schemes, so the build's frame gate covers light for every scene (§5). | §6 |
+
+Added beyond the critique: **One more round** for a spent review budget
+(decision 4 in §9), because the requirement asks the operator to act from the
+phone and #1938 had left only Close there.
 
 ## Appendix: other defects met during this research
 
 - `board_snapshot` with `limit: 5` returned about 570 000 characters: the
   board's stored preferences are returned whole regardless of the limit, so a
   bounded read is not bounded. It belongs in its own issue.
+- Round 2: #2080, the desktop draws the `needs_review` state chip in the grey of
+  an idle pipeline (`kanbanBoard.css:350-354` has no `needs_review` rule).
