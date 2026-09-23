@@ -3708,6 +3708,7 @@ export const en = {
   "seatTick.reason.interval": "interval",
   "seatTick.reason.childTerminal": "finished worker",
   "seatTick.reason.ownLaneSettled": "your lane settled",
+  "seatTick.reason.deploySettled": "your deploy settled",
   "seatTick.outcome.landed": "landed",
   "seatTick.outcome.deferred": "deferred, an attempt outstanding",
   "seatTick.outcome.queued": "queued",

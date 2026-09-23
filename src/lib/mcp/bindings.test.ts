@@ -491,7 +491,7 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
   const designatedSeat = {
     callerAttribution: () => ({ kind: "manager" as const, conversationId: "conversation_seat", role: null }),
     callerProject: () => "proj-a",
-    viewerProject: () => "proj-a",
+    viewerProjects: () => ["proj-a"],
     authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
     /* #845: the send resolves the conversation it names from ONE injected registry
        projection rather than reaching for the registry itself. */
@@ -3722,10 +3722,10 @@ test("with the rename alias recorded, the Viewer's own project is the seat's und
     /* The seat was designated under the old key and is read alias-resolved. */
     const seatProject = canonicalOrchestratorProject(before.project);
     expect(seatProject).toBe(after.project);
-    const viewerProject = () => productionDomainDependencies.viewerProject?.() ?? null;
+    const viewerProjects = () => productionDomainDependencies.viewerProjects?.() ?? [];
     for (const remote of [oldRemote, newRemote]) {
       process.env.LLV_VIEWER_CANONICAL_REMOTE = remote;
-      expect(viewerProject()).toBe(seatProject);
+      expect(viewerProjects()).toEqual([seatProject]);
     }
   } finally {
     if (restoreState === undefined) delete process.env.LLV_STATE_DIR;

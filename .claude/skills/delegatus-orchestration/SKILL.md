@@ -24,7 +24,7 @@ Delegatus (`~/.agents/tools/live-log-viewer-next`) is the user's dashboard for e
 
 ## Choosing the agent
 
-Templates map 1:1 to `agent:*` labels on GitHub issues (`Latand/live-log-viewer-next`) — a labeled issue already names its owner.
+Templates map 1:1 to `agent:*` labels on GitHub issues (`Latand/delegatus`) — a labeled issue already names its owner.
 
 | Template (engine) | Use for | Avoid |
 |---|---|---|

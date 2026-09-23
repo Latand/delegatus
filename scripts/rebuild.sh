@@ -14,7 +14,7 @@ LLV_DEPLOY_REVISION="${DELEGATUS_DEPLOY_REVISION:-${LLV_DEPLOY_REVISION:-}}"
 LLV_DEPLOY_IDEMPOTENCY_KEY="${DELEGATUS_DEPLOY_IDEMPOTENCY_KEY:-${LLV_DEPLOY_IDEMPOTENCY_KEY:-}}"
 
 PORT="${PORT:-8898}"
-CANONICAL_REMOTE="${LLV_VIEWER_CANONICAL_REMOTE:-https://github.com/Latand/live-log-viewer-next.git}"
+CANONICAL_REMOTE="${LLV_VIEWER_CANONICAL_REMOTE:-https://github.com/Latand/delegatus.git}"
 
 usage() {
   echo "usage: rebuild.sh [full-commit-sha]" >&2

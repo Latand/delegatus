@@ -22,7 +22,7 @@ import { BoardSchematic, NeedsYouSchematic, PipelineSchematic, SeatSchematic, St
 export type TourProject = { project: string; name: string };
 export type TourHandle = { /** Advance the phone pager; false once on its last page. */ advance(): boolean };
 
-const REPO = "https://github.com/Latand/live-log-viewer-next";
+const REPO = "https://github.com/Latand/delegatus";
 export const TOUR_GUIDE_URL = `${REPO}#how-agents-are-driven`;
 export const TOUR_SEAT_GUIDE_URL = `${REPO}/blob/main/docs/orchestrator.md`;
 

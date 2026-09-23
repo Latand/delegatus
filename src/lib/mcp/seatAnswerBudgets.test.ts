@@ -30,6 +30,8 @@ const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } = await import("./server");
 const { readSeatTickSettings, SEAT_TICK_PROMPT_LIMIT } = await import("@/lib/monitor/seatTickSettings");
 const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+const { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } = await import("@/lib/orchestrator/prompt");
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, failOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
 import type { Pipeline, PipelineCloseReport, PipelineStageHostRef } from "@/lib/pipelines/types";
 
 const PROJECT = "budget-board";
@@ -199,6 +201,56 @@ test("pipeline_action close answers counts in 600 B with 8 pending hosts, and ge
     const read = await mcp.call("get_pipeline", { pipelineId: open.id });
     expect((read.payload.pipeline as Pipeline).closeReport!.pending).toEqual(pending);
     console.log(`[#2030] pipeline_action close with 8 pending hosts: ${answer.bytes} B`);
+  } finally {
+    await mcp.close();
+  }
+});
+
+test("get_orchestrator answers a real seat in under 8 KB by default and whole with full:true (#2064)", async () => {
+  /* The seat the issue was filed from: the default mandate (about 25 KB), a
+     2 KB role table, fifteen terminalized intents that each keep their own copy
+     of the mandate, and seventy-six predecessors in the lineage. */
+  const project = "budget-seat-project";
+  const roleTable = Array.from({ length: 24 }, (_, row) => `| role-${row} | claude | opus | high | read-write | builds one slice |`).join("\n");
+  const at = (minute: number) => new Date(Date.parse("2026-09-01T00:00:00Z") + minute * 60_000).toISOString();
+  let minute = 0;
+  const seat = (index: number) => {
+    const key = `seat_${String(index).padStart(8, "0")}`;
+    beginOrchestratorSeatIntent({ project, mandate: ORCHESTRATOR_SYSTEM_PROMPT, roleTable, clientRequestId: key, mode: "spawn", promptVersion: ORCHESTRATOR_PROMPT_VERSION, now: at(++minute) });
+    completeOrchestratorSeatIntent({ project, clientRequestId: key, conversationId: `conversation_${crypto.randomUUID()}`, path: null, now: at(++minute) });
+  };
+  for (let index = 0; index <= 76; index += 1) seat(index);
+  for (let index = 0; index < 15; index += 1) {
+    const key = `failed_${String(index).padStart(8, "0")}`;
+    beginOrchestratorSeatIntent({ project, mandate: ORCHESTRATOR_SYSTEM_PROMPT, roleTable, clientRequestId: key, mode: "spawn", promptVersion: ORCHESTRATOR_PROMPT_VERSION, now: at(++minute) });
+    failOrchestratorSeatIntent(project, key, "the spawn never produced a readable conversation", at(++minute));
+  }
+
+  const mcp = await session({ ...tickDomain, callerProject: () => project });
+  try {
+    const compact = await mcp.call("get_orchestrator", { project });
+    expect(compact.failed).toBe(false);
+    expect(compact.payload).toMatchObject({
+      project,
+      designated: true,
+      promptVersion: ORCHESTRATOR_PROMPT_VERSION,
+      defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
+      intentHistoryCount: 15,
+      lineageCount: 76,
+      seat: { mandateLength: ORCHESTRATOR_SYSTEM_PROMPT.length, roleTableLength: roleTable.length },
+    });
+    for (const key of ["conversationId", "seatEpoch", "engine", "model", "health", "rotation", "predecessorConversationId"]) {
+      expect(compact.payload).toHaveProperty(key);
+    }
+    expect(JSON.stringify(compact.payload)).not.toContain(ORCHESTRATOR_SYSTEM_PROMPT.slice(0, 200));
+    expect(compact.bytes).toBeLessThan(8 * 1024);
+
+    const full = await mcp.call("get_orchestrator", { project, full: true });
+    expect(full.failed).toBe(false);
+    expect((full.payload.seat as { mandate: string }).mandate).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+    expect(full.payload.intentHistory as unknown[]).toHaveLength(15);
+    expect(full.payload.lineage as unknown[]).toHaveLength(76);
+    console.log(`[#2064] get_orchestrator: default ${compact.bytes} B, full:true ${full.bytes} B`);
   } finally {
     await mcp.close();
   }

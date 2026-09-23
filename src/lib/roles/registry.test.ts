@@ -30,7 +30,7 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
 
   const orchestrator = resolveRole("orchestrator", {
     mode: "backlog-campaign",
-    repo: "Latand/live-log-viewer-next",
+    repo: "Latand/delegatus",
     issueQuery: "is:open",
     urgent: "#35",
     maxWorkers: 2,
@@ -39,7 +39,7 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
   });
   expect(orchestrator.ok && orchestrator.value.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
   expect(orchestrator.ok && orchestrator.value.prompt).not.toMatch(/(?:https?:\/\/)?(?:127\.0\.0\.1|localhost|\[::1\]):\d+/);
-  expect(orchestrator.ok && orchestrator.value.prompt).toContain("Repository: Latand/live-log-viewer-next");
+  expect(orchestrator.ok && orchestrator.value.prompt).toContain("Repository: Latand/delegatus");
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Issue query: is:open");
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Urgent list: #35");
 

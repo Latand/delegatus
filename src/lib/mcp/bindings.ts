@@ -86,6 +86,7 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTickFence";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
+import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
 import { projectSuccessionFor } from "@/lib/projects/succession";
@@ -101,7 +102,7 @@ import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction, PipelineCloseReport } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
-import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
@@ -689,14 +690,19 @@ export interface ViewerMcpDomainDependencies {
       Null means the invariant "a registered session has a canonical project"
       is violated, and unscoped directive routing fails closed diagnostically. */
   callerProject?(): string | null;
-  /** The canonical project of the repository this Viewer deploys (#1321) — the
-      only project whose designated seat may execute a deploy. Production derives
-      it from the canonical Viewer remote, never from the caller's working
-      directory, because an MCP client launches inside the caller's own
-      repository. Optional so partial harnesses fall back to the production
-      resolver; null means the Viewer cannot name what it deploys, and the
-      deploy refusal then fails closed. */
-  viewerProject?(): string | null;
+  /** The canonical projects of the repository this Viewer deploys (#1321) —
+      the only projects whose designated seat may execute a deploy. Production
+      derives them from the canonical Viewer remote, never from the caller's
+      working directory, because an MCP client launches inside the caller's own
+      repository. More than one while the repository's GitHub rename has not
+      been folded into one key yet. Optional so partial harnesses fall back to
+      the production resolver; an empty list means the Viewer cannot name what
+      it deploys, and the deploy refusal then fails closed. */
+  viewerProjects?(): readonly string[];
+  /** Records which seat started an accepted deployment (#2063), so the seat
+      tick can wake that seat when it settles. Optional so partial harnesses
+      fall back to the production store. */
+  recordSeatDeployment?(record: SeatDeploymentRecord): void;
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
       writes the durable record, and every answer is a read of it. */
@@ -751,13 +757,13 @@ function productionCallerProject(): string | null {
  *
  * Folded through the operator's project aliases because seats are stored
  * alias-resolved: comparing a raw repository id against an aliased seat project
- * would refuse the Viewer's own deploy.
+ * would refuse the Viewer's own deploy. Both GitHub names of this repository
+ * count until that alias exists (`viewerRepositoryProjects`).
  */
-function viewerOwnProject(): string | null {
+function viewerOwnProjects(): string[] {
   const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
   const remote = configured || viewerPackageManifest.repository.url.trim();
-  const project = projectIdentityFromRemote(remote, process.cwd())?.project ?? null;
-  return project ? canonicalOrchestratorProject(project) : null;
+  return [...new Set(viewerRepositoryProjects(remote, process.cwd()).map(canonicalOrchestratorProject))];
 }
 
 /**
@@ -1090,7 +1096,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     (conversationId) => authorizedManagerSeats(productionManagerAuthoritySources())
       .some((seat) => seat.conversationId === conversationId),
   ),
-  viewerProject: viewerOwnProject,
+  viewerProjects: viewerOwnProjects,
 };
 
 function text(value: unknown): string {
@@ -2410,8 +2416,8 @@ async function deployExactSha(
      would otherwise learn only "revision not found" and go looking for a better
      SHA. Fails closed when the Viewer cannot name its own repository — a deploy
      whose target is unproven is the one this closes. */
-  const viewerProject = dependencies.viewerProject ? dependencies.viewerProject() : viewerOwnProject();
-  if (seat.project !== viewerProject) {
+  const viewerProjects = dependencies.viewerProjects ? dependencies.viewerProjects() : viewerOwnProjects();
+  if (!seat.project || !viewerProjects.includes(seat.project)) {
     throw new McpToolRefusal(
       "this tool deploys the Delegatus application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Delegatus surface can. Report the request over the bridge instead.",
       { code: "deploy_foreign_project", revision },
@@ -2422,11 +2428,34 @@ async function deployExactSha(
     revision,
     idempotencyKey: requestId(args),
   });
+  /* #2063: the ledger never learns who asked, and the seat ends its turn so
+     the promotion can replace its host. Recording the pair is what lets the
+     seat tick wake this seat when the deployment settles. A `busy` receipt
+     names someone else's deployment, which is not this seat's to be woken on.
+     A failed write costs the wake and nothing else: the deployment is
+     already admitted, so the answer says so rather than failing the call. */
+  let wakeOnSettle = false;
+  if (receipt.state === "accepted" && typeof receipt.deploymentId === "string" && receipt.deploymentId) {
+    try {
+      (dependencies.recordSeatDeployment ?? recordSeatDeployment)({
+        deploymentId: receipt.deploymentId,
+        conversationId: seat.conversationId,
+        project: seat.project,
+        revision: typeof receipt.revision === "string" ? receipt.revision : revision.toLowerCase(),
+        requestedAt: new Date().toISOString(),
+      });
+      wakeOnSettle = true;
+    } catch (error) {
+      console.error(`[deploy_exact_sha] could not record the seat for deployment ${receipt.deploymentId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   return {
     deploymentId: receipt.deploymentId,
     revision: receipt.revision,
     replayed: receipt.state === "accepted" && receipt.replayed === true,
     state: receipt.state,
+    /* Whether the seat tick will wake this seat when the deployment settles. */
+    wakeOnSettle,
   };
 }
 
@@ -2674,16 +2703,34 @@ function allowedSeatFields(args: McpToolArgs, keys: readonly string[]): Record<s
 }
 
 /**
+ * A seat record without its two long texts (#2064): the mandate (about 25 KB
+ * for the default one) and the role table. Their lengths stay, so a caller can
+ * see that they exist and ask for them with full:true.
+ */
+function compactOrchestratorSeat(seat: OrchestratorSeat | null): Record<string, unknown> | null {
+  if (!seat) return null;
+  const { mandate, roleTable, ...rest } = seat;
+  return { ...rest, mandateLength: mandate.length, roleTableLength: roleTable?.length ?? null };
+}
+
+/**
  * get_orchestrator (two-axis contract): the designation, its health, and a
  * BOUNDED rotation recommendation. Read-only; every inferred number is
  * labelled an estimate with its basis, and nothing here — or anywhere — may
  * act on the recommendation automatically.
+ *
+ * Compact by default (#2064), like the other read tools. The whole answer
+ * inlined the mandate, the role table, every terminalized intent with its own
+ * copy of the mandate and the full lineage, about 183 KB for a real seat, which
+ * the MCP client refuses. The default keeps what a seat asks this tool for and
+ * counts the history; full:true returns every record whole.
  */
 async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
+  const full = fullAnswer(args);
   const { active, pending, history } = orchestratorSeatFor(project);
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
-  const base = {
+  const base = full ? {
     project,
     defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
     pendingIntent: pending,
@@ -2701,6 +2748,13 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
       triggeredBy: revocation.triggeredBy ?? null,
       successorConversationId: revocation.successorConversationId ?? null,
     })),
+  } : {
+    project,
+    defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
+    pendingIntent: compactOrchestratorSeat(pending),
+    intentHistoryCount: history.length,
+    lineageCount: revocations.length,
+    readMore: "get_orchestrator with full:true returns the mandate, the role table, the pending intent, intentHistory and lineage in full.",
   };
   if (!active?.conversationId) {
     return redactPayload({ ...base, designated: false, seat: null, health: null, rotation: null });
@@ -2749,7 +2803,8 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   return redactPayload({
     ...base,
     designated: true,
-    seat: active,
+    seat: full ? active : compactOrchestratorSeat(active),
+    seatEpoch: active.seatEpoch,
     conversationId: active.conversationId,
     transcriptPath,
     engine,

@@ -9,7 +9,7 @@ import { changelogDelta, summarizeDelta } from "./changelog";
 import { shortSha, type CheckFailureCode, type CommitLine, type Relation, type Revision, type UpdateDelta } from "./types";
 
 export const TIP_REF = "refs/self-update/tip";
-export const CANONICAL_REMOTE = "https://github.com/Latand/live-log-viewer-next.git";
+export const CANONICAL_REMOTE = "https://github.com/Latand/delegatus.git";
 
 export interface GitResult { code: number; stdout: string; stderr: string }
 
