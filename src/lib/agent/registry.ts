@@ -1142,10 +1142,13 @@ function activeHostPathsChangedByEntry(
   const paths = new Set([previous?.artifactPath, replacement.artifactPath].filter((value): value is string => Boolean(value)));
   const activeStatuses = new Set<AgentRegistryEntry["status"]>(["starting", "live", "idle", "handoff"]);
   const activeAtPath = (pathname: string, replace: boolean): boolean => {
-    for (const [candidateKey, current] of Object.entries(file.entries)) {
+    for (const candidateKey of registryKeysMatching(file, "entries", "artifactPath", pathname)) {
+      const current = file.entries[candidateKey]!;
       const candidate = replace && candidateKey === keyId ? replacement : current;
       if (candidate.artifactPath === pathname && activeStatuses.has(candidate.status)) return true;
     }
+    if (replace && previous?.artifactPath !== pathname && replacement.artifactPath === pathname
+      && activeStatuses.has(replacement.status)) return true;
     return replace && !(keyId in file.entries)
       && replacement.artifactPath === pathname
       && activeStatuses.has(replacement.status);
@@ -4779,7 +4782,8 @@ export class AgentRegistry {
       return result;
     };
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
-      const mutation = this.sqliteStore!.mutate(mutator, false, { updateSnapshotCache: !options.deliveryOnly });
+      const operationName = new Error().stack?.split("\n")[3]?.match(/at (\w+)/)?.[1] ?? "anonymous";
+      const mutation = this.sqliteStore!.mutate(mutator, false, { updateSnapshotCache: !options.deliveryOnly, operationName });
       if (this.sqliteMode === "read") {
         this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
         if (this.mirrorDirty) this.scheduleRollbackMirrorForCadence();
@@ -6052,13 +6056,14 @@ export class AgentRegistry {
     return outcome.entry;
   }
 
-  failSpawn(launchId: string, error: string): void {
-    this.mutate((file) => {
+  failSpawn(launchId: string, error: string): boolean {
+    return this.mutate((file) => {
       const receipt = file.receipts[launchId];
-      if (!receipt || receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") return;
+      if (!receipt || receipt.state === "completed" || receipt.state === "conflicted") return false;
+      if (receipt.state === "failed") return true;
       if (receipt.state === "host-verified" || receipt.state === "prompt-delivered") {
         receipt.error = error;
-        return;
+        return false;
       }
       receipt.state = receipt.pane ? "conflicted" : "failed";
       receipt.error = error;
@@ -6074,6 +6079,7 @@ export class AgentRegistry {
          held or assigned attempts-zero initial delivery. Converge it in the
          same transaction instead of waiting for the reaper. */
       terminalizeFailedSpawnDeliveriesInFile(file);
+      return receipt.state === "failed";
     });
   }
 
@@ -8034,11 +8040,13 @@ export class AgentRegistry {
       const intent = file.migrationIntents[id];
       if (!intent) throw new Error("migration intent is unknown");
       if (expectedRevision !== undefined && intent.revision !== expectedRevision) throw new Error("migration intent revision is stale");
-      const paths = new Set(Object.values(file.conversations)
+      // Only stopping an intent edits conversation readiness. Completing or
+      // verifying it changes intent metadata alone, so no engine-wide scan is needed.
+      const paths = state === "stopped" ? new Set(Object.values(file.conversations)
         .filter((conversation) => conversation.engine === intent.engine)
         .map((conversation) => conversation.generations.at(-1)?.path)
-        .filter((pathname): pathname is string => Boolean(pathname)));
-      const signature = migrationReadinessSignature(file, intent.engine, paths);
+        .filter((pathname): pathname is string => Boolean(pathname))) : new Set<string>();
+      const signature = state === "stopped" ? migrationReadinessSignature(file, intent.engine, paths) : "";
       intent.state = state;
       intent.stoppedAt = state === "stopped" ? now() : intent.stoppedAt;
       intent.updatedAt = now();
@@ -8065,7 +8073,7 @@ export class AgentRegistry {
           terminalizeCancelledMigrationDeliveries(file, conversation, stoppedDeliveryReason.slice(0, 240));
         }
       }
-      advanceMigrationScopeRevision(file, intent.engine, signature, paths);
+      if (state === "stopped") advanceMigrationScopeRevision(file, intent.engine, signature, paths);
       return clone(intent);
     });
   }

@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry, RegistryParityError, type SeatChildrenAnchor } from "./registry";
-import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { RegistryMutationRetryLimitError, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
 const CHILD = path.join(import.meta.dir, "registry.sqliteChild.ts");
 
@@ -1654,6 +1654,55 @@ test("SQLite mutation acquisition retains the five-second deadline and leaves a 
   store.mutate((file) => { file.receipts[receipt.launchId]!.error = "after release"; }, false);
   expect(store.snapshot().file.receipts[receipt.launchId]!.error).toBe("after release");
 }, 7_000);
+
+test.each([2, 1])("SQLite mutation converges against a 20ms foreign writer with a %i-attempt ceiling", async (ceiling) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-foreign-writer-"));
+  const filename = path.join(directory, "registry.sqlite");
+  const ready = path.join(directory, "writer-ready");
+  const store = new SqliteAgentRegistryStore(filename, {
+    initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+    normalize: normalizeRegistry,
+    maxMutationAttempts: ceiling,
+  });
+  const writer = Bun.spawn([process.execPath, "-e", `
+    const fs = require("node:fs");
+    const { Database } = require("bun:sqlite");
+    const db = new Database(process.argv[1]);
+    db.exec("PRAGMA busy_timeout = 5000");
+    fs.writeFileSync(process.argv[2], "ready");
+    for (let i = 0; i < 30; i++) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      db.query("UPDATE registry_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'revision'").run();
+    }
+    db.close();
+  `, filename, ready], { stdout: "pipe", stderr: "pipe" });
+  try {
+    const deadline = performance.now() + 2_000;
+    while (!fs.existsSync(ready) && performance.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+    expect(fs.existsSync(ready)).toBe(true);
+    let attempts = 0;
+    const started = performance.now();
+    const mutate = () => store.mutate((file) => {
+      attempts += 1;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 110);
+      file.conversationRevision.codex += 1;
+    }, false, { operationName: "contended-regression" });
+    if (ceiling === 1) {
+      expect(mutate).toThrow(RegistryMutationRetryLimitError);
+      expect(attempts).toBe(1);
+    } else {
+      mutate();
+      expect(attempts).toBe(2);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+    expect(await writer.exited).toBe(0);
+    expect(await new Response(writer.stderr).text()).toBe("");
+  } finally {
+    if (writer.exitCode === null) writer.kill();
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 3_000);
 
 test.each(["off", "dual-write", "read", "sqlite"] as const)(
   "%s diagnostics keep cumulative counts and a rolling rate beyond the percentile sample cap",

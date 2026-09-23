@@ -28,6 +28,7 @@ import {
   type McpGrantPolicy,
 } from "./mcpAllowlist";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { databaseSwapMarker } from "@/lib/state/currentDatabase";
 
 /** A policy shaped like the one tranche 2 will ship, so the origin rules are
     exercised against a connector that is genuinely grantable. Proving them
@@ -1652,6 +1653,21 @@ test("a recorded grant decision never outlives a change to any row it was assemb
     // Unchanged, the complete snapshot that decision loaded is reused as it is.
     expect(store.readOnlySnapshot()).toBe(store.readOnlySnapshot());
 
+    /* A foreign write outside the grant inputs moves data_version but keeps
+       every recorded grant decision and its keyed-read cost. */
+    const unrelated = new Database(sqlitePath, { strict: true });
+    try {
+      unrelated.query("INSERT INTO registry_rows(collection, row_key, value_json, row_order) VALUES ('conversationAliases', 'unrelated', ?, 999)")
+        .run(JSON.stringify(rootId));
+    } finally {
+      unrelated.close();
+    }
+    expect(repeatedReads(grant)).toBeLessThan(conversations);
+    /* A local grant-row edit invalidates its own decision and dependents; a
+       separate root keeps its recorded decision. */
+    store.mutate((file) => { file.conversations[workerId]!.updatedAt = "2026-09-23T00:00:00.000Z"; }, false);
+    expect(repeatedReads(grant)).toBeLessThan(conversations);
+
     /* A transaction another connection rolled back changed nothing, and the
        record is still applied without deciding the whole file again. */
     rewriteEdge(workerId, rootId, (edge) => {
@@ -1699,6 +1715,81 @@ test("a recorded grant decision never outlives a change to any row it was assemb
     expect(repeatedReads(grant)).toBeLessThan(2 * conversations);
     store.close();
   } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a held registry store restores its grant journal and drops cached decisions after a database replacement", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-restored-journal-"));
+  const filename = path.join(directory, "agent-registry.sqlite");
+  const backup = path.join(directory, "pre-journal.sqlite");
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, {
+    sqliteMode: "off", mcpGrantPolicy: WITH_CONNECTOR,
+  });
+  const rootId = settledParent(seed, ["viewer", "test-connector"], "restored-journal-root");
+  const restored = seed.snapshot();
+  const launchId = Object.keys(restored.receipts)[0]!;
+  restored.receipts[launchId]!.error = "restored";
+  const current = structuredClone(restored);
+  current.receipts[launchId]!.error = "current";
+  seed.close();
+  const options = {
+    normalize: (value: unknown) => normalizeRegistry(value, WITH_CONNECTOR),
+    mcpGrantPolicy: WITH_CONNECTOR,
+  };
+  const old = new SqliteAgentRegistryStore(backup, { ...options, initialSnapshot: restored });
+  old.close();
+  const legacy = new Database(backup);
+  try {
+    legacy.exec(`
+      DROP TRIGGER registry_grant_insert;
+      DROP TRIGGER registry_grant_update;
+      DROP TRIGGER registry_grant_delete;
+      DROP TABLE registry_grant_changes;
+    `);
+  } finally {
+    legacy.close();
+  }
+  const store = new SqliteAgentRegistryStore(filename, { ...options, initialSnapshot: current });
+  try {
+    expect(store.readOnlySnapshot().file.receipts[launchId]!.error).toBe("current");
+    const caches = store as unknown as { grantDecisions: unknown; readOnlyCache: unknown };
+    expect(caches.grantDecisions).not.toBeNull();
+    expect(caches.readOnlyCache).not.toBeNull();
+    const revision = store.revision();
+
+    const marker = databaseSwapMarker(filename);
+    fs.writeFileSync(marker, "swapping");
+    try {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const source = `${filename}${suffix}`;
+        if (fs.existsSync(source)) fs.renameSync(source, `${filename}.set-aside${suffix}`);
+      }
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const source = `${backup}${suffix}`;
+        if (fs.existsSync(source)) fs.renameSync(source, `${filename}${suffix}`);
+      }
+    } finally {
+      fs.unlinkSync(marker);
+    }
+
+    expect(store.revision()).toBe(revision);
+    expect(caches.grantDecisions).toBeNull();
+    expect(caches.readOnlyCache).toBeNull();
+    expect(store.readOnlySnapshot().file.receipts[launchId]!.error).toBe("restored");
+    expect(store.read(file => file.conversations[rootId]!.generations.at(-1)!.launchProfile.mcpServers))
+      .toEqual(["viewer"]);
+    store.mutate(file => { file.receipts[launchId]!.error = "after restore"; }, false);
+    expect(store.readOnlySnapshot().file.receipts[launchId]!.error).toBe("after restore");
+    const db = new Database(filename, { readonly: true });
+    try {
+      expect(db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'").get()).not.toBeNull();
+      expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM registry_grant_changes").get()!.count).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+  } finally {
+    store.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
