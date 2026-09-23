@@ -265,6 +265,26 @@ describe("CopilotAcpHost", () => {
     await host.release();
   });
 
+  test("quota rejection emits exhausted limits evidence and ends the turn as an error", async () => {
+    const child = new FakeCopilot();
+    const opts = options(child);
+    const host = await CopilotAcpHost.start(opts);
+    try {
+      await host.send({ id: "quota-failure", content: { text: "work", images: [] } } as never);
+      await until(() => child.prompts.length === 1, "quota test prompt");
+      const prompt = child.prompts[0]!;
+      child.send({ jsonrpc: "2.0", id: prompt.id, error: { code: -32000, message: "Premium request quota exceeded" } });
+      const store = opts.eventStore as MemoryEventStore;
+      await until(() => store.events.get(child.sessionId)?.some((event) => event.kind === "turn-ended") ?? false, "quota error turn end");
+      const events = store.events.get(child.sessionId) ?? [];
+      expect(events.find((event) => event.kind === "limits")).toMatchObject({
+        kind: "limits",
+        snapshot: { engine: "copilot", exhausted: true, message: expect.stringMatching(/Premium request quota exceeded/) },
+      });
+      expect(events.find((event) => event.kind === "turn-ended")).toMatchObject({ kind: "turn-ended", status: "error" });
+    } finally { await host.release(); }
+  });
+
   test("a send while a prompt is in flight is refused stale-turn and writes nothing", async () => {
     const child = new FakeCopilot();
     const host = await CopilotAcpHost.start(options(child));

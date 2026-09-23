@@ -115,7 +115,7 @@ export type ProjectAccountSelection =
 
 export interface ProjectAccountSelectionInput {
   project: string | null;
-  engine: BindingEngine;
+  engine: BindingEngine | "copilot";
   accounts: readonly { id: string; authPresent: boolean }[];
   observations: readonly DurableQuotaObservation[];
   bindings: readonly AccountProjectBinding[];
@@ -183,7 +183,7 @@ export interface ProjectAccountSelectionInput {
  *   is not a candidate and is not consulted, which is the whole point.
  */
 export function selectProjectAccount(input: ProjectAccountSelectionInput): ProjectAccountSelection {
-  const allowed = allowedAccountIdsForProject(input.project, input.engine, input.bindings);
+  const allowed = input.engine === "copilot" ? null : allowedAccountIdsForProject(input.project, input.engine, input.bindings);
   const requestedId = input.requestedId?.trim() || null;
   if (requestedId && allowed !== null && !allowed.includes(requestedId)) {
     /* A control someone exercised is a capability, not a request the record
