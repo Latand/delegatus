@@ -621,7 +621,7 @@ function ActionRow({ pipeline, held, onRun }: {
             data-mobile2-pipeline-patch={spec.action}
             disabled={held}
             className={`inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[8px] px-3 text-body font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 ${
-              spec.primary ? "bg-accent text-white active:opacity-90" : "bg-card text-secondary shadow-1 active:bg-sunken"
+              spec.primary ? "bg-brand text-on-brand active:opacity-90" : "bg-card text-secondary shadow-1 active:bg-sunken"
             }`}
             onClick={() => onRun(spec)}
           >

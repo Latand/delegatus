@@ -135,7 +135,7 @@ test("while the check runs nothing is filled: Stop is bordered and the footer st
   answer = runOf("running", [row("spawn", "passed"), row("delivery", "running"), row("report", "waiting"), row("wake", "waiting"), row("filing", "waiting")]).answer;
   const host = await render();
   expect(host.querySelector("[data-health-start]")).toBeNull();
-  expect(host.querySelector<HTMLElement>("[data-health-stop]")?.className).not.toContain("bg-accent");
+  expect(host.querySelector<HTMLElement>("[data-health-stop]")?.className).not.toContain("bg-brand");
   expect(ownsPrimary).toBe(true);
 });
 
@@ -190,14 +190,14 @@ test("after Stop the rows that never ran read as not run", async () => {
 test("after a pass, running it again is the secondary action", async () => {
   answer = runOf("passed", ["spawn", "delivery", "report", "wake", "filing"].map((id) => row(id, "passed"))).answer;
   const host = await render();
-  expect(host.querySelector<HTMLElement>("[data-health-start]")?.className).not.toContain("bg-accent");
+  expect(host.querySelector<HTMLElement>("[data-health-start]")?.className).not.toContain("bg-brand");
   expect(ownsPrimary).toBe(false);
 });
 
-test("after a failure, running it again is the one accent action and the footer steps back", async () => {
+test("after a failure, running it again is the one filled action and the footer steps back", async () => {
   answer = runOf("failed", [row("spawn", "passed"), row("delivery", "passed"), row("report", "passed"), row("wake", "failed", fail("TICK_OFF")), row("filing", "waiting")]).answer;
   const host = await render();
-  expect(host.querySelector<HTMLElement>("[data-health-start]")?.className).toContain("bg-accent");
+  expect(host.querySelector<HTMLElement>("[data-health-start]")?.className).toContain("bg-brand");
   expect(ownsPrimary).toBe(true);
 });
 

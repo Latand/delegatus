@@ -71,7 +71,7 @@ export function DeadHostBannerView({
           type="button"
           onClick={onRespawn}
           disabled={respawnBusy}
-          className="inline-flex min-h-7 items-center gap-1 rounded-control border border-accent bg-accent px-2 text-label font-bold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-60 [@media(pointer:coarse)]:min-h-11"
+          className="inline-flex min-h-7 items-center gap-1 rounded-control border border-brand bg-brand px-2 text-label font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-60 [@media(pointer:coarse)]:min-h-11"
         >
           {respawnBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Play className="h-3.5 w-3.5" aria-hidden />}
           {t("deadHost.respawn")}

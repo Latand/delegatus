@@ -10,6 +10,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { BOARD_CLOCK_MS, useNowSeconds } from "@/hooks/useNowSeconds";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { useRuntimeSelector } from "@/hooks/useRuntime";
+import { DelegatusBadge } from "@/components/brand/BrandMark";
 import { ProjectAccounts } from "@/components/ProjectAccounts";
 import { projectDisplayName } from "@/lib/displayNames";
 import type { Flow } from "@/lib/flows/types";
@@ -325,6 +326,7 @@ function EmptyProjectLeaf({
   return (
     <div className="flex flex-1 items-center justify-center px-4 py-5 text-center" data-testid="project-empty">
       <div className="flex max-w-[440px] flex-col items-center gap-2">
+        <DelegatusBadge size={88} className="mb-1" />
         <div className="text-[13.5px] font-semibold text-primary">{t("dash.emptyTitle")}</div>
         <div className="text-[12px] text-secondary">{t("dash.emptyStartHere", { project: projectName })}</div>
         <div className="text-[12px] text-secondary">{t("dash.emptyOneAgent")}</div>

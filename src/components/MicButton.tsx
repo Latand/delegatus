@@ -224,7 +224,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
           <button
             type="button"
             data-mic-open-voice-guide=""
-            className="inline-flex min-h-8 items-center justify-center rounded-[8px] bg-accent px-2.5 text-[12px] font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="inline-flex min-h-8 items-center justify-center rounded-[8px] bg-brand px-2.5 text-[12px] font-semibold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             onClick={() => { onClose(); openOnboarding("voice"); }}
           >
             {t("onboarding.voice.micSetup")}

@@ -2,7 +2,8 @@
 
 import { useState, type ReactNode } from "react";
 
-import { ChevronRight, GlyphIcon, RotateCw } from "../../icons";
+import { DelegatusMark } from "../../brand/BrandMark";
+import { ChevronRight, RotateCw } from "../../icons";
 import { hhmm } from "../../utils";
 import { MESSAGE_ACTION } from "../actionStyles";
 import { CopyButton } from "../CopyButton";
@@ -37,8 +38,9 @@ export function MandateCard({ item }: { item: MandateItem }) {
   return (
     <div className="my-3 ml-9 overflow-hidden rounded-surface border border-border bg-card shadow-1" data-mandate-card>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3.5 pt-2">
-        <span className="flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg bg-sunken text-muted">
-          <GlyphIcon name="plan" className="h-3.5 w-3.5" />
+        {/* The mandate is written by Delegatus itself, so it carries the product's mark. */}
+        <span className="flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg bg-sunken">
+          <DelegatusMark size={20} />
         </span>
         <span className="text-[13px] font-semibold">{qualifier ? `${title} ${qualifier}` : title}</span>
         <span className="text-[11px] text-muted">

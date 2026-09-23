@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { PRODUCT_NAME } from "@/lib/brand";
 
 /*
  * Putting the WHOLE project sidebar away (issue #1819).
@@ -126,7 +127,7 @@ test("the hide control leaves no rail content on screen, and the restore control
   const host = await mountViewer();
 
   expect(railIn(host)).not.toBeNull();
-  expect(host.textContent ?? "").toContain(translate("en", "rail.title"));
+  expect(host.textContent ?? "").toContain(PRODUCT_NAME);
   expect(restoreIn(host)).toBeNull();
 
   await act(async () => { hideIn(host)!.click(); });
@@ -137,7 +138,7 @@ test("the hide control leaves no rail content on screen, and the restore control
      open; that is the board, not the rail.) */
   expect(railIn(host)).toBeNull();
   const hidden = host.textContent ?? "";
-  expect(hidden).not.toContain(translate("en", "rail.title"));
+  expect(hidden).not.toContain(PRODUCT_NAME);
   expect(hidden).not.toContain(translate("en", "rail.overview"));
   expect(hidden).not.toContain(translate("en", "rail.filter"));
   expect(dom.localStorage.getItem(RAIL_HIDDEN_STORAGE_KEY)).toBe("hidden");
@@ -150,7 +151,7 @@ test("the hide control leaves no rail content on screen, and the restore control
 
   await act(async () => { restore.click(); });
   expect(railIn(host)).not.toBeNull();
-  expect(host.textContent ?? "").toContain(translate("en", "rail.title"));
+  expect(host.textContent ?? "").toContain(PRODUCT_NAME);
   expect(restoreIn(host)).toBeNull();
   expect(dom.localStorage.getItem(RAIL_HIDDEN_STORAGE_KEY)).toBe("shown");
 });
@@ -168,7 +169,7 @@ test("the choice is remembered for this browser across a remount", async () => {
   const again = await mountViewer();
   expect(railIn(again)).toBeNull();
   expect(restoreIn(again)).not.toBeNull();
-  expect(again.textContent ?? "").not.toContain(translate("en", "rail.title"));
+  expect(again.textContent ?? "").not.toContain(PRODUCT_NAME);
 });
 
 test("a corrupt stored value means shown", async () => {

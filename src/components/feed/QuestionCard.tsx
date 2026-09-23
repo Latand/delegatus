@@ -532,7 +532,7 @@ export function QuestionCard({ file }: { file: FileEntry }) {
         <button
           type="button"
           data-question-open-session
-          className="mt-2 inline-flex min-h-11 w-full items-center justify-center rounded-control bg-accent px-3 text-title font-semibold text-white disabled:opacity-60"
+          className="mt-2 inline-flex min-h-11 w-full items-center justify-center rounded-control bg-brand px-3 text-title font-semibold text-on-brand disabled:opacity-60"
           disabled={resuming}
           onClick={resume}
         >
@@ -563,7 +563,7 @@ export function QuestionCard({ file }: { file: FileEntry }) {
           ))
         )}
         <p role="note" data-question-transport="unavailable" className="mt-3 text-[12px] font-semibold text-muted">{t("question.noPane")}</p>
-        <button className="mt-3 rounded-[8px] bg-accent px-3 py-1.5 text-[13px] font-bold text-white disabled:opacity-60" disabled={resuming} onClick={resume}>
+        <button className="mt-3 rounded-[8px] bg-brand px-3 py-1.5 text-[13px] font-bold text-on-brand disabled:opacity-60" disabled={resuming} onClick={resume}>
           {t("question.openSession")}
         </button>
         {message ? <div className="mt-2 text-[12px] font-semibold text-muted">{message}</div> : null}
@@ -687,7 +687,7 @@ export function QuestionCard({ file }: { file: FileEntry }) {
                 <button
                   type="button"
                   aria-label={t("common.send")}
-                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-control bg-accent text-white disabled:opacity-60"
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-control bg-brand text-on-brand disabled:opacity-60"
                   disabled={disabled || !text.trim()}
                   onClick={() => submit({ text }, text)}
                 >
@@ -696,7 +696,7 @@ export function QuestionCard({ file }: { file: FileEntry }) {
               </div>
             ) : null}
             {needsExplicitSubmit ? (
-              <button className="mt-2 inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-control bg-accent px-3 text-title font-semibold text-white disabled:opacity-60" disabled={disabled || !allAnswered} onClick={() => submit({ answers: packedAnswers() }, selectedLabel, answers)}>
+              <button className="mt-2 inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-control bg-brand px-3 text-title font-semibold text-on-brand disabled:opacity-60" disabled={disabled || !allAnswered} onClick={() => submit({ answers: packedAnswers() }, selectedLabel, answers)}>
                 <Send className="h-4 w-4" aria-hidden /> {t("common.send")}
               </button>
             ) : null}
@@ -797,13 +797,13 @@ export function QuestionCard({ file }: { file: FileEntry }) {
                 value={text}
                 onChange={(event) => setText(event.target.value)}
               />
-              <button className={`inline-flex items-center gap-1.5 rounded-[8px] bg-accent px-3 py-1.5 text-[13px] font-bold text-white disabled:opacity-60 ${mob}`} disabled={disabled || !text.trim()} onClick={() => submit({ text }, text)}>
+              <button className={`inline-flex items-center gap-1.5 rounded-[8px] bg-brand px-3 py-1.5 text-[13px] font-bold text-on-brand disabled:opacity-60 ${mob}`} disabled={disabled || !text.trim()} onClick={() => submit({ text }, text)}>
                 <Send className="h-4 w-4" aria-hidden /> {t("common.send")}
               </button>
             </div>
           ) : null}
           {needsExplicitSubmit ? (
-            <button className={`mt-3 inline-flex items-center gap-1.5 rounded-[8px] bg-accent px-3 py-1.5 text-[13px] font-bold text-white disabled:opacity-60 ${mob}`} disabled={disabled || !allAnswered} onClick={() => submit({ answers: packedAnswers() }, selectedLabel, answers)}>
+            <button className={`mt-3 inline-flex items-center gap-1.5 rounded-[8px] bg-brand px-3 py-1.5 text-[13px] font-bold text-on-brand disabled:opacity-60 ${mob}`} disabled={disabled || !allAnswered} onClick={() => submit({ answers: packedAnswers() }, selectedLabel, answers)}>
               <Send className="h-4 w-4" aria-hidden /> {t("common.send")}
             </button>
           ) : null}
