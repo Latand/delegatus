@@ -627,7 +627,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "attach.copyCommand": "Скопіювати команду",
   "attach.copyFull": "Скопіювати повну команду",
   "attach.copiedFull": "Повну команду скопійовано в буфер",
-  "attach.takeoverWarning": "Відновлення тут перебирає розмову у переглядача.",
+  "attach.takeoverWarning": "Відновлення тут перебирає розмову в Delegatus.",
   "attach.subagentNote": "Субагенти відновлюються через свою кореневу сесію.",
   "attach.secondaryViewer": "Відкрити панель перегляду лише для читання в tmux",
   "attach.secondaryFailed": "Не вдалося відкрити панель перегляду — спробуйте ще раз.",
@@ -1109,7 +1109,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "question.errorMoved": "агент уже пішов далі від цього питання",
   "question.errorUnconfirmed": "відповідь надіслано, але агент її не підтвердив",
   "question.errorNotDelivered": "екран агента не відреагував як очікувалось, тож відповідь не доставлена",
-  "question.errorRejected": "вʼювер не зміг зібрати коректну відповідь",
+  "question.errorRejected": "Delegatus не зміг зібрати коректну відповідь",
 
   "inbox.deleted": "видалено з диска",
   "inbox.fileGone": "файла вже немає на диску",
@@ -2043,7 +2043,7 @@ export const uk: Record<keyof typeof en, Message> = {
 
   "catalog.unreachable": "каталог недоступний",
   "catalog.errorTitle": "Не вдалося завантажити каталог сесій",
-  "catalog.errorBody": "Сервер вʼювера не відповів, тож невідомо, що зараз працює.",
+  "catalog.errorBody": "Сервер Delegatus не відповів, тож невідомо, що зараз працює.",
   "catalog.retry": "Спробувати ще",
   "catalog.attempts": {
     one: "{count} невдала спроба",
@@ -3952,7 +3952,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.badge.stopping": "зупиняється",
   "selfUpdate.badge.failed": "збій",
   "selfUpdate.badge.stopped": "зупинено",
-  "selfUpdate.process.hostWarning": "Перезапуск runtime host обриває агентів, яких він веде. Якщо змінився лише Delegatus, спершу перезапустіть веб.",
+  "selfUpdate.process.hostWarning": "Перезапуск runtime host обриває агентів, яких він веде. Якщо змінився лише вебзастосунок, спершу перезапустіть веб.",
   "selfUpdate.process.hostWarningManaged": "Розгортання завершується передачею runtime host його новому поколінню.",
   "selfUpdate.process.pid": "PID {pid}",
   "selfUpdate.process.port": "порт {port}",

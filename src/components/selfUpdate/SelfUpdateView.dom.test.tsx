@@ -300,7 +300,7 @@ describe("process blocks", () => {
     expect(text(section(el, "web"))).toContain("PID 48213·port 45123");
     expect(text(section(el, "web"))).toContain("up 2 h 14 m·checked 12:04:31");
     expect(text(section(el, "host"))).toContain("PID 48190·runtime-host.sock");
-    expect(text(section(el, "host"))).toContain("Restarting the runtime host drops the agents it supervises. Restart web first if you only changed Delegatus.");
+    expect(text(section(el, "host"))).toContain("Restarting the runtime host drops the agents it supervises. Restart web first if you only changed the web app.");
     expect(section(el, "web")!.querySelector("[data-badge]")!.getAttribute("data-badge")).toBe("healthy");
     click(button(el, "restart-web"));
     click(button(el, "arm-host"));

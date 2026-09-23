@@ -590,7 +590,7 @@ export const en = {
   "attach.copyCommand": "Copy command",
   "attach.copyFull": "Copy full command",
   "attach.copiedFull": "Full command copied to clipboard",
-  "attach.takeoverWarning": "Resuming here takes over the conversation from the viewer.",
+  "attach.takeoverWarning": "Resuming here takes over the conversation from Delegatus.",
   "attach.subagentNote": "Subagents resume through their root session.",
   "attach.secondaryViewer": "Open a read-only viewer pane in tmux",
   "attach.secondaryFailed": "Couldn't open the viewer pane — try again.",
@@ -1153,7 +1153,7 @@ export const en = {
   "question.errorMoved": "the agent has moved on from this question",
   "question.errorUnconfirmed": "the answer was sent, but the agent never confirmed it",
   "question.errorNotDelivered": "the agent's screen did not respond as expected, so the answer was not delivered",
-  "question.errorRejected": "the viewer could not build a valid answer",
+  "question.errorRejected": "Delegatus could not build a valid answer",
 
   // InboxImage
   "inbox.deleted": "deleted from disk",
@@ -2107,7 +2107,7 @@ export const en = {
   // Catalog fetch failure (issue #696) — never the idle empty-state copy
   "catalog.unreachable": "catalog unavailable",
   "catalog.errorTitle": "Couldn't load the session catalog",
-  "catalog.errorBody": "The viewer server did not answer, so what is running is unknown.",
+  "catalog.errorBody": "The Delegatus server did not answer, so what is running is unknown.",
   "catalog.retry": "Retry",
   "catalog.attempts": { one: "{count} failed attempt", other: "{count} failed attempts" },
 
@@ -4050,7 +4050,7 @@ export const en = {
   "selfUpdate.badge.stopping": "stopping",
   "selfUpdate.badge.failed": "failed",
   "selfUpdate.badge.stopped": "stopped",
-  "selfUpdate.process.hostWarning": "Restarting the runtime host drops the agents it supervises. Restart web first if you only changed Delegatus.",
+  "selfUpdate.process.hostWarning": "Restarting the runtime host drops the agents it supervises. Restart web first if you only changed the web app.",
   "selfUpdate.process.hostWarningManaged": "A deployment ends by handing the runtime host over to its new generation.",
   "selfUpdate.process.pid": "PID {pid}",
   "selfUpdate.process.port": "port {port}",
