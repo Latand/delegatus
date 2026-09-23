@@ -41,8 +41,14 @@ function workerRequest(value: unknown): FilesResponseWorkerRequest | null {
   return value as unknown as FilesResponseWorkerRequest;
 }
 
-function snapshotFor(request: FilesResponseWorkerRequest): NonNullable<FilesResponseWorkerRequest["snapshot"]> {
-  if (request.snapshot) return request.snapshot;
+/** The snapshot to project, and — read from the file — the scan generation
+    the file holds (#2072). A later scan can replace the file between the
+    request and this read, so the parent dates the projection by this. */
+function snapshotFor(request: FilesResponseWorkerRequest): {
+  snapshot: NonNullable<FilesResponseWorkerRequest["snapshot"]>;
+  read?: Record<string, string>;
+} {
+  if (request.snapshot) return { snapshot: request.snapshot };
   const persisted = JSON.parse(fs.readFileSync(request.snapshotFile!, "utf8")) as unknown;
   if (!record(persisted)
     || !record(persisted.snapshot)
@@ -50,11 +56,14 @@ function snapshotFor(request: FilesResponseWorkerRequest): NonNullable<FilesResp
     || !Array.isArray(persisted.snapshot.projectCatalog)) {
     throw new Error("files response worker snapshot file is invalid");
   }
-  return persisted.snapshot as unknown as NonNullable<FilesResponseWorkerRequest["snapshot"]>;
+  const snapshot = persisted.snapshot as unknown as NonNullable<FilesResponseWorkerRequest["snapshot"]>;
+  return typeof persisted.epoch === "string" && Number.isSafeInteger(persisted.generation)
+    ? { snapshot, read: { snapshotEpoch: persisted.epoch, snapshotGeneration: String(persisted.generation) } }
+    : { snapshot };
 }
 
 async function build(request: FilesResponseWorkerRequest): Promise<Record<string, string>> {
-  const snapshot = snapshotFor(request);
+  const { snapshot, read } = snapshotFor(request);
   const response = await buildFilesResponse(new Request(request.url, {
     headers: new Headers(request.headers),
   }), {
@@ -71,6 +80,7 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
     contentType: response.headers.get("content-type") ?? "application/json",
     etag,
     timing: response.headers.get("server-timing") ?? "",
+    ...read,
     ...(request.deltaScope ? deltaFromBase(resultDirectory, request.deltaScope, body, etag) : {}),
   };
 }
