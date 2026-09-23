@@ -3240,8 +3240,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     attachments: z.array(z.unknown()).optional(),
     board: z.enum(["shown", "hidden"]).optional()
       .describe("Board membership of the new task's band (#1627). Omitted creates a task the board shows, and the per-project limit counts only those; hidden records the task off the board, which is how work is kept when the board is full. Either way the task keeps its row in the task list, and update_task moves it between the two."),
-    icon: z.string().optional()
-      .describe("A lucide icon name for the card (#2102), kebab-case: bug, smartphone, rocket, search-check, shield. Bug and lucide:bug mean the same. A name lucide does not have is stored as no icon and the answer carries a note."),
+    /* Unknown, so the command clamps what the schema would refuse (#2102). */
+    icon: z.unknown().optional()
+      .describe("A lucide icon name for the card (#2102), kebab-case: bug, smartphone, rocket, search-check, shield. Bug and lucide:bug mean the same. A name lucide does not have, or a value that is no name, is stored as no icon and the answer carries a note."),
   }).passthrough(),
   update_task: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3263,7 +3264,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Board membership of this task's band (#1614). hidden takes the band off the board and shown puts it back; the task itself is never removed, keeps its row in the task list and every assignment, and either direction is one write. It governs EMPTY tasks only — a task holding a durable agent association draws its band whatever this says."),
     color: z.enum(["none", ...TASK_COLORS]).optional()
       .describe("Colour label shown on the task's kanban card (#1695). none clears it."),
-    icon: z.string().nullable().optional()
+    icon: z.unknown().optional()
       .describe("A lucide icon name for the card (#2102), read like create_task's icon; none, null or an empty string clears it. Leaves updatedAt unchanged."),
     attachLinks: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
       .describe("PRs or issues to attach to the task's card by hand (#2059): \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com pull/issue URL, one or a list. A bare number means the task's repository. Attaching one already attached changes nothing. The card also shows every link its pipelines discover, so attach only what discovery cannot see. Leaves updatedAt unchanged."),

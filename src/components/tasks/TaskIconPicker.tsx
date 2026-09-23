@@ -33,7 +33,9 @@ export interface TaskIconPickerProps {
  * It holds no frame and no placement: the desktop board shows it in a
  * `KanbanPopover`, and the phone mounts the same component in its own sheet.
  * The full name list is loaded on first open, never with the page; the grid's
- * drawings come through the task icon loader, only for the cells on screen.
+ * drawings come through the task icon loader, only for the cells the grid
+ * holds (at most `RESULT_LIMIT`, scrolled out of view or not), never the
+ * whole set.
  */
 export function TaskIconPicker({ value, suggestion = null, onPick, columns = 8, autoFocus = true }: TaskIconPickerProps) {
   const { t } = useLocale();

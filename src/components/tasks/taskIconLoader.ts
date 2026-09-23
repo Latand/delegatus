@@ -71,9 +71,11 @@ function schedule(): void {
 async function flush(): Promise<void> {
   const names = [...queued].sort();
   queued.clear();
+  /* Every name is in flight from here, so one asked for again while an
+     earlier batch loads is not queued a second time. */
+  for (const name of names) inFlight.add(name);
   for (let start = 0; start < names.length; start += BATCH) {
     const batch = names.slice(start, start + BATCH);
-    for (const name of batch) inFlight.add(name);
     try {
       const icons = await fetcher(batch);
       for (const name of batch) cache.set(name, iconNode(icons[name]));

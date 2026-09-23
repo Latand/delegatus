@@ -98,6 +98,17 @@ test("an unknown icon is never an error: it is stored as none and the answer say
     expect("icon" in stored(created.task.id)).toBe(false);
     const cleared = await p.call("update_task", { taskId: created.task.id, icon: null });
     expect(cleared.ok).toBe(true);
+    /* No schema refuses what the command clamps: null on create, a number on update. */
+    const nullOnCreate = await p.call("create_task", { project: "icon-project", text: "No icon yet", icon: null });
+    expect(nullOnCreate.ok).toBe(true);
+    expect("icon" in nullOnCreate.task).toBe(false);
+    expect(nullOnCreate.notes).toBeUndefined();
+    const numberOnUpdate = await p.call("update_task", { taskId: created.task.id, icon: 42 });
+    expect(numberOnUpdate.ok).toBe(true);
+    expect(numberOnUpdate.notes?.[0]).toContain("icon must be a lucide icon name");
+    const objectOnCreate = await p.call("create_task", { project: "icon-project", text: "Odd icon", icon: { name: "bug" } });
+    expect(objectOnCreate.ok).toBe(true);
+    expect(objectOnCreate.notes?.[0]).toContain("icon must be a lucide icon name");
 
     const posted = await POST(json("POST", { project: "icon-project", text: "Review the graph", placement: "unplaced", icon: "SearchCheck" }));
     expect(posted.status).toBe(200);

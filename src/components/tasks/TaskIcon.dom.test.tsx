@@ -116,6 +116,26 @@ test("every icon a render draws is asked for in one request, and a drawing alrea
   expect([...host.querySelectorAll("[data-task-icon] svg path")].map((path) => path.getAttribute("d"))).toEqual(["M3 3h4", "M2 2h3", "M1 1h2", "M2 2h3"]);
 });
 
+test("over a hundred icons go out in batches, and a name asked for again while an earlier batch loads is asked for once", async () => {
+  const names = Array.from({ length: 150 }, (_, index) => `icon-${String(index).padStart(3, "0")}`);
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  resetTaskIconLoaderForTests(async (batch) => {
+    requests.push(batch);
+    await gate;
+    return Object.fromEntries(batch.map((name) => [name, [["path", { d: `M0 0 ${name}` }]]]));
+  });
+  mount(<>{names.map((name) => <TaskIcon key={name} icon={name} title="" />)}</>);
+  await settle();
+  /* While the first batch is out, a card asks for a name from the second. */
+  mount(<TaskIcon icon="icon-149" title="" />);
+  await settle();
+  release();
+  await settle();
+  expect(requests.map((batch) => batch.length)).toEqual([100, 50]);
+  expect(requests.flat().filter((name) => name === "icon-149")).toHaveLength(1);
+});
+
 test("a route that never answers ends in a drawn fallback, after a bounded number of asks", async () => {
   let asks = 0;
   resetTaskIconLoaderForTests(async () => {
