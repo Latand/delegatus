@@ -83,12 +83,21 @@ type CachedRow = { valueJson: string; parsed: unknown };
     the assembled decision left on it: one for an entry or a receipt, one per
     generation for a conversation. */
 type RecordedGrant = { storedJson: string | undefined; lists: readonly (readonly string[] | undefined)[] };
-/** `stamp` names the stored database the decision ran over (see
-    `SqliteAgentRegistryStore.storeStamp`), so the record is only ever applied
-    to exactly that database: the decision also reads the lineage edges and
-    every other row attesting to the one being read, and a commit rewriting any
-    of them without a revision would otherwise leave the old answer standing. */
-type GrantDecisions = { revision: number; stamp: string; rows: ReadonlyMap<string, RecordedGrant> };
+/** `stamp` detects commits since the last read. The row journal then removes
+    decisions whose source rows changed, including changes that did not bump
+    the registry revision. */
+type GrantDecisions = {
+  revision: number;
+  stamp: string;
+  changeId: number;
+  rows: Map<string, RecordedGrant>;
+  sourceTargets: Map<string, Set<string>>;
+  entryPaths: Map<string, Set<string>>;
+  receiptConversations: Map<string, Set<string>>;
+  receiptKeys: Map<string, Set<string>>;
+  conversationByEntryKey: Map<string, Set<string>>;
+  conversationByPath: Map<string, Set<string>>;
+};
 type GrantProfileRow = { launchProfile?: { mcpServers?: string[] } | null; generations?: { launchProfile?: { mcpServers?: string[] } }[] };
 
 const grantDecisionKey = (collection: string, key: string) => `${collection}\u0000${key}`;
@@ -105,18 +114,80 @@ function recordGrantDecisions(
   file: RegistryFile,
   revision: number,
   stamp: string,
+  changeId: number,
   storedJson: (collection: RowCollection, key: string) => string | undefined,
 ): GrantDecisions {
   const rows = new Map<string, RecordedGrant>();
+  const decisions: GrantDecisions = {
+    revision, stamp, changeId, rows,
+    sourceTargets: new Map(), entryPaths: new Map(), receiptConversations: new Map(), receiptKeys: new Map(),
+    conversationByEntryKey: new Map(), conversationByPath: new Map(),
+  };
   for (const collection of ["entries", "receipts", "conversations"] as const) {
     for (const [key, row] of Object.entries(file[collection] as Record<string, GrantProfileRow>)) {
       rows.set(grantDecisionKey(collection, key), {
         storedJson: storedJson(collection, key),
         lists: grantLists(collection, row).map((list) => list && [...list]),
       });
+      if (collection === "entries") addIndexedTarget(decisions.entryPaths, (row as RegistryFile["entries"][string]).artifactPath, grantDecisionKey(collection, key));
+      if (collection === "receipts") indexReceipt(decisions, key, row as RegistryFile["receipts"][string]);
     }
   }
-  return { revision, stamp, rows };
+  for (const [key, row] of Object.entries(file.conversations)) indexGrantSource(decisions, "conversations", key, row);
+  for (const [key, row] of Object.entries(file.lineageEdges)) indexGrantSource(decisions, "lineageEdges", key, row);
+  return decisions;
+}
+
+function addIndexedTarget(index: Map<string, Set<string>>, source: string | null | undefined, target: string): void {
+  if (!source) return;
+  const targets = index.get(source) ?? new Set<string>();
+  targets.add(target);
+  index.set(source, targets);
+}
+
+function indexReceipt(decisions: GrantDecisions, key: string, receipt: RegistryFile["receipts"][string]): void {
+  const target = grantDecisionKey("receipts", key);
+  addIndexedTarget(decisions.receiptConversations, receipt.conversationId, target);
+  if (receipt.conversationId) {
+    addIndexedTarget(decisions.sourceTargets, grantDecisionKey("conversations", receipt.conversationId), target);
+    addIndexedTarget(decisions.sourceTargets, grantDecisionKey("lineageEdges", receipt.conversationId), target);
+  }
+  if (receipt.key) {
+    const entryKey = sessionKeyId(receipt.key);
+    addIndexedTarget(decisions.receiptKeys, entryKey, target);
+    for (const conversationId of decisions.conversationByEntryKey.get(entryKey) ?? []) {
+      addIndexedTarget(decisions.sourceTargets, grantDecisionKey("conversations", conversationId), target);
+      addIndexedTarget(decisions.sourceTargets, grantDecisionKey("lineageEdges", conversationId), target);
+    }
+  }
+}
+
+function indexGrantSource(decisions: GrantDecisions, collection: "conversations" | "lineageEdges", key: string, row: unknown): Set<string> {
+  const source = grantDecisionKey(collection, key);
+  const targets = decisions.sourceTargets.get(source) ?? new Set<string>();
+  if (collection === "conversations") {
+    targets.add(grantDecisionKey("conversations", key));
+    for (const receipt of decisions.receiptConversations.get(key) ?? []) targets.add(receipt);
+    const conversation = row as RegistryFile["conversations"][string];
+    for (const generation of conversation.generations) {
+      const entryKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
+      addIndexedTarget(decisions.conversationByEntryKey, entryKey, key);
+      addIndexedTarget(decisions.conversationByPath, generation.path, key);
+      targets.add(grantDecisionKey("entries", entryKey));
+      for (const receipt of decisions.receiptKeys.get(entryKey) ?? []) targets.add(receipt);
+      for (const entry of decisions.entryPaths.get(generation.path) ?? []) targets.add(entry);
+    }
+    // A later edge edit must also invalidate targets introduced by this conversation edit.
+    const edgeTargets = decisions.sourceTargets.get(grantDecisionKey("lineageEdges", key));
+    if (edgeTargets) for (const target of targets) edgeTargets.add(target);
+  } else {
+    targets.add(grantDecisionKey("conversations", key));
+    for (const target of decisions.sourceTargets.get(grantDecisionKey("conversations", key)) ?? []) targets.add(target);
+    const edge = row as RegistryFile["lineageEdges"][string];
+    if (edge.evidence?.launchId) targets.add(grantDecisionKey("receipts", edge.evidence.launchId));
+  }
+  decisions.sourceTargets.set(source, targets);
+  return targets;
 }
 
 /** Gives one row what the assembled decision gave it, but only when the row is
@@ -176,6 +247,13 @@ export interface SqliteRegistryMutation<T> {
   revision: number;
 }
 
+export class RegistryMutationRetryLimitError extends Error {
+  override name = "RegistryMutationRetryLimitError";
+  constructor(readonly operationName: string, readonly attempts: number) {
+    super(`registry mutation ${operationName} exceeded ${attempts} attempts`);
+  }
+}
+
 export interface SqliteRegistryStoreOptions {
   /** The legacy registry to import on first boot. A loader is called only
       when the store holds no import marker, so an initialised store never
@@ -200,6 +278,8 @@ export interface SqliteRegistryStoreOptions {
   onRowPayloadRead?(collection: RowCollection, count: number): void;
   onRowPayloadParse?(collection: RowCollection, count: number): void;
   onRevisionQuery?(): void;
+  /** Test seam for the hard ceiling; production uses two attempts. */
+  maxMutationAttempts?: number;
 }
 
 /**
@@ -266,6 +346,7 @@ export class SqliteAgentRegistryStore {
   private readonly db: BunDatabase;
   private readonly normalize: (value: unknown) => RegistryFile;
   private readonly onWriterWait: ((durationMs: number) => void) | undefined;
+  private readonly maxMutationAttempts: number;
   private onSnapshotLoad: (() => void) | undefined;
   private onRowPayloadRead: ((collection: RowCollection, count: number) => void) | undefined;
   private onRowPayloadParse: ((collection: RowCollection, count: number) => void) | undefined;
@@ -280,6 +361,7 @@ export class SqliteAgentRegistryStore {
       baseline otherwise assembles, clones and decides the whole file, per read:
       sixty such rows cost startup half a minute of blocked event loop. */
   private grantDecisions: GrantDecisions | null = null;
+  private readonly grantJournalReady: boolean;
 
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   /** Runtime half of {@link DecidedRegistryFile}: the files this store has
@@ -311,6 +393,10 @@ export class SqliteAgentRegistryStore {
     const { Database } = sqlite;
     this.normalize = options.normalize;
     this.onWriterWait = options.onWriterWait;
+    this.maxMutationAttempts = options.maxMutationAttempts ?? 2;
+    if (!Number.isInteger(this.maxMutationAttempts) || this.maxMutationAttempts < 1) {
+      throw new RangeError("maxMutationAttempts must be a positive integer");
+    }
     this.onSnapshotLoad = options.onSnapshotLoad;
     this.onRowPayloadRead = options.onRowPayloadRead;
     this.onRowPayloadParse = options.onRowPayloadParse;
@@ -329,6 +415,7 @@ export class SqliteAgentRegistryStore {
         this.db.close();
         throw new Error(`${path.basename(filename)} holds no imported registry`);
       }
+      this.grantJournalReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'").get());
       return;
     }
     /* Bound to the file at its name: a registry the activation fallback
@@ -351,6 +438,28 @@ export class SqliteAgentRegistryStore {
       `);
       return db;
     });
+    // Triggers observe every connection, including a predecessor release or a
+    // direct SQLite repair that changes a grant input without bumping revision.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS registry_grant_changes (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        collection TEXT NOT NULL,
+        row_key TEXT NOT NULL
+      );
+      CREATE TRIGGER IF NOT EXISTS registry_grant_insert AFTER INSERT ON registry_rows
+        WHEN NEW.collection IN ('entries', 'receipts', 'conversations', 'lineageEdges') BEGIN
+        INSERT INTO registry_grant_changes(collection, row_key) VALUES (NEW.collection, NEW.row_key);
+      END;
+      CREATE TRIGGER IF NOT EXISTS registry_grant_update AFTER UPDATE ON registry_rows
+        WHEN NEW.collection IN ('entries', 'receipts', 'conversations', 'lineageEdges') BEGIN
+        INSERT INTO registry_grant_changes(collection, row_key) VALUES (NEW.collection, NEW.row_key);
+      END;
+      CREATE TRIGGER IF NOT EXISTS registry_grant_delete AFTER DELETE ON registry_rows
+        WHEN OLD.collection IN ('entries', 'receipts', 'conversations', 'lineageEdges') BEGIN
+        INSERT INTO registry_grant_changes(collection, row_key) VALUES (OLD.collection, OLD.row_key);
+      END;
+    `);
+    this.grantJournalReady = true;
     const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(registry_rows)").all();
     if (!columns.some((column) => column.name === "row_order")) {
       this.db.exec(`
@@ -810,30 +919,44 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { updateSnapshotCache?: boolean } = {}): SqliteRegistryMutation<T> {
-    for (;;) {
-      this.db.exec("BEGIN");
+  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { updateSnapshotCache?: boolean; operationName?: string } = {}): SqliteRegistryMutation<T> {
+    let operationName = options.operationName ?? operation.name;
+    for (let attempt = 1; attempt <= this.maxMutationAttempts; attempt += 1) {
+      const pessimistic = attempt > 1;
+      const waitStartedAt = performance.now();
+      if (pessimistic) this.beginMutationWrite();
+      else this.db.exec("BEGIN");
       let current: LazyRegistrySnapshot;
       let changes: RegistryChanges;
       let result: T;
       try {
+        if (pessimistic) this.onWriterWait?.(performance.now() - waitStartedAt);
         current = this.loadLazyInTransaction();
         result = operation(current.file);
         changes = current.changes();
-        this.db.exec("COMMIT");
+        if (!pessimistic) this.db.exec("COMMIT");
       } catch (error) {
         try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
         throw error;
       }
-      const waitStartedAt = performance.now();
-      this.beginMutationWrite();
+      const optimisticWaitStartedAt = performance.now();
+      if (!pessimistic) this.beginMutationWrite();
       let revision: number;
       let stamps = { before: "", after: "" };
       const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
       try {
-        this.onWriterWait?.(performance.now() - waitStartedAt);
-        if (Number(this.meta("revision") ?? 0) !== current.revision) {
+        if (!pessimistic) this.onWriterWait?.(performance.now() - optimisticWaitStartedAt);
+        if (!pessimistic && Number(this.meta("revision") ?? 0) !== current.revision) {
           this.db.exec("ROLLBACK");
+          operationName ||= new Error().stack?.split("\n")[2]?.trim() ?? "anonymous";
+          if (attempt >= this.maxMutationAttempts) {
+            console.warn(`[registry] mutation ${operationName} reached its retry ceiling after ${attempt} lost revision`);
+            throw new RegistryMutationRetryLimitError(operationName, attempt);
+          }
+          // The next attempt owns the write lock, so it cannot lose a second
+          // revision. Surface a costly first loss before it becomes an outage.
+          const elapsed = performance.now() - waitStartedAt;
+          if (elapsed >= 1_000) console.warn(`[registry] mutation ${operationName} retrying after ${Math.round(elapsed)}ms`);
           continue;
         }
         revision = changed ? current.revision + 1 : current.revision;
@@ -861,6 +984,7 @@ export class SqliteAgentRegistryStore {
       }
       return { result, file: null, revision };
     }
+    throw new RegistryMutationRetryLimitError(operationName || "anonymous", this.maxMutationAttempts);
   }
 
   private beginMutationWrite(): void {
@@ -980,7 +1104,10 @@ export class SqliteAgentRegistryStore {
        the stored state it sees cannot move under it. */
     let transactionStamp: string | undefined;
     const stamp = () => transactionStamp ??= this.storeStamp();
-    const recordHolds = () => this.grantDecisions?.revision === revision && this.grantDecisions.stamp === stamp();
+    const recordHolds = () => {
+      this.refreshGrantDecisions(revision, stamp());
+      return this.grantDecisions?.revision === revision && this.grantDecisions.stamp === stamp();
+    };
     let grantsDecided = false;
     let decidingGrants = false;
     const decideGrants = () => {
@@ -991,7 +1118,7 @@ export class SqliteAgentRegistryStore {
         reboundAssembledMcpGrants(file, this.mcpGrantPolicy);
         grantsDecided = true;
         if (recordable) {
-          this.grantDecisions = recordGrantDecisions(file, revision, stamp(), (collection, key) =>
+          this.grantDecisions = recordGrantDecisions(file, revision, stamp(), this.grantChangeId(), (collection, key) =>
             this.rowCache.get(collection)?.get(key)?.valueJson);
         }
       } finally {
@@ -1371,16 +1498,15 @@ export class SqliteAgentRegistryStore {
     revision: number,
     stamps: { before: string; after: string },
   ): void {
-    /* Only the grant collections are inputs to the decision; a commit that
-       touched none of them leaves every recorded decision what it was, provided
-       the database it was recorded over is exactly the one this commit wrote
-       to: nothing else committed and nothing else was written since. */
-    this.grantDecisions = this.grantDecisions?.revision === revision - 1
-      && this.grantDecisions.stamp === stamps.before
-      && ![...changes.rows.keys(), ...changes.order].some((collection) => GRANT_COLLECTIONS.has(collection))
-      ? { ...this.grantDecisions, revision, stamp: stamps.after }
-      : null;
-    const cachedSnapshot = this.readOnlyCache?.revision === revision - 1 && this.readOnlyCache.stamp === stamps.before
+    // The journal identifies only changed grant inputs. A local grant write
+    // invalidates its target and dependents, leaving other decisions warm.
+    this.refreshGrantDecisions(revision, stamps.after);
+    // Entry and receipt decisions affect their own rows only, so the cached
+    // snapshot can patch those rows. Conversation and edge edits can change
+    // another row's grant and require the next snapshot to reassemble it.
+    const grantInputChanged = [...changes.rows.keys(), ...changes.order]
+      .some((collection) => collection === "conversations" || collection === "lineageEdges");
+    const cachedSnapshot = !grantInputChanged && this.readOnlyCache?.revision === revision - 1 && this.readOnlyCache.stamp === stamps.before
       ? this.readOnlyCache
       : null;
     const nextFile = cachedSnapshot ? { ...cachedSnapshot.file } : null;
@@ -1427,6 +1553,48 @@ export class SqliteAgentRegistryStore {
     } else {
       this.readOnlyCache = null;
     }
+  }
+
+  private grantChangeId(): number {
+    if (!this.grantJournalReady) return 0;
+    return this.db.query<{ seq: number }, []>("SELECT COALESCE(MAX(seq), 0) AS seq FROM registry_grant_changes").get()!.seq;
+  }
+
+  private refreshGrantDecisions(revision: number, stamp: string): void {
+    const previous = this.grantDecisions;
+    if (!previous || (previous.revision === revision && previous.stamp === stamp)) return;
+    if (!this.grantJournalReady) { this.grantDecisions = null; return; }
+    const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq), 0) AS seq FROM registry_grant_changes").get()!.seq;
+    if (first > previous.changeId + 1) { this.grantDecisions = null; return; }
+    const changed = this.db.query<{ seq: number; collection: RowCollection; row_key: string }, [number]>(
+      "SELECT seq, collection, row_key FROM registry_grant_changes WHERE seq > ? ORDER BY seq",
+    ).all(previous.changeId);
+    const rows = previous.rows;
+    for (const { collection, row_key: key } of changed) {
+      const source = grantDecisionKey(collection, key);
+      rows.delete(source);
+      for (const target of previous.sourceTargets.get(source) ?? []) rows.delete(target);
+      const raw = this.db.query<{ value_json: string }, [string, string]>(
+        "SELECT value_json FROM registry_rows WHERE collection = ? AND row_key = ?",
+      ).get(collection, key)?.value_json;
+      if (!raw) continue;
+      const value = JSON.parse(raw) as unknown;
+      if (collection === "conversations" || collection === "lineageEdges") {
+        for (const target of indexGrantSource(previous, collection, key, value)) rows.delete(target);
+      } else if (collection === "entries") {
+        const entry = value as RegistryFile["entries"][string];
+        addIndexedTarget(previous.entryPaths, entry.artifactPath, source);
+        for (const conversationId of previous.conversationByPath.get(entry.artifactPath) ?? []) {
+          addIndexedTarget(previous.sourceTargets, grantDecisionKey("conversations", conversationId), source);
+        }
+      } else if (collection === "receipts") {
+        indexReceipt(previous, key, value as RegistryFile["receipts"][string]);
+      }
+    }
+    this.grantDecisions = {
+      ...previous, revision, stamp,
+      changeId: changed.at(-1)?.seq ?? previous.changeId,
+    };
   }
 
   private persistAll(file: DecidedRegistryFile, revision: number): void {
@@ -1476,6 +1644,7 @@ export class SqliteAgentRegistryStore {
     for (const collection of changes.order) this.persistRowOrder(collection, Object.keys(file[collection]));
     for (const field of changes.meta) this.setMeta(field, JSON.stringify(file[field]));
     this.setMeta("revision", String(revision));
+    this.db.exec("DELETE FROM registry_grant_changes WHERE seq <= (SELECT MAX(seq) - 100000 FROM registry_grant_changes)");
   }
 
   private upsertRow(collection: RowCollection, key: string, value: unknown, order?: number): void {

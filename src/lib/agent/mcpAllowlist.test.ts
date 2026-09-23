@@ -1652,6 +1652,21 @@ test("a recorded grant decision never outlives a change to any row it was assemb
     // Unchanged, the complete snapshot that decision loaded is reused as it is.
     expect(store.readOnlySnapshot()).toBe(store.readOnlySnapshot());
 
+    /* A foreign write outside the grant inputs moves data_version but keeps
+       every recorded grant decision and its keyed-read cost. */
+    const unrelated = new Database(sqlitePath, { strict: true });
+    try {
+      unrelated.query("INSERT INTO registry_rows(collection, row_key, value_json, row_order) VALUES ('conversationAliases', 'unrelated', ?, 999)")
+        .run(JSON.stringify(rootId));
+    } finally {
+      unrelated.close();
+    }
+    expect(repeatedReads(grant)).toBeLessThan(conversations);
+    /* A local grant-row edit invalidates its own decision and dependents; a
+       separate root keeps its recorded decision. */
+    store.mutate((file) => { file.conversations[workerId]!.updatedAt = "2026-09-23T00:00:00.000Z"; }, false);
+    expect(repeatedReads(grant)).toBeLessThan(conversations);
+
     /* A transaction another connection rolled back changed nothing, and the
        record is still applied without deciding the whole file again. */
     rewriteEdge(workerId, rootId, (edge) => {
