@@ -627,12 +627,12 @@ function pipelineSummary(pipeline: Pipeline): PipelineSummary {
  * away without a wake — which is exactly how a pipeline that completed inside
  * the minute before a tick reached the seat as no item at all.
  *
- * A lane the seat CLOSED is not here: closing it is the seat saying it has
- * taken the outcome, and it is the discharge the reason needs. Nor is a hidden
- * one, nor one the operator dismissed off the board.
+ * A lane explicitly closed, hidden or dismissed is no longer on the seat's
+ * board. Completion writes closedAt automatically, so that timestamp cannot
+ * stand for the seat hearing that the lane completed (#2081).
  */
 function laneSettlement(pipeline: Pipeline): SeatTickOwnLaneInput["settled"] | null {
-  if (pipeline.hiddenAt || pipeline.dismissedAt || pipeline.closedAt || pipeline.state === "closed") return null;
+  if (pipeline.hiddenAt || pipeline.dismissedAt || pipeline.state === "closed") return null;
   const attempts = pipeline.runs.flatMap((run) => run.attempts);
   /* #1938: a spent review budget left an unreviewed head. It is never
      "completed", and it outranks the passed fix attempt it ended on. */
@@ -704,10 +704,10 @@ function ownSettledLanes(
     if (pipeline.srcConversationId !== seat.conversationId) continue;
     const settled = laneSettlement(pipeline);
     if (!settled) continue;
-    /* The one settlement with no obligation behind it is announced once and
-       then gone (#1799); every other settlement stands until the seat closes
-       the lane out, which is what discharges it. */
-    if (settled === "provisioned" && announced.includes(pipeline.id)) continue;
+    /* The legacy bare id announced only provisioning. A later state is new
+       news, and a landed wake records that state separately (#2081). */
+    if (announced.includes(`${pipeline.id}:${settled}`)
+      || (settled === "provisioned" && announced.includes(pipeline.id))) continue;
     lanes.push({
       id: pipeline.id,
       title: redactBounded(pipeline.task.split("\n")[0] ?? "", OWN_LANE_TITLE_LIMIT),
@@ -1207,11 +1207,17 @@ async function unmergedPullRequests(context: {
   const open = result.pullRequests;
   const byBranch = new Map<string, Pipeline>();
   for (const pipeline of finished) {
-    if (!pipeline.branch) continue;
     /* Two lanes on one branch is a relaunch: the newest is the one whose
        finishing left the pull request open. */
-    const held = byBranch.get(pipeline.branch);
-    if (!held || Date.parse(pipeline.createdAt) > Date.parse(held.createdAt)) byBranch.set(pipeline.branch, pipeline);
+    const delivery = pipeline.delivery?.target;
+    const heads = [pipeline.branch];
+    if (delivery?.branch && canonicalOrchestratorProject(delivery.repository) === context.project) {
+      heads.push(delivery.branch.replace(/^refs\/heads\//, ""));
+    }
+    for (const head of heads.filter(Boolean)) {
+      const held = byBranch.get(head);
+      if (!held || Date.parse(pipeline.createdAt) > Date.parse(held.createdAt)) byBranch.set(head, pipeline);
+    }
   }
   const found: SeatTickPullRequestInput[] = [];
   for (const pullRequest of open) {

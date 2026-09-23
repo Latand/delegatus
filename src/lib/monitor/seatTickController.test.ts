@@ -96,6 +96,7 @@ interface Harness {
 }
 
 type PipelineFixture = { id: string; state: string; createdAt: string; movedAt: string | null; branch?: string; closedAt?: string | null; project?: string;
+  deliveryBranch?: string;
   /** The conversation that created the lane (#1749), as the store records it.
       Null is a lane nobody's seat launched. */
   src?: string | null;
@@ -114,6 +115,7 @@ function pipelineRecord(entry: PipelineFixture) {
     repoDir: "/srv/repo",
     worktreeDir: "/srv/worktree",
     branch: entry.branch ?? "topic",
+    ...(entry.deliveryBranch ? { delivery: { target: { repository: PROJECT, remote: "origin", branch: `refs/heads/${entry.deliveryBranch}` } } } : {}),
     baseBranch: "main",
     baseRef: "main",
     lastPassedCommit: "",
@@ -388,6 +390,7 @@ function journalClient(journal: InstanceType<typeof RuntimeJournal>): RuntimeHos
     command: async (command) => journal.executeOperation(command),
     operationStatus: async (operationId: string, options?: { currentRetryLeaf?: boolean }) =>
       (options?.currentRetryLeaf ? journal.currentRetryResult(operationId) : journal.operationResult(operationId)),
+    readSession: async (identity) => journal.readSession(identity),
     claimDeliveryAction: async (operationId, action) => journal.claimDeliveryAction(operationId, action),
     producerCursor: async (producerKind: string, eventKeyPrefix: string) => journal.producerCursor(producerKind, eventKeyPrefix),
     effectBatch: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
@@ -412,6 +415,16 @@ function outstandingWake(over: Partial<SeatTickOutstandingWake> = {}): SeatTickO
   };
 }
 const OPEN_LANE = [{ id: "pipeline_a1", state: "running", createdAt: "2026-08-28T11:00:00.000Z", movedAt: "2026-08-28T11:58:00.000Z" }];
+
+test("three running lanes this seat launched keep the hourly interval agenda open (#2081)", async () => {
+  const pipelines = ["pipeline_a1", "pipeline_b2", "pipeline_c3"].map((id) => ({
+    id, state: "running", attemptState: "running", src: CONVERSATION,
+    createdAt: new Date(NOW - 90 * MINUTE).toISOString(), movedAt: new Date(NOW - 10 * MINUTE).toISOString(),
+  }));
+  const rig = harness({ pipelines, state: { ...OVERDUE, announcedLanes: pipelines.map((lane) => lane.id) } });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["interval"], items: 3 });
+});
 
 function terminalEvent(seq: number): LifecycleEvent {
   return {
@@ -1038,6 +1051,40 @@ test("a completed lane whose pull request is still open wakes the seat, naming t
   expect(record).toMatchObject({ verdict: "wake", reasons: ["unmerged-pr"], items: 1 });
   expect(rig.sent[0]!.text).toContain("pull request #1289 left open by a lane that finished");
   expect(rig.sent[0]!.text).toContain("[pull-request] #1289 — wake on a merge that is waiting");
+});
+
+test("a completed lane's delivery branch identifies the pull request it left open (#2081)", async () => {
+  const rig = harness({
+    pipelines: [{ ...FINISHED_LANE[0]!, branch: "pipeline/internal-lane", deliveryBranch: "pipeline/skeletons-transitions" }],
+    state: OVERDUE,
+    openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", updatedAt: new Date(NOW - MINUTE).toISOString() }],
+  });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["unmerged-pr"], items: 1 });
+  expect(rig.sent[0]!.text).toContain("[pull-request] #2076");
+});
+
+test("a pull request line announces its creator's completed lane only after delivery (#2081)", async () => {
+  const lane = {
+    ...FINISHED_LANE[0]!, src: CONVERSATION, branch: "pipeline/internal-lane",
+    deliveryBranch: "pipeline/skeletons-transitions",
+  };
+  const rig = harness({
+    pipelines: [lane], state: { ...OVERDUE, announcedLanes: [lane.id] },
+    openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", updatedAt: new Date(NOW - MINUTE).toISOString() }],
+  });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record!.reasons).toEqual(["own-lane-settled", "unmerged-pr"]);
+  expect(record!.items).toBe(1);
+  expect(rig.written.at(-1)!.announcedLanes).toEqual([lane.id, `${lane.id}:completed`]);
+
+  const later = harness({
+    pipelines: [lane], now: NOW + 61 * MINUTE, state: rig.written.at(-1)!,
+    openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", updatedAt: new Date(NOW - MINUTE).toISOString() }],
+  });
+  const second = await runSeatTickCheck(PROJECT, later.deps);
+  expect(second!.reasons).toContain("unmerged-pr");
+  expect(second!.reasons).not.toContain("own-lane-settled");
 });
 
 /* And the merge is what silences it, with nothing else to turn off. */
@@ -5161,13 +5208,10 @@ test("a child whose last record predates the seat by weeks is skipped on the har
 
   const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat, pipelines: [ownLane(fixture)] });
   const record = await runSeatTickCheck(fixture.project, second.deps);
-  /* No child reason at all: not the harvest, not the stall. The wake carries
-     the lane the seat launched and nothing else. */
-  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
-  const text = second.sent[0]!.text;
-  expect(text).not.toContain(owed.id);
-  expect(text).not.toContain(stalled.id);
-  expect(text).toContain("(2 spawned child(ren) not listed: their last activity predates this seat's designation");
+  /* The lane was already announced, and neither old child can raise another
+     reason. */
+  expect(record).toMatchObject({ verdict: "quiet" });
+  expect(second.sent).toEqual([]);
   expect(fixture.acknowledged()).toEqual([]);
 });
 
@@ -5193,14 +5237,11 @@ test("an unreadable child is listed when it finished and named once when it stal
   expect(shown).toContain(`- ${stalled.id} — vanished worker: the transcript file is no longer on disk`);
   expect(fixture.acknowledged()).toEqual([owed.id]);
 
-  /* Named once: the next wake neither lists nor names either of them. */
+  /* Named once: the next check neither lists nor names either of them. */
   const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat, pipelines: [ownLane(fixture)] });
   const record = await runSeatTickCheck(fixture.project, second.deps);
-  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
-  const text = second.sent[0]!.text;
-  expect(text).not.toContain(owed.id);
-  expect(text).not.toContain(stalled.id);
-  expect(text).toContain("(2 spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)");
+  expect(record).toMatchObject({ verdict: "quiet" });
+  expect(second.sent).toEqual([]);
 });
 
 test("a failure this seat's own worker had an hour ago is listed, once (#1783)", async () => {
@@ -5393,7 +5434,7 @@ test("a lane the seat created reaches it as provisioned, on the wake and once (#
   expect(rig.sent[0]!.text).toContain("[provisioning] pipeline_p1799");
   expect(rig.sent[0]!.text).toContain("provisioned, first stage running");
   /* The landing is what records it, and the row the check wrote carries it. */
-  expect(rig.written.at(-1)!.announcedLanes).toEqual(["pipeline_p1799"]);
+  expect(rig.written.at(-1)!.announcedLanes).toEqual(["pipeline_p1799:provisioned"]);
 
   /* An hour later, with the lane still running, nothing is owed on it: there
      was never an obligation, only something to know, and the seat knows it. */
@@ -5404,6 +5445,44 @@ test("a lane the seat created reaches it as provisioned, on the wake and once (#
   const second = await runSeatTickCheck(PROJECT, later.deps);
   expect(second!.reasons ?? []).not.toContain("own-lane-settled");
   expect(later.sent.map((message) => message.text).join("\n")).not.toContain("[provisioning]");
+});
+
+test("a provisioned lane wakes its creator again when it completes with closedAt (#2081)", async () => {
+  const lane = {
+    id: "pipeline_finished_2081", state: "completed", src: CONVERSATION,
+    createdAt: new Date(NOW - 90 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(),
+    closedAt: new Date(NOW - 49 * MINUTE).toISOString(),
+  };
+  const rig = harness({ pipelines: [lane], state: { ...OVERDUE, announcedLanes: [lane.id] } });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
+  expect(rig.sent[0]!.text).toContain("lane you launched: completed");
+  expect(rig.written.at(-1)!.announcedLanes).toContain(`${lane.id}:completed`);
+
+  const later = harness({ pipelines: [lane], now: NOW + 61 * MINUTE, state: rig.written.at(-1)! });
+  const second = await runSeatTickCheck(PROJECT, later.deps);
+  expect(second!.reasons ?? []).not.toContain("own-lane-settled");
+});
+
+test("each settled state of one lane is announced once after provisioning (#2081)", async () => {
+  const id = "pipeline_states_2081";
+  let state: Partial<SeatTickProjectState> = { ...OVERDUE, announcedLanes: [id] };
+  for (const [index, lane] of [
+    { state: "needs_review", attemptState: "passed" },
+    { state: "needs_decision", attemptState: "needs_decision" },
+    { state: "running", attemptState: "failed" },
+  ].entries()) {
+    const now = NOW + index * 122 * MINUTE;
+    const pipeline = { id, ...lane, src: CONVERSATION, createdAt: new Date(NOW - 90 * MINUTE).toISOString(), movedAt: new Date(now - MINUTE).toISOString() };
+    const rig = harness({ pipelines: [pipeline], now, state });
+    const record = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(record).toMatchObject({ verdict: "wake" });
+    expect(record!.reasons).toContain("own-lane-settled");
+    state = rig.written.at(-1)!;
+    const repeat = harness({ pipelines: [pipeline], now: now + 61 * MINUTE, state });
+    const second = await runSeatTickCheck(PROJECT, repeat.deps);
+    expect(second!.reasons ?? []).not.toContain("own-lane-settled");
+  }
 });
 
 test("a lane that never ran a stage tells its creator the provisioning failed, and why (#1799)", async () => {
@@ -5420,9 +5499,7 @@ test("a lane that never ran a stage tells its creator the provisioning failed, a
 
   expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"] });
   expect(rig.sent[0]!.text).toContain("provisioning failed, it never ran a stage: fetching origin/main: git fetch timed out after 60s");
-  /* A park is an obligation the seat has to discharge, so nothing announces it
-     away: it is offered until the seat closes the lane out. */
-  expect(rig.written.at(-1)!.announcedLanes).toEqual([]);
+  expect(rig.written.at(-1)!.announcedLanes).toEqual(["pipeline_p1799:provisioning-failed"]);
 });
 
 /* ------------------------------------------------------------------------- *
