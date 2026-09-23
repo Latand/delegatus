@@ -1,5 +1,7 @@
 "use client";
 
+import { workLinkClause } from "@/components/workLinks/WorkLinkChips";
+import { useWorkLinks } from "@/components/workLinks/workLinksContext";
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight, Crown, Mic } from "@/components/icons";
 import { Fragment, useLayoutEffect, useRef } from "react";
@@ -243,6 +245,7 @@ const PHRASE_TONE: Record<MobileRowState["key"], string> = {
  */
 export function MobilePipelineQueueRow({ row, onOpen }: { row: MobileBoardPipelineRow; onOpen?: (pipeline: Pipeline) => void }) {
   const { t } = useLocale();
+  const links = useWorkLinks().of({ kind: "pipeline", id: row.pipeline.id });
   /* The stage in the operator's words — its name and, once it ran twice, the
      attempt (#1865) — lowercased inside the sentence the way the prototype
      writes it: «stage 3/5 · critique · 2 · failed · 2 findings». */
@@ -254,6 +257,7 @@ export function MobilePipelineQueueRow({ row, onOpen }: { row: MobileBoardPipeli
     t(row.stageFailed ? "mobile2.board.pipelineStageFailed" : "mobile2.board.pipelineStage", { stage: row.stage, total: row.total, name: stageName }),
     row.findings ? t("mobile2.board.pipelineFindings", { count: row.findings }) : null,
     pipelineReviewHeads(t, row.review),
+    workLinkClause(t, links),
   ].filter(Boolean).join(" · ");
   const Tag = onOpen ? "button" : "div";
   return (

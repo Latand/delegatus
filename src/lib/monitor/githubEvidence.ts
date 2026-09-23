@@ -222,7 +222,7 @@ function parseOpenPullRequests(raw: string): OpenPullRequest[] | null {
     different facts about the machine, and whoever reads the journal line is
     telling an outage from a misconfiguration. `execFile` reports its own
     timeout as a killed child. */
-function unavailableFromError(error: unknown): OpenPullRequestsUnavailable {
+export function githubUnavailableFromError(error: unknown): OpenPullRequestsUnavailable {
   const detail = error as { killed?: unknown; code?: unknown; name?: unknown } | null | undefined;
   if (detail?.killed === true || detail?.code === "ETIMEDOUT" || detail?.name === "TimeoutError") return "timed-out";
   return "command-failed";
@@ -239,7 +239,7 @@ export async function openPullRequestsForRepo(options: {
   try {
     raw = await run(["pr", "list", "--state", "open", "--limit", String(options.limit ?? 60), "--json", "number,title,headRefName,updatedAt"]);
   } catch (error) {
-    return { ok: false, unavailable: unavailableFromError(error) };
+    return { ok: false, unavailable: githubUnavailableFromError(error) };
   }
   const pullRequests = parseOpenPullRequests(raw);
   return pullRequests ? { ok: true, pullRequests } : { ok: false, unavailable: "malformed-output" };

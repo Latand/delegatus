@@ -267,6 +267,7 @@ test("the card's pipeline header carries Stages and the pipeline actions, each w
   click(head.querySelector("[data-pipeline-menu]"));
   expect(menuLabels(host)).toEqual([
     ["Expand stages", false, null],
+    ["Attach PR or issue…", false, null],
     ["Pause", false, "The pipeline does not advance until you resume it."],
     ["Retry a stage", true, "Only while the pipeline waits on a stage for a decision"],
     ["Skip a stage", true, "Only while the pipeline waits on a stage for a decision"],

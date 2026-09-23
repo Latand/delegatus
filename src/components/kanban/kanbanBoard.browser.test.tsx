@@ -7433,3 +7433,152 @@ describe("the orchestrator seat's header keeps every element readable and clicka
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+/* PR and issue chips (#2059) over `issue1695Evidence.fixture.tsx?scenario=work-links`:
+   the card whose five pipelines carry an open PR with two issues, a lane with
+   no PR, a PR two lanes share, a closed attempt and a merged fix, and the
+   longest Inbox title with an attached draft. At 768, 1080 and 1440 px the
+   kanban cards are measured, at 390 px the phone's pipeline screen, in en
+   and uk:
+
+     CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+       bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "PR and issue chips"
+
+   Measured as ink (see "codex tool rows on a phone"): no chip's box meets a
+   visible text run outside its own row — the title above all — no chip is cut
+   by an overflow ancestor, a title that has more to say keeps at least 10rem,
+   and the page never scrolls sideways. PNGs go to WORK_LINKS_PNG_DIR (never
+   committed), the readings to `evidence/work-links/geometry.json`. */
+describe("PR and issue chips on pipelines and task cards", () => {
+  const measureChips = `(() => {
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    const intersect = (a, b) => ({ top: Math.max(a.top, b.top), left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+    const area = r => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+    const meets = (a, b) => area(intersect(a, b)) > 0.5;
+    /* What survives every clipping box from el up: a text run is cut by
+       its own line-clamped span too, a mark only by what holds it. */
+    const clipFrom = el => {
+      let clip = { top: -1e9, left: -1e9, right: 1e9, bottom: 1e9 };
+      for (let up = el; up; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, box(up));
+      }
+      return clip;
+    };
+    const ink = root => {
+      const out = [];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.nodeValue || !node.nodeValue.trim()) continue;
+        const clip = clipFrom(node.parentElement);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const raw of range.getClientRects()) {
+          const rect = intersect(clip, { top: raw.top, left: raw.left, right: raw.right, bottom: raw.bottom });
+          if (area(rect) > 0.5) out.push({ text: node.nodeValue.trim().slice(0, 40), el: node.parentElement, rect });
+        }
+      }
+      return out;
+    };
+    const rows = [...document.querySelectorAll("[data-work-links]")].filter(row => row.getClientRects().length);
+    const overlaps = [], clipped = [], squeezed = [];
+    let chips = 0;
+    for (const row of rows) {
+      row.scrollIntoView({ block: "center" });
+      const scope = row.closest(".stage-section") || row.closest(".card") || row.closest("[data-mobile2-pipeline-body]")?.parentElement || document.body;
+      const title = row.closest(".stage-section")?.querySelector(".ptitle")
+        || row.closest(".card")?.querySelector(".head .title")
+        || document.querySelector("[data-mobile2-title-text]");
+      const marks = [...row.querySelectorAll(".wl-chip, .wl-more, .wl-nopr")];
+      chips += marks.length;
+      const others = ink(scope).filter(entry => !row.contains(entry.el));
+      for (const mark of marks) {
+        const rect = box(mark);
+        const shown = intersect(rect, clipFrom(mark.parentElement));
+        if (area(shown) < area(rect) - 1) clipped.push({ row: row.dataset.workLinks, mark: mark.textContent, shown: Math.round(area(shown)), full: Math.round(area(rect)) });
+        for (const entry of others) {
+          if (meets(rect, entry.rect)) overlaps.push({ row: row.dataset.workLinks, mark: mark.textContent, text: entry.text });
+        }
+      }
+      /* A title that shares a line with chips keeps 10rem, so the chips wrap
+         rather than take its meaning; one on a line of its own is not theirs. */
+      const band = title ? box(title) : null;
+      if (band && marks.some(mark => { const r = box(mark); return r.bottom > band.top + 1 && r.top < band.bottom - 1; })) {
+        const width = band.right - band.left;
+        const needs = Math.min(title.scrollWidth, 160);
+        if (width + 1 < needs) squeezed.push({ row: row.dataset.workLinks, title: (title.textContent || "").slice(0, 40), width: Math.round(width), needs });
+      }
+    }
+    return { rows: rows.length, chips, overlaps, clipped, squeezed, scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth };
+  })()`;
+
+  browserTest("PR and issue chips never cover or clip a title, at 390, 768, 1080 and 1440 px, in en and uk", async () => {
+    const out = path.resolve(".artifacts/work-links");
+    const pngDir = process.env.WORK_LINKS_PNG_DIR ?? "/var/tmp/llv-work-links-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=work-links`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    type Reading = { rows: number; chips: number; overlaps: unknown[]; clipped: unknown[]; squeezed: unknown[]; scrollWidth: number; innerWidth: number };
+    const gate = (label: string, reading: Reading, minRows: number) => {
+      frames[label] = reading;
+      if (reading.rows < minRows) failures.push(`${label}: ${reading.rows} chip rows drawn, expected at least ${minRows}`);
+      if (reading.overlaps.length) failures.push(`${label}: ${reading.overlaps.length} chips meet other text — ${JSON.stringify(reading.overlaps[0])}`);
+      if (reading.clipped.length) failures.push(`${label}: ${reading.clipped.length} chips are cut — ${JSON.stringify(reading.clipped[0])}`);
+      if (reading.squeezed.length) failures.push(`${label}: ${reading.squeezed.length} titles squeezed under 10rem — ${JSON.stringify(reading.squeezed[0])}`);
+      if (reading.scrollWidth > reading.innerWidth) failures.push(`${label}: the page scrolls sideways (${reading.scrollWidth} > ${reading.innerWidth})`);
+    };
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const width of [768, 1080, 1440]) {
+          const label = `${width}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, base, { width, height: 900 }, "light", lang);
+          try {
+            await page.waitForSelector('[data-kanban-board] [data-work-links="t-many"]', { state: "attached", timeout: 20_000 });
+            await page.waitForTimeout(400);
+            /* The finished lanes fold behind their count; open them, so every
+               lane's own row is measured. */
+            const toggle = page.locator('.card[data-id="task:t-many"] [data-completed-toggle]');
+            if (await toggle.count()) await toggle.evaluate((element) => (element as HTMLElement).click());
+            await page.waitForTimeout(200);
+            gate(label, await page.evaluate(measureChips) as Reading, 6);
+            await page.locator('.card[data-id="task:t-many"]').screenshot({ path: path.join(pngDir, `card-${label}.png`) });
+            const long = page.locator('.card[data-id="task:t-longtitle"]');
+            if (await long.count() && await long.isVisible()) await long.screenshot({ path: path.join(pngDir, `longtitle-${label}.png`) });
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        const label = `390-${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, base, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+        try {
+          await page.waitForSelector('[data-mobile2-go="pipeline"]', { state: "attached", timeout: 20_000 });
+          await page.waitForTimeout(300);
+          await page.screenshot({ path: path.join(pngDir, `phone-board-${label}.png`) });
+          const clause = await page.locator('[data-mobile2-go="pipeline"] [data-mobile2-row-meta]').first().textContent();
+          if (!/PR #2195/.test(clause ?? "")) failures.push(`${label}: the queue row does not name its PR: ${JSON.stringify(clause)}`);
+          await page.locator('[data-mobile2-go="pipeline"]').first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-mobile2-links]", { state: "attached", timeout: 10_000 });
+          await page.waitForTimeout(300);
+          gate(label, await page.evaluate(measureChips) as Reading, 1);
+          if ((frames[label] as Reading).chips < 3) failures.push(`${label}: the pipeline screen drew ${(frames[label] as Reading).chips} chips, expected the PR and its two issues`);
+          await page.screenshot({ path: path.join(pngDir, `phone-${label}.png`) });
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/work-links", { recursive: true });
+    fs.writeFileSync("evidence/work-links/geometry.json", `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});

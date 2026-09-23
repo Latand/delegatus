@@ -12,6 +12,7 @@ import { applyFilesDelta, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER, ty
 import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
 import type { Flow } from "@/lib/flows/types";
+import { EMPTY_FILES_WORK_LINKS, type FilesWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { TmuxEndpointHealth } from "@/lib/tmux";
@@ -58,6 +59,8 @@ export interface FilesData {
   conversationAliases: Record<string, string>;
   /** `spawn:<launchId>` → canonical conversation id (issue #569). */
   launchRoutes: Record<string, string>;
+  /** Resolved PR and issue links (#2059). */
+  workLinks: FilesWorkLinks;
   loaded: boolean;
   /** The rows above were fetched for exactly `requestScope`. False while a
       newly requested scope — a deep-link pin — is still loading and the
@@ -74,7 +77,7 @@ export interface FilesData {
 }
 
 const HEALTHY_SYSTEM = { tmux: { status: "healthy" as const } };
-const EMPTY: FilesData = { files: [], pinOverlayPaths: [], requestScope: null, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, loaded: false, scopeCertified: false, catalogFailures: 0 };
+const EMPTY: FilesData = { files: [], pinOverlayPaths: [], requestScope: null, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: false, scopeCertified: false, catalogFailures: 0 };
 
 export function filesApiUrl(_project?: string | null, pinnedPath?: string | null): string {
   const params: string[] = ["view=summary"];
@@ -171,7 +174,7 @@ function patchRows<T>(previous: readonly T[], incoming: readonly T[], keyOf: (va
 
 function parsedFilesData(parsed: FilesResponse | FileEntry[], requestScope: string): FilesData {
   if (Array.isArray(parsed)) {
-    return { files: parsed, pinOverlayPaths: [], requestScope, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, loaded: true, scopeCertified: true, catalogFailures: 0 };
+    return { files: parsed, pinOverlayPaths: [], requestScope, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: true, scopeCertified: true, catalogFailures: 0 };
   }
   return {
     files: parsed.files ?? [],
@@ -190,6 +193,7 @@ function parsedFilesData(parsed: FilesResponse | FileEntry[], requestScope: stri
     systemHealth: parsed.systemHealth ?? HEALTHY_SYSTEM,
     conversationAliases: parsed.conversationAliases ?? {},
     launchRoutes: parsed.launchRoutes ?? {},
+    workLinks: parsed.workLinks ?? EMPTY_FILES_WORK_LINKS,
     loaded: true,
     scopeCertified: true,
     catalogFailures: 0,
@@ -222,6 +226,7 @@ function patchFilesData(previous: FilesData, incoming: FilesData): FilesData {
     launchRoutes: equalValue(previous.launchRoutes, incoming.launchRoutes)
       ? previous.launchRoutes
       : incoming.launchRoutes,
+    workLinks: equalValue(previous.workLinks, incoming.workLinks) ? previous.workLinks : incoming.workLinks,
   };
 }
 

@@ -4,12 +4,14 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { tickFlows } from "@/lib/flows/engine";
+import { scheduleForgeSweep } from "@/lib/forge/sweep";
+import { loadTasks } from "@/lib/tasks/store";
 import { completedFileScan } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 
 import { registerPipelineTick } from "./controllerSignal";
 import { tickPipelines } from "./engine";
-import { archiveSettledPipelines } from "./store";
+import { archiveSettledPipelines, loadPipelines } from "./store";
 
 export type FlowPipelineControllerPhase = "pipelines" | "scan" | "flows" | "idle";
 export type FlowPipelineControllerHeartbeatState =
@@ -48,6 +50,8 @@ export interface FlowPipelineControllerPorts {
   scheduleTimeout?: (callback: () => void, delayMs: number) => TimeoutHandle;
   clearTimeout?: (timer: TimeoutHandle) => void;
   publishHeartbeat?: (heartbeat: FlowPipelineControllerHeartbeat) => void;
+  /** Fire-and-forget PR state refresh (#2059); it gates its own intervals. */
+  sweepForgeLinks?: () => void;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -96,6 +100,7 @@ function productionPorts(): FlowPipelineControllerPorts {
     tickPipelines,
     tickFlows,
     publishHeartbeat: writeFlowPipelineControllerHeartbeat,
+    sweepForgeLinks: () => scheduleForgeSweep({ loadPipelines, loadTasks }),
   };
 }
 
@@ -118,6 +123,7 @@ export class FlowPipelineController {
       scheduleTimeout: ports.scheduleTimeout ?? ((callback, delayMs) => setTimeout(callback, delayMs)),
       clearTimeout: ports.clearTimeout ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)),
       publishHeartbeat: ports.publishHeartbeat ?? (() => undefined),
+      sweepForgeLinks: ports.sweepForgeLinks ?? (() => undefined),
       log: ports.log ?? ((message, error) => {
         if (error === undefined) console.error(message);
         else console.error(message, error);
@@ -192,6 +198,13 @@ export class FlowPipelineController {
       if (!changed) break;
     }
     this.sweepSettledArchive();
+    /* Off the critical path too, and under no pipeline lock: the sweep reads
+       the records lease-free and writes only the forge cache. */
+    try {
+      this.ports.sweepForgeLinks();
+    } catch (error) {
+      this.ports.log("[flow pipeline controller] forge link sweep failed to start", error);
+    }
     const blocked = [...this.activePhases.entries()]
       .sort((left, right) => left[1].startedAt - right[1].startedAt)[0];
     if (blocked) {

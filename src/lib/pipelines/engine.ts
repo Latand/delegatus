@@ -85,6 +85,9 @@ import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, d
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
+import { forgeCacheView, nudgeForgeSweep, observeForgePullRequest } from "@/lib/forge/cache";
+import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
+import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
 import type {
   CreatePipelineRequest,
   EffectivePipelineRole,
@@ -6529,7 +6532,7 @@ function discardDraft(pipeline: Pipeline, ports: PipelinePorts): void {
 
 /** A patch's answer: a mutation result, or the refusal of a stated guard (`STAGE_CHANGED`, or a malformed guard field). */
 export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field"> & {
-  code?: PipelineMutationResult["code"] | PipelineGuardErrorCode;
+  code?: PipelineMutationResult["code"] | PipelineGuardErrorCode | WorkLinkErrorCode;
   field?: PipelineMutationResult["field"] | PipelineGuardField;
   /** The journal entry an accepted graph edit wrote (graph slice 1). */
   graphEdit?: PipelineGraphEdit;
@@ -6541,7 +6544,47 @@ export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field">
   /** The conversion an accepted, replayed or reverted legacy-review action holds. */
   legacyReviewConversion?: PipelineLegacyReviewConversion;
   replayed?: boolean;
+  /** attach-link and detach-link (#2059): the request changed nothing. */
+  unchanged?: boolean;
 };
+
+type WorkLinkErrorCode = "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT";
+
+/**
+ * attach-link and detach-link (#2059): a PR or issue a person or an agent
+ * names by hand, for what discovery cannot see — a builder pushed another
+ * head, the work shipped in another lane's PR. Allowed in every state, since
+ * linking a finished lane to its PR later is the point. No forge work here:
+ * the input is normalized against the cache as it stands, and the sweep is
+ * nudged to read what is still unknown once the lock is gone.
+ */
+function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, now: string): PipelinePatchResult | { changed: true; repositories: string[] } {
+  const inputs = workLinkInputs(req.link);
+  if (!inputs.length) return { error: "link is required: a pull request or issue as #123, 123, owner/repo#123 or a github.com URL", status: 400, code: "WORK_LINK_INVALID" };
+  if (req.kind !== undefined && req.kind !== "pr" && req.kind !== "issue") return { error: "kind must be pr or issue", status: 400, code: "WORK_LINK_INVALID" };
+  const cache = forgeCacheView();
+  const repository = pipelineRepository(pipeline);
+  const links: NormalizedWorkLink[] = [];
+  for (const input of inputs) {
+    const normalized = normalizeWorkLinkInput(input, { repository, kind: req.action === "attach-link" ? req.kind : undefined, kindOf: cachedKindOf(cache) });
+    if (!normalized.ok) return { error: normalized.error, status: 400, code: "WORK_LINK_INVALID" };
+    links.push(normalized.link);
+  }
+  const canonical = canonicalRepository(cache);
+  const discovered = resolvePipelineLinks({ ...pipeline, workLinks: [] }, repository, cache).links;
+  const edit = editStoredWorkLinks(
+    pipeline.workLinks,
+    req.action === "attach-link" ? links : [],
+    req.action === "detach-link" ? links : [],
+    { now, addedBy: actor?.kind === "agent" ? "agent" : "operator", canonical },
+    (link) => discovered.find((found) => found.number === link.number && found.repository === canonical(link.repository))?.via ?? null,
+  );
+  if (!edit.ok) return { error: edit.error, status: edit.status, code: edit.code as WorkLinkErrorCode };
+  if (!edit.changed) return { pipeline, unchanged: true };
+  if (edit.links.length) pipeline.workLinks = edit.links;
+  else delete pipeline.workLinks;
+  return { changed: true, repositories: [...new Set(links.map((link) => link.repository))] };
+}
 
 /** Also checked before MCP receipt access; authorization refusals must never spend an answer's key. */
 export function decisionAnswerActorRefusal(
@@ -6879,11 +6922,15 @@ export async function patchPipeline(
     if (published.ok && published.remote === "unreachable") return { error: `${published.detail}; reconcile through takeover with expectedOwner ${pipeline.delivery?.ownerId ?? pipeline.id} and expectedEpoch ${pipeline.delivery?.epoch ?? 0}`, status: 409 };
     return published.ok ? { pipeline: findPipelineRecord(id)! } : { error: published.error, status: 409 };
   }
+  let linkRepositories: string[] = [];
   const patched = await withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) {
       if ((req.action === "convert-legacy-review" || req.action === "revert-legacy-review") && findPipelineRecord(id)) {
         return { error: "archived records are read-only; restore the pipeline before converting it", status: 409 };
+      }
+      if ((req.action === "attach-link" || req.action === "detach-link") && findPipelineRecord(id)) {
+        return { error: "archived records are read-only; restore the pipeline before changing its links", status: 409 };
       }
       return { error: "pipeline not found", status: 404 };
     }
@@ -6891,6 +6938,13 @@ export async function patchPipeline(
       const result = req.action === "convert-legacy-review" ? convertLegacyReview(pipeline, req, actor, ports) : revertLegacyReview(pipeline, req, actor, ports);
       if (result.pipeline && !result.replayed) persist();
       return result;
+    }
+    if (req.action === "attach-link" || req.action === "detach-link") {
+      const result = editPipelineWorkLinks(pipeline, req, actor, ports.now());
+      if (!("changed" in result)) return result;
+      persist();
+      linkRepositories = result.repositories;
+      return { pipeline };
     }
     if (req.action === "resolve-decision") {
       const result = resolveDecision(pipeline, req, actor, ports);
@@ -7599,6 +7653,8 @@ export async function patchPipeline(
     return { ...patched, pipeline: findPipelineRecord(id)! };
   }
   if (req.action === "close" && patched.close?.status === "pending") ports.scheduleTick?.(0);
+  /* The lock is gone: ask the sweep to read what the new links name. */
+  for (const repository of linkRepositories) nudgeForgeSweep(repository);
   return patched;
 }
 
@@ -7797,6 +7853,16 @@ export async function reportStageCompletion(
     previewStage ? attemptStage(previewStage, preview.attempt).outputs ?? [] : [],
     ports.exec,
   );
+  /* #2059: the PR this report just looked up feeds the board's chips at once,
+     still outside the mutation and with no further network call. */
+  const observedRepository = provenance.pullRequest ? pipelineRepository(preview.pipeline) : null;
+  if (observedRepository) {
+    try {
+      observeForgePullRequest(observedRepository, provenance.pullRequest, provenance.branch, ports.now());
+    } catch {
+      // A cache the report could not write is refreshed by the next sweep.
+    }
+  }
 
   return withPipelineMutation(async (pipelines, persist) => {
     const resolved = await resolveStageCompletionTarget(pipelines, conversationId, requestedStageId, ports);

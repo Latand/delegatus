@@ -144,6 +144,7 @@ import { recordReplySuggestions } from "@/lib/suggestions/store";
 import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
+import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
@@ -1439,7 +1440,8 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   let changedFields: string[] = [];
   const result = mutateTasks((tasks) => {
     const before = fieldValues(tasks.find(task => task.id === taskId));
-    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding });
+    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding,
+      workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
@@ -1536,7 +1538,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
   const beforeFields = fieldValues(before);
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
-  const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
+  const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest);
   if (!result.pipeline) {
@@ -1547,6 +1549,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     /* A refused conversion carries its editable preview. */
     if (result.legacyReviewPreview) throw new McpToolRefusal(message, { legacyReviewPreview: result.legacyReviewPreview });
     if (action === "publish" || action === "takeover") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
+    if (action === "attach-link" || action === "detach-link") throw new McpToolRefusal(message, { code: result.code ?? "WORK_LINK_INVALID", field: "link", status: result.status });
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
@@ -1574,6 +1577,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     ...(fullAnswer(args) ? { pipeline: result.pipeline } : { omittedRecordCount: 1 }),
     readMore: "get_pipeline(pipelineId) or pipeline_action with full:true returns the full record.",
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
+    ...(action === "attach-link" || action === "detach-link" ? { workLinks: pipelineWorkLinks(result.pipeline), ...(result.unchanged ? { unchanged: true } : {}) } : {}),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
     ...(result.decisionAnswer ? { decisionAnswer: {
@@ -3293,6 +3297,13 @@ async function rotateOrchestrator(args: McpToolArgs, control: ViewerControlDepen
   });
 }
 
+/** #2059: a compact read names its PR in one string, and says nothing when
+    there is nothing to say; the full forms carry every resolved link. */
+function compactPullRequest(pipeline: Pipeline): { pr?: string } {
+  const pr = pullRequestSummary(pipelineWorkLinks(pipeline));
+  return pr ? { pr } : {};
+}
+
 async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const pipeline = getPipelineRecord(pipelineId);
@@ -3312,10 +3323,11 @@ async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
       taskIds: pipeline.taskIds,
       stageDigests: stageDigests(pipeline.stages),
       graphDigest: graphDigest(pipeline.stages),
+      ...compactPullRequest(pipeline),
     });
   }
   /* The digests a guarded graph edit names as expectedStageDigest. */
-  return { ...redactPayload({ pipelineId, pipeline }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) };
+  return { ...redactPayload({ pipelineId, pipeline }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
 }
 
 const SENSITIVE_PAYLOAD_KEY = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|credential|password|passwd|secret)/i;
@@ -3455,7 +3467,13 @@ async function listPipelines(
   const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(), updatedSince: sinceTime(args.updatedSince) };
   const source = dependencies.pipelineSelectionSource?.();
-  const project = (pipeline: Pipeline) => args.full === true ? pipeline : args.compact === false ? pipelineListRow(pipeline) : pipelineCompactRow(pipeline);
+  /* #2059: the compact row names its PR in one string, the full forms carry
+     every resolved link. */
+  const project = (pipeline: Pipeline) => {
+    if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline) };
+    if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline) };
+    return { ...pipelineCompactRow(pipeline), ...compactPullRequest(pipeline) };
+  };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
     : await listPageAsync(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
@@ -3467,7 +3485,7 @@ async function listPipelines(
       && (!scope.ids.length || scope.ids.includes(pipeline.id))
       && (!scope.query || pipeline.task.toLowerCase().includes(scope.query))
       && (!scope.updatedSince || pipeline.createdAt >= scope.updatedSince),
-    project: pipeline => args.full === true ? pipeline : args.compact === false ? pipelineListRow(pipeline) : pipelineCompactRow(pipeline),
+    project,
   }, () => throwIfCallEnded(context));
   throwIfCallEnded(context);
   const { rows: pipelines, ...pagination } = page;
@@ -3537,6 +3555,17 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
     readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. get_task(taskId) or full:true reads complete records; compact:false returns the previous truncated-details projection. Never write a truncated value back." });
 }
 
+/** The pipelines a task carries, read by id when the store can, so a task read
+    never loads the whole registry to name its PRs (#2059). */
+function carriedPipelines(ids: readonly string[], dependencies: ViewerMcpDomainDependencies): Pipeline[] {
+  if (!ids.length) return [];
+  const source = dependencies.pipelineSelectionSource?.();
+  if (source) return ids.flatMap((id) => source.read(id) ?? []);
+  if (dependencies.readPipelineRecord) return ids.flatMap((id) => dependencies.readPipelineRecord!(id) ?? []);
+  const wanted = new Set(ids);
+  return (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []).filter((pipeline) => wanted.has(pipeline.id));
+}
+
 function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const taskId = required(args, "taskId");
   const source = dependencies.taskSelectionSource?.();
@@ -3544,7 +3573,8 @@ function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): 
   const task = source ? (stored ? taskWithLinks(stored, dependencies) : null)
     : taskById.get(taskReadModel(dependencies))!.get(taskId);
   if (!task) throw new Error("task not found");
-  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : task,
+  const workLinks = args.compact === true ? null : taskWorkLinks(task, carriedPipelines(task.pipelineIds, dependencies));
+  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : task, ...(workLinks ? { workLinks } : {}),
     ...(args.compact === true ? { omittedRecordCount: 1, readMore: "get_task without compact reads the full task." } : {}) });
 }
 
