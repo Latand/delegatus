@@ -328,3 +328,27 @@ test("a conversation's task strip opens the task screen above the conversation, 
   expect(await waitFor(() => onTask(root, "t-data"))).toBe(true);
   expect(getMobileNav().getState().stack.map((screen) => screen.kind)).toEqual(["board", "task"]);
 });
+
+/* Last in the file: the reset below leaves history entries above the board,
+   as a real deep link would, and no later test may inherit them. */
+test("the Tasks list goes with a navigation that sends the stack home, and does not come back over the board", async () => {
+  const root = await board();
+  click(q(root, '[data-mobile2-open="menu"]'));
+  await settle();
+  click(q(root, '[data-mobile2-menu-row="tasks"]'));
+  expect(await waitFor(() => q(root, '[data-task-sheet-row="t-systemd"]') !== null)).toBe(true);
+  click(q(root, '[data-task-sheet-row="t-systemd"]'));
+  expect(await waitFor(() => onTask(root, "t-systemd"))).toBe(true);
+  /* A search result or a deep link: the Viewer sends the phone home and pushes the conversation. */
+  flushSync(() => {
+    getMobileNav().home();
+    getMobileNav().push({ kind: "chat", id: agentFile.path });
+  });
+  await settle();
+  expect(top()).toEqual({ kind: "chat", id: agentFile.path });
+  /* Back on the board, where the list was opened: it stays gone. */
+  flushSync(() => getMobileNav().home());
+  expect(await waitFor(() => q(root, "[data-phone-kanban]") !== null)).toBe(true);
+  await settle();
+  expect(q(root, "[data-task-sheet-row]")).toBeNull();
+});

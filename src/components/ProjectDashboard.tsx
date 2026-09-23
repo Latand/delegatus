@@ -948,7 +948,7 @@ function ProjectDashboardView({
   /* The phone's task mutations (#2072 slice 5): the columns and the task
      screen share one set, so a move made on the task screen is still drawn on
      the board after ‹. */
-  const phoneTaskMutations = useTaskMutations(projectTasks);
+  const phoneTaskMutations = useTaskMutations(isMobile ? projectTasks : EMPTY_TASKS);
   /* Tasks that exist only for the orchestrator seat are the seat panel's to
      list (#1841): every task list leaves them out — the desktop Tasks panel
      and its count, the phone's task screens and their count — while the task
@@ -1307,10 +1307,15 @@ function ProjectDashboardView({
     setMobileTaskSheet({ view, depth: mobileNav.getState().stack.length });
   };
   const mobileTaskSheetShown = mobileTaskSheet !== null && mobileNavState.stack.length === mobileTaskSheet.depth;
-  /* Stepping below the screen the list stood over takes the list with it. */
-  useEffect(() => {
-    if (mobileTaskSheet && mobileNavState.stack.length < mobileTaskSheet.depth) setMobileTaskSheet(null);
-  }, [mobileTaskSheet, mobileNavState.stack.length]);
+  /* Stepping below the screen the list stood over takes the list with it, and
+     so does any navigation that sends the stack home (a search result, a deep
+     link, a project switch): the list belonged to where the operator was. A
+     store subscription sees the reset itself, even when the conversation it
+     opens is pushed in the same tick. */
+  useEffect(() => mobileNav.subscribe(() => {
+    const state = mobileNav.getState();
+    setMobileTaskSheet((current) => (current && (state.motion === "act" || state.stack.length < current.depth) ? null : current));
+  }), [mobileNav]);
   const persistDrafts = (next: string[]) => {
     setDrafts(next);
     sessionStorage.setItem(draftsKey(project), JSON.stringify(next));
