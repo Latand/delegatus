@@ -189,6 +189,10 @@ export class CopilotLoginSupervisor {
         cwd: os.homedir(), env: copilotChildEnv(process.env, account.home), detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
+      child.once("error", () => {
+        const live = this.operations.get(operationId);
+        if (live && !terminal(live.phase)) this.finish(operationId, "failed", failureResult("process_failed", "Copilot sign-in did not complete"));
+      });
       if (!child.pid) throw new Error("Copilot login process did not start");
       this.children.set(operationId, child);
       this.update(operationId, { pid: child.pid });
@@ -201,10 +205,6 @@ export class CopilotLoginSupervisor {
            still alive. Keep the group reference through the SIGKILL deadline. */
         if (!this.escalationTimers.has(operationId)) this.cleanupChild(operationId);
         this.handledExit.delete(operationId);
-      });
-      child.once("error", () => {
-        const live = this.operations.get(operationId);
-        if (live && !terminal(live.phase)) this.finish(operationId, "failed", failureResult("process_failed", "Copilot sign-in did not complete"));
       });
       const timer = this.ports.setTimeout(() => {
         const live = this.operations.get(operationId);

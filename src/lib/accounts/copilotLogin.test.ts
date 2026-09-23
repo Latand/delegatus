@@ -14,7 +14,7 @@ const previous = { state: process.env.LLV_STATE_DIR, home: process.env.COPILOT_H
 let run = 0;
 
 class FakeChild extends EventEmitter {
-  pid = 73142;
+  pid?: number = 73142;
   stdout = new EventEmitter();
   stderr = new EventEmitter();
   kill(): boolean { return true; }
@@ -93,14 +93,32 @@ test("exit zero without a config user is failed", async () => {
   expect(supervisor.forAccount(account.id)?.phase).toBe("failed");
 });
 
+test("a spawn error is handled even when the launcher has no pid", async () => {
+  const account = createManagedCopilotAccount("Spawn error");
+  const failedChild = new FakeChild();
+  failedChild.pid = undefined;
+  const supervisor = new CopilotLoginSupervisor({
+    ...ports(),
+    spawn: () => {
+      queueMicrotask(() => failedChild.emit("error", Object.assign(new Error("spawn failed"), { code: "ENOENT" })));
+      return failedChild as never;
+    },
+  });
+
+  expect(() => supervisor.start(account.id)).toThrow("Copilot sign-in could not start");
+  await Promise.resolve();
+  expect(supervisor.forAccount(account.id)?.phase).toBe("failed");
+});
+
 test("cancel signals the detached process group and escalates after the grace period", () => {
   const account = createManagedCopilotAccount("Cancel");
   const supervisor = new CopilotLoginSupervisor(ports());
   const operation = supervisor.start(account.id);
+  const pid = child.pid!;
   expect(supervisor.cancel(operation.operationId).phase).toBe("canceling");
-  expect(signals).toEqual([{ pid: -child.pid, signal: "SIGTERM" }]);
+  expect(signals).toEqual([{ pid: -pid, signal: "SIGTERM" }]);
   timers.find((timer) => timer.delay === COPILOT_LOGIN_TERM_GRACE_MS)!.callback();
-  expect(signals).toEqual([{ pid: -child.pid, signal: "SIGTERM" }, { pid: -child.pid, signal: "SIGKILL" }]);
+  expect(signals).toEqual([{ pid: -pid, signal: "SIGTERM" }, { pid: -pid, signal: "SIGKILL" }]);
   child.emit("exit", null, "SIGTERM");
   child.emit("close", null, "SIGTERM");
   expect(supervisor.forAccount(account.id)?.phase).toBe("canceled");
@@ -110,6 +128,7 @@ test("the fifteen-minute deadline clears buffered code and the timer, then stops
   const account = createManagedCopilotAccount("Deadline");
   const supervisor = new CopilotLoginSupervisor(ports());
   const operation = supervisor.start(account.id);
+  const pid = child.pid!;
   expect(timers.find((timer) => timer.delay === COPILOT_LOGIN_TIMEOUT_MS)).toBeDefined();
   child.stdout.emit("data", "To authenticate, visit https://github.com/login/device and enter code ABCD-1234");
   const internals = supervisor as unknown as { output: Map<string, string>; timers: Map<string, NodeJS.Timeout> };
@@ -120,7 +139,7 @@ test("the fifteen-minute deadline clears buffered code and the timer, then stops
   expect(internals.output.has(operation.operationId)).toBe(false);
   expect(internals.timers.has(operation.operationId)).toBe(false);
   timers.find((timer) => timer.delay === COPILOT_LOGIN_TERM_GRACE_MS)!.callback();
-  expect(signals).toEqual([{ pid: -child.pid, signal: "SIGTERM" }, { pid: -child.pid, signal: "SIGKILL" }]);
+  expect(signals).toEqual([{ pid: -pid, signal: "SIGTERM" }, { pid: -pid, signal: "SIGKILL" }]);
   child.emit("exit", null, "SIGTERM");
   child.emit("close", null, "SIGTERM");
 });
