@@ -23,11 +23,13 @@ import { createContext, useContext, useSyncExternalStore } from "react";
 export type MobileScreen =
   | { kind: "board" }
   | { kind: "chat"; id: string }
+  /* One task: its pipelines, its agents and its status (#2072 slice 5). */
+  | { kind: "task"; id: string }
   | { kind: "pipelines" }
   | { kind: "pipeline"; id: string }
   | { kind: "accounts" };
 export type MobileScreenKind = MobileScreen["kind"];
-export type MobileSheetName = "projects" | "attention" | "menu" | "host" | "search" | "seat" | "rotate" | "tick" | "switch" | "model" | "stage" | "row" | "links" | "card";
+export type MobileSheetName = "projects" | "attention" | "menu" | "host" | "search" | "seat" | "rotate" | "tick" | "switch" | "model" | "stage" | "row" | "links" | "card" | "status" | "lane";
 /** How the current state was reached; the shell picks its transition from it. */
 export type MobileNavMotion = "load" | "push" | "pop" | "switch" | "sheet" | "act";
 
@@ -51,8 +53,8 @@ export interface MobileNavEntry {
   screen: MobileScreen;
 }
 
-const SCREEN_KINDS: ReadonlySet<string> = new Set(["board", "chat", "pipelines", "pipeline", "accounts"]);
-const WITH_ID: ReadonlySet<string> = new Set(["chat", "pipeline"]);
+const SCREEN_KINDS: ReadonlySet<string> = new Set(["board", "chat", "task", "pipelines", "pipeline", "accounts"]);
+const WITH_ID: ReadonlySet<string> = new Set(["chat", "task", "pipeline"]);
 
 function isScreen(value: unknown): value is MobileScreen {
   if (typeof value !== "object" || value === null) return false;
@@ -71,7 +73,8 @@ export function readMobileNavEntry(state: unknown): MobileNavEntry | null {
   const { d, screen } = raw as { d?: unknown; screen?: unknown };
   if (typeof d !== "number" || !Number.isInteger(d) || d < 1) return null;
   if (!isScreen(screen)) return null;
-  return { d, screen: screen.kind === "chat" || screen.kind === "pipeline" ? { kind: screen.kind, id: screen.id } : { kind: screen.kind } };
+  /* A fresh screen, so nothing else the entry carried rides along. */
+  return { d, screen: ("id" in screen && WITH_ID.has(screen.kind) ? { kind: screen.kind, id: screen.id } : { kind: screen.kind }) as MobileScreen };
 }
 
 export function screenKey(screen: MobileScreen): string {
@@ -110,6 +113,11 @@ export interface MobileNav {
   push(screen: MobileScreen): void;
   /** Replace the top of the stack: a sibling switch (120 ms crossfade). */
   replace(screen: MobileScreen, motion?: "switch" | "pop"): void;
+  /** Write the top screen's key back onto the entry the tab stands on, after
+      the host re-typed that entry in place (a focus record replaces the state
+      whole). Without it the entry reads as the board, and a screen pushed
+      above it pops straight past it. */
+  stamp(): void;
   /** The bar's ‹ and the platform back are the same pop; at the bottom of the
       stack it lands on the board and closes whatever sheet is open. */
   back(): void;
@@ -181,6 +189,9 @@ export function createMobileNav(host: MobileNavHost): MobileNav {
       set({ stack, sheet: null, motion: "push", bump: null });
     },
     replace,
+    stamp() {
+      host.history.replaceState({ ...carried(host.history.state), [MOBILE_NAV_STATE_KEY]: entry(state.stack) }, "", host.href());
+    },
     back() {
       if (state.stack.length > 1) {
         host.history.back();
@@ -232,6 +243,7 @@ const INERT: MobileNav = {
   subscribe: () => noop,
   push: noop,
   replace: noop,
+  stamp: noop,
   back: noop,
   openSheet: noop,
   closeSheet: noop,

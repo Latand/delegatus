@@ -66,6 +66,8 @@ import { showReceipt } from "./mobile/MobileReceipt";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
+import { MobileTaskScreen } from "./mobile/MobileTaskScreen";
+import { useTaskMutations } from "./kanban/useTaskMutations";
 import { sameScreen, topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
@@ -555,7 +557,7 @@ function ProjectDashboardView({
   const [pendingRestoredHandoffs, setPendingRestoredHandoffs] = useState<Set<string>>(() => new Set());
   /* The phone's task sheet, opened from the board menu: «New task» in its
      create view, «Tasks» as the list (mobile v2 lane 1). */
-  const [mobileTaskSheet, setMobileTaskSheet] = useState<TaskSheetView | null>(null);
+  const [mobileTaskSheet, setMobileTaskSheet] = useState<{ view: TaskSheetView; depth: number } | null>(null);
   /* Template-first pipeline entry (#196, #388): `+ Пайплайн` opens repository
      admission; a successful choice lands in the owning shelf or group. */
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
@@ -943,6 +945,10 @@ function ProjectDashboardView({
   );
   const hiddenSet = useMemo(() => new Set(prefs.hidden), [prefs.hidden]);
   const projectTasks = useMemo(() => tasks.filter((task) => task.project === project), [tasks, project]);
+  /* The phone's task mutations (#2072 slice 5): the columns and the task
+     screen share one set, so a move made on the task screen is still drawn on
+     the board after ‹. */
+  const phoneTaskMutations = useTaskMutations(projectTasks);
   /* Tasks that exist only for the orchestrator seat are the seat panel's to
      list (#1841): every task list leaves them out — the desktop Tasks panel
      and its count, the phone's task screens and their count — while the task
@@ -1139,9 +1145,25 @@ function ProjectDashboardView({
     highlightTimer.current = window.setTimeout(() => setHighlight(null), HIGHLIGHT_MS);
   };
 
+  /* On the phone a task is a SCREEN (#2072 slice 5, phone-kanban §3.7):
+     every door into a task — a column card, the ⋯ › Tasks list, a
+     conversation's task strip, a pipeline's linked tasks, a task link —
+     pushes it over the screen the operator is on, so ‹ lands back there. A
+     repeat open of the task already on top is not a second entry. */
+  const openMobileTask = (id: string) => {
+    onUserNavigate?.();
+    const top = topScreen(mobileNav.getState());
+    if (top.kind === "task" && top.id === id) return;
+    mobileNav.push({ kind: "task", id });
+  };
+
   /* Opening a task by intent (panel row, cross-project jump, stack chip)
      expands it back onto the canvas as a durable pin, then glides to it. */
   const openTaskOnBoard = (id: string) => {
+    if (isMobile) {
+      openMobileTask(id);
+      return;
+    }
     setTaskExpanded(id, true);
     flashNode("task::" + id);
   };
@@ -1276,12 +1298,19 @@ function ProjectDashboardView({
     revealPipeline(pending);
   }, [pipelines, project]);
 
-  /* The phone's task sheet: «New task» opens the create view, «Tasks» the list. */
+  /* The phone's task sheet: «New task» opens the create view, «Tasks» the list.
+     It stands over the screen it was opened on: a task opened from the list is
+     pushed above that screen, and ‹ from the task finds the list again. */
   const openMobileTasks = (view: TaskSheetView) => {
     onUserNavigate?.();
     mobileNav.closeSheet();
-    setMobileTaskSheet(view);
+    setMobileTaskSheet({ view, depth: mobileNav.getState().stack.length });
   };
+  const mobileTaskSheetShown = mobileTaskSheet !== null && mobileNavState.stack.length === mobileTaskSheet.depth;
+  /* Stepping below the screen the list stood over takes the list with it. */
+  useEffect(() => {
+    if (mobileTaskSheet && mobileNavState.stack.length < mobileTaskSheet.depth) setMobileTaskSheet(null);
+  }, [mobileTaskSheet, mobileNavState.stack.length]);
   const persistDrafts = (next: string[]) => {
     setDrafts(next);
     sessionStorage.setItem(draftsKey(project), JSON.stringify(next));
@@ -1646,6 +1675,10 @@ function ProjectDashboardView({
       recordFocusNavigation(file, projectKey(file), { restore: true });
     }
     openBoardRow(file);
+    /* The focus records above re-typed the conversation's own entry whole;
+       it keeps its place on the shell's stack, so a screen pushed over the
+       conversation (a task from its task strip) pops back onto it. */
+    if (isMobile) mobileNav.stamp();
   };
 
   const statusBits: string[] = [];
@@ -1760,6 +1793,9 @@ function ProjectDashboardView({
      conversation is on top of the navigation stack. The model is pure, so the
      bar's badge and the rows below it are counted once, in one place. */
   const mobileTop = topScreen(mobileNavState);
+  /* The screen under the top one: a pipeline pushed from a task does not
+     list that task again among its linked tasks (§3.13). */
+  const mobileBelow = mobileNavState.stack.length > 1 ? mobileNavState.stack[mobileNavState.stack.length - 2] ?? null : null;
   const mobileConversationKey = mobileTop.kind === "chat" ? mobileTop.id : null;
   const crownedPaths = useMemo<ReadonlySet<string>>(() => new Set(favoriteRows.map((row) => row.file.path)), [favoriteRows]);
   /* A lane whose close is on its way is gone from the board already (#1671);
@@ -2217,6 +2253,40 @@ function ProjectDashboardView({
            focus view stays until lane 3 folds it into the bar's title cell. */
         mobileTop.kind === "accounts" ? (
           <MobileAccountsScreen host={mobileShell} renderSheet={renderMobileSheet} />
+        ) : mobileTop.kind === "task" ? (
+          /* One task (#2072 slice 5, phone-kanban §3.5): its pipelines, its
+             agents and its status, on the same stack as the board. A stage or
+             an agent opens its conversation above it, and ‹ comes back here. */
+          <MobileTaskScreen
+            taskId={mobileTop.id}
+            layout={pipelineLayout}
+            project={project}
+            groups={layoutGroups}
+            manual={layoutManual}
+            files={files}
+            flows={flows}
+            reviewGroups={directReviewGroups}
+            pipelines={pipelines}
+            surfacePipelines={activePipelines}
+            now={nowSeconds}
+            tasks={hasNodes ? boardTasks : EMPTY_TASKS}
+            allTasks={projectTasks}
+            drafts={layoutDrafts}
+            favorites={favoriteIdSet}
+            isolatedManualPaths={isolatedCompactHistoryPaths}
+            draftBands={draftBands}
+            seatRefs={seatRefsForBoard}
+            mutations={phoneTaskMutations}
+            closing={closingPipelines}
+            rowActions={mobileRowActions}
+            host={mobileShell}
+            renderSheet={renderMobileSheet}
+            onOpenConversation={openPipelineStageConversation}
+            onOpenPipeline={openMobilePipeline}
+            onOpenDraft={(id) => showMobileConversation("draft::" + id)}
+            onAddAgent={addBandAgentDraft}
+            onShown={reportMobileKanbanShown}
+          />
         ) : mobileTop.kind === "pipelines" || mobileTop.kind === "pipeline" ? (
           /* The pipelines list and one pipeline (mobile v2 lane 7, §4.7). Both
              are screens on the same stack as the board, so ‹ leaves the way the
@@ -2234,7 +2304,8 @@ function ProjectDashboardView({
               host={mobileShell}
               renderSheet={renderMobileSheet}
               onOpenConversation={openPipelineStageConversation}
-              onOpenTask={(task) => openMobileTasks({ taskId: task.id })}
+              onOpenTask={(task) => openMobileTask(task.id)}
+              cameFromTask={mobileBelow?.kind === "task" ? mobileBelow.id : null}
             />
           ) : (
             <MobilePipelinesScreen
@@ -2325,7 +2396,8 @@ function ProjectDashboardView({
                       />
                     </div>
                   )}
-                  onOpenTask={(task) => openMobileTasks({ taskId: task.id })}
+                  mutations={phoneTaskMutations}
+                  onOpenTask={(task) => openMobileTask(task.id)}
                   onOpenConversation={openBoardRow}
                   onOpenPipeline={openMobilePipeline}
                   onNewTask={() => openMobileTasks("new")}
@@ -2366,6 +2438,7 @@ function ProjectDashboardView({
                      host sheet's handoff handle — the last of the retired
                      shelf's contents — went with lane 10. */
                   onHandoff={addHandoffDraft}
+                  onOpenTask={(task) => openMobileTask(task.id)}
                   trayApi={trayApi}
                 />
               ) : (
@@ -2469,8 +2542,20 @@ function ProjectDashboardView({
           lines to REAL flows itself. */}
       {!isMobile && boardReady ? <Switchboard files={files} flows={deckFlows} project={project} loaded={loaded} catalogFailures={catalogFailures} onOpenFile={openSwitchboardFile} onOpenCatalogFile={openFullCatalogFile} /> : null}
 
-      {isMobile && mobileTaskSheet ? (
-        <TaskSheet project={project} projectName={projectName} tasks={faceTasks} files={files} initialView={mobileTaskSheet} onClose={() => setMobileTaskSheet(null)} />
+      {isMobile && mobileTaskSheet && mobileTaskSheetShown ? (
+        <TaskSheet
+          project={project}
+          projectName={projectName}
+          tasks={faceTasks}
+          files={files}
+          initialView={mobileTaskSheet.view}
+          onClose={() => setMobileTaskSheet(null)}
+          onOpenTask={(task, from) => {
+            /* A task just created has no list to come back to. */
+            if (from === "new") setMobileTaskSheet(null);
+            openMobileTask(task.id);
+          }}
+        />
       ) : null}
 
       <TaskToastHost />

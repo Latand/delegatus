@@ -86,6 +86,40 @@ describe("screens", () => {
     expect(b.index()).toBe(0);
   });
 
+  test("a task is a screen between the board and what it opens (#2072 slice 5, phone-kanban §3.7)", () => {
+    const { nav, b } = phone();
+    nav.push({ kind: "task", id: "t1" });
+    expect(readMobileNavEntry(b.state())).toEqual({ d: 2, screen: { kind: "task", id: "t1" } });
+    nav.push({ kind: "pipeline", id: "p1" });
+    nav.push({ kind: "chat", id: "/repo/stage.jsonl" });
+    expect(kinds(nav)).toEqual(["board", "task", "pipeline", "chat"]);
+    nav.back();
+    expect(kinds(nav)).toEqual(["board", "task", "pipeline"]);
+    b.host.history.back();
+    expect(topScreen(nav.getState())).toEqual({ kind: "task", id: "t1" });
+    nav.back();
+    expect(kinds(nav)).toEqual(["board"]);
+    /* Forward re-enters the task it left. */
+    b.forward();
+    expect(topScreen(nav.getState())).toEqual({ kind: "task", id: "t1" });
+  });
+
+  test("stamp puts the shell's key back on an entry the host re-typed whole, so a screen pushed above it pops back onto it", () => {
+    const { nav, b } = phone();
+    nav.push({ kind: "task", id: "t1" });
+    nav.push({ kind: "chat", id: "/repo/agent.jsonl" });
+    /* The Viewer's focus record replaces the entry's state whole. */
+    b.host.history.replaceState({ llvFocus: { v: 1, conversationId: "c1", path: "/repo/agent.jsonl", project: "atlas" } }, "", "http://phone/#c=c1");
+    nav.stamp();
+    expect(b.state()).toEqual({
+      llvFocus: { v: 1, conversationId: "c1", path: "/repo/agent.jsonl", project: "atlas" },
+      [MOBILE_NAV_STATE_KEY]: { d: 3, screen: { kind: "chat", id: "/repo/agent.jsonl" } },
+    });
+    nav.push({ kind: "task", id: "t1" });
+    b.host.history.back();
+    expect(kinds(nav)).toEqual(["board", "task", "chat"]);
+  });
+
   test("browser back and ‹ agree: both pop exactly one screen", () => {
     const { nav, b } = phone();
     nav.push({ kind: "pipelines" });
@@ -235,6 +269,9 @@ describe("history entries", () => {
     expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "chat" } } })).toBeNull();
     expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "bench" } } })).toBeNull();
     expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "chat", id: "c1", extra: 1 } } })).toEqual({ d: 2, screen: { kind: "chat", id: "c1" } });
+    expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "task" } } })).toBeNull();
+    expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "task", id: "t1", extra: 1 } } })).toEqual({ d: 2, screen: { kind: "task", id: "t1" } });
+    expect(readMobileNavEntry({ [MOBILE_NAV_STATE_KEY]: { d: 2, screen: { kind: "board", id: "t1" } } })).toBeNull();
   });
 
   test("attach is ref-counted: the listener stays until the last screen detaches", () => {

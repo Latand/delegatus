@@ -180,7 +180,7 @@ export function MobileShell({
   children,
 }: {
   screen: MobileScreenKind;
-  /** The conversation or pipeline id on those screens (`data-mobile2-conversation`). */
+  /** The conversation, task or pipeline id on those screens (`data-mobile2-conversation`). */
   screenId?: string;
   /** The title cell's content: a project name, a conversation title with its meta line. */
   title: ReactNode;
@@ -249,6 +249,7 @@ export function MobileShell({
       data-mobile2-screen={claimed ? undefined : screen}
       data-mobile2-conversation={!claimed && screen === "chat" ? screenId : undefined}
       data-mobile2-pipeline={!claimed && screen === "pipeline" ? screenId : undefined}
+      data-mobile2-task={!claimed && screen === "task" ? screenId : undefined}
       data-mobile2-motion={claimed ? undefined : state.motion}
       className={`relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden overflow-x-clip bg-canvas transition-transform duration-[200ms] ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${claimed ? "" : MOTION[state.motion] ?? ""}`}
     >
