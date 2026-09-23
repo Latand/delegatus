@@ -921,10 +921,9 @@ export const SEAT_TICK_RETIRED_WAKE_LIMIT = 20;
     which is the failure mode this bound is chosen to have. */
 export const SEAT_TICK_CHILDREN_SHOWN_LIMIT = 64;
 
-/** How many announced lanes a project's row keeps (#1799). Past it the oldest
-    may be announced once more, which is a repeated line rather than a lost
-    obligation — an announcement carries no obligation at all. */
-export const SEAT_TICK_ANNOUNCED_LANES_LIMIT = 64;
+/** Settled deployment history has its own bounded announcement window. Lane
+    announcements instead live for the lane's entire eligibility window. */
+export const SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT = 64;
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
@@ -1028,8 +1027,8 @@ export interface SeatTickProjectState {
    */
   childrenShown: string[];
   /**
-   * Lane and settlement-state pairs a delivered wake announced (#2081),
-   * newest last, bounded to {@link SEAT_TICK_ANNOUNCED_LANES_LIMIT}.
+   * Lane and settlement-state pairs a delivered wake announced (#2081).
+   * Kept while the lane remains eligible, even when more than 64 settle.
    *
    * Legacy bare lane ids mean provisioning only. A completed lane's automatic
    * closedAt is not evidence that its creator heard it completed.
@@ -1037,7 +1036,7 @@ export interface SeatTickProjectState {
   announcedLanes: string[];
   /**
    * Settled deployments of the seat's a delivered wake has already announced
-   * (#2063), newest last, bounded to {@link SEAT_TICK_ANNOUNCED_LANES_LIMIT}.
+   * (#2063), newest last, bounded to {@link SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT}.
    * A settled deployment stays settled for ever, so this is the only discharge
    * its reason has: announced once, it is never offered again. Absent reads as
    * empty.

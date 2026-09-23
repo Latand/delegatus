@@ -97,6 +97,7 @@ interface Harness {
 
 type PipelineFixture = { id: string; state: string; createdAt: string; movedAt: string | null; branch?: string; closedAt?: string | null; project?: string;
   deliveryBranch?: string;
+  deliveryPr?: number;
   /** The conversation that created the lane (#1749), as the store records it.
       Null is a lane nobody's seat launched. */
   src?: string | null;
@@ -115,7 +116,7 @@ function pipelineRecord(entry: PipelineFixture) {
     repoDir: "/srv/repo",
     worktreeDir: "/srv/worktree",
     branch: entry.branch ?? "topic",
-    ...(entry.deliveryBranch ? { delivery: { target: { repository: PROJECT, remote: "origin", branch: `refs/heads/${entry.deliveryBranch}` } } } : {}),
+    ...(entry.deliveryBranch ? { delivery: { target: { repository: PROJECT, remote: "origin", branch: `refs/heads/${entry.deliveryBranch}`, ...(entry.deliveryPr ? { pr: entry.deliveryPr } : {}) } } } : {}),
     baseBranch: "main",
     baseRef: "main",
     lastPassedCommit: "",
@@ -1013,6 +1014,7 @@ const FINISHED_LANE = [{
   branch: "topic-merge-queue",
   closedAt: "2026-08-27T22:00:00.000Z",
 }];
+const FINISHED_PR_CREATED = "2026-08-27T10:00:00.000Z";
 
 /* The report: three consecutive wakes whose every item named a pipeline that
    had reached a terminal state the day before. Nothing was owed on any of them,
@@ -1044,6 +1046,7 @@ test("a completed lane whose pull request is still open wakes the seat, naming t
       number: 1289,
       title: "wake on a merge that is waiting",
       headRefName: "topic-merge-queue",
+      createdAt: FINISHED_PR_CREATED,
       updatedAt: "2026-08-28T11:30:00.000Z",
     }],
   });
@@ -1057,7 +1060,7 @@ test("a completed lane's delivery branch identifies the pull request it left ope
   const rig = harness({
     pipelines: [{ ...FINISHED_LANE[0]!, branch: "pipeline/internal-lane", deliveryBranch: "pipeline/skeletons-transitions" }],
     state: OVERDUE,
-    openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", updatedAt: new Date(NOW - MINUTE).toISOString() }],
+    openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", createdAt: FINISHED_PR_CREATED, updatedAt: new Date(NOW - MINUTE).toISOString() }],
   });
   const record = await runSeatTickCheck(PROJECT, rig.deps);
   expect(record).toMatchObject({ verdict: "wake", reasons: ["unmerged-pr"], items: 1 });
@@ -1071,7 +1074,7 @@ test("a pull request line announces its creator's completed lane only after deli
   };
   const rig = harness({
     pipelines: [lane], state: { ...OVERDUE, announcedLanes: [lane.id] },
-    openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", updatedAt: new Date(NOW - MINUTE).toISOString() }],
+    openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", createdAt: FINISHED_PR_CREATED, updatedAt: new Date(NOW - MINUTE).toISOString() }],
   });
   const record = await runSeatTickCheck(PROJECT, rig.deps);
   expect(record!.reasons).toEqual(["own-lane-settled", "unmerged-pr"]);
@@ -1080,11 +1083,56 @@ test("a pull request line announces its creator's completed lane only after deli
 
   const later = harness({
     pipelines: [lane], now: NOW + 61 * MINUTE, state: rig.written.at(-1)!,
-    openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", updatedAt: new Date(NOW - MINUTE).toISOString() }],
+    openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", createdAt: FINISHED_PR_CREATED, updatedAt: new Date(NOW - MINUTE).toISOString() }],
   });
   const second = await runSeatTickCheck(PROJECT, later.deps);
   expect(second!.reasons).toContain("unmerged-pr");
   expect(second!.reasons).not.toContain("own-lane-settled");
+});
+
+test("a PR opened after a finished lane released its delivery head belongs to the active lane (#2081)", async () => {
+  const branch = "pipeline/shared-delivery-head";
+  const rig = harness({
+    pipelines: [
+      { ...FINISHED_LANE[0]!, branch: "pipeline/old-internal", deliveryBranch: branch },
+      { id: "pipeline_new", state: "running", branch: "pipeline/new-internal", deliveryBranch: branch,
+        createdAt: new Date(NOW - 90 * MINUTE).toISOString(), movedAt: new Date(NOW - MINUTE).toISOString() },
+    ],
+    state: OVERDUE,
+    openPullRequests: [{ number: 2090, title: "new lane work", headRefName: branch,
+      createdAt: new Date(NOW - 30 * MINUTE).toISOString(), updatedAt: new Date(NOW - MINUTE).toISOString() }],
+  });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["interval"] });
+  expect(rig.sent[0]!.text).not.toContain("#2090");
+});
+
+test("a PR opened after completion still belongs to the finished lane when its head was not reused (#2081)", async () => {
+  const branch = "pipeline/unchanged-delivery-head";
+  const rig = harness({
+    pipelines: [{ ...FINISHED_LANE[0]!, branch: "pipeline/internal-lane", deliveryBranch: branch }],
+    state: OVERDUE,
+    openPullRequests: [{ number: 2091, title: "late PR for finished work", headRefName: branch,
+      createdAt: new Date(NOW - 30 * MINUTE).toISOString(), updatedAt: new Date(NOW - MINUTE).toISOString() }],
+  });
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["unmerged-pr"] });
+});
+
+test("a running lane taking over an existing PR keeps its finished predecessor from waking the seat (#2081)", async () => {
+  const branch = "pipeline/shared-delivery-head";
+  const rig = harness({
+    pipelines: [
+      { ...FINISHED_LANE[0]!, branch: "pipeline/old-internal", deliveryBranch: branch, deliveryPr: 2092 },
+      { id: "pipeline_new", state: "running", branch: "pipeline/new-internal", deliveryBranch: branch, deliveryPr: 2092,
+        createdAt: new Date(NOW - 90 * MINUTE).toISOString(), movedAt: new Date(NOW - MINUTE).toISOString() },
+    ],
+    state: OVERDUE,
+    openPullRequests: [{ number: 2092, title: "shared PR now owned by the running lane", headRefName: branch,
+      createdAt: FINISHED_PR_CREATED, updatedAt: new Date(NOW - MINUTE).toISOString() }],
+  });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["interval"] });
+  expect(rig.sent[0]!.text).not.toContain("#2092");
 });
 
 /* And the merge is what silences it, with nothing else to turn off. */
@@ -1133,6 +1181,7 @@ test("a lane the archive has taken still wakes the seat over its open pull reque
       number: 1289,
       title: "wake on a merge that is waiting",
       headRefName: "topic-merge-queue",
+      createdAt: "2026-08-22T10:00:00.000Z",
       updatedAt: "2026-08-28T11:30:00.000Z",
     }],
   });
@@ -1187,6 +1236,7 @@ test("the check after the failure asks again, and wakes as soon as GitHub answer
       number: 1289,
       title: "wake on a merge that is waiting",
       headRefName: "topic-merge-queue",
+      createdAt: FINISHED_PR_CREATED,
       updatedAt: "2026-08-28T11:30:00.000Z",
     }],
   });
@@ -1508,7 +1558,7 @@ test("the empty array is the one gh answer that still earns quiet", async () => 
     tasks: [{ id: "task_b2", status: "inbox" }],
     state: OVERDUE,
     githubRun: async () => JSON.stringify([
-      { number: 1289, title: "wake on a merge that is waiting", headRefName: "topic-merge-queue", updatedAt: "2026-08-28T11:30:00.000Z" },
+      { number: 1289, title: "wake on a merge that is waiting", headRefName: "topic-merge-queue", createdAt: FINISHED_PR_CREATED, updatedAt: "2026-08-28T11:30:00.000Z" },
     ]),
   });
   expect(await runSeatTickCheck(PROJECT, open.deps)).toMatchObject({ verdict: "wake", reasons: ["unmerged-pr"] });
@@ -5483,6 +5533,38 @@ test("each settled state of one lane is announced once after provisioning (#2081
     const second = await runSeatTickCheck(PROJECT, repeat.deps);
     expect(second!.reasons ?? []).not.toContain("own-lane-settled");
   }
+});
+
+test("more than 64 delivered lane settlements stay announced until their lanes age out (#2081)", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "lane-announcements-")), "seat-tick.json");
+  writeSeatTickState(PROJECT, {
+    ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE,
+    lastProposalAt: new Date(NOW).toISOString(), accounting: undefined,
+  }, stateFile);
+  const lanes = Array.from({ length: 65 }, (_, index) => ({
+    id: `pipeline_announced_${index.toString().padStart(2, "0")}`,
+    state: "completed", src: CONVERSATION,
+    createdAt: new Date(NOW - 10 * MINUTE).toISOString(),
+    movedAt: new Date(NOW - MINUTE).toISOString(),
+    closedAt: new Date(NOW).toISOString(),
+  }));
+  for (let round = 0; round < 13; round += 1) {
+    const rig = harness({ pipelines: lanes, stateFile, now: NOW + round * 60 * MINUTE });
+    expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 5 });
+  }
+  const repeated = harness({ pipelines: lanes, stateFile, now: NOW + 13 * 60 * MINUTE });
+  expect(await runSeatTickCheck(PROJECT, repeated.deps)).toMatchObject({ verdict: "quiet" });
+  expect(repeated.sent).toEqual([]);
+  expect(readSeatTickState(PROJECT, stateFile).announcedLanes).toHaveLength(65);
+
+  const agedOut = harness({ pipelines: lanes.slice(1), stateFile, now: NOW + 14 * 60 * MINUTE });
+  expect(await runSeatTickCheck(PROJECT, agedOut.deps)).toMatchObject({ verdict: "quiet" });
+  expect(readSeatTickState(PROJECT, stateFile).announcedLanes).toHaveLength(64);
+  expect(readSeatTickState(PROJECT, stateFile).announcedLanes).not.toContain(`${lanes[0]!.id}:completed`);
+
+  const expired = harness({ pipelines: lanes.slice(1), stateFile, now: NOW + 73 * 60 * MINUTE });
+  await runSeatTickCheck(PROJECT, expired.deps);
+  expect(readSeatTickState(PROJECT, stateFile).announcedLanes).toEqual([]);
 });
 
 test("a lane that never ran a stage tells its creator the provisioning failed, and why (#1799)", async () => {

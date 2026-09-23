@@ -689,7 +689,7 @@ function ownSettledLanes(
   project: string,
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
-  sources: SeatTickSources,
+  pipelines: readonly Pipeline[],
 ): SeatTickOwnLaneInput[] {
   if (!seat) return [];
   /* The HOT store only, and deliberately: a settled lane lives there for three
@@ -699,7 +699,7 @@ function ownSettledLanes(
      buy nothing — and the archive read is the one #1289 kept behind a check
      that had already decided to pay for a subprocess. */
   const lanes: SeatTickOwnLaneInput[] = [];
-  for (const pipeline of sources.pipelines()) {
+  for (const pipeline of pipelines) {
     if (canonicalOrchestratorProject(pipeline.project) !== project) continue;
     if (pipeline.srcConversationId !== seat.conversationId) continue;
     const settled = laneSettlement(pipeline);
@@ -723,6 +723,27 @@ function ownSettledLanes(
   return lanes
     .sort((left, right) => (at(right) || 0) - (at(left) || 0) || left.id.localeCompare(right.id))
     .slice(0, OWN_LANE_LIMIT);
+}
+
+/** A delivered lane announcement survives every check that could still offer
+ * that lane. Prune only after the hot lane is gone or outside the same backlog
+ * bound the decision uses; a fixed token count loses live deduplication. */
+function retainedLaneAnnouncements(
+  announced: readonly string[],
+  pipelines: readonly Pipeline[],
+  project: string,
+  seat: SeatTickSeatInput | null,
+  now: number,
+  backlogAfterMs: number,
+): string[] {
+  if (!seat) return [...announced];
+  const eligible = new Set(pipelines.filter((pipeline) => {
+    if (canonicalOrchestratorProject(pipeline.project) !== project || pipeline.srcConversationId !== seat.conversationId
+      || pipeline.hiddenAt || pipeline.dismissedAt || pipeline.state === "closed") return false;
+    const movedAt = laneMovedAt(pipeline);
+    return movedAt !== null && Number.isFinite(Date.parse(movedAt)) && now - Date.parse(movedAt) < backlogAfterMs;
+  }).map((pipeline) => pipeline.id));
+  return announced.filter((token) => eligible.has(token.split(":", 1)[0]!));
 }
 
 /** Settled deployments of the seat's own one check carries (#2063). */
@@ -1171,8 +1192,9 @@ async function unmergedPullRequests(context: {
        be seen is exactly what gets reported as quiet. */
     return failed("lanes-unreadable");
   }
-  const finished = [...context.sources.pipelines(), ...archived]
-    .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === context.project && isFinished(pipeline));
+  const projectLanes = [...context.sources.pipelines(), ...archived]
+    .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === context.project && !pipeline.hiddenAt);
+  const finished = projectLanes.filter(isFinished);
   if (finished.length === 0) return unasked;
   const cwd = repoDirForProject(context.project, context.sources, archived);
   if (!cwd) return unasked;
@@ -1205,24 +1227,36 @@ async function unmergedPullRequests(context: {
   }
   if (!result.ok) return failed(result.unavailable);
   const open = result.pullRequests;
-  const byBranch = new Map<string, Pipeline>();
-  for (const pipeline of finished) {
-    /* Two lanes on one branch is a relaunch: the newest is the one whose
-       finishing left the pull request open. */
+  const byBranch = new Map<string, Pipeline[]>();
+  for (const pipeline of projectLanes) {
     const delivery = pipeline.delivery?.target;
     const heads = [pipeline.branch];
     if (delivery?.branch && canonicalOrchestratorProject(delivery.repository) === context.project) {
       heads.push(delivery.branch.replace(/^refs\/heads\//, ""));
     }
     for (const head of heads.filter(Boolean)) {
-      const held = byBranch.get(head);
-      if (!held || Date.parse(pipeline.createdAt) > Date.parse(held.createdAt)) byBranch.set(head, pipeline);
+      const lanes = byBranch.get(head) ?? [];
+      if (!lanes.some((lane) => lane.id === pipeline.id)) lanes.push(pipeline);
+      byBranch.set(head, lanes);
     }
   }
+  for (const lanes of byBranch.values()) lanes.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   const found: SeatTickPullRequestInput[] = [];
   for (const pullRequest of open) {
-    const lane = byBranch.get(pullRequest.headRefName);
-    if (!lane) continue;
+    const lanes = byBranch.get(pullRequest.headRefName) ?? [];
+    const named = (lane: Pipeline) => (lane.delivery?.target.pr === pullRequest.number
+      && canonicalOrchestratorProject(lane.delivery.target.repository) === context.project)
+      || lane.runs.some((run) => run.attempts.some((attempt) => attempt.report?.provenance?.pullRequest?.number === pullRequest.number));
+    const openedAt = Date.parse(pullRequest.createdAt);
+    /* A later lane reusing this head owns PRs opened after it started, even if
+       it is still running. Completion alone does not end ownership: a PR can
+       be opened on the unchanged head after the lane automatically closes. */
+    const owner = lanes.find((candidate) => {
+      const bornAt = Date.parse(candidate.createdAt);
+      return Number.isFinite(bornAt) && openedAt >= bornAt;
+    });
+    const lane = lanes.find(named) ?? owner;
+    if (!lane || !isFinished(lane)) continue;
     found.push({
       number: pullRequest.number,
       title: redactBounded(pullRequest.title, PULL_REQUEST_TITLE_LIMIT),
@@ -1709,7 +1743,8 @@ export async function gatherSeatTickInput(
   const settings = effectiveSeatTickSettings(sources.settings(canonical), now, SEAT_TICK_WAKE_INTERVAL_MS);
   const seat = await seatInput(canonical, policy, sources);
 
-  const openLanes = sources.pipelines().filter((pipeline) => isOpen(pipeline) && canonicalOrchestratorProject(pipeline.project) === canonical);
+  const hotLanes = sources.pipelines();
+  const openLanes = hotLanes.filter((pipeline) => isOpen(pipeline) && canonicalOrchestratorProject(pipeline.project) === canonical);
   const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
   const activity = openLanes.length > 0 ? await laneActivity(canonical, policy, sources) : new Map<string, SeatTickActivity>();
   const pipelines: SeatTickPipelineInput[] = openLanes.map((pipeline, index) => ({
@@ -1724,7 +1759,7 @@ export async function gatherSeatTickInput(
 
   /* Pipeline membership is the read model the board itself uses, so "owned"
      means the same thing here as it does on the card. */
-  const board = projectTaskPipelineIds(sources.tasks(), [...sources.pipelines()])
+  const board = projectTaskPipelineIds(sources.tasks(), [...hotLanes])
     .filter((task) => canonicalOrchestratorProject(task.project) === canonical);
   const taskEvidence = evidenceFromTasks(board.map(taskSummary));
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
@@ -1735,14 +1770,15 @@ export async function gatherSeatTickInput(
     updatedAt: task.updatedAt ?? null,
   }));
 
-  const ownLanes = ownSettledLanes(canonical, seat, state.announcedLanes ?? [], sources);
+  const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], hotLanes, canonical, seat, now, policy.backlogAfterMs);
+  const ownLanes = ownSettledLanes(canonical, seat, announcedLanes, hotLanes);
   const settledDeploys = settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
 
   /* The open set spans EVERY project, not this one's lanes: an event is history
      because its own lane finished, and reading a lane from another project as
      terminal because it is not in this project's slice would be the same claim
      made about the wrong pipeline. */
-  const openPipelineIds = new Set(sources.pipelines().filter(isOpen).map((pipeline) => pipeline.id));
+  const openPipelineIds = new Set(hotLanes.filter(isOpen).map((pipeline) => pipeline.id));
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, sources);
   const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
   /* The children source's run of failures (#1465), kept exactly as the
@@ -1790,7 +1826,7 @@ export async function gatherSeatTickInput(
        is what attempted the read, so the gather is what records what became of
        it, and the decision reads that row to know whether this is the outage
        worth putting on the board. */
-    state: { ...state, eventsThrough: cursor, pullRequestGap, childrenGap, harvestedChildren, accounting: state.accounting ? new SeatTickAccounting(state.accounting.filename, canonical).readState().accounting : undefined },
+    state: { ...state, announcedLanes, eventsThrough: cursor, pullRequestGap, childrenGap, harvestedChildren, accounting: state.accounting ? new SeatTickAccounting(state.accounting.filename, canonical).readState().accounting : undefined },
     policy,
     settings,
   };

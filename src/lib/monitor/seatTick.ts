@@ -4,7 +4,7 @@ import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SE
 import { evidenceStallReason } from "./classify";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
-  SEAT_TICK_ANNOUNCED_LANES_LIMIT,
+  SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickCard,
@@ -1691,15 +1691,15 @@ export function seatTickWakeCommit(
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
-    announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? []),
+    announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
   };
 }
 
-/** The lanes (#1799) or deployments (#2063) announced after a landing,
-    newest last and bounded. */
-function announced(before: readonly string[], landed: readonly string[]): string[] {
-  return [...new Set([...before.filter((id) => !landed.includes(id)), ...landed])]
-    .slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT);
+/** Keep each lane announcement until source eligibility expires. Deployments
+    retain their separate bounded history. */
+function announced(before: readonly string[], landed: readonly string[], limit?: number): string[] {
+  const merged = [...new Set([...before.filter((id) => !landed.includes(id)), ...landed])];
+  return limit === undefined ? merged : merged.slice(-limit);
 }
 
 /** The harvest cursor after a landing (#1465): the children this wake named,
