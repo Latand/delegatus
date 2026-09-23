@@ -78,3 +78,15 @@ test("the boot script resolves exactly as resolveRoleFrameVariant does", () => {
     }
   }
 });
+
+test("the frame follows the role, whatever engine runs the conversation", () => {
+  /* A Copilot conversation carries the same seat, stage and lineage facts as a
+     Claude or Codex one; with none of them it is neutral. */
+  const copilotFile = { seat: null, flow: null, durableLineage: null };
+  expect(conversationFrameRole({ file: copilotFile })).toBe("neutral");
+  expect(conversationFrameRole({ stage: { kind: "run", role: { roleId: "builder" } }, file: copilotFile })).toBe("builder");
+  expect(conversationFrameRole({ file: { durableLineage: { role: "verifier", memberships: [] } } })).toBe("verifier");
+  for (const role of ROLE_IDS) {
+    expect(conversationFrameRole({ stage: { kind: "run", role: { roleId: role } } })).toBe(role);
+  }
+});

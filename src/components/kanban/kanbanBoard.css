@@ -615,6 +615,14 @@
   .kb .card[data-pending="1"] .saving { opacity: 1; transform: none; }
 }
 
+/* ── How tall an expanded agent conversation is ──────────────────────────── */
+/* The one rule for the orchestrator seat, a reader opened inside a task card
+   and an agent draft on a card: most of the viewport below the board's bar.
+   The seat's default is capped at the 75% its drag already stops at
+   (`seatMaxHeight`); a height the operator dragged still wins. */
+.kb { --conv-expanded-h: max(360px, calc(100dvh - 160px)); --seat-default-h: min(var(--conv-expanded-h), 75dvh); }
+@media (max-width: 767px) { .kb { --conv-expanded-h: max(320px, calc(100dvh - 120px)); } }
+
 /* ── Page: the orchestrator seat above the board (K3) ────────────────────── */
 /* The seat keeps its height and the board keeps a full page below it; the
    page scrolls between the two instead of squeezing the columns (prototype
@@ -633,7 +641,7 @@
 
 .kb .seat {
   position: relative; z-index: 3; flex: 0 0 auto; width: calc(100% - 40px); max-width: 1040px; margin: 12px auto 0;
-  height: var(--seat-h, clamp(160px, 30vh, 360px));
+  height: var(--seat-h, var(--seat-default-h));
   border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
   display: flex; flex-direction: column;
 }
@@ -645,8 +653,7 @@
 .kb .seat { overflow-anchor: none; }
 .kb .seat > [data-orchestrator-panel] { border-radius: inherit; overflow: hidden; background: var(--surface-card); }
 .kb .seat.folded { height: auto; }
-/* The seat is short on purpose (the agreed clamp(160px, 30vh, 360px)), so its
-   rows are the transcript, the control strip and the composer. Who holds the
+/* The seat's rows are the transcript, the control strip and the composer. Who holds the
    seat and its host control ride the header; the turn's status row and the
    live-tail marker repeat the header's state and are left out (the "back to
    live" control still appears once the feed is scrolled up); the composer keeps 240 px of transcript
@@ -785,7 +792,7 @@
 .kb .card.has-reader { content-visibility: visible; }
 /* An agent draft on a card (K9a): the draft pane at reading width, as tall as a reader. */
 .kb .agent-drafts { display: flex; flex-direction: column; gap: 8px; }
-.kb .agent-draft { display: flex; width: 100%; max-width: 780px; height: min(620px, 74vh); min-width: 0; }
+.kb .agent-draft { display: flex; width: 100%; max-width: 780px; height: var(--conv-expanded-h); min-width: 0; }
 /* `+ Task`'s inline card at the top of Inbox. */
 .kb .card.new-task { content-visibility: visible; gap: 6px; }
 .kb .readers { display: flex; flex-direction: column; gap: 8px; }
@@ -793,7 +800,7 @@
 .kb .reader-slot { width: 100%; min-width: 0; }
 .kb .reader-host { display: flex; width: 100%; max-width: 780px; min-width: 0; }
 .kb .reader.conv {
-  width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 10px; max-height: min(620px, 74vh); overflow: hidden;
+  width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 10px; max-height: var(--conv-expanded-h); overflow: hidden;
   border-radius: var(--radius-control); border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card);
   container-type: inline-size; text-align: left;
 }

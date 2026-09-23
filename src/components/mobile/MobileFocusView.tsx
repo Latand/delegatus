@@ -516,7 +516,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 
   /* ── The bar's title cell ──────────────────────────────────────────────── */
   const displayName = projectDisplayName(project, projectName);
-  /* The role frame (prototype): the seat's conversation is the orchestrator,
+  /* The role frame: the seat's conversation is the orchestrator,
      a stage attempt wears its stage's role, a review deck is a review. */
   const frameRole = activeFile
     ? conversationFrameRole({ seat: holdsSeat, stage: stage?.stage ?? null, file: activeFile })

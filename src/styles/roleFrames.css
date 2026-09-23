@@ -1,4 +1,4 @@
-/* Role frames on agent conversations (prototype).
+/* Role frames on agent conversations.
 
    Which variant draws is one attribute on <html>, `data-role-frame`, that the
    boot script in src/app/layout.tsx sets before the first paint

@@ -1,7 +1,7 @@
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 
 /*
- * Role frames on agent conversations (prototype).
+ * Role frames on agent conversations.
  *
  * An expanded conversation — the orchestrator seat, a reader opened inside a
  * task card, the phone's conversation screen — carries a frame that says what

@@ -252,7 +252,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
     </button>
   ) : null;
   const needs = row.dot === "warning";
-  /* The role frame (prototype): which agent this is, from the stage it is an
+  /* The role frame: which agent this is, from the stage it is an
      attempt of and its own durable lineage. */
   const frameRole = conversationFrameRole({ stage: owner?.stage?.stage ?? null, file });
   const identity = (
