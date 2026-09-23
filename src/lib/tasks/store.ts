@@ -181,6 +181,8 @@ function coerceTask(value: unknown): BoardTask | null {
     updatedAt: raw.updatedAt!,
   };
   if (!pinned) delete task.pos;
+  /* An icon is a name or nothing; a row carrying anything else loads without one. */
+  if (task.icon !== undefined && typeof task.icon !== "string") delete task.icon;
   try { Object.assign(task, { revision: taskRevision(task) }); } catch { return null; }
   return task;
 }
