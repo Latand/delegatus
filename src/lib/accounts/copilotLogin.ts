@@ -10,7 +10,7 @@ import { copilotSignedInUser, listCopilotAccounts } from "./copilot";
 
 export const COPILOT_LOGIN_TIMEOUT_MS = 15 * 60_000;
 export const COPILOT_LOGIN_TERM_GRACE_MS = 2_000;
-export const COPILOT_LOGIN_PHASES: ReadonlySet<LoginPhase> = new Set(["starting", "awaiting_browser", "verifying", "canceling"]);
+export const COPILOT_LOGIN_PHASES: ReadonlySet<LoginPhase> = new Set(["starting", "awaiting_browser", "awaiting_storage_choice", "verifying", "canceling"]);
 const OUTPUT_LIMIT = 64 * 1024;
 const ANSI = /\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\))/g;
 /* C5-shaped fixture for Copilot CLI 1.0.87 device-code output:
@@ -19,9 +19,11 @@ const ANSI = /\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\))/g;
    in persisted state and is never written outside the live operation. */
 const DEVICE_URL = /https:\/\/github\.com\/login\/device(?:\b|\/|\?[^\s]*)/i;
 const USER_CODE = /\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/;
+const PLAINTEXT_STORAGE_PROMPT = /system keychain unavailable\.\s*store token in plaintext config file\?\s*\(y\/n\)/i;
 
 export interface CopilotLoginChild {
   pid?: number;
+  stdin?: { write(data: string): boolean } | null;
   stdout?: NodeJS.ReadableStream | null;
   stderr?: NodeJS.ReadableStream | null;
   kill(signal?: NodeJS.Signals): boolean;
@@ -45,6 +47,7 @@ export type CopilotLoginOperation = LoginOperationSummary & {
   pid: number | null;
   home: string;
   canceled: boolean;
+  storagePromptHandled: boolean;
 };
 
 function terminal(phase: LoginPhase): boolean {
@@ -132,6 +135,9 @@ export class CopilotLoginSupervisor {
     if (urlMatch && codeMatch && current.phase === "starting") {
       this.update(operationId, { phase: "awaiting_browser", loginUrl: "https://github.com/login/device", userCode: codeMatch, acceptsCode: false });
     }
+    if (!current.storagePromptHandled && PLAINTEXT_STORAGE_PROMPT.test(accumulated)) {
+      this.update(operationId, { phase: "awaiting_storage_choice", storagePromptHandled: true, loginUrl: null, userCode: null });
+    }
   }
 
   private async onExit(operationId: string, code: number | null, home: string): Promise<void> {
@@ -181,13 +187,13 @@ export class CopilotLoginSupervisor {
     const operation: CopilotLoginOperation = {
       operationId, accountId, phase: "starting", loginUrl: null, userCode: null, acceptsCode: false,
       deadlineAt: new Date(now + COPILOT_LOGIN_TIMEOUT_MS).toISOString(), result: null,
-      pid: null, home: account.home, canceled: false, generation,
+      pid: null, home: account.home, canceled: false, storagePromptHandled: false, generation,
     };
     this.operations.set(operationId, operation);
     try {
       const child = this.ports.spawn(resolveCopilotBinary(process.env), ["login", "--device-code"], {
         cwd: os.homedir(), env: copilotChildEnv(process.env, account.home), detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       });
       child.once("error", () => {
         const live = this.operations.get(operationId);
@@ -236,6 +242,17 @@ export class CopilotLoginSupervisor {
     } catch {
       this.finish(operationId, "failed", failureResult("process_failed", "Copilot sign-in process could not be stopped"));
     }
+    return this.summary(this.operations.get(operationId)!);
+  }
+
+  choosePlaintextStorage(operationId: string, accept: boolean): LoginOperationSummary {
+    const operation = this.operations.get(operationId);
+    if (!operation || operation.phase !== "awaiting_storage_choice") throw new Error("Copilot login is not awaiting a storage choice");
+    const child = this.children.get(operationId);
+    if (!child?.stdin) throw new Error("Copilot login input is unavailable");
+    child.stdin.write(accept ? "y\n" : "n\n");
+    if (accept) this.update(operationId, { phase: "verifying", loginUrl: null, userCode: null });
+    else this.update(operationId, { phase: "canceling", canceled: true, loginUrl: null, userCode: null });
     return this.summary(this.operations.get(operationId)!);
   }
 

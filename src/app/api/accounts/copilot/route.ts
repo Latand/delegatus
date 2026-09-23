@@ -49,7 +49,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const rejected = rejectCrossOrigin(req);
   if (rejected) return rejected;
-  let body: { label?: unknown; id?: unknown; action?: unknown; operationId?: unknown };
+  let body: { label?: unknown; id?: unknown; action?: unknown; operationId?: unknown; acceptPlaintext?: unknown };
   try { body = await req.json() as typeof body; } catch { return NextResponse.json({ error: "invalid JSON" }, { status: 400 }); }
   try {
     if (body.action === "login") {
@@ -61,6 +61,14 @@ export async function POST(req: NextRequest) {
       if (typeof body.operationId !== "string") return NextResponse.json({ error: "operationId must be a string" }, { status: 400 });
       if (!copilotLoginSupervisor.has(body.operationId)) return NextResponse.json({ error: "Copilot login operation was not found" }, { status: 404 });
       copilotLoginSupervisor.cancel(body.operationId);
+      return NextResponse.json(copilotAccountsBody());
+    }
+    if (body.action === "choose-plaintext-storage") {
+      if (typeof body.operationId !== "string" || typeof body.acceptPlaintext !== "boolean") {
+        return NextResponse.json({ error: "operationId and acceptPlaintext are required" }, { status: 400 });
+      }
+      if (!copilotLoginSupervisor.has(body.operationId)) return NextResponse.json({ error: "Copilot login operation was not found" }, { status: 404 });
+      copilotLoginSupervisor.choosePlaintextStorage(body.operationId, body.acceptPlaintext);
       return NextResponse.json(copilotAccountsBody());
     }
     if (body.action === "select") {

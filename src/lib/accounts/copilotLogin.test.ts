@@ -15,6 +15,7 @@ let run = 0;
 
 class FakeChild extends EventEmitter {
   pid?: number = 73142;
+  stdin = { writes: [] as string[], write: (value: string) => { this.stdin.writes.push(value); return true; } };
   stdout = new EventEmitter();
   stderr = new EventEmitter();
   kill(): boolean { return true; }
@@ -66,6 +67,30 @@ test("parses the captured URL and redacted device code from stdout or stderr", (
     loginUrl: "https://github.com/login/device",
     userCode: "XXXX-XXXX",
   }));
+});
+
+test("keychain fallback requires explicit plaintext-storage consent", async () => {
+  const account = createManagedCopilotAccount("Keychain choice");
+  const supervisor = new CopilotLoginSupervisor(ports());
+  const operation = supervisor.start(account.id);
+  child.stdout.emit("data", "System keychain unavailable. Store token in plaintext config file? (y/N)");
+  expect(supervisor.forAccount(account.id)?.phase).toBe("awaiting_storage_choice");
+  expect(child.stdin.writes).toEqual([]);
+
+  expect(supervisor.choosePlaintextStorage(operation.operationId, true).phase).toBe("verifying");
+  expect(child.stdin.writes).toEqual(["y\n"]);
+});
+
+test("declining plaintext storage sends no token choice and cancels login", () => {
+  const account = createManagedCopilotAccount("Declined keychain choice");
+  const supervisor = new CopilotLoginSupervisor(ports());
+  const operation = supervisor.start(account.id);
+  child.stderr.emit("data", "System keychain unavailable. Store token in plaintext config file? (y/N)");
+  expect(supervisor.choosePlaintextStorage(operation.operationId, false).phase).toBe("canceling");
+  expect(child.stdin.writes).toEqual(["n\n"]);
+  child.emit("exit", null, null);
+  child.emit("close", null, null);
+  expect(supervisor.forAccount(account.id)?.phase).toBe("canceled");
 });
 
 test("moves through browser and verification phases and confirms a config user", async () => {

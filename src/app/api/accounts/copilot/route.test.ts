@@ -24,6 +24,7 @@ const { GET: getModels } = await import("./models/route");
 
 class FakeChild extends EventEmitter {
   pid = 45678;
+  stdin = { writes: [] as string[], write: (value: string) => { this.stdin.writes.push(value); return true; } };
   stdout = new PassThrough();
   stderr = new PassThrough();
   signals: NodeJS.Signals[] = [];
@@ -80,6 +81,19 @@ test("GET reports config auth and the active login operation; POST starts device
   child.stdout.emit("data", "To authenticate, visit https://github.com/login/device and enter code XXXX-XXXX");
   const live = await (await GET()).json();
   expect(live.accounts[0].login).toMatchObject({ phase: "awaiting_browser", loginUrl: "https://github.com/login/device", userCode: "XXXX-XXXX" });
+});
+
+test("plaintext token storage requires an explicit Accounts-panel choice", async () => {
+  const started = await (await POST(post({ action: "login", id: accountId }))).json();
+  const operationId = started.accounts[0].login.operationId as string;
+  child.stderr.write("System keychain unavailable. Store token in plaintext config file? (y/N)");
+  const pending = await (await GET()).json();
+  expect(pending.accounts[0].login.phase).toBe("awaiting_storage_choice");
+  expect(child.stdin.writes).toEqual([]);
+
+  const accepted = await POST(post({ action: "choose-plaintext-storage", operationId, acceptPlaintext: true }));
+  expect(accepted.status).toBe(200);
+  expect(child.stdin.writes).toEqual(["y\n"]);
 });
 
 test("cross-origin POST is rejected", async () => {

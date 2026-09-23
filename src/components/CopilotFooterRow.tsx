@@ -58,7 +58,7 @@ export function CopilotFooterRow() {
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
-    if (!open || !body?.accounts.some((account) => account.login && ["starting", "awaiting_browser", "verifying", "canceling"].includes(account.login.phase))) return;
+    if (!open || !body?.accounts.some((account) => account.login && ["starting", "awaiting_browser", "awaiting_storage_choice", "verifying", "canceling"].includes(account.login.phase))) return;
     const timer = window.setInterval(() => void load(), 1000);
     return () => window.clearInterval(timer);
   }, [open, body, load]);
@@ -138,7 +138,7 @@ export function CopilotFooterRow() {
                   </button>
                 )}
               </div>
-              {account.kind === "managed" && account.auth !== "signed_in" && (!account.login || !["starting", "awaiting_browser", "verifying", "canceling"].includes(account.login.phase)) ? (
+              {account.kind === "managed" && account.auth !== "signed_in" && (!account.login || !["starting", "awaiting_browser", "awaiting_storage_choice", "verifying", "canceling"].includes(account.login.phase)) ? (
                 <button type="button" className="self-start rounded px-1.5 py-0.5 text-[10.5px] font-semibold text-accent hover:bg-accent-soft" onClick={() => void post({ action: "login", id: account.id })}>
                   {t("copilot.accounts.signIn")}
                 </button>
@@ -154,6 +154,15 @@ export function CopilotFooterRow() {
                   <a href={account.login.loginUrl ?? undefined} target="_blank" rel="noreferrer noopener" className="font-semibold text-accent underline">{t("copilot.accounts.openLogin")}</a>
                   {account.login.userCode ? <><span className="text-muted">{t("copilot.accounts.codeLabel")}</span><code className="rounded bg-sunken px-1.5 py-0.5 font-mono text-primary">{account.login.userCode}</code></> : null}
                   <button type="button" className="rounded px-1.5 text-accent hover:bg-accent-soft" onClick={() => void post({ action: "cancel-login", operationId: account.login!.operationId })}>{t("copilot.accounts.cancel")}</button>
+                </div>
+              ) : null}
+              {account.login?.phase === "awaiting_storage_choice" ? (
+                <div className="flex flex-col gap-1.5 text-[10.5px]">
+                  <span className="text-muted">{t("copilot.accounts.login.plaintextWarning")}</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" className="rounded px-1.5 text-accent hover:bg-accent-soft" onClick={() => void post({ action: "choose-plaintext-storage", operationId: account.login!.operationId, acceptPlaintext: true })}>{t("copilot.accounts.login.plaintextAccept")}</button>
+                    <button type="button" className="rounded px-1.5 text-muted hover:bg-accent-soft" onClick={() => void post({ action: "choose-plaintext-storage", operationId: account.login!.operationId, acceptPlaintext: false })}>{t("copilot.accounts.login.plaintextDecline")}</button>
+                  </div>
                 </div>
               ) : null}
               {account.loginCommand ? (

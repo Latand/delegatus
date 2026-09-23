@@ -22,7 +22,7 @@ export type AccountSummary = {
   login: LoginOperationSummary | null;
 };
 
-export type LoginPhase = "idle" | "starting" | "awaiting_browser" | "awaiting_code" | "verifying" | "authenticated" | "canceling" | "canceled" | "timed_out" | "failed" | "interrupted";
+export type LoginPhase = "idle" | "starting" | "awaiting_browser" | "awaiting_storage_choice" | "awaiting_code" | "verifying" | "authenticated" | "canceling" | "canceled" | "timed_out" | "failed" | "interrupted";
 
 export type LoginResult = {
   status: "success" | "failure" | "canceled";
