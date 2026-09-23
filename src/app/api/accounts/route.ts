@@ -26,7 +26,7 @@ export const dynamic = "force-dynamic";
 function copilotLaunchSection() {
   return {
     active: activeCopilotAccountId() ?? "",
-    accounts: listCopilotAccounts().map((account) => ({ id: account.id, label: account.label, kind: account.kind, authPresent: true })),
+    accounts: listCopilotAccounts().map((account) => ({ id: account.id, label: account.label, kind: account.kind, authPresent: account.auth === "signed_in" })),
   };
 }
 

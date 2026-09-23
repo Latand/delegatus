@@ -3,10 +3,12 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { StringDecoder } from "node:string_decoder";
 
 import type { ProcessIdentity } from "@/lib/agent/registry";
-import { viewerMcpServerEntry, VIEWER_SPAWN_CAPABILITY_ENV, type ViewerMcpServerEntry } from "@/lib/agent/spawnPolicy";
+import { resolveClaudeMcpServers, viewerMcpServerEntry, VIEWER_SPAWN_CAPABILITY_ENV, type ViewerMcpServerEntry } from "@/lib/agent/spawnPolicy";
+import { grantedMcpServers } from "@/lib/agent/mcpAllowlist";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
@@ -29,6 +31,7 @@ import {
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
+import { copilotModelsFromConfigOptions, modelInfoFromCopilotTranscript, writeCopilotModelCatalog } from "@/lib/agent/copilotModels";
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
 
 /**
@@ -75,6 +78,7 @@ export interface CopilotAcpHostOptions {
   cwd: string;
   /** The account home, exported to the child as `COPILOT_HOME`. */
   copilotHome: string;
+  accountId?: string;
   /** `auto` or a model id; omitted leaves the CLI's own default. */
   model?: string;
   /** `--reasoning-effort` tier; omitted leaves the CLI's default. */
@@ -169,19 +173,38 @@ export function copilotChildEnv(
 export function copilotMcpConfig(
   viewer: ViewerMcpServerEntry | null,
   capability: string | null,
+  registered: Record<string, unknown> = {},
+  allowlist: readonly string[] = ["viewer"],
 ): { mcpServers: Record<string, JsonObject> } {
-  if (!viewer) return { mcpServers: {} };
-  return {
-    mcpServers: {
-      viewer: {
+  const granted = new Set(grantedMcpServers(allowlist));
+  const mcpServers: Record<string, JsonObject> = {};
+  for (const [name, raw] of Object.entries(registered)) {
+    if (!granted.has(name) || name === "viewer") continue;
+    const definition = record(raw);
+    if (!definition) continue;
+    const type = definition.type;
+    if (type === "stdio" || type === "local") {
+      if (typeof definition.command !== "string") continue;
+      mcpServers[name] = {
         type: "local",
-        command: viewer.command,
-        args: viewer.args,
+        command: definition.command,
+        ...(Array.isArray(definition.args) ? { args: definition.args } : {}),
+        ...(record(definition.env) ? { env: record(definition.env)! } : {}),
         tools: ["*"],
-        env: { ...viewer.env, ...(capability ? { [VIEWER_SPAWN_CAPABILITY_ENV]: capability } : {}) },
-      },
-    },
+      };
+    } else if (type === "http" || type === "sse") {
+      mcpServers[name] = definition;
+    }
+  }
+  if (!viewer || !granted.has("viewer")) return { mcpServers };
+  mcpServers.viewer = {
+    type: "local",
+    command: viewer.command,
+    args: viewer.args,
+    tools: ["*"],
+    env: { ...viewer.env, ...(capability ? { [VIEWER_SPAWN_CAPABILITY_ENV]: capability } : {}) },
   };
+  return { mcpServers };
 }
 
 /** The launch argv after the binary. Pure, so the flag set is asserted
@@ -255,6 +278,7 @@ export class CopilotAcpHost implements EngineHost {
   /** Turns this host cancelled. A cancelled prompt answers `end_turn` in CLI
       1.0.87, so the host remembers the cancel instead of trusting the reply. */
   private readonly cancelledTurns = new Set<string>();
+  private readonly failedInterrupts = new Map<string, number>();
   /** Entry id → turn started for it, so a retried send is idempotent. */
   private readonly sentEntries = new Map<string, string>();
   private readonly stateListeners = new Set<(state: HostState) => void>();
@@ -354,14 +378,18 @@ export class CopilotAcpHost implements EngineHost {
       const viewer = options.viewerMcpServer === undefined
         ? (options.mcpServers ?? ["viewer"]).includes("viewer") ? viewerMcpServerEntry() : null
         : options.viewerMcpServer;
-      if (viewer) {
+      {
+        const registered = resolveClaudeMcpServers(os.homedir(), options.cwd, path.join(os.homedir(), ".claude.json"));
+        const capability = options.env?.[VIEWER_SPAWN_CAPABILITY_ENV] ?? null;
+        const mcpConfig = copilotMcpConfig(viewer, capability, registered, options.mcpServers ?? ["viewer"]);
+        if (Object.keys(mcpConfig.mcpServers).length > 0) {
         const directory = path.join(options.copilotHome, "llv-mcp");
         fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
         mcpConfigPath = path.join(directory, `${crypto.randomUUID()}.json`);
-        const capability = options.env?.[VIEWER_SPAWN_CAPABILITY_ENV] ?? null;
-        fs.writeFileSync(mcpConfigPath, JSON.stringify(copilotMcpConfig(viewer, capability)), { mode: 0o600 });
+        fs.writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig), { mode: 0o600 });
         const written = mcpConfigPath;
         cleanups.push(() => fs.rmSync(written, { force: true }));
+        }
       }
       /* Never the capability: it is in the 0600 file, not in the child env. */
       delete env[VIEWER_SPAWN_CAPABILITY_ENV];
@@ -415,6 +443,15 @@ export class CopilotAcpHost implements EngineHost {
       const minted = stringField(created, "sessionId");
       if (!minted) throw new Error("Copilot session/new returned no session id");
       sessionId = minted;
+      const modelOptions = copilotModelsFromConfigOptions(created?.configOptions);
+      if (this.options.accountId && modelOptions.length) {
+        const transcriptRoot = path.join(this.options.copilotHome, "session-state");
+        const transcriptInfo = modelInfoFromCopilotTranscript(transcriptRoot);
+        writeCopilotModelCatalog(this.options.accountId, modelOptions.map((model) => {
+          const info = transcriptInfo.find((item) => item.id === model.id);
+          return { ...model, efforts: info?.efforts ? [...info.efforts] : model.efforts, pickerEnabled: info?.pickerEnabled ?? model.pickerEnabled };
+        }), "acp-config");
+      }
     }
     this.identity = { sessionId, path: copilotTranscriptPath(this.options.copilotHome, sessionId) };
     this.restore();
@@ -531,8 +568,17 @@ export class CopilotAcpHost implements EngineHost {
       new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), this.interruptTimeoutMs); }),
     ]).finally(() => { if (timer) clearTimeout(timer); });
     if (!stopped) {
+      const failures = (this.failedInterrupts.get(running.turnId) ?? 0) + 1;
+      this.failedInterrupts.set(running.turnId, failures);
+      if (failures >= 3) {
+        const error = new Error(`Copilot turn did not stop after ${failures} session/cancel requests; host released`);
+        this.fail(error);
+        await this.release();
+        throw error;
+      }
       throw new Error(`Copilot turn did not stop within ${this.interruptTimeoutMs}ms of session/cancel`);
     }
+    this.failedInterrupts.delete(running.turnId);
   }
 
   /** Answers an open `session/request_permission` with the chosen option. */
@@ -613,6 +659,7 @@ export class CopilotAcpHost implements EngineHost {
     if (this.running !== running) return;
     this.running = null;
     this.cancelledTurns.delete(running.turnId);
+    this.failedInterrupts.delete(running.turnId);
     if (this.dead || this.released) return;
     if (this.releasing) {
       this.emit({ kind: "turn-ended", turnId: running.turnId, status: "interrupted" });

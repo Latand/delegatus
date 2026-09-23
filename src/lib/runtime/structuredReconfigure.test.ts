@@ -12,13 +12,14 @@ import { applyStructuredReconfigure } from "./structuredReconfigure";
 import type { StructuredReconfigureEffect } from "./structuredDeliveryQueue";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { copilotLaunchArgs } from "./copilotAcpHost";
 
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(profile: Partial<{ model: string | null; effort: string | null; fast: boolean | null }> = {}) {
+function fixture(profile: Partial<{ model: string | null; effort: string | null; fast: boolean | null }> = {}, engine: "codex" | "copilot" = "codex") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-reconfigure-"));
   roots.push(root);
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -26,22 +27,22 @@ function fixture(profile: Partial<{ model: string | null; effort: string | null;
   const transcript = path.join(root, `rollout-${sessionId}.jsonl`);
   fs.writeFileSync(transcript, "{}\n");
   const begun = beginLegacySpawnFixture(registry, {
-    engine: "codex",
+    engine,
     cwd: root,
     accountId: "source",
     transport: "structured",
-    launchProfile: { model: "gpt-5.5", effort: "medium", fast: false, ...profile },
+    launchProfile: { model: engine === "copilot" ? "gpt-5.4" : "gpt-5.5", effort: "medium", fast: false, ...profile },
   });
   if (begun.kind !== "created") throw new Error("fixture spawn was unavailable");
   const settled = registry.settleSpawn(begun.receipt.launchId, {
-    key: { engine: "codex", sessionId },
+    key: { engine, sessionId },
     artifactPath: transcript,
     cwd: root,
     accountId: "source",
     status: "idle",
     host: null,
     structuredHost: {
-      kind: "codex-app-server",
+      kind: engine === "copilot" ? "copilot-acp" : "codex-app-server",
       endpoint: "test:host",
       process: { pid: process.pid, startIdentity: "test" },
       eventCursor: 1,
@@ -57,7 +58,7 @@ function fixture(profile: Partial<{ model: string | null; effort: string | null;
     launchProfile: begun.receipt.launchProfile,
   });
   if (settled.kind !== "settled") throw new Error("fixture settlement failed");
-  return { registry, conversationId: begun.receipt.conversationId, transcript };
+  return { registry, conversationId: begun.receipt.conversationId, transcript, cwd: root };
 }
 
 function effect(overrides: Partial<StructuredReconfigureEffect> = {}): StructuredReconfigureEffect {
@@ -116,6 +117,54 @@ test("unauthenticated account reconfigure leaves profile and host ownership unto
   expect(after.generations.at(-1)?.accountId).toBe("source");
   expect(target.registry.snapshot().entries[`codex:${generationId}`]?.structuredHost?.process).not.toBeNull();
   expect(releases).toBe(0);
+});
+
+test("Copilot model and effort reconfigure releases the host and recovers the patched profile", async () => {
+  const target = fixture({ model: "gpt-5.4", effort: "xhigh", fast: null }, "copilot");
+  const generationId = target.registry.conversation(target.conversationId)!.generations.at(-1)!.id;
+  const released: string[] = [];
+  const recovered: Array<{ profile: unknown; args: string[] }> = [];
+
+  const outcome = await applyStructuredReconfigure(effect({
+    conversationId: target.conversationId,
+    model: "claude-sonnet-5",
+    effort: "low",
+    fast: null,
+  }), {
+    registry: target.registry,
+    releaseHost: async (key) => { released.push(`${key.engine}:${key.sessionId}`); return true; },
+    recover: async (request) => {
+      const profile = target.registry.conversation(request.conversationId as ViewerConversationId)?.generations.at(-1)?.launchProfile;
+      recovered.push({
+        profile,
+        args: copilotLaunchArgs({ cwd: target.cwd, model: "claude-sonnet-5", effort: "low" }, null),
+      });
+      return { target: null, path: target.transcript, conversationId: target.conversationId, spawned: true };
+    },
+  });
+
+  expect(outcome).toBe("applied");
+  expect(released).toEqual([`copilot:${generationId}`]);
+  expect(recovered[0]?.profile).toEqual(expect.objectContaining({ model: "claude-sonnet-5", effort: "low", fast: null }));
+  expect(recovered[0]?.args).toContain("--model");
+  expect(recovered[0]?.args).toContain("claude-sonnet-5");
+  expect(recovered[0]?.args).toContain("--reasoning-effort");
+  expect(recovered[0]?.args).toContain("low");
+});
+
+test("Copilot account reconfigure is refused with the account-home boundary", async () => {
+  const target = fixture({ model: "gpt-5.4", effort: "medium", fast: null }, "copilot");
+  let releases = 0;
+  await expect(applyStructuredReconfigure(effect({
+    conversationId: target.conversationId,
+    accountId: "another-account",
+    fast: null,
+  }), {
+    registry: target.registry,
+    releaseHost: async () => { releases += 1; return true; },
+  })).rejects.toThrow("a Copilot session stays in its account's COPILOT_HOME");
+  expect(releases).toBe(0);
+  expect(target.registry.conversation(target.conversationId)!.generations.at(-1)?.accountId).toBe("source");
 });
 
 test("failed account preflight supersedes an applying predecessor and restores its stable host", async () => {

@@ -18,9 +18,8 @@ import type { AccountContext } from "./contracts";
  * operator's own `$COPILOT_HOME` or `~/.copilot`: it is scanned when it
  * exists and launched into only when the operator selects it.
  *
- * Authentication state is not read in slice 1: it stays `unknown` until a
- * launch succeeds or fails on auth, and the Accounts panel offers the login
- * command instead.
+ * Authentication metadata is read from config.json. Copilot keeps the token
+ * in the desktop keyring, so this projection never reads or exposes it.
  */
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -34,6 +33,7 @@ export interface CopilotAccount {
   /** `<home>/session-state`, the transcript root the scanner reads. */
   sessionStateDir: string;
   createdAt: number;
+  auth: "signed_in" | "signed_out" | "unknown";
 }
 
 interface StoredAccount { id: string; label: string; createdAt: number }
@@ -63,6 +63,41 @@ function registryPath(): string {
 
 function managedHome(id: string): string {
   return path.join(copilotAccountsRoot(), id);
+}
+
+export interface CopilotSignedInUser { host: string; login: string }
+
+/** Return the account marker Copilot CLI writes after login, without touching
+    the keyring or treating a partial config file as a sign-in. */
+export function copilotSignedInUser(home: string): CopilotSignedInUser | null {
+  try {
+    const raw = fs.readFileSync(path.join(home, "config.json"), "utf8").replace(/^\s*\/\/.*$/gm, "");
+    const config = JSON.parse(raw) as { lastLoggedInUser?: unknown; loggedInUsers?: unknown };
+    const last = config.lastLoggedInUser;
+    if (!last || typeof last !== "object" || Array.isArray(last)) return null;
+    const user = last as Record<string, unknown>;
+    if (typeof user.host !== "string" || !user.host || typeof user.login !== "string" || !user.login) return null;
+    if (!Array.isArray(config.loggedInUsers)) return null;
+    const included = config.loggedInUsers.some((item) => item && typeof item === "object" && !Array.isArray(item)
+      && (item as Record<string, unknown>).host === user.host && (item as Record<string, unknown>).login === user.login);
+    return included ? { host: user.host, login: user.login } : null;
+  } catch { return null; }
+}
+
+export function copilotConfigCheckedAt(home: string): string | null {
+  try { return fs.statSync(path.join(home, "config.json")).mtime.toISOString(); }
+  catch { return null; }
+}
+
+function authState(home: string): CopilotAccount["auth"] {
+  try {
+    fs.accessSync(path.join(home, "config.json"));
+  } catch { return "unknown"; }
+  try {
+    const raw = fs.readFileSync(path.join(home, "config.json"), "utf8").replace(/^\s*\/\/.*$/gm, "");
+    JSON.parse(raw);
+  } catch { return "unknown"; }
+  return copilotSignedInUser(home) ? "signed_in" : "signed_out";
 }
 
 /** The operator's own Copilot home: `$COPILOT_HOME`, else `~/.copilot`. */
@@ -102,6 +137,7 @@ function legacyAccount(): CopilotAccount | null {
     home,
     sessionStateDir: path.join(home, "session-state"),
     createdAt: 0,
+    auth: authState(home),
   };
 }
 
@@ -113,6 +149,7 @@ export function listCopilotAccounts(): CopilotAccount[] {
     home: managedHome(stored.id),
     sessionStateDir: path.join(managedHome(stored.id), "session-state"),
     createdAt: stored.createdAt,
+    auth: authState(managedHome(stored.id)),
   }));
   const legacy = legacyAccount();
   return legacy ? [legacy, ...managed] : managed;

@@ -9,6 +9,7 @@ import {
   copilotAccountForSpawn,
   copilotLoginCommand,
   copilotSessionRoots,
+  copilotSignedInUser,
   createManagedCopilotAccount,
   listCopilotAccounts,
   NoCopilotAccountError,
@@ -70,4 +71,28 @@ test("the legacy home is listed when it exists but never picked by default", () 
 test("the login command signs in exactly the account's own home", () => {
   expect(copilotLoginCommand("/srv/fixture/.config/agent-log-viewer/accounts/copilot/work", "/opt/copilot"))
     .toBe("COPILOT_HOME='/srv/fixture/.config/agent-log-viewer/accounts/copilot/work' '/opt/copilot' login --device-code");
+});
+
+test("Copilot auth uses only a listed last user and strips config comment lines", () => {
+  const home = fs.mkdtempSync(path.join(sandbox, "auth-fixture-"));
+  fs.writeFileSync(path.join(home, "config.json"), '// CLI comment\n{"lastLoggedInUser":{"host":"github.com","login":"fixture-user"},"loggedInUsers":[{"host":"github.com","login":"fixture-user"}]}\n');
+  expect(copilotSignedInUser(home)).toEqual({ host: "github.com", login: "fixture-user" });
+  expect(listCopilotAccounts()).toEqual([]);
+});
+
+test("Copilot auth rejects an unlisted user, missing config, and malformed JSON", () => {
+  const home = fs.mkdtempSync(path.join(sandbox, "auth-invalid-"));
+  expect(copilotSignedInUser(home)).toBeNull();
+  fs.writeFileSync(path.join(home, "config.json"), '{"lastLoggedInUser":{"host":"github.com","login":"fixture-user"},"loggedInUsers":[]}');
+  expect(copilotSignedInUser(home)).toBeNull();
+  fs.writeFileSync(path.join(home, "config.json"), "not json");
+  expect(copilotSignedInUser(home)).toBeNull();
+});
+
+test("Copilot account listing reports signed-in state from config", () => {
+  const account = createManagedCopilotAccount("Authentication state");
+  fs.writeFileSync(path.join(account.home, "config.json"), '// comment\n{"lastLoggedInUser":{"host":"github.com","login":"fixture-user"},"loggedInUsers":[{"host":"github.com","login":"fixture-user"}]}');
+  expect(listCopilotAccounts().find((item) => item.id === account.id)?.auth).toBe("signed_in");
+  fs.writeFileSync(path.join(account.home, "config.json"), '{"loggedInUsers":[]}');
+  expect(listCopilotAccounts().find((item) => item.id === account.id)?.auth).toBe("signed_out");
 });

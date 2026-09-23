@@ -6,10 +6,13 @@ import {
   copilotLoginCommand,
   createManagedCopilotAccount,
   listCopilotAccounts,
+  copilotSignedInUser,
   setActiveCopilotAccount,
   UnknownCopilotAccountError,
 } from "@/lib/accounts/copilot";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { accountManager } from "@/lib/accounts/manager";
+import { copilotLoginSupervisor } from "@/lib/accounts/copilotLogin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,10 +20,8 @@ export const dynamic = "force-dynamic";
 /**
  * GitHub Copilot accounts (docs/design/copilot-engine.md 3.9, slice 1).
  *
- * A managed account is its own `COPILOT_HOME`; signing it in is the operator's
- * step in a terminal, with the command this answers. The credential itself is
- * never read here, so the auth state stays `unknown` until a launch succeeds or
- * fails on it.
+ * A managed account is its own `COPILOT_HOME`; the device-code operation is
+ * supervised here while the credential remains in the system keyring.
  */
 function copilotAccountsBody() {
   const active = activeCopilotAccountId();
@@ -34,8 +35,10 @@ function copilotAccountsBody() {
       label: account.label,
       kind: account.kind,
       active: account.id === active,
-      auth: "unknown" as const,
+      auth: account.auth,
+      "user": copilotSignedInUser(account.home)?.login ?? null,
       loginCommand: account.kind === "managed" ? copilotLoginCommand(account.home, binary) : null,
+      login: copilotLoginSupervisor.forAccount(account.id),
     })),
   };
 }
@@ -47,9 +50,19 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const rejected = rejectCrossOrigin(req);
   if (rejected) return rejected;
-  let body: { label?: unknown; id?: unknown; action?: unknown };
+  let body: { label?: unknown; id?: unknown; action?: unknown; operationId?: unknown };
   try { body = await req.json() as typeof body; } catch { return NextResponse.json({ error: "invalid JSON" }, { status: 400 }); }
   try {
+    if (body.action === "login") {
+      if (typeof body.id !== "string") return NextResponse.json({ error: "id must be a string" }, { status: 400 });
+      copilotLoginSupervisor.start(body.id);
+      return NextResponse.json(copilotAccountsBody());
+    }
+    if (body.action === "cancel-login") {
+      if (typeof body.operationId !== "string") return NextResponse.json({ error: "operationId must be a string" }, { status: 400 });
+      await accountManager.cancelLogin(body.operationId);
+      return NextResponse.json(copilotAccountsBody());
+    }
     if (body.action === "select") {
       if (typeof body.id !== "string") return NextResponse.json({ error: "id must be a string" }, { status: 400 });
       setActiveCopilotAccount(body.id);

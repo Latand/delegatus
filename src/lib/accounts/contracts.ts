@@ -34,6 +34,7 @@ export type LoginOperationSummary = {
   operationId: string;
   phase: LoginPhase;
   loginUrl: string | null;
+  userCode?: string | null;
   acceptsCode: boolean;
   deadlineAt: string;
   result: LoginResult | null;

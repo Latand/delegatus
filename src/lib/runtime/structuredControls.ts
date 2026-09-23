@@ -242,15 +242,10 @@ export async function dispatchStructuredControl(
     }
   }
 
-  /* Copilot's model, effort and account are fixed at launch in slice 1
-     (docs/design/copilot-engine.md 3.8): the child would have to restart. */
-  const reconfigurableEngine = conversation.engine === "copilot" ? null : conversation.engine;
-  if (request.action === "reconfigure" && !reconfigurableEngine) {
-    return {
-      status: 409,
-      body: { error: "a Copilot conversation's model, effort and account are fixed at launch", code: "unsupported-capability" },
-    };
-  }
+  /* Copilot model and effort changes restart its child at the next idle
+     boundary. Its session remains inside one COPILOT_HOME, so account changes
+     are refused before a durable reconfigure can be claimed. */
+  const reconfigurableEngine = conversation.engine;
 
   if (structuredKill
     && !entry.structuredHost?.process
@@ -283,6 +278,9 @@ export async function dispatchStructuredControl(
        its next engagement. Three consequences are settled here, where every caller's pick arrives. */
     if (reconfiguration?.value) {
       const named = reconfiguration.value.accountId;
+      if (conversation.engine === "copilot" && named && named !== generation.accountId) {
+        return { status: 409, body: { error: "a Copilot session stays in its account's COPILOT_HOME; account changes require a new conversation", code: "unsupported-capability" } };
+      }
       const unsettled = await waitingSwitch(client, registry, conversation.id);
       const waiting = unsettled?.phase === "waiting" ? unsettled : null;
       /* A message already engaged the pick and the conversation is moving: taking it back here would answer
@@ -331,7 +329,7 @@ export async function dispatchStructuredControl(
     if (reconfiguration?.value?.accountId) {
       const accountExists = dependencies.accountExists ?? ((engine: "claude" | "codex", accountId: string) =>
         (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).some((account) => account.id === accountId));
-      if (!accountExists(reconfigurableEngine!, reconfiguration.value.accountId)) {
+      if (conversation.engine !== "copilot" && !accountExists(reconfigurableEngine as "claude" | "codex", reconfiguration.value.accountId)) {
         return { status: 400, body: { error: `account is not available for ${conversation.engine}` } };
       }
       /* #1279: a reconfigure that MOVES this conversation onto another account
@@ -350,7 +348,7 @@ export async function dispatchStructuredControl(
       if (reconfiguration.value.accountId !== generation.accountId) {
         const accountId = reconfiguration.value.accountId;
         attributeSwitch = () => (dependencies.attributeAccountChoice ?? attributeNamedAccountChoice)({
-          engine: reconfigurableEngine!,
+          engine: reconfigurableEngine as "claude" | "codex",
           project: conversationProjectKey(conversation.projectOwnership, generation.launchProfile, {
             /* A getter, so the transcript is read only for a conversation that
                names no project of its own — an ADOPTED one, whose launch

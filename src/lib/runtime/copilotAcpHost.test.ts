@@ -11,6 +11,7 @@ import {
   COPILOT_NATIVE_MULTI_AGENT_TOOLS,
   CopilotAcpHost,
   copilotChildEnv,
+  copilotMcpConfig,
   copilotTranscriptPath,
   type CopilotAcpHostOptions,
 } from "./copilotAcpHost";
@@ -153,6 +154,17 @@ function kinds(events: RuntimeEvent[] | undefined): string[] {
 }
 
 describe("CopilotAcpHost", () => {
+  test("converts granted stdio MCP servers to local and preserves HTTP definitions", () => {
+    const viewer = { command: "bun", args: ["viewer-mcp"], env: { LLV_STATE_DIR: "/isolated/state" } };
+    expect(copilotMcpConfig(viewer, null, {
+      telegram: { type: "stdio", command: "bun", args: ["telegram-mcp"], env: { FIXTURE: "value" } },
+    }, ["viewer", "telegram"]).mcpServers.telegram).toEqual({
+      type: "local", command: "bun", args: ["telegram-mcp"], env: { FIXTURE: "value" }, tools: ["*"],
+    });
+    const http = { type: "http", url: "https://mcp.fixture.invalid/mcp", headers: { Authorization: "fixture" } };
+    expect(copilotMcpConfig(viewer, null, { telegram: http }, ["viewer", "telegram"]).mcpServers.telegram).toEqual(http);
+  });
+
   test("starts over ACP with the launch flags, strips credentials and attaches the Viewer MCP by file", async () => {
     const child = new FakeCopilot();
     const opts = options(child, {
@@ -306,6 +318,20 @@ describe("CopilotAcpHost", () => {
     await expect(host.interrupt(receipt.turnId)).rejects.toThrow("did not stop within 20ms");
     expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: receipt.turnId });
     await host.release();
+  });
+
+  test("the third failed interrupt releases the host so recovery can adopt the session", async () => {
+    const child = new FakeCopilot();
+    child.answerCancel = false;
+    const host = await CopilotAcpHost.start(options(child, { interruptTimeoutMs: 20 }));
+    const receipt = await host.send({ id: "entry-1", text: "long task" }) as { turnId: string };
+    await until(() => child.prompts.length === 1, "the prompt");
+    await expect(host.interrupt(receipt.turnId)).rejects.toThrow("did not stop within 20ms");
+    await expect(host.interrupt(receipt.turnId)).rejects.toThrow("did not stop within 20ms");
+    await expect(host.interrupt(receipt.turnId)).rejects.toThrow("host released");
+    expect(await host.health()).toMatchObject({ status: "dead", activeTurnRef: null });
+    expect(child.signals).toContain("SIGTERM");
+    expect(await host.send({ id: "entry-2", text: "retry after adoption" })).toEqual({ outcome: "rejected", reason: "dead-host" });
   });
 
   test("interrupt of a turn that is not running is a no-op", async () => {
