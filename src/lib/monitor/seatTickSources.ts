@@ -28,7 +28,8 @@ import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
-import { latestLedgerDeployment } from "@/lib/runtime/deploymentLedger";
+import { latestLedgerDeployment, ledgerDeployment } from "@/lib/runtime/deploymentLedger";
+import { seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import {
   journalVerdict,
   resolveOriginalSend,
@@ -67,6 +68,7 @@ import {
   type SeatTickCheckInput,
   type SeatTickChildInput,
   type SeatTickChildrenGap,
+  type SeatTickDeployInput,
   type SeatTickEventInput,
   type SeatTickOutstandingWake,
   type SeatTickOwnLaneInput,
@@ -424,6 +426,12 @@ export interface SeatTickSources {
   /** The most recently started deployment, read in recency order rather than
       sliced off an ordering that has nothing to do with time. */
   latestDeployment: typeof latestLedgerDeployment;
+  /** The deployments one seat conversation started (#2063), as
+      `deploy_exact_sha` recorded them. Absent reads as none, which is how a
+      harness that does not model deploys stays exactly as it was. */
+  seatDeployments?: (conversationId: string) => readonly SeatDeploymentRecord[];
+  /** One deployment off the ledger by id (#2063). Absent reads as none. */
+  deployment?: typeof ledgerDeployment;
   retirementReport: () => StructuredHostRetirementReport | null;
   /** The project's own tick settings (#1275), read fresh per check so a change
       an agent just recorded takes effect at the very next check rather than at
@@ -524,6 +532,8 @@ export function defaultSeatTickSources(): SeatTickSources {
     },
     lifecycleJournal: readLifecycleJournal,
     latestDeployment: latestLedgerDeployment,
+    seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
+    deployment: (deploymentId) => ledgerDeployment(deploymentId),
     retirementReport: () => {
       const report = readJsonCache(statePath("host-retirement-report.json"));
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
@@ -715,6 +725,64 @@ function ownSettledLanes(
     .slice(0, OWN_LANE_LIMIT);
 }
 
+/** Settled deployments of the seat's own one check carries (#2063). */
+const SEAT_DEPLOY_LIMIT = 5;
+
+/**
+ * The deployments the seat started that have settled and that no landed wake
+ * has announced (#2063).
+ *
+ * The seat ends its turn after `deploy_exact_sha`, because the promotion
+ * replaces the host that turn runs on, so the deploy settling is what it is
+ * waiting for. Only a deployment recorded against THIS seat's conversation is
+ * here: the operator's deploys and another seat's wake nobody. A ledger that
+ * cannot be read for one deployment leaves it out of this check only; the
+ * next check asks again, and nothing is announced that was not seen.
+ */
+function settledSeatDeploys(
+  seat: SeatTickSeatInput | null,
+  announced: readonly string[],
+  sources: SeatTickSources,
+): SeatTickDeployInput[] {
+  if (!seat || !sources.seatDeployments || !sources.deployment) return [];
+  const settled: SeatTickDeployInput[] = [];
+  let records: readonly SeatDeploymentRecord[];
+  try {
+    records = sources.seatDeployments(seat.conversationId);
+  } catch {
+    return [];
+  }
+  for (const record of records) {
+    if (announced.includes(record.deploymentId)) continue;
+    const read = sources.deployment(record.deploymentId);
+    const status = read.state === "ok" ? read.value : undefined;
+    if (!status || !status.terminal) continue;
+    settled.push({
+      deploymentId: record.deploymentId,
+      phase: status.phase,
+      sha: status.revision,
+      error: status.error ? redactBounded(status.error, OWN_LANE_DETAIL_LIMIT) : null,
+      settledAt: status.updatedAt ?? null,
+    });
+  }
+  return settled.slice(-SEAT_DEPLOY_LIMIT);
+}
+
+/**
+ * Who paused a lane, read off the detail the pause wrote (#2063).
+ *
+ * The pause records its actor as `paused by operator` or `paused by <role>
+ * <conversation>`; see `pauseResumeDetail`. The role an MCP caller is given
+ * varies, so the conversation is what makes it this seat's.
+ */
+function pausedBy(pipeline: Pipeline, seat: SeatTickSeatInput | null): SeatTickPipelineInput["pausedBy"] {
+  if (pipeline.state !== "paused") return undefined;
+  const detail = pipeline.stateDetail?.trim() ?? "";
+  if (detail === "paused by operator") return "operator";
+  const actor = /^paused by \S+ (\S+)$/.exec(detail)?.[1];
+  return seat && actor === seat.conversationId ? "seat" : "other";
+}
+
 function taskSummary(task: BoardTask & { pipelineIds: string[] }): TaskSummary {
   return {
     id: task.id,
@@ -883,6 +951,7 @@ function changeFingerprint(
   pullRequests: readonly SeatTickPullRequestInput[],
   pullRequestsUnavailable: SeatTickPullRequestGap | null,
   ownLanes: readonly SeatTickOwnLaneInput[],
+  settledDeploys: readonly SeatTickDeployInput[] = [],
 ): string {
   /* A child's status and outcome instant decide two wake reasons (#1465), so
      they are in the half the guard reads: a child finishing, or a harvested one
@@ -898,6 +967,9 @@ function changeFingerprint(
        and a guard blind to it would suppress the reason while a second lane
        settled behind the first. */
     ...ownLanes.map((lane) => `o:${lane.id}:${lane.settled}:${lane.updatedAt ?? ""}`),
+    /* A settled deploy decides a wake reason of its own (#2063), and a second
+       deploy settling behind the first is movement the guard has to see. */
+    ...settledDeploys.map((deploy) => `d:${deploy.deploymentId}:${deploy.phase}`),
   ].sort();
   /* The set of unmerged pull requests, for the same reason the card's movement
      instant is in the half above: it decides a wake reason, so a guard keyed on
@@ -1633,6 +1705,7 @@ export async function gatherSeatTickInput(
     updatedAt: evidence[index]!.updatedAt,
     stageActivity: activity.get(pipeline.id) ?? null,
     stageId: pipeline.cursor?.stageId ?? null,
+    ...(pipeline.state === "paused" ? { pausedBy: pausedBy(pipeline, seat) } : {}),
   }));
 
   /* Pipeline membership is the read model the board itself uses, so "owned"
@@ -1649,6 +1722,7 @@ export async function gatherSeatTickInput(
   }));
 
   const ownLanes = ownSettledLanes(canonical, seat, state.announcedLanes ?? [], sources);
+  const settledDeploys = settledSeatDeploys(seat, state.announcedDeploys ?? [], sources);
 
   /* The open set spans EVERY project, not this one's lanes: an event is history
      because its own lane finished, and reading a lane from another project as
@@ -1691,9 +1765,10 @@ export async function gatherSeatTickInput(
     pullRequestsUnavailable,
     signals: signals(canonical, seat, sources),
     ownLanes,
+    settledDeploys,
     children,
     childrenUnavailable,
-    changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes),
+    changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys),
     /* The sealed cursor travels on the state the decision carries forward, so a
        check of any verdict — a skip included, which remembers nothing else —
        persists where the journal stood when the tick first saw this project.

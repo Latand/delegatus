@@ -86,6 +86,7 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTickFence";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
+import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
 import { projectSuccessionFor } from "@/lib/projects/succession";
@@ -696,6 +697,10 @@ export interface ViewerMcpDomainDependencies {
       resolver; null means the Viewer cannot name what it deploys, and the
       deploy refusal then fails closed. */
   viewerProject?(): string | null;
+  /** Records which seat started an accepted deployment (#2063), so the seat
+      tick can wake that seat when it settles. Optional so partial harnesses
+      fall back to the production store. */
+  recordSeatDeployment?(record: SeatDeploymentRecord): void;
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
       writes the durable record, and every answer is a read of it. */
@@ -2418,11 +2423,34 @@ async function deployExactSha(
     revision,
     idempotencyKey: requestId(args),
   });
+  /* #2063: the ledger never learns who asked, and the seat ends its turn so
+     the promotion can replace its host. Recording the pair is what lets the
+     seat tick wake this seat when the deployment settles. A `busy` receipt
+     names someone else's deployment, which is not this seat's to be woken on.
+     A failed write costs the wake and nothing else: the deployment is
+     already admitted, so the answer says so rather than failing the call. */
+  let wakeOnSettle = false;
+  if (receipt.state === "accepted" && typeof receipt.deploymentId === "string" && receipt.deploymentId) {
+    try {
+      (dependencies.recordSeatDeployment ?? recordSeatDeployment)({
+        deploymentId: receipt.deploymentId,
+        conversationId: seat.conversationId,
+        project: seat.project,
+        revision: typeof receipt.revision === "string" ? receipt.revision : revision.toLowerCase(),
+        requestedAt: new Date().toISOString(),
+      });
+      wakeOnSettle = true;
+    } catch (error) {
+      console.error(`[deploy_exact_sha] could not record the seat for deployment ${receipt.deploymentId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   return {
     deploymentId: receipt.deploymentId,
     revision: receipt.revision,
     replayed: receipt.state === "accepted" && receipt.replayed === true,
     state: receipt.state,
+    /* Whether the seat tick will wake this seat when the deployment settles. */
+    wakeOnSettle,
   };
 }
 

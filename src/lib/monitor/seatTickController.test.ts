@@ -192,6 +192,10 @@ function harness(options: {
       stamps a reservation with the wall clock, so a check whose own clock has
       been advanced past a fresh reservation would end it on sight. */
   settlementNow?: () => number;
+  /** Deployments `deploy_exact_sha` attributed to a seat (#2063). */
+  seatDeployments?: { deploymentId: string; conversationId: string }[];
+  /** The deployment ledger, by id (#2063): phase and whether it is terminal. */
+  deployments?: Record<string, { phase: string; terminal: boolean; revision: string; error?: string | null }>;
 }): Harness {
   const sent: ConversationMessage[] = [];
   const journal: SeatTickRunRecord[] = [];
@@ -287,6 +291,13 @@ function harness(options: {
       },
       lifecycleJournal: () => ({ version: 1, lastSeq: options.events?.at(-1)?.seq ?? 0, events: options.events ?? [], retired: [] }),
       latestDeployment: () => ({ state: "unreadable", error: "no ledger" }) as never,
+      seatDeployments: (conversationId) => (options.seatDeployments ?? [])
+        .filter((row) => row.conversationId === conversationId)
+        .map((row) => ({ ...row, project: PROJECT, revision: options.deployments?.[row.deploymentId]?.revision ?? "", requestedAt: new Date(NOW - 10 * MINUTE).toISOString() })),
+      deployment: (deploymentId) => {
+        const row = options.deployments?.[deploymentId];
+        return { state: "ok", value: row ? { deploymentId, error: null, updatedAt: new Date(NOW - 2 * MINUTE).toISOString(), ...row } : undefined } as never;
+      },
       retirementReport: () => null,
       settings: () => options.settings ?? defaultSeatTickSettings(PROJECT),
       openPullRequests: async (request) => {
@@ -5615,4 +5626,85 @@ test("an attempt fencing the project outranks a standing refusal run on the card
   expect(cards[0]!.text).toContain("dispatches no replacement wake");
   /* And the refusal still asks for the operator. */
   expect(cards[0]!.text).toContain("rotate the seat");
+});
+
+/* ---------------------------------------------------------------------------
+ * A seat that deploys pauses its lanes, calls deploy_exact_sha and ends its
+ * turn, because the promotion replaces its host (#2063). The deploy settling is
+ * the wake it is waiting for, and the lanes it paused are that wake's work.
+ * ------------------------------------------------------------------------- */
+
+test("a deploy the seat started wakes it once when it settles, with the lanes it paused (#2063)", async () => {
+  const paused = (id: string, detail: string) => ({
+    id, state: "paused", createdAt: new Date(NOW - 120 * MINUTE).toISOString(), movedAt: new Date(NOW - 20 * MINUTE).toISOString(), stateDetail: detail,
+  });
+  const pipelines = [
+    paused("pipeline_s1", `paused by worker ${CONVERSATION}`),
+    paused("pipeline_s2", `paused by orchestrator ${CONVERSATION}`),
+    paused("pipeline_s3", `paused by worker ${CONVERSATION}`),
+    paused("pipeline_op", "paused by operator"),
+  ];
+  const SHA = "4f3c1b9a8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a";
+  const deploys = {
+    seatDeployments: [
+      { deploymentId: "deploy-own", conversationId: CONVERSATION },
+      { deploymentId: "deploy-own-running", conversationId: CONVERSATION },
+      { deploymentId: "deploy-foreign", conversationId: SUCCESSOR },
+    ],
+    deployments: {
+      "deploy-own": { phase: "succeeded", terminal: true, revision: SHA },
+      "deploy-own-running": { phase: "promoting", terminal: false, revision: SHA },
+      "deploy-foreign": { phase: "failed", terminal: true, revision: SHA, error: "candidate health failed" },
+    },
+  };
+  /* The wake before the deploy landed six minutes ago. The hour it would
+     otherwise wait out is what kept the seat idle for thirty minutes. */
+  const rig = harness({ pipelines, ...deploys, state: { lastWakeAt: new Date(NOW - 6 * MINUTE).toISOString() } });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+
+  expect(record).toMatchObject({ verdict: "wake" });
+  expect(record!.reasons).toContain("deploy-settled");
+  expect(rig.sent).toHaveLength(1);
+  const text = rig.sent[0]!.text;
+  expect(text).toContain(`- [deploy] deploy-own — deploy settled: the deployment you started succeeded, sha ${SHA}`);
+  for (const id of ["pipeline_s1", "pipeline_s2", "pipeline_s3"]) {
+    expect(text).toContain(`- [pipeline] ${id} — lane ${id} — paused by you; resume it`);
+  }
+  /* Not the seat's: a deploy another seat started, a deploy still running and
+     a lane the operator paused. */
+  expect(text).not.toContain("deploy-foreign");
+  expect(text).not.toContain("deploy-own-running");
+  expect(text).not.toContain("pipeline_op");
+  expect(rig.written.at(-1)!.announcedDeploys).toEqual(["deploy-own"]);
+
+  /* Ten minutes later nothing new has settled: the landed wake announced the
+     deploy, so it wakes nobody a second time. */
+  const again = harness({ pipelines, ...deploys, now: NOW + 10 * MINUTE, state: rig.written.at(-1)! });
+  const second = await runSeatTickCheck(PROJECT, again.deps);
+  expect(second!.reasons ?? []).not.toContain("deploy-settled");
+  expect(again.sent).toHaveLength(0);
+
+  /* The lanes stay owed until they are resumed: the next wake the hour brings
+     lists them again, and still not the operator's. */
+  const hourly = harness({ pipelines, ...deploys, now: NOW + 70 * MINUTE, state: again.written.at(-1)! });
+  const third = await runSeatTickCheck(PROJECT, hourly.deps);
+  expect(third).toMatchObject({ verdict: "wake" });
+  expect(third!.reasons ?? []).not.toContain("deploy-settled");
+  const hourlyText = hourly.sent[0]!.text;
+  for (const id of ["pipeline_s1", "pipeline_s2", "pipeline_s3"]) expect(hourlyText).toContain(`[pipeline] ${id} — lane ${id} — paused by you`);
+  expect(hourlyText).not.toContain("pipeline_op");
+  expect(hourlyText).not.toContain("[deploy]");
+});
+
+test("a lane the operator paused is not the seat's work: no stall, no interval wake (#2063)", async () => {
+  const pipelines = [{
+    id: "pipeline_op", state: "paused", createdAt: new Date(NOW - 300 * MINUTE).toISOString(),
+    movedAt: new Date(NOW - 200 * MINUTE).toISOString(), stateDetail: "paused by operator",
+  }];
+  /* The proposal slot is spent, so the only wake left to raise is the stall
+     this lane used to produce every hour. */
+  const rig = harness({ pipelines, state: { ...OVERDUE, stalledSeen: ["pipeline_op"], lastProposalAt: new Date(NOW - 60 * MINUTE).toISOString() } });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "quiet" });
+  expect(rig.sent).toHaveLength(0);
 });
