@@ -71,8 +71,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 22, and a v21 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(22);
+test("the default mandate is at version 23, and a v22 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(23);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -80,9 +80,10 @@ test("the default mandate is at version 22, and a v21 seat reads as stale", () =
      in the task's separate details field. v19 (#1843) adds the human-in-the-loop
      section. v20 (#1880) points "role per the role table" at the table
      delivery renders. v21 (#2030) carries the seat tick contract. v22 names the
-     product Delegatus and says its MCP key stays `viewer`. */
-  expect(orchestratorMandateStale(21)).toBe(true);
-  expect(orchestratorMandateStale(22)).toBe(false);
+     product Delegatus and says its MCP key stays `viewer`. v23 keeps work
+     moving and removes tool-schema duplication from the delivered text. */
+  expect(orchestratorMandateStale(22)).toBe(true);
+  expect(orchestratorMandateStale(23)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("You are Delegatus's built-in Manager");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("registered under the key `viewer`");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("the viewer's built-in Manager");
@@ -103,6 +104,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   20: "e49277d58a32cd581d1d9a3ab6658528b2d42de6465350e8108d00cffebdcfca",
   21: "99305652476c390cccbe283e49771f6abe408cb6ff8bdd14ed6fb4394dd7704c",
   22: "6e5ca84fd3997ce92d85d2ae1602d909b1786fa3340312539021e31d91dec74a",
+  23: "4853170b7f7a47ad6e219e25276b2d2bc3a9baad55964b7b078f20735ea02cae",
 };
 
 test("any edit to the default mandate text moves its version (#2030)", () => {
@@ -246,6 +248,8 @@ test("the checked-in playbook no longer tells the seat to schedule itself", () =
   const skill = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/delegatus-conveyor/SKILL.md"), "utf8");
   expect(skill).not.toContain("self-paces with ScheduleWakeup");
   expect(skill).not.toContain("ScheduleWakeup checkpoints");
+  expect(skill).toContain("controller appends the stage_report contract");
+  expect(skill).not.toContain("required fenced JSON verdict");
 });
 
 test("mandate delivery keys off directive content and appends it exactly once", () => {
@@ -296,27 +300,14 @@ test("the current default already contains the clock directive", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE);
 });
 
-/* #1016 — the seat had the attention tool and never used it, and the one seat
-   that tried gave up after five guesses because the tool published no target
-   shape. Verbatim shapes, so a seat following only the mandate reaches the
-   operator's screen on its FIRST call. Each is parsed here as the tool would
-   receive it. */
-test("the mandate carries working target shapes for every surface it names", () => {
-  for (const shape of [
-    '{"kind":"conversation","conversationId":"conversation_..."}',
-    '{"kind":"conversation","path":"/.../transcript.jsonl"}',
-    '{"kind":"stage","pipelineId":"pipeline_...","stageId":"review"}',
-    '{"kind":"pipeline","pipelineId":"pipeline_..."}',
-    '{"kind":"flowRound","flowId":"flow_...","round":2}',
-    '{"kind":"task","taskId":"task_..."}',
-    '{"kind":"draft","draftId":"draft_..."}',
-  ]) {
-    expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(shape);
-    const target = JSON.parse(shape) as { kind: string };
-    /* Each printed shape is a real target of a real kind, discriminated the way
-       the tool discriminates it. */
-    expect(FOCUS_TARGET_KINDS).toContain(target.kind as never);
-  }
+/* #1016 put target examples in the mandate before the tool published them.
+   The tool schema now owns their shapes; the mandate names every supported
+   kind and directs the seat back to that schema. */
+test("the mandate names every attention target and uses the tool schema for shapes", () => {
+  const namedKinds = ORCHESTRATOR_SYSTEM_PROMPT.match(/Targets are typed by kind \(([^)]+)\)/)?.[1]?.split(", ");
+  expect(namedKinds?.sort()).toEqual([...FOCUS_TARGET_KINDS].sort());
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("the tool schema gives each shape");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("The shapes, verbatim:");
   /* The sentinel the tool answers with when there is nothing to move. */
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("NO_ACTIVE_VIEW");
 });
