@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -94,8 +95,19 @@ describe("paths, entry and identity", () => {
       record: "/s/self-update/launcher-abc.json",
       request: "/s/self-update/request-abc.json",
       releasePointer: "/s/self-update/release-abc.json",
-      releasesDir: "/c/agent-log-viewer/self-update/abc/releases",
+      releasesDir: "/c/delegatus/self-update/abc/releases",
     });
+  });
+
+  test("an existing install's cache keeps its agent-log-viewer spelling", () => {
+    const cache = mkdtempSync(join(tmpdir(), "llv-self-update-cache-"));
+    try {
+      mkdirSync(join(cache, "agent-log-viewer"));
+      expect(selfUpdatePaths({ stateDirectory: "/s", cacheDirectory: cache, installId: "abc" }).releasesDir)
+        .toBe(join(cache, "agent-log-viewer", "self-update", "abc", "releases"));
+    } finally {
+      rmSync(cache, { recursive: true, force: true });
+    }
   });
 
   test("the host entry of a release is its bundle when present, else the source entry", () => {

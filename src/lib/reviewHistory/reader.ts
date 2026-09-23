@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { admitOperatorDirectory } from "@/lib/stateOwnership";
 import { isStagingMode, STAGING_STATE_DIRNAME } from "@/lib/staging";
+import { APP_DIR_NAMES, appDirIn } from "../../../bin/appDir.mjs";
 import { decodeFlow } from "./decode";
 import type { Flow } from "./types";
 
@@ -21,12 +22,12 @@ export function archiveDirectory(): string {
   const root = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
   const override = process.env.LLV_STATE_DIR;
   if (isStagingMode()) {
-    const directory = path.resolve(override || path.join(root, "agent-log-viewer", STAGING_STATE_DIRNAME));
-    const production = [path.join(root, "agent-log-viewer", "state"), path.join(root, "live-log-viewer", "state"), path.join(os.homedir(), ".claude", "viewer-state")];
+    const directory = path.resolve(override || path.join(appDirIn(root), STAGING_STATE_DIRNAME));
+    const production = [...APP_DIR_NAMES.map((name) => path.join(root, name, "state")), path.join(os.homedir(), ".claude", "viewer-state")];
     if (production.some(candidate => path.resolve(candidate) === directory)) throw new ArchiveReadError("ARCHIVE_UNAVAILABLE");
     return directory;
   }
-  return override || admitOperatorDirectory(path.join(root, "agent-log-viewer", "state"), "state");
+  return override || admitOperatorDirectory(path.join(appDirIn(root), "state"), "state");
 }
 
 /** Explicit missing-import result: GET must never import JSON or mistake it

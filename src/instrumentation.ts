@@ -33,6 +33,10 @@ export async function register(): Promise<void> {
        the operator's state dir, while the build phase that skips this branch
        never does. `LLV_STATE_OWNER` is a plain env name rather than the
        imported constant because this shim must reach no other module. */
+    /* DELEGATUS_* folds into LLV_* before the claim reads it (rename-delegatus.md
+       §5); a Viewer started by the launcher inherits an already folded
+       environment, and this covers `next start` and the container. */
+    await import("../bin/envAlias.mjs");
     if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "viewer";
     await registerNodeViewerRuntime(() => import("@/lib/viewerInstrumentation"));
   }

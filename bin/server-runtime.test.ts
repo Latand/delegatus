@@ -228,7 +228,7 @@ test("the CLI rejects a ready runtime socket owned by another process", async ()
     const [, stderr] = await Promise.all([exitedWith(child, 1), new Response(child.stderr).text()]);
     expect(stderr).toContain("Couldn't start the structured runtime host");
     expect(stderr).toContain(`runtime host socket is owned by pid ${process.pid}`);
-    expect(stderr).toContain("stop the other agent-log-viewer instance");
+    expect(stderr).toContain("stop the other delegatus instance");
   } finally {
     if (!child.killed) child.kill();
     await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));

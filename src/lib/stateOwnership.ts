@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { APP_DIR_NAMES } from "../../bin/appDir.mjs";
+
 /**
  * Who may resolve the operator's real config and state directories (#1905).
  *
@@ -109,15 +111,16 @@ export function operatorOwnedRoots(env: NodeJS.ProcessEnv = process.env): string
      directory for the one the caller deliberately chose. */
   const homes = uniqueStrings([os.homedir(), env.HOME]).filter((home, index) => index === 0 || !underTemp(home, env));
   for (const home of homes) {
-    roots.push(path.join(home, ".config", "agent-log-viewer"));
-    roots.push(path.join(home, ".config", "live-log-viewer"));
+    /* Every name the app dir has had, `delegatus` included: a lane's build
+       that resolved `~/.config/delegatus` as unguarded would be #1905 with a
+       new name. */
+    for (const name of APP_DIR_NAMES) roots.push(path.join(home, ".config", name));
     roots.push(path.join(home, ".claude", "viewer-state"));
     roots.push(path.join(home, ".claude", "viewer-inbox"));
   }
   const configHome = env.XDG_CONFIG_HOME?.trim();
   if (configHome && !underTemp(configHome, env)) {
-    roots.push(path.join(configHome, "agent-log-viewer"));
-    roots.push(path.join(configHome, "live-log-viewer"));
+    for (const name of APP_DIR_NAMES) roots.push(path.join(configHome, name));
   }
   return uniqueStrings(roots.map((root) => path.resolve(root)));
 }

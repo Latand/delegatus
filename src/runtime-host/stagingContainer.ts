@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import { APP_DIR_NAMES } from "../../bin/appDir.mjs";
+
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import {
@@ -90,8 +92,7 @@ function assertIsolatedStateDir(context: StagingContainerContext): void {
   if (!home) throw new Error("Viewer Compose service HOME is required");
   const configRoot = context.service.environment.XDG_CONFIG_HOME || path.join(home, ".config");
   const prodDirs = [
-    path.join(configRoot, "agent-log-viewer", "state"),
-    path.join(configRoot, "live-log-viewer", "state"),
+    ...APP_DIR_NAMES.map((name) => path.join(configRoot, name, "state")),
     path.join(home, ".claude", "viewer-state"),
   ];
   const resolved = path.resolve(context.paths.stateDir);

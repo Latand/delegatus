@@ -5,8 +5,11 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 import {
+  isRepositoryProjectId,
+  localRepositoryProjectId,
   projectIdentityFromRepositoryRoot,
   repositoryRootForPath,
+  type RepositoryProjectIdentity,
 } from "@/lib/projects/identity";
 
 export interface ProjectAliasRegistration {
@@ -20,9 +23,18 @@ export interface ProjectAliasSnapshot {
   displayNames: Record<string, string>;
 }
 
+/** A remote-to-remote move the durable pass saw but may not alias on its own
+    (rename-delegatus.md §2.4): only the forge can prove the two remotes are
+    one repository, so it is handed to `forgeRename.ts`. */
+export interface RemoteProjectMove {
+  source: string;
+  target: RepositoryProjectIdentity;
+}
+
 export interface DurableProjectAliasCandidates {
   registrations: ProjectAliasRegistration[];
   conflicts: string[];
+  remoteMoves: RemoteProjectMove[];
 }
 
 interface ProjectAliasFile extends ProjectAliasSnapshot {
@@ -184,7 +196,14 @@ function convergenceIdCollisions(registrations: readonly ProjectAliasRegistratio
   return { labels: [...labels], sources };
 }
 
-type TargetEvidence = { registration: ProjectAliasRegistration; records: number };
+type TargetEvidence = {
+  registration: ProjectAliasRegistration;
+  records: number;
+  identity: RepositoryProjectIdentity;
+  /** The source is a key this checkout's path minted (or a legacy bucket), so
+      the move is a #1874 succession rather than a changed remote. */
+  pathDerived: boolean;
+};
 
 /**
  * Pre-change flow, pipeline, and workflow records carry both the legacy
@@ -202,14 +221,20 @@ export function durableProjectAliasCandidates(): DurableProjectAliasCandidates {
     ...projectPathPairs("workflows.json", "workflows", "repoDir"),
   ];
   const targets = new Map<string, Map<string, TargetEvidence>>();
+  const remoteMoves = new Map<string, RemoteProjectMove>();
   for (const [source, candidatePath] of pairs) {
     const root = repositoryRootForPath(candidatePath) ?? rememberedRepositories.get(candidatePath);
     const identity = root ? projectIdentityFromRepositoryRoot(root) : null;
     if (!identity) continue;
+    /* A record whose checkout still mints its key is what fills the ledger on
+       the first scan: the remote it names is the one a later rename moves. */
+    if (source === identity.project) recordProjectRemote(identity);
     const sourceTargets = targets.get(source) ?? new Map<string, TargetEvidence>();
     const evidence = sourceTargets.get(identity.project) ?? {
       registration: { source, target: identity.project, displayName: identity.displayName },
       records: 0,
+      identity,
+      pathDerived: !isRepositoryProjectId(source) || source === (root ? localRepositoryProjectId(root) : null),
     };
     evidence.records += 1;
     sourceTargets.set(identity.project, evidence);
@@ -229,14 +254,29 @@ export function durableProjectAliasCandidates(): DurableProjectAliasCandidates {
     const ranked = [...sourceTargets.values()].sort((left, right) => right.records - left.records);
     const total = ranked.reduce((sum, evidence) => sum + evidence.records, 0);
     const leader = ranked[0]!;
-    if (leader.records * 2 > total) registrations.push(leader.registration);
-    else conflicts.push(source);
+    if (leader.records * 2 <= total) {
+      conflicts.push(source);
+      continue;
+    }
+    /* §2.4: a repository id whose checkout now resolves to a different REMOTE
+       id is a changed origin (renamed, transferred or re-pointed). Aliasing it
+       on this evidence alone merged a re-pointed fork into the repository it
+       replaced (#2035), so only the forge decides, and nothing is registered
+       here. A path-derived source (a legacy or `dir-` key, or the checkout's
+       own local id from before it had an origin) is what this pass exists
+       for. */
+    if (!leader.pathDerived && isRemoteRepositoryIdentity(leader.identity)) {
+      remoteMoves.set(source, { source, target: leader.identity });
+      continue;
+    }
+    registrations.push(leader.registration);
   }
   const collisions = convergenceIdCollisions(registrations);
   conflicts.push(...collisions.labels);
   return {
     registrations: registrations.filter((registration) => !collisions.sources.has(registration.source)),
     conflicts,
+    remoteMoves: [...remoteMoves.values()],
   };
 }
 
@@ -290,6 +330,90 @@ export function persistProjectAliases(registrations: readonly ProjectAliasRegist
   }
 }
 
+/* ── The remote ledger (rename-delegatus.md §2.3) ──────────────────────────
+   A repository id is a hash of its remote and cannot be reversed, and GitHub
+   publishes no list of a repository's former names. So each machine records
+   the remote behind every repository id it has seen, and a later rename can
+   be checked against the forge from the old remote this ledger still holds. */
+
+interface ProjectRemoteFile {
+  schemaVersion: 1;
+  remotes: Record<string, string>;
+}
+
+type RemoteCache = { file: string; mtimeMs: number; size: number; remotes: Record<string, string> };
+
+let remoteCache: RemoteCache | null = null;
+
+function remotesFile(): string {
+  return statePath("project-remotes.json");
+}
+
+function readRemotes(): Record<string, string> {
+  const file = remotesFile();
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    remoteCache = { file, mtimeMs: -1, size: -1, remotes: {} };
+    return remoteCache.remotes;
+  }
+  if (remoteCache && remoteCache.file === file && remoteCache.mtimeMs === stat.mtimeMs && remoteCache.size === stat.size) {
+    return remoteCache.remotes;
+  }
+  let remotes: Record<string, string> = {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<ProjectRemoteFile>;
+    remotes = (parsed.schemaVersion === 1 ? stringRecord(parsed.remotes) : null) ?? {};
+  } catch {
+    remotes = {};
+  }
+  remoteCache = { file, mtimeMs: stat.mtimeMs, size: stat.size, remotes };
+  return remotes;
+}
+
+/** Whether an identity names a remote (as opposed to a repository with no
+    `origin`, whose id is derived from its local path). */
+export function isRemoteRepositoryIdentity(identity: Pick<RepositoryProjectIdentity, "canonicalRemote">): boolean {
+  return !identity.canonicalRemote.startsWith("local:");
+}
+
+/** The remote this machine saw behind a repository id, or null. */
+export function recordedProjectRemote(project: string): string | null {
+  return readRemotes()[project] ?? null;
+}
+
+/**
+ * Remember the remote behind a repository id. Writes only when the entry is
+ * missing or changed, with the same temp-file-and-rename as the alias map; a
+ * failed write is retried by the next identity that asks.
+ */
+export function recordProjectRemote(identity: Pick<RepositoryProjectIdentity, "project" | "canonicalRemote">): void {
+  if (!isRepositoryProjectId(identity.project) || !isRemoteRepositoryIdentity(identity)) return;
+  const current = readRemotes();
+  if (current[identity.project] === identity.canonicalRemote) return;
+  const file = remotesFile();
+  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const remotes = { ...current, [identity.project]: identity.canonicalRemote };
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify({ schemaVersion: 1, remotes } satisfies ProjectRemoteFile, null, 2) + "\n",
+      { encoding: "utf8", mode: 0o600 },
+    );
+    fs.renameSync(temporary, file);
+    remoteCache = null;
+  } catch {
+    try {
+      fs.rmSync(temporary, { force: true });
+    } catch {
+      // The next identity resolution retries the ledger entry.
+    }
+  }
+}
+
 export function resetProjectAliasesForTests(): void {
   cache = null;
+  remoteCache = null;
 }

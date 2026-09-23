@@ -30,6 +30,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { appDirIn } from "../bin/appDir.mjs";
 import { viewerBootGateKey } from "../src/lib/access/phoneAccessBootGate";
 import { viewerControlOrigin, viewerControlToken } from "../src/lib/mcp/controlEndpoint";
 import type { ViewerMcpRuntimeIdentity, ViewerReleaseIdentity } from "../src/lib/runtime/contracts";
@@ -280,8 +281,8 @@ async function waitForStagingRevision(
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   const configRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  const prodStateDir = path.join(configRoot, "agent-log-viewer", "state");
-  const stagingStateDir = process.env.LLV_STAGING_STATE_DIR || path.join(configRoot, "agent-log-viewer", "state-staging");
+  const prodStateDir = path.join(appDirIn(configRoot), "state");
+  const stagingStateDir = process.env.LLV_STAGING_STATE_DIR || path.join(appDirIn(configRoot), "state-staging");
   const paths = stagingStatePaths(stagingStateDir);
   const remote = process.env.LLV_VIEWER_CANONICAL_REMOTE || "https://github.com/Latand/live-log-viewer-next.git";
   const endpoint = `http://127.0.0.1:${STAGING_FRONT_PORT}`;

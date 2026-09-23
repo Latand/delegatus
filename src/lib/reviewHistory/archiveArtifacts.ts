@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+
+import { APP_DIR_NAMES } from "../../../bin/appDir.mjs";
 import { ArchiveReadError } from "./reader";
 import type { Flow } from "./types";
 
@@ -21,7 +23,7 @@ export function readArchiveArtifact(directory: string, flowId: string, filename:
       // Read its copied artifact from today's archive, never an arbitrary path
       // embedded in a row or an already-pruned predecessor directory.
       const name = path.basename(candidate);
-      const legacyRoots = [path.join(".claude", "viewer-state"), path.join("live-log-viewer", "state"), path.join("agent-log-viewer", "state")];
+      const legacyRoots = [path.join(".claude", "viewer-state"), ...APP_DIR_NAMES.map((name) => path.join(name, "state"))];
       const recognized = /^round-[0-9]+-(?:review\.md|last-message\.md|stdout\.log|stderr\.txt)$/.test(name)
         && legacyRoots.some(legacy => candidate.endsWith(path.sep + path.join(legacy, "flows", flowId, name)));
       if (!recognized) return { status: "unavailable" };

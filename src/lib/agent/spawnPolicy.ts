@@ -6,6 +6,8 @@ import crypto from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
 
+import { appDirIn } from "../../../bin/appDir.mjs";
+
 import type { AgentEngine } from "./cli";
 import { grantedMcpServers } from "./mcpAllowlist";
 
@@ -67,7 +69,7 @@ export function viewerMcpServerEnv(source: NodeJS.ProcessEnv = process.env): Rec
   const configRoot = source.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), ".config");
   const env: Record<string, string> = {
     XDG_CONFIG_HOME: configRoot,
-    LLV_STATE_DIR: source.LLV_STATE_DIR?.trim() || path.join(configRoot, "agent-log-viewer", "state"),
+    LLV_STATE_DIR: source.LLV_STATE_DIR?.trim() || path.join(appDirIn(configRoot), "state"),
   };
   /* PATH and HOME are restated rather than assumed: a CLI that treats a
      server's `env` table as the whole environment instead of as additions to
