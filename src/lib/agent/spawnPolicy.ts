@@ -66,7 +66,7 @@ export interface ViewerMcpServerEntry {
  * link pointed at the real Viewer while everything else the agent runs stays
  * in its sandbox.
  */
-export function viewerMcpServerEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+export function viewerMcpServerEnv(source: McpEnvironment = process.env): Record<string, string> {
   const configRoot = source.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), ".config");
   const env: Record<string, string> = {
     XDG_CONFIG_HOME: configRoot,
@@ -95,7 +95,7 @@ export function viewerMcpServerEnv(source: NodeJS.ProcessEnv = process.env): Rec
  */
 export function viewerMcpServerEntry(
   packageCwd = process.cwd(),
-  source: NodeJS.ProcessEnv = process.env,
+  source: McpEnvironment = process.env,
 ): ViewerMcpServerEntry {
   const stable = path.join(stableMcpRuntimeRoot(source), "bin", "mcp-server.mjs");
   const direct = path.resolve(packageCwd, "bin", "mcp-server.mjs");

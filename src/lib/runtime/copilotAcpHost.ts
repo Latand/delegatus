@@ -178,7 +178,7 @@ export type CopilotViewerMcpServer = ViewerMcpServerEntry | { url: string };
 /** The Viewer server for one launch, from the environment its agent runs
     with: the shared endpoint when `viewerMcpTransportForLaunch` admits HTTP,
     the resolved stdio launcher otherwise. */
-export function copilotViewerMcpServer(launchEnv: NodeJS.ProcessEnv): CopilotViewerMcpServer {
+export function copilotViewerMcpServer(launchEnv: Readonly<Record<string, string | undefined>>): CopilotViewerMcpServer {
   return viewerMcpTransportForLaunch(launchEnv) === "http" ? { url: viewerMcpHttpUrl() } : viewerMcpServerEntry();
 }
 
