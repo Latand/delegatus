@@ -30,6 +30,8 @@ class FakeAppServer extends EventEmitter {
   /** MCP servers the thread gains from plugins on top of its own table. */
   pluginServers: string[] = [];
   statusError: string | null = null;
+  /** The MCP table `config/read` reports: how the account registers servers. */
+  configuredServers: Record<string, unknown> = { viewer: { command: "agent-log-viewer-mcp" }, playwright: { command: "npx" } };
 
   constructor(private readonly threadId = "thread-687") {
     super();
@@ -58,7 +60,7 @@ class FakeAppServer extends EventEmitter {
     if (method === "model/list") return this.respond(message.id, { data: [{ id: "gpt-5.3-codex-spark", isDefault: true }] });
     if (method === "config/read") return this.respond(message.id, {
       config: {
-        mcp_servers: { viewer: { command: "agent-log-viewer-mcp" }, playwright: { command: "npx" } },
+        mcp_servers: this.configuredServers,
         plugins: { "computer-use@openai-bundled": { enabled: true }, "browser@openai-bundled": { enabled: true } },
       },
     });
@@ -213,4 +215,40 @@ test("a stored profile naming an ungrantable plugin gets no grant at all", async
   expect(config).not.toHaveProperty("plugins");
   expect(captured.options?.env).not.toHaveProperty("WAYLAND_DISPLAY");
   await host.release();
+});
+
+/* Not a plugin case: the same fake app-server, reused for the transport a
+   thread's Viewer server gets under LLV_MCP_TRANSPORT=http. */
+test("with the HTTP flag, only an app-server holding a capability gives its thread the shared endpoint", async () => {
+  const previous = { transport: process.env.LLV_MCP_TRANSPORT, token: process.env.LLV_TOKEN };
+  process.env.LLV_MCP_TRANSPORT = "http";
+  delete process.env.LLV_TOKEN;
+  const viewerFor = async (env: Record<string, string>) => {
+    const server = new FakeAppServer();
+    server.configuredServers = { playwright: { command: "npx" } };
+    const host = await CodexAppServerHost.start({ cwd: "/repo", env: { NODE_ENV: "test", ...env } as NodeJS.ProcessEnv, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    const config = (server.requests.find((request) => request.method === "thread/start")
+      ?.params as { config: { mcp_servers: Record<string, Record<string, unknown>> } }).config;
+    await host.release();
+    return config.mcp_servers.viewer!;
+  };
+  try {
+    const withCapability = await viewerFor({ LLV_SPAWN_CAPABILITY: "c".repeat(43) });
+    expect(withCapability).toMatchObject({
+      url: "http://127.0.0.1:8898/api/mcp",
+      env_http_headers: { "x-llv-spawn-capability": "LLV_SPAWN_CAPABILITY" },
+      enabled: true,
+    });
+    expect(withCapability).not.toHaveProperty("command");
+    /* An app-server started with none — a migration successor the registry
+       could not match — keeps the packaged stdio launcher. */
+    const without = await viewerFor({});
+    expect(without).toHaveProperty("command");
+    expect(without).not.toHaveProperty("url");
+  } finally {
+    for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_TOKEN", previous.token]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });

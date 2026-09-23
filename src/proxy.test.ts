@@ -108,3 +108,21 @@ test("only the report frame passes without the cookie; the route checks its sign
     expect(proxy(bare(pathname)).status).toBe(403);
   }
 });
+
+test("with LLV_TOKEN set, the shared MCP endpoint keeps the token gate every other path has", () => {
+  process.env.LLV_TOKEN = "operator-key";
+  const bearer = (key: string) => `Bearer ${key}`;
+  const mcp = (headers: Record<string, string>) =>
+    proxy(new NextRequest("http://127.0.0.1:8898/api/mcp", { method: "POST", headers: { host: "127.0.0.1:8898", ...headers } }));
+  const capability = "A".repeat(43);
+
+  /* A capability is identity, not access: without the operator's key a
+     request is refused before the route, whatever it presents — which is what
+     keeps a tailnet caller with a spoofed loopback Host out. */
+  expect(mcp({ "x-llv-spawn-capability": capability }).status).toBe(403);
+  expect(mcp({}).status).toBe(403);
+  /* The stable local entry supplies the key for loopback callers when it is
+     trusted; with it the request reaches the route, which then asks for the
+     capability. */
+  expect(mcp({ authorization: bearer("operator-key"), "x-llv-spawn-capability": capability }).headers.get("x-middleware-next")).toBe("1");
+});
