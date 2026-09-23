@@ -1937,7 +1937,12 @@ test("pipeline close acknowledges pending teardown and get_pipeline reads final 
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
   } as never);
   const answer = await bindings.pipeline_action({ clientRequestId: "close-pending", pipelineId: pipeline.id, action: "close" });
-  expect(answer).toMatchObject({ state: "closed", close: { status: "pending", pending: [target], stopped: [] } });
+  /* #2030: counts, never the host list; get_pipeline reads the list below. */
+  expect(answer).toMatchObject({ state: "closed", close: { status: "pending", pending: 1, stopped: 0, alreadyStopped: 0 } });
+  expect(JSON.stringify(answer)).not.toContain("conversation_build");
+  expect(answer).not.toHaveProperty("stageDigests");
+  const full = await bindings.pipeline_action({ clientRequestId: "close-pending-full", pipelineId: pipeline.id, action: "close", full: true });
+  expect(full).toMatchObject({ close: { pending: [target] } });
   Object.assign(close, { status: "settled", pending: [], stopped: [target] });
   pipeline.closeReport = close as import("@/lib/pipelines/types").PipelineCloseReport;
   pipeline.closeTeardown = { id: "close-fixture", phase: "settled", waitingForActivation: false, acknowledgeHosts: false, flow: null };
@@ -2570,8 +2575,15 @@ test("seat_tick_settings turns its own project's tick off indefinitely, with the
     enabled: false,
     reason: "the only open lane is a draft nothing can discharge",
   });
-  expect(applied).toMatchObject({
+  /* #2030: a write is acknowledged, never read back. */
+  expect(applied).toEqual({
     changed: true,
+    revision: expect.any(String),
+    changedFields: ["enabled", "reason"],
+    monitorPromptLength: 0,
+  });
+  expect(Buffer.byteLength(JSON.stringify(applied))).toBeLessThanOrEqual(300);
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-off-read" })).toMatchObject({
     scope: "own-project",
     effective: { enabled: false, isDefault: false, until: null, reason: "the only open lane is a draft nothing can discharge" },
   });
@@ -2643,7 +2655,9 @@ test("seat_tick_settings sets a cadence and restores the default", async () => {
   });
   expect(store.get("viewer")).toMatchObject({ enabled: true, wakeIntervalMinutes: 240 });
   const restored = await bindings.seat_tick_settings({ clientRequestId: "tick-default", wakeIntervalMinutes: null });
-  expect(restored).toMatchObject({ effective: { wakeIntervalMinutes: 60, isDefault: true } });
+  expect(restored).toMatchObject({ changed: true, changedFields: ["wakeIntervalMinutes"] });
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-default-read" }))
+    .toMatchObject({ effective: { wakeIntervalMinutes: 60, isDefault: true } });
 });
 
 test("seat_tick_settings accepts an expiry in minutes and records the instant it lapses", async () => {
@@ -2670,6 +2684,7 @@ test("seat_tick_settings lets one seat set another project's tick, and says whos
   });
   /* Allowed rather than refused; what answers for it is attribution. */
   expect(applied).toMatchObject({ project: "another-project", changed: true, scope: "other-project", callerProject: "viewer" });
+  expect(Buffer.byteLength(JSON.stringify(applied))).toBeLessThanOrEqual(300);
   expect(store.get("another-project")).toMatchObject({
     enabled: false,
     setBy: { conversationId: TICK_SEAT, project: "viewer" },
@@ -2693,13 +2708,12 @@ test("seat_tick_settings sets, replaces and clears the monitor prompt, and the r
   });
   expect(set).toMatchObject({
     changed: true,
-    /* The stored note in full and its length ride the reply (#1450), so a seat
-       can check what persisted against what it sent. */
+    /* An explicit full write reads the stored note back (#1450), so a seat can
+       check what persisted against what it sent — once (#2030). */
     monitorPrompt: "before the items, check whether last night's digest actually sent",
     monitorPromptLength: "before the items, check whether last night's digest actually sent".length,
   });
-  /* Explicit full mode preserves all three locations in the verbose record. */
-  expect(JSON.stringify(set).split("last night's digest").length - 1).toBe(3);
+  expect(JSON.stringify(set).split("last night's digest").length - 1).toBe(1);
 
   /* Read back through a second call, which is what the tick itself does at its
      next check — the echo of the write proves nothing about the record. */
@@ -2707,13 +2721,12 @@ test("seat_tick_settings sets, replaces and clears the monitor prompt, and the r
   expect(readBack).toMatchObject({
     changed: false,
     monitorPrompt: "before the items, check whether last night's digest actually sent",
-    settings: { monitorPrompt: "before the items, check whether last night's digest actually sent" },
-    effective: { monitorPrompt: "before the items, check whether last night's digest actually sent" },
   });
+  expect(JSON.stringify(readBack).split("last night's digest").length - 1).toBe(1);
 
   await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-replace", monitorPrompt: "the digest is fixed; watch the review rounds instead" });
   expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-2", verbose: true }))
-    .toMatchObject({ changed: false, effective: { monitorPrompt: "the digest is fixed; watch the review rounds instead" } });
+    .toMatchObject({ changed: false, monitorPrompt: "the digest is fixed; watch the review rounds instead" });
 
   await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-clear", monitorPrompt: null });
   expect(store.get("viewer")).toMatchObject({ monitorPrompt: null });
@@ -2726,7 +2739,7 @@ test("seat_tick_settings sets, replaces and clears the monitor prompt, and the r
     .rejects.toThrow(`monitorPrompt is ${SEAT_TICK_PROMPT_LIMIT + 1} characters; the limit is ${SEAT_TICK_PROMPT_LIMIT}`);
   expect(store.get("viewer")).toMatchObject({ monitorPrompt: null });
   expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-3", verbose: true }))
-    .toMatchObject({ changed: false, effective: { monitorPrompt: null } });
+    .toMatchObject({ changed: false, monitorPrompt: null });
 });
 
 /* #1845: a seat changing its cadence read its whole note back three times on
@@ -2749,7 +2762,9 @@ test("seat_tick_settings carries a stored monitor prompt only when it is written
     expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThan(2_000);
   }
   const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-note-verbose", verbose: true });
-  expect(verbose).toMatchObject({ monitorPrompt: note, settings: { monitorPrompt: note }, effective: { monitorPrompt: note } });
+  expect(verbose).toMatchObject({ monitorPrompt: note });
+  /* Once (#2030): a verbose read used to carry three copies. */
+  expect(JSON.stringify(verbose).split(note).length - 1).toBe(1);
 });
 
 test("a plain seat_tick_settings read of a fenced, paused project with a note stays under 1.7 KB, and verbose keeps the whole record (#1845)", async () => {
@@ -2786,12 +2801,13 @@ test("a plain seat_tick_settings read of a fenced, paused project with a note st
 
   const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-size-verbose", verbose: true });
   expect(verbose).toMatchObject({
-    settings: { enabled: false, reason, monitorPrompt: note },
+    settings: { enabled: false, reason },
     monitorPrompt: note,
-    effective: { reason, monitorPrompt: note },
+    effective: { reason },
     defaults: { enabled: true, wakeIntervalMinutes: null, reason: null },
     fence: { clientMessageId: key },
   });
+  expect(JSON.stringify(verbose).split(note).length - 1).toBe(1);
   expect((verbose as { fenceDetail: string }).fenceDetail).toContain(`under key ${key}`);
 });
 

@@ -14,7 +14,9 @@ import { EngineMark } from "@/components/EngineMark";
 import { CtxChip } from "@/components/PlanChip";
 import { captureReader, restoreReader, type ReaderSnapshot } from "@/components/scheme/NativeConversationPane";
 import { useProcessKill } from "@/components/TaskHeader";
+import { RoleFrameMark } from "@/components/RoleFrameMark";
 import { useAgentCapabilities } from "@/components/useAgentCapabilities";
+import { conversationFrameRole } from "@/lib/roleFrames";
 import { cleanTitle, fileModelLabel, fmtAge } from "@/components/utils";
 
 import { ConversationAccountChip } from "./AccountPicker";
@@ -250,6 +252,9 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
     </button>
   ) : null;
   const needs = row.dot === "warning";
+  /* The role frame: which agent this is, from the stage it is an
+     attempt of and its own durable lineage. */
+  const frameRole = conversationFrameRole({ stage: owner?.stage?.stage ?? null, file });
   const identity = (
     <>
       {engine ? (
@@ -306,6 +311,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
           header: (
             <div className="conv-head">
               <div className="ch-meta pane-id">
+                <RoleFrameMark role={frameRole} />
                 {identity}
                 <span className="spacer" />
                 {dismissLaunch}
@@ -324,6 +330,8 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
             "data-reader-path": file.path,
             "data-folded": "0",
             "data-in-sheet": "1",
+            "data-role-host": "reader",
+            "data-role": frameRole,
             role: "region",
             "aria-label": t("kanban.readerAria", { title, state: stateWord }),
           },
@@ -335,6 +343,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
     <>
       <div className="conv-head">
         <div className="ch-row">
+          <RoleFrameMark role={frameRole} />
           <span className={`ch-dot ${tone}${working ? " live" : ""}`} aria-hidden="true" />
           <span className="ch-title" title={titleHint}>
             {labelParts && labelParts.attempt !== null && owner
@@ -417,6 +426,8 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
           /* See above: the pane an arrival on a loose conversation lands on. */
           "data-reader-path": file.path,
           "data-folded": folded ? "1" : "0",
+          "data-role-host": "reader",
+          "data-role": frameRole,
           role: "region",
           "aria-label": t("kanban.readerAria", { title, state: stateWord }),
         },

@@ -1524,10 +1524,13 @@ export function seatTickWakeCommitPlan(
         actually names — inside the per-wake bound — are recorded as harvested
         by its landing; a child the bound held back stays owed. */
     terminalChildren?: readonly string[];
+    /** The revision of the monitor note the wake carries (#2030). */
+    noteShown?: string | null;
   },
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
-  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], shownChildren: [] };
+  const note = context.noteShown === undefined ? {} : { noteShown: context.noteShown };
+  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], shownChildren: [], ...note };
   if (verdict.kind !== "wake") return null;
   const terminal = new Set(context.terminalChildren ?? []);
   /* What each child line SHOWS, for the clause that asks whether anything has
@@ -1552,7 +1555,7 @@ export function seatTickWakeCommitPlan(
      announced, and recording it here would be the announcement nobody ever
      received. Same rule the harvested children live under. */
   const announcedLanes = verdict.items.filter((item) => item.kind === "provisioning").map((item) => item.id);
-  return { proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, shownChildren };
+  return { proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, shownChildren, ...note };
 }
 
 /**
@@ -1578,9 +1581,13 @@ export function seatTickWakeCommit(
 ): SeatTickProjectState {
   const at = new Date(now).toISOString();
   const eventsThrough = Math.max(state.eventsThrough ?? 0, commit.eventsThrough);
+  /* What the seat now holds of its own note (#2030); a plan that predates the
+     field leaves the record as it was. */
+  const note = commit.noteShown === undefined ? {} : { noteShown: commit.noteShown };
   if (commit.proposal) {
     return {
       ...state,
+      ...note,
       lastWakeAt: at,
       lastProposalAt: at,
       lastWakeReasons: [],
@@ -1605,6 +1612,7 @@ export function seatTickWakeCommit(
   }
   return {
     ...state,
+    ...note,
     lastWakeAt: at,
     lastWakeReasons: carried,
     lastWakeFingerprint: commit.fingerprint,

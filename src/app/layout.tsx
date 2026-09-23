@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { PRODUCT_NAME } from "@/lib/brand";
 
+import { ROLE_FRAME_BOOT_SCRIPT } from "@/lib/roleFrames";
+
 export const metadata: Metadata = {
   title: PRODUCT_NAME,
   description: "Agent Log Viewer for Codex and Claude agent logs",
@@ -22,7 +24,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="h-full antialiased">
+    /* The role frame variant is an attribute the boot script sets on <html>
+       before hydration (src/lib/roleFrames.ts). */
+    <html lang="en" className="h-full antialiased" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: ROLE_FRAME_BOOT_SCRIPT }} />
+      </head>
       <body className="h-dvh overflow-hidden font-sans text-[15px]">
         {children}
       </body>
