@@ -6,7 +6,7 @@ import type { DayActivity, HourActivity } from "@/lib/activity/method";
 import type { ActivityResponse } from "@/lib/activity/report";
 import type { Locale, TFunction } from "@/lib/i18n";
 
-import { agentParts, agentText, approxText, clockText, dayLong, hostName, hoursText, minutesText, nameList } from "./format";
+import { agentParts, agentText, approxAtLeast, approxText, clockText, dayLong, hostName, hoursText, minutesText, nameList } from "./format";
 import { Items, TipGap, TipRow } from "./marks";
 
 /*
@@ -20,8 +20,12 @@ const MINUTE = 60_000;
 export interface TipContext {
   data: ActivityResponse;
   names: ReadonlyMap<string | null, string>;
-  /** None of your input was read for the range. */
+  /** None of your input was read for the range, for the figures shown (on a
+      project's page, that project's). */
   unread: boolean;
+  /** None of your input was read for any project: what the Projects list's
+      rows go by. */
+  listUnread: boolean;
   locale: Locale;
   t: TFunction;
 }
@@ -43,6 +47,9 @@ export function DayTip({ day, context }: { day: DayActivity; context: TipContext
   if (reported.length && !unread) list.push(<Items items={reported.map((entry) => `${names.get(entry.project) ?? entry.project ?? ""} ${hoursText(entry.humanHours, locale, t)}`)} />);
   if (flagged) list.push(t("activity.tip.missing"));
   else if (lower) list.push(t("activity.tip.lower", { host: nameList(day.coverage.missingHosts.map((host) => hostName(host, data.coverage.hosts, t)), t) }));
+  /* Agent turns a host did not send: the day's agent time is a lower bound. */
+  const agentsLower = !day.agentCoverage.complete;
+  if (agentsLower) list.push(t("activity.tip.agentsLower", { host: nameList(day.agentCoverage.missingHosts.map((host) => hostName(host, data.coverage.hosts, t)), t) }));
   if (unclear > 0 && !flagged && !unread) {
     const projects = data.projects
       .filter((row) => row.unclearDays.includes(day.date))
@@ -64,7 +71,7 @@ export function DayTip({ day, context }: { day: DayActivity; context: TipContext
           </>
         )}
         <TipGap />
-        <TipRow value={approxText(day.wallMs, t)} label={t("activity.tip.agents")} />
+        <TipRow value={approxAtLeast(day.wallMs, agentsLower, t)} label={t("activity.tip.agents")} />
         {supervised > 0 ? <TipRow kind="supervised" value={approxText(supervised, t)} label={t("activity.tip.supervised")} /> : null}
         {unattended > 0 ? <TipRow kind="unattended" value={approxText(unattended, t)} label={t("activity.tip.unattended")} /> : null}
         {unclear > 0 ? <TipRow kind="unclear" value={approxText(unclear, t)} label={t("activity.tip.unclear")} /> : null}

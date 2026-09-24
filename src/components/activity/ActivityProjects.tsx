@@ -7,16 +7,18 @@ import { REQUEST_KINDS, SURFACES } from "@/lib/activity/method";
 import type { ActivityProjectRow } from "@/lib/activity/report";
 import type { MessageKey } from "@/lib/i18n";
 
-import { agentHoursText, agentParts, approxText, dayShort, ENGINE_NAMES, hostName, hoursText, minutesText, partsRound, roleName } from "./format";
+import { agentHoursText, agentParts, approxAtLeast, approxText, dayShort, ENGINE_NAMES, hostName, hoursText, minutesText, nameList, partsRound, roleName } from "./format";
 import { Items } from "./marks";
 import type { TipContext } from "./tips";
 
 /*
  * "On which projects" (docs/design/activity-dashboard-v2.md, "Projects"): a
  * ranked list beside the charts, your reported hours and agent time per
- * project. A row opens in place into three lines (you, agents, hosts), and
- * "More detail" opens the remaining breakdowns. The rows fill the column; the
- * rest folds into one "+ N more" row carrying their sums.
+ * project. Clicking a row scopes the whole page to that project and opens the
+ * row in place into three lines (you, agents, hosts); clicking it again
+ * returns to every project. "More detail" opens the remaining breakdowns. The
+ * list always holds every project, whatever the page is scoped to. The rows
+ * fill the column; the rest folds into one "+ N more" row carrying their sums.
  */
 
 type Sort = "you" | "agents";
@@ -62,13 +64,20 @@ function Detail({ row, unread, more, onMore, context }: { row: ActivityProjectRo
   const where = unclearDays.length <= 2
     ? unclearDays.map((day) => day.start <= data.range.now && data.range.now < day.end ? t("activity.range.today") : dayShort(day, locale, tz)).join(", ")
     : t("activity.detail.days", { count: unclearDays.length });
+  /* Agent turns a host holding the project did not send are missing: the
+     agent figures are lower bounds, and the line names that host. */
+  const agentsLower = !row.agentCoverage.complete;
+  const notRead = agentsLower
+    ? [t("activity.detail.agentsNotRead", { hosts: nameList(row.agentCoverage.missingHosts.map((host) => hostName(host, data.coverage.hosts, t)), t) })]
+    : [];
   const agentItems: ReactNode[] = row.wallMs >= 2.5 * MINUTE ? [
     ...(supervised ? [t("activity.fig.supervised", { value: approxText(supervised, t) })] : []),
     ...(unattended ? [t("activity.fig.unattended", { value: approxText(unattended, t) })] : []),
     ...(unclear ? [unclearDays.length ? t("activity.detail.unclearOn", { value: approxText(unclear, t), days: where }) : t("activity.fig.unclear", { value: approxText(unclear, t) })] : []),
     t("activity.project.agents", { count: row.conversations }),
-    t("activity.detail.agentHours", { value: agentHoursText(row.agentHoursMs, locale) }),
-  ] : [<V key="none">–</V>];
+    t("activity.detail.agentHours", { value: `${agentsLower ? "≥ " : ""}${agentHoursText(row.agentHoursMs, locale)}` }),
+    ...notRead,
+  ] : [<V key="none">{agentsLower ? "?" : "–"}</V>, ...notRead];
 
   const hostItems = Object.entries(row.byHost).filter(([, ms]) => ms >= MINUTE).sort((a, b) => b[1] - a[1])
     .map(([host, ms]) => <>{hostName(host, data.coverage.hosts, t)} <V>{row.coverage.missingHosts.includes(host) ? "≥ " : ""}{minutesText(ms, t)}</V></>);
@@ -118,10 +127,19 @@ function Detail({ row, unread, more, onMore, context }: { row: ActivityProjectRo
   );
 }
 
-export function ActivityProjects({ context, span }: { context: TipContext; span: boolean }) {
-  const { data, unread, names, locale, t } = context;
+export function ActivityProjects({ context, span, selected, onSelect }: {
+  context: TipContext;
+  span: boolean;
+  /** The project the page is scoped to: its row is highlighted and open. */
+  selected: string | null;
+  onSelect(project: string | null): void;
+}) {
+  const { data, listUnread: unread, names, locale, t } = context;
   const [sort, setSort] = useState<Sort>(unread ? "agents" : "you");
-  const [expanded, setExpanded] = useState<string | null>(null);
+  /* The row with no project cannot scope the page; it only opens in place. */
+  const [unattributedOpen, setUnattributedOpen] = useState(false);
+  /* The open row the fold keeps in view: the chosen project's first. */
+  const expanded = selected ?? (unattributedOpen ? "" : null);
   const [more, setMore] = useState(false);
   const [all, setAll] = useState(false);
   const [budget, setBudget] = useState<number | null>(null);
@@ -175,6 +193,7 @@ export function ActivityProjects({ context, span }: { context: TipContext; span:
   }
   const restHours = rest.reduce((sum, row) => sum + row.humanHours, 0);
   const restAgents = rest.reduce((sum, row) => sum + row.wallMs, 0);
+  const restAgentsLower = rest.some((row) => !row.agentCoverage.complete);
 
   const header = (column: Sort, label: string) => (
     <button
@@ -204,15 +223,21 @@ export function ActivityProjects({ context, span }: { context: TipContext; span:
         {rows.length ? (
           <ul>
             {shown.map((row) => {
-              const open = expanded === key(row);
+              const chosen = row.project !== null && row.project === selected;
+              const open = row.project === null ? unattributedOpen : chosen;
               const name = names.get(row.project) ?? "";
               return (
-                <li key={key(row)} data-activity-project={key(row)} data-coverage={row.coverage.complete ? "complete" : "unknown"}>
+                <li key={key(row)} data-activity-project={key(row)} data-coverage={row.coverage.complete ? "complete" : "unknown"} data-selected={chosen ? "true" : undefined}>
                   <button
                     type="button"
-                    aria-expanded={open}
-                    onClick={() => { setExpanded(open ? null : key(row)); setMore(false); }}
-                    className={`grid w-full grid-cols-[minmax(0,1fr)_64px_92px] items-center gap-2 border-t border-border px-[18px] pb-[9px] pt-2 text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${open ? "bg-sunken" : ""}`}
+                    aria-pressed={row.project === null ? undefined : chosen}
+                    aria-expanded={row.project === null ? open : undefined}
+                    onClick={() => {
+                      setMore(false);
+                      if (row.project === null) setUnattributedOpen(!open);
+                      else onSelect(chosen ? null : row.project);
+                    }}
+                    className={`grid w-full grid-cols-[minmax(0,1fr)_64px_92px] items-center gap-2 border-t border-border px-[18px] pb-[9px] pt-2 text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${open ? "bg-sunken" : ""} ${chosen ? "shadow-[inset_3px_0_0_var(--color-accent)]" : ""}`}
                   >
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-1.5">
@@ -222,7 +247,7 @@ export function ActivityProjects({ context, span }: { context: TipContext; span:
                       <div className="mt-1.5 h-1 rounded-r-[2px]" style={{ width: `${(row.humanHours / maxHours) * 100}%`, background: row.humanHours > 0 && !unread ? "var(--mark-you)" : "none" }} aria-hidden />
                     </div>
                     <div className="text-right text-[13px] font-semibold tabular-nums whitespace-nowrap text-primary" data-activity-project-you="">{youValue(row, unread, context)}</div>
-                    <div className="text-right text-[12px] tabular-nums whitespace-nowrap text-secondary" data-activity-project-agents="">{approxText(row.wallMs, t)}</div>
+                    <div className="text-right text-[12px] tabular-nums whitespace-nowrap text-secondary" data-activity-project-agents="">{approxAtLeast(row.wallMs, !row.agentCoverage.complete, t)}</div>
                   </button>
                   {open ? <Detail row={row} unread={unread} more={more} onMore={() => setMore((value) => !value)} context={context} /> : null}
                 </li>
@@ -240,7 +265,7 @@ export function ActivityProjects({ context, span }: { context: TipContext; span:
                   <span className="text-right text-[13px] font-semibold tabular-nums whitespace-nowrap">
                     {unread ? <span className="font-medium text-muted">?</span> : restHours ? hoursText(restHours, locale, t) : <span className="font-medium text-muted">0</span>}
                   </span>
-                  <span className="text-right text-[12px] tabular-nums whitespace-nowrap">{approxText(restAgents, t)}</span>
+                  <span className="text-right text-[12px] tabular-nums whitespace-nowrap">{approxAtLeast(restAgents, restAgentsLower, t)}</span>
                 </button>
               </li>
             ) : null}
