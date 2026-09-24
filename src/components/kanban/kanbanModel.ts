@@ -98,10 +98,17 @@ export interface KanbanCard {
   details: string;
   members: KanbanMember[];
   mirrors: KanbanMirror[];
-  /** Distinct conversations, counted from members, mirrors and durable rows. */
+  /** Distinct conversations the operator can open, counted from members,
+      mirrors and durable rows. A launch that never produced a transcript is
+      not one of them: it is listed in `unstarted`. */
   conversations: number;
   /** Conversations counted from durable rows whose transcripts this board does not carry. */
   notLoaded: number;
+  /** Those conversations, each with the transcript it opens. */
+  notLoadedRefs: KanbanRecordedConversation[];
+  /** The task's launches that never produced a transcript, past the grace a
+      starting launch gets. Nothing opens; the card offers to dismiss each. */
+  unstarted: KanbanUnstartedLaunch[];
   /** Review decks and worker stacks the band carries besides conversations. */
   otherSurfaces: number;
   /** Agent drafts the card holds, in the band's order: its own «+ Agent», a handoff, a retried launch. */
@@ -127,6 +134,32 @@ export interface KanbanCard {
   /** The task holds the project's orchestrator seat conversation, active or
       pending: it stays on the board, and the server refuses to hide it. */
   holdsSeat: boolean;
+}
+
+/** A conversation the card holds that this board did not load. */
+export interface KanbanRecordedConversation {
+  key: string;
+  path: string;
+  conversationId: string | null;
+}
+
+/** A launch recorded on the task that never produced a transcript. */
+export interface KanbanUnstartedLaunch {
+  key: string;
+  launchId: string | null;
+  conversationId: string | null;
+  /** When the launch was recorded, epoch ms. */
+  atMs: number;
+}
+
+/** How long a launch may run before its transcript appears and still count as
+    starting: a Codex rollout is attributed a moment after its process starts,
+    and until then the task row carries no path. */
+export const LAUNCH_START_GRACE_MS = 10 * 60_000;
+
+/** A projected launch placeholder whose launch failed: nothing ever ran. */
+function failedLaunchPlaceholder(file: FileEntry): boolean {
+  return file.path.startsWith("spawn:") && file.spawn?.state === "failed";
 }
 
 export interface KanbanColumn {
@@ -385,9 +418,13 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const seatTasks: BoardTask[] = [];
   const cards: KanbanCard[] = bands.flatMap((band): KanbanCard[] => {
     const task = band.task;
-    const members = band.members
-      .filter((member) => member.kind === "node" && member.file && !seatFile(member.file))
+    const nodes = band.members.filter((member) => member.kind === "node" && member.file && !seatFile(member.file));
+    /* A launch placeholder whose launch failed opens nothing: it is listed as
+       a launch that did not start, never as a conversation. */
+    const members = nodes
+      .filter((member) => !failedLaunchPlaceholder(member.file!))
       .map((member) => memberOf(member.key, member.file!, stageByPath, now));
+    const failedLaunches = nodes.filter((member) => failedLaunchPlaceholder(member.file!)).map((member) => member.file!);
     const mirrors = band.mirrors.filter((mirror) => !seatFile(mirror.file)).map((mirror) => ({
       key: mirror.key,
       file: mirror.file,
@@ -410,25 +447,60 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     /* Conversations: what the band carries, plus durable rows it could not
        resolve to a transcript on this board. */
     const identities = new Set<string>();
-    let notLoaded = 0;
+    const notLoadedRefs: KanbanRecordedConversation[] = [];
+    const unopenable: { kind: string; state: string; conversationId: string | null; launchId: string | null }[] = [];
     for (const member of members) identities.add(conversationIdentity(member.file));
     for (const mirror of mirrors) identities.add(conversationIdentity(mirror.file));
-    const countReference = (reference: { kind: string; conversationId: string | null; path: string | null; file: FileEntry | null }) => {
+    const failedIdentities = new Set(failedLaunches.flatMap((file) => [file.conversationId, file.path].filter((key): key is string => Boolean(key))));
+    const countReference = (reference: { kind: string; state: string; conversationId: string | null; launchId: string | null; path: string | null; file: FileEntry | null }) => {
       if (reference.kind === "planned") return;
       if (isSeatConversation(input.seat, reference.file ?? reference)) return;
       const identity = referenceIdentity(reference);
       if (!identity || identities.has(identity)) return;
-      identities.add(identity);
+      if (reference.file && failedLaunchPlaceholder(reference.file)) {
+        unopenable.push(reference);
+        return;
+      }
       const known = Boolean(reference.file)
         || (reference.path !== null && knownConversations.has(reference.path))
-        || (reference.conversationId !== null && knownConversations.has(reference.conversationId));
-      if (!known) notLoaded += 1;
+        || (reference.conversationId !== null && knownConversations.has(reference.conversationId) && !failedIdentities.has(reference.conversationId));
+      if (known) {
+        identities.add(identity);
+        return;
+      }
+      /* Not on this board: it counts, and opens, only through a transcript. */
+      const transcript = reference.path && !reference.path.startsWith("spawn:") ? reference.path : null;
+      if (transcript) {
+        identities.add(identity);
+        notLoadedRefs.push({ key: identity, path: transcript, conversationId: reference.conversationId });
+        return;
+      }
+      unopenable.push(reference);
     };
     for (const reference of workflow?.references ?? []) countReference(reference);
     for (const execution of workflow?.executions ?? []) {
       if (execution.basis !== "explicit") continue;
       for (const reference of execution.references) countReference(reference);
     }
+    /* The task's own launches that nothing can open: past the grace a starting
+       launch gets, each is a launch that did not start. A dismissed one is a
+       failed row and is gone. Stage attempts have their chips instead. */
+    const unstarted: KanbanUnstartedLaunch[] = [];
+    const unstartedKeys = new Set<string>();
+    const nowMs = now * 1000;
+    for (const reference of unopenable) {
+      if (reference.kind !== "assignment" || reference.state === "failed" || !task) continue;
+      const assignment = task.assignments.find((candidate) => candidate.state !== "failed"
+        && ((reference.launchId && candidate.launchId === reference.launchId) || (reference.conversationId && candidate.conversationId === reference.conversationId)));
+      if (!assignment) continue;
+      const atMs = Date.parse(assignment.at);
+      if (Number.isFinite(atMs) && nowMs - atMs < LAUNCH_START_GRACE_MS) continue;
+      const key = assignment.launchId ?? assignment.conversationId ?? "";
+      if (!key || unstartedKeys.has(key)) continue;
+      unstartedKeys.add(key);
+      unstarted.push({ key, launchId: assignment.launchId ?? null, conversationId: assignment.conversationId ?? null, atMs: Number.isFinite(atMs) ? atMs : 0 });
+    }
+    const notLoaded = notLoadedRefs.length;
 
     /* Newest agent work first; a pipeline with no recorded work sorts last. */
     const summaries = [...cardPipelines.values()]
@@ -492,6 +564,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       mirrors,
       conversations: identities.size,
       notLoaded,
+      notLoadedRefs,
+      unstarted,
       otherSurfaces,
       drafts,
       pipelines: summaries,

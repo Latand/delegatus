@@ -42,7 +42,7 @@ import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
 import { drawnTasks, useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
-import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
+import { assignmentRefFor, browserAssignmentPorts, dismissUnstartedLaunch, type AssignmentPorts } from "./kanbanAssignments";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
@@ -576,6 +576,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
     void element.offsetWidth;
     element.classList.add("flash");
   }, []);
+  /* A launch that never produced a transcript: dismissing it marks its row
+     failed on the server, and the refreshed tasks take the row away. A refusal
+     (it did start after all) flashes the card. */
+  const dismissLaunch = useCallback((card: KanbanCardModel, launch: { launchId: string | null; conversationId: string | null }) => {
+    if (!card.task) return;
+    void dismissUnstartedLaunch(card.task.id, launch).then((answer) => {
+      if (!answer.ok) flash(card.id);
+    });
+  }, [flash]);
   const previousRects = useRef(new Map<string, { rect: DOMRect; status: string | undefined }>());
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -2149,6 +2158,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         graphChoices,
         onToggleGraph: toggleGraph,
         onOpenAttempt: openRecorded,
+        onDismissLaunch: dismissLaunch,
         drafts: stageDrafts,
         pipelinePorts,
         onOpenSheet: openSheet,
@@ -2465,7 +2475,7 @@ type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
   | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onIconMenu"
-  | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
+  | "graphChoices" | "onToggleGraph" | "onOpenAttempt" | "onDismissLaunch"
   | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
   | "projectNames" | "onOpenProject"
 >;

@@ -124,7 +124,7 @@ function Receipt() {
   return receipt ? <div data-test-receipt="">{receipt.text}{receipt.inverse ? <button type="button" data-test-undo="" onClick={() => receipts.undo()}>undo</button> : null}</div> : null;
 }
 
-function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts) {
+function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: BoardTask = theTask) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -134,12 +134,12 @@ function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts) {
     href: () => "http://localhost/",
     onPopstate: () => () => {},
   });
-  nav.push({ kind: "task", id: "t-many" });
+  nav.push({ kind: "task", id: subject.id });
   const files = [file(1)];
   flushSync(() => root.render(
     <MobileNavContext.Provider value={nav}>
       <MobileTaskScreen
-        taskId="t-many"
+        taskId={subject.id}
         layout={layout(files)}
         project="fixture"
         groups={[]}
@@ -148,7 +148,7 @@ function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts) {
         flows={[]}
         pipelines={pipelines}
         tasks={[]}
-        allTasks={[theTask]}
+        allTasks={[subject]}
         drafts={[]}
         now={NOW}
         seatRefs={null}
@@ -261,4 +261,38 @@ test("the title is edited in place and written as the task's text, the descripti
     text: "Name every pipeline row by its first prompt line\nThe phone names each lane of a task by its first prompt line.",
     expectedRevision: "r-t-many-1",
   });
+});
+
+test("the phone lists only what opens: a transcript the board did not load opens by its path, a launch that never started offers a Dismiss", async () => {
+  const subject = {
+    ...theTask,
+    id: "t-ghost",
+    text: "Exercise legacy spawn fixture",
+    origin: { kind: "launch", key: "launch-ghost", refinement: "pending" },
+    assignments: [
+      { launchId: "launch-ghost", conversationId: "conversation_ghost", path: null, panePid: null, state: "linked", error: null, at: iso(3_600), engine: "codex" },
+      { conversationId: "conversation_elsewhere", path: "/elsewhere/conversation-9.jsonl", panePid: null, state: "linked", error: null, at: iso(3_600) },
+    ],
+  } as unknown as BoardTask;
+  const requests: Array<{ url: string; method: string; body: unknown }> = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    requests.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
+    return new Response(JSON.stringify({ ok: true, task: subject }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const { host } = mount(taskPorts([]), noPipelinePorts, subject);
+    const open = qa(host, "[data-phone-task-not-loaded]");
+    expect(open.length).toBe(1);
+    click(open[0]!);
+    const { formatConversationHash } = await import("@/lib/accounts/identity");
+    expect(dom.location.hash).toBe(formatConversationHash({ conversationId: "conversation_elsewhere", path: "/elsewhere/conversation-9.jsonl" }));
+    expect(qa(host, "[data-phone-task-unstarted]").map((row) => row.getAttribute("data-phone-task-unstarted"))).toEqual(["launch-ghost"]);
+    click(q(host, '[data-phone-launch-dismiss="launch-ghost"]'));
+    await sleep(5);
+    expect(requests.filter((request) => request.method !== "GET")).toEqual([{ url: "/api/tasks/t-ghost/assignment", method: "PATCH", body: { launchId: "launch-ghost", conversationId: "conversation_ghost", dismiss: "launch-did-not-start" } }]);
+  } finally {
+    globalThis.fetch = realFetch;
+    dom.location.hash = "";
+  }
 });
