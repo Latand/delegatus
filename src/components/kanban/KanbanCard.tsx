@@ -40,10 +40,14 @@ import type { PipelineActionKind } from "./stagesModel";
    tools, the links no lane row draws, description, the collapsed Details row
    carrying the agent's context (#1834), one lane row per pipeline
    (`PipelineBlock` at task density), the conversations as rows, and the
-   footer: the status pill that is the one place status changes, the age, who
-   is working and how many conversations the card holds.
+   footer: the age, who is working and how many conversations the card holds.
 
-   The card is the only frame. A lane has a hairline above it, a stage pill
+   The column the card stands in names its status, so the card does not
+   repeat it (#2148): status changes from the card's ⋯ ("Move to"), the S key
+   or a drag. That ⋯ is the card's one menu: each lane's actions are a group
+   in it, and a lane's stage chain is its head row.
+
+   The card is the only frame. A lane is set apart by space, a stage pill
    is an outline with no fill, and a conversation is a row. What the old
    activity line said moved to where it belongs: "needs you" to the amber edge
    and the lane's own state word, the working and conversation counts to the
@@ -168,7 +172,6 @@ export interface KanbanCardProps {
   collapsed: boolean;
   nowMs: number;
   onToggleCollapsed: (id: string) => void;
-  onStatusMenu: (card: KanbanCardModel, anchor: HTMLElement) => void;
   onCardMenu: (card: KanbanCardModel, anchor: HTMLElement) => void;
   onKey: (card: KanbanCardModel, event: React.KeyboardEvent<HTMLElement>) => void;
   onPointerDown: (card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => void;
@@ -454,7 +457,9 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       onToggleGraph={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}
       onOpenStage={(pipeline, stage) => props.onOpenStage(pipeline, stage, card.id)}
       onOpenStages={(pipeline) => props.onOpenSheet(card.id, pipeline)}
-      onMenu={(pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
+      /* A task's card has one ⋯, and the lane's actions are a group in it. A
+         pipeline on no task has no card menu, so its lane keeps its own. */
+      onMenu={card.task ? undefined : (pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
       onWorkLinks={onWorkLinks}
       onAnswer={onAnswer ? (pipeline, answer) => onAnswer(card.id, title, pipeline, answer) : undefined}
     />
@@ -796,16 +801,6 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
 
       {card.task ? (
         <div className="foot">
-          <button
-            type="button"
-            className="pill"
-            data-status={status}
-            aria-haspopup="menu"
-            aria-label={t("kanban.statusAria", { status: statusText })}
-            onClick={(event) => props.onStatusMenu(card, event.currentTarget)}
-          >
-            {statusText} <ChevronDown />
-          </button>
           <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
           {footMeta}
           <span className="spacer" />

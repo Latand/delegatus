@@ -1,6 +1,6 @@
 "use client";
 
-import { Settings } from "lucide-react";
+import { Link2, Settings } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -419,6 +419,11 @@ export interface PipelineBlockProps {
   /** Screen density: the heading, which the screen's bar watches to take the
       title once it scrolls away. */
   headingRef?: React.Ref<HTMLHeadingElement>;
+  /** Screen density inside another screen (the phone task screen, #2148): no
+      heading, since the screen above names the task, and no Attach, which is
+      on the pipeline screen one tap away. The "Stages" line is that tap, with
+      the lane's age and its ⋯ at the end. */
+  embedded?: boolean;
   /** Card density: what the card adds about its other pipelines ("+1
       paused"), at the right end of the block's last line. */
   aside?: React.ReactNode;
@@ -497,54 +502,72 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const age = moved === null ? null : fmtAge(moved / 1000);
   const graphOpen = Boolean(props.graphOpen && props.onToggleGraph && props.onOpenStage);
   const report = !needs && pipeline.stageReports?.length ? pipeline.stageReports.at(-1)! : null;
-  return (
-    <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root}>
-      <div className="pb-head">
+  const opener = (
+    <button
+      type="button"
+      className="pb-open"
+      data-open-stages={pipeline.id}
+      aria-label={`${t("kanban.pipelineAria", { title, progress })}. ${t("kanban.stages.expandTitle")}`}
+      title={pipeline.task || title}
+      disabled={!props.onOpenStages}
+      onClick={() => props.onOpenStages?.(pipeline)}
+    >
+      {showTitle ? <span className="pb-title" data-pipeline-title={pipeline.id}>{title}</span> : null}
+      <span className="pb-meta">
+        {word ? <span className="pstate-word" data-pstate={pipeline.state}>{word}</span> : null}
+        {word && age ? <span className="pb-sep" aria-hidden="true">·</span> : null}
+        {age ? <span className="pb-when">{age}</span> : null}
+      </span>
+      <ChevronRight />
+    </button>
+  );
+  const acting = props.acting ? <span className="pb-acting" role="status" data-pipeline-acting={props.acting}>{t(`kanban.pipelineAct.pending.${props.acting}`)}</span> : null;
+  const controls = (
+    <>
+      {props.onToggleGraph && props.onOpenStage ? (
         <button
           type="button"
-          className="pb-open"
-          data-open-stages={pipeline.id}
-          aria-label={`${t("kanban.pipelineAria", { title, progress })}. ${t("kanban.stages.expandTitle")}`}
-          title={pipeline.task || title}
-          disabled={!props.onOpenStages}
-          onClick={() => props.onOpenStages?.(pipeline)}
+          className="pb-icon pb-graph-toggle"
+          aria-pressed={graphOpen}
+          aria-label={graphOpen ? t("kanban.graph.showSummary") : t("kanban.graph.showGraph")}
+          title={graphOpen ? t("kanban.graph.summary") : t("kanban.graph.graph")}
+          data-graph-toggle={pipeline.id}
+          onClick={() => props.onToggleGraph!(!graphOpen)}
         >
-          {showTitle ? <span className="pb-title" data-pipeline-title={pipeline.id}>{title}</span> : null}
-          <span className="pb-meta">
-            {word ? <span className="pstate-word" data-pstate={pipeline.state}>{word}</span> : null}
-            {word && age ? <span className="pb-sep" aria-hidden="true">·</span> : null}
-            {age ? <span className="pb-when">{age}</span> : null}
-          </span>
-          <ChevronRight />
+          {graphOpen ? <ListGlyph /> : <GraphGlyph />}
         </button>
-        {props.acting ? <span className="pb-acting" role="status" data-pipeline-acting={props.acting}>{t(`kanban.pipelineAct.pending.${props.acting}`)}</span> : null}
-        <span className="pb-grow" />
-        {props.onToggleGraph && props.onOpenStage ? (
-          <button
-            type="button"
-            className="pb-icon pb-graph-toggle"
-            aria-pressed={graphOpen}
-            aria-label={graphOpen ? t("kanban.graph.showSummary") : t("kanban.graph.showGraph")}
-            title={graphOpen ? t("kanban.graph.summary") : t("kanban.graph.graph")}
-            data-graph-toggle={pipeline.id}
-            onClick={() => props.onToggleGraph!(!graphOpen)}
-          >
-            {graphOpen ? <ListGlyph /> : <GraphGlyph />}
-          </button>
-        ) : null}
-        {props.onMenu ? (
-          <button
-            type="button"
-            className="pb-icon"
-            aria-label={t("kanban.pipelineAct.menu")}
-            aria-haspopup="menu"
-            data-pipeline-menu={pipeline.id}
-            onClick={(event) => props.onMenu!(pipeline, event.currentTarget)}
-          >
-            <MoreGlyph />
-          </button>
-        ) : null}
-      </div>
+      ) : null}
+      {props.onMenu ? (
+        <button
+          type="button"
+          className="pb-icon"
+          aria-label={t("kanban.pipelineAct.menu")}
+          aria-haspopup="menu"
+          data-pipeline-menu={pipeline.id}
+          onClick={(event) => props.onMenu!(pipeline, event.currentTarget)}
+        >
+          <MoreGlyph />
+        </button>
+      ) : null}
+    </>
+  );
+  /* One head (#2148). When the lane carries the task's own title and
+     its actions live in the card's ⋯ (no `onMenu` of its own), the stage
+     chain IS the head: the age and the way into the stages trail it on the
+     same row, and nothing above it repeats the card. A lane with a title or a
+     menu of its own keeps its head row; at 390 px the chain, the age and a
+     44 px ⋯ do not fit one line. */
+  const chainHead = !showTitle && !graphOpen && !props.onMenu;
+  return (
+    <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root}>
+      {chainHead ? null : (
+        <div className="pb-head">
+          {opener}
+          {acting}
+          <span className="pb-grow" />
+          {controls}
+        </div>
+      )}
       {graphOpen ? (
         <>
           <GraphSlot summary={summary} names={names} selected={selected} onOpenStage={props.onOpenStage!} />
@@ -554,6 +577,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
         <div className="pb-chain">
           <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={props.onOpenStage} />
           <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />
+          {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
         </div>
       )}
       {answers ? (
@@ -779,22 +803,39 @@ function ScreenBlock(props: PipelineBlockProps & {
   };
   /* A finished lane has no current stage: what closed it is the last report. */
   const lastReport = ended ? (pipeline.stageReports ?? []).at(-1) ?? null : null;
+  const moved = pipelineMovedAtMs(pipeline);
+  /* The links say what the lane produced, under its title; attaching one by
+     hand is rare, so it is a row of its own after the stages (#2148). */
+  const hasLinks = Boolean(links?.links.length || links?.noPr);
   return (
     <section className="pblock" aria-label={t("kanban.pipelineAria", { title: pipelineTitle(t, pipeline), progress: pipelineProgress(t, summary, nameOf) })} {...props.root}>
-      <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>
-      <div className="pb-links-row">
-        <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} />
-        {props.onWorkLinks ? (
-          <button type="button" className="pb-attach" data-work-links-open={pipeline.id} onClick={(event) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, event.currentTarget)}>
-            {t("workLinks.attach")}
-          </button>
-        ) : null}
-      </div>
+      {props.embedded ? null : <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>}
+      {hasLinks ? (
+        <div className="pb-links-row">
+          <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} />
+        </div>
+      ) : null}
       {lastReport ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={lastReport} names={names} shown={ANSWER_FINDINGS} /></div> : null}
-      <p className="pb-section" data-stages-count={pipeline.stages.length}>
-        {t("mobile2.pipeline.stages")}
-        <span className="pb-count">{pipeline.stages.length}</span>
-      </p>
+      {props.embedded ? (
+        <div className="pb-section-row">
+          <button type="button" className="pb-section pb-section-open" data-open-stages={pipeline.id} data-stages-count={pipeline.stages.length} disabled={!props.onOpenStages} onClick={() => props.onOpenStages?.(pipeline)}>
+            {t("mobile2.pipeline.stages")}
+            <span className="pb-count">{pipeline.stages.length}</span>
+            {moved === null ? null : <span className="pb-count">· {humanizeDuration(blockAgeSeconds((nowMs - moved) / 1000))}</span>}
+            <ChevronRight />
+          </button>
+          {props.onMenu ? (
+            <button type="button" className="pb-icon" aria-label={t("kanban.pipelineAct.menu")} aria-haspopup="menu" data-pipeline-menu={pipeline.id} onClick={(event) => props.onMenu!(pipeline, event.currentTarget)}>
+              <MoreGlyph />
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <p className="pb-section" data-stages-count={pipeline.stages.length}>
+          {t("mobile2.pipeline.stages")}
+          <span className="pb-count">{pipeline.stages.length}</span>
+        </p>
+      )}
       <ol className="pb-stages" data-chain={pipeline.id}>
         {foldPassed ? (
           <li className="pb-stage passed-fold tone-ok">
@@ -826,6 +867,13 @@ function ScreenBlock(props: PipelineBlockProps & {
             <li key={`${loop.from.id}:${loop.to.id}`}>{`↺ ${t("kanban.loopRest", { from: nameOf(loop.from), to: nameOf(loop.to), max: loop.max })}`}</li>
           ))}
         </ul>
+      ) : null}
+      {props.onWorkLinks && !props.embedded ? (
+        <button type="button" className="pb-attach" data-work-links-open={pipeline.id} onClick={(event) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, event.currentTarget)}>
+          <Link2 className="pb-attach-icon" aria-hidden />
+          <span className="pb-attach-label">{t("workLinks.attach")}</span>
+          <ChevronRight />
+        </button>
       ) : null}
     </section>
   );

@@ -10,6 +10,7 @@ import { SelectedContextBadge } from "../SelectedContextBadge";
 import { CopyButton } from "./CopyButton";
 import { MESSAGE_ACTION } from "./actionStyles";
 import { mdBlocks } from "./markdown";
+import { BUBBLE_MEASURE } from "./measure";
 import { tr } from "./parse";
 
 /**
@@ -28,7 +29,9 @@ import { tr } from "./parse";
  * The row is a column: the message line, which is identical in every state,
  * and an optional slot under it that only a proven failure fills. The action
  * gutter is a fixed-size box — the copy control's own geometry — so swapping
- * the pending affordance for the copy control moves nothing.
+ * the pending affordance for the copy control moves nothing. The row places
+ * that box: beside the bubble on the desktop, and on the phone under it at its
+ * trailing edge (#2148), so the bubble reads first and nothing floats beside it.
  */
 
 /** Long enough that the bubble folds it away (the transcript's own rule). */
@@ -57,22 +60,21 @@ export function UserMessageRow({
 }) {
   const isMobile = useIsMobile();
   const long = text.length > LONG_MESSAGE;
+  const gutter = action ?? <CopyButton text={copyText ?? text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;
   return (
     <div className="my-3 flex flex-col items-end" {...rowAttributes}>
       <div
         className="group/msg flex w-full items-start justify-end gap-1.5"
         data-mobile-message={isMobile ? "user" : undefined}
       >
-        {action ?? (
-          <CopyButton text={copyText ?? text} label={tr("feed.copyMd")} className={`mt-2 ${MESSAGE_ACTION}`} />
-        )}
+        {isMobile ? null : <span className="mt-2 flex shrink-0">{gutter}</span>}
         {/* Mobile v2 (#1439, lane 4): the user keeps the bubble, at 86% and
             15 px on the phone (README §2.6). */}
         <div
           data-user-bubble
           className={isMobile
             ? "max-w-[86%] whitespace-pre-wrap break-words rounded-surface bg-user px-3 py-[9px] text-title leading-[1.45]"
-            : "max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5"}
+            : `${BUBBLE_MEASURE} whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5`}
         >
           {/* #844: what this turn pointed at, from the reference persisted on
               the record itself — the same badge the composer showed before the
@@ -96,6 +98,9 @@ export function UserMessageRow({
           {bubbleFooter}
         </div>
       </div>
+      {/* The 44 px target keeps its size; the negative margins hand the part
+          of it past the text back to the gaps around the row. */}
+      {isMobile ? <div data-mobile-message-actions className="-mr-3 -my-1.5 flex h-11 items-center">{gutter}</div> : null}
       {below}
     </div>
   );

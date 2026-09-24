@@ -63,10 +63,11 @@ export type SwitchHold = MessageRowSwitchHold;
     recovery controls its disclosure holds. */
 const ROW_ACTION = "min-h-11 shrink-0 rounded-full border border-border px-3 font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-6";
 
-/** The progress affordance's box: the copy control's own geometry, so the two
-    swap without moving a pixel of the row (see `actionStyles.ts`). */
+/** The progress affordance's box: the copy control's own geometry and its
+    ghost treatment, so the two swap without moving a pixel of the row (see
+    `actionStyles.ts`). */
 function affordanceClass(coarse: boolean): string {
-  return `inline-flex shrink-0 items-center justify-center rounded-[6px] border border-border bg-card text-muted shadow-1 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${coarse ? "h-11 w-11" : "p-1"}`;
+  return `inline-flex shrink-0 items-center justify-center rounded-[6px] border border-transparent text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${coarse ? "h-11 w-11" : "p-1"}`;
 }
 
 /**
@@ -147,7 +148,7 @@ export function ConversationMessageRow({
       aria-expanded={open}
       title={row.transport}
       onClick={() => setOpen((was) => !was)}
-      className={`mt-2 ${affordanceClass(coarse)}`}
+      className={affordanceClass(coarse)}
     >
       <Loader2
         className={`${coarse ? "h-4 w-4" : "h-3 w-3"} animate-spin motion-reduce:animate-none`}

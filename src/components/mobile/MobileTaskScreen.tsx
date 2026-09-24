@@ -632,6 +632,30 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const laneBlock = (summary: KanbanPipeline) => {
     const { pipeline } = summary;
     const needs = pipelineNeedsYou(pipeline);
+    /* A live lane shows its stages as the pipeline screen draws them (#2148):
+       numbered rows with who runs each, and the current stage's report and
+       "Open conversation", so the usual next tap is on this screen. A
+       finished lane keeps the one-row chain. */
+    if (!pipelineEnded(pipeline)) {
+      return (
+        <div key={pipeline.id} data-phone-task-lane={pipeline.id} data-needs={needs ? "1" : undefined} className="shrink-0">
+          <PipelineBlock
+            summary={summary}
+            density="screen"
+            embedded
+            nowMs={nowMs}
+            acting={lane.acting(pipeline)}
+            onOpenStage={openStage}
+            onOpenStages={props.onOpenPipeline}
+            onMenu={(entry) => {
+              setLaneFor(entry.id);
+              nav.openSheet("lane");
+            }}
+            onAnswer={lane.answer}
+          />
+        </div>
+      );
+    }
     return (
       <div
         key={pipeline.id}
@@ -888,156 +912,162 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
               )}
             </div>
 
-            {/* 2. The pipelines: what needs the operator first; finished ones folded. */}
-            {live.length || ended.length ? (
-              <section data-phone-task-lanes={lanes.length} className="flex shrink-0 flex-col gap-2">
-                {live.map(laneBlock)}
-                {ended.length ? (
-                  <>
-                    <button
-                      type="button"
-                      data-phone-task-ended={ended.length}
-                      aria-expanded={endedOpen}
-                      aria-label={t(endedOpen ? "kanban.pipelines.completedHide" : "kanban.pipelines.completedShow", { count: ended.length })}
-                      className="flex min-h-11 w-full items-center gap-2 rounded-[12px] border border-dashed border-border px-3 text-left text-ui tabular-nums text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-                      onClick={() => setEndedOpen((open) => !open)}
-                    >
-                      <Check className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-                      <span className="min-w-0 flex-1 truncate">
-                        {[t("mobile2.pipelines.completed", { count: ended.length }), ...endedPrs].join(" · ")}
-                      </span>
-                      <ChevronDown className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${endedOpen ? "rotate-180" : ""}`} aria-hidden />
-                    </button>
-                    {endedOpen ? ended.map(laneBlock) : null}
-                  </>
-                ) : null}
-              </section>
-            ) : null}
-
-            {/* 3. What an agent asks that no block carries. */}
-            {asks.length ? (
-              <section data-phone-task-needs={asks.length} className="flex shrink-0 flex-col gap-1.5">
-                <h2 className={`${SECTION} m-0`}>{t("mobile2.attention.title")}</h2>
-                {asks.map(({ file }) => <AskCard key={file.path} file={file} now={now} onOpen={() => props.onOpenConversation(file)} />)}
-              </section>
-            ) : null}
-
-            {/* 4. Links attached to the task by hand. */}
-            <WorkLinkRow resolved={taskLinks} showNoPr={false} className="phone-task-links" testId={taskId} onMore={() => openLinks({ kind: "task", id: taskId })} />
-
-            {/* 5. The description: one line, whole and editable on a tap. */}
-            {editorFor("description") ?? (
-              <button
-                type="button"
-                data-phone-task-description=""
-                aria-label={description ? t("kanban.editDescription") : t("kanban.addDescription")}
-                className={`${ROW} shrink-0 min-h-12`}
-                onClick={() => startEdit("description")}
-              >
-                <span className="flex min-w-0 flex-1 items-baseline gap-[5px] text-body">
-                  <span className="shrink-0 font-semibold text-primary">{t("mobile2.task.description")}</span>
-                  <Sep />
-                  <span className={`min-w-0 truncate ${description ? "text-secondary" : "italic text-muted"}`}>{description ? description.split(/\r?\n/, 1)[0] : t("kanban.addDescription")}</span>
-                </span>
-                <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
-              </button>
-            )}
-
-            {/* 6. The agents, working first. */}
-            <section data-phone-task-agents={agents.length} className="flex shrink-0 flex-col gap-1.5">
-              <h2 className={`${SECTION} m-0`}>
-                {t("mobile2.task.agents")}
-                <Sep />
-                <span className="text-label font-semibold tabular-nums text-muted">{agents.length + notLoadedRefs.length}</span>
-              </h2>
-              {agents.map((agent) => {
-                const rowTitle = agentTitle(agent);
-                const row: MobileBoardConversation = {
-                  file: agent.file,
-                  path: agent.file.path,
-                  title: rowTitle,
-                  state: mobileRowState(agent.file, now),
-                  now: nowFragment(agent.file),
-                  launchedAt: launchedAt(agent.file),
-                  crowned: false,
-                };
-                const reason = row.state.key === "waiting" ? attentionReason(agent.file, now) : null;
-                const actions = props.rowActions?.({ kind: "conversation", row: { path: agent.file.path, title: rowTitle, conversationId: agent.file.conversationId ?? null, reasonId: reason?.id ?? null } }) ?? [];
-                const view = <ConversationRow row={row} now={now} onOpen={props.onOpenConversation} />;
-                return (
-                  <div key={agent.file.path} data-phone-task-agent={agent.file.path} data-phone-task-agent-stage={agent.stage?.stage.id}>
-                    {actions.length ? <MobileSwipeRow id={`task:${taskId}:${agent.file.path}`} title={rowTitle} actions={actions}>{view}</MobileSwipeRow> : view}
-                  </div>
-                );
-              })}
-              {(card?.drafts ?? []).map((draftId) => (
-                <button
-                  key={draftId}
-                  type="button"
-                  data-phone-task-draft={draftId}
-                  className={`${ROW} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
-                  disabled={!props.onOpenDraft}
-                  onClick={() => props.onOpenDraft?.(draftId)}
-                >
-                  <Plus className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate text-body font-semibold text-secondary">{t("mobile2.task.draft")}</span>
-                  <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
-                </button>
-              ))}
-              {/* A conversation the board did not load still opens, through its
-                  conversation id or its transcript. A stage's is left to its
-                  pipeline's Earlier attempts. */}
-              {notLoadedRefs.map((ref) => (
-                <button
-                  key={ref.key}
-                  type="button"
-                  data-phone-task-not-loaded={ref.key}
-                  className={`${ROW} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
-                  onClick={() => { window.location.hash = formatConversationHash({ conversationId: ref.conversationId ?? undefined, path: ref.path ?? "" }); }}
-                >
-                  <span className="min-w-0 flex-1 truncate text-body font-semibold text-secondary">{t("kanban.notLoadedOpen")}</span>
-                  <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
-                </button>
-              ))}
-              {/* A launch that did not start opens nothing: it says so, and
-                  can be dismissed. A failed one says so at once, with its
-                  error, and opens its launch view, where Retry lives. Two or
-                  more fold behind one summary row. */}
-              {unstarted.length ? <UnstartedLaunches taskId={taskId} title={title} launches={unstarted} onOpen={props.onOpenConversation} /> : null}
-              {!agents.length && !notLoadedRefs.length && !unstarted.length && !card?.drafts.length ? (
-                <p className="m-0 px-1 text-ui text-muted">{t("mobile2.kanban.noAgents")}</p>
+            {/* Groups under the title, 24 px apart and 8 px inside (#2148):
+                the stages, what agents ask, the task with its agents, and
+                its history. */}
+            <div data-phone-task-groups="" className="flex shrink-0 flex-col gap-6">
+              {/* 2. The pipelines: what needs the operator first; finished ones folded. */}
+              {live.length || ended.length ? (
+                <section data-phone-task-lanes={lanes.length} className="flex shrink-0 flex-col gap-2">
+                  {live.map(laneBlock)}
+                  {ended.length ? (
+                    <>
+                      <button
+                        type="button"
+                        data-phone-task-ended={ended.length}
+                        aria-expanded={endedOpen}
+                        aria-label={t(endedOpen ? "kanban.pipelines.completedHide" : "kanban.pipelines.completedShow", { count: ended.length })}
+                        className="flex min-h-11 w-full items-center gap-2 rounded-[12px] border border-dashed border-border px-3 text-left text-ui tabular-nums text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                        onClick={() => setEndedOpen((open) => !open)}
+                      >
+                        <Check className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                        <span className="min-w-0 flex-1 truncate">
+                          {[t("mobile2.pipelines.completed", { count: ended.length }), ...endedPrs].join(" · ")}
+                        </span>
+                        <ChevronDown className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${endedOpen ? "rotate-180" : ""}`} aria-hidden />
+                      </button>
+                      {endedOpen ? ended.map(laneBlock) : null}
+                    </>
+                  ) : null}
+                </section>
               ) : null}
-            </section>
+              {/* 3. What an agent asks that no block carries. */}
+              {asks.length ? (
+                <section data-phone-task-needs={asks.length} className="flex shrink-0 flex-col gap-2">
+                  <h2 className={`${SECTION} m-0`}>{t("mobile2.attention.title")}</h2>
+                  {asks.map(({ file }) => <AskCard key={file.path} file={file} now={now} onOpen={() => props.onOpenConversation(file)} />)}
+                </section>
+              ) : null}
+              <div data-phone-task-group="task" className="flex shrink-0 flex-col gap-2">
+                {/* 4. Links attached to the task by hand. */}
+                <WorkLinkRow resolved={taskLinks} showNoPr={false} className="phone-task-links" testId={taskId} onMore={() => openLinks({ kind: "task", id: taskId })} />
 
-            {/* 7. The agent's context and the earlier attempts, folded. */}
-            {editorFor("details") ?? (details ? (
-              <section data-phone-task-details="" className="shrink-0 overflow-hidden rounded-[12px] bg-card shadow-1">
-                <button
-                  type="button"
-                  aria-expanded={detailsOpen}
-                  data-phone-task-details-toggle=""
-                  aria-label={t(detailsOpen ? "kanban.detailsHide" : "kanban.detailsShow", { title: receiptTitle })}
-                  className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-body font-semibold text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-                  onClick={() => setDetailsOpen((open) => !open)}
-                >
-                  <ScrollText className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate">{t("kanban.details")}</span>
-                  <ChevronRight className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${detailsOpen ? "rotate-90" : ""}`} aria-hidden />
-                </button>
-                {detailsOpen ? (
+                {/* 5. The description: one line, whole and editable on a tap. */}
+                {editorFor("description") ?? (
                   <button
                     type="button"
-                    data-phone-task-details-text=""
-                    aria-label={t("kanban.editDetails")}
-                    className="block max-h-[320px] w-full overflow-y-auto whitespace-pre-wrap border-t border-border px-3 py-2 text-left font-mono text-ui leading-[1.45] text-secondary [overflow-wrap:anywhere] active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-                    onClick={() => startEdit("details")}
+                    data-phone-task-description=""
+                    aria-label={description ? t("kanban.editDescription") : t("kanban.addDescription")}
+                    className={`${ROW} shrink-0 min-h-12`}
+                    onClick={() => startEdit("description")}
                   >
-                    {details}
+                    <span className="flex min-w-0 flex-1 items-baseline gap-[5px] text-body">
+                      <span className="shrink-0 font-semibold text-primary">{t("mobile2.task.description")}</span>
+                      <Sep />
+                      <span className={`min-w-0 truncate ${description ? "text-secondary" : "italic text-muted"}`}>{description ? description.split(/\r?\n/, 1)[0] : t("kanban.addDescription")}</span>
+                    </span>
+                    <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
                   </button>
-                ) : null}
-              </section>
-            ) : null)}
-            <EarlierAttempts taskId={taskId} lanes={lanes} past={card?.past ?? []} files={files} nowMs={nowMs} onOpen={props.onOpenConversation} />
+                )}
+
+                {/* 6. The agents, working first. */}
+                <section data-phone-task-agents={agents.length} className="flex shrink-0 flex-col gap-2">
+                  <h2 className={`${SECTION} m-0`}>
+                    {t("mobile2.task.agents")}
+                    <Sep />
+                    <span className="text-label font-semibold tabular-nums text-muted">{agents.length + notLoadedRefs.length}</span>
+                  </h2>
+                  {agents.map((agent) => {
+                    const rowTitle = agentTitle(agent);
+                    const row: MobileBoardConversation = {
+                      file: agent.file,
+                      path: agent.file.path,
+                      title: rowTitle,
+                      state: mobileRowState(agent.file, now),
+                      now: nowFragment(agent.file),
+                      launchedAt: launchedAt(agent.file),
+                      crowned: false,
+                    };
+                    const reason = row.state.key === "waiting" ? attentionReason(agent.file, now) : null;
+                    const actions = props.rowActions?.({ kind: "conversation", row: { path: agent.file.path, title: rowTitle, conversationId: agent.file.conversationId ?? null, reasonId: reason?.id ?? null } }) ?? [];
+                    const view = <ConversationRow row={row} now={now} onOpen={props.onOpenConversation} />;
+                    return (
+                      <div key={agent.file.path} data-phone-task-agent={agent.file.path} data-phone-task-agent-stage={agent.stage?.stage.id}>
+                        {actions.length ? <MobileSwipeRow id={`task:${taskId}:${agent.file.path}`} title={rowTitle} actions={actions}>{view}</MobileSwipeRow> : view}
+                      </div>
+                    );
+                  })}
+                  {(card?.drafts ?? []).map((draftId) => (
+                    <button
+                      key={draftId}
+                      type="button"
+                      data-phone-task-draft={draftId}
+                      className={`${ROW} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
+                      disabled={!props.onOpenDraft}
+                      onClick={() => props.onOpenDraft?.(draftId)}
+                    >
+                      <Plus className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate text-body font-semibold text-secondary">{t("mobile2.task.draft")}</span>
+                      <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
+                    </button>
+                  ))}
+                  {/* A conversation the board did not load still opens, through its
+                      conversation id or its transcript. A stage's is left to its
+                      pipeline's Earlier attempts. */}
+                  {notLoadedRefs.map((ref) => (
+                    <button
+                      key={ref.key}
+                      type="button"
+                      data-phone-task-not-loaded={ref.key}
+                      className={`${ROW} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
+                      onClick={() => { window.location.hash = formatConversationHash({ conversationId: ref.conversationId ?? undefined, path: ref.path ?? "" }); }}
+                    >
+                      <span className="min-w-0 flex-1 truncate text-body font-semibold text-secondary">{t("kanban.notLoadedOpen")}</span>
+                      <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
+                    </button>
+                  ))}
+                  {/* A launch that did not start opens nothing: it says so, and
+                      can be dismissed. A failed one says so at once, with its
+                      error, and opens its launch view, where Retry lives. Two or
+                      more fold behind one summary row. */}
+                  {unstarted.length ? <UnstartedLaunches taskId={taskId} title={title} launches={unstarted} onOpen={props.onOpenConversation} /> : null}
+                  {!agents.length && !notLoadedRefs.length && !unstarted.length && !card?.drafts.length ? (
+                    <p className="m-0 px-1 text-ui text-muted">{t("mobile2.kanban.noAgents")}</p>
+                  ) : null}
+                </section>
+              </div>
+              <div data-phone-task-group="history" className="flex shrink-0 flex-col gap-2 empty:hidden">
+                {/* 7. The agent's context and the earlier attempts, folded. */}
+                {editorFor("details") ?? (details ? (
+                  <section data-phone-task-details="" className="shrink-0 overflow-hidden rounded-[12px] bg-card shadow-1">
+                    <button
+                      type="button"
+                      aria-expanded={detailsOpen}
+                      data-phone-task-details-toggle=""
+                      aria-label={t(detailsOpen ? "kanban.detailsHide" : "kanban.detailsShow", { title: receiptTitle })}
+                      className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-body font-semibold text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                      onClick={() => setDetailsOpen((open) => !open)}
+                    >
+                      <ScrollText className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate">{t("kanban.details")}</span>
+                      <ChevronRight className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${detailsOpen ? "rotate-90" : ""}`} aria-hidden />
+                    </button>
+                    {detailsOpen ? (
+                      <button
+                        type="button"
+                        data-phone-task-details-text=""
+                        aria-label={t("kanban.editDetails")}
+                        className="block max-h-[320px] w-full overflow-y-auto whitespace-pre-wrap border-t border-border px-3 py-2 text-left font-mono text-ui leading-[1.45] text-secondary [overflow-wrap:anywhere] active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                        onClick={() => startEdit("details")}
+                      >
+                        {details}
+                      </button>
+                    ) : null}
+                  </section>
+                ) : null)}
+                <EarlierAttempts taskId={taskId} lanes={lanes} past={card?.past ?? []} files={files} nowMs={nowMs} onOpen={props.onOpenConversation} />
+              </div>
+            </div>
           </>
         )}
       </div>

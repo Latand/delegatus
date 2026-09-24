@@ -277,20 +277,21 @@ test("a task link a conversation carries opens the task screen", async () => {
   noOldEditor(root);
 });
 
-test("from the task: the block's head opens the pipeline screen, a stage pill and an agent row open their conversations full screen, and ‹ returns to the task", async () => {
+test("from the task: the Stages line opens the pipeline screen, Open conversation and an agent row open their conversations full screen, and ‹ returns to the task", async () => {
   const root = await board();
   click(q(root, '[data-phone-card="task:t-data"]'));
   expect(await waitFor(() => onTask(root, "t-data"))).toBe(true);
 
-  /* The block's head: the pipeline screen, which does not list this task again. */
+  /* The lane's "Stages" line: the pipeline screen, which does not list this task again. */
   click(q(root, '[data-phone-task-lane="lane-parked"] [data-open-stages="lane-parked"]'));
   expect(await waitFor(() => q(root, '[data-mobile2-pipeline="lane-parked"]') !== null)).toBe(true);
   expect(q(root, '[data-mobile2-linked-task="t-data"]')).toBeNull();
   await back(root);
   expect(await waitFor(() => onTask(root, "t-data"))).toBe(true);
 
-  /* A stage pill: that stage's conversation. */
-  click(q(root, '[data-phone-task-lane="lane-parked"] button.pb-pill[data-stage="implement"]'));
+  /* The stage the lane stands on, in the lane's own list (#2148): "Open
+     conversation" under its report opens that stage's conversation. */
+  click(q(root, '[data-phone-task-lane="lane-parked"] [data-open-conversation="implement"]'));
   expect(await waitFor(() => top().kind === "chat")).toBe(true);
   expect(top()).toEqual({ kind: "chat", id: stageFile.path });
   expect(q(root, "[data-phone-task-body]")).toBeNull();

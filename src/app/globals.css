@@ -661,3 +661,14 @@ body {
       0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent) !important;
   }
 }
+
+/* Press feedback for a discrete button outside the board (#2148,
+   make-interfaces-feel-better #12): 0.96 while held, where motion is welcome.
+   While held, an invisible layer keeps the whole unpressed box, so a press
+   that began near the edge still ends on the button (the board's own rule is
+   in kanbanBoard.css, "Press and open/close"). */
+@media (prefers-reduced-motion: no-preference) {
+  .press-scale { transition: scale var(--motion-fast) ease-out; }
+  .press-scale:active:not(:disabled) { scale: 0.96; position: relative; }
+  .press-scale:active:not(:disabled)::after { content: ""; position: absolute; inset: calc(-2.5% - 2px); }
+}
