@@ -48,6 +48,8 @@ import { localSubmissionJoin, submissionNamesItsDelivery } from "./conversation/
 import { createFeedSession, type FeedSession, type FeedSnapshot } from "./feed/parse";
 import { claimFeedSession, releaseFeedSession, takeFeedSession } from "./feed/sessionPool";
 import { FeedItem } from "./feed/FeedItem";
+import { useConversationGallery } from "./feed/imageGallery";
+import { GalleryOwnerProvider, ImageGalleryProvider } from "./feed/Lightbox";
 import { MessageProvenanceProvider, useDeliveredMessageProvenance } from "./feed/messageProvenance";
 import { RawLineProvider, type RawLineLookup } from "./feed/rawLine";
 import { ResponseDuration } from "./feed/ResponseDuration";
@@ -687,6 +689,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const visibleItems = hiddenLocal ? feed.items.slice(-visibleCount) : feed.items;
   const visibleStartIndex = feed.items.length - visibleItems.length;
   const answerFor = useMemo(() => createSpeakableAnswerResolver(feed.items), [feed.items, memoryKey, tailPath]);
+  /* The image viewer steps through this conversation's pictures, all of them
+     and in feed order, read from the records when it opens (#2144). */
+  const gallery = useConversationGallery(feed.items);
 
   /* Lazy raw-record provenance: a tool card resolves its source line(s) from
      the retained window, client-side, with no server round-trip. A line that
@@ -1311,6 +1316,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   return (
     <RawLineProvider value={getRawLine}>
     <MessageProvenanceProvider value={provenanceLookup}>
+    <ImageGalleryProvider value={gallery}>
     <div className="flex min-h-0 flex-1 flex-col">
     {/* The live-tail pill anchors to the scroller wrapper — NOT the pane
         column — so the pinned status bar below is structurally outside its
@@ -1550,7 +1556,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
                   className={compact ? "feed-cv" : undefined}
                 >
-                  <FeedItem item={item} speakText={speakText} />
+                  <GalleryOwnerProvider value={item}>
+                    <FeedItem item={item} speakText={speakText} />
+                  </GalleryOwnerProvider>
                   {responseDurationMs !== undefined ? <ResponseDuration durationMs={responseDurationMs} /> : null}
                 </div>
               );
@@ -1659,6 +1667,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       <TurnStatusBar file={file} workingLabel={working.label} workingIcon={working.icon} compact={compact} />
     ) : null}
     </div>
+    </ImageGalleryProvider>
     </MessageProvenanceProvider>
     </RawLineProvider>
   );

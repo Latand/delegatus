@@ -226,6 +226,28 @@ function MdImage({ alt, src }: { alt: string; src: string }) {
   );
 }
 
+/* The pictures `mdBlocks` draws for a feed text, in the order it draws them
+   and with the source each one loads from, read without rendering: fenced
+   code is skipped, and every other line goes through the same inline split. */
+export function mdImages(text: string): { alt: string; src: string }[] {
+  const found: { alt: string; src: string }[] = [];
+  if (!text.includes("![")) return found;
+  const inline = (part: string) => {
+    for (const piece of part.split(MD_INLINE_RE)) {
+      if (piece.startsWith("**") && piece.endsWith("**")) inline(piece.slice(2, -2));
+      const image = piece.match(IMAGE_PART_RE);
+      if (image) found.push({ alt: image[1], src: imageSrc(image[2], null) });
+    }
+  };
+  let fenced = false;
+  for (const line of text.split("\n")) {
+    if (fenced) fenced = !FENCE_CLOSE_RE.test(line);
+    else if (FENCE_OPEN_RE.test(line)) fenced = true;
+    else inline(line);
+  }
+  return found;
+}
+
 /* A run of image-only lines flows as a wrapping thumbnail row (a contact sheet
    of screenshots reads far better side by side than stacked). */
 export function MdImageRow({ images }: { images: { alt: string; src: string }[] }) {
