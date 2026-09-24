@@ -76,6 +76,12 @@ export function ActivityCountingDrawer({ context, focusHosts, onClose }: { conte
     const read = host.sources.filter((source) => source.state === "read");
     const ledger = read.some((source) => source.source === "ledger");
     const exported = read.some((source) => source.source === "transcripts");
+    /* The host's own record: this host's ingest, or another host's pull. */
+    const recorded = read.find((source) => source.source === "ingest" || source.source === "pull");
+    if (recorded) {
+      const name = t(recorded.source === "ingest" ? "activity.hosts.ingest" : "activity.hosts.pull");
+      return ledger ? t("activity.drawer.srcLedgerAnd", { source: name.charAt(0).toLocaleLowerCase(locale) + name.slice(1) }) : name;
+    }
     if (ledger && exported) return t("activity.drawer.srcBoth");
     if (exported) return t("activity.hosts.transcripts");
     if (ledger) return t("activity.drawer.srcLedger");

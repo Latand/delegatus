@@ -589,6 +589,33 @@ function projectInfoFromOpenclawWorkspace(cwd: string): ProjectInfo | null {
   return { project: directoryProjectId(resolved), displayName: "OpenClaw" };
 }
 
+/** The segments a seat rotation's handoff digest runs under:
+    `<state>/orchestrator/handoff-digests/<request>/cwd` (`orchestrator/handoffDigest.ts`). */
+const HANDOFF_DIGEST_CONTAINER = ["orchestrator", "handoff-digests"] as const;
+
+/**
+ * Every handoff digest as one project. Each digest runs in a fresh directory
+ * of its own, which is removed when it finishes, so the directory rule gave
+ * every rotation a project named `cwd` and the activity page listed dozens of
+ * lookalike rows. The digest's container directory is the project, recognized
+ * by path alone, so a digest groups the same way before and after its
+ * directory is deleted.
+ */
+function projectInfoFromHandoffDigest(cwd: string): ProjectInfo | null {
+  const parts = path.resolve(cwd).split(path.sep);
+  for (let i = 0; i + HANDOFF_DIGEST_CONTAINER.length < parts.length; i += 1) {
+    if (!HANDOFF_DIGEST_CONTAINER.every((segment, offset) => parts[i + offset] === segment)) continue;
+    if (!parts[i + HANDOFF_DIGEST_CONTAINER.length]) return null;
+    const container = joinPathSegments(parts.slice(0, i + HANDOFF_DIGEST_CONTAINER.length));
+    /* The container outlives every digest; its real path keeps a state
+       directory reached through a link on the same id. */
+    let resolved = container;
+    try { resolved = fs.realpathSync.native(container); } catch { /* Gone: the recorded path. */ }
+    return { project: directoryProjectId(resolved), displayName: "Handoff digests" };
+  }
+  return null;
+}
+
 /** Project identity for a real cwd, shared by every engine: resolve a
     worktree checkout to its main repository, then derive the stable key and
     human label from that repository's canonical remote. */
@@ -597,7 +624,7 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
   const resolutionState = requestedState ?? projectResolutionStateKey();
   const cached = projectInfoCwdCache.get(cwd);
   if (cached && cached[0] > Date.now() && cached[1] === resolutionState) return cached[2];
-  const scratchpad = projectInfoFromClaudeTaskCwd(cwd);
+  const scratchpad = projectInfoFromClaudeTaskCwd(cwd) ?? projectInfoFromHandoffDigest(cwd);
   if (scratchpad) {
     projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, scratchpad]);
     return scratchpad;

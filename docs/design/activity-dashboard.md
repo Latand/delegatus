@@ -4,6 +4,7 @@
 - Grounded base: `main` at `bfd58b846fa21e84138b7e74f64f0fb34c73b852`
 - Prior work read: #473 (WakaTime integration), #763 and its landed Phase 0 (#767, #1017, #1623), the scanner activity model, the view presence heartbeat, the transcript search index
 - Revised by three operator corrections on 2026-09-24 (below). Where the first draft of this document and a correction disagree, the correction wins and the text here already follows it.
+- Extended the same day by "Activity records itself" (section [Continuous record](#continuous-record-no-export-required)): every host's operator input and agent turns are written into Delegatus's own store as transcripts are indexed, other hosts are pulled over ssh, and an export is no longer required for complete numbers.
 
 ## Originating requirement
 
@@ -121,7 +122,8 @@ untouched.
 2. **Coverage.** The expected hosts are this one, the hosts in
    `activity/hosts.json`, and any host with an export directory. The stretch a
    host's sources did not cover is *unknown* for the projects that host holds.
-   Only a source that read every store of its host covers it: a transcript
+   Only a source that read every store of its host covers it: the host's
+   continuous record (this host's ingest, another host's pull) or a transcript
    export. The ledger's rows count, but the ledger never covers its host,
    because input typed into an agent's terminal there never reaches it.
    A figure missing a host is a lower bound (`≥`); nothing read is `Unknown`.
@@ -137,6 +139,135 @@ untouched.
    30 minutes of agent wall-clock is a probable missing source.
 6. **Page.** `/activity`, desktop and phone, backed by the pure module
    `src/lib/activity/method.ts` and one `GET /api/activity`.
+
+## Continuous record: no export required
+
+The operator's request after the prototype merged, paraphrased: activity must
+be recorded automatically as it happens and stored in Delegatus's own
+database; an export may exist, and the numbers must never depend on one.
+
+### This host: the ingest
+
+`src/lib/activity/ingest.ts`, called from the transcript index's background
+pass (`src/lib/search/transcriptFeed.ts`) over the same scanner inventory,
+right after the index and in the same process. It writes
+`<state>/activity/records.sqlite` (`src/lib/activity/store.ts`):
+
+| table | one row per | fields |
+|---|---|---|
+| `activity_inputs` | operator input, per host | opaque ids, content hash, time, project, kind, surface, opaque conversation digest |
+| `activity_input_ids` | id of this host's inputs | which row the id already names |
+| `activity_turns` | agent turn of a conversation, per host | opaque conversation digest, project, engine, role, pipeline and stage ids, start, end |
+| `activity_files` | transcript read | byte offset read to, what the lines before it said (cwd, entrypoint, how the session started, the open turn), whether its first message was judged |
+| `activity_hosts` | host | span read, when last read and attempted, why the last attempt failed, the pull cursor and the remote store's id, exclusion counts |
+
+- **The same rules as the export.** Each transcript's new lines go through
+  the exporter's own line reader and classifier (`TranscriptLineReader`,
+  `classifyRecords`, `conversationResolver`), so the marker-only rule, the
+  exclusion reasons, Kyiv buckets and project from context are one code path.
+- **Incremental, with a durable cursor.** Only the bytes a transcript gained
+  since its cursor are read, in pieces of 32 MB; each piece's rows, exclusion
+  counts and advanced cursor commit in one transaction. A half-written last
+  line waits for the next pass. A restart resumes at the cursor; a
+  transcript shorter than its cursor is read again, and its ids keep it from
+  doubling.
+- **Copies count once.** A copy of an input whose id is already stored joins
+  that row; an unregistered session's copies share their file name and are
+  one conversation for turns. The read side still applies the fallback rule
+  (`dedupeCandidates`), so fan-out and id-less copies collapse exactly as in
+  an export.
+- **Backfill.** The first pass has no cursors, so it reads the host's whole
+  history, newest transcripts first, within a budget of 1 GB per pass; the
+  rest continues on the next passes.
+- **A transcript the registry does not name yet.** A Delegatus-hosted session
+  can be written before the registry records it, and judged then its input
+  would be excluded for good. It waits up to 15 minutes, and the read span
+  stops before its first unread record meanwhile.
+- **Read span.** From the first record on disk to the start of the last pass
+  that read the whole inventory without failures, and never past the moment
+  the scan that listed it began. The index passes every four to eight minutes
+  (measured on the operator's host: median 250 s, p90 6 min, max 8 min), so a
+  source whose last read ended within 10 minutes is caught up and covers to
+  now; one older than that is behind, and the stretch since is unread.
+  Transcripts an engine has already deleted are not on disk to read: the span
+  begins at the oldest record that survived.
+
+### Other hosts: the pull
+
+Observed, not assumed: the second host is a shared stage box that runs its
+own Delegatus as a user service on a loopback port, reachable from this host
+only over ssh with the operator's key. This host's Viewer container shares
+the operator's home (ssh config and keys) and has `openssh-client`, and a
+non-interactive `ssh -o BatchMode=yes <alias>` from inside it answers.
+
+So each host records itself with the same ingest, and this Viewer pulls:
+`src/lib/activity/pull.ts` runs `ssh -o BatchMode=yes <alias>` with a
+self-contained reader handed to the remote Bun on stdin. The reader uses Bun
+built-ins only, reads the remote `activity/records.sqlite` read-only in one
+transaction, and answers the remote's read span, exclusion counts, store id
+and every input and turn row written after the version this host last
+received. Nothing is installed on the remote host and no port is opened.
+
+- **Idempotent.** Rows are keyed per host and replace an older version only;
+  a replay changes nothing. A remote store whose id changed (recreated) is
+  dropped here and read again whole.
+- **Honest span.** A pull in pages takes the remote's read span only with its
+  last page. A failed pull (`unreachable`, `timeout`, `no-ingest` for a remote
+  Delegatus that predates the ingest, `malformed`) keeps the last span and
+  names the reason in the hosts table; the stretch after it is unread.
+- **Schedule.** After an ingest pass, every host whose interval (5 minutes by
+  default) has passed is pulled, one at a time, beside the index queue so a
+  slow host delays nothing but itself.
+- **Configuration.** A host entry in `activity/hosts.json` gains
+  `pull: { ssh, bun?, stateDir?, everyMin? }`; `ssh` is an alias from the
+  operator's ssh config and is never an option or a command.
+
+### Agent axis from the same record
+
+The measurement below showed the index-based turns wrong in both directions,
+and the other host missing entirely, so the agent axis now reads agent turns
+from the store: this host's once its ingest has finished a pass (the index
+approximation until then), and every pulled host's. A turn is bounded by the
+engine's own records:
+
+- **Codex:** from `task_started` to `task_complete` or `turn_aborted`. A user
+  message opens a turn only when none is running. A turn started by another
+  agent's delivery carries no user message, which is why the index, which saw
+  only message rows, ran such a conversation's idle hours between turns into
+  one turn.
+- **Claude:** from a user record with text to the turn's last assistant,
+  tool-result or system record. Queue and bookkeeping records written while
+  the agent waits are not work.
+- A turn still running is stored as far as it has run and extended later.
+
+A Codex line's place in a turn is in its first few hundred bytes, so tool
+output, reasoning and compaction lines are never decoded or parsed whole.
+
+### Project attribution
+
+Human input and agent turns take their project from the conversation's
+context through the scanner's own rules (`projectInfoFromCwd`), so a worktree
+groups under its parent repository on both axes. One family was still
+splitting: every seat rotation's handoff digest runs in its own
+`<state>/orchestrator/handoff-digests/<request>/cwd`, so each was a project
+named `cwd`. A pure path recognizer now groups them under their container
+("Handoff digests"), live or deleted. Two distinct projects that would still
+read the same name on the page take a short piece of their key.
+
+### Cost, measured on the operator's workstation
+
+| pass | transcripts | read | time | rows |
+|---|---|---|---|---|
+| backfill, all history | about 10,000 | 26 GB | 95-105 s of work over 25 passes of at most 1 GB, the longest 7 s, yielding between 32 MB pieces | about 270-320 rows (inputs and turns) per second, 200-240 MB/s |
+| steady state, nothing new | same | only new bytes | about 0.1 s per pass | — |
+
+Memory: the process's resident size rises by about 550-650 MB at the peak of
+the backfill, the allocator's high-water mark while parsing a few very large
+Codex rollouts, independent of the per-pass budget, and falls back to within
+about 60-150 MB of its starting size after it; a steady-state pass adds
+nothing measurable. The store holds the whole history in about 15 MB. The
+stage box, with about 350 transcripts, backfills in 2.5 s. A pull of its whole
+history is about 1,300 rows in one page, under 2 s over ssh.
 
 ## Prior work: what is reused and what is wrong or missing
 
@@ -210,7 +341,7 @@ span it speaks for (`exportSource`, `src/lib/activity/hostSources.ts`).
 
 | file | shape | default when absent |
 |---|---|---|
-| `activity/hosts.json` | `{ v: 1, local: { id, label }, hosts: [{ id, label, projects, since }] }` | this host is `local`; no other host is expected unless it has an export directory |
+| `activity/hosts.json` | `{ v: 1, local: { id, label }, hosts: [{ id, label, projects, since, pull? }] }`, `pull` = `{ ssh, bun?, stateDir?, everyMin? }` | this host is `local`; no other host is expected unless it has an export directory |
 | `activity/settings.json` | `{ v: 1, tz, billable: [project keys], workdays: [0-6] }` | Europe/Kyiv, nothing billable, Monday to Friday |
 
 `projects` scopes a host (`"all"` or a list): its absence makes only those
@@ -388,6 +519,11 @@ the warning tone with an icon, never `0 m`.
 
 ## Agent axis calculation
 
+This section describes the index approximation, which now serves only this
+host until its ingest has finished a pass; see
+[Agent axis from the same record](#agent-axis-from-the-same-record) for the
+turns the page reads after that.
+
 1. **Rows.** `SELECT id, speaker, transcript_path, timestamp FROM transcript_messages WHERE sort_timestamp BETWEEN ? AND ? AND timestamp IS NOT NULL`,
    from six hours before the range. The body is never selected.
 2. **Turns per transcript.** A user row opens a turn that ends at the last
@@ -560,22 +696,16 @@ hosts table names), and a home with no data at all. Output:
 
 ### What it does not do
 
-- No network pull of remote exports: a host's file is copied in by hand.
-- No agent axis for other hosts.
-- No automatic read of this host's terminal input: its exporter is run by
-  hand, like any host's, and until it has covered a stretch this host's
-  figures there are lower bounds.
 - No settings UI; `hosts.json` and `settings.json` are edited as files.
 - No per-conversation or per-stage durations.
-- No change to WakaTime, #zvit or their data; no background scheduler.
+- No change to WakaTime, #zvit or their data. The only schedule is the pull,
+  which rides the transcript index's pass.
 
 ## Deferred — not currently justified
 
 | item | why deferred | what would justify it |
 |---|---|---|
-| Pulling a remote host's export over SSH or from its Viewer | Needs access decisions per host; a copied file proves the model first. | The operator wants the dashboard current without a manual step. |
-| Reading this host's terminal input without a manual export (a scheduled export, or an in-process read cached per file) | A live read on each request walks gigabytes; a schedule is a background job the prototype does not add. | Today's figure has to be exact without the operator running the exporter. |
-| Agent axis from other hosts | The export could carry turn intervals; the prototype keeps it to human input, which the corrections are about. | Supervised/unattended split for stage-host projects. |
+| A remote host's request ledger | The pull carries its transcript records, which hold every Delegatus delivery there too (surface `unknown`); the ledger would add the browser surface. | Per-surface figures for the stage host. |
 | A canonical turn-window index | The approximation is within 1.7% in aggregate. | Per-conversation agent durations become a requirement. |
 | Settings UI for hosts, zone and billable tags | Files cover the prototype. | The operator edits them regularly. |
 | Viewing time from the presence heartbeat | Not engagement under the method. | The method changes. |

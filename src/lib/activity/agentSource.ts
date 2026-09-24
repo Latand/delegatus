@@ -7,6 +7,10 @@ import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { UNRESOLVED_PROJECT } from "@/lib/projects/identity";
 import { readTranscriptActivity, type TranscriptActivityRead } from "@/lib/search/transcriptSearch";
+import { statePath } from "@/lib/configDir";
+
+import { readHostsConfig } from "./hostSources";
+import { ActivityStore, LOCAL_HOST_KEY, type StoredTurn } from "./store";
 
 import {
   agentTurns,
@@ -19,10 +23,14 @@ import {
 
 /*
  * The agent axis's source (docs/design/activity-dashboard.md, "Agent axis
- * calculation"): message rows from the transcript search index — path,
- * speaker and time, never a body — joined to the registry for the
- * conversation, its role and its pipeline stage. Transcript paths stay here;
- * what leaves is keyed by conversation.
+ * calculation"). Agent turns come from Delegatus's activity store: this
+ * host's ingest reads them from the raw transcripts as they are written, and
+ * every host listed with a pull sends its own. Until this host's ingest has
+ * finished its first pass, this host's turns are approximated from the
+ * transcript search index instead: message rows (path, speaker and time,
+ * never a body) joined to the registry for the conversation, its role and its
+ * pipeline stage. Transcript paths stay here; what leaves is keyed by
+ * conversation.
  */
 
 /** Rows this long before the range are read so a turn that began before it
@@ -33,19 +41,64 @@ const CACHE_MS = 60_000;
 export interface AgentSourceRead {
   agents: AgentConversation[];
   index: { available: boolean; indexedAtMs: number | null };
+  /** Where this host's turns came from: the ingest's own record, or the
+      index while the ingest has not finished a pass. */
+  local?: "ingest" | "index";
 }
 
 export interface AgentSourceDependencies {
   read(fromSec: number, toSec: number): TranscriptActivityRead;
   registrySnapshot(): RegistryFile;
   canonicalProject(project: string): string;
+  /** The activity store, read-only; null before anything was recorded. */
+  store?(): ActivityStore | null;
+  /** The hosts whose turns are pulled here. */
+  pulledHosts?(): string[];
 }
 
 const productionDependencies: AgentSourceDependencies = {
   read: readTranscriptActivity,
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
   canonicalProject,
+  store: () => ActivityStore.openReadOnly(),
+  pulledHosts: () => readHostsConfig(statePath("activity")).hosts.filter((host) => host.pull).map((host) => host.id),
 };
+
+/** Stored turns as conversations: each conversation's turns clipped to the
+    range and to now, then unioned. */
+export function turnConversations(
+  turns: readonly StoredTurn[],
+  keyPrefix: string,
+  range: Interval,
+  nowMs: number,
+  canonical: (project: string) => string,
+): AgentConversation[] {
+  const upTo = Math.min(range.end, nowMs);
+  const byConversation = new Map<string, AgentConversation>();
+  for (const turn of turns) {
+    const start = Math.max(turn.start, range.start);
+    const end = Math.min(turn.end, upTo);
+    if (end <= start) continue;
+    const key = `${keyPrefix}${turn.conversation}`;
+    const existing = byConversation.get(key);
+    if (existing) {
+      existing.activity.push({ start, end });
+      continue;
+    }
+    const project = turn.project ? canonical(turn.project) : null;
+    byConversation.set(key, {
+      key,
+      project: project && project !== UNRESOLVED_PROJECT ? project : null,
+      engine: turn.engine,
+      role: turn.role,
+      pipelineId: turn.pipelineId,
+      stageId: turn.stageId,
+      activity: [{ start, end }],
+    });
+  }
+  for (const conversation of byConversation.values()) conversation.activity = unionIntervals(conversation.activity);
+  return [...byConversation.values()];
+}
 
 /** Registry provenance of one transcript. */
 function provenance(snapshot: RegistryFile, lookup: ReturnType<typeof readOnlyConversationLookupFromSnapshot>, transcriptPath: string) {
@@ -72,6 +125,35 @@ export function readAgentConversations(
   range: Interval,
   nowMs: number,
   dependencies: AgentSourceDependencies = productionDependencies,
+): AgentSourceRead {
+  let store: ActivityStore | null = null;
+  try {
+    store = dependencies.store?.() ?? null;
+  } catch {
+    /* No store: this host from the index, and no other host. */
+  }
+  try {
+    const remote: AgentConversation[] = [];
+    for (const host of store ? dependencies.pulledHosts?.() ?? [] : []) {
+      remote.push(...turnConversations(store!.turns(host, range.start, range.end), `${host}:`, range, nowMs, dependencies.canonicalProject));
+    }
+    const local = store?.hostState(LOCAL_HOST_KEY);
+    if (store && local?.coveredUntil !== null && local?.coveredUntil !== undefined) {
+      const agents = turnConversations(store.turns(LOCAL_HOST_KEY, range.start, range.end), "", range, nowMs, dependencies.canonicalProject);
+      return { agents: [...agents, ...remote], index: { available: true, indexedAtMs: local.readAt }, local: "ingest" };
+    }
+    const indexed = readIndexedAgentConversations(range, nowMs, dependencies);
+    return { ...indexed, agents: [...indexed.agents, ...remote], local: "index" };
+  } finally {
+    store?.close();
+  }
+}
+
+/** This host's agent conversations approximated from the search index. */
+function readIndexedAgentConversations(
+  range: Interval,
+  nowMs: number,
+  dependencies: AgentSourceDependencies,
 ): AgentSourceRead {
   const upTo = Math.min(range.end, nowMs);
   const read = dependencies.read(Math.floor((range.start - TURN_LOOKBACK_MS) / 1_000), Math.ceil(upTo / 1_000));

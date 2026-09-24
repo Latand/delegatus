@@ -489,18 +489,33 @@ const COVERAGE_ROWS: ReadonlyArray<{ key: string; surface: MessageKey; counted: 
   { key: "outside", surface: "activity.coverage.outside", counted: "activity.coverage.outsideCounted", missing: "activity.coverage.outsideMissing" },
 ];
 
+const SOURCE_NAMES: Record<HostReport["sources"][number]["source"], MessageKey> = {
+  ledger: "activity.hosts.ledger",
+  transcripts: "activity.hosts.transcripts",
+  ingest: "activity.hosts.ingest",
+  pull: "activity.hosts.pull",
+};
+const SOURCE_ERRORS = new Set(["unreachable", "timeout", "no-ingest", "malformed", "unreadable"]);
+
 function sourceLine(source: HostReport["sources"][number], locale: Locale, tz: string, t: TFunction): string {
-  const name = t(source.source === "ledger" ? "activity.hosts.ledger" : "activity.hosts.transcripts");
+  const name = t(SOURCE_NAMES[source.source]);
+  /* When the ingest or the pull last read, and why its last try did not. */
+  const tail = [
+    source.source !== "ledger" && source.readAt !== null ? t("activity.hosts.lastRead", { at: dateTime(source.readAt, locale, tz) }) : null,
+    source.error && SOURCE_ERRORS.has(source.error) ? t("activity.hosts.lastError", { reason: t(`activity.hosts.error.${source.error}` as MessageKey) }) : null,
+  ].filter(Boolean).join("; ");
+  const withTail = (line: string) => (tail ? `${line} (${tail})` : line);
   if (source.state === "absent") return t("activity.hosts.absent", { source: name });
-  if (source.state === "unreadable") return t("activity.hosts.unreadable", { source: name });
+  if (source.state === "unreadable") return withTail(t("activity.hosts.unreadable", { source: name }));
+  if (source.state === "pending") return withTail(t("activity.hosts.pending", { source: name }));
   const first = source.covered[0];
   const last = source.covered.at(-1);
-  return t("activity.hosts.readSpan", {
+  return withTail(t("activity.hosts.readSpan", {
     source: name,
     from: first ? dateTime(first.start, locale, tz) : "—",
     until: last ? dateTime(last.end, locale, tz) : "—",
     count: source.inputs,
-  });
+  }));
 }
 
 function HostsTable({ hosts, locale, tz, t }: { hosts: readonly ActivityHostRow[]; locale: Locale; tz: string; t: TFunction }) {
@@ -517,7 +532,7 @@ function HostsTable({ hosts, locale, tz, t }: { hosts: readonly ActivityHostRow[
         <tbody className="max-sm:block">
           {hosts.map((host) => {
             const connected = host.sources.some((source) => source.state === "read");
-            /* Its ledger is read and no export covers the range: only Delegatus requests were read. */
+            /* Its ledger is read and its transcripts are not read for all of the range. */
             const terminalUnread = !host.complete && host.sources.some((source) => source.scope === "delegatus" && source.state === "read");
             const excluded = EXCLUSION_REASONS
               .map((reason) => [reason, host.sources.reduce((sum, source) => sum + (source.excluded[reason] ?? 0), 0)] as const)
