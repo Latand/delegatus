@@ -158,10 +158,16 @@ let board = {
 } as unknown as BoardProjectStateV1;
 
 const evidence = {
+  /* docs/design/needs-attention.md: every dismissal the phone sent, and the
+     switch that makes the agent's request arrive. */
+  dismissals: [] as Array<Record<string, unknown>>,
+  noticeOn: false,
   catalogRequests: [] as string[],
   /* Every reconfigure the runtime pill sends, so a re-tap of the tier the
      conversation already runs on can be shown to send nothing (#1795). */
   runtimeRequests: [] as Array<Record<string, unknown>>,
+  /* Every chat save the Telegram bot panel sent. */
+  botPosts: [] as Array<Record<string, unknown>>,
   /* Every account select, the one path that moves the next message. */
   accountSelects: [] as Array<{ engine: string; body: unknown }>,
   pipelinePatches: [] as Array<{ id: string; action: string }>,
@@ -258,7 +264,14 @@ const tasks = TOOLCARD ? [{
    its tasks, lanes and conversations spread over three projects, each with a
    display name the cards must show instead of its key. */
 const OVERVIEW_SCENE = new URLSearchParams(location.search).has("overview");
-const KANBAN = new URLSearchParams(location.search).has("kanban") || OVERVIEW_SCENE;
+/* docs/design/needs-attention.md (`?needs=1`): the kanban scene with one card
+   for each reason that still asks, one someone cleared, a loose conversation
+   at its account's limit, and the running conversation with a feed, which the
+   driver opens before an agent's request arrives. `&notice=1` answers the
+   phone's rows-only read with that request once the driver switches it on. */
+const NEEDS_SCENE = new URLSearchParams(location.search).has("needs");
+const NOTICE = new URLSearchParams(location.search).has("notice");
+const KANBAN = new URLSearchParams(location.search).has("kanban") || OVERVIEW_SCENE || NEEDS_SCENE;
 const kanbanFiles: FileEntry[] = [];
 const kanbanLinks: { pipelines: Record<string, unknown>; tasks: Record<string, unknown> } = { pipelines: {}, tasks: {} };
 /* A resolved role names its engine, as a stored one does. */
@@ -431,6 +444,34 @@ if (KANBAN) {
   kanbanConversation("Measure the board's memory on a 390 px phone", "stalled", 2_230);
   kanbanConversation("Draft the Copilot engine login flow", "stalled", 2_280);
   kanbanConversation("Rename the MCP key in the setup docs", "stalled", 2_290);
+  if (NEEDS_SCENE) {
+    const reason = (title: string, over: Record<string, unknown>) => {
+      const path = kanbanConversation(title, "working", 900);
+      Object.assign(kanbanFiles.find((entry) => entry.path === path)!, over);
+      return path;
+    };
+    const prompt = reason("Rotate the deploy key on the stage box", {
+      waitingInput: { since: now - 420, screenTail: "Allow the write to ~/.ssh/config? ❯ 1. Yes", target: "stage:0.0", menu: null },
+    });
+    const owed = reason("Tell the reviewer the flake is fixed", {
+      stuckDelivery: { since: iso(41 * 60), attempts: 2, state: "held" },
+    });
+    const cleared = reason("Pick the log retention for the stage box", {
+      pendingQuestion: { kind: "question", toolUseId: "toolu-needs-cleared", transcriptPath: "", pid: 5_900, paneTarget: null, askedAt: iso(1_500),
+        questions: [{ question: "Keep 14 days of logs or 30?", header: "Retention", multiSelect: false, options: [] }] },
+      attentionDismissal: { at: iso(600), by: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, reasonId: "toolu-needs-cleared" },
+    });
+    kanbanTasks.push(
+      kanbanTask("t-prompt", "assigned", "Rotate the deploy key on the stage box", { assignments: [kanbanAssign(prompt)] }),
+      kanbanTask("t-owed", "assigned", "Tell the reviewer the flake is fixed", { assignments: [kanbanAssign(owed)] }),
+      kanbanTask("t-cleared", "assigned", "Pick the log retention for the stage box", { assignments: [kanbanAssign(cleared)] }),
+    );
+    /* At its account's limit: it keeps its words and asks nothing. */
+    const walled = kanbanConversation("Summarize the week's review findings", "working", 1_200);
+    Object.assign(kanbanFiles.find((entry) => entry.path === walled)!, { rateLimit: { source: "account", accountId: "main", window: "session", resetAt: now + 40 * 60 } });
+    /* The conversation the operator reads when the request arrives. */
+    kanbanFiles.push({ ...files[0]! } as FileEntry);
+  }
   kanbanPipelines.push(kanbanLane("lane-flake", "Nightly: rerun the flake campaign on a quiet machine", [], "running", [
     { id: "measure", state: "running", ago: 1_500 }, { id: "report", role: "reviewer" },
   ]));
@@ -501,6 +542,41 @@ if (OVERVIEW_SCENE) {
   }
 }
 
+/* An invented bot and its invented chats. */
+const BOT_SCENE = new URLSearchParams(location.search).get("bot");
+const botChat = (over: Record<string, unknown>) => ({
+  chatId: "-1000000000101", title: "Team Reports", type: "supergroup", username: null, isForum: false, member: true,
+  alias: null, postAllowed: false, postable: false, seesAllMessages: false, readdToApply: false,
+  lastMessageAt: iso(600), lastPostAt: null, lastPostBy: null, storedMessages: 12, ...over,
+});
+/* `typed`: one group whose title suggests no alias, so the field shows. */
+const telegramBot = BOT_SCENE === "typed"
+  ? {
+    connected: true,
+    bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
+    receiving: "polling",
+    lastUpdateAt: iso(120),
+    lastCheckedAt: iso(60),
+    chats: [botChat({ chatId: "-1000000000505", title: "Реліз", type: "group" })],
+    limits: [],
+  }
+  : BOT_SCENE === "chats" || BOT_SCENE === "webhook"
+  ? {
+    connected: true,
+    bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
+    receiving: BOT_SCENE === "webhook" ? "webhook_elsewhere" : "polling",
+    lastUpdateAt: iso(120),
+    lastCheckedAt: iso(60),
+    chats: [
+      botChat({ alias: "team-reports", postAllowed: true, postable: true, seesAllMessages: true, lastPostAt: iso(3_600), lastPostBy: { conversationId: "conversation_writer", title: "Weekly delivery report for the atlas team" } }),
+      botChat({ chatId: "-1000000000202", title: "Design review and release coordination", isForum: true }),
+      botChat({ chatId: "700000303", title: "Person A", type: "private", seesAllMessages: true }),
+      botChat({ chatId: "-1000000000404", title: "Old Project", member: false, alias: "old-project", postAllowed: true }),
+    ],
+    limits: [],
+  }
+  : { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -561,6 +637,47 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
+  /* The phone's rows-only read; with `&notice=1`, the orchestrator's request
+     for the operator arrives once the driver says so. */
+  if (url.pathname === "/api/attention" && url.searchParams.get("records") === "only") {
+    return json({
+      ok: true,
+      records: null,
+      notices: NOTICE && evidence.noticeOn ? [{
+        id: "attention_needs_notice",
+        reason: "The review of the upload redesign finished with two findings.",
+        target: { kind: "pipeline", pipelineId: "lane-upload" },
+        contextLabel: null,
+        raisedBy: { kind: "manager", role: "orchestrator" },
+        createdAt: iso(40),
+      }] : [],
+    });
+  }
+  /* The dismissal route (docs/design/needs-attention.md §5), applied to the
+     fixture's own rows the way the server applies it. */
+  if (url.pathname === "/api/attention/dismissals" && method === "POST") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { target: { kind: string; taskId?: string; subjects?: Array<Record<string, string>>; pipelineId?: string; conversationId?: string; path?: string }; undo?: boolean };
+    evidence.dismissals.push(body as unknown as Record<string, unknown>);
+    const at = new Date().toISOString();
+    const by = { kind: "operator", surface: "phone" };
+    const subjects = body.target.subjects ?? [body.target as unknown as Record<string, string>];
+    const dismissed: unknown[] = [];
+    for (const subject of subjects) {
+      if (subject.kind === "pipeline") {
+        const lane = kanbanPipelines.find((entry) => entry.id === subject.pipelineId);
+        if (!lane) continue;
+        Object.assign(lane, body.undo ? { dismissedAt: null, dismissedBy: undefined } : { dismissedAt: at, dismissedBy: by });
+        dismissed.push({ kind: "pipeline", pipelineId: lane.id });
+        continue;
+      }
+      const file = kanbanFiles.find((entry) => entry.conversationId === subject.conversationId || entry.path === subject.path);
+      if (!file) continue;
+      if (body.undo) delete (file as { attentionDismissal?: unknown }).attentionDismissal;
+      else Object.assign(file, { attentionDismissal: { at, by, reasonId: subject.reasonId ?? null } });
+      dismissed.push({ kind: "conversation", conversationId: file.conversationId });
+    }
+    return json({ ok: true, dismissed, alreadyClear: [], at, by, undo: body.undo === true });
+  }
   if (url.pathname === "/api/board") {
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body)) as { mutations?: BoardMutationV1[] };
@@ -656,9 +773,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const found = pipelines.find((pipeline) => pipeline.id === id);
     if (!found) return json({ error: "pipeline not found" }, 404);
     if (evidence.pipelineAnswerDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.pipelineAnswerDelayMs));
-    /* The engine's own rule: a lane already hidden keeps its first Hide
-       instant through a later dismiss, and undismiss clears it. */
-    if (body.action === "dismiss") found.dismissedAt = found.dismissedAt ?? new Date().toISOString();
+    /* The engine's own rule: a dismissal stamps its own instant, and
+       undismiss clears it. */
+    if (body.action === "dismiss") found.dismissedAt = new Date().toISOString();
     if (body.action === "undismiss") found.dismissedAt = null;
     if (body.action === "dismiss" || body.action === "undismiss") evidence.hidesAnswered.push({ id, action: body.action, dismissedAt: found.dismissedAt ?? null });
     if (body.action === "close") {
@@ -668,6 +785,22 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json({ ok: true, pipeline: found });
   }
+  /* The Telegram panel (docs/design/telegram-bot-account.md): the personal
+     account not connected, and the bot in the state `?bot=` names. */
+  if (url.pathname === "/api/telegram") {
+    return json({ telegram: { phase: "disconnected", login: null, identity: null, credentialRef: null, lastHealthCheckAt: null, error: null, credentialsConfigured: true } });
+  }
+  if (url.pathname === "/api/telegram/bot" && method === "POST") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    evidence.botPosts.push(body);
+    const row = (telegramBot.chats as Array<Record<string, unknown>>).find((entry) => entry.chatId === body.chatId);
+    if (body.action === "chat" && row) {
+      const alias = typeof body.alias === "string" && body.alias !== "" ? body.alias : null;
+      Object.assign(row, { alias, postAllowed: alias !== null && body.postAllowed === true, postable: alias !== null && body.postAllowed === true });
+    }
+    return json({ bot: telegramBot });
+  }
+  if (url.pathname === "/api/telegram/bot") return json({ bot: telegramBot });
   return json({}, 404);
 }) as typeof fetch;
 

@@ -1,5 +1,8 @@
 import type { Database as BunDatabase } from "bun:sqlite";
 import fs from "node:fs";
+import path from "node:path";
+
+import { assertNotOperatorStateUnderTest } from "@/lib/stateOwnership";
 
 /**
  * A connection that stays bound to the file at its name (#1870 slice 10).
@@ -68,6 +71,10 @@ export function openCurrentDatabase<T extends BunDatabase>(
     reopened?: (db: T) => void;
   } = {},
 ): T {
+  /* Every state database — the task store, the agent registry, the state
+     store, the MCP receipts — opens through here, so a test run can never
+     reach the operator's own, whichever way it was handed the path. */
+  assertNotOperatorStateUnderTest(path.dirname(path.resolve(filename)), `state database ${path.basename(filename)}`);
   const connect = (): { db: T; identity: string | null } => {
     for (let attempt = 0; attempt < OPEN_ATTEMPTS; attempt += 1) {
       if (databaseSwapInProgress(filename)) {

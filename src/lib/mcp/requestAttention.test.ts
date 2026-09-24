@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AttentionCallerAuthority } from "@/lib/attention/callerAuthority";
 import type { RegistryConversation } from "@/lib/agent/registry";
@@ -40,6 +41,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   resetPresenceForTest();
+  /* The process-wide registry is opened on the first test's state directory;
+     each test deletes its own, so the next one must reopen it. */
+  closeAgentRegistryForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -481,11 +485,20 @@ test("the answer names the desktop the operator is sitting in front of", async (
 });
 
 test("with nobody at a desk the call fails explicitly rather than naming a device that will not move", async () => {
-  upsertPresence(openView({ viewSessionId: "view-phone", deviceId: "device-phone", device: { kind: "mobile", browser: "safari" } }));
-
   const result = await service().callTool("request_attention", ask()) as McpToolResult;
 
   expect(result.ok).toBe(false);
   expect((result as { details?: { code?: string } }).details?.code).toBe("NO_ACTIVE_VIEW");
   expect(readAttentionFile().requests).toEqual([]);
+});
+
+/* docs/design/needs-attention.md §6: the phone is never moved, and names no
+   device; the request reaches it as a notice a desktop can still follow. */
+test("with only a phone open the request is a notice that names no device", async () => {
+  upsertPresence(openView({ viewSessionId: "view-phone", deviceId: "device-phone", device: { kind: "mobile", browser: "safari" } }));
+
+  const result = await service().callTool("request_attention", ask()) as McpToolResult & { delivered?: string; handoff?: unknown };
+
+  expect(result).toMatchObject({ ok: true, delivered: "notice", handoff: null });
+  expect(readAttentionFile().requests).toMatchObject([{ delivery: "notice", offeredTo: [], state: "pending" }]);
 });

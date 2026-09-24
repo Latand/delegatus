@@ -240,10 +240,16 @@ The tools include:
   `seat_tick_settings`;
 - **accounts:** `account_limits`, `account_project_binding`,
   `conversation_migration`;
+- **Telegram bot:** `telegram_bot_chats`, `telegram_bot_send` (posts to a chat
+  the operator allowlisted in the Telegram panel, attributed to the calling
+  conversation), `telegram_bot_messages` (what the bot received, newest
+  first);
 - **the operator and the machine:** `operator_snapshot`, `request_attention`
   (moves your active Delegatus view to a conversation, task or other target and
   returns once the browser has arrived there; it does not wait for a reply,
-  and a Return control takes you back), `agent_activity`,
+  and a Return control takes you back; on a phone it shows as a notice and
+  moves nothing), `dismiss_attention` (clears a card's "needs you" flag until
+  something new asks, the same as the card's Dismiss), `agent_activity`,
   `lifecycle_events`, `resources`, `deployment_status`, `deploy_exact_sha`.
 
 Every call takes a `clientRequestId`; repeating a call with the same id and

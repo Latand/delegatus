@@ -2179,6 +2179,451 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
 }, 600_000);
 
 /*
+ * The Telegram bot account's setup panel (docs/design/telegram-bot-account.md)
+ * — not connected, connected with chats, and reading blocked by a webhook — on
+ * the phone (menu › Accounts › Telegram) at 390 and 430 in both schemes, and
+ * on the desktop from the rail footer at 1440:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "telegram bot"
+ *
+ * Frames go to `$LLV_TELEGRAM_BOT_OUT` (default `.artifacts/telegram-bot`),
+ * readings to `evidence/telegram-bot/panel.json`. A case fails on horizontal
+ * overflow, a control cut by the panel's edge, two text boxes overlapping, a
+ * phone target under 44 px, or, on the phone, a sheet narrower than the screen
+ * or with no scrim behind it.
+ */
+const BOT_OUT = path.resolve(process.env.LLV_TELEGRAM_BOT_OUT ?? ".artifacts/telegram-bot");
+const BOT_EVIDENCE = path.resolve("evidence/telegram-bot");
+const BOT_SCENES = ["none", "chats", "webhook"] as const;
+
+async function readTelegramPanel(page: Page, phone: boolean) {
+  return page.evaluate((isPhone) => {
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Telegram"]');
+    if (!dialog) return null;
+    const box = dialog.getBoundingClientRect();
+    const failures: string[] = [];
+    if (dialog.scrollWidth > dialog.clientWidth + 1) failures.push(`horizontal overflow ${dialog.scrollWidth} > ${dialog.clientWidth}`);
+    if (box.left < -0.5 || box.right > window.innerWidth + 0.5) failures.push(`panel leaves the viewport: ${box.left}..${box.right}`);
+    /* On the phone the sheet spans the screen over a dimming scrim, so none
+       of the Accounts list shows beside it. */
+    const scrim = document.querySelector<HTMLElement>("[data-telegram-scrim]");
+    const scrimColor = scrim ? getComputedStyle(scrim).backgroundColor : null;
+    if (isPhone && (box.left > 0.5 || box.right < window.innerWidth - 0.5)) failures.push(`the sheet leaves the screen's sides uncovered: ${box.left}..${box.right} of ${window.innerWidth}`);
+    if (isPhone && (!scrimColor || scrimColor === "rgba(0, 0, 0, 0)" || scrimColor === "transparent")) failures.push(`no scrim behind the sheet (${scrimColor})`);
+    const controls = [...dialog.querySelectorAll<HTMLElement>("button, input, summary")]
+      .filter((element) => element.getClientRects().length > 0 && !(element.closest("details:not([open])") && !element.closest("summary")));
+    for (const control of controls) {
+      const rect = control.getBoundingClientRect();
+      const name = control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40) ?? control.tagName;
+      if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5) failures.push(`control cut by the panel edge: ${name}`);
+      if (isPhone && rect.height < 43.5) failures.push(`phone target under 44 px: ${name} (${rect.height})`);
+    }
+    /* Ink, not boxes: the union of each text leaf's own line rects. */
+    /* A closed <details> keeps boxes for what it hides; that is not ink. */
+    const hidden = (element: Element) => {
+      const details = element.closest("details:not([open])");
+      return details !== null && !element.closest("summary");
+    };
+    const leaves = [...dialog.querySelectorAll<HTMLElement>("span, p, label, h3, h4, summary, li")]
+      .filter((element) => element.childElementCount === 0 && (element.textContent ?? "").trim() !== "" && element.getClientRects().length > 0 && !hidden(element));
+    /* A range's rects run past an ellipsis and out of a clipped box
+       (a truncated title, an sr-only line); the part a box with overflow
+       other than visible cuts off is not ink. */
+    const clipOf = (element: HTMLElement) => {
+      let clip = { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
+      for (let node: HTMLElement | null = element; node && node !== dialog; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+        const r = node.getBoundingClientRect();
+        clip = { left: Math.max(clip.left, r.left), top: Math.max(clip.top, r.top), right: Math.min(clip.right, r.right), bottom: Math.min(clip.bottom, r.bottom) };
+      }
+      return clip;
+    };
+    const inkOf = (element: HTMLElement) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const clip = clipOf(element);
+      return [...range.getClientRects()]
+        .map((r) => ({ left: Math.max(r.left, clip.left), top: Math.max(r.top, clip.top), right: Math.min(r.right, clip.right), bottom: Math.min(r.bottom, clip.bottom) }))
+        .filter((r) => r.right - r.left > 1 && r.bottom - r.top > 1);
+    };
+    const inks = leaves.map((element) => ({ element, rects: inkOf(element) }));
+    let overlaps = 0;
+    for (let a = 0; a < inks.length; a += 1) {
+      for (let b = a + 1; b < inks.length; b += 1) {
+        if (inks[a]!.element.contains(inks[b]!.element) || inks[b]!.element.contains(inks[a]!.element)) continue;
+        const hit = inks[a]!.rects.some((r1) => inks[b]!.rects.some((r2) =>
+          Math.min(r1.right, r2.right) - Math.max(r1.left, r2.left) > 1 && Math.min(r1.bottom, r2.bottom) - Math.max(r1.top, r2.top) > 1));
+        if (hit) {
+          overlaps += 1;
+          failures.push(`text overlaps: "${inks[a]!.element.textContent?.slice(0, 30)}" / "${inks[b]!.element.textContent?.slice(0, 30)}"`);
+        }
+      }
+    }
+    return {
+      panel: { left: box.left, top: box.top, width: box.width, height: box.height, scrollHeight: dialog.scrollHeight },
+      scrim: scrimColor,
+      botSectionHeight: dialog.querySelector('section[aria-label="Bot"]')?.getBoundingClientRect().height ?? null,
+      controls: controls.length,
+      textLeaves: leaves.length,
+      overlaps,
+      failures,
+    };
+  }, phone);
+}
+
+async function openTelegramPanel(page: Page, phone: boolean): Promise<void> {
+  if (phone) {
+    await page.locator('[data-mobile2-open="menu"]').first().click();
+    await page.locator('[data-mobile2-menu-row="accounts"]').click();
+    await page.waitForSelector("[data-mobile2-telegram] button", { timeout: 10_000 });
+    await page.locator("[data-mobile2-telegram] button").first().click();
+  } else {
+    const footer = page.locator("[data-rail-footer]").first();
+    await footer.waitFor({ timeout: 10_000 });
+    if (await footer.getAttribute("data-rail-footer") === "folded") await page.click("[data-rail-footer-toggle]");
+    await page.locator('button[aria-label="Telegram connection"]').click();
+  }
+  await page.waitForSelector('[role="dialog"][aria-label="Telegram"] section[aria-label="Bot"]', { timeout: 10_000 });
+  await pause(page, 500);
+}
+
+browserTest("telegram bot: the setup panel on the phone and the desktop holds its width, controls and ink", async () => {
+  fs.mkdirSync(BOT_OUT, { recursive: true });
+  fs.mkdirSync(BOT_EVIDENCE, { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const cases = [
+    ...VIEWPORTS.flatMap((viewport) => SCHEMES.map((scheme) => ({ viewport, scheme, phone: true }))),
+    { viewport: { width: 1_440, height: 900 }, scheme: "light" as const, phone: false },
+    { viewport: { width: 1_440, height: 900 }, scheme: "dark" as const, phone: false },
+  ];
+  try {
+    for (const { viewport, scheme, phone } of cases) {
+      for (const scene of BOT_SCENES) {
+        const key = `${phone ? "phone" : "desktop"}-${viewport.width}-${scheme}-${scene}`;
+        const context = await browser.newContext({ viewport, colorScheme: scheme, deviceScaleFactor: 2, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${base}/?bot=${scene}`);
+          await openTelegramPanel(page, phone);
+          const top = await readTelegramPanel(page, phone);
+          await page.screenshot({ path: path.join(BOT_OUT, `${key}.png`) });
+          /* The panel scrolls inside itself; the second frame is its end. */
+          await page.evaluate(() => {
+            const dialog = document.querySelector('[role="dialog"][aria-label="Telegram"]');
+            dialog?.querySelectorAll("details").forEach((details) => { (details as HTMLDetailsElement).open = true; });
+            dialog?.scrollTo({ top: dialog.scrollHeight });
+          });
+          await pause(page, 300);
+          const end = await readTelegramPanel(page, phone);
+          await page.screenshot({ path: path.join(BOT_OUT, `${key}-end.png`) });
+          if (!top || !end) failures.push(`${key}: the panel did not open`);
+          for (const reading of [top, end]) for (const failure of reading?.failures ?? []) failures.push(`${key}: ${failure}`);
+          if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+          results.push({ key, viewport, scheme, scene, top, end });
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(BOT_EVIDENCE, "panel.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);
+
+/*
+ * The chat row's posting switch: one tap allows a chat with no alias under
+ * the one its title suggests; an alias typed into a chat that suggests none
+ * rides with the tap on the switch; and a rename of an allowed chat followed
+ * by switching it off is one save. The field's blur between them used to
+ * save first, disable the switch, and swallow the tap. Each case must end on
+ * the switch's new state after exactly one POST, by touch on the phone and by
+ * mouse on the desktop:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "telegram bot switch"
+ */
+browserTest("telegram bot switch: one tap allows a chat, and a typed alias rides with the tap", async () => {
+  fs.mkdirSync(BOT_OUT, { recursive: true });
+  fs.mkdirSync(BOT_EVIDENCE, { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const surfaces = [
+    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
+    { name: "desktop-1440", viewport: { width: 1_440, height: 900 }, phone: false },
+  ];
+  const steps = [
+    { scene: "typed", title: "Реліз", fill: "release", expect: { chatId: "-1000000000505", alias: "release", postAllowed: true } },
+    { scene: "chats", title: "Person A", fill: null, expect: { chatId: "700000303", alias: "person-a", postAllowed: true } },
+    { scene: "chats", title: "Team Reports", fill: "team-weekly", expect: { chatId: "-1000000000101", alias: "team-weekly", postAllowed: false } },
+  ] as const;
+  try {
+    for (const surface of surfaces) {
+      for (const step of steps) {
+        const key = `${surface.name}-${step.scene}-${step.expect.alias}`;
+        const context = await browser.newContext({ viewport: surface.viewport, colorScheme: "light", deviceScaleFactor: 2, ...(surface.phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          const page = await context.newPage();
+          await page.goto(`${base}/?bot=${step.scene}`);
+          await openTelegramPanel(page, surface.phone);
+          const field = page.locator(`input[aria-label="Alias agents use: ${step.title}"]`);
+          const toggle = page.locator(`[role="switch"][aria-label="Agents may post: ${step.title}"]`);
+          if (step.fill !== null) await field.fill(step.fill);
+          if (surface.phone) await toggle.tap();
+          else await toggle.click();
+          const wanted = String(step.expect.postAllowed);
+          await page.waitForFunction(({ title, value }) => document.querySelector(`[role="switch"][aria-label="Agents may post: ${title}"]`)?.getAttribute("aria-checked") === value, { title: step.title, value: wanted }, { timeout: 5_000 })
+            .catch(() => failures.push(`${key}: the switch did not end ${wanted}`));
+          await pause(page, 300);
+          const posts = await page.evaluate(() => structuredClone((window as unknown as { evidence: { botPosts: Array<Record<string, unknown>> } }).evidence.botPosts));
+          const checked = await toggle.getAttribute("aria-checked");
+          const expected = { action: "chat", ...step.expect };
+          if (posts.length !== 1 || JSON.stringify(posts[0]) !== JSON.stringify(expected)) {
+            failures.push(`${key}: expected exactly one POST ${JSON.stringify(expected)}, saw ${JSON.stringify(posts)}`);
+          }
+          await page.screenshot({ path: path.join(BOT_OUT, `${key}-after-tap.png`) });
+          results.push({ key, surface: surface.name, scene: step.scene, title: step.title, filled: step.fill, checked, posts });
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(BOT_EVIDENCE, "switch.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);
+
+/*
+ * docs/design/needs-attention.md — why a phone card needs the operator, its
+ * Dismiss, and an agent's request_attention that moves nothing, on the real
+ * Viewer over the fixture's `?needs=1` scene at 390 × 844:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable LLV_NEEDS_PHASE=after \
+ *     LLV_NEEDS_FRAMES=<dir> bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "needs attention"
+ *
+ * The same case renders the scene on a checkout without the change
+ * (`LLV_NEEDS_PHASE=before`), which records frames and readings and gates
+ * nothing, so the two phases are the before and after of one scene. Frames go
+ * to `LLV_NEEDS_FRAMES` (default `.artifacts/needs-attention`, not committed);
+ * the after readings to `evidence/needs-attention/phone.json`.
+ */
+const NEEDS_PHASE = process.env.LLV_NEEDS_PHASE === "before" ? "before" : "after";
+const NEEDS_OUT = path.resolve(process.env.LLV_NEEDS_FRAMES || ".artifacts/needs-attention");
+const NEEDS_EVIDENCE = path.resolve("evidence/needs-attention");
+const NEEDS_READER = "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl";
+
+/** What one column shows about what needs the operator, card by card. */
+const needsReading = (page: Page, status: string) => page.evaluate((wanted) => {
+  const column = document.querySelector<HTMLElement>(`[data-phone-kanban-column="${wanted}"]`)!;
+  const rect = (element: Element | null) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+  };
+  const cross = (a: DOMRect, b: DOMRect) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+  return {
+    tabNeeds: document.querySelector(`[data-phone-kanban-tab="${wanted}"] [data-phone-tab-needs]`)?.textContent ?? null,
+    cards: [...column.querySelectorAll<HTMLElement>("[data-phone-card]")].map((card) => {
+      const frame = card.closest("[data-phone-card-frame]");
+      const dismiss = frame?.querySelector("[data-phone-card-dismiss]") ?? null;
+      const undo = frame?.querySelector("[data-phone-card-undo]") ?? null;
+      const inks = [...card.querySelectorAll("[data-phone-card-title], [data-phone-card-badge]")].map((node) => node.getBoundingClientRect());
+      const control = (dismiss ?? undo)?.getBoundingClientRect() ?? null;
+      return {
+        key: card.getAttribute("data-phone-card"),
+        title: card.querySelector("[data-phone-card-title]")?.textContent ?? "",
+        needs: card.getAttribute("data-needs") === "1",
+        edge: card.closest("[data-phone-card-frame]") ? frame?.className.includes("inset_3px") ?? false : card.getAttribute("data-edge"),
+        badge: card.querySelector("[data-phone-card-badge]")?.textContent ?? null,
+        state: card.querySelector("[data-phone-card-state]")?.textContent ?? null,
+        cleared: card.querySelector("[data-phone-card-cleared]")?.textContent ?? null,
+        dismiss: rect(dismiss),
+        undo: rect(undo),
+        /* The card's own button and its control are side by side, never on
+           top of each other, and the control covers none of the card's text. */
+        controlCrossesCard: control ? cross(control, card.getBoundingClientRect()) > 0.5 : false,
+        controlOnText: control ? inks.some((ink) => cross(control, ink) > 0.5) : false,
+      };
+    }),
+  };
+}, status);
+
+/** Where the operator is: the screen on top and how far its feed is scrolled. */
+const whereAmI = (page: Page) => page.evaluate(() => {
+  const screens = [...document.querySelectorAll<HTMLElement>("[data-mobile2-screen]")];
+  const top = screens.at(-1) ?? null;
+  const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]");
+  return {
+    screen: top?.getAttribute("data-mobile2-screen") ?? null,
+    conversation: top?.getAttribute("data-mobile2-conversation") ?? null,
+    feedScrollTop: feed ? Math.round(feed.scrollTop) : null,
+    banner: document.querySelectorAll("[data-mobile2-banner]").length,
+    badge: document.querySelector("[data-mobile2-open='attention']")?.getAttribute("aria-label") ?? null,
+    dot: document.querySelectorAll("[data-mobile2-notice-dot]").length,
+    hash: location.hash,
+  };
+});
+
+browserTest("needs attention: why a phone card needs the operator, its Dismiss, and a request that moves nothing", async () => {
+  fs.mkdirSync(NEEDS_OUT, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const readings: Record<string, unknown> = { phase: NEEDS_PHASE };
+  const failures: string[] = [];
+  const fail = (label: string) => failures.push(label);
+  const after = NEEDS_PHASE === "after";
+  const shot = (page: Page, name: string) => page.screenshot({ path: path.join(NEEDS_OUT, `${NEEDS_PHASE}-${name}.png`) });
+  try {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: "light" });
+    await context.addInitScript(() => { localStorage.setItem("llv_lang", "en"); });
+    try {
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await page.goto(`${fixtureBase}/?kanban=1&needs=1&notice=1#p=atlas`);
+      await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+      await pause(page, 900);
+
+      /* Assigned: a card for each reason that still asks, then the rest. */
+      await page.locator('[data-phone-kanban-tab="assigned"]').click();
+      await pagerAtRest(page);
+      await shot(page, "assigned");
+      const assigned = await needsReading(page, "assigned");
+      readings.assigned = assigned;
+      const geometry = await readColumn(page);
+      readings.assignedGeometry = { smallControls: geometry.smallControls, crossingControls: geometry.crossingControls, inkOverlaps: geometry.inkOverlaps, inkOnControls: geometry.inkOnControls, pinnedFirst: geometry.pinnedFirst };
+      /* The card someone cleared, scrolled to where the operator reads it. */
+      await page.evaluate(() => document.querySelector('[data-phone-card="task:t-cleared"]')?.scrollIntoView({ block: "center" }));
+      await pause(page, 400);
+      await shot(page, "assigned-cleared");
+
+      /* Inbox: the question, then what no task owns, stalled and walled among it. */
+      await page.locator('[data-phone-kanban-tab="inbox"]').click();
+      await pagerAtRest(page);
+      await shot(page, "inbox");
+      const inbox = await needsReading(page, "inbox");
+      readings.inbox = inbox;
+      await page.evaluate(() => document.querySelector('[data-phone-kanban-column="inbox"] [data-phone-kanban-unlinked]')?.scrollIntoView({ block: "start" }));
+      await pause(page, 400);
+      await shot(page, "inbox-loose");
+
+      if (after) {
+        const byKey = new Map(assigned.cards.map((card) => [card.key, card] as const));
+        const expectBadge = (key: string, words: RegExp) => {
+          const card = byKey.get(key);
+          if (!card?.needs) fail(`${key} is not pinned as needing the operator`);
+          else if (!words.test(card.badge ?? "")) fail(`${key} names «${card.badge}», wanted ${words}`);
+          if (card && (!card.dismiss || card.dismiss.width < 44 || card.dismiss.height < 44)) fail(`${key} has no 44 × 44 Dismiss: ${JSON.stringify(card.dismiss)}`);
+          if (card?.controlCrossesCard || card?.controlOnText) fail(`${key}'s Dismiss sits over the card`);
+        };
+        expectBadge("task:t-data", /^needs a decision · /);
+        expectBadge("task:t-copilot", /^review budget spent · /);
+        expectBadge("task:t-prompt", /^permission prompt$/);
+        expectBadge("task:t-owed", /^message not delivered$/);
+        const cleared = byKey.get("task:t-cleared");
+        if (!cleared || cleared.needs || !/^Cleared · orchestrator · /.test(cleared.cleared ?? "")) fail(`the cleared card reads ${JSON.stringify(cleared)}`);
+        if (cleared && (!cleared.undo || cleared.undo.height < 44)) fail("the cleared card has no 44 px Undo");
+        if (geometry.crossingControls.length) fail(`controls crossing: ${JSON.stringify(geometry.crossingControls)}`);
+        if (geometry.inkOverlaps.length) fail(`text over text: ${JSON.stringify(geometry.inkOverlaps.slice(0, 6))}`);
+        if (geometry.inkOnControls.length) fail(`text over a control: ${JSON.stringify(geometry.inkOnControls.slice(0, 6))}`);
+        if (geometry.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(geometry.smallControls)}`);
+        const loose = inbox.cards.filter((card) => card.key !== "task:t-systemd" && card.state);
+        if (!loose.some((card) => /resets/.test(card.state ?? ""))) fail("the walled row does not say when it resets");
+        if (!loose.some((card) => /^stalled/i.test(card.state ?? ""))) fail("a stalled row lost its word");
+        if (inbox.cards.some((card) => card.state && card.needs)) fail("a stalled or walled row is pinned as needing the operator");
+
+        /* One tap on Dismiss: the card clears on the tap and says who cleared it. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pagerAtRest(page);
+        await page.evaluate(() => document.querySelector('[data-phone-kanban-column="assigned"]')!.scrollTop = 0);
+        await pause(page, 300);
+        await page.locator('[data-phone-card-dismiss="task:t-prompt"]').click();
+        await pause(page, 900);
+        await shot(page, "dismissed");
+        const dismissedReading = await needsReading(page, "assigned");
+        readings.dismissed = dismissedReading;
+        readings.dismissals = await page.evaluate(() => (window as unknown as { evidence: { dismissals: unknown[] } }).evidence.dismissals);
+        const prompt = dismissedReading.cards.find((card) => card.key === "task:t-prompt");
+        if (!prompt || prompt.needs || !/^Cleared · you · /.test(prompt.cleared ?? "")) fail(`the dismissed card reads ${JSON.stringify(prompt)}`);
+      }
+
+      /* The operator reads a conversation; the orchestrator asks for them. */
+      await page.locator('[data-phone-kanban-tab="inbox"]').click();
+      await pagerAtRest(page);
+      await page.locator(`[data-phone-card-agent="${NEEDS_READER}"]`).first().scrollIntoViewIfNeeded();
+      await page.locator(`[data-phone-card-agent="${NEEDS_READER}"]`).first().click();
+      await page.waitForSelector('[data-mobile2-screen="chat"]', { timeout: 10_000 });
+      await pause(page, 1_200);
+      await page.evaluate(() => {
+        const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]");
+        if (feed) feed.scrollTop = Math.max(0, feed.scrollHeight - feed.clientHeight - 360);
+      });
+      await pause(page, 500);
+      const before = await whereAmI(page);
+      await shot(page, "chat-before-notice");
+      await page.evaluate(() => {
+        (window as unknown as { evidence: { noticeOn: boolean } }).evidence.noticeOn = true;
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await pause(page, 1_500);
+      const arrived = await whereAmI(page);
+      await shot(page, "chat-notice");
+      readings.chat = { before, arrived };
+      if (before.screen !== arrived.screen || before.conversation !== arrived.conversation || before.hash !== arrived.hash) fail(`the screen moved: ${JSON.stringify({ before, arrived })}`);
+      if (before.feedScrollTop !== arrived.feedScrollTop) fail(`the feed moved from ${before.feedScrollTop} to ${arrived.feedScrollTop}`);
+      if (arrived.banner > before.banner) fail("a banner was put above the conversation");
+      if (after && arrived.dot !== 1) fail(`the badge's dot is ${arrived.dot}, wanted one`);
+
+      /* The ⚠ sheet: the request as a row, above the queue. */
+      const badge = page.locator("[data-mobile2-open='attention']");
+      if (await badge.count()) {
+        await badge.click();
+        await pause(page, 700);
+        await shot(page, "sheet-notice");
+        readings.sheet = await page.evaluate(() => ({
+          notices: [...document.querySelectorAll("[data-mobile2-notice-row]")].map((row) => row.textContent ?? ""),
+          queue: [...document.querySelectorAll("[data-attention-row]")].map((row) => row.textContent ?? ""),
+          dotAfterOpen: document.querySelectorAll("[data-mobile2-notice-dot]").length,
+        }));
+        const sheet = readings.sheet as { notices: string[]; dotAfterOpen: number };
+        if (after && sheet.notices.length !== 1) fail(`the sheet lists ${sheet.notices.length} notices`);
+        if (after && sheet.dotAfterOpen !== 0) fail("the dot stays lit after the sheet showed the notice");
+      } else if (after) {
+        fail("no ⚠ badge to open");
+      }
+      if (pageErrors.length) fail(`page errors: ${pageErrors.join(" | ")}`);
+      await page.close();
+    } finally {
+      await context.close();
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  readings.failures = failures;
+  fs.writeFileSync(path.join(NEEDS_OUT, `readings-${NEEDS_PHASE}.json`), `${JSON.stringify(readings, null, 2)}\n`);
+  if (after) {
+    fs.mkdirSync(NEEDS_EVIDENCE, { recursive: true });
+    fs.writeFileSync(path.join(NEEDS_EVIDENCE, "phone.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }
+}, 300_000);
+
+/*
  * #2105 — Back and screen history on the phone follow the path the operator
  * took. The kanban fixture (`?kanban=1`) at 390 × 844, dark, touch. Every
  * phone screen and every sheet over one is one history entry; the browser's

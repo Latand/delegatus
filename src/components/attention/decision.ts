@@ -1,9 +1,14 @@
 import { roleNameById } from "@/components/builderCopy";
-import { rateLimitText } from "@/components/rateLimit";
-import type { Locale, TFunction } from "@/lib/i18n";
+import { blockAgeSeconds } from "@/components/pipelines/pipelineBlockModel";
+import { stageCardLabel, stageLatestAttemptPlace } from "@/components/pipelines/pipelineModel";
+import { humanizeDuration } from "@/components/turnDuration";
+import type { DismissedBy } from "@/lib/attention/dismissalTypes";
+import type { TFunction } from "@/lib/i18n";
+import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
-import { attentionId, blockingStuckDelivery, openBridgeAsk, stalledAttention } from "../attention";
+import { attentionReason, type ConversationReason } from "../attention";
+import type { NeedReason } from "./needReason";
 
 /**
  * The ONE line every attention surface shows for a waiting agent (issue #1167).
@@ -16,14 +21,12 @@ import { attentionId, blockingStuckDelivery, openBridgeAsk, stalledAttention } f
  * different things, so the derivation lives here once and every surface reads
  * it.
  *
- * `attentionId` is the eligibility authority, and this module CALLS it rather
- * than re-deciding: a conversation the queue does not count is a conversation
- * this line refuses to name. That gate is load-bearing for the stalled tier,
- * whose signal needs a live process and a fresh mtime before it is anyone's to
- * answer — without it a toast left up over an abandoned session announced
- * «interrupted or awaiting permission» while the popover behind it held no such
- * row, which is the one-signal-two-descriptions defect this issue exists to
- * remove.
+ * `attentionReason` is the eligibility authority, and this module CALLS it
+ * rather than re-deciding: a conversation the queue does not count, including
+ * one whose reason the operator dismissed, is a conversation this line refuses
+ * to name. Without that gate a toast left up over a settled session announced
+ * a wait while the popover behind it held no such row, which is the
+ * one-signal-two-descriptions defect this issue exists to remove.
  */
 
 /** The role a pipeline stage records when its stage carries no role at all
@@ -54,36 +57,30 @@ function roleLabel(t: TFunction, file: FileEntry): string | null {
 
 /**
  * The wait itself, from a FIXED vocabulary — the agent's own question header,
- * or one of three localized phrases, or the rate-limit badge's own wording.
+ * or one of the localized phrases.
  *
  * Nothing is lifted out of a question body or off a scraped screen: a line
  * assembled from whatever the terminal happened to be drawing names the OPTIONS
  * rather than the decision, and it is what put «❯ 1. Yes» in front of the
  * operator as the name of a wait.
- *
- * The ladder is `attentionId`'s precedence, in its order, over a file that
- * already qualified — which is what makes the stalled tail honest rather than a
- * catch-all.
  */
-function decisionText(t: TFunction, locale: Locale, file: FileEntry, now: number): string {
-  /* First, exactly as `attentionId` orders it (issue #1168): an orchestrator's
-     open bridge ask is the one wait on this board that was ESCALATED rather
-     than inferred, so it outranks whatever the seat's own transcript is doing.
-     An ask the clock has already retired falls THROUGH to the signals below,
-     so the words age out with the row they belong to. */
-  if (openBridgeAsk(file, now)) return t("status.awaitingDecision");
-  const pending = file.pendingQuestion;
-  if (pending) {
-    if (pending.kind === "plan") return t("attention.decisionPlan");
+function decisionText(t: TFunction, reason: ConversationReason): string {
+  switch (reason.kind) {
+    /* An orchestrator's open bridge ask (issue #1168) is the one wait on this
+       board that was ESCALATED rather than inferred. */
+    case "decision":
+      return t("status.awaitingDecision");
+    case "plan":
+      return t("attention.decisionPlan");
     /* Never the question BODY: it is a paragraph written to be read inside the
        conversation, and it truncates into nonsense on a badge. */
-    return pending.questions?.[0]?.header?.trim() || t("attention.decisionQuestion");
+    case "question":
+      return reason.header || t("attention.decisionQuestion");
+    case "permission":
+      return t("attention.decisionPermission");
+    case "delivery":
+      return t("attention.decisionDelivery");
   }
-  if (file.rateLimit) return rateLimitText(t, locale, file.rateLimit);
-  if (file.waitingInput) return t("attention.decisionPermission");
-  if (blockingStuckDelivery(file, now) !== null) return t("attention.decisionDelivery");
-  if (stalledAttention(file, now)) return t("status.stalled");
-  return t("status.stalled");
 }
 
 /**
@@ -91,13 +88,73 @@ function decisionText(t: TFunction, locale: Locale, file: FileEntry, now: number
  * evidence names one — or null when the queue counts no wait here at all.
  *
  * A surface holding a stale target (a toast still up after its question was
- * answered elsewhere, an agent that exited mid-turn) falls back to its own
+ * answered elsewhere, a reason the operator dismissed) falls back to its own
  * generic wording rather than inventing a decision. `now` is epoch SECONDS and
  * defaults to the wall clock, exactly as `attentionId` does.
  */
-export function decisionLine(t: TFunction, locale: Locale, file: FileEntry, now: number = Date.now() / 1000): string | null {
-  if (attentionId(file, now) === null) return null;
-  const decision = decisionText(t, locale, file, now);
+export function decisionLine(t: TFunction, file: FileEntry, now: number = Date.now() / 1000): string | null {
+  const reason = attentionReason(file, now);
+  if (!reason || reason.dismissal) return null;
+  const decision = decisionText(t, reason);
   const role = roleLabel(t, file);
   return role ? `${decision} · ${role}` : decision;
+}
+
+/**
+ * Why a card needs the operator, as one short label (docs/design/needs-attention.md
+ * §4): the desktop card's foot, the phone card's badge and a member tile's
+ * title all read this one function, so the two boards name a reason the same
+ * way. A conversation's reason carries its role when the evidence names one;
+ * a lane's carries the stage it stopped on.
+ */
+export function needLabel(t: TFunction, need: NeedReason): string {
+  if (need.subject === "pipeline") {
+    const stage = laneStageName(t, need.pipeline, need.stageId);
+    const key = need.kind === "lane-review" ? "needs.laneReview" : "needs.laneDecision";
+    return stage ? t(`${key}Stage`, { stage }) : t(key);
+  }
+  const text = conversationNeedText(t, need.reason);
+  const role = roleLabel(t, need.file);
+  return role ? `${text} · ${role}` : text;
+}
+
+/** A conversation reason in the card's words: shorter than the toast's line. */
+export function conversationNeedText(t: TFunction, reason: Pick<ConversationReason, "kind" | "header">): string {
+  switch (reason.kind) {
+    case "decision":
+      return t("mobile2.board.badgeDecision");
+    case "plan":
+      return t("mobile2.board.badgePlan");
+    case "question":
+      return reason.header || t("mobile2.board.badgeQuestion");
+    case "permission":
+      return t("attention.decisionPermission");
+    case "delivery":
+      return t("needs.delivery");
+  }
+}
+
+/** The stage a lane waits on, in the operator's words: the cursor's, or the
+    review stage a needs_review lane stands on (#1938). */
+function laneStageName(t: TFunction, pipeline: Pipeline, stageId: string | null): string {
+  const stage = stageId ? pipeline.stages.find((entry) => entry.id === stageId) : null;
+  return stage ? stageCardLabel(t, stage, stageLatestAttemptPlace(pipeline, stage.id)).toLocaleLowerCase() : "";
+}
+
+/** The cleared line both cards draw: who cleared it and how long ago, on the
+    board's own clock (epoch seconds), «just now» under a minute. */
+export function clearedLine(t: TFunction, cleared: { at: number; by: DismissedBy }, now: number): string {
+  const seconds = now - cleared.at;
+  const age = seconds < 60 ? t("kanban.justNow") : humanizeDuration(blockAgeSeconds(seconds));
+  return t("needs.cleared", { who: clearedByText(t, cleared.by), age });
+}
+
+/** Who cleared a card, in the card's words: «you» for the operator, the
+    orchestrator, the operator's own root session, else the agent's role. */
+export function clearedByText(t: TFunction, by: DismissedBy): string {
+  if (by.kind === "operator") return t("needs.clearedByYou");
+  if (by.kind === "manager") return t("needs.clearedByOrchestrator");
+  if (by.kind === "gateway") return t("needs.clearedByGateway");
+  const role = by.role?.trim();
+  return role ? roleNameById(t, role) : t("needs.clearedByAgent");
 }

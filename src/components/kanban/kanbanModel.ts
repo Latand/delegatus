@@ -3,16 +3,17 @@ import { conversationIdentity } from "@/lib/accounts/identity";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { groupHideState, isSeatConversation, seatAssignment, seatOnlyTask, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
-import { TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
+import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { byNeedAge, conversationNeed, laneNeed, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
 import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttempts, stageChipState, stageFailEdgeRoundsUsed, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { deckKey } from "@/components/scheme/agentLinks";
 import type { TaskBand } from "@/components/scheme/taskBands";
-import { taskTitle } from "@/components/tasks/taskModel";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
 
 import { pastAttempts, stageViews, type PastAttempt, type StageView } from "./pipelineGraph";
+import { placeholderTitle } from "./placeholderTitle";
 
 /**
  * The kanban board's projection (#1695 K1).
@@ -36,8 +37,10 @@ export interface KanbanMember {
   key: string;
   file: FileEntry;
   state: MobileRowStateKey;
-  /** A conversation that is owed an answer: waiting, stalled, at a limit. */
+  /** A conversation that is owed an answer: its reason is flagged. */
   needsYou: boolean;
+  /** Why it needs the operator, flagged or cleared; null when it asks nothing. */
+  need: NeedReason | null;
   working: boolean;
   /** The agent's own words about the work in flight, when it published any. */
   latest: string | null;
@@ -98,17 +101,33 @@ export interface KanbanCard {
   details: string;
   members: KanbanMember[];
   mirrors: KanbanMirror[];
-  /** Distinct conversations, counted from members, mirrors and durable rows. */
+  /** Distinct conversations the operator can open, counted from members,
+      mirrors and durable rows. A launch that never produced a transcript is
+      not one of them: it is listed in `unstarted`. */
   conversations: number;
   /** Conversations counted from durable rows whose transcripts this board does not carry. */
   notLoaded: number;
+  /** Those conversations, each with the transcript it opens. */
+  notLoadedRefs: KanbanRecordedConversation[];
+  /** The task's launches that never produced a transcript: a failed one at
+      once, any other past the grace a starting launch gets. None is a
+      conversation; the card offers to dismiss each, and a failed one opens
+      its launch view. */
+  unstarted: KanbanUnstartedLaunch[];
   /** Review decks and worker stacks the band carries besides conversations. */
   otherSurfaces: number;
   /** Agent drafts the card holds, in the band's order: its own «+ Agent», a handoff, a retried launch. */
   drafts: string[];
   pipelines: KanbanPipeline[];
   working: number;
+  /** Something on the card needs the operator: `reasons` is not empty. */
   needsYou: boolean;
+  /** Why, oldest first: every member's flagged reason and every lane parked
+      on the operator that nobody cleared (docs/design/needs-attention.md §4). */
+  reasons: NeedReason[];
+  /** Reasons that are still live and were dismissed, with who cleared them
+      and when, newest dismissal first. */
+  cleared: ClearedNeed[];
   /** Working conversations plus pipelines still provisioning. */
   activity: number;
   /** Nothing on it: no conversation, no active pipeline, nothing owed. */
@@ -127,6 +146,38 @@ export interface KanbanCard {
   /** The task holds the project's orchestrator seat conversation, active or
       pending: it stays on the board, and the server refuses to hide it. */
   holdsSeat: boolean;
+}
+
+/** A conversation the card holds that this board did not load. */
+export interface KanbanRecordedConversation {
+  key: string;
+  path: string;
+  conversationId: string | null;
+}
+
+/** A launch recorded on the task that never produced a transcript. */
+export interface KanbanUnstartedLaunch {
+  key: string;
+  launchId: string | null;
+  conversationId: string | null;
+  /** When the launch was recorded, epoch ms. */
+  atMs: number;
+  /** The launch failed: its receipt's error, and the placeholder that opens
+      the launch view, where Retry lives. Null for a launch that simply never
+      produced a transcript. */
+  failed: { error: string | null; file: FileEntry } | null;
+  /** The task still holds a live assignment for it, which Dismiss settles. */
+  dismissable: boolean;
+}
+
+/** How long a launch may run before its transcript appears and still count as
+    starting: a Codex rollout is attributed a moment after its process starts,
+    and until then the task row carries no path. */
+export const LAUNCH_START_GRACE_MS = 10 * 60_000;
+
+/** A projected launch placeholder whose launch failed: nothing ever ran. */
+function failedLaunchPlaceholder(file: FileEntry): boolean {
+  return file.path.startsWith("spawn:") && file.spawn?.state === "failed";
 }
 
 export interface KanbanColumn {
@@ -193,7 +244,9 @@ const ACTIVE_PIPELINE_STATES = new Set(["provisioning", "running", "needs_decisi
 /** A stage with an attempt in flight right now. `pending` is not started,
     `passed`/`failed`/`skipped` are over. */
 const IN_FLIGHT_STAGES: ReadonlySet<StageChipState> = new Set(["running", "reviewing", "committing"]);
-const NEEDS_STATES: ReadonlySet<MobileRowStateKey> = new Set(["waiting", "stalled", "limit"]);
+/* Only a flagged reason needs the operator; a stalled or rate-limited member
+   keeps its word and counts as neither (docs/design/needs-attention.md §3). */
+const NEEDS_STATES: ReadonlySet<MobileRowStateKey> = new Set(["waiting"]);
 const WORKING_STATES: ReadonlySet<MobileRowStateKey> = new Set(["working", "held"]);
 
 function parseMs(iso: string | undefined | null): number {
@@ -276,6 +329,7 @@ function memberOf(key: string, file: FileEntry, stageByPath: ReadonlyMap<string,
     file,
     state: row.key,
     needsYou: NEEDS_STATES.has(row.key),
+    need: conversationNeed(file, now)?.need ?? null,
     working: WORKING_STATES.has(row.key),
     latest: nowFragment(file),
     stage: stageByPath.get(file.path) ?? null,
@@ -385,9 +439,13 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const seatTasks: BoardTask[] = [];
   const cards: KanbanCard[] = bands.flatMap((band): KanbanCard[] => {
     const task = band.task;
-    const members = band.members
-      .filter((member) => member.kind === "node" && member.file && !seatFile(member.file))
+    const nodes = band.members.filter((member) => member.kind === "node" && member.file && !seatFile(member.file));
+    /* A launch placeholder whose launch failed is no conversation: it is
+       listed as a failed launch, which opens its launch view with Retry. */
+    const members = nodes
+      .filter((member) => !failedLaunchPlaceholder(member.file!))
       .map((member) => memberOf(member.key, member.file!, stageByPath, now));
+    const failedLaunches = nodes.filter((member) => failedLaunchPlaceholder(member.file!)).map((member) => member.file!);
     const mirrors = band.mirrors.filter((mirror) => !seatFile(mirror.file)).map((mirror) => ({
       key: mirror.key,
       file: mirror.file,
@@ -410,34 +468,104 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     /* Conversations: what the band carries, plus durable rows it could not
        resolve to a transcript on this board. */
     const identities = new Set<string>();
-    let notLoaded = 0;
+    const notLoadedRefs: KanbanRecordedConversation[] = [];
+    const unopenable: { kind: string; state: string; conversationId: string | null; launchId: string | null }[] = [];
     for (const member of members) identities.add(conversationIdentity(member.file));
     for (const mirror of mirrors) identities.add(conversationIdentity(mirror.file));
-    const countReference = (reference: { kind: string; conversationId: string | null; path: string | null; file: FileEntry | null }) => {
+    const failedIdentities = new Set(failedLaunches.flatMap((file) => [file.conversationId, file.path].filter((key): key is string => Boolean(key))));
+    const countReference = (reference: { kind: string; state: string; conversationId: string | null; launchId: string | null; path: string | null; file: FileEntry | null }) => {
       if (reference.kind === "planned") return;
       if (isSeatConversation(input.seat, reference.file ?? reference)) return;
       const identity = referenceIdentity(reference);
       if (!identity || identities.has(identity)) return;
-      identities.add(identity);
+      if (reference.file && failedLaunchPlaceholder(reference.file)) {
+        failedLaunches.push(reference.file);
+        return;
+      }
       const known = Boolean(reference.file)
         || (reference.path !== null && knownConversations.has(reference.path))
-        || (reference.conversationId !== null && knownConversations.has(reference.conversationId));
-      if (!known) notLoaded += 1;
+        || (reference.conversationId !== null && knownConversations.has(reference.conversationId) && !failedIdentities.has(reference.conversationId));
+      if (known) {
+        identities.add(identity);
+        return;
+      }
+      /* Not on this board: it counts, and opens, only through a transcript. */
+      const transcript = reference.path && !reference.path.startsWith("spawn:") ? reference.path : null;
+      if (transcript) {
+        identities.add(identity);
+        notLoadedRefs.push({ key: identity, path: transcript, conversationId: reference.conversationId });
+        return;
+      }
+      unopenable.push(reference);
     };
     for (const reference of workflow?.references ?? []) countReference(reference);
     for (const execution of workflow?.executions ?? []) {
       if (execution.basis !== "explicit") continue;
       for (const reference of execution.references) countReference(reference);
     }
+    /* The task's own launches that nothing can open: past the grace a starting
+       launch gets, each is a launch that did not start. A dismissed one is a
+       failed row and is gone. Stage attempts have their chips instead. */
+    const unstarted: KanbanUnstartedLaunch[] = [];
+    const unstartedKeys = new Set<string>();
+    const nowMs = now * 1000;
+    /* A failed launch is final the moment its receipt says so: it is listed
+       at once, with its error, and no start grace applies. A dismissed one is
+       gone, and a stage's has its stage chip and past attempt instead. */
+    for (const failed of failedLaunches) {
+      if (stageByPath.has(failed.path) || failed.durableLineage?.memberships.some((membership) => membership.kind === "pipeline")) continue;
+      const launchId = failed.spawn?.launchId ?? null;
+      const conversationId = failed.spawn?.conversationId ?? failed.conversationId ?? null;
+      const assignment = task?.assignments.find((candidate) => (launchId && candidate.launchId === launchId) || (conversationId && candidate.conversationId === conversationId));
+      if (assignment?.state === "failed" && assignment.error === LAUNCH_NOT_STARTED_ERROR) continue;
+      const key = launchId ?? conversationId ?? failed.path;
+      if (unstartedKeys.has(key)) continue;
+      unstartedKeys.add(key);
+      if (assignment?.launchId) unstartedKeys.add(assignment.launchId);
+      if (assignment?.conversationId) unstartedKeys.add(assignment.conversationId);
+      const atMs = assignment ? Date.parse(assignment.at) : Number.NaN;
+      unstarted.push({
+        key,
+        launchId,
+        conversationId,
+        atMs: Number.isFinite(atMs) ? atMs : failed.mtime * 1000,
+        failed: { error: failed.spawn?.error ?? null, file: failed },
+        dismissable: Boolean(assignment && assignment.state !== "failed"),
+      });
+    }
+    for (const reference of unopenable) {
+      if (reference.kind !== "assignment" || reference.state === "failed" || !task) continue;
+      const assignment = task.assignments.find((candidate) => candidate.state !== "failed"
+        && ((reference.launchId && candidate.launchId === reference.launchId) || (reference.conversationId && candidate.conversationId === reference.conversationId)));
+      if (!assignment) continue;
+      const atMs = Date.parse(assignment.at);
+      if (Number.isFinite(atMs) && nowMs - atMs < LAUNCH_START_GRACE_MS) continue;
+      const key = assignment.launchId ?? assignment.conversationId ?? "";
+      if (!key || unstartedKeys.has(key)) continue;
+      unstartedKeys.add(key);
+      unstarted.push({ key, launchId: assignment.launchId ?? null, conversationId: assignment.conversationId ?? null, atMs: Number.isFinite(atMs) ? atMs : 0, failed: null, dismissable: true });
+    }
+    const notLoaded = notLoadedRefs.length;
 
     /* Newest agent work first; a pipeline with no recorded work sorts last. */
     const summaries = [...cardPipelines.values()]
       .sort((a, b) => pipelineWorkAt(b) - pipelineWorkAt(a) || a.id.localeCompare(b.id))
       .map((pipeline) => summarizePipeline(pipeline, flowsById));
     const provisioning = summaries.filter((summary) => summary.pipeline.state === "provisioning").length;
-    const pipelineNeeds = summaries.some((summary) => summary.pipeline.state === "needs_decision" || summary.pipeline.state === "needs_review");
+    /* Why the card needs the operator, and what someone cleared. A lane
+       dismissed on either surface asks nothing here either: `laneNeed` reads
+       the phone queue's own predicate (`pipelineAsks`). */
+    const reasons: NeedReason[] = [];
+    const cleared: ClearedNeed[] = [];
+    for (const found of [...members.map((member) => conversationNeed(member.file, now)), ...summaries.map((summary) => laneNeed(summary.pipeline))]) {
+      if (!found) continue;
+      if (found.cleared) cleared.push(found.cleared);
+      else reasons.push(found.need);
+    }
+    reasons.sort(byNeedAge);
+    cleared.sort((a, b) => b.at - a.at || a.need.key.localeCompare(b.need.key));
     const working = members.filter((member) => member.working).length;
-    const needsYou = pipelineNeeds || members.some((member) => member.needsYou);
+    const needsYou = reasons.length > 0;
     const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
     const status: TaskStatus = overridden ?? task?.status ?? "inbox";
@@ -446,7 +574,10 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       : { hidden: false, resurfaced: null };
     const holdsSeat = Boolean(task && input.seat && seatAssignment(task.assignments, input.seat));
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
-    const title = band.title;
+    /* A placeholder no agent will name any more borrows its conversation's
+       title rather than staying «Untitled task» for good. */
+    const naming = task ? placeholderTitle({ task, members, mirrors, failedLaunches: unstarted.flatMap((launch) => (launch.failed ? [launch.failed.file] : [])), nowMs: now * 1000 }) : null;
+    const title = naming?.derived ?? band.title;
     const description = task ? descriptionOf(task.text) : "";
     /* Retain modification metadata separately from agent-work ordering. A
        band without a task has only its conversations to date it. */
@@ -482,18 +613,22 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       origin: band.origin,
       status,
       title,
-      titlePending: Boolean(task?.origin && task.origin.refinement === "pending") || (task ? !taskTitle(task.text) : false),
+      titlePending: naming?.pending ?? false,
       description,
       details: task?.details ?? "",
       members,
       mirrors,
       conversations: identities.size,
       notLoaded,
+      notLoadedRefs,
+      unstarted,
       otherSurfaces,
       drafts,
       pipelines: summaries,
       working,
       needsYou,
+      reasons,
+      cleared,
       activity: working + provisioning,
       idle: members.length === 0 && mirrors.length === 0 && !activePipeline && !needsYou && otherSurfaces === 0 && drafts.length === 0,
       updatedAtMs,

@@ -1748,6 +1748,7 @@ describe("MCP tool service", () => {
         "lifecycle_events",
         "request_attention",
         "suggest_replies",
+        "dismiss_attention",
         "bridge_report",
         "bridge_directive",
         "get_orchestrator",
@@ -1757,6 +1758,9 @@ describe("MCP tool service", () => {
         "seat_tick_settings",
         "account_project_binding",
         "account_limits",
+        "telegram_bot_chats",
+        "telegram_bot_send",
+        "telegram_bot_messages",
       ]);
       for (const tool of listed.tools) {
         expect(tool.inputSchema.required).toContain("clientRequestId");

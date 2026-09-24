@@ -20,6 +20,7 @@ import type { SchemeLayout } from "@/components/scheme/layout";
 import { updateTask } from "@/components/tasks/taskApi";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { TaskIconPicker } from "@/components/tasks/TaskIconPicker";
+import { sendDismissal } from "@/components/attention/dismissalOverlay";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
@@ -41,8 +42,9 @@ import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./ka
 import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
+import { cardDismissal } from "./cardDismissal";
 import { drawnTasks, useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
-import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
+import { assignmentRefFor, browserAssignmentPorts, dismissUnstartedLaunch, type AssignmentPorts } from "./kanbanAssignments";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
@@ -576,6 +578,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
     void element.offsetWidth;
     element.classList.add("flash");
   }, []);
+  /* A launch that never produced a transcript: dismissing it marks its row
+     failed on the server, and the refreshed tasks take the row away. A refusal
+     (it did start after all) flashes the card. */
+  const dismissLaunch = useCallback((card: KanbanCardModel, launch: { launchId: string | null; conversationId: string | null }) => {
+    if (!card.task) return;
+    void dismissUnstartedLaunch(card.task.id, launch).then((answer) => {
+      if (!answer.ok) flash(card.id);
+    });
+  }, [flash]);
   const previousRects = useRef(new Map<string, { rect: DOMRect; status: string | undefined }>());
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -708,7 +719,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     setIncomingEdits((current) => withEntry(current, card.id, undefined));
     setEditing((current) => withEntry(current, card.id, retained
       ? { field, draft: retained.draft, base: retained.base }
-      : { field, draft: field === "title" && card.titlePending ? "" : base, base }));
+      /* A borrowed title (a placeholder no agent will name) is where the
+         rename starts, so accepting it as shown makes it the task's own. */
+      : { field, draft: field === "title" ? (card.titlePending ? "" : card.title) : base, base }));
     if (field === "description" || field === "details") {
       setCollapsed((current) => {
         if (!current.has(card.id)) return current;
@@ -941,6 +954,33 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers read refs and the card they are given
   }, [controller, dismiss, show, showGroup, t]);
+  /* Dismiss (docs/design/needs-attention.md §5): the card stops flagging the
+     reasons it drew, on the click, and comes back only when something newer
+     asks. Nothing else moves, so the receipt's Undo is the same request with
+     `undo`, and a refusal puts the card back and says why. */
+  const sendCardDismissal = useCallback((card: KanbanCardModel, undo: boolean) => {
+    const { target, subjects } = cardDismissal(card, undo);
+    if (!subjects.length) return;
+    const title = shortTitle(card);
+    const receiptId = undo
+      ? null
+      : show(t("needs.dismissedReceipt", { title }), { label: t("kanban.undo"), run: () => void sendDismissal(target, subjects, { undo: true, surface: "desktop" }) });
+    void sendDismissal(target, subjects, { undo, surface: "desktop" }).then((result) => {
+      if (result.ok) {
+        /* A lane parked again after the card was drawn: that decision is new,
+           and it stays flagged. With nothing else cleared, there is nothing to undo. */
+        if (!result.outcome.changed?.length) return;
+        if (receiptId && !result.outcome.dismissed.length) dismiss(receiptId);
+        show(t("needs.changedReceipt", { title }));
+        return;
+      }
+      if (receiptId) dismiss(receiptId);
+      show(t(undo ? "needs.undoFailed" : "needs.dismissFailed", { title, error: result.error }), undefined, { error: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- shortTitle reads only its argument
+  }, [dismiss, show, t]);
+  const dismissCard = useCallback((card: KanbanCardModel) => sendCardDismissal(card, false), [sendCardDismissal]);
+  const undoDismissCard = useCallback((card: KanbanCardModel) => sendCardDismissal(card, true), [sendCardDismissal]);
   /* Many groups at once: every card leaves at once, the writes go one task at
      a time, one Undo brings back every group that was hidden, and each task
      the server refuses comes back with its own receipt. Groups with a working
@@ -2143,10 +2183,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onUseTheirs: takeTheirs,
         onKeepMine: keepMine,
         onHide: hideCard,
+        onDismiss: dismissCard,
+        onUndoDismiss: undoDismissCard,
         onIconMenu: openIconMenu,
         graphChoices,
         onToggleGraph: toggleGraph,
         onOpenAttempt: openRecorded,
+        onDismissLaunch: dismissLaunch,
         drafts: stageDrafts,
         pipelinePorts,
         onOpenSheet: openSheet,
@@ -2462,8 +2505,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
 type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
   | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
-  | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onIconMenu"
-  | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
+  | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onDismiss" | "onUndoDismiss" | "onIconMenu"
+  | "graphChoices" | "onToggleGraph" | "onOpenAttempt" | "onDismissLaunch"
   | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
   | "projectNames" | "onOpenProject"
 >;

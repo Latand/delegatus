@@ -1,0 +1,101 @@
+{
+  "results": [
+    {
+      "key": "phone-390-typed-release",
+      "surface": "phone-390",
+      "scene": "typed",
+      "title": "Реліз",
+      "filled": "release",
+      "checked": "true",
+      "posts": [
+        {
+          "action": "chat",
+          "chatId": "-1000000000505",
+          "alias": "release",
+          "postAllowed": true
+        }
+      ]
+    },
+    {
+      "key": "phone-390-chats-person-a",
+      "surface": "phone-390",
+      "scene": "chats",
+      "title": "Person A",
+      "filled": null,
+      "checked": "true",
+      "posts": [
+        {
+          "action": "chat",
+          "chatId": "700000303",
+          "alias": "person-a",
+          "postAllowed": true
+        }
+      ]
+    },
+    {
+      "key": "phone-390-chats-team-weekly",
+      "surface": "phone-390",
+      "scene": "chats",
+      "title": "Team Reports",
+      "filled": "team-weekly",
+      "checked": "false",
+      "posts": [
+        {
+          "action": "chat",
+          "chatId": "-1000000000101",
+          "alias": "team-weekly",
+          "postAllowed": false
+        }
+      ]
+    },
+    {
+      "key": "desktop-1440-typed-release",
+      "surface": "desktop-1440",
+      "scene": "typed",
+      "title": "Реліз",
+      "filled": "release",
+      "checked": "true",
+      "posts": [
+        {
+          "action": "chat",
+          "chatId": "-1000000000505",
+          "alias": "release",
+          "postAllowed": true
+        }
+      ]
+    },
+    {
+      "key": "desktop-1440-chats-person-a",
+      "surface": "desktop-1440",
+      "scene": "chats",
+      "title": "Person A",
+      "filled": null,
+      "checked": "true",
+      "posts": [
+        {
+          "action": "chat",
+          "chatId": "700000303",
+          "alias": "person-a",
+          "postAllowed": true
+        }
+      ]
+    },
+    {
+      "key": "desktop-1440-chats-team-weekly",
+      "surface": "desktop-1440",
+      "scene": "chats",
+      "title": "Team Reports",
+      "filled": "team-weekly",
+      "checked": "false",
+      "posts": [
+        {
+          "action": "chat",
+          "chatId": "-1000000000101",
+          "alias": "team-weekly",
+          "postAllowed": false
+        }
+      ]
+    }
+  ],
+  "failures": []
+}

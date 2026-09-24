@@ -89,7 +89,7 @@ interface ProbeResult {
   stderr: string;
 }
 
-function runProbe(mode: "resolve" | "load-stores" | "open-registry" | "resolve-then-disown" | "resolve-then-chdir", environment: Record<string, string | undefined>): ProbeResult {
+function runProbe(mode: "resolve" | "load-stores" | "open-registry" | "resolve-then-disown" | "resolve-then-chdir" | "write-task" | "registry-at", environment: Record<string, string | undefined>): ProbeResult {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries({ ...process.env, ...environment })) {
     if (value !== undefined) env[key] = value;
@@ -297,6 +297,62 @@ describe("the operator's state directory", () => {
     expect(probe.status).toBe(0);
     const resolved = JSON.parse(probe.stdout.trim()) as { stateDirectory: string };
     expect(resolved.stateDirectory.startsWith(`${temporary}${path.sep}`)).toBeTrue();
+  });
+
+  test("a test run that inherited the Viewer's owner claim writes no task into the operator's store", () => {
+    /* The 2026-09-23 leak: a headless reviewer carried LLV_STATE_OWNER=viewer
+       from the image, ran a NODE_ENV=test fixture, and its launch placeholder
+       landed in the live task store. */
+    const temporary = temporaryRoot();
+    const before = snapshot(OPERATOR_HOME);
+
+    const probe = runProbe("write-task", { ...operatorEnvironment(temporary), NODE_ENV: "test", [STATE_OWNER_ENV]: "viewer" });
+
+    expect(probe.status).not.toBe(0);
+    expect(probe.stderr).toContain("OperatorStateUnderTestError");
+    expect(snapshot(OPERATOR_HOME)).toEqual(before);
+  });
+
+  test("a test run handed the operator's directory through LLV_STATE_DIR is refused, not obeyed", () => {
+    const temporary = temporaryRoot();
+    const before = snapshot(OPERATOR_HOME);
+
+    const probe = runProbe("write-task", { ...operatorEnvironment(temporary), NODE_ENV: "test", LLV_STATE_DIR: STATE_DIRECTORY });
+
+    expect(probe.status).not.toBe(0);
+    expect(probe.stderr).toContain("OperatorStateUnderTestError");
+    expect(snapshot(OPERATOR_HOME)).toEqual(before);
+  });
+
+  test("a test run that opens a registry at the operator's path explicitly is refused", () => {
+    const temporary = temporaryRoot();
+    const before = snapshot(OPERATOR_HOME);
+
+    const probe = runProbe("registry-at", {
+      ...operatorEnvironment(temporary),
+      NODE_ENV: "test",
+      LLV_STATE_DIR: path.join(temporary, "state"),
+      PROBE_REGISTRY_FILE: path.join(STATE_DIRECTORY, "agent-registry.json"),
+    });
+
+    expect(probe.status).not.toBe(0);
+    expect(probe.stderr).toContain("OperatorStateUnderTestError");
+    expect(snapshot(OPERATOR_HOME)).toEqual(before);
+  });
+
+  test("the store fence answers only for a test run and only for the operator's directories", async () => {
+    /* Read off the module at run time, so the file still loads on a tree
+       without the fence and each case says for itself what is missing. */
+    const { assertNotOperatorStateUnderTest } = await import("./stateOwnership");
+    expect(typeof assertNotOperatorStateUnderTest).toBe("function");
+    const temporary = temporaryRoot();
+    const testRun = env({ HOME: OPERATOR_HOME, NODE_ENV: "test" });
+    expect(() => assertNotOperatorStateUnderTest(STATE_DIRECTORY, "task store", testRun)).toThrow("task store");
+    expect(() => assertNotOperatorStateUnderTest(path.join(temporary, "state"), "task store", testRun)).not.toThrow();
+    /* The serving Viewer is no test run: its own directory is its to open. */
+    expect(() => assertNotOperatorStateUnderTest(STATE_DIRECTORY, "task store", env({ HOME: OPERATOR_HOME, [STATE_OWNER_ENV]: "viewer" }))).not.toThrow();
+    /* An owner a test run inherited is refused at resolution too. */
+    expect(() => admitOperatorDirectory(STATE_DIRECTORY, "state", env({ HOME: OPERATOR_HOME, NODE_ENV: "test", [STATE_OWNER_ENV]: "viewer" }))).toThrow("test run");
   });
 
   test("a fresh install's first registry open is no migration at all", () => {

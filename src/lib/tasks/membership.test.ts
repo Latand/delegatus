@@ -215,7 +215,9 @@ test("admission planning covers roots and their children, skips held ones, gives
   ];
   const held = task("held", "fixture", { assignments: [{ path: entries[4]!.path, conversationId: entries[4]!.conversationId!, panePid: null, state: "delivered", error: null, at: now }] });
   const p = pipeline("p1", [{ agentPath: entries[5]!.path, conversationId: entries[5]!.conversationId! }, { agentPath: entries[6]!.path, conversationId: entries[6]!.conversationId! }]);
-  const plans = planAdmissions(entries, [held], [p]);
+  /* Planned at the moment the fixtures were written (mtime 1 s), so these
+     conversations are still running and their placeholder waits for a name. */
+  const plans = planAdmissions(entries, [held], [p], ADMISSION_BATCH, 1_000);
   expect(plans.map((plan) => [plan.origin.kind, plan.origin.key])).toEqual([["pipeline", "p1"], ["pipeline", "p1"], ["conversation", "conversation_fixture_1"], ["conversation", "conversation_fixture_2"]]);
   expect(plans[3]!.inherit).toEqual([{ conversationId: "conversation_fixture_1", path: entries[0]!.path }]);
   const admitted = admitConversations([held], plans, deps);
@@ -401,4 +403,25 @@ test("a child is planned only once its parent is covered, follows a parent plann
   expect(tasks.length).toBe(2);
   expect(tasks[0]!.assignments.map((assignment) => assignment.conversationId)).toEqual(["conversation_fixture_20", "conversation_fixture_21", "conversation_fixture_22"]);
   expect(planAdmissions([grandchild, child, orphan, root], tasks, [])).toEqual([]);
+});
+
+test("a rotation's handoff digest and a reply-with-ok probe mint no task; ordinary work beside them does", () => {
+  const digest = entry(901, { cwd: "/srv/installation/.config/agent-log-viewer/state/orchestrator/handoff-digests/seat3-rotate-to-4/cwd", title: "You are compacting the rotation history of a project manager agent's mandate. Write a digest", root: "codex-sessions", engine: "codex", fmt: "codex" });
+  const probe = entry(902, { cwd: "/var/tmp/llv-probe", title: "Reply with exactly: ok" });
+  const work = entry(903, { title: "Fix the flaky upload test" });
+  const plans = planAdmissions([digest, probe, work], [], [], ADMISSION_BATCH, Date.parse(now));
+  expect(plans.map((plan) => plan.identity.path)).toEqual([work.path]);
+});
+
+test("a conversation that has already ended is admitted under its own title; a live one waits for its first action", () => {
+  const nowMs = Date.parse(now);
+  const ended = entry(911, { title: "Old investigation of the cache", mtime: (nowMs - 2 * 60 * 60_000) / 1000, activity: "idle" });
+  const live = entry(912, { title: "Fresh launch", mtime: nowMs / 1000, activity: "live" });
+  const quietButRunning = entry(913, { title: "Long build", mtime: (nowMs - 2 * 60 * 60_000) / 1000, activity: "idle", proc: "running" });
+  const plans = planAdmissions([ended, live, quietButRunning], [], [], ADMISSION_BATCH, nowMs);
+  const admitted = admitConversations([], plans, deps).tasks;
+  const byTitle = new Map(admitted.map((task) => [task.text, task.origin?.refinement] as const));
+  expect(byTitle.get("Old investigation of the cache")).toBe("titled");
+  expect(byTitle.get("Fresh launch")).toBe("pending");
+  expect(byTitle.get("Long build")).toBe("pending");
 });

@@ -63,3 +63,26 @@ export function assignmentRefFor(task: BoardTask, file: FileEntry): AssignmentRe
   if (assignment.path) return { path: assignment.path };
   return assignment.panePid ? { panePid: assignment.panePid } : null;
 }
+
+/**
+ * Dismiss a launch that never produced a transcript (the card's «launch did
+ * not start» row) over `PATCH /api/tasks/:id/assignment`. The row is kept on
+ * the task, marked failed; a placeholder task left with nothing else is done.
+ */
+export async function dismissUnstartedLaunch(taskId: string, launch: { launchId: string | null; conversationId: string | null }): Promise<AssignmentAnswer> {
+  try {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/assignment`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ launchId: launch.launchId, conversationId: launch.conversationId, dismiss: "launch-did-not-start" }),
+    });
+    const json = (await response.json().catch(() => null)) as { task?: BoardTask; error?: string } | null;
+    if (!response.ok) {
+      return { ok: false, status: response.status, error: json?.error ?? translate(getLocale(), "tasks.failed", { status: response.status }) };
+    }
+    fireTasksChanged();
+    return { ok: true, task: json?.task ?? null };
+  } catch {
+    return { ok: false, status: 0, error: translate(getLocale(), "common.serverUnavailable") };
+  }
+}
