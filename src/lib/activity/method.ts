@@ -36,8 +36,13 @@ export type ExclusionReason =
   | "scaffold"
   /** A pipeline stage's generated prompt (builder, reviewer, auditor, deployer…). */
   | "stage-template"
+  /** The first message of a Delegatus session the host's registry does not
+      name: a stage template, a delegation or a spawn, and nothing says which. */
+  | "unregistered"
   /** Bridge, automation and recovery notifications, compaction summaries. */
   | "notification"
+  /** A notice Delegatus sent into a conversation it re-hosted after a restart. */
+  | "recovery"
   /** Injected skill hints, system reminders, instructions, command output. */
   | "injected"
   /** A screenshot attached by the client. */
@@ -55,7 +60,7 @@ export type ExclusionReason =
   | "duplicate";
 
 export const EXCLUSION_REASONS: readonly ExclusionReason[] = [
-  "scaffold", "stage-template", "notification", "injected", "attachment", "agent-message", "subagent", "automation", "interrupt", "unmarked", "duplicate",
+  "scaffold", "stage-template", "unregistered", "notification", "recovery", "injected", "attachment", "agent-message", "subagent", "automation", "interrupt", "unmarked", "duplicate",
 ];
 
 export type Rounding = "half-hour" | "clock-hour";

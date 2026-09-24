@@ -25,13 +25,19 @@ import { readRequests, type LedgerRead } from "./requestLedger";
  * the prototype has two:
  *
  * - `ledger`: this host's request ledger, live, from its first row to now.
+ *   It records requests made through Delegatus surfaces and nothing else, so
+ *   it never vouches for a host: input typed into an agent's terminal on this
+ *   host reaches no ledger.
  * - `transcripts`: export files a host's exporter wrote from its own
  *   transcripts (`scripts/export-human-input.ts`), placed under
- *   `activity/hosts/<host>/`. Each file names the span it speaks for.
+ *   `activity/hosts/<host>/`. Each file names the span it speaks for, and it
+ *   read every store of its host, terminal input included.
  *
  * The expected hosts are this one, every host named in `activity/hosts.json`,
- * and every host that has an export directory. A host none of whose sources
- * covers a stretch leaves that stretch unknown for the projects it holds.
+ * and every host that has an export directory. A host is covered only where
+ * a source that read all of it covers: a stretch no export speaks for is
+ * unknown for the projects the host holds, however many ledger rows fall in
+ * it. Those rows still count, so a figure there is a lower bound.
  */
 
 export const DEFAULT_LOCAL_HOST = "local";
@@ -52,7 +58,10 @@ export interface HostsConfig {
 export interface HostSourceRead {
   source: InputSource;
   state: "read" | "absent" | "unreadable";
-  /** The spans this source speaks for completely. */
+  /** What the source reads: `delegatus` for requests made through Delegatus
+      surfaces alone, `all` for every store of the host. Only `all` covers. */
+  scope: "delegatus" | "all";
+  /** The spans this source read. */
   covered: Interval[];
   inputs: HumanInput[];
   /** Records the exporter excluded, by reason. Counts only. */
@@ -129,13 +138,15 @@ export function readHostsConfig(dir: string): HostsConfig {
   }
 }
 
-/** The local ledger as a source: complete from its first row to now. */
+/** The local ledger as a source: every Delegatus request from its first row
+    to now, and nothing typed anywhere else. */
 export function ledgerSource(host: string, window: Interval, nowMs: number, read: HostSourceDependencies["readLedger"]): HostSourceRead {
   try {
     const ledger = read(window.start, window.end);
     return {
       source: "ledger",
       state: ledger.ledgerStartMs === null ? "absent" : "read",
+      scope: "delegatus",
       covered: ledger.ledgerStartMs === null ? [] : [{ start: ledger.ledgerStartMs, end: nowMs }],
       inputs: ledger.rows.map((row) => ({
         ids: [ledgerRequestId(row.key)],
@@ -151,7 +162,7 @@ export function ledgerSource(host: string, window: Interval, nowMs: number, read
       exportedAt: null,
     };
   } catch {
-    return { source: "ledger", state: "unreadable", covered: [], inputs: [], excluded: {}, exportedAt: null };
+    return { source: "ledger", state: "unreadable", scope: "delegatus", covered: [], inputs: [], excluded: {}, exportedAt: null };
   }
 }
 
@@ -164,7 +175,7 @@ export function exportSource(host: string, hostDir: string, window: Interval): H
     names = fs.readdirSync(hostDir).filter((name) => name.endsWith(".jsonl")).sort();
   } catch (error) {
     const absent = (error as NodeJS.ErrnoException).code === "ENOENT";
-    return { source: "transcripts", state: absent ? "absent" : "unreadable", covered: [], inputs: [], excluded: {}, exportedAt: null };
+    return { source: "transcripts", state: absent ? "absent" : "unreadable", scope: "all", covered: [], inputs: [], excluded: {}, exportedAt: null };
   }
   const covered: Interval[] = [];
   const inputs: HumanInput[] = [];
@@ -197,7 +208,7 @@ export function exportSource(host: string, hostDir: string, window: Interval): H
     }
   }
   const state = covered.length ? "read" : unreadable ? "unreadable" : "absent";
-  return { source: "transcripts", state, covered: unionIntervals(covered), inputs, excluded, exportedAt };
+  return { source: "transcripts", state, scope: "all", covered: unionIntervals(covered), inputs, excluded, exportedAt };
 }
 
 /**
@@ -246,7 +257,7 @@ export function readHumanInputs(
       host: host.id,
       projects: host.projects,
       since: host.since,
-      covered: unionIntervals(sources.flatMap((source) => source.covered)),
+      covered: unionIntervals(sources.filter((source) => source.scope === "all").flatMap((source) => source.covered)),
     });
     hosts.push({
       host: host.id,

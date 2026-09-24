@@ -10,7 +10,8 @@ import type { LedgerRead } from "./requestLedger";
 
 /* Two invented hosts: this workstation (`local`) and a stage host. The stage
    host's human input arrives as an export file; the local host is read
-   through its ledger. Invented projects and ids only. */
+   through its ledger for Delegatus requests and through its own export for
+   everything else. Invented projects and ids only. */
 
 const NOW = Date.parse("2026-09-23T20:00:00Z");
 /* 2026-09-23 in Kyiv. */
@@ -37,6 +38,11 @@ function stageExport(inputs: HumanInput[], coveredFrom = DAY.start, coveredUntil
   fs.writeFileSync(path.join(target, name), exportLines({ host, coveredFrom, coveredUntil, exportedAt: NOW, records: inputs.length + 4, excluded: { "agent-message": 3, unmarked: 1 } }, inputs));
 }
 
+/** This host's own export, empty: every store read, nothing typed in a terminal. */
+function localExport(host = "workstation", coveredFrom = DAY.start - 86_400_000, coveredUntil = NOW): void {
+  stageExport([], coveredFrom, coveredUntil, host, "local-export.jsonl");
+}
+
 const stageInput = (isoTime: string, id: string): HumanInput => ({
   ids: [messageId("codex", id)], at: Date.parse(isoTime), host: "stage", source: "transcripts", project: "client-a", kind: "message", surface: "unknown", hash: "a".repeat(64),
 });
@@ -50,9 +56,10 @@ describe("human input from every expected host", () => {
   test("the local host read and empty, the stage host with input: hours from the stage host, coverage complete", () => {
     hostsFile([{ id: "stage", label: "Stage host" }]);
     stageExport([stageInput("2026-09-23T09:00:00Z", "a"), stageInput("2026-09-23T09:10:00Z", "b"), stageInput("2026-09-23T09:45:00Z", "c")]);
+    localExport();
     const read = readHumanInputs({ start: DAY.start - 600_000, end: NOW }, NOW, { dir: () => dir, readLedger: quietLedger });
     expect(read.hosts.map((host) => [host.host, host.configured, host.sources.map((source) => `${source.source}:${source.state}`)])).toEqual([
-      ["workstation", true, ["ledger:read", "transcripts:absent"]],
+      ["workstation", true, ["ledger:read", "transcripts:read"]],
       ["stage", true, ["transcripts:read"]],
     ]);
     expect(read.hosts[1]!.sources[0]!.excluded).toEqual({ "agent-message": 3, unmarked: 1 });
@@ -67,6 +74,7 @@ describe("human input from every expected host", () => {
 
   test("the same with the stage host not connected: coverage unknown and a flagged zero", () => {
     hostsFile([{ id: "stage", label: "Stage host" }]);
+    localExport();
     const read = readHumanInputs({ start: DAY.start - 600_000, end: NOW }, NOW, { dir: () => dir, readLedger: quietLedger });
     expect(read.hosts[1]!.sources[0]!.state).toBe("absent");
     const report = reportFor(read);
@@ -75,8 +83,28 @@ describe("human input from every expected host", () => {
     expect(report.days[0]!.missingSource).toEqual(["unread-source"]);
   });
 
+  test("a ledger alone never covers its host: terminal input there is unread, so its requests are a lower bound", () => {
+    hostsFile([{ id: "stage" }]);
+    stageExport([]);
+    const ledger = (): LedgerRead => ({ rows: [{ v: 1, key: "e".repeat(64), at: Date.parse("2026-09-23T09:00:00Z"), kind: "message", surface: "desktop", project: "client-a" }], ledgerStartMs: NOW - 7 * 24 * 3_600_000 });
+    const read = readHumanInputs({ start: DAY.start, end: NOW }, NOW, { dir: () => dir, readLedger: ledger });
+    expect(read.hosts[0]!.sources.map((source) => `${source.source}:${source.state}:${source.scope}`)).toEqual(["ledger:read:delegatus", "transcripts:absent:all"]);
+    expect(read.coverage.find((host) => host.host === "workstation")!.covered).toEqual([]);
+    const report = reportFor(read);
+    /* The ledger's request still counts, and the figure says it is a lower bound. */
+    expect(report.totals.humanMs).toBe(10 * 60_000);
+    expect(report.totals.coverage).toEqual({ complete: false, missingHosts: ["workstation"] });
+    expect(report.days[0]!.coverage.complete).toBe(false);
+
+    /* An export of this host that stops at noon covers the morning; the afternoon stays unknown. */
+    localExport("workstation", DAY.start, Date.parse("2026-09-23T09:00:00Z"));
+    const partial = reportFor(readHumanInputs({ start: DAY.start, end: NOW }, NOW, { dir: () => dir, readLedger: ledger }));
+    expect(partial.days[0]!.unknown).toEqual([{ start: Date.parse("2026-09-23T09:00:00Z"), end: NOW }]);
+  });
+
   test("an export that ends before the day does not cover it", () => {
     hostsFile([{ id: "stage" }]);
+    localExport();
     stageExport([], DAY.start - 86_400_000, DAY.start + 3_600_000);
     const report = reportFor(readHumanInputs({ start: DAY.start, end: NOW }, NOW, { dir: () => dir, readLedger: quietLedger }));
     expect(report.days[0]!.coverage.complete).toBe(false);
@@ -84,6 +112,7 @@ describe("human input from every expected host", () => {
   });
 
   test("a file naming another host covers nothing, and a host found only by its export directory is expected", () => {
+    localExport("local");
     stageExport([stageInput("2026-09-23T09:00:00Z", "z")], DAY.start, NOW, "stage", "mislabelled.jsonl");
     fs.renameSync(path.join(dir, "hosts", "stage"), path.join(dir, "hosts", "build-box"));
     const read = readHumanInputs({ start: DAY.start, end: NOW }, NOW, { dir: () => dir, readLedger: quietLedger });

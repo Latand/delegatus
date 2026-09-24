@@ -14,7 +14,8 @@
  * session id is written.
  *
  * `--only-roots` reads the `--root` directories alone; `--no-registry` skips
- * the registry, so only marked or typed input counts.
+ * the registry, so only marked or typed input counts, and the first message of
+ * every Delegatus session is excluded as unregistered.
  *
  * Copy the file into `<state>/activity/hosts/<host>/` on the host that runs
  * the dashboard. Dates are whole days in the configured zone (Europe/Kyiv
@@ -38,7 +39,6 @@ import { codexSessionRoots } from "../src/lib/accounts/codex";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "../src/lib/agent/registry";
 import { UNRESOLVED_PROJECT } from "../src/lib/projects/identity";
 import { claudeMessageProvenance } from "../src/lib/runtime/claudeMessageProvenance";
-import { decodeCodexStructuredUserText } from "../src/lib/runtime/codexStructuredUserText";
 import { submissionIdentities } from "../src/lib/runtime/submissionIdentity";
 import { ROOTS } from "../src/lib/scanner/roots";
 import { resolveProjectAttribution } from "../src/lib/session/projectResolution";
@@ -115,11 +115,10 @@ function resolve(facts: TranscriptFacts): ConversationResolution {
         const found = rec.messageId ? claude[rec.messageId] : undefined;
         return found ? { origin: found.origin, ...(found.submissionId ? { idempotencyKey: found.submissionId } : {}) } : null;
       }
-      const decoded = decodeCodexStructuredUserText(rec.text);
-      if (!decoded.origin) return null;
+      if (!rec.markerOrigin) return null;
       codex ??= submissionIdentities(facts.path);
-      const submission = decoded.deliveryDedup ? codex[decoded.deliveryDedup] : undefined;
-      return { origin: decoded.origin.kind, ...(submission ? { idempotencyKey: submission } : {}) };
+      const submission = rec.deliveryKey ? codex[rec.deliveryKey] : undefined;
+      return { origin: rec.markerOrigin, ...(submission ? { idempotencyKey: submission } : {}) };
     } catch {
       return null;
     }

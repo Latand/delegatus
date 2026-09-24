@@ -5,6 +5,8 @@ import path from "node:path";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 
+import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENING } from "./recoveryNotices";
+
 /**
  * A conversation whose in-flight turn the Viewer cut, and the one continuation
  * the Viewer owes it for that cut (#1835).
@@ -349,12 +351,12 @@ export function interruptionContinuationText(obligation: InterruptionObligation)
   const turn = `The interrupted turn's last transcript event is ${obligation.checkpoint.lastEventKind ?? "a record"} at ${at}.`;
   const opening = obligation.reason === "viewer-release"
     ? [
-      "A Viewer deployment interrupted your turn while it was in flight: the Viewer that hosted you was replaced and this conversation was re-hosted by its successor.",
+      VIEWER_RELEASE_INTERRUPTION_OPENING,
       turn,
       "Resume that turn.",
     ]
     : [
-      "Viewer restarted and severed your structured host mid-turn.",
+      VIEWER_RESTART_INTERRUPTION_OPENING,
       turn,
       "You were re-hosted automatically; resume that turn.",
     ];

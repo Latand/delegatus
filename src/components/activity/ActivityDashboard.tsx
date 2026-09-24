@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 
 import type { HostReport } from "@/lib/activity/hostSources";
 import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES, type Coverage, type DayActivity, type RangeKey } from "@/lib/activity/method";
-import type { ActivityProjectRow, ActivityResponse } from "@/lib/activity/report";
+import type { ActivityHostRow, ActivityProjectRow, ActivityResponse } from "@/lib/activity/report";
 import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { useLocale, type Locale, type MessageKey, type TFunction } from "@/lib/i18n";
 
@@ -486,7 +486,7 @@ function sourceLine(source: HostReport["sources"][number], locale: Locale, tz: s
   });
 }
 
-function HostsTable({ hosts, locale, tz, t }: { hosts: readonly HostReport[]; locale: Locale; tz: string; t: TFunction }) {
+function HostsTable({ hosts, locale, tz, t }: { hosts: readonly ActivityHostRow[]; locale: Locale; tz: string; t: TFunction }) {
   return (
     <div className="mt-1 overflow-x-auto">
       <table className="w-full min-w-[560px] border-collapse text-left text-[11.5px] max-sm:block max-sm:min-w-0" data-activity-hosts="">
@@ -500,11 +500,13 @@ function HostsTable({ hosts, locale, tz, t }: { hosts: readonly HostReport[]; lo
         <tbody className="max-sm:block">
           {hosts.map((host) => {
             const connected = host.sources.some((source) => source.state === "read");
+            /* Its ledger is read and no export covers the range: only Delegatus requests were read. */
+            const terminalUnread = !host.complete && host.sources.some((source) => source.scope === "delegatus" && source.state === "read");
             const excluded = EXCLUSION_REASONS
               .map((reason) => [reason, host.sources.reduce((sum, source) => sum + (source.excluded[reason] ?? 0), 0)] as const)
               .filter(([, count]) => count > 0);
             return (
-              <tr key={host.host} className="border-t border-border align-top max-sm:flex max-sm:flex-col max-sm:py-2" data-activity-host={host.host} data-connected={connected ? "true" : "false"}>
+              <tr key={host.host} className="border-t border-border align-top max-sm:flex max-sm:flex-col max-sm:py-2" data-activity-host={host.host} data-connected={connected ? "true" : "false"} data-complete={host.complete ? "true" : "false"}>
                 <th scope="row" className="py-1.5 pr-3 font-semibold text-primary max-sm:block max-sm:py-0.5">
                   {hostName(host.host, hosts, t)}
                   {host.local && host.label ? <span className="font-normal text-muted"> · {t("activity.hosts.thisHost")}</span> : null}
@@ -517,6 +519,12 @@ function HostsTable({ hosts, locale, tz, t }: { hosts: readonly HostReport[]; lo
                 </th>
                 <td className="py-1.5 pr-3 text-secondary max-sm:block max-sm:py-0.5">
                   {host.sources.map((source) => <div key={source.source}>{sourceLine(source, locale, tz, t)}</div>)}
+                  {terminalUnread ? (
+                    <div className="mt-0.5 flex items-start gap-1 text-warning" data-activity-terminal-unread="">
+                      <TriangleAlert className="mt-[2px] h-3 w-3 shrink-0" aria-hidden />
+                      {t("activity.hosts.terminalUnread")}
+                    </div>
+                  ) : null}
                 </td>
                 <td className="py-1.5 text-muted max-sm:block max-sm:py-0.5">
                   <span className="font-semibold sm:hidden">{t("activity.hosts.excluded")}: </span>

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
+import { structuredUserReference } from "@/lib/runtime/codexStructuredUserText";
+import { INTERRUPTED_CODEX_CONTINUATION_TEXT, VIEWER_RESTART_INTERRUPTION_OPENING } from "@/lib/runtime/recoveryNotices";
+
 import {
   candidateFor,
   canonicalTextHash,
@@ -12,6 +15,7 @@ import {
   ledgerRequestId,
   ledgerRowKey,
   mergeHumanInputs,
+  messageId,
   parseClaudeUserRecord,
   parseCodexUserRecord,
   parseExportLine,
@@ -25,10 +29,11 @@ import {
 
 const AT = Date.parse("2026-09-22T09:00:00Z");
 const iso = (offsetSec: number) => new Date(AT + offsetSec * 1000).toISOString();
-/** An operator-origin marker; each delivery carries its own key. */
+/** An operator-origin marker; each delivery carries its own key. A key's
+    43rd character carries two padding bits, which a valid key leaves zero. */
 const mark = (key: string) => `<!-- llv:structured-user ctx=o.${key.padEnd(43, "A")}.${"B".repeat(16)} -->\n`;
 const OPERATOR_MARK = mark("K0");
-const AGENT_MARK = `<!-- llv:structured-user ctx=a.${"C".repeat(43)}.${"D".repeat(16)} -->\n`;
+const AGENT_MARK = `<!-- llv:structured-user ctx=a.${"C".repeat(42)}A.${"D".repeat(16)} -->\n`;
 
 function context(overrides: Partial<TranscriptContext> = {}): TranscriptContext {
   return { host: "stage", project: "client-a", conversation: "conv-1", session: "delegatus", launch: "operator", ...overrides };
@@ -93,6 +98,43 @@ describe("only real operator input counts", () => {
       [codex(`${OPERATOR_MARK}ignored`), context({ session: "automation" }), false, "automation"],
     ];
     for (const [rec, ctx, first, reason] of cases) expect(classifyUserRecord(rec, ctx, first)).toEqual({ human: false, reason: reason as never });
+  });
+
+  test("Delegatus's own restart notices are excluded, the ones stamped with the operator marker included", () => {
+    /* Startup sent the continuation with no origin, and the Codex host stamped it operator. */
+    const continuation = codex(`${mark("R1")}${INTERRUPTED_CODEX_CONTINUATION_TEXT}`, "item-r1");
+    expect(continuation.markerOrigin).toBe("operator");
+    expect(classifyUserRecord(continuation, context(), false)).toEqual({ human: false, reason: "recovery" });
+    expect(classifyUserRecord(continuation, context({ launch: null }), true)).toEqual({ human: false, reason: "recovery" });
+    const obligation = claude(`${VIEWER_RESTART_INTERRUPTION_OPENING} The interrupted turn's last transcript event is a tool call.`, { promptSource: "sdk" });
+    expect(classifyUserRecord(obligation, context({ deliveryOrigin: () => ({ origin: "operator" }) }), false)).toEqual({ human: false, reason: "recovery" });
+    /* The operator's own words that merely mention a restart still count. */
+    expect(classifyUserRecord(codex(`${mark("R2")}Continue the interrupted turn from the transcript, then deploy`), context(), false)).toMatchObject({ human: true });
+  });
+
+  test("a Delegatus session the registry does not name: its operator-marked first message is excluded as unregistered", () => {
+    const unregistered = context({ launch: null });
+    const template = codex(`${mark("U1")}You are a Builder in plain mode. Implement the directive…`, "item-u1");
+    expect(classifyUserRecord(template, unregistered, true)).toEqual({ human: false, reason: "unregistered" });
+    /* Later operator-marked messages in it still count. */
+    expect(classifyUserRecord(codex(`${mark("U2")}hold the merge`, "item-u2"), unregistered, false)).toEqual({ human: true, kind: "message", surface: "unknown" });
+    /* An interactive session's typed first prompt is not affected. */
+    expect(classifyUserRecord(claude("rename the column", { promptSource: "typed" }), context({ session: "interactive", launch: null }), true))
+      .toEqual({ human: true, kind: "message", surface: "terminal" });
+  });
+
+  test("the marker is read by the runtime's decoder: one delivery has one id in either wire form", () => {
+    const key = "7f".repeat(32);
+    const compact = `<!-- llv:structured-user ctx=o.${structuredUserReference(key, true).slice(2)}.${"B".repeat(16)} -->\n`;
+    const legacy = `<!-- llv:structured-user dedup=${key} origin=operator -->\n`;
+    const [a, b] = [codex(`${compact}tag the release`, "item-a"), codex(`${legacy}tag the release`, "item-b", 5)];
+    expect([a.deliveryKey, b.deliveryKey]).toEqual([key, key]);
+    const candidates = [a, b].map((rec, index) => candidateFor(rec, context({ conversation: `c${index}` }), { kind: "message", surface: "unknown" }));
+    expect(candidates.every((candidate) => candidate.ids.includes(messageId("delivery", key)))).toBe(true);
+    /* A ctx value the decoder rejects names no origin and no key. */
+    const forged = codex(`<!-- llv:structured-user ctx=o.not-a-key.${"B".repeat(16)} -->\nship it`);
+    expect([forged.markerOrigin, forged.deliveryKey]).toEqual([null, null]);
+    expect(classifyUserRecord(forged, context(), false)).toEqual({ human: false, reason: "unmarked" });
   });
 
   test("sessions are classified from their own first records", () => {

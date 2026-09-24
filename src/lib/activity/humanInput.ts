@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
 
+import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
+import { isRecoveryNotice } from "@/lib/runtime/recoveryNotices";
+
 import type { ExclusionReason, Interval, RequestKind, Surface } from "./method";
 import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES } from "./method";
 
@@ -85,11 +88,15 @@ function fallbackId(host: string, textHash: string, at: number): string {
   return `h:${sha256(`${ID_DOMAIN}\0${host}\0${textHash}\0${at}`)}`;
 }
 
+/** A record's text with its Delegatus delivery marker line dropped. */
+function bodyOf(text: string): string {
+  return decodeCodexStructuredUserText(text.trimStart()).text;
+}
+
 /** Canonical text for the fallback rule: the Delegatus delivery marker line
     dropped, whitespace collapsed. */
 export function canonicalTextHash(text: string): string {
-  const body = text.replace(/^<!-- llv:structured-user[^>]*-->\n?/, "").trim().replace(/\s+/gu, " ");
-  return sha256(`${ID_DOMAIN}\0${body}`);
+  return sha256(`${ID_DOMAIN}\0${bodyOf(text).trim().replace(/\s+/gu, " ")}`);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -123,7 +130,8 @@ export interface UserRecord {
   promptId: string | null;
   /** Claude `uuid` or Codex response item `id`. */
   messageId: string | null;
-  /** The delivery key in a Codex structured-user marker. */
+  /** The delivery key (64 hex) in a Codex structured-user marker, whichever
+      form carried it: the compact `ctx` reference or a legacy `dedup`. */
   deliveryKey: string | null;
   /** Origin stamped in a Codex structured-user marker. */
   markerOrigin: "operator" | "agent" | null;
@@ -155,25 +163,6 @@ function textOf(content: unknown): { text: string; toolResultOnly: boolean } {
 function timeOf(value: unknown): number | null {
   const ms = typeof value === "string" ? Date.parse(value) : NaN;
   return Number.isFinite(ms) ? ms : null;
-}
-
-const MARKER = /^<!-- llv:structured-user((?: [a-z0-9]+=[^ >]+)*) -->/;
-
-function markerFacts(text: string): { delivered: boolean; origin: "operator" | "agent" | null; key: string | null } {
-  const marker = MARKER.exec(text);
-  if (!marker) return { delivered: false, origin: null, key: null };
-  let origin: "operator" | "agent" | null = null;
-  let key: string | null = null;
-  for (const [, name, value] of marker[1]!.matchAll(/ ([a-z0-9]+)=([^ >]+)/g)) {
-    if (name === "ctx" && /^[oad]\./.test(value!)) {
-      key = value!.split(".")[1] ?? null;
-      if (value!.startsWith("o.")) origin = "operator";
-      if (value!.startsWith("a.")) origin = "agent";
-    }
-    if (name === "dedup" && /^[a-f0-9]{64}$/.test(value!)) key ??= value!;
-    if (name === "origin" && (value === "operator" || value === "agent")) origin = value;
-  }
-  return { delivered: true, origin, key };
 }
 
 /** A Claude transcript line, when it is a user message record with text. */
@@ -209,16 +198,18 @@ export function parseCodexUserRecord(raw: unknown): UserRecord | null {
   const { text } = textOf(payload.content);
   const at = timeOf(line.timestamp);
   if (!text.trim() || at === null) return null;
-  const marker = markerFacts(text);
+  /* The marker grammar is the runtime's own decoder's, so a delivery key here
+     is the same 64-hex key the host's submission identities are filed under. */
+  const marker = decodeCodexStructuredUserText(text.trimStart());
   return {
     engine: "codex",
     at,
     text,
     promptId: null,
     messageId: typeof payload.id === "string" && payload.id ? payload.id : null,
-    deliveryKey: marker.key,
-    markerOrigin: marker.origin,
-    delivered: marker.delivered,
+    deliveryKey: marker.deliveryDedup ?? null,
+    markerOrigin: marker.origin?.kind ?? null,
+    delivered: marker.structured,
     isMeta: false,
     isSidechain: false,
     isCompactSummary: false,
@@ -261,14 +252,20 @@ export type Verdict =
  * provenance naming the operator, or the engine's own "typed by a person"
  * flag. The first user message of a spawned conversation is judged by how it
  * was launched: a pipeline stage's is a generated template and a delegated
- * spawn's is another agent's.
+ * spawn's is another agent's. A Delegatus session the registry does not name
+ * could be either, or an operator spawn; its first message is excluded, since
+ * pipeline and orchestrator spawns stamp their templates with the operator
+ * marker. The notices Delegatus sends after a restart are excluded by their
+ * text, because the ones written before they carried an origin are marked as
+ * the operator's.
  */
 export function classifyUserRecord(rec: UserRecord, context: TranscriptContext, firstUserMessage: boolean): Verdict {
-  const body = rec.text.trimStart().replace(MARKER, "").trimStart();
+  const body = bodyOf(rec.text).trimStart();
   if (rec.isMeta && /^\[Image\b/.test(body)) return { human: false, reason: "attachment" };
   if (rec.isMeta || INJECTED_PREFIXES.some((prefix) => body.startsWith(prefix))) return { human: false, reason: "injected" };
   if (rec.isCompactSummary || rec.promptSource === "system" || rec.turnOrigin === "task_notification"
     || NOTIFICATION_PREFIXES.some((prefix) => body.startsWith(prefix))) return { human: false, reason: "notification" };
+  if (isRecoveryNotice(body)) return { human: false, reason: "recovery" };
   if (body.startsWith("[Request interrupted by user")) return { human: false, reason: "interrupt" };
   if (rec.isSidechain || context.session === "subagent") return { human: false, reason: "subagent" };
   if (context.session === "automation") return { human: false, reason: "automation" };
@@ -277,6 +274,7 @@ export function classifyUserRecord(rec: UserRecord, context: TranscriptContext, 
   if (origin === "agent") return { human: false, reason: "agent-message" };
   if (firstUserMessage && context.launch === "pipeline") return { human: false, reason: "stage-template" };
   if (firstUserMessage && context.launch === "agent") return { human: false, reason: "scaffold" };
+  if (firstUserMessage && context.launch === null && context.session === "delegatus") return { human: false, reason: "unregistered" };
   if (origin === "operator") {
     return {
       human: true,

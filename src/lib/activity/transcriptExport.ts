@@ -172,7 +172,7 @@ export async function readTranscript(file: string): Promise<ParsedTranscript | n
 
 /** Records that say nothing about who started the conversation: seeing one
     does not make the next record the conversation's first message. */
-const PRELUDE: ReadonlySet<ExclusionReason> = new Set(["injected", "attachment", "notification", "interrupt"]);
+const PRELUDE: ReadonlySet<ExclusionReason> = new Set(["injected", "attachment", "notification", "recovery", "interrupt"]);
 
 /**
  * Human inputs of one host inside [from, to], deduplicated, and a manifest

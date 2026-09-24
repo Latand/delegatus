@@ -12,6 +12,7 @@ import {
   METHOD_DEFAULTS,
   RANGE_KEYS,
   rangeDays,
+  uncoveredSpans,
   type ActivityReport,
   type Anchor,
   type MethodParams,
@@ -33,6 +34,12 @@ export interface ActivityProjectRow extends ProjectActivity {
   name: string | null;
 }
 
+export interface ActivityHostRow extends HostReport {
+  /** Whether the host was read for the whole range up to now: a host whose
+      ledger is read and whose transcripts are not is incomplete. */
+  complete: boolean;
+}
+
 export interface ActivityResponse extends Omit<ActivityReport, "projects" | "params"> {
   generatedAt: number;
   params: { windowMin: number; breakMin: number; rounding: MethodParams["rounding"]; tz: string };
@@ -40,7 +47,7 @@ export interface ActivityResponse extends Omit<ActivityReport, "projects" | "par
     /** Whether `activity/hosts.json` names the expected hosts. */
     hostsConfig: HumanInputRead["config"];
     /** Every expected host and what each of its sources was read for. */
-    hosts: HostReport[];
+    hosts: ActivityHostRow[];
     agentIndex: SourceState;
     indexedAtMs: number | null;
     unregisteredConversations: number;
@@ -175,7 +182,10 @@ export async function activityResponse(
     range: report.range,
     coverage: {
       hostsConfig: human.config,
-      hosts: human.hosts,
+      hosts: human.hosts.map((host) => ({
+        ...host,
+        complete: uncoveredSpans({ start: window.start, end: Math.min(window.end, nowMs) }, hostCoverage.filter((entry) => entry.host === host.host)).hosts.length === 0,
+      })),
       agentIndex,
       indexedAtMs: agentRead.index.indexedAtMs,
       unregisteredConversations: report.totals.unregisteredConversations,

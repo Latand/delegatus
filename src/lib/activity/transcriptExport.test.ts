@@ -3,8 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { INTERRUPTED_CODEX_CONTINUATION_TEXT, VIEWER_RESTART_INTERRUPTION_OPENING } from "@/lib/runtime/recoveryNotices";
+
 import { exportLines, parseExportLine } from "./humanInput";
-import { zonedDate } from "./method";
+import { activityReport, clampMethodParams, zonedDate } from "./method";
 import { exportHumanInputs, listTranscriptFiles, type ConversationResolution, type TranscriptFacts } from "./transcriptExport";
 
 /* One invented host's transcript stores on disk: two account stores, a shared
@@ -62,6 +64,29 @@ write("accounts/a/sessions/2026/09/23/rollout-stage.jsonl", [
   codexUser("2026-09-23T08:00:10Z", "s-1", `${mark("o", "S1")}You are a Deployer. Deploy the exact SHA…`),
   codexUser("2026-09-23T08:40:00Z", "s-2", `${mark("o", "S2")}hold the deploy until 10:00`),
 ]);
+/* A restart on the 21st in Kyiv: startup sent its continuation to three
+   interrupted Codex conversations within a minute, stamped with the operator
+   marker, and an interruption notice to a Claude one. Each conversation's
+   own messages are from the 19th. */
+for (const [index, second] of [0, 20, 40].entries()) {
+  write(`accounts/a/sessions/2026/09/19/rollout-restart-${index}.jsonl`, [
+    codexMeta("2026-09-19T08:00:00Z", "/work/harbor"),
+    codexUser("2026-09-19T08:00:10Z", `r${index}-1`, `${mark("o", `R${index}A`)}start the ledger reconciliation`),
+    codexUser(`2026-09-21T09:00:${String(second).padStart(2, "0")}Z`, `r${index}-2`, `${mark("o", `R${index}B`)}${INTERRUPTED_CODEX_CONTINUATION_TEXT}`),
+  ]);
+}
+write("accounts/b/projects/-work-harbor/claude-restart.jsonl", [
+  claudeUser("2026-09-19T08:10:00Z", "r3-1", "add the audit column"),
+  claudeUser("2026-09-21T09:00:50Z", "r3-2", `${VIEWER_RESTART_INTERRUPTION_OPENING} Resume that turn.`),
+]);
+/* A pipeline stage the registry does not name (read with --no-registry, or a
+   rollout the lookup missed), on the 20th: its operator-marked template, then
+   one message from the operator. */
+write("accounts/a/sessions/2026/09/20/rollout-unregistered.jsonl", [
+  codexMeta("2026-09-20T08:00:00Z", "/work/client-a"),
+  codexUser("2026-09-20T08:00:10Z", "n-1", `${mark("o", "N1")}You are a Builder in plain mode. Implement the directive…`),
+  codexUser("2026-09-20T08:30:00Z", "n-2", `${mark("o", "N2")}hold the merge until the review`),
+]);
 /* Untouched since before the window: never read. */
 const old = write("accounts/a/sessions/2026/08/01/rollout-old.jsonl", [codexMeta("2026-08-01T08:00:00Z", "/work/harbor"), codexUser("2026-08-01T08:01:00Z", "o-1", `${mark("o", "O1")}old`)]);
 fs.utimesSync(old, new Date("2026-08-01T09:00:00Z"), new Date("2026-08-01T09:00:00Z"));
@@ -70,6 +95,7 @@ fs.utimesSync(old, new Date("2026-08-01T09:00:00Z"), new Date("2026-08-01T09:00:
     Delegatus sessions registered, and one pipeline stage. */
 function resolve(facts: TranscriptFacts): ConversationResolution {
   const project = facts.cwd === "/work/harbor" ? "harbor" : facts.cwd === "/work/client-a" ? "client-a" : null;
+  if (facts.path.endsWith("rollout-unregistered.jsonl")) return { project, registered: false, launch: null };
   const stage = facts.path.endsWith("rollout-stage.jsonl");
   return {
     project,
@@ -124,6 +150,23 @@ describe("one host's transcripts into human input", () => {
   test("the 22nd excludes the worker's role=user note, the relay and the injected instructions", async () => {
     const { manifest } = await exportDay("2026-09-22");
     expect(manifest.excluded).toEqual({ "agent-message": 1, unmarked: 1, injected: 1 });
+  });
+
+  test("a restart that reaches four conversations adds no human time: every notice is excluded and counted", async () => {
+    const { manifest, inputs } = await exportDay("2026-09-21");
+    expect(inputs).toEqual([]);
+    expect(manifest.excluded).toEqual({ recovery: 4 });
+    const report = activityReport({
+      params: clampMethodParams({}), range: "today", nowMs: day("2026-09-21").end - 1, hosts: [], agents: [],
+      anchors: inputs.map((input) => ({ at: input.at, project: input.project, surface: input.surface, kind: input.kind, host: input.host })),
+    });
+    expect(report.totals.humanMs).toBe(0);
+  });
+
+  test("an unregistered Delegatus session's operator-marked first message is excluded, and its later input counts", async () => {
+    const { manifest, inputs } = await exportDay("2026-09-20");
+    expect(manifest.excluded).toEqual({ unregistered: 1 });
+    expect(inputs.map((input) => [new Date(input.at).toISOString(), input.kind])).toEqual([["2026-09-20T08:30:00.000Z", "message"]]);
   });
 
   test("the project comes from the conversation's context, never from a name in the text", async () => {

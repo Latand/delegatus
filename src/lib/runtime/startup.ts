@@ -37,6 +37,7 @@ import {
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
+import { INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
 import { conversationTurnLiveness, readTranscriptEvidence, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
@@ -165,7 +166,6 @@ interface StructuredStartupSignals {
 
 const TRANSCRIPT_REFRESH_CONCURRENCY = 16;
 const INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX = "recovery-continuation";
-const INTERRUPTED_CODEX_CONTINUATION_TEXT = "Continue the interrupted turn from the transcript.";
 /** Owed continuations older than this are retired unsent: a turn cut that
     long ago has been looked at by someone, and a paid turn resuming it now
     would act on a stale picture. */
@@ -520,6 +520,7 @@ async function deliverInterruptionContinuations(
       clientMessageId: obligation.id,
       text: interruptionContinuationText(obligation),
       images: [],
+      origin: RECOVERY_NOTICE_ORIGIN,
     }, {
       enabled: () => true,
       client: () => client,
@@ -698,6 +699,7 @@ async function enqueueInterruptedCodexContinuations(
       text: INTERRUPTED_CODEX_CONTINUATION_TEXT,
       policy: "queue",
       turnId: null,
+      origin: RECOVERY_NOTICE_ORIGIN,
     });
   }
 }

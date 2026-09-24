@@ -58,7 +58,7 @@ test("the answer carries both axes and no path, title or message text", async ()
   const text = await response.text();
   const body = JSON.parse(text) as {
     params: { windowMin: number; breakMin: number; rounding: string; tz: string };
-    coverage: { agentIndex: string; hosts: Array<{ host: string; sources: Array<{ source: string; state: string }> }> };
+    coverage: { agentIndex: string; hosts: Array<{ host: string; complete: boolean; sources: Array<{ source: string; state: string; scope: string }> }> };
     totals: { humanMs: number; wallMs: number; supervisedMs: number; unattendedMs: number };
     days: unknown[];
     projects: Array<{ project: string | null; humanMs: number; wallMs: number; byEngine: Record<string, number>; byRole: Record<string, number> }>;
@@ -67,8 +67,10 @@ test("the answer carries both axes and no path, title or message text", async ()
   expect(body.params).toEqual({ windowMin: 15, breakMin: 15, rounding: "clock-hour", tz: "Europe/Kyiv" });
   expect(body.days).toHaveLength(7);
   expect(body.coverage.agentIndex).toBe("ok");
-  expect(body.coverage.hosts.map((host) => [host.host, host.sources.map((source) => `${source.source}:${source.state}`)]))
-    .toEqual([["local", ["ledger:read", "transcripts:absent"]]]);
+  expect(body.coverage.hosts.map((host) => [host.host, host.sources.map((source) => `${source.source}:${source.state}:${source.scope}`)]))
+    .toEqual([["local", ["ledger:read:delegatus", "transcripts:absent:all"]]]);
+  /* The ledger read Delegatus requests only; terminal input here had no export. */
+  expect(body.coverage.hosts[0]!.complete).toBe(false);
   /* One request 45 minutes ago with a 15-minute window, and a 30-minute turn
      that began 5 minutes before it: 15 minutes supervised, 15 unattended. */
   expect(body.totals.humanMs).toBe(15 * 60_000);
