@@ -79,6 +79,9 @@ afterEach(async () => {
 function journalClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
     snapshot: async () => journal.snapshot(),
+    /* The host answers `session-read` from its journal; delivery reads the
+       session through it before it enqueues a continuation. */
+    readSession: async (identity) => journal.readSession(identity),
     append: async (event) => journal.append(event),
     command: async (command) => journal.executeOperation(command),
     operationStatus: async (operationId, options) => options?.currentRetryLeaf
