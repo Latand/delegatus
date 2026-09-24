@@ -249,6 +249,8 @@ export interface AttentionCreateInput {
   /** The one browser session the directed handoff executes on — see
       `AttentionRequestV1.directedSessionId`. Only meaningful with `directedAt`. */
   directedAtSession?: string;
+  /** A phone notice rather than a handoff — see `AttentionRequestV1.delivery`. */
+  delivery?: "notice";
   /** Durable MCP operation identity — see `AttentionRequestV1.operationKey`.
       Creation is idempotent over it: a second create with the same key returns
       the existing record instead of raising a twin. */
@@ -355,6 +357,7 @@ export function createAttentionRequest(
           : {}),
       ...(input.directedAtSession !== undefined ? { directedSessionId: input.directedAtSession } : {}),
       ...(input.operationKey !== undefined ? { operationKey: input.operationKey } : {}),
+      ...(input.delivery === "notice" ? { delivery: "notice" as const } : {}),
       returnPoints: [],
       ...(input.desktopTarget !== undefined ? { desktopTarget: input.desktopTarget } : {}),
       revision: 0,

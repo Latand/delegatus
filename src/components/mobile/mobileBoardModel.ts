@@ -6,7 +6,8 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
-import { attentionId, blockingStuckDelivery, buildAttentionQueue, openBridgeAsk, stalledAttention } from "../attention";
+import { attentionReason, buildAttentionQueue, stalledAttention, type ConversationReason } from "../attention";
+import { pipelineNeedsYou } from "../pipelines/pipelineBlockModel";
 import { isAuxTask, isChildConversation, isConversation, isSubagent, projectKey } from "../projectModel";
 import { turnIsRunning, turnLeftOpen } from "../turnDuration";
 import { workingSince } from "../workingSince";
@@ -20,18 +21,24 @@ import { workingSince } from "../workingSince";
  * Working while any pipeline is active, and Recent capped at three rows. A
  * conversation's state is computed ONCE here, by the design's precedence
  *
- *     killed > stalled > limit > held > waiting > working > returned > done
+ *     killed > waiting > stalled > limit > held > working > returned > done
  *
  * (offline and degraded are screen-level and live in the shell's banner slot),
  * and every phone surface renders that one answer: a badge on the rows that
  * need the operator, a phrase in the meta line otherwise.
  *
+ * «waiting» is the only state that needs the operator
+ * (docs/design/needs-attention.md §3): a question outranks a quiet turn, and a
+ * stalled or rate-limited row keeps its word and its dot in Working, because
+ * its turn is still open and nothing is asked of anyone.
+ *
  * Nothing here invents a lifecycle. Each branch names the authority the board
  * already trusts: the kill is the process state read together with the turn
  * it left behind (a host stopped after its turn settled is a finished
- * conversation, not a killed one — #1487), «stalled» and «waiting» are
- * the attention queue's own signals (`attentionId`, so the bar's badge and
- * these rows cannot count different things), «limit» is the rate-limit wall,
+ * conversation, not a killed one — #1487), «waiting» is the attention
+ * queue's own reason (`attentionReason`, so the bar's badge and these rows
+ * cannot count different things), «stalled» is the quiet-turn rule it no
+ * longer counts, «limit» is the rate-limit wall,
  * «held» is the account-switch delivery fence read exactly as the card status
  * reads it, and «working» is the open-turn condition the working spinner
  * paints from, measured from the anchor that spinner counts with.
@@ -43,10 +50,10 @@ import { workingSince } from "../workingSince";
 /** The eight conversation states, in precedence order. */
 export type MobileRowStateKey =
   | "killed"
+  | "waiting"
   | "stalled"
   | "limit"
   | "held"
-  | "waiting"
   | "working"
   | "returned"
   | "done";
@@ -54,8 +61,8 @@ export type MobileRowStateKey =
 /** The three sections of the board; the switcher and the swipe read the same. */
 export type MobileBoardSection = "needs" | "working" | "recent";
 
-/** The trailing badge of a row that needs the operator. */
-export type MobileRowBadge = "question" | "plan" | "decision" | "attention" | "stalled" | "limit";
+/** The trailing badge of a row that needs the operator: its reason. */
+export type MobileRowBadge = "question" | "plan" | "decision" | "permission" | "delivery";
 
 export type MobileRowDot = "success" | "warning" | "danger" | "accent" | "neutral";
 
@@ -77,8 +84,10 @@ export interface MobileRowState {
   account: string | null;
 }
 
-const NEEDS: ReadonlySet<MobileRowStateKey> = new Set(["stalled", "limit", "waiting"]);
-const WORKING: ReadonlySet<MobileRowStateKey> = new Set(["held", "working"]);
+const NEEDS: ReadonlySet<MobileRowStateKey> = new Set(["waiting"]);
+/* A stalled or rate-limited turn is still open or held, so it sits with the
+   work in flight rather than with what is asked of the operator. */
+const WORKING: ReadonlySet<MobileRowStateKey> = new Set(["held", "working", "stalled", "limit"]);
 
 function sectionOf(key: MobileRowStateKey): MobileBoardSection {
   if (NEEDS.has(key)) return "needs";
@@ -93,22 +102,17 @@ function isoSeconds(iso: string | null | undefined): number | null {
   return Number.isFinite(ms) ? ms / 1000 : null;
 }
 
-/** How long the operator has been owed an answer — the same instant the
-    attention queue freezes as its sort key, so the row and the queue agree. */
-function waitingSince(file: FileEntry, now: number): number {
-  const ask = openBridgeAsk(file, now);
-  const askAt = ask ? isoSeconds(ask.at) : null;
-  if (askAt !== null) return askAt;
-  if (file.pendingQuestion) return isoSeconds(file.pendingQuestion.askedAt) ?? file.mtime;
-  if (file.waitingInput) return file.waitingInput.since;
-  return blockingStuckDelivery(file, now) ?? file.mtime;
-}
-
-function waitingBadge(file: FileEntry, now: number): MobileRowBadge {
-  if (openBridgeAsk(file, now)) return "decision";
-  if (file.pendingQuestion) return file.pendingQuestion.kind === "plan" ? "plan" : "question";
-  if (file.waitingInput) return "question";
-  return "attention";
+/** The badge that names a reason. How long the operator has been owed an
+    answer is the reason's own `since`, the instant the attention queue freezes
+    as its sort key. */
+function waitingBadge(reason: ConversationReason): MobileRowBadge {
+  switch (reason.kind) {
+    case "decision": return "decision";
+    case "plan": return "plan";
+    case "question": return "question";
+    case "permission": return "permission";
+    case "delivery": return "delivery";
+  }
 }
 
 function heldDeliveries(file: FileEntry): number {
@@ -139,15 +143,18 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
      finished conversation, in the neutral tone, so the alarming word keeps
      meaning something when it does appear. */
   if (file.proc === "killed" && turnLeftOpen(file)) return bits({ key: "killed", dot: "danger", seconds: Math.max(0, now - file.mtime) });
-  if (stalledAttention(file, now)) {
-    return bits({ key: "stalled", dot: "danger", edge: "danger", badge: "stalled", seconds: Math.max(0, now - file.mtime) });
+  /* Right after the kill: a question outranks a quiet turn, because a turn
+     that asked something and went quiet is waiting on the answer. A reason
+     someone dismissed falls through to what the conversation is doing. */
+  const reason = attentionReason(file, now);
+  if (reason && !reason.dismissal) {
+    return bits({ key: "waiting", dot: "warning", edge: "warning", badge: waitingBadge(reason), seconds: Math.max(0, now - reason.since) });
   }
+  if (stalledAttention(file, now)) return bits({ key: "stalled", dot: "danger", seconds: Math.max(0, now - file.mtime) });
   if (file.rateLimit) {
     return bits({
       key: "limit",
       dot: "warning",
-      edge: "warning",
-      badge: "limit",
       resetAt: file.rateLimit.resetAt ?? null,
       account: file.rateLimit.accountId ?? null,
       seconds: Math.max(0, now - file.mtime),
@@ -155,9 +162,6 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
   }
   const held = heldDeliveries(file);
   if (held > 0) return bits({ key: "held", dot: "warning", held });
-  if (attentionId(file, now) !== null) {
-    return bits({ key: "waiting", dot: "warning", edge: "warning", badge: waitingBadge(file, now), seconds: Math.max(0, now - waitingSince(file, now)) });
-  }
   /* A dead host runs nothing, whatever freshness the transcript still carries. */
   if (file.proc !== "killed" && turnIsRunning(file)) {
     const since = workingSince(file);
@@ -330,6 +334,16 @@ export function needsDecisionPipelineRows(
 const NO_IDS: readonly string[] = [];
 
 /**
+ * Whether a lane asks the operator for anything now: parked on them, and not
+ * dismissed for the decision it waits on. The desktop card, the phone's
+ * columns and the ⚠ sheet all read this, so a lane cleared on one surface is
+ * cleared on every one (docs/design/needs-attention.md §4).
+ */
+export function pipelineAsks(pipeline: Pipeline): boolean {
+  return pipelineNeedsYou(pipeline) && !pipelineHiddenFromBoard(pipeline);
+}
+
+/**
  * Whether the operator's Hide still covers the decision this lane waits on
  * (#1671). A Hide answers the decision the operator saw. `dismissedAt` stays on
  * the record after the lane moves on, so once any of its rounds has started or
@@ -339,13 +353,6 @@ const NO_IDS: readonly string[] = [];
 export function pipelineHiddenFromBoard(pipeline: Pipeline): boolean {
   if ((pipeline.state !== "needs_decision" && pipeline.state !== "needs_review") || !pipeline.dismissedAt) return false;
   return laneMovedAt(pipeline) <= Date.parse(pipeline.dismissedAt);
-}
-
-/** The instant an optimistic Hide carries: now, or the lane's latest stamp when
-    this device's clock runs behind the server's, so the row leaves on the tap.
-    The PATCH echo replaces it with the server's own instant. */
-export function dismissStamp(pipeline: Pipeline, nowMs: number = Date.now()): string {
-  return new Date(Math.max(nowMs, laneMovedAt(pipeline))).toISOString();
 }
 
 /** A conversation the phone board may list: no background task, no subagent
@@ -408,9 +415,8 @@ export function buildMobileBoard({
     rows.push(boardConversation(file, now, crowned));
   }
 
-  /* The queue reads in the attention queue's OWN order — the hard-blocked
-     segment first, the stalled tail after it, oldest signal first inside each
-     — because §4.6 makes the rows, the bar's badge and the sheet's «Next ›»
+  /* The queue reads in the attention queue's OWN order — oldest signal first —
+     because §4.6 makes the rows, the bar's badge and the sheet's «Next ›»
      one queue: an order of our own here would walk the operator through the
      same items in a different sequence. `buildAttentionQueue` is the authority
      that decides it, so it is asked rather than imitated. Anything it does not

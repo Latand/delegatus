@@ -7,8 +7,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
 import { viewBus, type ViewSlice } from "@/hooks/viewPresenceBus";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { answerAttentionRequest, attentionForDevice, attentionRecordsForSurface, raiseAttentionRequest } from "@/lib/attention/service";
-import { readAttentionFile } from "@/lib/attention/store";
+import { mutateAttention, readAttentionFile } from "@/lib/attention/store";
 import { OFFER_TTL_MS, type FocusRect } from "@/lib/attention/types";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import { validateAttentionEvent } from "@/lib/attention/validation";
@@ -100,6 +101,9 @@ afterEach(async () => {
   arrivalClockCleanup?.();
   arrivalClockCleanup = undefined;
   await settle();
+  /* The process-wide registry is opened on the first test's state directory;
+     each test deletes its own, so the next one must reopen it. */
+  closeAgentRegistryForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -1076,10 +1080,13 @@ for (const directed of [false, true]) {
 
 test("an empty reason follows with Back and no announcement", async () => {
   const request = raiseDirected();
-  const file = readAttentionFile();
-  file.requests.find((entry) => entry.id === request.id)!.reason = "   ";
-  // A legacy empty reason is read through the same on-disk store as every poll.
-  fs.writeFileSync(path.join(sandbox, "attention.json"), JSON.stringify(file));
+  /* A legacy empty reason, written through the store every poll reads: the
+     legacy JSON file is a tombstone once the store lives in SQLite (#1870). */
+  mutateAttention((file) => ({
+    requests: file.requests.map((entry) => entry.id === request.id ? { ...entry, reason: "   " } : entry),
+    result: null,
+  }));
+  expect(readAttentionFile().requests.find((entry) => entry.id === request.id)!.reason).toBe("   ");
   const { bus } = board({ [ANCHOR]: LIVE_RECT });
   mount(bus);
   await settle();

@@ -5,6 +5,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { groupHideState, isSeatConversation, seatAssignment, seatOnlyTask, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
 import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { byNeedAge, conversationNeed, laneNeed, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
 import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttempts, stageChipState, stageFailEdgeRoundsUsed, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { deckKey } from "@/components/scheme/agentLinks";
@@ -36,8 +37,10 @@ export interface KanbanMember {
   key: string;
   file: FileEntry;
   state: MobileRowStateKey;
-  /** A conversation that is owed an answer: waiting, stalled, at a limit. */
+  /** A conversation that is owed an answer: its reason is flagged. */
   needsYou: boolean;
+  /** Why it needs the operator, flagged or cleared; null when it asks nothing. */
+  need: NeedReason | null;
   working: boolean;
   /** The agent's own words about the work in flight, when it published any. */
   latest: string | null;
@@ -117,7 +120,14 @@ export interface KanbanCard {
   drafts: string[];
   pipelines: KanbanPipeline[];
   working: number;
+  /** Something on the card needs the operator: `reasons` is not empty. */
   needsYou: boolean;
+  /** Why, oldest first: every member's flagged reason and every lane parked
+      on the operator that nobody cleared (docs/design/needs-attention.md §4). */
+  reasons: NeedReason[];
+  /** Reasons that are still live and were dismissed, with who cleared them
+      and when, newest dismissal first. */
+  cleared: ClearedNeed[];
   /** Working conversations plus pipelines still provisioning. */
   activity: number;
   /** Nothing on it: no conversation, no active pipeline, nothing owed. */
@@ -234,7 +244,9 @@ const ACTIVE_PIPELINE_STATES = new Set(["provisioning", "running", "needs_decisi
 /** A stage with an attempt in flight right now. `pending` is not started,
     `passed`/`failed`/`skipped` are over. */
 const IN_FLIGHT_STAGES: ReadonlySet<StageChipState> = new Set(["running", "reviewing", "committing"]);
-const NEEDS_STATES: ReadonlySet<MobileRowStateKey> = new Set(["waiting", "stalled", "limit"]);
+/* Only a flagged reason needs the operator; a stalled or rate-limited member
+   keeps its word and counts as neither (docs/design/needs-attention.md §3). */
+const NEEDS_STATES: ReadonlySet<MobileRowStateKey> = new Set(["waiting"]);
 const WORKING_STATES: ReadonlySet<MobileRowStateKey> = new Set(["working", "held"]);
 
 function parseMs(iso: string | undefined | null): number {
@@ -317,6 +329,7 @@ function memberOf(key: string, file: FileEntry, stageByPath: ReadonlyMap<string,
     file,
     state: row.key,
     needsYou: NEEDS_STATES.has(row.key),
+    need: conversationNeed(file, now)?.need ?? null,
     working: WORKING_STATES.has(row.key),
     latest: nowFragment(file),
     stage: stageByPath.get(file.path) ?? null,
@@ -539,9 +552,20 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       .sort((a, b) => pipelineWorkAt(b) - pipelineWorkAt(a) || a.id.localeCompare(b.id))
       .map((pipeline) => summarizePipeline(pipeline, flowsById));
     const provisioning = summaries.filter((summary) => summary.pipeline.state === "provisioning").length;
-    const pipelineNeeds = summaries.some((summary) => summary.pipeline.state === "needs_decision" || summary.pipeline.state === "needs_review");
+    /* Why the card needs the operator, and what someone cleared. A lane
+       dismissed on either surface asks nothing here either: `laneNeed` reads
+       the phone queue's own predicate (`pipelineAsks`). */
+    const reasons: NeedReason[] = [];
+    const cleared: ClearedNeed[] = [];
+    for (const found of [...members.map((member) => conversationNeed(member.file, now)), ...summaries.map((summary) => laneNeed(summary.pipeline))]) {
+      if (!found) continue;
+      if (found.cleared) cleared.push(found.cleared);
+      else reasons.push(found.need);
+    }
+    reasons.sort(byNeedAge);
+    cleared.sort((a, b) => b.at - a.at || a.need.key.localeCompare(b.need.key));
     const working = members.filter((member) => member.working).length;
-    const needsYou = pipelineNeeds || members.some((member) => member.needsYou);
+    const needsYou = reasons.length > 0;
     const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
     const status: TaskStatus = overridden ?? task?.status ?? "inbox";
@@ -603,6 +627,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       pipelines: summaries,
       working,
       needsYou,
+      reasons,
+      cleared,
       activity: working + provisioning,
       idle: members.length === 0 && mirrors.length === 0 && !activePipeline && !needsYou && otherSurfaces === 0 && drafts.length === 0,
       updatedAtMs,

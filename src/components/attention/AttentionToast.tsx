@@ -47,8 +47,8 @@ export function AttentionToast({ file, mobile, onOpen, onDismiss, collapseMs = A
   /** Test seam for the phone's collapse; production uses the design's ~6 s. */
   collapseMs?: number;
 }) {
-  const { t, locale } = useLocale();
-  const title = decisionLine(t, locale, file) ?? t("viewer.agentWaiting");
+  const { t } = useLocale();
+  const title = decisionLine(t, file) ?? t("viewer.agentWaiting");
 
   if (mobile) {
     return <ArrivalBanner file={file} decision={title} onOpen={onOpen} onDismiss={onDismiss} collapseMs={collapseMs} />;

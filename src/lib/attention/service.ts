@@ -5,7 +5,7 @@ import { loadTasks } from "@/lib/tasks/store";
 import { freshness, listPresence } from "@/lib/view/presenceStore";
 import type { StoredViewSession } from "@/lib/view/types";
 
-import { attentionCapablePresence } from "./eligibility";
+import { attentionCapablePresence, noticeCapablePresence } from "./eligibility";
 
 import {
   applyAttentionEvent,
@@ -24,7 +24,7 @@ import {
   transitionAttentionRequest,
   type AttentionCreateInput,
 } from "./store";
-import { isTerminalAttentionState, type AttentionRequestV1, type FocusTarget } from "./types";
+import { isTerminalAttentionState, OFFER_TTL_MS, type AttentionFileV1, type AttentionNotice, type AttentionRequestV1, type FocusTarget } from "./types";
 
 /**
  * What the surfaces call (#688 slice 3): raise a request, read what this device
@@ -143,19 +143,47 @@ export function attentionForDevice(
  * carries a freshly admitted lane — so a phone board waited for the corpus
  * scan, which is the failure item 1 is about.
  *
- * Nothing here reads, sweeps or answers the attention record: no offer, no
- * presence, no expiry. Only the lanes admitted inside the window, and which of
- * the echoed ids the registry does not hold.
+ * Nothing here sweeps or answers the attention record: no offer, no presence,
+ * no expiry. Only the lanes admitted inside the window, which of the echoed
+ * ids the registry does not hold, and the root agent's recent requests as the
+ * phone's notices (docs/design/needs-attention.md §6), read and never touched.
  */
 export function attentionRecordsForSurface(
-  options: { now?: Date; records?: AttentionRecordSources; echoedPipelineIds?: readonly string[] } = {},
-): { records: AttentionTargetRecords | null } {
+  options: { now?: Date; records?: AttentionRecordSources; echoedPipelineIds?: readonly string[]; filePath?: string } = {},
+): { records: AttentionTargetRecords | null; notices: AttentionNotice[] } {
+  const now = options.now ?? new Date();
   return {
     records: attentionTargetRecords([], options.records ?? productionRecordSources, {
-      now: options.now ?? new Date(),
+      now,
       ...(options.echoedPipelineIds ? { echoedPipelineIds: options.echoedPipelineIds } : {}),
     }),
+    notices: attentionNotices(readAttentionFile(options.filePath, now), now),
   };
+}
+
+/**
+ * What the phone shows of the root agent's requests (docs/design/needs-attention.md
+ * §6): every one raised in the last {@link OFFER_TTL_MS} that nobody refused
+ * and nothing replaced, newest first, as a notice. The ones a desktop followed
+ * are included, because presence cannot tell which screen the operator is
+ * looking at. It is a read: nothing is swept, offered or answered, so a phone
+ * never takes a request away from a desktop.
+ */
+export function attentionNotices(file: AttentionFileV1, now: Date): AttentionNotice[] {
+  const floor = now.getTime() - OFFER_TTL_MS;
+  return file.requests
+    .filter((request) => request.origin === "root-agent"
+      && request.state !== "declined" && request.state !== "superseded"
+      && Date.parse(request.createdAt) >= floor)
+    .sort((left, right) => byAge(right, left))
+    .map((request) => ({
+      id: request.id,
+      reason: request.reason,
+      target: request.target,
+      contextLabel: request.contextLabel ?? null,
+      raisedBy: request.raisedBy ? { kind: request.raisedBy.kind, role: request.raisedBy.role } : null,
+      createdAt: request.createdAt,
+    }));
 }
 
 /**
@@ -279,6 +307,17 @@ export interface DirectedAttentionView {
 export function resolveDirectedAttentionView(now = new Date()): DirectedAttentionView | null {
   const session = followCapableSessions(now)[0];
   return session ? { deviceId: session.deviceId, viewSessionId: session.viewSessionId } : null;
+}
+
+/**
+ * Whether a phone the operator is looking at is open (docs/design/needs-attention.md
+ * §6): a request with no desktop to move reaches it as a notice. Presence's
+ * own freshness rules apply, so a phone left in a pocket stops counting when
+ * its heartbeat does.
+ */
+export function noticeCapableViewOpen(now = new Date()): boolean {
+  const at = now.getTime();
+  return listPresence(at).some((session) => noticeCapablePresence({ ...session, freshness: freshness(session, at) }));
 }
 
 /** Device-only projection of {@link resolveDirectedAttentionView}, kept for

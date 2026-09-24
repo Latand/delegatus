@@ -141,9 +141,8 @@ export const BADGE_LABEL = {
   question: "mobile2.board.badgeQuestion",
   plan: "mobile2.board.badgePlan",
   decision: "mobile2.board.badgeDecision",
-  attention: "mobile2.board.badgeAttention",
-  stalled: "mobile2.board.badgeStalled",
-  limit: "mobile2.board.badgeLimit",
+  permission: "attention.decisionPermission",
+  delivery: "needs.delivery",
 } as const;
 
 /** A conversation as a phone row: the board's, and the task screen's agents

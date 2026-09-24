@@ -7,7 +7,7 @@ import { translate, type TFunction, useLocale } from "@/lib/i18n";
 import type { ActionEvent, FileEntry } from "@/lib/types";
 import { cleanTitle } from "@/lib/title";
 
-import { attentionId } from "@/components/attention";
+import { attentionId, stalledAttention } from "@/components/attention";
 import { isDirectReviewFlow } from "@/components/flows/directReviewGroups";
 import { claimedReviewerPaths, flowByImplementer, flowPresentation } from "@/components/flows/flowModel";
 import { descendantCounts, isAuxTask, isConversation, isSubagent, projectKey } from "@/components/projectModel";
@@ -67,8 +67,8 @@ export function isAwaitingUser(file: FileEntry, now = Date.now() / 1000): boolea
   /* An interrupted session stops being "yours to answer" after a while: a
      permission prompt from two days ago is dead context, so old stalled
      entries sink into the recency buckets instead of inflating the waiting
-     counter. The attention queue owns that TTL judgement. */
-  if (file.activity === "stalled") return attentionId(file, now) !== null;
+     counter. The stalled rule owns that TTL judgement. */
+  if (file.activity === "stalled") return stalledAttention(file, now) || attentionId(file, now) !== null;
   return file.activity === "recent"
     && (file.engine === "claude" || file.engine === "codex" || file.engine === "openclaw")
     && isConversation(file)

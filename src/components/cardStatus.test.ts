@@ -80,13 +80,13 @@ test("mixed state resolves by precedence: needs-you beats held beats running bea
   expect(cardStatus(idle, NOW_MS)).toEqual({ kind: "queued" });
 });
 
-test("needs-you derives from the frozen attention authority, including its stalled TTL", () => {
-  expect(cardStatus(file({ rateLimit: { resetAt: null } as FileEntry["rateLimit"] }), NOW_MS)).toEqual({ kind: "needs-you" });
+test("needs-you derives from the attention authority: a prompt asks, a wall and a stall do not", () => {
   expect(cardStatus(file({ waitingInput: { since: NOW_S - 40 } as FileEntry["waitingInput"] }), NOW_MS)).toEqual({ kind: "needs-you" });
-  /* Stalled counts only while a live process still waits, within the TTL. */
-  expect(cardStatus(file({ activity: "stalled", proc: "running", mtime: NOW_S - 600 }), NOW_MS)).toEqual({ kind: "needs-you" });
+  /* docs/design/needs-attention.md §3, reasons 4 and 7: nothing waits on the
+     operator behind a rate-limit wall or a quiet turn. */
+  expect(cardStatus(file({ rateLimit: { resetAt: null } as FileEntry["rateLimit"] }), NOW_MS)).not.toEqual({ kind: "needs-you" });
+  expect(cardStatus(file({ activity: "stalled", proc: "running", mtime: NOW_S - 600 }), NOW_MS)).not.toEqual({ kind: "needs-you" });
   expect(cardStatus(file({ activity: "stalled", proc: null, mtime: NOW_S - 600 }), NOW_MS)).toBeNull();
-  expect(cardStatus(file({ activity: "stalled", proc: "running", mtime: NOW_S - 3 * 3600 }), NOW_MS)).toBeNull();
 });
 
 test("held reads the registry count level-wise: a committed switch's leftover annotation never shows", () => {

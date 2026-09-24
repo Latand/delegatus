@@ -295,8 +295,10 @@ test("a lane the operator set aside asks nothing here, as in the ⚠ queue, and 
   const loose = lane("loose", "needs_decision", [], { agentPath: looseStage.path, stageState: "needs_decision" });
   const pipelines = [hidden, lane("running", "running", ["t"], { agentPath: stage.path }), loose];
   const model = desktop([task("t", "assigned")], [stage, looseStage], { pipelines });
-  /* The desktop model knows nothing of a Hide: both cards need the operator there. */
-  expect(model.columns.assigned.cards[0]!.needsYou).toBe(true);
+  /* The desktop reads the same dismissal (docs/design/needs-attention.md §2):
+     the hidden lane asks nothing there either, and the card says it was cleared. */
+  expect(model.columns.assigned.cards[0]!.needsYou).toBe(false);
+  expect(model.columns.assigned.cards[0]!.cleared.map((entry) => entry.need.key)).toEqual(["pipeline:hidden"]);
 
   const phone = buildPhoneKanban({ model, attention: [attentionKey.pipeline("loose")], now: NOW });
   const card = phone.columns.assigned.cards[0]!;
@@ -339,4 +341,38 @@ test("the Overview's narrowing keeps live work only, and each tab counts what it
   expect(keys(whole.columns.assigned.cards)).toEqual(["a1", "a2"]);
   expect(whole.columns.assigned.count).toBe(2);
   expect(whole.columns.done.count).toBe(1);
+});
+
+/* docs/design/needs-attention.md §4, §5: the phone card reads the desktop
+   card's reasons, and a card someone cleared keeps who cleared it until
+   something new asks. */
+test("a phone card carries the reasons its Dismiss clears, and a cleared card says who cleared it", () => {
+  const asker = asking(1, 300);
+  const clearedAsker = { ...asking(2, 600), attentionDismissal: { at: new Date((NOW - 60) * 1000).toISOString(), by: { kind: "operator" as const, surface: "phone" as const } } };
+  const parked = lane("parked", "needs_decision", ["t-ask"]);
+  const model = desktop([task("t-ask", "assigned", [asker.path]), task("t-clear", "assigned", [clearedAsker.path])], [asker, clearedAsker], { pipelines: [parked] });
+  const phone = buildPhoneKanban({ model, attention: [attentionKey.conversation(asker.path), attentionKey.pipeline("parked")], now: NOW });
+  const byId = new Map([...phone.columns.assigned.pinned, ...phone.columns.assigned.cards].map((item) => [item.card.task!.id, item] as const));
+
+  const ask = byId.get("t-ask")!;
+  expect(ask.reasons.map((need) => need.key).sort()).toEqual(["pipeline:parked", "tool-1"]);
+  /* The one the queue ranks first names the badge. */
+  expect(ask.need).toMatchObject({ kind: "conversation", reason: { key: "tool-1" } });
+  expect(ask.cleared).toBeNull();
+
+  const clear = byId.get("t-clear")!;
+  expect(clear.need).toBeNull();
+  expect(clear.reasons).toEqual([]);
+  expect(clear.cleared).toMatchObject({ by: { kind: "operator", surface: "phone" }, need: { key: "tool-2" } });
+  expect(phone.columns.assigned.needsYou).toBe(1);
+});
+
+test("a closing lane is not among the reasons a card's Dismiss would clear", () => {
+  const parked = lane("parked", "needs_decision", ["t"]);
+  const model = desktop([task("t", "assigned")], [], { pipelines: [parked] });
+  const open = buildPhoneKanban({ model, now: NOW });
+  expect(open.columns.assigned.pinned[0]!.reasons.map((need) => need.key)).toEqual(["pipeline:parked"]);
+  const closing = buildPhoneKanban({ model, closing: ["parked"], now: NOW });
+  expect(closing.columns.assigned.pinned).toEqual([]);
+  expect(closing.columns.assigned.cards[0]!.reasons).toEqual([]);
 });

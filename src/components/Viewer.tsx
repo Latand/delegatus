@@ -23,15 +23,19 @@ import { projectDisplayName, projectTitle } from "@/lib/displayNames";
 import { cachedProjectName, rememberProjectNames } from "@/lib/client/projectNameCache";
 import { canonicalClientProject } from "@/lib/projects/clientAliases";
 import { useLocale } from "@/lib/i18n";
+import type { AttentionNotice } from "@/lib/attention/types";
 import type { FileEntry } from "@/lib/types";
 
 import { advanceAttentionCycle, attentionExpiries, attentionId, buildAttentionQueue, type AttentionItem } from "./attention";
 import { AttentionHost } from "./attention/AttentionHost";
+import { useDismissalOverlay } from "./attention/dismissalOverlay";
+import { clearNotice, markNoticesSeen, usePhoneNotices } from "./attention/phoneNotices";
 import { BootShell } from "./BootShell";
 import { AttentionIsland, AttentionQueueRow } from "./attention/AttentionIsland";
 import { AttentionToast } from "./attention/AttentionToast";
 import { buildMobileAttentionQueue } from "./attention/attentionQueue";
-import { MobileAttentionSheet } from "./attention/MobileAttentionSheet";
+import { MobileAttentionSheet, type MobileNoticeRow } from "./attention/MobileAttentionSheet";
+import { roleNameById } from "./builderCopy";
 import { purgeLegacyOperatorCredential } from "./operatorCredential";
 import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
 import { OnboardingHost } from "./onboarding/OnboardingDialog";
@@ -173,7 +177,12 @@ function ViewerApp() {
     return initial.filePath || initial.conversationId ? initial : null;
   });
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
-  const { files: allFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  const { files: polledFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
+     the polled rows here, the one place they are read, so the cards, the
+     phone's ⚠ count and the queue stop flagging it in the same frame
+     (docs/design/needs-attention.md §5). */
+  const { files: allFiles, pipelines } = useDismissalOverlay(polledFiles, polledPipelines);
   /* Whether the server answers (#2071 D7): one reading for every surface, from
      the files streak above and the runtime stream; no request of its own. */
   const reach = useDerivedServerReach({ catalogFailures, failingSince, lastSuccessAt });
@@ -484,6 +493,13 @@ function ViewerApp() {
          own listener gets): the place, and the project it was written on,
          which comes back with it — the Overview included (#2098, #2105). */
       const landing = phoneRef.current.mobile ? mobileNav.land(event.state, event) : null;
+      /* An entry a ‹ passes through on its way to the screen under the one
+         it left: nothing is drawn from it, so nothing of it replays, and its
+         own hashchange is skipped. */
+      if (landing?.kind === "passing") {
+        traversalFenceRef.current.arm(location.hash);
+        return;
+      }
       const phone = landing?.kind === "phone" ? landing : null;
       const phoneProject = phone?.entry.project ?? null;
       const projectMoved = phoneProject !== null && phoneProject !== phoneRef.current.project;
@@ -1119,6 +1135,25 @@ function ViewerApp() {
      «Next ›» walks (lane 8, `attentionQueue.ts`). */
   const shellEntries = useMemo(() => buildMobileAttentionQueue(shellQueue, shellPipelineRows), [shellQueue, shellPipelineRows]);
   const shellQueueCount = shellEntries.length;
+  /* An agent's request_attention on the phone (docs/design/needs-attention.md
+     §6): a dot on the ⚠ badge and a row in its sheet, never a move. Each row
+     names where it points, in the words the board uses for it. */
+  const phoneNotices = usePhoneNotices();
+  const noticeRows = useMemo<MobileNoticeRow[]>(() => phoneNotices.notices.map((notice) => {
+    const target = notice.target;
+    const firstLine = (text: string | undefined) => cleanTitle((text ?? "").split(/\r?\n/, 1)[0] ?? "", 90);
+    const title = target.kind === "conversation"
+      ? cleanTitle(allFiles.find((file) => file.path === target.path)?.title ?? "", 90) || t("notices.target.conversation")
+      : target.kind === "pipeline" || target.kind === "stage"
+        ? firstLine(pipelines.find((pipeline) => pipeline.id === target.pipelineId)?.task) || t("notices.target.pipeline")
+        : target.kind === "task"
+          ? firstLine(tasks.find((task) => task.id === target.taskId)?.text) || t("notices.target.task")
+          : t("notices.target.board");
+    const by = notice.raisedBy?.kind === "manager" ? t("notices.byOrchestrator")
+      : notice.raisedBy?.kind === "gateway" ? t("notices.byAssistant")
+        : notice.raisedBy?.role ? roleNameById(t, notice.raisedBy.role) : t("notices.byAgent");
+    return { notice, target: title, by };
+  }), [phoneNotices.notices, allFiles, pipelines, tasks, t]);
 
   useEffect(() => {
     /* N and F are desktop keys (D4/D6): the phone layout renders without the
@@ -1298,8 +1333,26 @@ function ViewerApp() {
      and a fresh object per render would re-render it on every poll. */
   const mobileShell = useMemo<MobileShellHost | null>(() => {
     if (!isMobile) return null;
+    /* A notice goes where it points, on the stack the operator is on: nothing
+       moved them there, so ‹ comes straight back. */
+    const openNotice = (notice: AttentionNotice, close: () => void) => {
+      close();
+      const target = notice.target;
+      if (target.kind === "conversation") {
+        const file = allFiles.find((entry) => entry.path === target.path);
+        if (file) {
+          if (project === OVERVIEW) openOverOverview(file);
+          else openFile(file);
+        }
+      } else if (target.kind === "pipeline" || target.kind === "stage") {
+        mobileNav.push({ kind: "pipeline", id: target.pipelineId });
+      } else if (target.kind === "task") {
+        mobileNav.push({ kind: "task", id: target.taskId });
+      }
+    };
     return {
       attentionCount: shellQueueCount,
+      noticeDot: phoneNotices.unseen,
       arrival: toastFile ? (
         <AttentionToast
           file={toastFile}
@@ -1363,13 +1416,17 @@ function ViewerApp() {
                 mobileNav.push({ kind: "pipeline", id: row.id });
               }}
               onClose={close}
+              notices={noticeRows}
+              onOpenNotice={(notice) => openNotice(notice, close)}
+              onClearNotice={clearNotice}
+              onNoticesSeen={markNoticesSeen}
             />
           );
         }
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, loaded, catalogFailures, selectProject, createProject, jumpToItem]);
+  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, loaded, catalogFailures, selectProject, createProject, jumpToItem, phoneNotices.unseen, noticeRows]);
 
   const shell = (
     <div className="flex h-full">
