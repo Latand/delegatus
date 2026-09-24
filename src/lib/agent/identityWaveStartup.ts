@@ -4,6 +4,7 @@ import path from "node:path";
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { legacyClaudeHome, sharedClaudeProjectsRoot } from "@/lib/accounts/claude";
 import { statePath } from "@/lib/configDir";
+import { startupDiagnostic } from "@/lib/startupDiagnostics";
 import { activeOrchestratorSeatsForMigration, rekeyOrchestratorSeatPaths } from "@/lib/orchestrator/seats";
 import { searchTextForTranscript } from "@/lib/scanner/describe";
 import { durableSemanticTitle } from "@/lib/title";
@@ -181,7 +182,7 @@ export function runIdentityWaveMigrationAtStartup(
     transcriptTitle: overrides.transcriptTitle ?? titleFromTranscriptHead,
     sharedPath: overrides.sharedPath ?? sharedPathForLegacyClaudeTranscript,
     commitExternalPathRekeys: overrides.commitExternalPathRekeys ?? rekeyOrchestratorSeatPaths,
-    log: overrides.log ?? ((message, detail) => console.info(message, detail)),
+    log: overrides.log ?? ((message, detail) => startupDiagnostic("info", message, detail)),
     env,
   };
   const migrate = () => dependencies.registry.runIdentityWaveMigration({

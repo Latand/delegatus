@@ -114,7 +114,10 @@ Options:
     serverStartFail: (detail) => `Couldn't start the server: ${detail}`,
     serverTimeout: (seconds) => `The server didn't respond within ${seconds} seconds.`,
     bannerOpened: (url) => `  Opened:    ${url}`,
-    bannerReads: () => "  Reads logs from ~/.claude/projects, ~/.codex/sessions.",
+    bannerOpening: (url) => `  Opening:   ${url}`,
+    bannerOpenUrl: (url) => `  Open ${url} in your browser.`,
+    bannerReads: () => "  Reads logs from ~/.claude/projects, ~/.codex/sessions, ~/.copilot/session-state.",
+    bannerDebug: () => "  DELEGATUS_DEBUG=1 — show startup diagnostics.",
     bannerStop: () => "  Ctrl+C — stop.  --tailscale — access from your phone.",
     tsLinkWarn: () => "  The link contains an access key — don't forward it to others.",
     tsCookie: () => "  After the first open the key is stored in a cookie for 30 days.",
@@ -160,7 +163,10 @@ Options:
     serverStartFail: (detail) => `Не вдалося запустити сервер: ${detail}`,
     serverTimeout: (seconds) => `Сервер не відповів за ${seconds} секунд.`,
     bannerOpened: (url) => `  Відкрито:  ${url}`,
-    bannerReads: () => "  Читає логи з ~/.claude/projects, ~/.codex/sessions.",
+    bannerOpening: (url) => `  Відкриваю: ${url}`,
+    bannerOpenUrl: (url) => `  Відкрийте ${url} у браузері.`,
+    bannerReads: () => "  Читає логи з ~/.claude/projects, ~/.codex/sessions, ~/.copilot/session-state.",
+    bannerDebug: () => "  DELEGATUS_DEBUG=1 — показати діагностику запуску.",
     bannerStop: () => "  Ctrl+C — зупинити.  --tailscale — доступ з телефона.",
     tsLinkWarn: () => "  Посилання містить ключ доступу — не пересилайте його стороннім.",
     tsCookie: () => "  Після першого відкриття ключ зберігається у cookie на 30 днів.",
@@ -184,11 +190,63 @@ Options:
 
 const m = MESSAGES[LANG];
 
+/* A newcomer's terminal shows the banner and the URL first (#2168). What the
+   children write before the banner is held and follows it, and Next's own
+   startup lines (its version, "Local:", "Ready in") are dropped: the banner
+   names the URL that works, with the key when one gates the start.
+   DELEGATUS_DEBUG=1 keeps Next's lines, and it is also what lets the children
+   print their startup diagnostics (`src/lib/startupDiagnostics.ts`). An error
+   is never dropped: it waits for the banner, or for the launcher to fail. */
+const NEXT_STARTUP_LINE = /^\s*(?:▲ Next\.js |- (?:Local|Network|Environments|Experiments):|✓ (?:Starting|Ready in|Running next\.config))/;
+const HELD_OUTPUT_LIMIT_BYTES = 1024 * 1024;
+/* The name `src/lib/startupDiagnostics.ts` reads. */
+const QUIET_DIAGNOSTICS_ENV = "LLV_QUIET_DIAGNOSTICS";
+
+function withoutNextStartupLines(text) {
+  return text
+    .split("\n")
+    .filter((line) => !NEXT_STARTUP_LINE.test(line.replace(/\x1b\[[0-9;]*m/g, "")))
+    .join("\n");
+}
+
+function createStartupOutput() {
+  const held = [];
+  let heldBytes = 0;
+  let released = false;
+  let debug = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    for (const [stream, text] of held.splice(0)) stream.write(text);
+  };
+  return {
+    setDebug(value) {
+      debug = value;
+    },
+    write(stream, chunk) {
+      const text = debug ? String(chunk) : withoutNextStartupLines(String(chunk));
+      if (!text) return;
+      if (released) {
+        stream.write(text);
+        return;
+      }
+      held.push([stream, text]);
+      heldBytes += text.length;
+      if (heldBytes > HELD_OUTPUT_LIMIT_BYTES) release();
+    },
+    release,
+  };
+}
+
+const startupOutput = createStartupOutput();
+process.once("exit", () => startupOutput.release());
+
 function usage() {
   return m.usage();
 }
 
 function fail(message) {
+  startupOutput.release();
   console.error(message);
   process.exit(1);
 }
@@ -408,8 +466,9 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
   const child = spawn(server.command, server.args, viewerChildProcessOptions({
     cwd: server.cwd,
     env: buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment, launch.extraEnv),
-    stdio: ["ignore", "inherit", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
   }));
+  child.stdout.on("data", (chunk) => startupOutput.write(process.stdout, chunk));
 
   const state = {
     sawAddressInUse: false,
@@ -428,7 +487,7 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
       return;
     }
 
-    process.stderr.write(chunk);
+    startupOutput.write(process.stderr, chunk);
   });
 
   child.on("error", (error) => {
@@ -579,7 +638,7 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     const child = spawn(bunRuntime, ["--bun", packaged ? config.entrypoint : hostEntrypoint(release.dir)], viewerChildProcessOptions({
       cwd: release.dir,
       env: environment,
-      stdio: ["ignore", "inherit", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
     }));
     const state = {
       command: bunRuntime,
@@ -593,9 +652,10 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     current = processHandle;
     currentRelease = release;
     hooks.onStarted?.(child, release);
+    child.stdout.on("data", (chunk) => startupOutput.write(process.stdout, chunk));
     child.stderr.on("data", (chunk) => {
       state.stderrTail = `${state.stderrTail}${chunk}`.slice(-8_192);
-      process.stderr.write(chunk);
+      startupOutput.write(process.stderr, chunk);
     });
     child.once("error", (error) => {
       state.spawnError = error;
@@ -732,11 +792,15 @@ function localUrl(options, runtime) {
   return `http://${host}:${options.port}/${key}`;
 }
 
-function printBanner(version, options, runtime) {
+/* `browser` is what `openBrowser` found out: the banner says "Opened" only
+   when an opener reported success. */
+function printBanner(version, options, runtime, browser, debug) {
+  const url = localUrl(options, runtime);
   console.log(`  ✳ Delegatus v${version}`);
-  console.log(m.bannerOpened(localUrl(options, runtime)));
+  console.log(browser === "opened" ? m.bannerOpened(url) : browser === "opening" ? m.bannerOpening(url) : m.bannerOpenUrl(url));
   console.log(m.bannerReads());
   console.log(m.bannerStop());
+  if (!debug) console.log(m.bannerDebug());
 }
 
 async function printTailscaleBanner(runtime) {
@@ -757,20 +821,36 @@ async function printTailscaleBanner(runtime) {
   console.log(m.tsCookie());
 }
 
+const BROWSER_OPEN_WAIT_MS = 1_500;
+
+/* "opened" when the opener exited 0, "failed" when it could not run or exited
+   otherwise (xdg-open with no display), "opening" when it is still running
+   after a moment, as an opener that starts the browser itself does. */
 function openBrowser(url) {
   const opener = browserOpenCommand(url);
   if (!opener) {
-    return;
+    return Promise.resolve("failed");
   }
 
-  /* `windowsHide` keeps the console rundll32 would otherwise flash on the
-     desktop; it is inert on every other platform. */
-  const child = spawn(opener.command, opener.args, viewerChildProcessOptions({
-    stdio: "ignore",
-    detached: true,
-    windowsHide: true,
-  }));
-  child.unref();
+  return new Promise((resolve) => {
+    /* `windowsHide` keeps the console rundll32 would otherwise flash on the
+       desktop; it is inert on every other platform. */
+    const child = spawn(opener.command, opener.args, viewerChildProcessOptions({
+      stdio: "ignore",
+      detached: true,
+      windowsHide: true,
+    }));
+    const timer = setTimeout(() => resolve("opening"), BROWSER_OPEN_WAIT_MS);
+    child.once("error", () => {
+      clearTimeout(timer);
+      resolve("failed");
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      resolve(code === 0 ? "opened" : "failed");
+    });
+    child.unref();
+  });
 }
 
 async function stopChild(processHandle) {
@@ -971,6 +1051,12 @@ async function main() {
     console.log(version);
     return;
   }
+
+  /* Everything started below inherits the choice (#2168). */
+  const debug = process.env.LLV_DEBUG === "1";
+  startupOutput.setDebug(debug);
+  if (debug) delete process.env[QUIET_DIAGNOSTICS_ENV];
+  else process.env[QUIET_DIAGNOSTICS_ENV] = "1";
 
   /* Before anything can fail on a port the old unit still holds. */
   const legacyNotice = legacySystemdNotice(findLegacySystemdUnits(), LANG);
@@ -1203,14 +1289,14 @@ async function main() {
     }
   }
 
-  printBanner(version, options, runtime);
+  const browser = !options.noOpen && process.stdout.isTTY
+    ? await openBrowser(localUrl(options, runtime))
+    : "not-opened";
+  printBanner(version, options, runtime, browser, debug);
   if (options.tailscale) {
     await printTailscaleBanner(runtime);
   }
-
-  if (!options.noOpen && process.stdout.isTTY) {
-    openBrowser(localUrl(options, runtime));
-  }
+  startupOutput.release();
 }
 
 main().catch((error) => {
