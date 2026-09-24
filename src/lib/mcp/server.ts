@@ -31,6 +31,7 @@ import { procBackend } from "@/lib/proc";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { TASK_COLORS } from "@/lib/tasks/types";
+import { BOT_MESSAGES_LIMIT, BOT_MESSAGES_MAX_CHARS, TELEGRAM_BOT_LIMITS } from "@/lib/telegram/bot/contracts";
 import {
   MAX_REPLY_LABEL_CHARS, MAX_REPLY_SUGGESTIONS, MAX_REPLY_TEXT_BYTES, MIN_REPLY_SUGGESTIONS,
 } from "@/lib/suggestions/types";
@@ -87,6 +88,9 @@ export const MCP_TOOL_NAMES = [
   "seat_tick_settings",
   "account_project_binding",
   "account_limits",
+  "telegram_bot_chats",
+  "telegram_bot_send",
+  "telegram_bot_messages",
 ] as const;
 
 export type McpToolName = typeof MCP_TOOL_NAMES[number];
@@ -148,6 +152,9 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      (#1279), and the record it answers with outlives this process either way:
      a replayed clientRequestId must answer with what the first call recorded. */
   "account_project_binding",
+  /* Posts into a Telegram chat. A replayed clientRequestId must answer with
+     the message ids the first call posted, never post a second time. */
+  "telegram_bot_send",
 ]);
 
 /**
@@ -311,6 +318,10 @@ export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpB
   ],
   list_conversations: [
     { path: ["limit"], min: 1, max: 100, fallback: 50 },
+  ],
+  telegram_bot_messages: [
+    { path: ["limit"], ...BOT_MESSAGES_LIMIT },
+    { path: ["maxChars"], ...BOT_MESSAGES_MAX_CHARS },
   ],
   search_transcripts: [
     { path: ["limit"], min: 1, max: 100, fallback: 20 },
@@ -2812,6 +2823,12 @@ export function createMcpToolService(
           const taskCode = (typedTool === "create_task" || typedTool === "update_task")
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
             && error.details.code.startsWith("TASK_") ? error.details.code : null;
+          /* A Telegram bot refusal answers with the bot's own code and its own
+             retryable: a generic retryable tool_failed after send_uncertain
+             would invite the double post the bot refuses to risk. */
+          const botRefusal = typedTool === "telegram_bot_send" && error instanceof McpToolRefusal
+            && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
+            ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an
           // uncertain dispatch as unknown. Cache that answer under the original
@@ -2826,9 +2843,9 @@ export function createMcpToolService(
             : failure(
             typedTool,
             requestId,
-            taskCode ?? "tool_failed",
+            taskCode ?? botRefusal?.code ?? "tool_failed",
             error instanceof Error ? error.message : String(error),
-            taskCode === null,
+            botRefusal ? botRefusal.retryable : taskCode === null,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
@@ -3024,6 +3041,23 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
   account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
+  telegram_bot_chats: [
+    "List the chats the operator's connected Telegram bot knows: per chat `chat` (the alias, else the chat id — the value the other telegram_bot_* tools take), `title`, `type`, `isForum`, `member`, `postAllowed` with `postRefusal` in words when false, `seesAllMessages` with `visibilityNote`, `lastMessageAt` and `storedMessages`; plus the bot's `receiving` state and note.",
+    "A chat appears once the bot has been added to it or has received a message there. Only chats the operator allowlisted with an alias accept posts. Left or removed chats are hidden unless includeInactive is true.",
+    "With no bot connected the answer is still ok, with `connected: false` and a note. Every answer carries `limits`: " + TELEGRAM_BOT_LIMITS.join(" "),
+  ].join(" "),
+  telegram_bot_send: [
+    "Post a message through the operator's Telegram bot into a chat the operator allowlisted — for example a report into a team group. `chat` is the alias (or chat id) from telegram_bot_chats.",
+    "`format` is plain (default) or html (Telegram's HTML subset: b, i, u, s, code, pre, a, blockquote, tg-spoiler). Plain text over 4096 characters is split into up to 4 messages; html over 4096 is refused. `replyToMessageId` replies to a message in that chat, `topicId` posts into a forum topic, `silent` sends without a notification.",
+    "The post is attributed in Delegatus to your conversation, resolved server-side. A chat outside the allowlist is refused before anything is sent (chat_not_allowed, bot_not_in_chat, chat_unknown, bot_not_connected); Telegram's own refusals come back as forbidden (blocked, removed, or a user who never wrote to the bot), format_invalid, or rate_limited with retryAfterSeconds.",
+    "A refusal answers ok:false with the bot's code as `code` and `retryable` saying whether a retry under a NEW clientRequestId may help (true only for rate_limited, network_failed, timed_out, telegram_failed); send_partial adds `details.sentMessageIds`.",
+    "Idempotent by clientRequestId: a repeat answers the first post's message ids; a repeat of a send that never finished, or one whose connection was cut or timed out, answers send_uncertain (not retryable) instead of posting twice.",
+  ].join(" "),
+  telegram_bot_messages: [
+    "Read recent messages the operator's Telegram bot received in one chat, newest first, from Delegatus's local store — a bot has no history API, so only what arrived while it was connected exists.",
+    "`chat` is the alias or chat id from telegram_bot_chats; reading is not limited to allowlisted chats. Page with `limit` and the answer's `nextCursor`; `since` (ISO time, inclusive) bounds how far back; `maxChars` truncates each text (`truncated: true`). Messages the bot posted appear with direction out and `sentBy` naming the posting conversation.",
+    "`storedSince` is the oldest stored message; nothing older exists locally. Every answer carries `limits` and the chat's `visibilityNote`, which says whether the bot sees every message there.",
+  ].join(" "),
   rotate_orchestrator: "Explicitly hand a project's orchestrator seat to a fresh successor: bounded handoff (predecessor transcript reference, open tasks, optional notes), atomic designation switch, manager-authority-only revocation of the predecessor, bidirectional lineage. Callable from any session, including the seat rotating itself; the answer and the durable record both name who triggered it. Never triggered automatically.",
 };
 
@@ -3705,6 +3739,27 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     engine: z.enum(["claude", "codex", "copilot"]).optional().describe("Only this engine's accounts."),
     accountId: z.string().trim().min(1).optional().describe("Only this account."),
+  }).passthrough(),
+  telegram_bot_chats: z.object({
+    clientRequestId: clientRequestIdSchema,
+    includeInactive: z.boolean().optional().describe("Also list chats the bot left or was removed from. Default false."),
+  }).passthrough(),
+  telegram_bot_send: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The chat's alias or chat id, as telegram_bot_chats lists it."),
+    text: z.string().min(1).describe("The message. Plain text up to 16384 characters (split into up to 4 messages); html up to 4096."),
+    format: z.enum(["plain", "html"]).optional().describe("plain (default) or html: Telegram's HTML subset."),
+    replyToMessageId: z.number().int().positive().optional().describe("Reply to this message in the same chat. Sent anyway if it no longer exists."),
+    topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
+    silent: z.boolean().optional().describe("Send without a notification sound."),
+  }).passthrough(),
+  telegram_bot_messages: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The chat's alias or chat id, as telegram_bot_chats lists it."),
+    limit: boundedNumericInput("telegram_bot_messages", "limit"),
+    cursor: z.string().optional().describe("nextCursor from the previous page."),
+    since: z.string().optional().describe("ISO time; only messages at or after it."),
+    maxChars: boundedNumericInput("telegram_bot_messages", "maxChars"),
   }).passthrough(),
 };
 
