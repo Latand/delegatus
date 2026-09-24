@@ -4125,6 +4125,8 @@ export const en = {
   "selfUpdate.update.failedManaged": "Deployment stopped at {step} after {duration}.",
   "selfUpdate.update.rolledBack": "Deployment stopped at {step} after {duration} and was rolled back: the previous release serves again.",
   "selfUpdate.update.retryFrom": "Retry from {step}",
+  "selfUpdate.update.checkAgain": "Check again",
+  "selfUpdate.update.checkedTarget": "Update to checked {target}",
   "selfUpdate.update.deployAgain": "Deploy again",
   "selfUpdate.step.fetch": "Fetch {sha}",
   "selfUpdate.step.checkout": "Check out {sha}",
