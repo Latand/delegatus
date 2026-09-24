@@ -58,9 +58,9 @@ test("the answer carries both axes and no path, title or message text", async ()
   const text = await response.text();
   const body = JSON.parse(text) as {
     params: { windowMin: number; breakMin: number; rounding: string; tz: string };
-    coverage: { agentIndex: string; hosts: Array<{ host: string; complete: boolean; sources: Array<{ source: string; state: string; scope: string }> }> };
-    totals: { humanMs: number; wallMs: number; supervisedMs: number; unattendedMs: number };
-    days: unknown[];
+    coverage: { agentIndex: string; hosts: Array<{ host: string; complete: boolean; unread: Array<{ start: number; end: number }>; sources: Array<{ source: string; state: string; scope: string }> }> };
+    totals: { humanMs: number; wallMs: number; supervisedMs: number; unattendedMs: number; unattendedUnreadMs: number };
+    days: Array<{ hours: unknown[]; projects: Array<{ project: string | null }> }>;
     projects: Array<{ project: string | null; humanMs: number; wallMs: number; byEngine: Record<string, number>; byRole: Record<string, number> }>;
   };
   /* An unknown zone falls back to the settings' zone, Europe/Kyiv by default. */
@@ -71,12 +71,18 @@ test("the answer carries both axes and no path, title or message text", async ()
     .toEqual([["local", ["ledger:read:delegatus", "transcripts:absent:all"]]]);
   /* The ledger read Delegatus requests only; terminal input here had no export. */
   expect(body.coverage.hosts[0]!.complete).toBe(false);
+  expect(body.coverage.hosts[0]!.unread).toHaveLength(1);
   /* One request 45 minutes ago with a 15-minute window, and a 30-minute turn
      that began 5 minutes before it: 15 minutes supervised, 15 unattended. */
   expect(body.totals.humanMs).toBe(15 * 60_000);
   expect(body.totals.wallMs).toBe(30 * 60_000);
   expect(body.totals.supervisedMs).toBe(15 * 60_000);
   expect(body.totals.unattendedMs).toBe(15 * 60_000);
+  /* The page's presentation fields: that host holds every project and was
+     not read, so the unattended part is unclear; one row per clock hour. */
+  expect(body.totals.unattendedUnreadMs).toBe(15 * 60_000);
+  expect(body.days.at(-1)!.hours.length).toBeGreaterThanOrEqual(23);
+  expect([...new Set(body.days.flatMap((day) => day.projects).map((entry) => entry.project))]).toEqual(["harbor"]);
   const harbor = body.projects.find((row) => row.project === "harbor")!;
   expect(harbor.byEngine).toEqual({ claude: 30 * 60_000 });
   expect(harbor.byRole).toEqual({ unregistered: 30 * 60_000 });

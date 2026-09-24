@@ -544,3 +544,130 @@ describe("billable projects are counted on their own", () => {
     expect(result.projects.find((row) => row.project === "lantern")!.billable).toBe(false);
   });
 });
+
+describe("presentation fields: the unclear part of unattended time and the clock hours", () => {
+  const DEFAULTS = clampMethodParams({}, "UTC");
+  const NOW = Date.parse("2026-09-24T20:00:00Z");
+  const WED = { start: Date.parse("2026-09-23T00:00:00Z"), end: Date.parse("2026-09-24T00:00:00Z") };
+  const at = (date: string, hhmm: string) => Date.parse(`${date}T${hhmm}:00Z`);
+  const input = (date: string, hhmm: string, project: string, host = "local"): Anchor => ({ at: at(date, hhmm), project, surface: "desktop", kind: "message", host });
+  const run = (key: string, project: string, date: string, from: string, to: string): AgentConversation => ({
+    key, project, engine: "claude", role: "builder", pipelineId: null, stageId: null, activity: [{ start: at(date, from), end: at(date, to) }],
+  });
+  /** A host read for all time except Wednesday. */
+  const unreadWed = (host: string, projects: HostCoverage["projects"]) => readHost(host, projects, [{ start: 0, end: WED.start }, { start: WED.end, end: Number.MAX_SAFE_INTEGER }]);
+  const week = (anchors: Anchor[], agents: AgentConversation[], hosts: HostCoverage[], params: MethodParams = DEFAULTS) =>
+    activityReport({ params, range: "7d", nowMs: NOW, anchors, hosts, agents });
+  const day = (result: ReturnType<typeof week>, date: string) => result.days.find((row) => row.date === date)!;
+  const project = (result: ReturnType<typeof week>, name: string) => result.projects.find((row) => row.project === name)!;
+
+  test("a host holding only A unread for a day: A's time there is unclear, B's read time never is (the Wed 23 case)", () => {
+    const result = week(
+      [input("2026-09-23", "10:00", "B")],
+      [run("a", "A", "2026-09-23", "02:00", "04:00"), run("b", "B", "2026-09-23", "14:00", "15:00")],
+      [LOCAL, unreadWed("stage", ["A"])],
+    );
+    expect(project(result, "A").unattendedMs).toBe(2 * HOUR);
+    expect(project(result, "A").unattendedUnreadMs).toBe(2 * HOUR);
+    expect(project(result, "A").unclearDays).toEqual(["2026-09-23"]);
+    expect(project(result, "B").unattendedMs).toBe(HOUR);
+    expect(project(result, "B").unattendedUnreadMs).toBe(0);
+    expect(project(result, "B").unclearDays).toEqual([]);
+    expect(day(result, "2026-09-23").missingSource).toBeNull();
+    expect(day(result, "2026-09-23").unattendedMs).toBe(3 * HOUR);
+    expect(day(result, "2026-09-23").unattendedUnreadMs).toBe(2 * HOUR);
+    expect(result.totals.unattendedUnreadMs).toBe(2 * HOUR);
+  });
+
+  test("a host holding every project unread makes every project's time there unclear", () => {
+    const result = week(
+      [input("2026-09-23", "10:00", "B")],
+      [run("a", "A", "2026-09-23", "02:00", "04:00"), run("b", "B", "2026-09-23", "14:00", "15:00")],
+      [LOCAL, unreadWed("stage", "all")],
+    );
+    expect(project(result, "A").unattendedUnreadMs).toBe(2 * HOUR);
+    expect(project(result, "B").unattendedUnreadMs).toBe(HOUR);
+    expect(day(result, "2026-09-23").unattendedUnreadMs).toBe(3 * HOUR);
+  });
+
+  test("a flagged day makes all its unattended time unclear, for the day and for each project", () => {
+    const result = week([], [run("a", "A", "2026-09-22", "09:00", "10:00"), run("b", "B", "2026-09-22", "13:00", "13:40")], [LOCAL]);
+    const tuesday = day(result, "2026-09-22");
+    expect(tuesday.missingSource).toEqual(["agent-activity"]);
+    expect(tuesday.unattendedUnreadMs).toBe(tuesday.unattendedMs);
+    expect(tuesday.unattendedUnreadMs).toBe(100 * MIN);
+    for (const name of ["A", "B"]) {
+      expect(project(result, name).unattendedUnreadMs).toBe(project(result, name).unattendedMs);
+      expect(project(result, name).unclearDays).toEqual(["2026-09-22"]);
+    }
+  });
+
+  test("a minute counts once: supervised before unclear before unattended", () => {
+    const result = week(
+      [input("2026-09-23", "10:00", "A")],
+      [
+        /* A supervised 10:00-10:10 while B, unread, works 10:00-10:30. */
+        run("a", "A", "2026-09-23", "10:00", "10:10"),
+        run("b1", "B", "2026-09-23", "10:00", "10:30"),
+        /* B unread and C read and unwatched, 12:00-12:20. */
+        run("b2", "B", "2026-09-23", "12:00", "12:20"),
+        run("c", "C", "2026-09-23", "12:00", "12:20"),
+      ],
+      [LOCAL, unreadWed("stage", ["B"])],
+    );
+    const wednesday = day(result, "2026-09-23");
+    expect(wednesday.wallMs).toBe(50 * MIN);
+    expect(wednesday.supervisedMs).toBe(10 * MIN);
+    expect(wednesday.unattendedMs).toBe(40 * MIN);
+    /* 10:10-10:30 and 12:00-12:20: the union of the projects' unclear
+       stretches outside every supervised one. */
+    expect(wednesday.unattendedUnreadMs).toBe(40 * MIN);
+    expect(project(result, "B").unattendedUnreadMs).toBe(50 * MIN);
+    expect(project(result, "C").unattendedUnreadMs).toBe(0);
+    const ten = wednesday.hours.find((hour) => hour.start === at("2026-09-23", "10:00"))!;
+    expect([ten.supervisedMs, ten.unattendedMs, ten.unattendedUnreadMs]).toEqual([10 * MIN, 20 * MIN, 20 * MIN]);
+  });
+
+  test("with nothing read, nothing is supervised and all agent time is unclear", () => {
+    const result = week([], [run("a", "A", "2026-09-23", "02:00", "04:00"), run("b", "B", "2026-09-20", "14:00", "15:00")], [readHost("local", "all", [])]);
+    expect(result.totals.supervisedMs).toBe(0);
+    expect(result.totals.unattendedUnreadMs).toBe(result.totals.wallMs);
+    expect(result.totals.wallMs).toBe(3 * HOUR);
+    for (const row of result.days) expect(row.unattendedUnreadMs).toBe(row.wallMs);
+    for (const row of result.projects) expect(row.unattendedUnreadMs).toBe(row.wallMs);
+  });
+
+  test("every day's hours and projects add up to the day's own figures", () => {
+    const anchors = [
+      input("2026-09-21", "09:02", "A"), input("2026-09-21", "09:09", "A"), input("2026-09-21", "09:30", "B"), input("2026-09-21", "09:44", "A"),
+      input("2026-09-21", "13:05", "B"), input("2026-09-21", "13:12", "B"), input("2026-09-23", "10:00", "B"), input("2026-09-24", "08:55", "A"),
+    ];
+    const agents = [run("a", "A", "2026-09-21", "08:00", "11:00"), run("b", "B", "2026-09-21", "12:30", "16:00"), run("c", "A", "2026-09-23", "01:00", "03:00")];
+    const hosts = [LOCAL, unreadWed("stage", ["A"])];
+    for (const params of [DEFAULTS, { ...DEFAULTS, breakMs: 30 * MIN, rounding: "half-hour" as const }]) {
+      const result = week(anchors, agents, hosts, params);
+      for (const row of result.days) {
+        const sum = (pick: (hour: typeof row.hours[number]) => number) => row.hours.reduce((total, hour) => total + pick(hour), 0);
+        expect(row.hours).toHaveLength(24);
+        expect(sum((hour) => hour.humanMs)).toBe(row.humanMs);
+        expect(sum((hour) => hour.supervisedMs)).toBe(row.supervisedMs);
+        expect(sum((hour) => hour.unattendedMs)).toBe(row.unattendedMs);
+        expect(sum((hour) => hour.unattendedUnreadMs)).toBe(row.unattendedUnreadMs);
+        if (params.rounding === "clock-hour") expect(sum((hour) => hour.weight ?? 0)).toBe(row.humanHours);
+        else for (const hour of row.hours) expect(hour.weight).toBeNull();
+        expect(row.projects.reduce((total, entry) => total + entry.humanHours, 0)).toBe(row.humanHours);
+        expect(row.projects.reduce((total, entry) => total + entry.humanMs, 0)).toBe(row.humanMs);
+      }
+      expect(result.days.reduce((total, row) => total + row.unattendedUnreadMs, 0)).toBe(result.totals.unattendedUnreadMs);
+    }
+    const monday = day(week(anchors, agents, hosts), "2026-09-21");
+    const nine = monday.hours.find((hour) => hour.start === at("2026-09-21", "09:00"))!;
+    expect(nine.project).toBe("A");
+    expect(nine.agentProject).toBe("A");
+    expect(monday.workday).toBe(true);
+    expect(day(week(anchors, agents, hosts), "2026-09-20").workday).toBe(false);
+    const wednesday = day(week(anchors, agents, hosts), "2026-09-23");
+    expect(wednesday.hours[0]!.unreadHosts).toEqual(["stage"]);
+    expect(day(week(anchors, agents, hosts), "2026-09-22").hours[0]!.unreadHosts).toEqual([]);
+  });
+});

@@ -481,22 +481,17 @@ export function clockHourWeight(ms: number): number {
   return 1;
 }
 
-/**
- * Step 5, per day: report hours per project. `half-hour` rounds each
- * project's raw time for the day. `clock-hour` combines every window in a
- * clock hour, weighs the hour's covered minutes, and gives the hour to the one
- * project with the most of them (a tie goes to the more recent input).
- */
-export function dayReportHours(segments: readonly HumanSegment[], day: Interval, rounding: Rounding): Map<string, number> {
-  const hours = new Map<string, number>();
+/** One clock hour of human time: its covered minutes, and the project key
+    with the most of them (a tie goes to the more recent input), or null when
+    the hour holds none. */
+interface ClockHourShare extends Interval {
+  coveredMs: number;
+  winner: string | null;
+}
+
+function clockHourShares(segments: readonly HumanSegment[], day: Interval): ClockHourShare[] {
   const inDay = clipIntervals(segments, day.start, day.end);
-  if (rounding === "half-hour") {
-    const raw = new Map<string, number>();
-    for (const segment of inDay) raw.set(projectKey(segment.project), (raw.get(projectKey(segment.project)) ?? 0) + segment.end - segment.start);
-    for (const [key, ms] of raw) hours.set(key, roundHalfHour(ms));
-    return hours;
-  }
-  for (const hour of clockHours(day)) {
+  return clockHours(day).map((hour) => {
     const perProject = new Map<string, { ms: number; latest: number }>();
     for (const segment of clipIntervals(inDay, hour.start, hour.end)) {
       const key = projectKey(segment.project);
@@ -511,11 +506,30 @@ export function dayReportHours(segments: readonly HumanSegment[], day: Interval,
         || (entry[1].ms === winner[1].ms && (entry[1].latest > winner[1].latest
           || (entry[1].latest === winner[1].latest && entry[0] > winner[0])))) winner = entry;
     }
-    if (!winner) continue;
     let covered = 0;
     for (const entry of perProject.values()) covered += entry.ms;
-    const weight = clockHourWeight(covered);
-    if (weight > 0) hours.set(winner[0], (hours.get(winner[0]) ?? 0) + weight);
+    return { start: hour.start, end: hour.end, coveredMs: covered, winner: winner ? winner[0] : null };
+  });
+}
+
+/**
+ * Step 5, per day: report hours per project. `half-hour` rounds each
+ * project's raw time for the day. `clock-hour` combines every window in a
+ * clock hour, weighs the hour's covered minutes, and gives the hour to the one
+ * project with the most of them (a tie goes to the more recent input).
+ */
+export function dayReportHours(segments: readonly HumanSegment[], day: Interval, rounding: Rounding): Map<string, number> {
+  const hours = new Map<string, number>();
+  if (rounding === "half-hour") {
+    const raw = new Map<string, number>();
+    for (const segment of clipIntervals(segments, day.start, day.end)) raw.set(projectKey(segment.project), (raw.get(projectKey(segment.project)) ?? 0) + segment.end - segment.start);
+    for (const [key, ms] of raw) hours.set(key, roundHalfHour(ms));
+    return hours;
+  }
+  for (const share of clockHourShares(segments, day)) {
+    if (share.winner === null) continue;
+    const weight = clockHourWeight(share.coveredMs);
+    if (weight > 0) hours.set(share.winner, (hours.get(share.winner) ?? 0) + weight);
   }
   return hours;
 }
@@ -643,16 +657,48 @@ export interface AgentSplit {
   /** The part of it inside a human episode of the same project. */
   supervisedMs: number;
   unattendedMs: number;
+  /** The part of unattendedMs whose project's input was not read: a host
+      holding that project was not read then, or the day is flagged as a
+      probable missing source. The page draws it as "unclear" and draws the
+      rest of unattendedMs as unattended. A presentation field: it moves no
+      other figure. */
+  unattendedUnreadMs: number;
   /** Parallel work counted once per agent. */
   agentHoursMs: number;
   agentHoursSupervisedMs: number;
   agentHoursUnattendedMs: number;
 }
 
+/** One clock hour of a day, for the page's hourly chart and rhythm grid. */
+export interface HourActivity {
+  start: number;
+  /** Covered minutes of human time in the hour. */
+  humanMs: number;
+  /** clockHourWeight of those minutes; null under half-hour rounding. */
+  weight: 0 | 0.5 | 1 | null;
+  /** The project with the most of the hour's human minutes (the one its
+      weight goes to), or null when the hour holds none or they are
+      unattributed. */
+  project: string | null;
+  supervisedMs: number;
+  unattendedMs: number;
+  unattendedUnreadMs: number;
+  /** The project with the most agent wall-clock in the hour. */
+  agentProject: string | null;
+  /** Expected hosts not read for part of the hour. */
+  unreadHosts: string[];
+}
+
 export interface DayActivity extends AgentSplit {
   date: string;
   start: number;
   end: number;
+  /** One of the weekdays checked for a probable missing source. */
+  workday: boolean;
+  /** One entry per clock hour in the zone (23 or 25 on a DST day). */
+  hours: HourActivity[];
+  /** The day's report hours per project, with the raw minutes behind each. */
+  projects: Array<{ project: string | null; humanMs: number; humanHours: number }>;
   /** Complete when every expected host was read for the whole day (up to
       now); otherwise the human figures are a lower bound. */
   coverage: Coverage;
@@ -697,6 +743,9 @@ export interface ProjectActivity extends AgentSplit {
   byRole: Record<string, number>;
   pipelines: Array<{ id: string; stages: string[]; agentHoursMs: number }>;
   conversations: number;
+  /** The dates (in the zone) holding at least a minute of its
+      unattendedUnreadMs, oldest first. */
+  unclearDays: string[];
 }
 
 export interface ActivityReport {
@@ -717,13 +766,14 @@ export interface ActivityReport {
 }
 
 function emptySplit(): AgentSplit {
-  return { wallMs: 0, supervisedMs: 0, unattendedMs: 0, agentHoursMs: 0, agentHoursSupervisedMs: 0, agentHoursUnattendedMs: 0 };
+  return { wallMs: 0, supervisedMs: 0, unattendedMs: 0, unattendedUnreadMs: 0, agentHoursMs: 0, agentHoursSupervisedMs: 0, agentHoursUnattendedMs: 0 };
 }
 
 function addSplit(into: AgentSplit, from: AgentSplit): void {
   into.wallMs += from.wallMs;
   into.supervisedMs += from.supervisedMs;
   into.unattendedMs += from.unattendedMs;
+  into.unattendedUnreadMs += from.unattendedUnreadMs;
   into.agentHoursMs += from.agentHoursMs;
   into.agentHoursSupervisedMs += from.agentHoursSupervisedMs;
   into.agentHoursUnattendedMs += from.agentHoursUnattendedMs;
@@ -832,6 +882,7 @@ export function activityReport(input: ReportInput): ActivityReport {
       byRole: {},
       pipelines: [],
       conversations: 0,
+      unclearDays: [],
       ...emptySplit(),
     });
   }
@@ -917,6 +968,8 @@ export function activityReport(input: ReportInput): ActivityReport {
     let billableHours = 0;
     for (const hours of dayReportHours(billableSegments, day, params.rounding).values()) billableHours += hours;
     const weekday = new Date(`${day.date}T12:00:00Z`).getUTCDay();
+    const projectMs = new Map<string, number>();
+    for (const segment of daySegments) projectMs.set(projectKey(segment.project), (projectMs.get(projectKey(segment.project)) ?? 0) + segment.end - segment.start);
     const reasons: MissingSourceReason[] = [];
     if (workdays.has(weekday) && humanMs === 0 && window.end > window.start) {
       if (uncovered.hosts.length) reasons.push("unread-source");
@@ -930,6 +983,12 @@ export function activityReport(input: ReportInput): ActivityReport {
       date: day.date,
       start: day.start,
       end: day.end,
+      workday: workdays.has(weekday),
+      /* Filled below, once every day's flag is known. */
+      hours: [],
+      projects: [...new Set([...projectMs.keys(), ...reportHours.keys()])]
+        .map((key) => ({ project: projectOf(key), humanMs: projectMs.get(key) ?? 0, humanHours: reportHours.get(key) ?? 0 }))
+        .sort((a, b) => b.humanHours - a.humanHours || b.humanMs - a.humanMs || projectKey(a.project).localeCompare(projectKey(b.project))),
       coverage: { complete: uncovered.hosts.length === 0, missingHosts: uncovered.hosts },
       unknown: uncovered.spans,
       humanMs,
@@ -953,6 +1012,60 @@ export function activityReport(input: ReportInput): ActivityReport {
   for (const row of projects.values()) {
     row.humanReassignedMs = row.humanOwnMs - row.humanMs;
     totals.requests += row.requests;
+  }
+
+  /* Presentation fields (docs/design/activity-dashboard-v2.md, "API
+     additions"): the unclear part of unattended time and the clock hours.
+     Your input for a project is not read where a host holding it was not
+     read, or on a flagged day (a flag names no host, so it holds every
+     project). A project's unclear time is its agents' time there outside its
+     own episodes; a day, an hour and the range count the union of those
+     stretches outside every supervised stretch, so a minute several projects'
+     agents share counts once, supervised before unclear before unattended.
+     Nothing here moves a figure computed above. */
+  const flagged = unionIntervals(dayRows.filter((day) => day.missingSource).map((day) => ({ start: day.start, end: Math.min(day.end, limit) })));
+  const wallByProject = new Map<string, Interval[]>();
+  const unclearParts: Interval[] = [];
+  for (const [key, list] of agentsByProject) {
+    const wall = unionIntervals(list.flatMap((agent) => agent.activity));
+    wallByProject.set(key, wall);
+    const unread = unionIntervals([...uncoveredSpans(rangeWindow, input.hosts, projectOf(key)).spans, ...flagged]);
+    const unclear = subtractIntervals(intersectIntervals(wall, unread), own.get(key) ?? []);
+    const row = projects.get(key)!;
+    row.unattendedUnreadMs = totalMs(unclear);
+    row.unclearDays = days.filter((day) => totalMs(clipIntervals(unclear, day.start, day.end)) >= MINUTE_MS).map((day) => day.date);
+    unclearParts.push(...unclear);
+  }
+  const unclearAll = subtractIntervals(unionIntervals(unclearParts), supervisedUnion);
+  const inWindow = (list: readonly Interval[], window: Interval) => totalMs(clipIntervals(list, window.start, window.end));
+  for (const day of dayRows) {
+    day.unattendedUnreadMs = inWindow(unclearAll, { start: day.start, end: Math.min(day.end, limit) });
+    totals.unattendedUnreadMs += day.unattendedUnreadMs;
+    day.hours = clockHourShares(segments, day).map((share) => {
+      const window = { start: share.start, end: Math.min(share.end, limit) };
+      let agentProject: string | null = null;
+      let agentMost = 0;
+      for (const [key, wall] of wallByProject) {
+        const ms = inWindow(wall, window);
+        if (ms > agentMost || (ms === agentMost && ms > 0 && agentProject !== null && key > agentProject)) {
+          agentMost = ms;
+          agentProject = key;
+        }
+      }
+      const wallMs = inWindow(wallAll, window);
+      const supervisedMs = inWindow(supervisedUnion, window);
+      return {
+        start: share.start,
+        humanMs: share.coveredMs,
+        weight: params.rounding === "clock-hour" ? clockHourWeight(share.coveredMs) as 0 | 0.5 | 1 : null,
+        project: share.winner === null ? null : projectOf(share.winner),
+        supervisedMs,
+        unattendedMs: wallMs - supervisedMs,
+        unattendedUnreadMs: inWindow(unclearAll, window),
+        agentProject: agentProject === null ? null : projectOf(agentProject),
+        unreadHosts: window.end > window.start ? uncoveredSpans(window, input.hosts).hosts : [],
+      };
+    });
   }
   return {
     range: { key: input.range, start: rangeStart, end: rangeEnd, now: nowMs },

@@ -15,6 +15,7 @@ import {
   uncoveredSpans,
   type ActivityReport,
   type Anchor,
+  type Interval,
   type MethodParams,
   type ProjectActivity,
   type RangeKey,
@@ -38,6 +39,8 @@ export interface ActivityHostRow extends HostReport {
   /** Whether the host was read for the whole range up to now: a host whose
       ledger is read and whose transcripts are not is incomplete. */
   complete: boolean;
+  /** The stretches of the range, up to now, it was not read for. */
+  unread: Interval[];
 }
 
 export interface ActivityResponse extends Omit<ActivityReport, "projects" | "params"> {
@@ -182,10 +185,10 @@ export async function activityResponse(
     range: report.range,
     coverage: {
       hostsConfig: human.config,
-      hosts: human.hosts.map((host) => ({
-        ...host,
-        complete: uncoveredSpans({ start: window.start, end: Math.min(window.end, nowMs) }, hostCoverage.filter((entry) => entry.host === host.host)).hosts.length === 0,
-      })),
+      hosts: human.hosts.map((host) => {
+        const unread = uncoveredSpans({ start: window.start, end: Math.min(window.end, nowMs) }, hostCoverage.filter((entry) => entry.host === host.host)).spans;
+        return { ...host, complete: unread.length === 0, unread };
+      }),
       agentIndex,
       indexedAtMs: agentRead.index.indexedAtMs,
       unregisteredConversations: report.totals.unregisteredConversations,
