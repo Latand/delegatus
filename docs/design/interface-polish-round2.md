@@ -6,6 +6,12 @@ render. The brief for round 2 is the critique of round 1
 (`docs/design/interface-polish-critique.md`). Nothing here changes product
 code: the operator picks what gets built.
 
+**Status (2026-09-25): built.** The operator took all twelve changes for the
+1.5.0 release, including the four decisions listed below. They are product
+code now, with the pipeline-screen half of critique #12. "Built" at the end of
+this document says where the build departs from the patches, which stay here
+as the prototype record.
+
 ## Originating requirement
 
 Pinned specification of this lane (pipeline 2520afe0, recorded 2026-09-24;
@@ -291,3 +297,140 @@ old markup or text, found by searching the test files:
   (06): from source, the old phone control sat outside its message's
   `data-tts-message` anchor, so `karaokeRoots` found no text, and the patch puts
   it inside. That was not exercised with audio.
+
+## Built
+
+All twelve changes are product code, reconciled with main as it stood after
+the board order (#2156) and task colour (#2155) changes. Main moved under two
+of the patched files (`FeedItem.tsx`, `ToolCard.tsx`), and every patch still
+applied. The build departs from the patches where main or a closer reading
+asked for it.
+
+### Where the build differs from the patch
+
+- **01.** The measure is one class (`src/components/feed/measure.ts`), used by
+  the settled answer, the live answer row and the operator's typed and voice
+  bubbles. The patch left the live row at full width, so an answer would have
+  narrowed the moment its transcript echo replaced it.
+- **02.** The head's second line starts below 1024 px, not 700 px. The desktop
+  layout runs down to 640 px, and at 820 px the one-row head left the title
+  40 px (rendered, see Evidence). Below 1024 px only the lane's controls take
+  the second line. The title and the progress keep the first line, grow to at
+  most their own width and ellipsize, so the state chip stays beside the
+  title.
+- **03.** The build also removes what 03 and 02 left without a caller. That
+  is seven i18n keys in both languages (`kanban.draft.noteAfter`, `noteFirst`,
+  `composerAria`, `composerPlaceholder`, `composerNote`, `send`, and
+  `kanban.stages.inView`), plus the closed composer's CSS (`.composer2`), the
+  lane bar's `.pos` and `.lane-count` rules and the sheet's `firstInView`
+  state (critique-2's note).
+- **04.** A pipeline on no task has no card menu, so its lane keeps its own ⋯
+  and its head row. The patch would have left it with no way to its actions.
+  The card's menu also keys its items by position, because each lane repeats
+  "Expand stages", "Pause" and the rest.
+- **05.** The pill is gone from the card's markup, and `kanban.statusAria`
+  went with it. The patch had only hidden it with CSS. After a move, focus
+  lands on the moved card, so `[`, `]`, S and M keep working. S opens the
+  status menu at the card's ⋯.
+- **06.** The ghost copy control keeps a transparent 1 px border, because the
+  22 px fine-pointer size the gutters are cut to counts it. The outbox's
+  pending spinner holds the same slot until the message is confirmed. It takes
+  the same ghost look and the same place under the bubble, so nothing moves
+  when the copy control replaces it. The voice turn's bubble follows the
+  typed one.
+- **07.** The `ml-auto` on the phone's Send button, which never took any
+  space, is gone; its span carries it.
+- **08.** One command copy control, placed by the pointer query
+  (`useCoarsePointer`, which the gutters already follow). The patch drew two
+  controls and hid one with CSS. On a finger the meta row's bottom margin grows
+  by the target's overhang, so the 44 px target ends where the command begins.
+  On a mouse, a command with no status or time draws no empty meta row.
+- **09.** A failed seat counts as needing the operator, the folded side rail
+  keeps its frame, and the quiet Unfold keeps a hover state.
+- **10.** A folded conversation in the sheet keeps the ribbon's content box.
+- **11.** All of the motion lives inside `prefers-reduced-motion:
+  no-preference`, beside the rules it moves. The patch added it and then
+  switched it off in `globals.css`. The Past attempts layout moves into
+  `::details-content` only where the browser supports that pseudo-element.
+  While a button is held at 0.96, an invisible layer keeps its whole unpressed
+  box. Without it, a held press 1 px inside the edge of a 212 px Retry lands
+  beside the button (measured, see Evidence). Desktop Send uses the same rule
+  through a `.press-scale` class.
+- **12.** The embedded lane draws no empty links row, which had left a blank
+  band under the task's title.
+
+### Critique #12, the pipeline-screen half
+
+Critique-2 noted that this half was left undone and not deferred. It is built:
+
+- The phone pipeline screen's "Attach PR or issue…" is a list row after the
+  stages, with a link at its leading edge and a chevron at its end, shaped like
+  the screen's Past attempts row. It used to be bare accent text beside the
+  heading. The link chips stay under the heading, and with no link there is no
+  empty row.
+- The phone task screen groups what it holds. The stages, what agents ask,
+  the task (links, description, agents) and its history (details, Past
+  attempts) sit 24 px apart, with 8 px between the rows inside each group.
+  The title stays 12 px above the first group.
+
+### Tests
+
+- `KanbanBoard.dom`: no pill on a column's card; S opens the status menu from
+  the card's ⋯; a move from the ⋯ writes with the guard and focus follows the
+  card. `OverviewBoard.kanban.dom` reads "Move to" from the ⋯.
+- `KanbanStages.dom`: the lane's actions are a group in the card's ⋯, and the
+  lane draws no ⋯. With the graph shown there is no chip strip and a node
+  reaches a folded pane; with it hidden the chips return. The lane's controls
+  sit in the head, the column heads draw no identity, and a waiting stage has
+  no sub-line, composer or note, with the new status words.
+- `PipelineBlock.dom`: the chain is the head where the card's ⋯ holds the
+  actions; a lane with its own ⋯ or title keeps its head row.
+- `FeedItem.mobile.dom`, `FeedItem.actions.render`: caption, text, then
+  controls on the phone. The read-aloud control still finds its text there.
+  The operator's copy sits under the bubble. The desktop sets prose at the
+  measure.
+- `actionGeometry.dom`: one command copy control, in the gutter for a mouse,
+  and at the end of the meta row and 44 px for a finger.
+- `MobileTaskScreen.dom`, `MobileTaskScreen.entry.dom`: a live lane is its
+  numbered stage list with "Open conversation", its Stages line opens the
+  pipeline screen and its ⋯ the lane sheet, a finished lane keeps its chain,
+  and the groups sit 24 px apart and 8 px inside.
+  `MobilePipelineScreen.dom`: Attach is a row after the stages and opens the
+  links sheet.
+- The kanban browser driver (`kanbanBoard.browser.test.tsx`) gains the
+  "interface polish round 2" case, run in Chrome. It covers the press near
+  the edge with its red path, reduced motion, Past attempts by height and its
+  mid-way reversal, the sheet's entrance, the status menu at the ⋯, the quiet
+  tools on hover and focus, and the sheet head at 640, 820 and 1100 px.
+  Readings are in `evidence/interface-polish/readings.json`. The driver's
+  older cases that read the pill, the lane's ⋯, the chip strip, the draft
+  composer and the pane-head identity are updated to the new markup.
+
+### Evidence
+
+Everything is in `~/Pictures/delegatus-review/interface-polish/build/`. The
+"before" frames come from main at the branch point, the "after" frames from
+the branch head. Both are production builds (`bun run build`, isolated config
+and state roots) served over the same seeded demo home by round 2's capture
+driver, which is a scratch script and not committed. Each `NN` pair shows its
+change's primary screen with every change applied, so pairs that share a
+screen share frames: 02, 03 and 10 are the Stages sheet, 04, 05 and 09 the
+board, 06, 07 and 08 the phone conversation. Every pair was opened and read.
+
+- `02-660-pair.png` and `02-820-pair.png` are the sheet head under 1024 px
+  (critique-2's note). At 660 px the graph starts hidden, so the chips are the
+  navigation.
+- `03-column-pair.png` is the Verify column at full resolution.
+- `12-pipeline-pair.png` is the phone pipeline screen with the Attach row.
+- `11-before.webm`, `11-after.webm` and `11-pair.mp4` are the recordings.
+  `11-pair.png` is Past attempts opening at 40 ms a frame: in one frame
+  before, and over about 120 ms after.
+- The after frames match round 2's after, with one difference: main's board
+  order (#2156) now puts the card whose stage is running first in Assigned.
+
+The browser case measured the motion in Chrome. Past attempts goes 22, 38,
+88, 121, 141, 155, … 185 px, one frame at a time; clicked again at 80 ms, it
+turns at 141 px and settles closed. The sheet's opacity runs 0, 0, 0.1, 0.41,
+0.82 … 1 over its first frames. Under reduced motion, both are whole in the
+first frame and nothing scales.
+

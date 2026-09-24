@@ -1,9 +1,12 @@
 # Interface polish, round 2: patches
 
 Prototype patches for issue #2148, described and ranked in
-[`../interface-polish-round2.md`](../interface-polish-round2.md). None of them
-is applied to the product. Each applies on its own from the repository root,
-and all twelve apply together in numeric order:
+[`../interface-polish-round2.md`](../interface-polish-round2.md). All twelve
+are built into the product now. The patches stay as the prototype record, and
+"Built" in the design document says where the build departs from them.
+
+Each patch applied on its own, and all twelve in numeric order, to the round-2
+lane's head and to main before the build, for example:
 
 ```
 git apply docs/design/interface-polish-round2/01-prose-measure.patch
