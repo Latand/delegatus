@@ -4155,6 +4155,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.changes.none": "Для цих комітів немає записів у changelog.",
   "selfUpdate.changes.commitList": "Коміти",
   "selfUpdate.changes.more": "ще {count}",
+  "selfUpdate.changes.expand": "Докладніше ▸",
+  "selfUpdate.changes.collapse": "Згорнути ▾",
   "selfUpdate.process.web": "Веб",
   "selfUpdate.process.host": "Runtime host",
   "selfUpdate.badge.healthy": "працює",

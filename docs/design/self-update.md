@@ -442,12 +442,20 @@ the update still checks out the exact tip.
 items[] } }` where an item is its bullet text joined to one line. The delta is
 every version heading present at the tip and absent at the installed release,
 whole, plus for `[Unreleased]` every item present at the tip and absent there (compared
-after whitespace normalisation). Summary line: `N commits · M changelog
-entries (2 Added, 3 Changed, 1 Fixed)`. Below it, per type, each item's first
-sentence, at most 8 items, then `+k more`. A first sentence over 160
-characters loses its parenthetical asides, then ends at the last clause
-boundary (`, ` `; ` `: ` ` — `) past half the limit, else the last word, with
-`…`. No changelog difference → `No changelog entries for these commits.`
+after whitespace normalisation). Each item's reference-style links (`[#2096]`)
+are rewritten as inline links from the new revision's own link definitions,
+so an item carries its targets. Summary line: `N commits · M changelog
+entries (2 Added, 3 Changed, 1 Fixed)`. Below it, per type, at most 8 whole
+items, then `+k more`. An item renders its inline Markdown as elements (bold,
+emphasis, code, links that open in a new tab;
+`src/lib/selfUpdate/changelogMarkup.ts`); raw HTML, images and other markup
+read as their text, and only http(s) targets become links. A collapsed item
+shows its bold lead in full; an item with no bold lead shows its first
+sentence when that fits 160 characters, else the text up to the last word
+boundary that fits, with `…`. Every cut falls in plain text, never inside a
+span, and the rest of the item opens behind the item's own More. An item
+that fits 160 characters shows whole. No changelog difference → `No
+changelog entries for these commits.`
 
 **Update** runs five steps, each with `env: childEnv("build")`, sequentially,
 stopping at the first failure, never starting or stopping a process
@@ -748,8 +756,10 @@ dir) and use `/var/tmp` when a checkout is cloned (the `/tmp` quota).
 1. **`changelog.test.ts`** (pure): parse the real `CHANGELOG.md` shape (a
    fixture string with `[Unreleased]`, two versions, wrapped bullets, `###`
    types); delta = new version heading whole + new Unreleased items only;
-   identical files → empty delta; summary counts per type; 160-char cut on
-   the first sentence; `+k more` past eight.
+   identical files → empty delta; summary counts per type; whole items with
+   reference links resolved; `+k more` past eight. **`changelogMarkup.test.ts`**
+   (pure): the inline subset, unsupported markup and HTML as text, and a
+   collapsed item's lead cut only outside spans.
 2. **`git.test.ts`** against a local bare-repo fixture: `git init --bare
    remote.git`; a work clone commits `package.json` `1.0.0` + `CHANGELOG.md`
    v1, tags nothing, pushes `main`; a second commit bumps to `1.0.1`, adds a

@@ -4260,6 +4260,8 @@ export const en = {
   "selfUpdate.changes.none": "No changelog entries for these commits.",
   "selfUpdate.changes.commitList": "Commits",
   "selfUpdate.changes.more": "+{count} more",
+  "selfUpdate.changes.expand": "More ▸",
+  "selfUpdate.changes.collapse": "Less ▾",
   "selfUpdate.process.web": "Web",
   "selfUpdate.process.host": "Runtime host",
   "selfUpdate.badge.healthy": "healthy",
