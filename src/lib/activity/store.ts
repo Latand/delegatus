@@ -108,6 +108,8 @@ export interface HostState {
   error: string | null;
   /** The highest remote version a pull has received. */
   cursor: number;
+  /** Which store on the remote host the cursor counts in. */
+  remoteStore: string | null;
   excluded: Partial<Record<ExclusionReason, number>>;
 }
 
@@ -138,7 +140,7 @@ function storedTurn(row: TurnRow): StoredTurn {
 
 type HostRow = {
   covered_from: number | null; covered_until: number | null; read_at: number | null; attempt_at: number | null;
-  error: string | null; cursor: number; excluded: string;
+  error: string | null; cursor: number; excluded: string; remote_store: string | null;
 };
 
 function parseIds(value: string): string[] {
@@ -250,12 +252,13 @@ export class ActivityStore {
           attempt_at INTEGER,
           error TEXT,
           cursor INTEGER NOT NULL DEFAULT 0,
-          excluded TEXT NOT NULL DEFAULT '{}'
+          excluded TEXT NOT NULL DEFAULT '{}',
+          remote_store TEXT
         );
         CREATE TABLE IF NOT EXISTS activity_meta (
-          singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL, store_id TEXT NOT NULL
         );
-        INSERT OR IGNORE INTO activity_meta VALUES (1, 0);
+        INSERT OR IGNORE INTO activity_meta VALUES (1, 0, '${crypto.randomUUID()}');
         PRAGMA user_version = ${SCHEMA_VERSION};
       `);
       for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
@@ -492,6 +495,15 @@ export class ActivityStore {
     ).all(LOCAL_HOST_KEY, version, limit).map(storedInput);
   }
 
+  /** Drop everything pulled from `host`, before it is read again whole. */
+  forgetHost(host: string): void {
+    if (host === LOCAL_HOST_KEY) throw new Error("this host's own records are never dropped");
+    this.transaction(() => {
+      this.db.query("DELETE FROM activity_inputs WHERE host = ?").run(host);
+      this.db.query("DELETE FROM activity_turns WHERE host = ?").run(host);
+    });
+  }
+
   count(host: string): number {
     return this.db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM activity_inputs WHERE host = ?").get(host)?.n ?? 0;
   }
@@ -507,18 +519,19 @@ export class ActivityStore {
       error: row.error,
       cursor: row.cursor,
       excluded: parseExcluded(row.excluded),
+      remoteStore: row.remote_store,
     };
   }
 
   setHostState(host: string, patch: Partial<HostState>): void {
-    const current = this.hostState(host) ?? { coveredFrom: null, coveredUntil: null, readAt: null, attemptAt: null, error: null, cursor: 0, excluded: {} };
+    const current: HostState = this.hostState(host) ?? { coveredFrom: null, coveredUntil: null, readAt: null, attemptAt: null, error: null, cursor: 0, excluded: {}, remoteStore: null };
     const next = { ...current, ...patch };
     this.db.query(`
-      INSERT INTO activity_hosts(host, covered_from, covered_until, read_at, attempt_at, error, cursor, excluded)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO activity_hosts(host, covered_from, covered_until, read_at, attempt_at, error, cursor, excluded, remote_store)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(host) DO UPDATE SET covered_from = excluded.covered_from, covered_until = excluded.covered_until,
         read_at = excluded.read_at, attempt_at = excluded.attempt_at, error = excluded.error, cursor = excluded.cursor,
-        excluded = excluded.excluded
-    `).run(host, next.coveredFrom, next.coveredUntil, next.readAt, next.attemptAt, next.error, next.cursor, JSON.stringify(next.excluded));
+        excluded = excluded.excluded, remote_store = excluded.remote_store
+    `).run(host, next.coveredFrom, next.coveredUntil, next.readAt, next.attemptAt, next.error, next.cursor, JSON.stringify(next.excluded), next.remoteStore);
   }
 }

@@ -55,10 +55,12 @@ const after = Math.max(0, Number(env.LLV_ACTIVITY_AFTER) || 0);
 const limit = Math.min(20000, Math.max(1, Number(env.LLV_ACTIVITY_LIMIT) || 5000));
 const db = new Database(file, { readonly: true });
 db.exec("PRAGMA busy_timeout = 5000");
-let host, rows, turns, latest;
+let host, rows, turns, latest, storeId;
 try {
   db.exec("BEGIN");
-  latest = db.query("SELECT version FROM activity_meta WHERE singleton = 1").get()?.version ?? 0;
+  const meta = db.query("SELECT version, store_id FROM activity_meta WHERE singleton = 1").get();
+  latest = meta?.version ?? 0;
+  storeId = meta?.store_id ?? null;
   host = db.query("SELECT covered_from, covered_until, read_at, excluded FROM activity_hosts WHERE host = ''").get();
   rows = db.query("SELECT key, version, at, project, kind, surface, hash, conversation, ids FROM activity_inputs WHERE host = '' AND version > ? ORDER BY version LIMIT ?").all(after, limit + 1).map((row) => ({ type: "input", ...row }));
   try {
@@ -74,7 +76,7 @@ const more = page.length > limit;
 page.length = Math.min(page.length, limit);
 let excluded = {};
 try { excluded = JSON.parse(host?.excluded ?? "{}"); } catch {}
-out({ type: "state", v: 1, state: "read", coveredFrom: host?.covered_from ?? null, coveredUntil: host?.covered_until ?? null, readAt: host?.read_at ?? null, excluded, latest, more });
+out({ type: "state", v: 1, state: "read", coveredFrom: host?.covered_from ?? null, coveredUntil: host?.covered_until ?? null, readAt: host?.read_at ?? null, excluded, latest, storeId, more });
 for (const row of page) {
   if (row.type === "turn") {
     out({ type: "turn", key: row.key, version: row.version, conversation: row.conversation, project: row.project, engine: row.engine, role: row.role, pipelineId: row.pipeline, stageId: row.stage, start: row.start, end: row.end });
@@ -152,6 +154,8 @@ type RemoteState = { state: "no-ingest" } | {
   excluded: Partial<Record<ExclusionReason, number>>;
   /** The remote's highest version: below the cursor, its store was recreated. */
   latest: number;
+  /** The remote store's identity; another one than before is a new store. */
+  storeId: string | null;
   more: boolean;
 };
 
@@ -171,7 +175,7 @@ function parseState(line: unknown): RemoteState | null {
     const count = record(row.excluded)?.[reason];
     if (Number.isSafeInteger(count) && (count as number) > 0) excluded[reason] = count as number;
   }
-  return { state: "read", coveredFrom: time(row.coveredFrom), coveredUntil: time(row.coveredUntil), readAt: time(row.readAt), excluded, latest: Number.isSafeInteger(row.latest) ? row.latest as number : 0, more: row.more === true };
+  return { state: "read", coveredFrom: time(row.coveredFrom), coveredUntil: time(row.coveredUntil), readAt: time(row.readAt), excluded, latest: Number.isSafeInteger(row.latest) ? row.latest as number : 0, storeId: typeof row.storeId === "string" && /^[0-9a-f-]{36}$/.test(row.storeId) ? row.storeId : null, more: row.more === true };
 }
 
 const OPAQUE = /^[a-z]:[0-9a-f]{64}$/;
@@ -255,7 +259,9 @@ export async function pullHost(
   pageRows: number = PULL_PAGE_ROWS,
 ): Promise<PullResult> {
   const result: PullResult = { ok: false, error: null, pages: 0, rows: 0, changed: 0 };
-  let cursor = store.hostState(host)?.cursor ?? 0;
+  const held = store.hostState(host);
+  let cursor = held?.cursor ?? 0;
+  const heldStore = held?.remoteStore ?? null;
   const fail = (error: PullError) => {
     result.error = error;
     store.setHostState(host, { attemptAt: now(), error, cursor });
@@ -279,11 +285,14 @@ export async function pullHost(
     const state = parseState(parsed[0]);
     if (!state) return fail("malformed");
     if (state.state === "no-ingest") return fail("no-ingest");
-    if (state.latest < cursor && !restarted) {
-      /* A recreated remote store numbers its rows from one again: read it
-         whole once more. Keys make the second read idempotent. */
+    const recreated = (heldStore !== null && state.storeId !== null && state.storeId !== heldStore) || state.latest < cursor;
+    if (recreated && !restarted) {
+      /* A recreated remote store numbers its rows from one again, so its
+         versions no longer order against the ones held here: drop what was
+         pulled from it and read it whole once more. */
       restarted = true;
       cursor = 0;
+      store.forgetHost(host);
       continue;
     }
     const inputs: StoredInput[] = [];
@@ -300,8 +309,8 @@ export async function pullHost(
       result.changed += store.upsertPulled(host, inputs) + store.upsertPulledTurns(host, turns);
       for (const row of [...inputs, ...turns]) cursor = Math.max(cursor, row.version);
       store.setHostState(host, state.more
-        ? { attemptAt: now(), cursor }
-        : { attemptAt: now(), readAt: now(), error: null, cursor, coveredFrom: state.coveredFrom, coveredUntil: state.coveredUntil, excluded: state.excluded });
+        ? { attemptAt: now(), cursor, remoteStore: state.storeId }
+        : { attemptAt: now(), readAt: now(), error: null, cursor, remoteStore: state.storeId, coveredFrom: state.coveredFrom, coveredUntil: state.coveredUntil, excluded: state.excluded });
     });
     if (!state.more) {
       result.ok = true;

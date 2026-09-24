@@ -138,4 +138,15 @@ describe("pulling another host's records", () => {
     expect(conversation).toMatchObject({ project: "client-a", engine: "codex", role: "builder" });
     expect(conversation.activity.reduce((total, span) => total + span.end - span.start, 0)).toBe(3 * 9 * 60_000);
   });
+
+  test("a recreated remote store is read again whole, and its rows replace the old ones", async () => {
+    await stageRecords();
+    await pull();
+    /* The stage host loses its store and records one session again, now with
+       one more step: its versions restart below the cursor held here. */
+    fs.rmSync(path.join(remoteState, "activity"), { recursive: true, force: true });
+    await stageRecords(1);
+    expect(await pull()).toMatchObject({ ok: true, rows: 8 });
+    expect(local((store) => [store.count("stage"), store.turns("stage", 0, NOW).length])).toEqual([4, 4]);
+  });
 });
