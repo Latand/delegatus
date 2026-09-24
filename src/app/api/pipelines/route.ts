@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { authenticatedAgentSpawnCaller, isAgentInitiatedSpawn } from "@/app/api/spawn/admission";
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { agentRegistry } from "@/lib/agent/registry";
+import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { conversationAgentRole, isSpawnDeniedRole, reviewerOriginSpawnGuidance, type SpawnRejectionCode } from "@/lib/agent/spawnAdmission";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { createPipelineFromRequest, getPipelines } from "@/lib/pipelines/engine";
@@ -133,6 +135,10 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
       ...(result.violations?.length ? { violations: result.violations } : {}),
     }, { status: result.status ?? 400 });
     if (result.pipeline.state !== "draft") requestPipelineTick();
+    /* A replayed create answers the same pipeline, so its id is the key. */
+    if (directOperatorActivityAuthority(req).ok) {
+      recordOperatorRequest(req, { kind: "pipeline", idempotencyKey: `pipeline-create:${result.pipeline.id}`, project: result.pipeline.project });
+    }
     return NextResponse.json({ ok: true, pipeline: result.pipeline, ...(result.warnings?.length ? { warnings: result.warnings } : {}) }, { status: 201 });
   } catch (error) {
     /* #1766: the registry lock was never taken, so no pipeline was created.

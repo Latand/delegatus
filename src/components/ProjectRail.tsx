@@ -464,6 +464,14 @@ function RailHeaderMenu() {
           >
             {t("selfUpdate.menu")}
           </button>
+          {/* Your time and your agents' time, per day and per project. */}
+          <a
+            href="/activity"
+            data-rail-menu-activity=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            {t("activity.menu")}
+          </a>
         </div>
       ) : null}
     </div>

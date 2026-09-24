@@ -24,7 +24,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
   const result = await executeRealtimeControl(
     body,
     undefined,
-    realtimeRequestAuthority(req, requestBody),
+    { ...realtimeRequestAuthority(req, requestBody), userAgent: req.headers.get("user-agent") },
   );
   return NextResponse.json(result.body, { status: result.status });
 }

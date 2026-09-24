@@ -2,7 +2,8 @@
 
 import { useEffect } from "react";
 
-import { VIEW_SCHEMA_VERSION, type BrowserKind, type DeviceKind, type PresencePayloadV1 } from "@/lib/view/types";
+import { detectBrowser, detectDeviceKind } from "@/lib/view/device";
+import { VIEW_SCHEMA_VERSION, type PresencePayloadV1 } from "@/lib/view/types";
 
 import {
   mergeView,
@@ -57,23 +58,7 @@ export function stableDeviceId(storage: Pick<Storage, "getItem" | "setItem"> | n
   return fresh;
 }
 
-export function detectBrowser(ua: string): BrowserKind {
-  const s = ua.toLowerCase();
-  if (s.includes("firefox") || s.includes("fxios")) return "firefox";
-  /* Edge and other Chromium skins are not "chrome" for our purposes. */
-  if (s.includes("edg/") || s.includes("opr/")) return "other";
-  if (s.includes("crios") || s.includes("chrome") || s.includes("chromium")) return "chrome";
-  /* Chrome's UA also contains "safari", so this must come after the chrome test. */
-  if (s.includes("safari")) return "safari";
-  return "other";
-}
-
-export function detectDeviceKind(ua: string, coarsePointer: boolean, width: number): DeviceKind {
-  const s = ua.toLowerCase();
-  if (s.includes("ipad") || (s.includes("tablet") && !s.includes("mobi")) || (coarsePointer && width >= 768 && width <= 1280)) return "tablet";
-  if (s.includes("mobi") || s.includes("iphone") || s.includes("android") || (coarsePointer && width < 768)) return "mobile";
-  return "desktop";
-}
+export { detectBrowser, detectDeviceKind };
 
 /** Build the exact wire body from the assembled view plus this document's
     identity and the current sequence counters. Pure — the publisher owns the
