@@ -197,6 +197,90 @@ test("the title is the first line of the text and the description the rest", () 
   expect(card.description).toBe("After the index rebuild the results page is empty.\nSecond line.");
 });
 
+test("a placeholder no agent will name borrows its conversation's cleaned title instead of staying untitled", () => {
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const pending = (id: string, paths: string[], extra: Partial<BoardTask> = {}) =>
+    task(id, "assigned", paths, { text: "Untitled task", origin: { kind: "conversation", key: `origin-${id}`, refinement: "pending" }, ...extra });
+  const ended = file(1, { title: "**Fix** the `upload` retries after a timeout", activity: "idle", mtime: NOW - 3 * 3600 });
+  const running = file(2, { title: "Rebuild the search index", activity: "live", proc: "running", mtime: NOW - 5 });
+  const fresh = file(3, { title: "Draft the release notes", activity: "live", proc: "running", mtime: NOW - 5 });
+  const settled = file(4, { title: "Answer the API question", activity: "idle", mtime: NOW - 30 });
+  const tasks = [
+    /* Its conversation ended hours ago: the card reads its conversation's title. */
+    pending("ended", [ended.path]),
+    /* Still working, but past the bounded wait: the same. */
+    pending("slow", [running.path]),
+    /* Young and working: the agent may still name it. */
+    pending("young", [fresh.path], { createdAt: iso(NOW - 60) }),
+    /* Young, but its conversation already stopped: nothing will name it. */
+    pending("stopped", [settled.path], { createdAt: iso(NOW - 60) }),
+    /* A launch that never produced a transcript: its own admission title. */
+    pending("launch", [], { text: "Exercise legacy spawn fixture", origin: { kind: "launch", key: "launch-x", refinement: "pending" } }),
+  ];
+  const result = model(tasks, [ended, running, fresh, settled]);
+  const byId = new Map(KANBAN_STATUSES.flatMap((status) => result.columns[status].cards).map((card) => [card.task!.id, card] as const));
+  const shown = (id: string) => ({ title: byId.get(id)!.titlePending ? null : byId.get(id)!.title, pending: byId.get(id)!.titlePending });
+  expect(shown("ended")).toEqual({ title: "Fix the upload retries after a timeout", pending: false });
+  expect(shown("slow")).toEqual({ title: "Rebuild the search index", pending: false });
+  expect(shown("young")).toEqual({ title: null, pending: true });
+  expect(shown("stopped")).toEqual({ title: "Answer the API question", pending: false });
+  expect(shown("launch")).toEqual({ title: "Exercise legacy spawn fixture", pending: false });
+  /* A task somebody named keeps its own title, whatever its conversation says. */
+  const named = model([task("named", "assigned", [ended.path], { text: "Upload retries", origin: { kind: "conversation", key: "k", refinement: "titled" } })], [ended]);
+  expect(named.columns.assigned.cards[0]!.title).toBe("Upload retries");
+});
+
+test("the conversation count holds only what opens: a transcript elsewhere opens by its path, a launch that never started is listed apart", () => {
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const launch = (id: string, at: number) => ({ launchId: `launch-${id}`, conversationId: `conversation_${id}`, path: null, panePid: null, state: "linked", error: null, at: iso(at), engine: "codex" });
+  const ghost = task("ghost", "assigned", [], { text: "Exercise legacy spawn fixture", origin: { kind: "launch", key: "launch-ghost", refinement: "pending" }, assignments: [launch("ghost", NOW - 3600)] as BoardTask["assignments"] });
+  const starting = task("starting", "assigned", [], { assignments: [launch("starting", NOW - 30)] as BoardTask["assignments"] });
+  const dismissed = task("dismissed", "assigned", [], { assignments: [{ ...launch("dismissed", NOW - 3600), state: "failed", error: "launch did not start (dismissed)" }] as BoardTask["assignments"] });
+  const elsewhere = task("elsewhere", "assigned", ["/elsewhere/conversation-9.jsonl"]);
+  const result = model([ghost, starting, dismissed, elsewhere], []);
+  const byId = new Map(KANBAN_STATUSES.flatMap((status) => result.columns[status].cards).map((card) => [card.task!.id, card] as const));
+  /* The ghost: no conversation counted, one launch that did not start. */
+  expect(byId.get("ghost")!.conversations).toBe(0);
+  expect(byId.get("ghost")!.unstarted.map((row) => row.launchId)).toEqual(["launch-ghost"]);
+  /* A launch still inside its start grace is neither. */
+  expect(byId.get("starting")!.conversations).toBe(0);
+  expect(byId.get("starting")!.unstarted).toEqual([]);
+  /* A dismissed launch is gone from the card. */
+  expect(byId.get("dismissed")!.unstarted).toEqual([]);
+  /* A transcript the board did not load counts, and names the path it opens. */
+  expect(byId.get("elsewhere")!.conversations).toBe(1);
+  expect(byId.get("elsewhere")!.notLoadedRefs).toEqual([{ key: "conversation_elided_elsewhere_0", path: "/elsewhere/conversation-9.jsonl", conversationId: "conversation_elided_elsewhere_0" }]);
+});
+
+test("a failed launch is listed at once with its error, opens its launch view, and is never a conversation", () => {
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const placeholder = (id: string) => ({
+    path: `spawn:launch-${id}`,
+    conversationId: `conversation_${id}`,
+    title: "Fix the upload retries",
+    mtime: NOW - 120,
+    spawn: { launchId: `launch-${id}`, clientAttemptId: null, accountId: null, conversationId: `conversation_${id}`, state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached" },
+  }) as Partial<FileEntry>;
+  const failedFile = file(1, placeholder("failed"));
+  const dismissedFile = file(2, placeholder("dismissed"));
+  const launch = (id: string, extra: Record<string, unknown> = {}) => ({ launchId: `launch-${id}`, conversationId: `conversation_${id}`, path: failedFile.path.replace("failed", id), panePid: null, state: "spawning", error: null, at: iso(NOW - 120), engine: "claude", ...extra });
+  const failed = task("failed", "assigned", [], { text: "Untitled task", origin: { kind: "launch", key: "launch-failed", refinement: "pending" }, createdAt: iso(NOW - 120), assignments: [launch("failed")] as BoardTask["assignments"] });
+  const dismissed = task("dismissed", "assigned", [], { assignments: [launch("dismissed", { state: "failed", error: "launch did not start (dismissed)" })] as BoardTask["assignments"] });
+  const result = model([failed, dismissed], [failedFile, dismissedFile]);
+  const byId = new Map(KANBAN_STATUSES.flatMap((status) => result.columns[status].cards).map((card) => [card.task!.id, card] as const));
+  const card = byId.get("failed")!;
+  /* Two minutes old, well inside a starting launch's grace: a failed receipt is final. */
+  expect(card.conversations).toBe(0);
+  expect(card.members).toEqual([]);
+  expect(card.unstarted.map((row) => ({ key: row.key, error: row.failed?.error, opens: row.failed?.file.path, dismissable: row.dismissable }))).toEqual([
+    { key: "launch-failed", error: "account limit reached", opens: "spawn:launch-failed", dismissable: true },
+  ]);
+  /* Nothing will name it now: it reads its launch's own title at once. */
+  expect({ title: card.title, pending: card.titlePending }).toEqual({ title: "Fix the upload retries", pending: false });
+  /* Once dismissed, the row is gone. */
+  expect(byId.get("dismissed")?.unstarted ?? []).toEqual([]);
+});
+
 function pipeline(): Pipeline {
   const attempt = (n: number, state: string, activatedBy: unknown = null) => ({ n, state, activatedBy, agentPath: null, conversationId: null, launchId: null, sessionId: null, paneId: null, flowId: null, effectiveRole: {}, output: null, verdict: null, error: null });
   return {

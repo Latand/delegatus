@@ -1,5 +1,8 @@
 export type TaskStatus = "inbox" | "assigned" | "blocked" | "done";
 
+/** The text of a placeholder task whose admission carried no title at all. */
+export const UNTITLED_TASK_TEXT = "Untitled task";
+
 /** How long a task's human `text` may be, server-enforced. */
 export const TASK_TEXT_LIMIT = 6000;
 /**
@@ -12,6 +15,10 @@ export const TASK_TEXT_LIMIT = 6000;
  * decide how large that answer can get.
  */
 export const TASK_DETAILS_LIMIT = 20000;
+
+/** The error a dismissed launch row carries (the card's «launch did not
+    start» Dismiss). */
+export const LAUNCH_NOT_STARTED_ERROR = "launch did not start (dismissed)";
 
 /** Board membership of a task's band. Absent on a row is `shown`; the value is
     written explicitly so a restore is durable and readable in the state file. */

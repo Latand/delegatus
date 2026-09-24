@@ -167,6 +167,18 @@ export function guardedContext(env: NodeJS.ProcessEnv = process.env): GuardedCon
   return null;
 }
 
+/**
+ * A test run, as the environment declares it. Narrower than
+ * {@link guardedContext}, which also reads this process's argv: the fence
+ * below overrides a declared owner, and an owner is a property of the
+ * environment handed in, so the answer has to come from that environment too.
+ * `bun test` pins it in `test-preload.ts`; the incident's `bun -e` set it by
+ * hand.
+ */
+export function testEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV === "test";
+}
+
 let throwawayRoot: string | null = null;
 let throwawayRootCleanupInstalled = false;
 
@@ -230,6 +242,45 @@ export class StateStartupMutationRefused extends Error {
   }
 }
 
+/**
+ * A test that reached the operator's own state (the live-state fence).
+ *
+ * The owner check above admits a declared owner wherever it points, and an
+ * explicit `LLV_STATE_DIR` is never classified at all. Both are inherited: a
+ * headless reviewer the Viewer spawned carried the Viewer's own
+ * `LLV_STATE_OWNER=viewer`, ran a `NODE_ENV=test bun -e` fixture, and the two
+ * placeholder tasks it minted landed in the live task store. A test context
+ * owns nothing, whatever it inherited, so it is refused here.
+ */
+export class OperatorStateUnderTestError extends Error {
+  readonly directory: string;
+  constructor(directory: string, store: string) {
+    super(
+      `refusing to open the operator's ${store} at ${directory} from a test run (NODE_ENV=test).`
+      + " A test never writes live state: point LLV_STATE_DIR at a throw-away directory.",
+    );
+    this.name = "OperatorStateUnderTestError";
+    this.directory = directory;
+  }
+}
+
+/**
+ * The store boundary's half of the fence: the task store, the agent registry
+ * and the state database call this with the file they are about to open. In a
+ * test run an operator-owned path throws, whether it arrived through a
+ * declared owner, an inherited `LLV_STATE_DIR` or an explicit argument.
+ * Outside a test it is free: resolution already decided who may reach it.
+ */
+export function assertNotOperatorStateUnderTest(
+  target: string,
+  store: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!testEnvironment(env)) return;
+  if (!isOperatorOwnedDirectory(target, env)) return;
+  throw new OperatorStateUnderTestError(target, store);
+}
+
 const warned = new Set<string>();
 
 function warnSubstitution(context: GuardedContext, directory: string, substitute: string): void {
@@ -257,8 +308,12 @@ export function admitOperatorDirectory(
   /* A declared owner is admitted wherever the directory is, so it is asked
      first: the classification below is path work that every `statePath()`
      call repeated (#1987). Both answers are read afresh on every call. */
-  if (stateOwner(env)) return directory;
+  if (stateOwner(env) && !testEnvironment(env)) return directory;
   if (!isOperatorOwnedDirectory(directory, env)) return directory;
+  /* A test run that carries an owner claimed the operator's directory on
+     purpose or by inheritance; either way it is refused out loud rather than
+     quietly redirected, so the claim is seen and removed. */
+  if (stateOwner(env)) throw new OperatorStateUnderTestError(directory, `${kind} directory`);
   const context = guardedContext(env);
   if (!context) throw new UnownedStateAccessError(directory, env);
   const substitute = path.join(throwawayStateRoot(), kind);

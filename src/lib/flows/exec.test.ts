@@ -362,6 +362,24 @@ test("headless managed Codex reviewer fixes its account home and file credential
   Reflect.deleteProperty(process.env, WAKATIME_CREDENTIAL_ENV);
 });
 
+test("a headless reviewer never inherits the Viewer's state owner claim", () => {
+  /* The image sets LLV_STATE_OWNER=viewer for the whole container. A reviewer
+     that inherited it ran a NODE_ENV=test fixture against the live task store. */
+  const held = process.env.LLV_STATE_OWNER;
+  process.env.LLV_STATE_OWNER = "viewer";
+  try {
+    for (const engine of ["codex", "claude"] as const) {
+      const built = reviewerCommand({ engine, model: null, effort: null }, "review prompt", "/out/review.md", "/repo");
+      expect(built.env.LLV_STATE_OWNER).toBeUndefined();
+    }
+    const managed = reviewerCommand({ engine: "codex", model: null, effort: null }, "review prompt", "/out/review.md", "/repo", { home: "/accounts/work", managed: true });
+    expect(managed.env.LLV_STATE_OWNER).toBeUndefined();
+  } finally {
+    if (held === undefined) delete process.env.LLV_STATE_OWNER;
+    else process.env.LLV_STATE_OWNER = held;
+  }
+});
+
 test("headless claude reviewer launches with approval-free tool access", () => {
   const built = reviewerCommand({ engine: "claude", model: null, effort: null }, "review prompt", "/out/review.md", "/repo");
 

@@ -25,7 +25,7 @@ import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
 import { CheckGlyph, ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
-import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
+import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline, KanbanUnstartedLaunch } from "./kanbanModel";
 import { PastAttempts, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
@@ -199,6 +199,9 @@ export interface KanbanCardProps {
   onToggleGraph: (cardId: string, pipelineId: string, open: boolean) => void;
   /** Open the conversation an earlier attempt or review round kept. */
   onOpenAttempt: (conversation: PastAttempt["conversation"]) => void;
+  /** Dismiss a launch of this task that never produced a transcript. Absent,
+      the row still says so and offers nothing. */
+  onDismissLaunch?: (card: KanbanCardModel, launch: KanbanUnstartedLaunch) => void;
   /** Open readers this card shows, by conversation identity, one per line —
       a string so an unchanged set never re-renders the card. */
   readerKeys: string;
@@ -681,18 +684,61 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         />
       ) : null}
 
-      {!collapsed && (card.mirrors.length || card.notLoaded || card.otherSurfaces) ? (
+      {!collapsed && card.unstarted.length ? (
+        <div className="unstarted" role="list" aria-label={t("kanban.launchNotStarted")}>
+          {card.unstarted.map((launch) => (
+            <div
+              key={launch.key}
+              role="listitem"
+              className={`unstarted-row${launch.failed ? " failed" : ""}`}
+              data-launch-not-started={launch.key}
+              data-launch-failed={launch.failed ? launch.key : undefined}
+              title={t(launch.failed ? "kanban.launchFailedHint" : "kanban.launchNotStartedHint")}
+            >
+              <span className="what">{t(launch.failed ? "kanban.launchFailed" : "kanban.launchNotStarted")}</span>
+              <span className="age num">{ageLabel(t, launch.atMs, nowMs)}</span>
+              {/* A failed launch opens its launch view: the error in full and Retry. */}
+              {launch.failed ? (
+                <button
+                  type="button"
+                  className="open"
+                  data-launch-open={launch.key}
+                  aria-label={t("kanban.openFailedLaunchAria", { title })}
+                  onClick={() => props.onOpenMember(launch.failed!.file)}
+                >
+                  {t("kanban.openFailedLaunch")}
+                </button>
+              ) : null}
+              {props.onDismissLaunch && launch.dismissable ? (
+                <button
+                  type="button"
+                  className="dismiss"
+                  data-launch-dismiss={launch.key}
+                  aria-label={t("kanban.dismissLaunchAria", { title })}
+                  onClick={() => props.onDismissLaunch!(card, launch)}
+                >
+                  {t("kanban.dismissLaunch")}
+                </button>
+              ) : null}
+              {launch.failed?.error ? <span className="error" data-launch-error={launch.key}>{launch.failed.error}</span> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {!collapsed && (card.mirrors.length || card.notLoadedRefs.length || card.otherSurfaces) ? (
         <div className="refs">
           {card.mirrors.map((mirror) => (
             <button key={mirror.key} type="button" className="ref" onClick={() => props.onFocusCard(mirror.primaryCardId)}>
               {t("kanban.alsoOn", { title: cleanTitle(mirror.file.title ?? "", 48) || t("kanban.untitledConversation"), card: mirror.primaryTitle })}
             </button>
           ))}
-          {card.notLoaded ? (
-            <button type="button" className="ref quiet" onClick={props.onOpenConversations}>
-              {t("kanban.notLoaded", { count: card.notLoaded })}
+          {/* Each conversation the count holds opens on its own, loaded here or not. */}
+          {card.notLoadedRefs.map((ref) => (
+            <button key={ref.key} type="button" className="ref quiet" data-not-loaded={ref.key} onClick={() => props.onOpenAttempt({ path: ref.path, conversationId: ref.conversationId })}>
+              {t("kanban.notLoadedOpen")}
             </button>
-          ) : null}
+          ))}
           {card.otherSurfaces ? (
             <button type="button" className="ref quiet" onClick={props.onOpenConversations}>
               {t("kanban.otherSurfaces", { count: card.otherSurfaces })}

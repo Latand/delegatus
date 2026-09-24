@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { isStagingMode, STAGING_STATE_DIRNAME } from "@/lib/staging";
-import { admitOperatorDirectory, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { admitOperatorDirectory, assertNotOperatorStateUnderTest, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { stateMutationRefusal } from "@/lib/state/stateMutationBarrier";
 
 import { APP_DIR, APP_DIR_NAMES, appDirIn, appDirLinkPending, FORMER_APP_DIR, linkAppDirIn } from "../../bin/appDir.mjs";
@@ -186,7 +186,12 @@ export function migrateLegacyDir(target: string, legacy: string): void {
 export function stateDir(): string {
   const override = process.env.LLV_STATE_DIR;
   if (isStagingMode()) return stagingStateDir(override);
-  if (override) return override;
+  if (override) {
+    /* An inherited override is never classified by the owner check, so a
+       test run that inherited the operator's own directory stops here. */
+    assertNotOperatorStateUnderTest(override, "state directory");
+    return override;
+  }
   const resolved = path.join(appConfigDir(), "state");
   const dir = admitOperatorDirectory(resolved, "state");
   if (dir !== resolved) return dir;
