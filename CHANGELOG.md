@@ -8,6 +8,12 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Fixed
+- **The Update page's changelog reads as formatted text.** Bold, code and
+  links render instead of raw Markdown, PR references open their pull
+  requests in a new tab, and each entry shows its lead with the rest behind
+  More, never cut inside a span ([#2158]).
+
 ## [1.4.0] — 2026-09-24
 
 ### Added
@@ -999,3 +1005,4 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2120]: https://github.com/Latand/delegatus/pull/2120
 [#2122]: https://github.com/Latand/delegatus/pull/2122
 [#2125]: https://github.com/Latand/delegatus/pull/2125
+[#2158]: https://github.com/Latand/delegatus/pull/2158
