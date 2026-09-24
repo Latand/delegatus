@@ -119,7 +119,7 @@ const { resetLogTailCacheForTests } = await import("@/hooks/useLogTail");
 const { resetFeedSessionPoolForTests } = await import("./feed/sessionPool");
 const { resetPendingOpensForTest, resetSelectionSessionsForTest } = await import("@/hooks/useBoardState");
 const { OPEN_KEY } = await import("./orchestrator/OrchestratorDock");
-const { getMobileNav } = await import("./mobile/mobileNav");
+const { getMobileNav, resetMobileNavForTests } = await import("./mobile/mobileNav");
 
 /* ── corpus ─────────────────────────────────────────────────────────────── */
 
@@ -397,7 +397,7 @@ beforeEach(() => {
   /* The phone shell's navigation store is one per tab and outlives a mount
      (mobile v2 lane 1), so a test that left a conversation screen on the stack
      would hand the next mount that screen instead of the board. */
-  getMobileNav().home();
+  resetMobileNavForTests();
   resetFilesClientCacheForTests();
   resetLogTailCacheForTests();
   resetFeedSessionPoolForTests();

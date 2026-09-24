@@ -40,7 +40,7 @@ import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks } from "@/components/workLinks/workLinksContext";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
-import { useMobileNav, useMobileNavStore } from "./mobileNav";
+import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory } from "./mobileNav";
 
 /*
  * One pipeline on the phone: the Stages view (#2072 slice 6,
@@ -400,10 +400,11 @@ export function MobilePipelineScreen({
   const body = useRef<HTMLDivElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const titleAway = useScrolledAway(heading, body);
+  /* Back to this pipeline lands where the operator left it (#2105). */
+  useMobileScrollMemory(body, { kind: "pipeline", id: pipeline.id });
   const title = pipelineTitle(t, pipeline);
   /* The stage-configuration sheet (lane 10). The nav store says a sheet is
-     open (§3.3: a sheet creates no history, and back takes it with the
-     screen); this says which stage. The pane inside is the desktop's own
+     open (§3.3: one history entry, which Back closes); this says which stage. The pane inside is the desktop's own
      editor, so a change made from the phone is the same `override-stage`
      PATCH the board sends. */
   const [configuring, setConfiguring] = useState<string | null>(null);
@@ -612,7 +613,8 @@ function PastAttemptsSection({ pipeline, flows, flowsById, files, names, nowMs, 
   onOpenConversation: (file: FileEntry) => void;
 }) {
   const { t } = useLocale();
-  const [open, setOpen] = useState(false);
+  /* Open or folded as the operator left it when Back returns here (#2105). */
+  const [open, setOpen] = useMobileScreenState({ kind: "pipeline", id: pipeline.id }, "past", false);
   const nameOf = (stageId: string) => names.get(stageId) ?? stageId;
   const history = pastAttempts([pipeline], flowsById);
   const listed = new Set(history.flatMap((row) => (row.conversation.path ? [row.conversation.path] : [])));

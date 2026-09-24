@@ -2177,3 +2177,238 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
   fs.writeFileSync(path.join(OVERVIEW_EVIDENCE, "overview.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 600_000);
+
+/*
+ * #2105 — Back and screen history on the phone follow the path the operator
+ * took. The kanban fixture (`?kanban=1`) at 390 × 844, dark, touch. Every
+ * phone screen and every sheet over one is one history entry; the browser's
+ * Back (which is what iOS's edge swipe sends) and the bar's ‹ each pop exactly
+ * one, and the screen they land on is the one the operator came from, with
+ * its scroll and its column. Walks:
+ *
+ *   report    board → the orchestrator → Back → a task → its agent → Back ends
+ *             on the task (the operator's report: it ended on the orchestrator)
+ *   path      board → task → pipeline → conversation → Back ×3, each screen in
+ *             turn, the task's scroll and the board's column and offset kept
+ *   sheets    the same path with a sheet opened at each step and closed by
+ *             Back, which stays on the screen; a sheet closed by its × leaves
+ *             no entry behind
+ *   deeplink  a link that lands through the hash and an in-app link, each
+ *             from the task screen: Back returns to the task
+ *   reload    a reload on the task, the pipeline and the conversation keeps
+ *             the screen, and Back still goes where it went before
+ *
+ * Frames go to `LLV_PHONE_BACK_FRAMES` (default `.artifacts/phone-back`, not
+ * committed), prefixed by `LLV_PHONE_BACK_PREFIX` so a run on the code before
+ * the change can be kept beside a run after it; readings go to
+ * `evidence/issue-2105/history.json`.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#2105"
+ */
+const PHONE_BACK_OUT = path.resolve(process.env.LLV_PHONE_BACK_FRAMES || ".artifacts/phone-back");
+const PHONE_BACK_PREFIX = process.env.LLV_PHONE_BACK_PREFIX || "after";
+const PHONE_BACK_EVIDENCE = path.resolve("evidence/issue-2105");
+
+interface PhonePlace { screen: string | null; id: string | null; sheet: string | null; column: string | null; hash: string; historyLength: number }
+interface PhoneExpect { screen: string; id?: string; sheet?: string | null }
+
+const readPhonePlace = (page: Page) => page.evaluate((): PhonePlace => {
+  const shells = [...document.querySelectorAll<HTMLElement>("[data-mobile2-screen]")];
+  const top = shells[shells.length - 1] ?? null;
+  return {
+    screen: top?.getAttribute("data-mobile2-screen") ?? null,
+    id: top?.getAttribute("data-mobile2-conversation") ?? top?.getAttribute("data-mobile2-task") ?? top?.getAttribute("data-mobile2-pipeline") ?? null,
+    sheet: document.querySelector("[data-mobile2-sheet]")?.getAttribute("data-mobile2-sheet") ?? null,
+    column: document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active") ?? null,
+    hash: location.hash,
+    historyLength: history.length,
+  };
+});
+
+/** The id a conversation screen names itself by: the fixture's conversation id. */
+const conversationOf = (transcript: string | null) => (transcript ? `conversation_${transcript.split("/").pop()!.replace(".jsonl", "")}` : undefined);
+
+const placeMatches = (place: PhonePlace, want: PhoneExpect) =>
+  place.screen === want.screen && (want.id === undefined || place.id === want.id) && (want.sheet === undefined || place.sheet === want.sheet);
+
+browserTest("#2105: Back and the phone's screen history follow the path the operator took", async () => {
+  fs.mkdirSync(PHONE_BACK_OUT, { recursive: true });
+  fs.mkdirSync(PHONE_BACK_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const failures: string[] = [];
+  const results: unknown[] = [];
+  const viewport = { width: 390, height: 844 };
+  const walk = async (name: string, run: (ctx: {
+    page: Page;
+    step: (label: string, act: () => Promise<unknown>, want: PhoneExpect) => Promise<PhonePlace>;
+    back: (label: string, want: PhoneExpect, how?: "browser" | "chevron") => Promise<PhonePlace>;
+    fail: (text: string) => void;
+  }) => Promise<void>) => {
+    const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    const steps: unknown[] = [];
+    let n = 0;
+    const fail = (text: string) => failures.push(`${name}: ${text}`);
+    /* One step: act, wait for the screen it should land on, then wait again
+       and read once more, so a screen that something pushes a moment later —
+       the orchestrator the report names — is caught rather than missed. */
+    const step = async (label: string, act: () => Promise<unknown>, want: PhoneExpect) => {
+      n += 1;
+      await act();
+      await page.waitForFunction(({ screen, id, sheet }) => {
+        const shells = [...document.querySelectorAll<HTMLElement>("[data-mobile2-screen]")];
+        const top = shells[shells.length - 1] ?? null;
+        const openSheet = document.querySelector("[data-mobile2-sheet]")?.getAttribute("data-mobile2-sheet") ?? null;
+        const topId = top?.getAttribute("data-mobile2-conversation") ?? top?.getAttribute("data-mobile2-task") ?? top?.getAttribute("data-mobile2-pipeline") ?? null;
+        return top?.getAttribute("data-mobile2-screen") === screen && (id === undefined || topId === id) && (sheet === undefined || openSheet === sheet);
+      }, want, { timeout: 8_000 }).catch(() => undefined);
+      await pause(page, 1_200);
+      const place = await readPhonePlace(page);
+      await page.screenshot({ path: path.join(PHONE_BACK_OUT, `${PHONE_BACK_PREFIX}-${name}-${String(n).padStart(2, "0")}-${label}.png`) });
+      steps.push({ n, label, want, place });
+      if (!placeMatches(place, want)) fail(`step ${n} (${label}) wanted ${JSON.stringify(want)}, landed on ${JSON.stringify(place)}`);
+      return place;
+    };
+    const back = (label: string, want: PhoneExpect, how: "browser" | "chevron" = "browser") =>
+      step(label, () => (how === "chevron" ? page.locator("[data-mobile2-back]").first().click() : page.goBack({ waitUntil: "commit" }).catch(() => null)), want);
+    try {
+      await run({ page, step, back, fail });
+      if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+    } catch (error) {
+      fail(`threw ${(error as Error).message.split("\n")[0]}`);
+    } finally {
+      results.push({ walk: name, steps });
+      await context.close();
+    }
+  };
+  const board = `${fixtureBase}/?kanban=1#p=atlas`;
+  const boardShown = (page: Page) => page.waitForSelector('[data-phone-card="task:t-many"]', { timeout: 20_000 });
+  try {
+    await walk("report", async ({ page, step, back }) => {
+      await step("board", async () => { await page.goto(board); await boardShown(page); }, { screen: "board", sheet: null });
+      const seat = await step("orchestrator", () => page.locator("[data-mobile2-seat-open]").click(), { screen: "chat", sheet: null });
+      await back("back-to-board", { screen: "board", sheet: null });
+      await step("task", () => page.locator('[data-phone-card="task:t-long"]').click(), { screen: "task", id: "t-long", sheet: null });
+      const agent = conversationOf(await page.locator("[data-phone-task-agent]").first().getAttribute("data-phone-task-agent"));
+      await step("agent", () => page.locator("[data-phone-task-agent] button").first().click(), { screen: "chat", id: agent, sheet: null });
+      const landed = await back("back-to-task", { screen: "task", id: "t-long", sheet: null });
+      if (landed.screen === "chat" && landed.id === seat.id) failures.push("report: Back from the agent opened the orchestrator conversation");
+      await back("back-to-board-again", { screen: "board", sheet: null });
+    });
+
+    await walk("path", async ({ page, step, back, fail }) => {
+      await step("board", async () => { await page.goto(board); await boardShown(page); }, { screen: "board", sheet: null });
+      /* Bring the task's card into view in its column, so the column has an offset to keep. */
+      const offset = await page.evaluate(() => {
+        const card = document.querySelector<HTMLElement>('[data-phone-card="task:t-many"]')!;
+        card.scrollIntoView({ block: "center" });
+        const column = card.closest<HTMLElement>("[data-phone-kanban-column]")!;
+        return { column: column.getAttribute("data-phone-kanban-column"), top: column.scrollTop };
+      });
+      await pause(page, 400);
+      await step("task", () => page.locator('[data-phone-card="task:t-many"]').click(), { screen: "task", id: "t-many", sheet: null });
+      await page.locator("[data-phone-task-ended]").click().catch(() => undefined);
+      await pause(page, 300);
+      /* Where the task screen was when it was left: the driver's click scrolls
+         its target into view first, so the page keeps the last offset itself. */
+      await page.evaluate(() => {
+        const body = document.querySelector<HTMLElement>("[data-phone-task-body]")!;
+        /* A detached scroller reports a last scroll to 0 on its way out. */
+        const record = () => { if (body.isConnected) (window as unknown as { taskScroll: number }).taskScroll = body.scrollTop; };
+        body.addEventListener("scroll", record, { passive: true });
+        body.scrollTop = Math.round(body.scrollHeight / 3);
+        record();
+      });
+      await pause(page, 400);
+      await step("pipeline", () => page.locator('[data-phone-task-lane="lane-many-review"] [data-open-stages]').click(), { screen: "pipeline", id: "lane-many-review", sheet: null });
+      const taskScroll = await page.evaluate(() => (window as unknown as { taskScroll: number }).taskScroll);
+      if (taskScroll < 40) fail(`the task screen was left at scroll ${taskScroll}, too close to the top to show a restore`);
+      await step("conversation", () => page.locator('[data-mobile2-pipeline="lane-many-review"] [data-stage-open="build"]').first().click(), { screen: "chat", sheet: null });
+      await back("back-to-pipeline", { screen: "pipeline", id: "lane-many-review", sheet: null });
+      await back("back-to-task", { screen: "task", id: "t-many", sheet: null }, "chevron");
+      const restored = await page.evaluate(() => document.querySelector<HTMLElement>("[data-phone-task-body]")?.scrollTop ?? -1);
+      if (Math.abs(restored - taskScroll) > 2) fail(`the task screen came back at scroll ${restored}, left at ${taskScroll}`);
+      await back("back-to-board", { screen: "board", sheet: null });
+      const column = await page.evaluate((status) => {
+        const board = document.querySelector<HTMLElement>("[data-phone-kanban]")!;
+        return { active: board.getAttribute("data-phone-kanban-active"), top: board.querySelector<HTMLElement>(`[data-phone-kanban-column="${status}"]`)?.scrollTop ?? -1 };
+      }, offset.column);
+      if (column.active !== offset.column || Math.abs(column.top - offset.top) > 2) fail(`the board came back on ${JSON.stringify(column)}, left on ${JSON.stringify(offset)}`);
+    });
+
+    await walk("sheets", async ({ page, step, back, fail }) => {
+      await step("board", async () => { await page.goto(board); await boardShown(page); }, { screen: "board", sheet: null });
+      const boardHash = await page.evaluate(() => location.hash);
+      await step("board-menu", () => page.locator('[data-mobile2-open="menu"]').first().click(), { screen: "board", sheet: "menu" });
+      await back("board-menu-back", { screen: "board", sheet: null });
+      await step("card-sheet", () => page.locator('[data-phone-card="task:t-many"]').click({ button: "right" }), { screen: "board", sheet: "card" });
+      await back("card-sheet-back", { screen: "board", sheet: null });
+      await step("tasks-menu", () => page.locator('[data-mobile2-open="menu"]').first().click(), { screen: "board", sheet: "menu" });
+      await step("tasks-sheet", () => page.locator('[data-mobile2-menu-row="tasks"]').click(), { screen: "board", sheet: "tasks" });
+      await back("tasks-sheet-back", { screen: "board", sheet: null });
+      /* Closed by its own ×, a sheet takes its entry with it: the next Back leaves the screen. */
+      await step("menu-closed-by-x", async () => {
+        await page.locator('[data-mobile2-open="menu"]').first().click();
+        await page.waitForSelector('[data-mobile2-sheet="menu"]');
+        await page.locator("[data-mobile2-close]").click();
+      }, { screen: "board", sheet: null });
+      if ((await page.evaluate(() => location.hash)) !== boardHash) fail("a sheet on the board moved the URL");
+      await step("task", () => page.locator('[data-phone-card="task:t-many"]').click(), { screen: "task", id: "t-many", sheet: null });
+      await step("status-sheet", () => page.locator("[data-phone-task-status-pill]").first().click(), { screen: "task", id: "t-many", sheet: "status" });
+      await back("status-sheet-back", { screen: "task", id: "t-many", sheet: null });
+      await step("task-menu", () => page.locator('[data-mobile2-open="menu"]').first().click(), { screen: "task", id: "t-many", sheet: "menu" });
+      await back("task-menu-back", { screen: "task", id: "t-many", sheet: null });
+      await step("pipeline", () => page.locator('[data-phone-task-lane="lane-many-review"] [data-open-stages]').click(), { screen: "pipeline", id: "lane-many-review", sheet: null });
+      await step("pipeline-menu", () => page.locator('[data-mobile2-open="menu"]').first().click(), { screen: "pipeline", id: "lane-many-review", sheet: "menu" });
+      await back("pipeline-menu-back", { screen: "pipeline", id: "lane-many-review", sheet: null });
+      const chat = await step("conversation", () => page.locator('[data-mobile2-pipeline="lane-many-review"] [data-stage-open="build"]').first().click(), { screen: "chat", sheet: null });
+      await step("conversation-menu", () => page.locator('[data-mobile2-open="menu"]').first().click(), { screen: "chat", id: chat.id ?? undefined, sheet: "menu" });
+      await back("conversation-menu-back", { screen: "chat", id: chat.id ?? undefined, sheet: null });
+      await back("back-to-pipeline", { screen: "pipeline", id: "lane-many-review", sheet: null });
+      await back("back-to-task", { screen: "task", id: "t-many", sheet: null });
+      await back("back-to-board", { screen: "board", sheet: null });
+    });
+
+    await walk("deeplink", async ({ page, step, back }) => {
+      await step("board", async () => { await page.goto(board); await boardShown(page); }, { screen: "board", sheet: null });
+      await step("task", () => page.locator('[data-phone-card="task:t-long"]').click(), { screen: "task", id: "t-long", sheet: null });
+      const id = conversationOf(await page.locator("[data-phone-task-agent]").first().getAttribute("data-phone-task-agent"))!;
+      /* A notification or a link the Viewer does not intercept lands through the hash. */
+      await step("hash-link", () => page.evaluate((conversation) => { location.hash = "#c=" + encodeURIComponent(conversation); }, id), { screen: "chat", id, sheet: null });
+      await back("hash-link-back", { screen: "task", id: "t-long", sheet: null });
+      /* A link in a message: the Viewer opens a target it knows in place. */
+      await step("message-link", () => page.evaluate((conversation) => {
+        const anchor = document.createElement("a");
+        anchor.href = "#c=" + encodeURIComponent(conversation);
+        anchor.textContent = "Open conversation";
+        anchor.setAttribute("data-evidence-link", "");
+        document.querySelector("[data-phone-task-body]")!.prepend(anchor);
+        anchor.click();
+      }, id), { screen: "chat", id, sheet: null });
+      await back("message-link-back", { screen: "task", id: "t-long", sheet: null });
+      await back("back-to-board", { screen: "board", sheet: null });
+    });
+
+    await walk("reload", async ({ page, step, back }) => {
+      await step("board", async () => { await page.goto(board); await boardShown(page); }, { screen: "board", sheet: null });
+      await step("task", () => page.locator('[data-phone-card="task:t-many"]').click(), { screen: "task", id: "t-many", sheet: null });
+      await step("task-reload", () => page.reload(), { screen: "task", id: "t-many", sheet: null });
+      await step("pipeline", () => page.locator('[data-phone-task-lane="lane-many-review"] [data-open-stages]').click(), { screen: "pipeline", id: "lane-many-review", sheet: null });
+      await step("pipeline-reload", () => page.reload(), { screen: "pipeline", id: "lane-many-review", sheet: null });
+      const chat = await step("conversation", () => page.locator('[data-mobile2-pipeline="lane-many-review"] [data-stage-open="build"]').first().click(), { screen: "chat", sheet: null });
+      await step("conversation-reload", () => page.reload(), { screen: "chat", id: chat.id ?? undefined, sheet: null });
+      await back("back-to-pipeline", { screen: "pipeline", id: "lane-many-review", sheet: null });
+      await back("back-to-task", { screen: "task", id: "t-many", sheet: null });
+      await back("back-to-board", { screen: "board", sheet: null });
+    });
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(PHONE_BACK_EVIDENCE, `history-${PHONE_BACK_PREFIX}.json`), `${JSON.stringify({ viewport, results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);

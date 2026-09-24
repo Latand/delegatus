@@ -12,6 +12,7 @@ import type { PatchBody, PatchResult, TaskMutationPorts } from "@/components/kan
 
 import { MobileKanban } from "./MobileKanban";
 import { createMobileNav, MobileNavContext, type MobileNav } from "./mobileNav";
+import { fakeHistory } from "./mobileNavTestHistory";
 import { receipts, useReceipt } from "./MobileReceipt";
 import { attentionKey } from "./phoneKanbanModel";
 import { resetPhoneKanbanPlaces } from "./phoneKanbanPlace";
@@ -104,20 +105,8 @@ function layout(files: readonly FileEntry[]): SchemeLayout {
 }
 
 function fakeNav(): { nav: MobileNav; pushes: () => number } {
-  const entries: { state: unknown; url: string }[] = [{ state: null, url: "http://localhost/#p=fixture" }];
-  let index = 0;
-  let pushes = 0;
-  const nav = createMobileNav({
-    history: {
-      get state() { return entries[index]!.state; },
-      pushState(state, _unused, url) { pushes += 1; entries.splice(index + 1); entries.push({ state, url: url ?? entries[index]!.url }); index += 1; },
-      replaceState(state, _unused, url) { entries[index] = { state, url: url ?? entries[index]!.url }; },
-      back() { if (index > 0) index -= 1; },
-    },
-    href: () => entries[index]!.url,
-    onPopstate: () => () => {},
-  });
-  return { nav, pushes: () => pushes };
+  const history = fakeHistory("http://localhost/#p=fixture");
+  return { nav: createMobileNav(history.host), pushes: history.pushes };
 }
 
 /** The flow receipt the shell draws between the body and the dock. */

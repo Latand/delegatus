@@ -8,7 +8,9 @@ import {
   recordFocusNavigation,
   recordProjectNavigation,
   retargetRecordedProject,
+  setFocusHistoryOwner,
   type FocusHistoryEntry,
+  type FocusHistoryOwner,
 } from "./focusHistory";
 
 let dom: Window;
@@ -138,5 +140,47 @@ describe("attachFocusPopstate", () => {
     detach();
     popstate({ [FOCUS_HISTORY_STATE_KEY]: { v: 1, conversationId: "conv-a", path: null, project: "-p" } });
     expect(seen).toEqual([]);
+  });
+});
+
+/* The phone's navigation store owns the history while the phone layout is up
+   (#2105): the records are handed to it and write nothing themselves, and the
+   desktop, which registers no owner, keeps the table above. */
+describe("an owner", () => {
+  test("takes every record, and the history is written only by it", () => {
+    const calls: unknown[] = [];
+    const owner: FocusHistoryOwner = {
+      focus: (entry, state, url) => calls.push(["focus", entry, state, url]),
+      project: (url) => calls.push(["project", url]),
+      retarget: (project, state, url) => calls.push(["retarget", project, state, url]),
+    };
+    const release = setFocusHistoryOwner(owner);
+    const before = dom.history.length;
+    recordFocusNavigation(fileA, "-p");
+    recordFocusNavigation(fileB, "-p", { restore: true });
+    recordProjectNavigation("#p=-q");
+    retargetRecordedProject("-r", "#p=-r");
+    expect(dom.history.length).toBe(before);
+    expect(dom.location.hash).toBe("");
+    expect(calls).toEqual([
+      ["focus", { v: 1, conversationId: "conv-a", path: "/logs/a.jsonl", project: "-p" }, { [FOCUS_HISTORY_STATE_KEY]: { v: 1, conversationId: "conv-a", path: "/logs/a.jsonl", project: "-p" } }, "#c=conv-a"],
+      ["focus", { v: 1, conversationId: "conv-b", path: "/logs/b.jsonl", project: "-p" }, { [FOCUS_HISTORY_STATE_KEY]: { v: 1, conversationId: "conv-b", path: "/logs/b.jsonl", project: "-p" } }, "#c=conv-b"],
+      ["project", "#p=-q"],
+      ["retarget", "-r", null, "#p=-r"],
+    ]);
+    release();
+    recordFocusNavigation(fileA, "-p");
+    expect(dom.history.length).toBe(before + 1);
+    expect(dom.location.hash).toBe("#c=conv-a");
+  });
+
+  test("a release by an owner that was replaced leaves the new one in place", () => {
+    const seen: string[] = [];
+    const first = setFocusHistoryOwner({ focus: () => seen.push("first"), project: () => {}, retarget: () => {} });
+    const second = setFocusHistoryOwner({ focus: () => seen.push("second"), project: () => {}, retarget: () => {} });
+    first();
+    recordFocusNavigation(fileA, "-p");
+    second();
+    expect(seen).toEqual(["second"]);
   });
 });

@@ -1,0 +1,929 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "results": [
+    {
+      "walk": "report",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "orchestrator",
+          "want": {
+            "screen": "chat",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-66",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-66",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "back-to-board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 4,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-long",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 5,
+          "label": "agent",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-32",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 6,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-long",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 7,
+          "label": "back-to-board-again",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 4
+          }
+        }
+      ]
+    },
+    {
+      "walk": "path",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 4,
+          "label": "conversation",
+          "want": {
+            "screen": "chat",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-20",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-20",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 5,
+          "label": "back-to-pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 6,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 7,
+          "label": "back-to-board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 5
+          }
+        }
+      ]
+    },
+    {
+      "walk": "sheets",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "board-menu",
+          "want": {
+            "screen": "board",
+            "sheet": "menu"
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": "menu",
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "board-menu-back",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 4,
+          "label": "card-sheet",
+          "want": {
+            "screen": "board",
+            "sheet": "card"
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": "card",
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 5,
+          "label": "card-sheet-back",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 6,
+          "label": "tasks-menu",
+          "want": {
+            "screen": "board",
+            "sheet": "menu"
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": "menu",
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 7,
+          "label": "tasks-sheet",
+          "want": {
+            "screen": "board",
+            "sheet": "tasks"
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": "tasks",
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 8,
+          "label": "tasks-sheet-back",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 9,
+          "label": "menu-closed-by-x",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 10,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 11,
+          "label": "status-sheet",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "status"
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "status",
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 12,
+          "label": "status-sheet-back",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 13,
+          "label": "task-menu",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "menu"
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": "menu",
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 14,
+          "label": "task-menu-back",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 15,
+          "label": "pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 16,
+          "label": "pipeline-menu",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": "menu"
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": "menu",
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 17,
+          "label": "pipeline-menu-back",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 18,
+          "label": "conversation",
+          "want": {
+            "screen": "chat",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-20",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-20",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 19,
+          "label": "conversation-menu",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-20",
+            "sheet": "menu"
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-20",
+            "sheet": "menu",
+            "column": null,
+            "hash": "#c=conversation_kanban-20",
+            "historyLength": 6
+          }
+        },
+        {
+          "n": 20,
+          "label": "conversation-menu-back",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-20",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-20",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-20",
+            "historyLength": 6
+          }
+        },
+        {
+          "n": 21,
+          "label": "back-to-pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 6
+          }
+        },
+        {
+          "n": 22,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 6
+          }
+        },
+        {
+          "n": 23,
+          "label": "back-to-board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 6
+          }
+        }
+      ]
+    },
+    {
+      "walk": "deeplink",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-long",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "hash-link",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-32",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 4,
+          "label": "hash-link-back",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-long",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 5,
+          "label": "message-link",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-32",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 6,
+          "label": "message-link-back",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-long",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 7,
+          "label": "back-to-board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 4
+          }
+        }
+      ]
+    },
+    {
+      "walk": "reload",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "task-reload",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 4,
+          "label": "pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 5,
+          "label": "pipeline-reload",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 6,
+          "label": "conversation",
+          "want": {
+            "screen": "chat",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-20",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-20",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 7,
+          "label": "conversation-reload",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-20",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-20",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-20",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 8,
+          "label": "back-to-pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#pipeline=lane-many-review",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 9,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#task=t-many",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 10,
+          "label": "back-to-board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 5
+          }
+        }
+      ]
+    }
+  ],
+  "failures": []
+}

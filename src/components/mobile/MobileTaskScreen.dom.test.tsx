@@ -47,6 +47,7 @@ const { createPendingPipelineActs } = await import("./MobilePipelineScreen");
 const { receipts, useReceipt } = await import("./MobileReceipt");
 const { MobileTaskScreen } = await import("./MobileTaskScreen");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
+const { fakeHistory } = await import("./mobileNavTestHistory");
 setLocale("en");
 afterAll(async () => {
   await new Promise((r) => setTimeout(r, 0));
@@ -129,11 +130,7 @@ function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts) {
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
   roots.push(root);
-  const nav = createMobileNav({
-    history: { state: null, pushState() {}, replaceState() {}, back() {} },
-    href: () => "http://localhost/",
-    onPopstate: () => () => {},
-  });
+  const nav = createMobileNav(fakeHistory("http://localhost/").host);
   nav.push({ kind: "task", id: "t-many" });
   const files = [file(1)];
   flushSync(() => root.render(

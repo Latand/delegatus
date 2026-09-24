@@ -1,0 +1,441 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "results": [
+    {
+      "walk": "report",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "orchestrator",
+          "want": {
+            "screen": "chat",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-66",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-66",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 3,
+          "label": "back-to-board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#c=conversation_kanban-66",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 4,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-66",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 5,
+          "label": "agent",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-32",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 6,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-66",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-66",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 7,
+          "label": "back-to-board-again",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-66",
+            "historyLength": 5
+          }
+        }
+      ]
+    },
+    {
+      "walk": "path",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#p=atlas",
+            "historyLength": 4
+          }
+        },
+        {
+          "n": 4,
+          "label": "conversation",
+          "want": {
+            "screen": "chat",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-20",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-20",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 5,
+          "label": "back-to-pipeline",
+          "want": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null
+          },
+          "place": {
+            "screen": "pipeline",
+            "id": "lane-many-review",
+            "sheet": null,
+            "column": null,
+            "hash": "#p=atlas",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 6,
+          "label": "back-to-task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#p=atlas",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 7,
+          "label": "back-to-board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 5
+          }
+        }
+      ]
+    },
+    {
+      "walk": "sheets",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "board-menu",
+          "want": {
+            "screen": "board",
+            "sheet": "menu"
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": "menu",
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 3,
+          "label": "board-menu-back",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": null,
+            "id": null,
+            "sheet": null,
+            "column": null,
+            "hash": "",
+            "historyLength": 2
+          }
+        }
+      ]
+    },
+    {
+      "walk": "deeplink",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null,
+            "column": null,
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "hash-link",
+          "want": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null
+          },
+          "place": {
+            "screen": "chat",
+            "id": "conversation_kanban-32",
+            "sheet": null,
+            "column": null,
+            "hash": "#c=conversation_kanban-32",
+            "historyLength": 5
+          }
+        },
+        {
+          "n": 4,
+          "label": "hash-link-back",
+          "want": {
+            "screen": "task",
+            "id": "t-long",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#c=conversation_kanban-32",
+            "historyLength": 5
+          }
+        }
+      ]
+    },
+    {
+      "walk": "reload",
+      "steps": [
+        {
+          "n": 1,
+          "label": "board",
+          "want": {
+            "screen": "board",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 2
+          }
+        },
+        {
+          "n": 2,
+          "label": "task",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null,
+            "column": null,
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        },
+        {
+          "n": 3,
+          "label": "task-reload",
+          "want": {
+            "screen": "task",
+            "id": "t-many",
+            "sheet": null
+          },
+          "place": {
+            "screen": "board",
+            "id": null,
+            "sheet": null,
+            "column": "assigned",
+            "hash": "#p=atlas",
+            "historyLength": 3
+          }
+        }
+      ]
+    }
+  ],
+  "failures": [
+    "report: step 6 (back-to-task) wanted {\"screen\":\"task\",\"id\":\"t-long\",\"sheet\":null}, landed on {\"screen\":\"chat\",\"id\":\"conversation_kanban-66\",\"sheet\":null,\"column\":null,\"hash\":\"#c=conversation_kanban-66\",\"historyLength\":5}",
+    "report: Back from the agent opened the orchestrator conversation",
+    "report: step 7 (back-to-board-again) wanted {\"screen\":\"board\",\"sheet\":null}, landed on {\"screen\":\"task\",\"id\":\"t-long\",\"sheet\":null,\"column\":null,\"hash\":\"#c=conversation_kanban-66\",\"historyLength\":5}",
+    "path: the task screen came back at scroll 0, left at 423",
+    "sheets: step 3 (board-menu-back) wanted {\"screen\":\"board\",\"sheet\":null}, landed on {\"screen\":null,\"id\":null,\"sheet\":null,\"column\":null,\"hash\":\"\",\"historyLength\":2}",
+    "sheets: threw click: Timeout 30000ms exceeded.",
+    "deeplink: step 4 (hash-link-back) wanted {\"screen\":\"task\",\"id\":\"t-long\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"assigned\",\"hash\":\"#c=conversation_kanban-32\",\"historyLength\":5}",
+    "deeplink: threw evaluate: TypeError: Cannot read properties of null (reading 'prepend')",
+    "reload: step 3 (task-reload) wanted {\"screen\":\"task\",\"id\":\"t-many\",\"sheet\":null}, landed on {\"screen\":\"board\",\"id\":null,\"sheet\":null,\"column\":\"assigned\",\"hash\":\"#p=atlas\",\"historyLength\":3}",
+    "reload: threw click: Timeout 30000ms exceeded."
+  ]
+}
