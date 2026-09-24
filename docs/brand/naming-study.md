@@ -304,7 +304,7 @@ and says nothing about the seat.
 | Cache dir | `~/.cache/agent-log-viewer/whisper-venv` | 1 | local dictation |
 | Env prefix | `LLV_` | 254 distinct variables in 611 files; 7 documented in the README, 20 in `docker-compose.yml`; `VIEWER_PROC_BACKEND` has its own prefix | operators' `service.env`, compose overrides, CI, tests |
 | Docker | compose project `agent-log-viewer`; images `agent-log-viewer:node22`, `:deploy-*`, `:staging-*`, `:hostboot-*`; containers `llv-runtime-host-<rev>-<gen>`, `llv-deploy-*`; `/opt/llv-whisper-venv` | runtime host, deploy adapter, bootstrap | the runtime host that performs release succession |
-| Legacy service names | `agent-log-viewer.service`, `agent-log-viewer-legacy-tmux.service` | 2 units (systemd is legacy now) | old installs |
+| Legacy service names | `agent-log-viewer.service`, `agent-log-viewer-legacy-tmux.service` | 2 units (retired; `docs/docker.md`, "Moving off the systemd install") | old installs |
 | MCP server key | `viewer` (tools appear to agents as `mcp__viewer__*`); `presentation.ts` also accepts `agent-log-viewer*` | every agent's MCP config, permission allowlists, skills and memories | all agents |
 | Product noun in UI and prompts | "the Viewer": about 1,000 uses in non-test `src/`, 200 in MCP tool descriptions, 94 in orchestrator/role/pipeline prompts; 44 in `en.ts`, 41 in `uk.ts` | agent-facing and operator-facing text | agents learn the product from these |
 | Product name strings | `onboarding.title`, `onboarding.tour.heading` (en, uk); `src/app/layout.tsx` title and description; CLI usage and messages in `bin/cli.mjs` (en, uk) | ~12 strings | first-run and tab title |

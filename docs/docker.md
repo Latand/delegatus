@@ -322,47 +322,39 @@ stdio unless the local entry is trusted. An agent already running over HTTP at
 that moment reaches the Viewer only through a trusted local entry, which on the
 Docker shape is what carries the key file's key.
 
-## Legacy tmux supervisor migration
+## Moving off the systemd install
 
-The Viewer listens on `127.0.0.1:8898`. Legacy tmux panes acquire a separate user-service owner only after the explicitly approved migration. The service runs a foreground tmux server at `/run/user/1000/agent-log-viewer`, then bootstraps the canonical `agents` session.
+Docker is the only install. The systemd user units an earlier install set up,
+`agent-log-viewer.service` and `agent-log-viewer-legacy-tmux.service`, are
+retired, and the repository no longer ships or installs them. When either unit
+file is still in `~/.config/systemd/user`, the `delegatus` CLI prints this
+migration at start and then starts as usual; it never stops a unit itself.
 
-Run this read-only preflight first:
+Stopping `agent-log-viewer-legacy-tmux.service` ends every tmux session it
+hosts, so finish the agents in those panes first. Then stop and remove the
+units and install with the production instance steps above:
 
 ```bash
-./scripts/install-legacy-tmux-supervisor.sh
+systemctl --user disable --now agent-log-viewer.service agent-log-viewer-legacy-tmux.service
+rm -f ~/.config/systemd/user/agent-log-viewer.service ~/.config/systemd/user/agent-log-viewer-legacy-tmux.service
+systemctl --user daemon-reload
 ```
-
-The installation command requires `--install` and a later operator approval. It enables `agent-log-viewer-legacy-tmux.service`; it does not run as a Compose service.
 
 ## Attach to a Viewer pane
 
 Use the attach command Delegatus copies for a live pane. It includes the configured endpoint and the pane's current display target. For example:
 
 ```bash
-TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -t 'agents:2.0'
+TMUX_TMPDIR='/tmp' tmux attach-session -t 'agents:2.0'
 ```
 
 For an observation-only terminal, use the read-only form:
 
 ```bash
-TMUX_TMPDIR='/run/user/1000/agent-log-viewer' tmux attach-session -r -t 'agents:2.0'
+TMUX_TMPDIR='/tmp' tmux attach-session -r -t 'agents:2.0'
 ```
 
 Detach with `Ctrl-b d`; the pane and its agent continue running. The endpoint prefix is required because an unqualified `tmux attach-session` can select another tmux server. If the Viewer reports that the pane changed or the tmux server restarted, refresh the page and copy a newly resolved command. Window renumbering is handled when the command is copied.
-
-Keep `LLV_LEGACY_TMUX_EXTERNAL=0` while the container-owned server still hosts legacy panes. That preserves the current `/tmp/tmux-1000` behavior. The cutover phase machine may commit `state/legacy-tmux-migration-complete` only after it verifies both the supervisor endpoint and the moved sessions. Every failed, aborted, or rolled-back cutover removes that marker. After those checks succeed, deploy the Viewer with:
-
-```bash
-LLV_LEGACY_TMUX_EXTERNAL=1 \
-LLV_TMUX_TMPDIR=/run/user/1000/agent-log-viewer \
-./scripts/rebuild.sh
-```
-
-External-host mode fails closed when `agents` cannot be found through the dedicated endpoint. It never creates a replacement tmux server from the Viewer container. The migration preflight records a nonce-bound approval token; the later operator runbook must checkpoint the root, verify its successor uses the same engine-native thread, and roll back on any failed verification.
-
-If marker and endpoint state drift apart, `/api/files` reports degraded tmux health and Delegatus displays an operator alert. Delivery continues through the configured endpoint so a stale marker cannot disable every legacy pane.
-
-The `scripts/e2e-viewer-replacement.ts` helper provides prepare and verify snapshots for that later runbook. Its normal modes only inspect state. It does not recreate a container, send a root message, or kill a pane.
 
 ## Test instance
 

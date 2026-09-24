@@ -98,8 +98,10 @@ test("historical failures and orphaned applying rows perform no conversation or 
     const rows = Object.values(registry.readOnlySnapshot().conversations);
     for (const row of rows.slice(0, 13)) {
       const requested = registry.requestConversationReseat(row.id, "account-b");
-      registry.transitionConversationMigration(row.id, requested.migration!.revision, [requested.migration!.phase], { phase: "failed-recoverable", error: "old failure" });
+      /* Historical residue was held while the switch waited. A send made after it parked is assigned to the
+         current generation and is delivered by the tick (#1709), so it is not residue. */
       registry.holdDelivery(row.id, "preserve this held message", `held-${row.id}`, "text", [], null);
+      registry.transitionConversationMigration(row.id, requested.migration!.revision, [requested.migration!.phase], { phase: "failed-recoverable", error: "old failure" });
     }
     for (const [i, row] of rows.slice(13, 15).entries()) registry.claimConversationReconfigure(row.id, {
       operationId: `orphan-${i}`, revision: 1, profile: { model: "gpt-5.6-sol", effort: "high", fast: false }, accountId: "account-b",
@@ -121,6 +123,7 @@ test("historical failures and orphaned applying rows perform no conversation or 
     for (let tick = 0; tick < 3; tick++) await controller.poll();
     expect(reads).toBe(0);
     expect(Object.values(registry.readOnlySnapshot().conversations).filter(row => row.migration?.phase === "failed-recoverable")).toHaveLength(13);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries).map((item) => item.state)).toEqual(Array(13).fill("held"));
   } finally { registry.close(); }
 });
 

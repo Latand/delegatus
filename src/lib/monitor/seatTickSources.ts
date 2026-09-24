@@ -433,6 +433,9 @@ export interface SeatTickSources {
   /** One deployment off the ledger by id (#2063). Absent reads as none. */
   deployment?: typeof ledgerDeployment;
   retirementReport: () => StructuredHostRetirementReport | null;
+  /** The retirement journal's sweeps finished at or after `sinceMs` (#1818).
+      Absent reads as none. */
+  retirementJournal?: (sinceMs: number) => RetirementJournalWindow;
   /** The project's own tick settings (#1275), read fresh per check so a change
       an agent just recorded takes effect at the very next check rather than at
       the next deploy. A project nobody configured reads the defaults. */
@@ -538,6 +541,7 @@ export function defaultSeatTickSources(): SeatTickSources {
       const report = readJsonCache(statePath("host-retirement-report.json"));
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
     },
+    retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
     settings: (project) => readSeatTickSettings(project),
     openPullRequests: (options) => openPullRequestsForRepo(options),
     /* One rule for both halves: ask, and act on, the layer that is actually
@@ -896,6 +900,116 @@ async function seatInput(project: string, policy: SeatTickPolicy, sources: SeatT
   };
 }
 
+/** One sweep as the retirement journal keeps it: retirements whole, refusals
+    as a count per clause. */
+export interface RetirementJournalSweep {
+  finishedAt: string;
+  retired: number;
+  refusedByClause: Record<string, number>;
+}
+
+/** The sweeps inside a window, oldest first. `covered` says the journal
+    reaches back past the window's start: a journal younger than the window
+    cannot say that nothing retired across it. */
+export interface RetirementJournalWindow {
+  covered: boolean;
+  sweeps: RetirementJournalSweep[];
+}
+
+/** The window a sweep that retires nothing is judged over. Four times the
+    default six-hour idle bound, so an idle host has had every chance to go. */
+export const RETIREMENT_STALL_WINDOW_MS = 24 * 3_600_000;
+/** Refusals on one clause across the window that make a window without a
+    retirement a stall rather than a quiet machine. At one sweep per five
+    minutes that is more than three hosts refused on the same clause in every
+    sweep of the day; the #1818 journal held about 1900 a day. */
+export const RETIREMENT_STALL_REFUSALS = 1000;
+/** Enough of the journal's tail to hold a day of sweeps several times over. */
+const RETIREMENT_JOURNAL_TAIL_BYTES = 1024 * 1024;
+
+/**
+ * The clause holding every host back, when a window of sweeps retired nothing
+ * (#1818). A predicate stuck on one clause produces neither a failure nor an
+ * undetermined refusal, so the report the other signal reads stays clean while
+ * the host population grows; the journal's per-clause counts are where it
+ * shows. Null when the window is not fully observed, when anything retired, or
+ * when no clause crossed the threshold.
+ */
+export function stalledRetirementClause(
+  window: RetirementJournalWindow,
+  threshold: number = RETIREMENT_STALL_REFUSALS,
+): { clause: string; refusals: number; sweeps: number } | null {
+  if (!window.covered || window.sweeps.length === 0) return null;
+  if (window.sweeps.some((sweep) => sweep.retired > 0)) return null;
+  const totals = new Map<string, number>();
+  for (const sweep of window.sweeps) {
+    for (const [clause, count] of Object.entries(sweep.refusedByClause)) totals.set(clause, (totals.get(clause) ?? 0) + count);
+  }
+  let worst: { clause: string; refusals: number } | null = null;
+  for (const [clause, refusals] of totals) if (!worst || refusals > worst.refusals) worst = { clause, refusals };
+  return worst && worst.refusals > threshold ? { ...worst, sweeps: window.sweeps.length } : null;
+}
+
+/** The journal's last `bytes`, as sweeps oldest first, and whether the read
+    started mid-file. A line that does not parse is skipped. */
+function retirementJournalTail(filename: string, bytes: number): { sweeps: RetirementJournalSweep[]; truncated: boolean } {
+  let descriptor: number;
+  try {
+    descriptor = fs.openSync(filename, "r");
+  } catch {
+    return { sweeps: [], truncated: false };
+  }
+  let text: string;
+  let truncated: boolean;
+  try {
+    const size = fs.fstatSync(descriptor).size;
+    const start = Math.max(0, size - bytes);
+    const buffer = Buffer.alloc(size - start);
+    fs.readSync(descriptor, buffer, 0, buffer.length, start);
+    text = buffer.toString("utf8");
+    truncated = start > 0;
+    if (truncated) text = text.slice(text.indexOf("\n") + 1);
+  } catch {
+    return { sweeps: [], truncated: false };
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  const sweeps: RetirementJournalSweep[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line) as { finishedAt?: unknown; retired?: unknown; refusedByClause?: unknown };
+      if (typeof record.finishedAt !== "string" || !Number.isFinite(Date.parse(record.finishedAt)) || !Array.isArray(record.retired)) continue;
+      const refusedByClause: Record<string, number> = {};
+      if (record.refusedByClause && typeof record.refusedByClause === "object") {
+        for (const [clause, count] of Object.entries(record.refusedByClause)) {
+          if (typeof count === "number" && Number.isFinite(count)) refusedByClause[clause] = count;
+        }
+      }
+      sweeps.push({ finishedAt: record.finishedAt, retired: record.retired.length, refusedByClause });
+    } catch { /* a torn line */ }
+  }
+  return { sweeps, truncated };
+}
+
+/**
+ * The journal's sweeps since `sinceMs`, reading the rotated copy only when the
+ * current file starts inside the window. Covered once a sweep older than the
+ * window is seen; a tail that ends inside the window, or a journal that begins
+ * inside it, is not.
+ */
+export function readRetirementJournalWindow(filename: string, sinceMs: number): RetirementJournalWindow {
+  const sweeps: RetirementJournalSweep[] = [];
+  for (const file of [filename, `${filename}.1`]) {
+    const tail = retirementJournalTail(file, RETIREMENT_JOURNAL_TAIL_BYTES);
+    const within = tail.sweeps.filter((sweep) => Date.parse(sweep.finishedAt) >= sinceMs);
+    sweeps.unshift(...within);
+    if (within.length < tail.sweeps.length) return { covered: true, sweeps };
+    if (tail.truncated) break;
+  }
+  return { covered: false, sweeps };
+}
+
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [];
   /* The LATEST deployment, asked for as such. The ledger's default ordering is
@@ -913,6 +1027,15 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
   const undetermined = report?.refused.filter((refusal) => refusal.undetermined).length ?? 0;
   if (report && (report.failed.length > 0 || undetermined > 0)) {
     found.push({ id: "host-retirement", label: `host retirement: ${report.failed.length} failed, ${undetermined} undetermined` });
+  }
+  const stalled = sources.retirementJournal
+    ? stalledRetirementClause(sources.retirementJournal(sources.now() - RETIREMENT_STALL_WINDOW_MS))
+    : null;
+  if (stalled) {
+    found.push({
+      id: "host-retirement-stalled",
+      label: `host retirement: nothing retired in ${stalled.sweeps} sweeps over ${RETIREMENT_STALL_WINDOW_MS / 3_600_000}h while ${stalled.clause} refused ${stalled.refusals} times`,
+    });
   }
   /* The one signal that is about the seat itself: its own turn has stopped
      progressing. The tick's wake is what brings such a seat back, which is the
