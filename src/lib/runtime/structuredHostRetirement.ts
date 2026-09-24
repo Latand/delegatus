@@ -331,8 +331,9 @@ const CLAUSE_CHECKS: Record<
 
   /* Capability advertisements are not activity: every Claude host carries
      `structured-image-v1` (and the multi-agent denial's tool set) for its whole
-     life, so reading the raw array refuses every Claude host forever and
-     retires nothing at all. Anything the classifier does not recognise still
+     life, and every Codex host its app-server's native queue, injection and
+     turn-profile support, so reading the raw array refuses every host forever
+     and retires nothing at all. Anything the classifier does not recognise still
      counts as activity and still refuses. */
   "no-active-flags": (subject) => {
     const activityFlags = blockingHostActivityFlags(subject.activeFlags);
@@ -482,6 +483,10 @@ export interface StructuredHostRetirementRefusal {
       that was taken, a message that arrived while earlier candidates in the
       same sweep were being terminated. */
   changed?: true;
+  /** The flags a `no-active-flags` refusal read as activity, so a flag the
+      classifier does not know is named in the record rather than found by
+      reading the host's state (#2137). */
+  flags?: string[];
 }
 
 export interface StructuredHostRetirementFailure {
@@ -507,6 +512,10 @@ export interface StructuredHostRetirementReport {
   standDown: "rebinding" | "unbound" | null;
   retired: StructuredHostRetirementRecord[];
   refused: StructuredHostRetirementRefusal[];
+  /** How many `no-active-flags` refusals each flag took part in. A flag on
+      every refused host is the one to look at: an advertisement nobody named
+      refuses every host that carries it, forever (#2137). */
+  refusedByFlag: Record<string, number>;
   failed: StructuredHostRetirementFailure[];
   reclaimed: StructuredHostRetirementReclaim;
 }
@@ -700,7 +709,8 @@ function atomicWrite(filename: string, value: unknown): void {
  * What the journal keeps from one sweep.
  *
  * Every action is kept whole — which host, why it qualified, what it
- * reclaimed — while refusals are kept as a count per clause. A machine holding
+ * reclaimed — while refusals are kept as a count per clause, and the
+ * `no-active-flags` ones also as a count per flag. A machine holding
  * 65 hosts refuses 65 times a minute, and writing each of those out in full
  * would push the actions that matter out of a rotated journal within hours. The
  * last sweep's refusals stay in full in the report file beside it.
@@ -1040,6 +1050,27 @@ function qualifiedTranscriptMtimeMs(subject: StructuredHostRetirementSubject): n
  *   re-read from durable state and from the machine, and a host that stopped
  *   qualifying is reported with the clause that changed instead of killed.
  */
+/** Records one refusal, naming and counting the flags when the clause that
+    refused is `no-active-flags`. */
+function refuse(
+  report: StructuredHostRetirementReport,
+  subject: StructuredHostRetirementSubject,
+  verdict: Extract<StructuredHostRetirementVerdict, { retire: false }>,
+  changed: boolean,
+): void {
+  const flags = verdict.clause === "no-active-flags" ? blockingHostActivityFlags(subject.activeFlags) : [];
+  for (const flag of flags) report.refusedByFlag[flag] = (report.refusedByFlag[flag] ?? 0) + 1;
+  report.refused.push({
+    key: subject.keyId,
+    conversationId: subject.conversationId,
+    clause: verdict.clause,
+    reason: verdict.reason,
+    ...(verdict.undetermined ? { undetermined: true as const } : {}),
+    ...(changed ? { changed: true as const } : {}),
+    ...(flags.length > 0 ? { flags } : {}),
+  });
+}
+
 export async function runStructuredHostRetirementSweep(
   dependencies: StructuredHostRetirementDependencies = {},
 ): Promise<StructuredHostRetirementReport> {
@@ -1098,6 +1129,7 @@ export async function runStructuredHostRetirementSweep(
     standDown: null,
     retired: [],
     refused: [],
+    refusedByFlag: {},
     failed: [],
     reclaimed: { rssBytes: 0, swapBytes: 0, processes: 0 },
   };
@@ -1123,13 +1155,7 @@ export async function runStructuredHostRetirementSweep(
     const subject = retirementSubject(entry, planned, readers);
     const verdict = structuredHostRetirementVerdict(subject, { now: startedAtMs, idleMs });
     if (!verdict.retire) {
-      report.refused.push({
-        key: subject.keyId,
-        conversationId: subject.conversationId,
-        clause: verdict.clause,
-        reason: verdict.reason,
-        ...(verdict.undetermined ? { undetermined: true as const } : {}),
-      });
+      refuse(report, subject, verdict, false);
       continue;
     }
     if (qualified.length >= batch) {
@@ -1162,14 +1188,7 @@ export async function runStructuredHostRetirementSweep(
     const subject = retirementSubject(fresh, current, readers);
     const verdict = structuredHostRetirementVerdict(subject, { now: now(), idleMs });
     if (!verdict.retire) {
-      report.refused.push({
-        key: subject.keyId,
-        conversationId: subject.conversationId,
-        clause: verdict.clause,
-        reason: verdict.reason,
-        ...(verdict.undetermined ? { undetermined: true as const } : {}),
-        changed: true,
-      });
+      refuse(report, subject, verdict, true);
       continue;
     }
     const hostProcess = subject.process;
