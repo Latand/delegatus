@@ -70,7 +70,8 @@ export interface ExportResult {
 }
 
 /** Every `.jsonl` under the roots modified at or after `sinceMs`, each real
-    file once (a store linked into two roots is one store). */
+    file once and by its real path (a store linked into two roots is one
+    store, and the real path is the one the registry records). */
 export function listTranscriptFiles(roots: readonly string[], sinceMs: number): string[] {
   const found = new Map<string, string>();
   const visited = new Set<string>();
@@ -95,7 +96,10 @@ export function listTranscriptFiles(roots: readonly string[], sinceMs: number): 
       else if (item.name.endsWith(".jsonl")) {
         try {
           const stat = fs.statSync(target);
-          if (stat.isFile() && stat.mtimeMs >= sinceMs) found.set(fs.realpathSync(target), target);
+          if (stat.isFile() && stat.mtimeMs >= sinceMs) {
+            const realFile = fs.realpathSync(target);
+            found.set(realFile, realFile);
+          }
         } catch {
           /* Vanished while walking. */
         }
@@ -134,7 +138,7 @@ export async function readTranscript(file: string): Promise<ParsedTranscript | n
   const lines = readline.createInterface({ input: fs.createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity });
   for await (const line of lines) {
     if (!line.trim()) continue;
-    const relevant = engine === null || line.includes("\"user\"") || line.includes("session_meta") || line.includes("turn_context") || (cwd === null && line.includes("\"cwd\""));
+    const relevant = engine === null || line.includes("\"user\"") || line.includes("session_meta") || (cwd === null && line.includes("\"cwd\""));
     if (!relevant) continue;
     let parsed: Record<string, unknown> | null;
     try {

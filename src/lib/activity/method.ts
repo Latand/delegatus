@@ -781,7 +781,9 @@ export function activityReport(input: ReportInput): ActivityReport {
   const episodeCounts = new Map<string, number>();
   for (const episode of episodes) {
     const key = projectKey(episode.project);
-    own.set(key, [...(own.get(key) ?? []), { start: episode.start, end: episode.end }]);
+    const list = own.get(key);
+    if (list) list.push({ start: episode.start, end: episode.end });
+    else own.set(key, [{ start: episode.start, end: episode.end }]);
     if (episode.end > rangeStart && episode.start < limit) episodeCounts.set(key, (episodeCounts.get(key) ?? 0) + 1);
   }
   for (const [key, list] of own) own.set(key, unionIntervals(clipIntervals(list, rangeStart, limit)));
@@ -792,7 +794,9 @@ export function activityReport(input: ReportInput): ActivityReport {
   const agentsByProject = new Map<string, typeof agents>();
   for (const agent of agents) {
     const key = projectKey(agent.project);
-    agentsByProject.set(key, [...(agentsByProject.get(key) ?? []), agent]);
+    const list = agentsByProject.get(key);
+    if (list) list.push(agent);
+    else agentsByProject.set(key, [agent]);
   }
 
   const projectKeys = new Set<string>([...own.keys(), ...agentsByProject.keys()]);
