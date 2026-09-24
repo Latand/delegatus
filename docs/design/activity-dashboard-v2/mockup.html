@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Activity v2: desktop mockup (docs/design/activity-dashboard-v2.md)</title>
+<!--
+  A static mockup of the /activity desktop redesign. Nothing here is product
+  code: the data below is invented, shaped like GET /api/activity plus the
+  fields docs/design/activity-dashboard-v2.md proposes (days[].hours,
+  days[].projects).
+
+  URL parameters pick the state that is drawn:
+    lang   = en | uk
+    range  = today | 7d | 30d
+    state  = default | drawer | expand | hover | empty
+    theme  = light | dark
+  Rendered with headless Chrome at 1440x900; see the doc for the command.
+-->
+<style>
+/* The app's tokens (src/styles/tokens.css), copied by value. */
+:root {
+  color-scheme: light;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  --surface-canvas: #f4f1ec;
+  --surface-card: #fffdfa;
+  --surface-sunken: #f8f5f0;
+  --surface-raised: #fffdfa;
+  --shadow-1: 0 1px 2px rgb(20 20 30 / 0.05);
+  --shadow-2: 0 8px 32px rgb(20 20 30 / 0.16), 0 1px 2px rgb(20 20 30 / 0.06);
+  --color-primary: #1c1c22;
+  --color-secondary: #55555f;
+  --color-muted: #6c6c79;
+  --border-default: #e5dfd5;
+  --border-strong: #cbc3b7;
+  --color-accent: #5a51e0;
+  --color-accent-soft: #ecebfb;
+  --color-success: #177a37;
+  --color-warning: #8a5f00;
+  --color-warning-soft: #fff4dd;
+  --color-info: #0d9488;
+
+  /* Chart marks. You = the accent, agents = the info teal (as in the
+     prototype); each has one lighter step, validated as an ordinal pair. */
+  --mark-you: var(--color-accent);
+  --mark-you-half: #9ca2f0;
+  --mark-supervised: var(--color-info);
+  --mark-unattended: #79b9ae;
+  --mark-track: #f1ede6;
+  --mark-hatch: var(--border-strong);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --dummy: 0; }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-canvas: #111218;
+  --surface-card: #191b23;
+  --surface-sunken: #14151b;
+  --surface-raised: #20232c;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-2: 0 8px 32px rgb(0 0 0 / 0.55), 0 1px 2px rgb(0 0 0 / 0.4);
+  --color-primary: #e8e8ec;
+  --color-secondary: #a2a2ae;
+  --color-muted: #8b8b98;
+  --border-default: #292c36;
+  --border-strong: #3c404c;
+  --color-accent: #8f88ff;
+  --color-accent-soft: #262347;
+  --color-success: #4fc36f;
+  --color-warning: #e0ae45;
+  --color-warning-soft: #2b2312;
+  --color-info: #2dd4bf;
+  /* The dark chart steps sit inside the dark lightness band; the app's own
+     accent and info tokens are brighter than it (validator, see the doc). */
+  --mark-you: #7f79e6;
+  --mark-you-half: #4a4786;
+  --mark-supervised: #20a896;
+  --mark-unattended: #296b65;
+  --mark-track: #1f222b;
+  --mark-hatch: #3c404c;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--surface-canvas);
+  color: var(--color-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+svg.i { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.tab { font-variant-numeric: tabular-nums; }
+
+.page { max-width: 1328px; margin: 0 auto; padding: 20px 24px 16px; }
+
+/* Header */
+.top { display: flex; align-items: center; gap: 12px; height: 36px; }
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--color-secondary); }
+.btn.outline { border: 1px solid var(--border-default); background: var(--surface-card); color: var(--color-primary); }
+.btn:hover { color: var(--color-primary); }
+.title { display: flex; align-items: baseline; gap: 10px; margin-left: 4px; }
+.title h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.title .when { font-size: 13px; color: var(--color-muted); }
+.spacer { flex: 1; }
+.seg { display: flex; padding: 2px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--surface-card); }
+.seg button { height: 28px; padding: 0 12px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--color-muted); }
+.seg button[aria-pressed="true"] { background: var(--surface-canvas); color: var(--color-primary); }
+.trust { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--border-default); background: var(--surface-card); color: var(--color-secondary); }
+.trust.warn { color: var(--color-warning); border-color: color-mix(in oklab, var(--color-warning) 30%, var(--border-default)); background: var(--color-warning-soft); }
+.trust.ok svg { color: var(--color-success); }
+
+/* Grid */
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 16px; margin-top: 18px; align-items: start; }
+.card { background: var(--surface-card); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-1); }
+.main { grid-column: 1; grid-row: 1; padding: 20px 22px 14px; }
+.rhythm { grid-column: 1; grid-row: 2; padding: 14px 22px 12px; }
+.projects { grid-column: 2; grid-row: 1 / span 2; align-self: stretch; position: relative; min-height: 200px; }
+.projects .inner { position: absolute; inset: 14px 0 0; overflow: hidden; }
+.grid.no-rhythm .projects { grid-row: 1; }
+
+/* Figures */
+.figures { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+.fig-label { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--color-secondary); }
+.sw { width: 10px; height: 10px; border-radius: 3px; flex: none; display: inline-block; }
+.sw.you { background: var(--mark-you); }
+.sw.you-half { background: var(--mark-you-half); }
+.sw.sup { background: var(--mark-supervised); }
+.sw.una { background: var(--mark-unattended); }
+.sw.hatch { background: var(--mark-track) repeating-linear-gradient(135deg, var(--mark-hatch) 0 1.2px, transparent 1.2px 3.5px); }
+.fig-value { margin-top: 6px; display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.fig-value .v { font-size: 44px; line-height: 1; font-weight: 650; letter-spacing: -0.02em; }
+.fig-value .v.agents { font-size: 32px; }
+.fig-value .v .q { font-size: 0.62em; font-weight: 500; color: var(--color-muted); margin-right: 6px; vertical-align: 0.18em; }
+.fig-value .v.unknown { font-size: 32px; color: var(--color-secondary); }
+.fig-value .unit { font-size: 13px; color: var(--color-muted); font-weight: 500; }
+.fig-sub { margin-top: 8px; font-size: 12px; color: var(--color-muted); display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.fig-sub .k { color: var(--color-secondary); font-weight: 600; }
+.fig-sub .item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.link { color: var(--color-accent); font-weight: 600; }
+.meter { display: flex; gap: 2px; height: 6px; margin-top: 12px; max-width: 320px; }
+.meter span { height: 100%; }
+.meter span:first-child { border-radius: 3px 0 0 3px; }
+.meter span:last-child { border-radius: 0 3px 3px 0; }
+
+.chart-wrap { position: relative; margin-top: 18px; border-top: 1px solid var(--border-default); padding-top: 12px; }
+.chart-wrap svg text { font-family: var(--font-sans); }
+
+/* Rhythm */
+.sec-head { display: flex; align-items: center; gap: 12px; height: 22px; }
+.sec-head h2 { margin: 0; font-size: 13px; font-weight: 650; }
+.legend { display: flex; gap: 14px; font-size: 11px; color: var(--color-muted); }
+.legend .item { display: inline-flex; align-items: center; gap: 5px; }
+
+/* Projects */
+.p-head { display: grid; grid-template-columns: minmax(0, 1fr) 64px 92px; gap: 8px; align-items: center; padding: 0 18px 8px; }
+.p-head h2 { margin: 0; font-size: 13px; font-weight: 650; display: flex; gap: 8px; align-items: baseline; }
+.p-head h2 .n { font-weight: 500; color: var(--color-muted); font-size: 12px; }
+.p-head .col { font-size: 11px; font-weight: 600; color: var(--color-muted); text-align: right; display: inline-flex; justify-content: flex-end; align-items: center; gap: 2px; }
+.p-head .col.on { color: var(--color-primary); }
+.p-head .col svg { width: 12px; height: 12px; }
+.p-row { display: grid; grid-template-columns: minmax(0, 1fr) 64px 92px; gap: 8px; align-items: center; padding: 8px 18px 9px; border-top: 1px solid var(--border-default); width: 100%; text-align: left; }
+.p-row:hover, .p-row.open { background: var(--surface-sunken); }
+.p-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.p-name .nm { font-size: 13px; font-weight: 600; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill { font-size: 10px; font-weight: 600; color: var(--color-secondary); border: 1px solid var(--border-default); border-radius: 999px; padding: 0 6px; line-height: 16px; white-space: nowrap; }
+.p-bar { margin-top: 6px; height: 4px; border-radius: 0 2px 2px 0; background: var(--mark-you); }
+.p-bar.zero { background: none; }
+.p-you { text-align: right; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.p-ag { text-align: right; font-size: 12px; color: var(--color-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.q { color: var(--color-muted); font-weight: 500; }
+.p-more { color: var(--color-secondary); }
+.p-more .nm { font-weight: 500; color: var(--color-secondary); }
+.p-detail { padding: 2px 18px 12px; background: var(--surface-sunken); font-size: 12px; color: var(--color-muted); display: grid; gap: 6px; }
+.p-detail .line { display: flex; gap: 8px; align-items: baseline; }
+.p-detail .line b { color: var(--color-secondary); font-weight: 600; min-width: 52px; }
+.p-detail .v { color: var(--color-primary); }
+
+/* Tooltip */
+.tip { position: absolute; z-index: 5; width: max-content; max-width: 280px; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-2); padding: 8px 10px; font-size: 12px; line-height: 1.45; }
+.tip .d { font-weight: 650; margin-bottom: 3px; }
+.tip .r { display: flex; gap: 6px; align-items: center; color: var(--color-secondary); }
+.tip .r b { color: var(--color-primary); font-weight: 600; }
+.tip .note { margin-top: 4px; color: var(--color-muted); font-size: 11px; }
+.tip .note span { white-space: nowrap; }
+
+/* Drawer */
+.scrim { position: fixed; inset: 0; background: rgb(28 28 34 / 0.18); }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 460px; background: var(--surface-raised); border-left: 1px solid var(--border-default); box-shadow: var(--shadow-2); padding: 18px 22px; overflow: auto; font-size: 12.5px; line-height: 1.5; color: var(--color-secondary); }
+.drawer .dh { display: flex; align-items: center; justify-content: space-between; }
+.drawer h2 { margin: 0; font-size: 15px; font-weight: 650; color: var(--color-primary); }
+.drawer h3 { margin: 18px 0 8px; font-size: 11px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-muted); }
+.drawer ul { margin: 0; padding-left: 16px; display: grid; gap: 6px; }
+.drawer .flag { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; background: var(--color-warning-soft); color: var(--color-primary); margin-bottom: 6px; }
+.drawer .flag svg { color: var(--color-warning); margin-top: 2px; }
+.drawer .host { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; padding: 8px 0; border-top: 1px solid var(--border-default); }
+.drawer .host:first-of-type { border-top: 0; }
+.drawer .host .hn { color: var(--color-primary); font-weight: 600; }
+.drawer .host .ok { color: var(--color-success); }
+.drawer .host .no { color: var(--color-warning); }
+.drawer details { border-top: 1px solid var(--border-default); padding: 10px 0 0; margin-top: 12px; }
+.drawer summary { color: var(--color-primary); font-weight: 600; font-size: 12.5px; }
+.drawer .foot { margin-top: 16px; font-size: 11.5px; color: var(--color-muted); }
+</style>
+</head>
+<body>
+<div class="page" id="app"></div>
+<script>
+"use strict";
+/* ------------------------------------------------------------------ */
+/* Parameters                                                          */
+/* ------------------------------------------------------------------ */
+const qs = new URLSearchParams(location.search);
+const LANG = qs.get("lang") === "uk" ? "uk" : "en";
+const RANGE = ["today", "7d", "30d"].includes(qs.get("range")) ? qs.get("range") : "7d";
+const STATE = qs.get("state") || "default";
+if (qs.get("theme") === "dark") document.documentElement.dataset.theme = "dark";
+document.documentElement.lang = LANG;
+
+/* ------------------------------------------------------------------ */
+/* Copy: every visible string, en and uk                               */
+/* ------------------------------------------------------------------ */
+const COPY = {
+  en: {
+    back: "Board", title: "Activity",
+    today: "Today", d7: "7 days", d30: "30 days",
+    trustOk: "All sources read", trustLow: "Lower bound", trustNone: "Nothing read",
+    how: "How it's counted",
+    you: "You", agents: "Agents", reported: "reported",
+    byMinute: "{v} by the minute", billable: "{v} billable",
+    supervised: "{v} supervised", unattended: "{v} unattended",
+    unknown: "Unknown", noneRead: "No host was read for this range.", connect: "Connect a host",
+    todayX: "Today", hoursUnit: "h", minUnit: "min",
+    rhythm: "Rhythm", lFull: "1 h", lHalf: "½ h", lAlone: "agents without you", lUnread: "not read",
+    splitUnknown: "Split unknown: your time was not read.", tipSplit: "Your time was not read, so the split is uncertain.",
+    projects: "Projects", colYou: "You", colAgents: "Agents", billTag: "billable",
+    more: "+ {n} more",
+    dYou: "You", dAgents: "Agents",
+    tipRep: "{v} reported", tipMin: "{v} by the minute", tipSup: "{v} supervised",
+    tipLow: "{host} not read: at least this.",
+    tipMissing: "A workday reads zero while agents ran: a source is probably missing.",
+    inputs: { one: "{n} input", other: "{n} inputs" }, agentsN: { one: "{n} agent", other: "{n} agents" },
+    hostsLine: "Hosts", pipelinesLine: "Pipelines",
+    drawerTitle: "How this is counted", close: "Close",
+    hRange: "This range", hMethod: "Method", hHosts: "Hosts",
+    flagLow: "{host} was not read on {days}. Your hours there may be higher.",
+    flagMissing: "{day} reads zero on a workday while agents ran. A source is probably missing.",
+    m1: "Each of your inputs opens a 10-minute window; overlapping windows merge. A minute counts once, for the project of the latest input.",
+    m2: "Reported hours weigh each clock hour: under 10 minutes 0, 10–39 half an hour, 40 or more a full hour. The hour goes to the project with the most minutes.",
+    m3: "Only your own input counts. Stage prompts, agent-to-agent messages, notifications and injected text are left out.",
+    m4: "Agent time (≈) runs from each message to the agent's last reply. Inside your time on the same project it is supervised; the rest is unattended. Your time and agent time are never added.",
+    m5: "Days and hours are in Europe/Kyiv.",
+    hostRead: "Read to {when}", hostGap: "Not read {days}", thisHost: "this host",
+    srcBoth: "Request ledger and transcript export", srcExport: "Transcript export",
+    excluded: "Excluded as not your input", surfaces: "What each surface contributes",
+    foot: "Agent time indexed {when}. {n} agents are not in the registry, so their roles are unknown.",
+    exclLine1: "Workstation: stage templates 9, notifications 22, restart notices 7, injected hints 48, agent-to-agent 61, unmarked 5, copies 64",
+    exclLine2: "Stage host: stage templates 6, notifications 4, screenshots 3, agent-to-agent 14, unmarked 9, copies 11",
+    surf1: "Browser, tablet, phone: every request, voice included",
+    surf2: "Terminal: prompts a CLI records as typed by a person, through a host's export",
+    surf3: "Outside Delegatus (editors, Telegram, GitHub review): not seen",
+  },
+  uk: {
+    back: "Дошка", title: "Активність",
+    today: "Сьогодні", d7: "7 днів", d30: "30 днів",
+    trustOk: "Усі джерела прочитано", trustLow: "Нижня межа", trustNone: "Нічого не прочитано",
+    how: "Як рахується",
+    you: "Ви", agents: "Агенти", reported: "у звіті",
+    byMinute: "{v} похвилинно", billable: "{v} оплачуваних",
+    supervised: "{v} під наглядом", unattended: "{v} без нагляду",
+    unknown: "Невідомо", noneRead: "За цей період не прочитано жодного хоста.", connect: "Підʼєднати хост",
+    todayX: "Сьогодні", hoursUnit: "год", minUnit: "хв",
+    rhythm: "Ритм", lFull: "1 год", lHalf: "½ год", lAlone: "агенти без вас", lUnread: "не прочитано",
+    splitUnknown: "Розподіл невідомий: ваш час не прочитано.", tipSplit: "Ваш час не прочитано, тож розподіл неточний.",
+    projects: "Проєкти", colYou: "Ви", colAgents: "Агенти", billTag: "оплачуваний",
+    more: "+ ще {n}",
+    dYou: "Ви", dAgents: "Агенти",
+    tipRep: "{v} у звіті", tipMin: "{v} похвилинно", tipSup: "{v} під наглядом",
+    tipLow: "{host} не прочитано: щонайменше стільки.",
+    tipMissing: "Робочий день показує нуль, хоча агенти працювали: ймовірно, бракує джерела.",
+    inputs: { one: "{n} ввід", few: "{n} вводи", many: "{n} вводів", other: "{n} вводу" },
+    agentsN: { one: "{n} агент", few: "{n} агенти", many: "{n} агентів", other: "{n} агента" },
+    hostsLine: "Хости", pipelinesLine: "Пайплайни",
+    drawerTitle: "Як це рахується", close: "Закрити",
+    hRange: "Цей період", hMethod: "Метод", hHosts: "Хости",
+    flagLow: "{days}: {host} не прочитано, тож ваших годин тоді могло бути більше.",
+    flagMissing: "{day} — робочий день із нулем, хоча агенти працювали. Ймовірно, бракує джерела.",
+    m1: "Кожен ваш ввід відкриває вікно на 10 хвилин; вікна, що перетинаються, зливаються. Хвилина рахується один раз — для проєкту останнього вводу.",
+    m2: "Години у звіті зважують кожну годину за годинником: менше 10 хвилин — 0, 10–39 — пів години, 40 і більше — година. Година дістається проєкту з найбільшою кількістю хвилин.",
+    m3: "Рахується лише ваш власний ввід. Промпти етапів, повідомлення між агентами, сповіщення та вставлений текст не враховуються.",
+    m4: "Час агентів (≈) триває від повідомлення до останньої відповіді агента. У межах вашого часу на тому ж проєкті це нагляд; решта — без нагляду. Ваш час і час агентів ніколи не додаються.",
+    m5: "Дні й години — за Europe/Kyiv.",
+    hostRead: "Прочитано до {when}", hostGap: "Не прочитано {days}", thisHost: "цей хост",
+    srcBoth: "Журнал запитів і експорт транскриптів", srcExport: "Експорт транскриптів",
+    excluded: "Виключено як не ваш ввід", surfaces: "Що дає кожна поверхня",
+    foot: "Час агентів проіндексовано {when}. {n} агентів немає в реєстрі, тож їхні ролі невідомі.",
+    exclLine1: "Workstation: шаблони етапів 9, сповіщення 22, повідомлення після перезапуску 7, вставлені підказки 48, між агентами 61, непозначені 5, копії 64",
+    exclLine2: "Stage host: шаблони етапів 6, сповіщення 4, знімки екрана 3, між агентами 14, непозначені 9, копії 11",
+    surf1: "Браузер, планшет, телефон: кожен запит, разом із голосом",
+    surf2: "Термінал: промпти, які CLI записує як набрані людиною, через експорт хоста",
+    surf3: "Поза Delegatus (редактори, Telegram, рев’ю на GitHub): не видно",
+  },
+};
+const C = COPY[LANG];
+const fmt = (s, vars = {}) => s.replace(/\{(\w+)\}/g, (_, k) => vars[k]);
+const plural = (forms, n) => {
+  const rule = new Intl.PluralRules(LANG).select(n);
+  return fmt(forms[rule] || forms.other, { n });
+};
+
+/* ------------------------------------------------------------------ */
+/* Formatting                                                          */
+/* ------------------------------------------------------------------ */
+const WD = { en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], uk: ["нд", "пн", "вт", "ср", "чт", "пт", "сб"] };
+const WDL = { en: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], uk: ["неділя", "понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота"] };
+const MON = { en: ["Jan", "Feb", "Mar", "Apr", "May", "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec"], uk: ["січ.", "лют.", "бер.", "квіт.", "трав.", "черв.", "лип.", "серп.", "вер.", "жовт.", "лист.", "груд."] };
+const num = (v) => LANG === "uk" ? String(v).replace(".", ",") : String(v);
+const hrs = (h) => `${num(h)} ${C.hoursUnit}`;
+function dur(min) {
+  min = Math.round(min);
+  const h = Math.floor(min / 60), m = min % 60;
+  const H = C.hoursUnit, Mi = LANG === "uk" ? "хв" : "m";
+  if (!h) return `${m} ${Mi}`;
+  if (!m) return `${h} ${H}`;
+  return `${h} ${H} ${m} ${Mi}`;
+}
+/* Agent time is an estimate, so it is never shown to the minute: whole hours
+   from 10 h, five-minute steps below, and a dash for none. */
+function adur(min) {
+  if (min < 2.5) return "–";
+  if (min >= 600) return `${Math.round(min / 60)} ${C.hoursUnit}`;
+  return dur(Math.round(min / 5) * 5);
+}
+/* A split is rounded so its parts add up to the total shown beside it. */
+function splitRound(total, part) {
+  const unit = total >= 600 ? 60 : 5;
+  const t = Math.round(total / unit) * unit, a = Math.min(t, Math.round(part / unit) * unit);
+  return [a, t - a];
+}
+const approx = (min) => min < 2.5 ? `<span class="q">–</span>` : `<span class="q">≈</span> ${adur(min)}`;
+const dayShort = (d) => `${WD[LANG][d.getUTCDay()]} ${d.getUTCDate()}`;
+const dayLong = (d) => LANG === "uk" ? `${WD.uk[d.getUTCDay()]}, ${d.getUTCDate()} ${MON.uk[d.getUTCMonth()]}` : `${WD.en[d.getUTCDay()]} ${d.getUTCDate()} ${MON.en[d.getUTCMonth()]}`;
+const dayMonth = (d) => `${d.getUTCDate()} ${MON[LANG][d.getUTCMonth()]}`;
+
+/* ------------------------------------------------------------------ */
+/* Invented data                                                       */
+/* ------------------------------------------------------------------ */
+/* Projects are invented. The two billable ones stand for client work that
+   runs on the stage host; that host was offline on 22-23 Sept. */
+const PROJECTS = {
+  "orchard-client": { billable: true, stage: true },
+  "harbor-ledger": { billable: true, stage: true },
+  "lantern-api": {}, "tidewater-app": {}, "kestrel-cli": {}, "atlas-docs": {}, "mesa-infra": {},
+  "fennel-site": {}, "bramble-etl": {}, "cobalt-auth": {}, "juniper-notes": {}, "pebble-ui": {}, "sorrel-bot": {},
+};
+const NOW_HOUR = 14 + 10 / 60; // Thu 24 Sept, 14:10
+const TODAY = "2026-09-24";
+
+/* The last seven days, by hand: your input blocks [from, to, project,
+   density] and agent blocks [from, to, density, project] in local hours. */
+const WEEK = {
+  "2026-09-18": {
+    you: [[9.0, 12.8, "orchard-client", 0.85], [14.0, 16.9, "lantern-api", 0.8], [17.1, 17.9, "kestrel-cli", 0.75], [18.0, 18.5, "fennel-site", 0.7], [21.2, 22.0, "atlas-docs", 0.7]],
+    agents: [[0.5, 3.5, 0.85, "tidewater-app"], [9.2, 13.4, 0.9, "orchard-client"], [14.1, 17.5, 0.85, "lantern-api"], [22.0, 24, 0.85, "atlas-docs"]],
+  },
+  "2026-09-19": { you: [], agents: [[1.0, 4.6, 0.9, "harbor-ledger"], [13.0, 13.6, 0.8, "mesa-infra"], [20.0, 21.5, 0.8, "bramble-etl"]] },
+  "2026-09-20": { you: [], agents: [[2.2, 4.4, 0.85, "lantern-api"], [15.0, 16.0, 0.7, "pebble-ui"]] },
+  "2026-09-21": {
+    you: [[8.1, 11.9, "harbor-ledger", 0.9], [11.9, 12.7, "tidewater-app", 0.7], [13.5, 16.2, "orchard-client", 0.9], [16.2, 18.1, "lantern-api", 0.8], [19.4, 19.9, "cobalt-auth", 0.7], [20.6, 21.8, "mesa-infra", 0.75]],
+    agents: [[1.5, 5.0, 0.9, "lantern-api"], [8.3, 12.5, 0.95, "harbor-ledger"], [13.6, 18.6, 0.9, "orchard-client"], [19.0, 21.0, 0.7, "lantern-api"], [22.5, 24, 0.9, "tidewater-app"]],
+  },
+  "2026-09-22": { unread: "stage", you: [], agents: [[0, 2.5, 0.9, "tidewater-app"], [10.0, 11.2, 0.8, "kestrel-cli"]] },
+  "2026-09-23": {
+    unread: "stage",
+    you: [[10.1, 11.7, "kestrel-cli", 0.8], [15.0, 17.2, "lantern-api", 0.85]],
+    agents: [[1.0, 3.0, 0.8, "harbor-ledger"], [10.2, 12.6, 0.9, "kestrel-cli"], [15.1, 19.8, 0.85, "lantern-api"], [21.0, 22.0, 0.6, "sorrel-bot"]],
+  },
+  "2026-09-24": {
+    you: [[8.4, 11.1, "orchard-client", 0.9], [11.1, 12.1, "harbor-ledger", 0.8], [12.3, 12.8, "juniper-notes", 0.7], [13.2, NOW_HOUR, "atlas-docs", 0.75]],
+    agents: [[2.0, 4.0, 0.8, "lantern-api"], [8.5, 12.4, 0.9, "orchard-client"], [13.3, NOW_HOUR, 0.9, "atlas-docs"]],
+  },
+};
+
+/* The 23 days before them, generated from a fixed seed. */
+function rng(seed) { return () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296); }
+function generatedDay(date, r) {
+  const wd = new Date(date + "T00:00:00Z").getUTCDay();
+  const weights = [["orchard-client", 5], ["harbor-ledger", 4], ["lantern-api", 3], ["tidewater-app", 3], ["kestrel-cli", 2], ["atlas-docs", 1], ["mesa-infra", 1], ["cobalt-auth", 1], ["fennel-site", 1]];
+  const pick = () => { let t = r() * weights.reduce((s, w) => s + w[1], 0); for (const [p, w] of weights) { if ((t -= w) < 0) return p; } return weights[0][0]; };
+  const you = [], agents = [];
+  if (date === "2026-09-04") return { you, agents }; // a day off: every host read, nothing happened
+  if (wd >= 1 && wd <= 5) {
+    const a = 8.5 + r() * 1.5, b = a + 2 + r() * 2;
+    const p1 = pick(); you.push([a, b, p1, 0.8 + r() * 0.15]); agents.push([a + 0.2, b + 0.6, 0.85, p1]);
+    const c = 13 + r() * 1.5, d = c + 1.5 + r() * 2.5;
+    const p2 = pick(); you.push([c, d, p2, 0.8 + r() * 0.15]); agents.push([c + 0.1, d + 1.2 * r(), 0.85, p2]);
+    if (r() < 0.45) { const e = 19.5 + r() * 1.5; const p3 = pick(); you.push([e, e + 1 + r() * 1.5, p3, 0.75]); }
+  } else if (r() < 0.35) {
+    const e = 11 + r() * 4; const p = pick(); you.push([e, e + 0.6 + r(), p, 0.7]);
+  }
+  if (r() < 0.55) { const n = 0.5 + r() * 3; agents.push([n, n + 1 + r() * 2.5, 0.85, pick()]); }
+  return { you, agents };
+}
+
+/* Hours of one day: minutes per clock hour, the hour's report weight and
+   owner, agent minutes split into supervised and unattended. This is what
+   the proposed days[].hours field carries; the server computes it with the
+   same method, the page never does. */
+function buildDay(date, spec) {
+  const hours = [];
+  const isToday = date === TODAY;
+  for (let h = 0; h < 24; h++) {
+    const future = isToday && h >= Math.ceil(NOW_HOUR);
+    const byProject = {};
+    let you = 0;
+    for (const [a, b, p, dens] of spec.you) {
+      const o = Math.max(0, Math.min(b, h + 1) - Math.max(a, h));
+      if (o > 0) { const m = o * 60 * dens; you += m; byProject[p] = (byProject[p] || 0) + m; }
+    }
+    you = Math.min(60, you);
+    let agent = 0; const agentBy = {};
+    for (const [a, b, dens, p] of spec.agents) {
+      const o = Math.max(0, Math.min(b, h + 1) - Math.max(a, h));
+      if (o > 0) { const m = o * 60 * dens; agent += m; agentBy[p] = (agentBy[p] || 0) + m; }
+    }
+    agent = Math.min(60, agent);
+    const sup = you > 0 ? Math.min(agent, you * 0.8) : 0;
+    const weight = you >= 40 ? 1 : you >= 10 ? 0.5 : 0;
+    const owner = Object.entries(byProject).sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
+    hours.push({ hour: h, future, humanMin: you, weight, owner, byProject, agentMin: agent, agentBy, supMin: sup, unaMin: agent - sup, unknown: !!spec.unread && !future });
+  }
+  const humanHours = hours.reduce((s, x) => s + x.weight, 0);
+  const humanMin = hours.reduce((s, x) => s + x.humanMin, 0);
+  const supMin = hours.reduce((s, x) => s + x.supMin, 0);
+  const unaMin = hours.reduce((s, x) => s + x.unaMin, 0);
+  const wd = new Date(date + "T00:00:00Z").getUTCDay();
+  const workday = wd >= 1 && wd <= 5;
+  const complete = !spec.unread;
+  const missingSource = workday && humanMin === 0 && (!complete || supMin + unaMin >= 30);
+  return { date, d: new Date(date + "T00:00:00Z"), hours, humanHours, humanMin, supMin, unaMin, wallMin: supMin + unaMin, complete, missingHosts: spec.unread ? ["Stage host"] : [], missingSource, today: date === TODAY, workday };
+}
+
+function dates(n) {
+  const out = []; const end = new Date(TODAY + "T00:00:00Z");
+  for (let i = n - 1; i >= 0; i--) { const d = new Date(end); d.setUTCDate(d.getUTCDate() - i); out.push(d.toISOString().slice(0, 10)); }
+  return out;
+}
+
+function buildReport(range) {
+  const r = rng(20260924);
+  const all = dates(30).map((date) => [date, WEEK[date] || generatedDay(date, r)]);
+  const n = range === "today" ? 1 : range === "7d" ? 7 : 30;
+  const days = all.slice(-n).map(([date, spec]) => buildDay(date, spec));
+  const projects = {};
+  for (const day of days) for (const h of day.hours) {
+    if (h.weight && h.owner) (projects[h.owner] ||= { you: 0, youMin: 0, sup: 0, una: 0, inputs: 0 }).you += h.weight;
+    for (const [p, m] of Object.entries(h.byProject)) { const row = (projects[p] ||= { you: 0, youMin: 0, sup: 0, una: 0, inputs: 0 }); row.youMin += m; row.inputs += Math.round(m / 7); }
+    const agentTotal = Object.values(h.agentBy).reduce((s, m) => s + m, 0) || 1;
+    for (const [p, m] of Object.entries(h.agentBy)) {
+      const row = (projects[p] ||= { you: 0, youMin: 0, sup: 0, una: 0, inputs: 0 });
+      row.sup += h.supMin * (m / agentTotal); row.una += h.unaMin * (m / agentTotal);
+    }
+  }
+  const unreadDays = days.filter((d) => !d.complete);
+  const rows = Object.entries(projects).map(([name, v]) => ({
+    name, ...v, billable: !!PROJECTS[name]?.billable,
+    lowerBound: !!PROJECTS[name]?.stage && unreadDays.length > 0,
+    agents: v.sup + v.una,
+  })).sort((a, b) => b.you - a.you || b.agents - a.agents);
+  const totals = {
+    humanHours: days.reduce((s, d) => s + d.humanHours, 0),
+    humanMin: days.reduce((s, d) => s + d.humanMin, 0),
+    billable: rows.filter((x) => x.billable).reduce((s, x) => s + x.you, 0),
+    supMin: days.reduce((s, d) => s + d.supMin, 0),
+    unaMin: days.reduce((s, d) => s + d.unaMin, 0),
+  };
+  totals.wallMin = totals.supMin + totals.unaMin;
+  return { range, days, projects: rows, totals, unreadDays, missingDays: days.filter((d) => d.missingSource) };
+}
+
+let R = buildReport(RANGE);
+const EMPTY = STATE === "empty";
+if (EMPTY) {
+  /* Nothing read for the range: no host was connected, agents still indexed. */
+  for (const d of R.days) { d.complete = false; d.missingHosts = ["This host"]; for (const h of d.hours) { h.unknown = !h.future; h.weight = 0; h.humanMin = 0; h.owner = null; h.supMin = 0; h.unaMin = h.agentMin; } d.humanHours = 0; d.humanMin = 0; d.unaMin += d.supMin; d.supMin = 0; }
+  R.totals = { ...R.totals, humanHours: 0, humanMin: 0, billable: 0, unaMin: R.totals.unaMin + R.totals.supMin, supMin: 0 };
+  R.projects = R.projects.map((p) => ({ ...p, you: 0, una: p.una + p.sup, sup: 0, unknown: true })).sort((a, b) => b.agents - a.agents);
+}
+const LOWER = !EMPTY && R.unreadDays.length > 0;
+
+/* ------------------------------------------------------------------ */
+/* Icons (lucide paths)                                                */
+/* ------------------------------------------------------------------ */
+const ICON = {
+  back: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+};
+const icon = (k, cls = "i") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[k]}</svg>`;
+
+/* ------------------------------------------------------------------ */
+/* Header                                                              */
+/* ------------------------------------------------------------------ */
+function rangeLabel() {
+  const d = R.days;
+  if (RANGE === "today") return LANG === "uk" ? `${WDL.uk[d[0].d.getUTCDay()]}, ${dayMonth(d[0].d)}` : `${WDL.en[d[0].d.getUTCDay()]}, ${dayMonth(d[0].d)}`;
+  const a = d[0].d, b = d.at(-1).d;
+  if (a.getUTCMonth() === b.getUTCMonth()) return `${a.getUTCDate()}–${dayMonth(b)}`;
+  return `${dayMonth(a)} – ${dayMonth(b)}`;
+}
+function header() {
+  const trust = EMPTY
+    ? `<button class="trust warn" data-trust="none">${icon("alert")}${C.trustNone}</button>`
+    : LOWER || R.missingDays.length
+      ? `<button class="trust warn" data-trust="lower">${icon("alert")}${C.trustLow}</button>`
+      : `<button class="trust ok" data-trust="ok">${icon("check")}${C.trustOk}</button>`;
+  const seg = [["today", C.today], ["7d", C.d7], ["30d", C.d30]].map(([k, l]) => `<button aria-pressed="${k === RANGE}">${l}</button>`).join("");
+  return `<header class="top">
+    <button class="btn outline">${icon("back")}${C.back}</button>
+    <div class="title"><h1>${C.title}</h1><span class="when">${rangeLabel()}</span></div>
+    <div class="spacer"></div>
+    <div class="seg" role="tablist">${seg}</div>
+    ${trust}
+    <button class="btn">${icon("info")}${C.how}</button>
+  </header>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Figures: the answer to questions 1 and 2                            */
+/* ------------------------------------------------------------------ */
+function figures() {
+  const t = R.totals;
+  const q = LOWER ? `<span class="q">≥</span>` : "";
+  const you = EMPTY
+    ? `<div class="fig-value"><span class="v unknown">${C.unknown}</span></div>
+       <div class="fig-sub"><span>${C.noneRead}</span><span class="link item">${icon("plug")}${C.connect}</span></div>`
+    : `<div class="fig-value"><span class="v">${q}${hrs(t.humanHours)}</span><span class="unit">${C.reported}</span></div>
+       <div class="fig-sub"><span>${fmt(C.byMinute, { v: (LOWER ? "≥ " : "") + dur(t.humanMin) })}</span><span>·</span><span class="k">${fmt(C.billable, { v: (LOWER ? "≥ " : "") + hrs(t.billable) })}</span></div>`;
+  const supShare = t.wallMin ? t.supMin / t.wallMin : 0;
+  const [supShown, unaShown] = splitRound(t.wallMin, t.supMin);
+  return `<div class="figures">
+    <div data-figure="you">
+      <div class="fig-label"><span class="sw you"></span>${C.you}</div>
+      ${you}
+    </div>
+    <div data-figure="agents">
+      <div class="fig-label"><span class="sw sup"></span>${C.agents}</div>
+      <div class="fig-value"><span class="v agents"><span class="q">≈</span>${adur(t.wallMin)}</span></div>
+      ${EMPTY ? `<div class="meter" aria-hidden="true"><span style="flex:1;border-radius:3px;background:var(--mark-supervised)"></span></div>
+      <div class="fig-sub" style="margin-top:7px"><span>${C.splitUnknown}</span></div>` : `<div class="meter" aria-hidden="true"><span style="width:${supShare * 100}%;background:var(--mark-supervised)"></span><span style="flex:1;background:var(--mark-unattended)"></span></div>
+      <div class="fig-sub" style="margin-top:7px">
+        <span class="item"><span class="sw sup"></span>${fmt(C.supervised, { v: (LOWER ? "≥ " : "") + adur(supShown) })}</span>
+        <span class="item"><span class="sw una"></span>${fmt(C.unattended, { v: (LOWER ? "≤ " : "") + adur(unaShown) })}</span>
+      </div>`}
+    </div>
+  </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* The day chart: your reported hours beside agent time, per day       */
+/* ------------------------------------------------------------------ */
+function dayChart(width) {
+  const today = RANGE === "today";
+  const cols = today ? R.days[0].hours.map((h) => ({ key: h.hour, you: h.humanMin, sup: h.supMin, una: h.unaMin, future: h.future, unknown: h.unknown, day: R.days[0], hour: h }))
+    : R.days.map((d) => ({ key: d.date, you: d.humanHours, sup: d.supMin / 60, una: d.unaMin / 60, day: d }));
+  const H = today ? 300 : RANGE === "30d" ? 176 : 228;
+  const top = 20, axisW = today ? 50 : 40, bottom = 26;
+  const plotW = width - axisW;
+  const max = today ? 60 : Math.max(4, ...cols.map((c) => Math.max(c.you, c.sup + c.una)));
+  const step = today ? 30 : max > 10 ? 4 : 2;
+  const yMax = today ? 60 : Math.ceil(max / step) * step;
+  const y = (v) => top + H - (v / yMax) * H;
+  const slot = plotW / cols.length;
+  const bw = Math.min(22, Math.floor((slot - (RANGE === "30d" ? 6 : 10)) / 2));
+  const gap = RANGE === "30d" ? 2 : 3;
+  let s = `<svg width="${width}" height="${top + H + bottom}" viewBox="0 0 ${width} ${top + H + bottom}" role="img">`;
+  for (let v = 0; v <= yMax; v += step) {
+    const yy = Math.round(y(v)) + 0.5;
+    s += `<line x1="${axisW}" x2="${width}" y1="${yy}" y2="${yy}" stroke="var(--border-default)" stroke-width="1"/>`;
+    s += `<text x="${axisW - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="var(--color-muted)" class="tab">${v}${v === yMax ? ` ${today ? C.minUnit : C.hoursUnit}` : ""}</text>`;
+  }
+  const rad = 3;
+  const col = (x, v0, v1, fill) => {
+    const y0 = y(v0), y1 = y(v1); const h = y0 - y1; if (h < 0.5) return "";
+    const r = Math.min(rad, h);
+    return `<path d="M${x} ${y0} V${y1 + r} Q${x} ${y1} ${x + r} ${y1} H${x + bw - r} Q${x + bw} ${y1} ${x + bw} ${y1 + r} V${y0} Z" fill="${fill}"/>`;
+  };
+  const flat = (x, v0, v1, fill) => { const y0 = y(v0), y1 = y(v1); if (y0 - y1 < 0.5) return ""; return `<rect x="${x}" y="${y1}" width="${bw}" height="${y0 - y1}" fill="${fill}"/>`; };
+  cols.forEach((c, i) => {
+    const cx = axisW + slot * i + slot / 2;
+    const xa = cx - bw - gap / 2, xb = cx + gap / 2;
+    if (today && c.key % 3 === 0) s += `<text x="${axisW + slot * i}" y="${top + H + 17}" font-size="11" fill="var(--color-muted)" class="tab">${String(c.key).padStart(2, "0")}</text>`;
+    if (c.future) return;
+    /* You */
+    if (!EMPTY && c.you > 0) s += col(xa, 0, c.you, "var(--mark-you)");
+    /* Agents: supervised at the base, unattended on top, 2px surface gap between. */
+    const supTop = c.sup, unaTop = c.sup + c.una;
+    if (EMPTY) { if (unaTop > 0.01) s += col(xb, 0, unaTop, "var(--mark-supervised)"); }
+    else if (c.una > 0.01 && c.sup > 0.01) {
+      s += flat(xb, 0, supTop, "var(--mark-supervised)");
+      const gapV = (2 / H) * yMax;
+      s += col(xb, supTop + gapV, unaTop + gapV, "var(--mark-unattended)");
+    } else if (c.sup > 0.01) s += col(xb, 0, supTop, "var(--mark-supervised)");
+    else if (c.una > 0.01) s += col(xb, 0, unaTop, "var(--mark-unattended)");
+    /* Your value on the cap: the figure the report uses. Only for days. */
+    if (!today) {
+      const d = c.day;
+      const label = EMPTY ? "?" : d.missingSource ? "?" : c.you > 0 ? (d.complete ? "" : "≥ ") + num(c.you) : "0";
+      const fill = !EMPTY && d.missingSource ? "var(--color-warning)" : c.you > 0 ? "var(--color-primary)" : "var(--color-muted)";
+      if (RANGE === "7d") s += `<text x="${xa + bw / 2}" y="${y(c.you) - 6}" text-anchor="middle" font-size="${label === "?" ? 14 : 12}" font-weight="${c.you > 0 || (label === "?" && !EMPTY) ? 650 : 500}" fill="${fill}" class="tab">${label}</text>`;
+      else if (d.missingSource || (!d.complete && !EMPTY)) s += `<text x="${xa + bw / 2}" y="${y(c.you) - 5}" text-anchor="middle" font-size="10" font-weight="600" fill="${d.missingSource ? "var(--color-warning)" : "var(--color-muted)"}">${d.missingSource ? "?" : "≥"}</text>`;
+    } else if (c.unknown && !c.future) {
+      /* Today, an hour a host did not read: a hatched stub in your slot. */
+    }
+    /* X labels */
+    if (!today) {
+      const d = c.day; const weekend = !d.workday;
+      let text = null;
+      if (RANGE === "7d") text = d.today ? C.todayX : dayShort(d.d);
+      else if (d.today) text = C.todayX;
+      else if (d.d.getUTCDay() === 1 && (R.days.length - 1 - i) > 3) text = dayMonth(d.d);
+      if (text) s += `<text x="${RANGE === "7d" ? cx : d.today ? cx + bw + gap : cx - bw}" y="${top + H + 18}" text-anchor="${RANGE === "7d" ? "middle" : d.today ? "end" : "start"}" font-size="${RANGE === "7d" ? 12 : 11}" font-weight="${d.today ? 650 : 500}" fill="${d.today ? "var(--color-primary)" : weekend ? "var(--color-muted)" : "var(--color-secondary)"}">${text}</text>`;
+      if (RANGE === "30d" && !text) s += `<line x1="${cx}" x2="${cx}" y1="${top + H + 4}" y2="${top + H + 7}" stroke="var(--border-strong)"/>`;
+    }
+  });
+  if (today) {
+    const xNow = axisW + slot * NOW_HOUR;
+    s += `<line x1="${xNow}" x2="${xNow}" y1="${top - 4}" y2="${top + H}" stroke="var(--color-muted)" stroke-width="1" opacity="0.6"/>`;
+    s += `<text x="${axisW + slot * 24}" y="${top + H + 17}" text-anchor="end" font-size="11" fill="var(--color-muted)">24</text>`;
+  }
+  s += `</svg>`;
+  return { svg: s, geometry: { axisW, slot, bw, gap, top, H, y } };
+}
+
+/* ------------------------------------------------------------------ */
+/* Rhythm: a day x hour grid, one cell per clock hour                  */
+/* ------------------------------------------------------------------ */
+function rhythm(width) {
+  const labelW = 60;
+  const gridW = width - labelW;
+  const cg = 2;
+  const cw = (gridW - cg * 23) / 24;
+  const dense = R.days.length > 7;
+  const lane = dense ? 7 : 18, rowGap = dense ? 3 : 6;
+  const height = R.days.length * (lane + rowGap) - rowGap + 24;
+  let s = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img">
+    <defs>
+      <pattern id="hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(135)"><rect width="4" height="4" fill="var(--mark-track)"/><line x1="0" y1="0" x2="0" y2="4" stroke="var(--mark-hatch)" stroke-width="1.2"/></pattern>
+      <pattern id="hatch-agents" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(135)"><rect width="4" height="4" fill="var(--mark-unattended)"/><line x1="0" y1="0" x2="0" y2="4" stroke="var(--surface-card)" stroke-width="1.2" opacity="0.7"/></pattern>
+    </defs>`;
+  R.days.forEach((d, r) => {
+    const y0 = r * (lane + rowGap);
+    const showLabel = !dense || d.today || d.d.getUTCDay() === 1;
+    if (showLabel) {
+      const lbl = d.today ? C.todayX : dense ? dayMonth(d.d) : dayShort(d.d);
+      s += `<text x="0" y="${y0 + lane / 2 + 4}" font-size="${dense ? 10.5 : 12}" font-weight="${d.today ? 650 : 500}" fill="${d.today ? "var(--color-primary)" : d.workday ? "var(--color-secondary)" : "var(--color-muted)"}">${lbl}</text>`;
+    }
+    d.hours.forEach((h, i) => {
+      if (h.future) return;
+      const x = labelW + i * (cw + cg);
+      /* One cell per clock hour: your weight wins; otherwise agents working
+         without you; otherwise a hatch where a host was not read. */
+      const alone = h.agentMin >= 10;
+      const fill = h.weight === 1 ? "var(--mark-you)" : h.weight === 0.5 ? "var(--mark-you-half)"
+        : alone ? (h.unknown ? "url(#hatch-agents)" : "var(--mark-unattended)")
+        : h.unknown ? "url(#hatch)" : "var(--mark-track)";
+      s += `<rect x="${x}" y="${y0}" width="${cw}" height="${lane}" rx="${dense ? 1.5 : 3}" fill="${fill}"/>`;
+    });
+  });
+  const ay = height - 6;
+  for (const tick of [0, 6, 12, 18, 24]) {
+    const x = labelW + tick * (cw + cg) - (tick === 24 ? cg : 0);
+    s += `<text x="${x}" y="${ay}" text-anchor="${tick === 0 ? "start" : tick === 24 ? "end" : "middle"}" font-size="11" fill="var(--color-muted)" class="tab">${String(tick).padStart(2, "0")}</text>`;
+  }
+  s += `</svg>`;
+  return s;
+}
+
+/* ------------------------------------------------------------------ */
+/* Projects                                                            */
+/* ------------------------------------------------------------------ */
+function projectsCard(budget) {
+  const rows = R.projects;
+  const fit = rows.length <= budget ? rows.length : budget - 1;
+  const shown = rows.slice(0, fit), rest = rows.slice(fit);
+  const max = Math.max(...rows.map((p) => p.you), 0.5);
+  const openName = STATE === "expand" ? shown[0].name : null;
+  const youCell = (p) => EMPTY || p.unknown ? `<span class="q">?</span>` : p.you ? `${p.lowerBound ? '<span class="q">≥ </span>' : ""}${hrs(p.you)}` : `<span class="q">0</span>`;
+  let html = `<div class="p-head"><h2>${C.projects}<span class="n">${rows.length}</span></h2>${EMPTY ? `<span class="col">${C.colYou}</span><span class="col on">${C.colAgents}${icon("down")}</span>` : `<span class="col on">${C.colYou}${icon("down")}</span><span class="col">${C.colAgents}</span>`}</div>`;
+  for (const p of shown) {
+    html += `<div class="p-row${p.name === openName ? " open" : ""}" role="button" aria-expanded="${p.name === openName}">
+      <div style="min-width:0"><div class="p-name"><span class="nm">${p.name}</span>${p.billable ? `<span class="pill">${C.billTag}</span>` : ""}</div>
+      <div class="p-bar${p.you ? "" : " zero"}" style="width:${(p.you / max) * 100}%"></div></div>
+      <div class="p-you">${youCell(p)}</div>
+      <div class="p-ag">${approx(p.agents)}</div>
+    </div>`;
+    if (p.name === openName) {
+      const [ps, pu] = splitRound(p.agents, p.sup);
+      html += `<div class="p-detail">
+        <div class="line"><b>${C.dYou}</b><span><span class="v">${fmt(C.tipMin, { v: (p.lowerBound ? "≥ " : "") + dur(p.youMin) })}</span> · ${plural(C.inputs, p.inputs)}</span></div>
+        <div class="line"><b>${C.dAgents}</b><span><span class="v">${fmt(C.supervised, { v: adur(ps) })}</span> · ${fmt(C.unattended, { v: adur(pu) })} · ${plural(C.agentsN, 7)}</span></div>
+        <div class="line"><b>${C.hostsLine}</b><span>Stage host ${dur(p.youMin * 0.9)} · Workstation ${dur(p.youMin * 0.1)}</span></div>
+        <div class="line"><b>${C.pipelinesLine}</b><span>3 · ≈ ${adur(p.agents * 0.6)}</span></div>
+      </div>`;
+    }
+  }
+  if (rest.length) {
+    const you = rest.reduce((s, p) => s + p.you, 0), ag = rest.reduce((s, p) => s + p.agents, 0);
+    html += `<div class="p-row p-more" role="button"><div class="p-name"><span class="nm">${fmt(C.more, { n: rest.length })}</span></div><div class="p-you">${EMPTY ? '<span class="q">?</span>' : you ? hrs(you) : '<span class="q">0</span>'}</div><div class="p-ag">${approx(ag)}</div></div>`;
+  }
+  return html;
+}
+
+/* ------------------------------------------------------------------ */
+/* Drawer: everything about trust and method                           */
+/* ------------------------------------------------------------------ */
+function drawer() {
+  const unread = R.unreadDays;
+  const daysTxt = unread.length ? (unread.length === 1 ? dayMonth(unread[0].d) : `${unread[0].d.getUTCDate()}–${dayMonth(unread.at(-1).d)}`) : "";
+  const flags = [];
+  if (unread.length) flags.push(`<div class="flag">${icon("alert")}<span>${fmt(C.flagLow, { host: "Stage host", days: daysTxt })}</span></div>`);
+  for (const d of R.missingDays) flags.push(`<div class="flag">${icon("alert")}<span>${fmt(C.flagMissing, { day: dayLong(d.d) })}</span></div>`);
+  return `<div class="scrim"></div><aside class="drawer" role="dialog" aria-label="${C.drawerTitle}">
+    <div class="dh"><h2>${C.drawerTitle}</h2><button class="btn" aria-label="${C.close}">${icon("x")}</button></div>
+    <h3>${C.hRange}</h3>
+    ${flags.join("")}
+    <div class="host"><span class="ok">${icon("check")}</span><div><span class="hn">Workstation</span> · ${C.thisHost}<br>${C.srcBoth} · ${fmt(C.hostRead, { when: LANG === "uk" ? "24 вер., 14:05" : "24 Sept, 14:05" })}</div></div>
+    <div class="host"><span class="no">${icon("alert")}</span><div><span class="hn">Stage host</span><br>${C.srcExport} · ${fmt(C.hostGap, { days: daysTxt })}</div></div>
+    <h3>${C.hMethod}</h3>
+    <ul><li>${C.m1}</li><li>${C.m2}</li><li>${C.m3}</li><li>${C.m4}</li><li>${C.m5}</li></ul>
+    <details><summary>${C.excluded}</summary><ul style="margin-top:8px"><li>${C.exclLine1}</li><li>${C.exclLine2}</li></ul></details>
+    <details><summary>${C.surfaces}</summary><ul style="margin-top:8px"><li>${C.surf1}</li><li>${C.surf2}</li><li>${C.surf3}</li></ul></details>
+    <div class="foot">${fmt(C.foot, { when: LANG === "uk" ? "24 вер., 13:41" : "24 Sept, 13:41", n: 13 })}</div>
+  </aside>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Page                                                                */
+/* ------------------------------------------------------------------ */
+function render() {
+  const app = document.getElementById("app");
+  const showRhythm = RANGE !== "today";
+  app.innerHTML = `${header()}
+    <div class="grid${showRhythm ? "" : " no-rhythm"}">
+      <section class="card main" data-card="main">${figures()}<div class="chart-wrap" id="chart"></div></section>
+      ${showRhythm ? `<section class="card rhythm" data-card="rhythm"><div class="sec-head"><h2>${C.rhythm}</h2><div class="spacer"></div>
+        <div class="legend"><span class="item"><span class="sw you"></span>${C.lFull}</span><span class="item"><span class="sw you-half"></span>${C.lHalf}</span><span class="item"><span class="sw una"></span>${C.lAlone}</span><span class="item"><span class="sw hatch"></span>${C.lUnread}</span></div></div>
+        <div id="rhythm" style="margin-top:10px"></div></section>` : ""}
+      <aside class="card projects" data-card="projects"><div class="inner" id="plist"></div></aside>
+    </div>${STATE === "drawer" ? drawer() : ""}`;
+  const chartEl = document.getElementById("chart");
+  const chart = dayChart(chartEl.clientWidth);
+  chartEl.innerHTML = chart.svg;
+  if (showRhythm) { const el = document.getElementById("rhythm"); el.innerHTML = rhythm(el.clientWidth); }
+  /* Rows fill the projects column; what does not fit folds into "+ N more". */
+  const plist = document.getElementById("plist");
+  let budget = R.projects.length;
+  plist.innerHTML = projectsCard(budget);
+  while (budget > 3 && plist.scrollHeight > plist.clientHeight) plist.innerHTML = projectsCard(--budget);
+  if (STATE === "hover" && RANGE === "7d") {
+    const i = R.days.findIndex((d) => d.date === "2026-09-21");
+    const d = R.days[i];
+    const g = chart.geometry;
+    const cx = g.axisW + g.slot * i + g.slot / 2;
+    const tip = document.createElement("div");
+    tip.className = "tip";
+    tip.innerHTML = `<div class="d">${dayLong(d.d)}</div>
+      <div class="r"><span class="sw you"></span><b>${hrs(d.humanHours)}</b> ${C.reported} · ${fmt(C.tipMin, { v: dur(d.humanMin) })}</div>
+      <div class="r"><span class="sw sup"></span><b>≈ ${adur(d.wallMin)}</b> · ${fmt(C.tipSup, { v: adur(d.supMin) })}</div>
+      <div class="note">${Object.entries(d.hours.reduce((m, h) => (h.weight && h.owner ? (m[h.owner] = (m[h.owner] || 0) + h.weight, m) : m), {})).sort((a, b) => b[1] - a[1]).map(([p, v]) => `<span>${p} ${hrs(v)}</span>`).join(" · ")}</div>`;
+    chartEl.appendChild(tip);
+    tip.style.left = `${cx + 26}px`;
+    tip.style.top = `${g.y(d.humanHours) + 6}px`;
+  }
+  measure();
+}
+
+/* Self-check, read back through --dump-dom: overflow and overlap. */
+function measure() {
+  const out = { viewport: [innerWidth, innerHeight], docHeight: document.documentElement.scrollHeight, scrollWidth: document.documentElement.scrollWidth, overflow: [] };
+  for (const el of document.querySelectorAll(".nm, .fig-value, .fig-sub, .p-you, .p-ag, .trust, .btn, .seg button, .legend .item")) {
+    if (el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflow !== "visible") out.overflow.push(el.className + ":" + el.textContent.trim().slice(0, 40));
+  }
+  const cards = [...document.querySelectorAll("[data-card]")].map((c) => { const r = c.getBoundingClientRect(); return [c.dataset.card, Math.round(r.top), Math.round(r.bottom), Math.round(r.left), Math.round(r.right)]; });
+  out.cards = cards;
+  out.words = document.getElementById("app").innerText.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+  document.body.dataset.measure = JSON.stringify(out);
+}
+render();
+</script>
+</body>
+</html>
