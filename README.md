@@ -7,50 +7,58 @@
 
 # Delegatus
 
-Delegatus is a local web app for running Claude Code and Codex agents
-and reading what they do. It shows every agent conversation on your machine
-as a readable chat, and lets you give agents work through a task board and
-pipelines, from a desktop browser or your phone.
+Delegatus is a local web app for running Claude Code, Codex and GitHub
+Copilot agents and reading what they do. It shows every agent conversation on
+your machine as a readable chat, and lets you give agents work through a task
+board and pipelines, from a desktop browser or your phone.
 
-![A project board: tasks by status, the agents working on each, a running pipeline, and account limits in the sidebar](docs/media/readme/board.svg)
+![A project board: tasks by status with their icons, the agents working on each, a running pipeline's stages, a card that says why it needs you, and account limits in the sidebar](docs/media/readme/board.svg)
 
 ## What you can do
 
 - **Read any agent as a chat.** Claude Code sessions and their subagents,
-  Codex rollouts and background shell tasks, with tool calls shown as cards:
-  diffs for edits, commands with their output, and the final answer. It
-  follows new output live, and every conversation has its own link.
+  Codex rollouts and background shell tasks, and Copilot sessions, with tool
+  calls shown as cards: diffs for edits, commands with their output, the
+  images an agent looked at, and the final answer. It follows new output
+  live, and every conversation has its own link.
 - **Keep work on a board.** Each project has a task board with Inbox,
-  Assigned, Blocked and Done columns. A task card shows the agents working on
-  it and whether they are working, waiting or done. An Overview board
+  Assigned, Blocked and Done columns. A task card carries an icon, the agents
+  working on it, and each pipeline's stages with its pull request. A card
+  that needs you says why, and one click clears it. An Overview board
   collects what is running across all projects.
-- **Start and talk to agents.** Launch a Claude or Codex agent from a task or
-  the Create button, pick the model and reasoning effort, and send messages,
-  images and files from the composer. Interrupt, resume or stop an agent from
-  its window.
+- **Start and talk to agents.** Launch a Claude, Codex or Copilot agent from a
+  task or the Create button, pick the model and reasoning effort, and send
+  messages, images and files from the composer. Interrupt, resume or stop an
+  agent from its window.
 - **Run pipelines.** A pipeline runs a chain of agent stages (build, review,
   verify, …) in its own git worktree, and sends work back to the builder when
   a reviewer fails it.
 - **Hand a project to an orchestrator.** One agent per project can hold the
   orchestrator seat: you tell it what to ship, and it opens pipelines, spawns
   builders and reviewers, and reports back.
-- **Switch accounts before a limit stops you.** Add more than one Claude or
-  Codex account, see each one's five-hour and weekly usage, and change which
-  account an agent runs on.
-- **Use it from your phone.** Over your Tailscale network, with a layout made
-  for a 390 px screen.
+- **Switch accounts before a limit stops you.** Add more than one Claude,
+  Codex or Copilot account, see each one's usage (five-hour and weekly, or
+  Copilot's monthly allowance), and change which account an agent runs on.
+- **Use it from your phone.** Over your Tailscale network: the same board as
+  swipeable columns, tasks, pipelines and conversations on screens of their
+  own, and Back that returns to where you came from.
 - **Talk instead of typing.** Dictate messages, have answers read aloud, or
   hold a live voice conversation with a Codex agent.
 - **Let agents drive it.** The bundled MCP server gives agents the same board,
   tasks, pipelines and conversations you use.
+- **Give agents a Telegram bot.** Connect a bot token from BotFather in the
+  Telegram panel and choose which chats agents may post to; agents post and
+  read what the bot receives through the MCP server.
 - **English or Ukrainian** interface.
 
 <a id="run"></a>
 
 ## Quick start
 
-You need [Bun](https://bun.sh) 1.4 or newer, and the Claude Code and/or Codex
-CLI installed and logged in. Then:
+You need [Bun](https://bun.sh) 1.4 or newer, and at least one of the Claude
+Code, Codex and GitHub Copilot CLIs installed. Claude Code and Codex use the
+login they already have; a Copilot account signs in from Delegatus's Accounts
+panel. Then:
 
 ```bash
 bunx delegatus-cli
@@ -62,9 +70,10 @@ Viewer before; the old `agent-log-viewer` command still works and prints a
 one-line notice.
 
 This serves Delegatus on `http://127.0.0.1:8898` and opens it in your
-browser. It reads the transcripts already in `~/.claude` and `~/.codex`, so
-existing sessions show up at once. The same command also starts the runtime
-host that launches and supervises agents. Stop both with Ctrl-C.
+browser. It reads the transcripts already in `~/.claude`, `~/.codex` and
+`~/.copilot`, so existing sessions show up at once. The same command also
+starts the runtime host that launches and supervises agents. Stop both with
+Ctrl-C.
 
 Useful options:
 
@@ -100,13 +109,20 @@ see each call as a card.
 A card reads *working* while the agent is in the middle of a turn and
 *done* once its final answer lands, so you can tell a busy agent from one
 waiting for you. When an agent stops on a question, the question appears with
-its options and your answer goes straight back to it.
+its options and your answer goes straight back to it. An image the agent
+looked at, such as a screenshot or a file it read, shows under its tool call
+as a thumbnail you can open full size.
 
 ## How agents are driven
 
 **Tasks.** A task is a card on its project's board. Add one from the board,
 assign an agent to it with **+ Agent**, and move it between columns as the
-work goes. Agents can create and update tasks through the MCP server too.
+work goes. Each card has an icon, which you pick or which its title
+suggests. When something on a card needs you, its foot says what: the
+question an agent asked, a plan to approve, a permission prompt, a message
+that was not delivered, or a stage waiting on your decision. ✓ clears it
+until something new asks. Agents can create and update tasks through the MCP
+server too.
 
 **Pipelines.** A pipeline takes a task and a specification and runs up to
 eight stages in a dedicated worktree and branch. Each stage has a role
@@ -117,8 +133,12 @@ a verdict: pass moves to the next stage, fail follows the stage's fail edge
 stops and asks you. A "needs decision" that carries findings on a stage with
 a fail edge is routed like a fail, so the findings reach the stage that can
 fix them; only a decision without findings, or on a stage without a fail
-edge, parks the pipeline for you. The pipeline card on the board shows where it is; open
-it to see the stage graph and each stage's conversation side by side.
+edge, parks the pipeline for you. On its task's card a pipeline is one row:
+its stages as a chain, its state, and its pull request with the issues that
+pull request closes. When it waits on you, the answer is on the row: Skip or
+Retry the stage, or, once the review budget is spent, Close the lane or allow
+One more round. Open it to see the stage graph and each stage's conversation
+side by side.
 
 ![A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation](docs/media/readme/pipeline.svg)
 
@@ -135,10 +155,11 @@ editable. [docs/orchestrator.md](docs/orchestrator.md) walks through it.
 
 ## Accounts and limits
 
-The sidebar shows the active Claude and Codex account with the share of each
-usage window left and when it resets. Open an engine's account list to add an
-account, refresh its reading, or make another account active. Each account
-keeps its own login, and agents launched afterwards use the active one.
+The sidebar shows the active Claude, Codex and Copilot account with the
+share of each usage window left and when it resets. Open an engine's account
+list to add an account, refresh its reading, or make another account active.
+Each account keeps its own login, and agents launched afterwards use the
+active one.
 
 ![Claude accounts with their five-hour, weekly and per-model limits](docs/media/readme/accounts.svg)
 
@@ -172,12 +193,18 @@ this computer too, needs the link once.
 Publishing needs Tailscale's operator right. If the button reports that it
 is missing, run `sudo tailscale set --operator=$USER` once and press it again.
 
-<img src="docs/media/readme/phone-conversation.svg" width="300" alt="A conversation on a 390 px phone screen, its test run expanded">
+<img src="docs/media/readme/phone-board.svg" width="300" alt="A project's board on a 390 px phone: the four status columns as tabs, with the card that needs you pinned first"> <img src="docs/media/readme/phone-conversation.svg" width="300" alt="A conversation on a 390 px phone screen, its test run expanded">
 
-On a phone Delegatus opens a layout of its own: a project list, the board,
-and one conversation at a time with the composer at the bottom. Accounts and
-limits are in the board's ⋯ menu. Push notifications, once enabled, tell
-you when an agent asks you a question.
+On a phone Delegatus opens a layout of its own. The board is the desktop's
+four columns as tabs you swipe between, with the cards that need you pinned
+first; a long press on a card moves, hides or dismisses it. The Overview is
+the same board across every project. A task, a pipeline and a conversation
+each open full screen: a pipeline as its list of stages, with a decision
+answered inside the stage it stopped on, and a conversation with the
+composer at the bottom. Back returns to the screen you came from. Accounts
+and limits are in the board's ⋯ menu. Push notifications, once enabled, tell
+you when an agent asks you a question, and an agent that asks for your
+attention shows a quiet notice instead of moving your screen.
 
 Anyone who has the tailnet URL can read every transcript and start commands
 through Delegatus, so treat it as a secret.
@@ -314,6 +341,12 @@ APIs refuse paths outside the known transcript roots.
 For a pinned deployment the repository ships a `Dockerfile` and
 `docker-compose.yml`; a runtime host owns releases and the listener, and
 `scripts/rebuild.sh` deploys a revision. See [docs/docker.md](docs/docker.md).
+
+Docker is the only way to run Delegatus as a service; the systemd unit is
+gone. When `delegatus` finds a retired unit file in `~/.config/systemd/user`,
+it prints how to stop and remove it, and
+[docs/docker.md](docs/docker.md#moving-off-the-systemd-install) has the same
+steps.
 
 ## More
 

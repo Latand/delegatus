@@ -78,10 +78,10 @@ export const SHOTS: ReadmeShot[] = [
     id: "board",
     target: { kind: "project", project: "harbor-api" },
     viewport: DESKTOP,
-    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes"],
-    absentText: ["tmux"],
+    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "needs a decision · build"],
+    absentText: ["tmux", "Untitled task"],
     prepare: foldOrchestrator,
-    description: "A project's board: tasks by status, the agents working on each, and a running pipeline; account limits in the sidebar.",
+    description: "A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages, and a card that names why it needs you; account limits in the sidebar.",
   },
   {
     id: "conversation",
@@ -105,7 +105,8 @@ export const SHOTS: ReadmeShot[] = [
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
-      await clickLabel(page, "Expand all 3 stages");
+      /* The lane row's head opens the pipeline: its graph over the stages. */
+      await page.locator('[data-open-stages][aria-label^="Idempotent refunds"]').first().click();
     },
     description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
   },
@@ -135,6 +136,18 @@ export const SHOTS: ReadmeShot[] = [
       await page.getByText("bun test src/refunds", { exact: false }).first().evaluate((element) => element.closest("li")?.scrollIntoView({ block: "start" }));
     },
     description: "The same conversation on a 390 px phone screen, its test run expanded.",
+  },
+  {
+    id: "phone-board",
+    target: { kind: "project", project: "harbor-api" },
+    viewport: PHONE,
+    requiredText: ["Inbox", "Assigned", "Blocked", "Done", "Back off webhook retries", "Idempotent refunds"],
+    absentText: ["Untitled task"],
+    prepare: async (page) => {
+      await page.locator('[data-phone-kanban-tab="assigned"]').first().click();
+      await page.waitForTimeout(600);
+    },
+    description: "A project's board on a 390 px phone: the four status columns as tabs, with the card that needs you pinned first.",
   },
 ];
 
