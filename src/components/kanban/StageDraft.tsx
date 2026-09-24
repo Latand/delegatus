@@ -19,14 +19,14 @@ import { draftFacts, draftOutcome, neverLaunched, pipelineEnded, stageDraftable,
 /*
  * A stage that has not started, drawn as the conversation it will become
  * (#1695 K5b, prototype `renderDraftBody` + `renderDraftMessage`): an event
- * line saying when it starts, its first message as the operator's own bubble
- * marked «Waiting for stage start · not delivered» and editable in place, and
- * a composer that opens when the stage starts.
+ * line saying when it starts, and its first message as the operator's own
+ * bubble, marked «First message · not sent yet» and editable in place. Waiting
+ * for the stage before it is the plan, not a warning, so nothing here is amber
+ * (#2148).
  */
 
 const PencilGlyph = () => <svg {...svgProps}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>;
 const ClockGlyph = () => <svg {...svgProps}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>;
-const SendGlyph = () => <svg {...svgProps}><path d="m5 12 14-7-5 14-2.5-5.5z" /></svg>;
 
 
 export function useStageDraft(drafts: StageDrafts, key: string): StageDraft | null {
@@ -35,7 +35,10 @@ export function useStageDraft(drafts: StageDrafts, key: string): StageDraft | nu
 
 const clockTime = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-/** The feed and the closed composer of a stage with no attempt yet. */
+/** The feed of a stage with no attempt yet: when it starts, its first message
+    and what is added when it starts. It has no composer (#2148): until the
+    stage starts there is nothing to reply to, and the line above the message
+    already says when it will. */
 export function StageDraftFeed({ pipeline, stage, names, drafts, ports }: {
   pipeline: Pipeline;
   stage: PipelineStage;
@@ -54,25 +57,12 @@ export function StageDraftFeed({ pipeline, stage, names, drafts, ports }: {
   ].filter(Boolean).join(" · ");
   const ended = pipelineEnded(pipeline);
   return (
-    <>
-      <div className="feed draft-feed" role="log" aria-label={t("kanban.draft.feedAria", { stage: name })}>
-        <div className="msg event"><i className="edot" aria-hidden="true" /><span>{when}</span></div>
-        <StageDraftMessage pipeline={pipeline} stage={stage} name={name} drafts={drafts} ports={ports} />
-        <AddedAtStart pipeline={pipeline} stage={stage} />
-        <p className="draft-note">
-          {ended
-            ? t("kanban.draft.noteEnded")
-            : facts.after ? t("kanban.draft.noteAfter", { stage: name, after: nameOf(facts.after) }) : t("kanban.draft.noteFirst", { stage: name })}
-        </p>
-      </div>
-      <div className="composer2 disabled" aria-disabled="true">
-        <div className="c-box">
-          <textarea className="c-field" rows={1} disabled aria-label={t("kanban.draft.composerAria", { stage: name })} placeholder={t("kanban.draft.composerPlaceholder", { stage: name })} />
-          <button type="button" className="c-send" disabled aria-label={t("kanban.draft.send")}><SendGlyph /></button>
-        </div>
-        <p className="c-status" role="status">{t("kanban.draft.composerNote")}</p>
-      </div>
-    </>
+    <div className="feed draft-feed" role="log" aria-label={t("kanban.draft.feedAria", { stage: name })}>
+      <div className="msg event"><i className="edot" aria-hidden="true" /><span>{when}</span></div>
+      <StageDraftMessage pipeline={pipeline} stage={stage} name={name} drafts={drafts} ports={ports} />
+      <AddedAtStart pipeline={pipeline} stage={stage} />
+      {ended ? <p className="draft-note">{t("kanban.draft.noteEnded")}</p> : null}
+    </div>
   );
 }
 

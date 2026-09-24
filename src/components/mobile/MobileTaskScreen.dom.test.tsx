@@ -22,7 +22,9 @@ import type { FileEntry } from "@/lib/types";
  *   - the parked lane answers in place with the phone's 44 px buttons;
  *   - the status is a sheet, and a choice moves the task through the guarded
  *     mutation with a receipt whose Undo moves it back;
- *   - the title is edited in place and written as the task's text.
+ *   - the title is edited in place and written as the task's text;
+ *   - a live lane is its numbered stage list with "Open conversation", and
+ *     the screen groups what it holds 24 px apart, 8 px inside (#2148).
  */
 
 const NOW = 1_800_000_000;
@@ -125,7 +127,7 @@ function Receipt() {
   return receipt ? <div data-test-receipt="">{receipt.text}{receipt.inverse ? <button type="button" data-test-undo="" onClick={() => receipts.undo()}>undo</button> : null}</div> : null;
 }
 
-function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: BoardTask = theTask, extra: { files?: FileEntry[]; onOpen?: (file: FileEntry) => void } = {}) {
+function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: BoardTask = theTask, extra: { files?: FileEntry[]; onOpen?: (file: FileEntry) => void; pipelines?: Pipeline[]; onOpenPipeline?: (pipeline: Pipeline) => void } = {}) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -143,7 +145,7 @@ function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: 
         manual={[]}
         files={files}
         flows={[]}
-        pipelines={pipelines}
+        pipelines={extra.pipelines ?? pipelines}
         tasks={[]}
         allTasks={[subject]}
         drafts={[]}
@@ -153,7 +155,7 @@ function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: 
         acts={createPendingPipelineActs()}
         ports={pipelinePorts}
         onOpenConversation={extra.onOpen ?? (() => {})}
-        onOpenPipeline={() => {}}
+        onOpenPipeline={extra.onOpenPipeline ?? (() => {})}
       />
       <Receipt />
     </MobileNavContext.Provider>,
@@ -384,4 +386,66 @@ test("the phone folds several launches that did not start behind one summary row
   } finally {
     setLocale("en");
   }
+});
+
+test("a live lane is its numbered stage list: who runs each stage once, the current stage's report and Open conversation; its Stages line opens the pipeline screen, and a finished lane keeps its one-row chain (#2148)", () => {
+  const stageFile = file(2, { title: "Implement the cache" });
+  const running = lane("running-a", "running", "running", 420);
+  (running.runs[0]!.attempts[0] as unknown as { agentPath: string; conversationId: string }).agentPath = stageFile.path;
+  (running.runs[0]!.attempts[0] as unknown as { agentPath: string; conversationId: string }).conversationId = stageFile.conversationId!;
+  const opened: string[] = [];
+  const screens: string[] = [];
+  const { host } = mount(taskPorts([]), noPipelinePorts, theTask, {
+    files: [stageFile],
+    pipelines: [running, lane("done-a", "completed", "passed", 3_600)],
+    onOpen: (entry) => opened.push(entry.path),
+    onOpenPipeline: (pipeline) => screens.push(pipeline.id),
+  });
+  const live = q(host, '[data-phone-task-lane="running-a"]')!;
+  /* The stages, each drawn once, numbered, with who runs it on its own row. */
+  const rows = qa(live, "ol.pb-stages > li.pb-stage");
+  expect(rows.map((row) => [row.querySelector(".pb-num")?.textContent, row.querySelector(".pb-name")?.textContent])).toEqual([["1", "Implement"], ["2", "Review"]]);
+  expect(rows.every((row) => row.querySelector("[data-engine-mark], .pb-ident-words") !== null)).toBe(true);
+  expect(live.querySelector(".pb-chain, .pb-pills")).toBeNull();
+  /* The screen above names the task and Attach lives on the pipeline screen,
+     so the embedded list draws no heading and no Attach. */
+  expect(live.querySelector(".pb-heading, [data-pipeline-heading], .pb-attach")).toBeNull();
+  /* The current stage carries its report and the usual next tap. */
+  const current = q(live, '[data-stage-current="1"]')!;
+  expect(current.getAttribute("data-stage")).toBe("implement");
+  expect(current.querySelector("[data-stage-now]")?.textContent).toContain("running");
+  click(q(current, '[data-open-conversation="implement"]'));
+  expect(opened).toEqual([stageFile.path]);
+  /* The Stages line is the way into the pipeline screen, with the lane's ⋯. */
+  const stages = q(live, '.pb-section-row [data-open-stages="running-a"]')!;
+  expect(stages.textContent).toContain(en("mobile2.pipeline.stages"));
+  click(stages);
+  expect(screens).toEqual(["running-a"]);
+  click(q(live, '.pb-section-row [data-pipeline-menu="running-a"]'));
+  expect(q(host, '[data-phone-task-lane-sheet="running-a"]')).not.toBeNull();
+  /* A finished lane keeps its one-row chain in its own card. */
+  click(q(host, "[data-phone-task-ended]"));
+  const done = q(host, '[data-phone-task-lane="done-a"]')!;
+  expect(done.classList.contains("phone-lane")).toBe(true);
+  expect(done.querySelector(".pb-chain")).not.toBeNull();
+  expect(done.querySelector("ol.pb-stages")).toBeNull();
+});
+
+test("the task screen groups what it holds: 24 px between the stages, the task with its agents and its history, 8 px inside each (#2148)", () => {
+  const { host } = mount(taskPorts([]), noPipelinePorts);
+  const groups = q(host, "[data-phone-task-groups]")!;
+  expect(groups.className).toContain("gap-6");
+  /* The title stands above the groups, 12 px from the first. */
+  expect(q(host, "[data-phone-task-body]")!.className).toContain("gap-3");
+  expect(q(host, "[data-phone-task-title]")!.closest("[data-phone-task-groups]")).toBeNull();
+  const kids = Array.from(groups.children) as unknown as HTMLElement[];
+  expect(kids[0]!.hasAttribute("data-phone-task-lanes")).toBe(true);
+  const task = q(groups, '[data-phone-task-group="task"]')!;
+  expect(task.className).toContain("gap-2");
+  /* The description and the agents are one group. */
+  expect(task.querySelector("[data-phone-task-description]")).not.toBeNull();
+  expect(task.querySelector("[data-phone-task-agents]")!.className).toContain("gap-2");
+  /* The history group draws nothing, and takes no gap, when it holds nothing. */
+  const history = q(groups, '[data-phone-task-group="history"]')!;
+  expect(history.className).toContain("empty:hidden");
 });

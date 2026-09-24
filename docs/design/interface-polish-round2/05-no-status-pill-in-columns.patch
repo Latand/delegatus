@@ -1,0 +1,52 @@
+diff --git a/src/components/kanban/KanbanBoard.tsx b/src/components/kanban/KanbanBoard.tsx
+index ec00cbf..7cd86b2 100644
+--- a/src/components/kanban/KanbanBoard.tsx
++++ b/src/components/kanban/KanbanBoard.tsx
+@@ -630,7 +630,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
+     const element = rootRef.current?.querySelector<HTMLElement>(`.column[data-status="${wanted.status}"] .card[data-id="${cssEscape(wanted.cardId)}"]`);
+     if (!element) return;
+     pendingFocus.current = null;
+-    const focusable = wanted.target === "pill" ? element.querySelector<HTMLElement>(".pill") ?? element : element;
++    /* A column hides the card's pill; focus then stays on the card itself. */
++    const pill = element.querySelector<HTMLElement>(".pill");
++    const focusable = wanted.target === "pill" && pill?.getClientRects().length ? pill : element;
+     /* The menu hands focus back to its anchor on close; the anchor was the old
+        card, so this runs again on the next frame once that has happened. */
+     focusable.focus({ preventScroll: true });
+@@ -1400,7 +1402,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
+     else if ((key === "s" || key === "S") && card.task) {
+       event.preventDefault();
+       const pill = element.querySelector<HTMLElement>(".pill");
+-      if (pill) openStatusMenu(card, pill);
++      const anchor = pill?.getClientRects().length ? pill : element.querySelector<HTMLElement>("[data-menu]");
++      if (anchor) openStatusMenu(card, anchor);
+     } else if ((key === "m" || key === "M") && card.task) {
+       event.preventDefault();
+       const more = element.querySelector<HTMLElement>("[data-menu]");
+diff --git a/src/components/kanban/kanbanBoard.css b/src/components/kanban/kanbanBoard.css
+index 6d9863e..96cca24 100644
+--- a/src/components/kanban/kanbanBoard.css
++++ b/src/components/kanban/kanbanBoard.css
+@@ -293,6 +293,10 @@
+ .kb .pill[data-status="assigned"] { --st: var(--color-accent); --st-soft: var(--color-accent-soft); }
+ .kb .pill[data-status="blocked"] { --st: var(--color-danger); --st-soft: var(--color-danger-soft); }
+ .kb .pill[data-status="done"] { --st: var(--color-success); --st-soft: var(--color-success-soft); }
++/* Inside a status column the column names the status, so the card does not
++   repeat it: the pill goes, and its menu is the card's ⋯ ("Move to", or S),
++   and dragging still moves the card. */
++.kb .column .card .foot .pill { display: none; }
+ .kb .card .age { color: var(--color-muted); font-size: var(--text-label); white-space: nowrap; }
+ .kb .card .foot .spacer { flex: 1; }
+ .kb .card .add { display: inline-flex; align-items: center; gap: 4px; height: var(--target, 32px); padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
+@@ -826,6 +830,11 @@
+ @media (hover: hover) and (pointer: fine) {
+   .kb .card .tools .icon-btn.hide { opacity: 0; transition: opacity var(--motion-fast); }
+   .kb .card:hover .tools .icon-btn.hide, .kb .card:focus-within .tools .icon-btn.hide { opacity: 1; }
++  /* A still board is a column of titles, not a grid of icons: the fold and ⋯
++     controls stay in place, quiet, and come up to full strength when the card
++     is hovered or holds focus. */
++  .kb .card .tools .icon-btn:not(.hide) { opacity: 0.35; transition: opacity var(--motion-fast); }
++  .kb .card:hover .tools .icon-btn:not(.hide), .kb .card:focus-within .tools .icon-btn:not(.hide) { opacity: 1; }
+ }
+ .kb .card .editor { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+ .kb .card .edit { width: 100%; border: 1px solid var(--color-accent); border-radius: 6px; padding: 1px 4px; margin-left: -4px; background: var(--surface-card); color: var(--color-primary); resize: none; line-height: 18px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent); }

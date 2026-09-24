@@ -307,10 +307,13 @@ test("what needs one project to write into is absent, never faked", () => {
   expect(host.querySelector(".card [data-add-agent]")).toBeNull();
 
   /* The board that is there is the whole board: search, the hidden tray and
-     the status pill a move writes with the card's own project. */
+     the card's ⋯, whose "Move to" writes with the card's own project. The
+     column names the status, so the card draws no pill of its own (#2148). */
   expect(host.querySelector("[data-kanban-search]")).toBeTruthy();
   expect(host.querySelector("[data-hidden-pill]")).toBeTruthy();
-  expect(cardOf(host, "t-ledger")?.querySelector(".foot .pill")).toBeTruthy();
+  expect(cardOf(host, "t-ledger")?.querySelector(".foot .pill")).toBeNull();
+  flushSync(() => cardOf(host, "t-ledger")!.querySelector<HTMLElement>("[data-menu]")!.click());
+  expect([...host.querySelectorAll('.menu [role="menuitemradio"]')].slice(0, 4).map((item) => item.textContent)).toEqual(["Inbox", "Assigned", "Blocked", "Done"]);
 });
 
 test("the Overview's bar keeps its three facts; the project board's bar, put in order (#1801), says each once", () => {

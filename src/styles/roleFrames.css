@@ -145,6 +145,25 @@
 :root[data-role-frame="ribbon"] .kb .reader .role-mark { margin-left: -11px; }
 :root[data-role-frame="ribbon"] .kb .seat-head .role-mark { margin-left: -12px; }
 :root[data-role-frame="ribbon"] [data-role-host="dock"] .role-mark { margin-left: -12px; }
+/* Inside the Stages sheet two or three conversations stand side by side, and
+   a gradient ring and a ribbon on each made them compete as peers (#2148).
+   There the frame is the rail: a neutral border with the role on its left
+   edge and the role's name in its ink. Wherever one conversation is open the
+   ribbon stays. The padding keeps the ribbon's content box. */
+:root[data-role-frame="ribbon"] .kb .gsheet .reader.conv[data-role-host] {
+  border: 1px solid var(--border-default); border-left: 4px solid var(--role);
+  background: var(--surface-card); padding: 8px 12px 10px 9px;
+}
+:root[data-role-frame="ribbon"] .kb .gsheet .reader.conv.folded[data-role-host] { padding-bottom: 6px; }
+:root[data-role-frame="ribbon"] .kb .gsheet .reader.conv[data-role-host]::after { display: none; }
+:root[data-role-frame="ribbon"] .kb .gsheet .reader .role-mark {
+  height: auto; margin-left: 0; padding: 0; gap: 7px; color: var(--role-ink); letter-spacing: 0.06em;
+  background: none; clip-path: none;
+}
+:root[data-role-frame="ribbon"] .kb .gsheet .reader .role-mark-emblem {
+  width: 22px; height: 22px; border-radius: 6px; color: #fff; background: var(--role-fill);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 18%, transparent);
+}
 /* The phone: a gradient hairline under the bar, the ribbon in the title cell. */
 :root[data-role-frame="ribbon"] [data-role-host="phone"] [data-mobile2-bar] {
   border-bottom-color: transparent;

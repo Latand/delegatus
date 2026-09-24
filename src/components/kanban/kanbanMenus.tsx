@@ -131,7 +131,9 @@ export function KanbanMenu({ anchor, label, items, onClose }: {
         }
         return (
           <button
-            key={`${item.type}-${item.label}`}
+            /* By place too: the card's ⋯ holds each lane's actions as a
+               group, so a label can repeat in one menu (#2148). */
+            key={`${index}-${item.type}-${item.label}`}
             type="button"
             role={item.type === "radio" ? "menuitemradio" : "menuitem"}
             aria-checked={item.type === "radio" ? Boolean(item.checked) : undefined}

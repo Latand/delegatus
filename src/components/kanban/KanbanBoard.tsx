@@ -51,7 +51,7 @@ import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type Reade
 import { stagePanelKey } from "./KanbanCard";
 import { operationalAttempts } from "./pipelineGraph";
 import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
-import { stageNames } from "./PipelineSection";
+import { pipelineTitle, stageNames } from "./PipelineSection";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { StagesSheet, type SheetPane } from "./StagesSheet";
 import { textField, withField } from "./taskText";
@@ -619,10 +619,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
 
   /* ── Status moves ────────────────────────────────────────────────────── */
   /* Focus follows the card into its new column: the moved card is a new
-     element there, so the control the operator used is found again by id. */
-  const pendingFocus = useRef<{ cardId: string; status: TaskStatus; target: "card" | "pill" } | null>(null);
-  const focusMoved = useCallback((cardId: string, status: TaskStatus, target: "card" | "pill") => {
-    pendingFocus.current = { cardId, status, target };
+     element there, so it is found again by id. The card, not the ⋯ the move
+     may have come from, takes it, so [ ] S M work on it at once. */
+  const pendingFocus = useRef<{ cardId: string; status: TaskStatus } | null>(null);
+  const focusMoved = useCallback((cardId: string, status: TaskStatus) => {
+    pendingFocus.current = { cardId, status };
   }, []);
   useLayoutEffect(() => {
     const wanted = pendingFocus.current;
@@ -630,15 +631,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const element = rootRef.current?.querySelector<HTMLElement>(`.column[data-status="${wanted.status}"] .card[data-id="${cssEscape(wanted.cardId)}"]`);
     if (!element) return;
     pendingFocus.current = null;
-    const focusable = wanted.target === "pill" ? element.querySelector<HTMLElement>(".pill") ?? element : element;
     /* The menu hands focus back to its anchor on close; the anchor was the old
        card, so this runs again on the next frame once that has happened. */
-    focusable.focus({ preventScroll: true });
+    element.focus({ preventScroll: true });
     requestAnimationFrame(() => {
-      if (focusable.isConnected && !focusable.contains(document.activeElement)) focusable.focus({ preventScroll: true });
+      if (element.isConnected && document.activeElement !== element) element.focus({ preventScroll: true });
     });
   });
-  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { receipt?: boolean; focus?: "card" | "pill" } = {}) => {
+  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { receipt?: boolean; focus?: boolean } = {}) => {
     const task = card.task ? tasksById.current.get(card.task.id) ?? card.task : null;
     if (!task) return;
     const from = card.status;
@@ -653,7 +653,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       ? show(t("kanban.movedBack", { title: short, status: statusLabel(t, to) }))
       : show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: undo });
     if (options.receipt !== false) latestUndo.current = { receiptId, run: undo };
-    if (options.focus) focusMoved(card.id, to, options.focus);
+    if (options.focus) focusMoved(card.id, to);
     void controller.move(task, to).then((outcome: StatusMoveOutcome) => {
       if (outcome.kind === "failed") {
         dismiss(receiptId);
@@ -683,10 +683,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const cardsByIdRef = useRef(cardsById);
   cardsByIdRef.current = cardsById;
 
-  const shift = useCallback((card: KanbanCardModel, delta: -1 | 1, focus: "card" | "pill" = "card") => {
+  const shift = useCallback((card: KanbanCardModel, delta: -1 | 1) => {
     const index = KANBAN_STATUSES.indexOf(card.status) + delta;
     const target = KANBAN_STATUSES[index];
-    if (target) move(card, target, { focus });
+    if (target) move(card, target, { focus: true });
   }, [move]);
 
   /* ── Inline title and description (prototype `startEdit`/`commitEdit`) ── */
@@ -1085,7 +1085,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     label: statusLabel(t, status),
     why: hints ? t(`kanban.statusHint.${status}`) : null,
     checked: card.status === status,
-    onSelect: () => move(card, status, { focus: "pill" }),
+    onSelect: () => move(card, status, { focus: true }),
   })), [move, t]);
   const menuFor = (): { label: string; items: KanbanMenuItem[] } | null => {
     const open = menu.open;
@@ -1139,8 +1139,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const title = card.titlePending ? t("kanban.untitled") : card.title;
     const common: KanbanMenuItem[] = [
       { type: "sep" },
-      { type: "item", label: t("kanban.prevColumn"), kbd: "[", disabled: card.status === "inbox", onSelect: () => shift(card, -1, "pill") },
-      { type: "item", label: t("kanban.nextColumn"), kbd: "]", disabled: card.status === "done", onSelect: () => shift(card, 1, "pill") },
+      { type: "item", label: t("kanban.prevColumn"), kbd: "[", disabled: card.status === "inbox", onSelect: () => shift(card, -1) },
+      { type: "item", label: t("kanban.nextColumn"), kbd: "]", disabled: card.status === "done", onSelect: () => shift(card, 1) },
     ];
     if (value.kind === "status") {
       return { label: t("kanban.statusOf", { title }), items: [{ type: "head", label: t("kanban.moveTo") }, ...statusItems(card, true), ...common] };
@@ -1154,6 +1154,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
       onPick: (color) => setColor(card, color),
     };
     if (value.kind === "colour") return { label: t("kanban.colour"), items: [{ type: "head", label: t("kanban.colour") }, swatches] };
+    /* One ⋯ per card: each lane's actions are a group here, headed by the
+       lane's title when the card holds more than one. */
+    const laneGroups = card.pipelines.flatMap((entry): KanbanMenuItem[] => {
+      const lane = pipelineMenu({ kind: "pipeline", cardId: card.id, pipelineId: entry.pipeline.id }, true);
+      if (!lane) return [];
+      const head = card.pipelines.length > 1 ? pipelineTitle(t, entry.pipeline) : t("kanban.pipelineAct.menu");
+      return [{ type: "sep" }, { type: "head", label: head }, ...lane.items.filter((entryItem) => entryItem.type !== "head")];
+    });
     return {
       label: t("kanban.cardActions", { title }),
       items: [
@@ -1168,6 +1176,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         { type: "item", label: t("kanban.rename"), kbd: "Enter", keepFocus: true, onSelect: () => startEdit(card, "title") },
         { type: "item", label: card.description ? t("kanban.editDescription") : t("kanban.addDescription"), kbd: "E", keepFocus: true, onSelect: () => startEdit(card, "description") },
         ...(card.task ? [linksItem({ kind: "task", id: card.task.id })] : []),
+        ...laneGroups,
         { type: "sep" },
         card.holdsSeat
           ? { type: "item", label: t("kanban.hideFromBoard"), why: t("kanban.seatProtected"), disabled: true, onSelect: () => {} }
@@ -1188,11 +1197,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
     },
   });
   /* #2059: the attach form opens where the menu was, over the same anchor. */
-  const linksItem = (target: WorkLinkTarget): KanbanMenuItem => {
+  const linksItem = (target: WorkLinkTarget, label = t("workLinks.attach")): KanbanMenuItem => {
     const anchor = menu.open?.anchor;
     return {
       type: "item",
-      label: t("workLinks.attach"),
+      label,
       keepFocus: true,
       disabled: !anchor,
       onSelect: () => { if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "links", target } })); },
@@ -1202,6 +1211,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const refusalWhy = (option: PipelineActionOption): string | null => (option.refusal ? t(`kanban.pipelineAct.refusal.${option.refusal}`) : null);
   const pipelineMenu = (
     value: { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" },
+    inCardMenu = false,
   ): { label: string; items: KanbanMenuItem[] } | null => {
     const card = cardsById.get(value.cardId) ?? cards.find((candidate) => candidate.pipelines.some((entry) => entry.pipeline.id === value.pipelineId));
     const summary = card?.pipelines.find((entry) => entry.pipeline.id === value.pipelineId);
@@ -1268,7 +1278,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       items: [
         { type: "head", label: t("kanban.pipelineAct.menu") },
         { type: "item", label: t("kanban.stages.expandTitle"), keepFocus: true, onSelect: () => openSheet(card.id, pipeline) },
-        linksItem({ kind: "pipeline", id: pipeline.id }),
+        /* In the card's ⋯ the task's own Attach sits a few rows up, so the lane's names what it attaches to. */
+        linksItem({ kind: "pipeline", id: pipeline.id }, inCardMenu ? t("workLinks.attachPipeline") : undefined),
         item(pauseOrResume, t(`kanban.pipelineAct.label.${pauseOrResume.action}`, { title, stage: "" }), pauseOrResume.action === "pause" ? t("kanban.pipelineAct.pauseWhy") : null),
         item(retry, decision ? t("kanban.pipelineAct.retryStage", { stage: decision }) : t("kanban.pipelineAct.retryAny"), t("kanban.pipelineAct.retryWhy")),
         item(skip, decision ? t("kanban.pipelineAct.skipStage", { stage: decision }) : t("kanban.pipelineAct.skipAny"), t("kanban.pipelineAct.skipWhy")),
@@ -1398,9 +1409,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (icon) openIconMenu(card, icon);
     }
     else if ((key === "s" || key === "S") && card.task) {
+      /* The column names the status, so its menu opens from the card's ⋯. */
       event.preventDefault();
-      const pill = element.querySelector<HTMLElement>(".pill");
-      if (pill) openStatusMenu(card, pill);
+      const more = element.querySelector<HTMLElement>("[data-menu]");
+      if (more) openStatusMenu(card, more);
     } else if ((key === "m" || key === "M") && card.task) {
       event.preventDefault();
       const more = element.querySelector<HTMLElement>("[data-menu]");
@@ -2167,7 +2179,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
       onColumnMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "column", status } })}
       cardProps={{
         onToggleCollapsed: toggleCollapsed,
-        onStatusMenu: openStatusMenu,
         onCardMenu: openCardMenu,
         onKey: onCardKey,
         onPointerDown: onCardPointerDown,
@@ -2505,7 +2516,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
 
 type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
-  | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
+  | "onToggleCollapsed" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onDismiss" | "onUndoDismiss" | "onIconMenu"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt" | "onDismissLaunch"
   | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"

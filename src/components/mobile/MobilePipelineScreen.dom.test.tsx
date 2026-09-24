@@ -195,6 +195,25 @@ test("the bar says where the lane stands, and the body owns the title once", () 
   expect(q(body, "[data-stages-count]")!.textContent).toBe(`${translate("en", "mobile2.pipeline.stages")}5`);
 });
 
+test("Attach is a list row after the stages, a link at its leading edge, and it opens the links sheet (#2148)", () => {
+  const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
+  const body = q(host, "[data-mobile2-pipeline-body]")!;
+  const attach = q(body, '[data-work-links-open="p2"]')!;
+  expect(attach.textContent).toBe(translate("en", "workLinks.attach"));
+  /* A row of its own, after the stage list and its loop words, never beside
+     the heading as bare text. */
+  expect(attach.className).toBe("pb-attach");
+  expect(attach.firstElementChild?.getAttribute("class")).toContain("pb-attach-icon");
+  const block = attach.parentElement!;
+  const order = Array.from(block.children).map((child) => child.tagName === "OL" ? "stages" : child === attach ? "attach" : child.className);
+  expect(order.indexOf("stages")).toBeLessThan(order.indexOf("attach"));
+  expect(order.at(-1)).toBe("attach");
+  /* With no link the heading has no empty row under it. */
+  expect(q(body, ".pb-links-row")).toBeNull();
+  click(attach);
+  expect(q(host, '[data-mobile2-links-sheet="p2"]')).not.toBeNull();
+});
+
 test("the passed stages before the current one fold into one row, which opens and closes in place", () => {
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
   const rows = () => qa(host, ".pb-stage[data-stage]").map((el) => el.getAttribute("data-stage"));
