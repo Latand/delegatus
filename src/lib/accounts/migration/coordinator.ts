@@ -1063,22 +1063,39 @@ export async function reconcileMigrations(
   });
   const pendingDeliveries = new Set<ViewerConversationId>();
   const uncertainDeliveries = new Set<ViewerConversationId>();
+  const currentlyAssignedDeliveries = new Set<ViewerConversationId>();
   await forEachCooperatively(Object.values(before.heldDeliveries), (item) => {
     if (item.state !== "delivered" && item.state !== "failed"
       && (item.state !== "delivery-uncertain" || delivery.reconcileUncertain)) {
       const id = registry.canonicalConversationId(item.conversationId);
       pendingDeliveries.add(id);
       if (item.state === "delivery-uncertain") uncertainDeliveries.add(id);
+      if (item.state === "assigned" && item.generationId === before.conversations[id]?.generations.at(-1)?.id) {
+        currentlyAssignedDeliveries.add(id);
+      }
     }
   });
+  /* #1709: a parked switch leaves the conversation on its current generation, where sends are assigned and
+     claimed in admission order. An assigned reservation no sender went on to claim would hold back every later
+     send until the switch left the phase, so this pass delivers what is assigned to that generation, in order.
+     Nothing uncertain is replayed: uncertain rows only reconcile. */
+  const drainParkedSwitch = async (parked: RegistryConversation) => {
+    const currentGeneration = parked.generations.at(-1)?.id;
+    if (registry.pendingDeliveries(parked.id).some((item) => item.state === "assigned" && item.generationId === currentGeneration)) {
+      await drainHeldDeliveries(parked.id, delivery, registry);
+    }
+  };
   await forEachCooperatively(Object.values(before.conversations), async (snapshotConversation) => {
     // A keyed delivery read may assemble grant provenance across the registry.
     // Inventory already tells us which conversations need that read (#1983).
     const hasDelivery = pendingDeliveries.has(snapshotConversation.id);
-    // A failed migration needs an explicit retry. Only reconciliation of an
-    // uncertain prior actuation can make progress while it remains parked.
+    // A failed migration needs an explicit retry. While it remains parked, only
+    // reconciliation of an uncertain prior actuation and delivery of what is
+    // assigned to the current generation (#1709) can make progress; held
+    // residue stays parked without a read.
     if (snapshotConversation.migration?.phase === "failed-recoverable"
-      && !uncertainDeliveries.has(snapshotConversation.id)) return;
+      && !uncertainDeliveries.has(snapshotConversation.id)
+      && !currentlyAssignedDeliveries.has(snapshotConversation.id)) return;
     const activeMigration = snapshotConversation.migration !== null
       && !terminalMigrationPhase(snapshotConversation.migration.phase);
     if (!hasDelivery && !activeMigration) return;
@@ -1136,7 +1153,10 @@ export async function reconcileMigrations(
       }
       return;
     }
-    if (conversation.migration.phase === "failed-recoverable") return;
+    if (conversation.migration.phase === "failed-recoverable") {
+      if (!drained) await drainParkedSwitch(conversation);
+      return;
+    }
     const migration = conversation.migration;
     const source = conversation.generations.find((generation) => generation.id === migration.sourceGenerationId)
       ?? conversation.generations.at(-1);
@@ -1151,17 +1171,7 @@ export async function reconcileMigrations(
         || (item.state === "delivery-uncertain" && delivery.reconcileUncertain))) {
       await drainHeldDeliveries(advanced.id, delivery, registry);
     }
-    /* #1709: a parked switch leaves the conversation on its current generation, where sends are assigned and
-       claimed in admission order. An assigned reservation no sender went on to claim would hold back every later
-       send until the switch left the phase, so this pass delivers what is assigned to that generation, in order,
-       unless the drain above already ran for this conversation. Nothing uncertain is replayed: uncertain rows only
-       reconcile. */
-    const currentGeneration = advanced.generations.at(-1)?.id;
-    if (!drained
-      && advanced.migration?.phase === "failed-recoverable"
-      && registry.pendingDeliveries(advanced.id).some((item) => item.state === "assigned" && item.generationId === currentGeneration)) {
-      await drainHeldDeliveries(advanced.id, delivery, registry);
-    }
+    if (!drained && advanced.migration?.phase === "failed-recoverable") await drainParkedSwitch(advanced);
   });
   await yieldToRuntime();
   const after = registry.readOnlySnapshot();

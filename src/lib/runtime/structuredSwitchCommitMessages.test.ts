@@ -443,6 +443,8 @@ function journalClient(fixture: Switch, journal: RuntimeJournal): RuntimeHostCli
   }) as unknown as RuntimeSnapshot;
   return {
     snapshot: async () => snapshot(),
+    readSession: async (identity: { conversationId?: string; artifactPath?: string }) => snapshot().sessions.find((session) =>
+      session.conversationId === identity.conversationId || session.artifactPath === identity.artifactPath) ?? null,
     command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => journal.executeOperation(command),
     operationStatus: async (operationId: string) => journal.operationResult(operationId),
   } as unknown as RuntimeHostClient;
