@@ -62,6 +62,15 @@ guarantees for the 1.x series.
 - **`request_attention` reaches a phone as a quiet notice** when no desktop is
   open. The screen you are reading does not move; the ⚠ badge gets a dot and
   its sheet lists the request under "From your agents" ([#2118]).
+- **A Telegram bot account for agents.** Paste a BotFather token in the
+  Telegram panel (on the phone, under Accounts), then switch on, chat by chat,
+  where agents may post. Agents list those chats with `telegram_bot_chats`,
+  post with `telegram_bot_send`, which reaches allowed chats only, names the
+  conversation that sent it and never posts twice for one `clientRequestId`,
+  and read what the bot received with `telegram_bot_messages`. A bot sees only
+  messages sent after it joined, and in a group it sees all of them only with
+  privacy mode off or as an admin. The personal-account connector works as
+  before ([#2125]).
 - **Images an agent looks at appear in its conversation** as thumbnails that
   open full screen, for Claude, Codex and Copilot, on the phone and the
   desktop, while the turn runs and after it. A picture that is no longer on
@@ -100,9 +109,9 @@ guarantees for the 1.x series.
 
 ### Fixed
 - **No more «Untitled task» ghost cards.** Helper and probe conversations no
-  longer create tasks, an orchestrator seat's launch gets a named task, a
-  a task that never got its name shows its conversation's first line, and a
-  card counts only conversations that open. A launch that never started
+  longer create tasks, an orchestrator seat's launch gets a named task, a task
+  that never got its name shows its conversation's first line, and a card
+  counts only conversations that open. A launch that never started
   is listed as «Launch did not start» with Dismiss, and a failed launch shows
   at once as «Launch failed» with its error and a way to Retry.
   `scripts/settle-ghost-tasks.ts` settles the cards left from before, dry run
@@ -135,12 +144,14 @@ guarantees for the 1.x series.
   composer after a screen slides in ([#2107]).
 
 ### Removed
-- The systemd install path. Docker is the only install: the legacy tmux
-  supervisor unit (`deploy/systemd/agent-log-viewer-legacy-tmux.service`), its
-  installer and its session bootstrap script are gone, with the docs that
-  described them. When a retired unit file is still in
-  `~/.config/systemd/user`, `delegatus` prints how to stop and remove it and
-  how to install with Docker, then starts as usual ([#2112]).
+- The systemd install path. Docker is the only way to run Delegatus as a
+  service: the legacy tmux supervisor unit
+  (`deploy/systemd/agent-log-viewer-legacy-tmux.service`), its installer and
+  its session bootstrap script are gone, with the docs that described them.
+  `bunx delegatus-cli` and `npm i -g delegatus-cli` are unchanged. When a
+  retired unit file is still in `~/.config/systemd/user`, `delegatus` prints
+  how to stop and remove it and how to install with Docker, then starts as
+  usual ([#2112]).
 - The phone's old task editor, and with it the phone's Delete task button and
   its raw assignment list. The task screen replaces it; hide a task from the
   board instead ([#2100]).
@@ -987,3 +998,4 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2118]: https://github.com/Latand/delegatus/pull/2118
 [#2120]: https://github.com/Latand/delegatus/pull/2120
 [#2122]: https://github.com/Latand/delegatus/pull/2122
+[#2125]: https://github.com/Latand/delegatus/pull/2125
