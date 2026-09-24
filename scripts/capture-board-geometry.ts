@@ -83,11 +83,13 @@
  * With BOARD_CAPTURE_CASE=activity it renders the activity dashboard
  * (docs/design/activity-dashboard.md) on a home seeded with invented work:
  * three git repositories whose Claude transcripts the Viewer's own scan
- * indexes (the agent axis), a request ledger that starts nine days back, a
- * stage host export that stops two days back (so the last two days read
- * unknown), `hosts.json`, `settings.json`, and one weekday with agent work and
- * no input (the probable-missing-source flag); then the same page on a home
- * with no data at all. At 1440 × 900 and 390 × 844 it captures the day view,
+ * indexes (the agent axis), a request ledger that starts nine days back, this
+ * host's own transcript export up to last midnight (its terminal input; today
+ * reads as a lower bound until it is exported), a stage host export that stops
+ * two days back (so the last two days read unknown), `hosts.json`,
+ * `settings.json`, and one weekday with agent work and no input (the
+ * probable-missing-source flag); then the same page on a home with no data at
+ * all. At 1440 × 900 and 390 × 844 it captures the day view,
  * the project view with one row open, the 30-day view and the empty home, and
  * checks for sideways overflow, the unknown days and the flagged day. With
  * ACTIVITY_RENDER_DIR set, the images are copied there.
@@ -4239,7 +4241,7 @@ interface ActivityReading {
   tiles: number;
   days: Array<{ date: string; coverage: string | null; missing: string | null; text: string }>;
   projects: Array<{ project: string; coverage: string | null }>;
-  hosts: Array<{ host: string; connected: string | null }>;
+  hosts: Array<{ host: string; connected: string | null; complete: string | null; terminalUnread: boolean }>;
   expanded: number;
 }
 
@@ -4259,7 +4261,12 @@ function readActivity(): ActivityReading {
       text: row.querySelector("[data-activity-day-totals]")?.textContent ?? "",
     })),
     projects: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-project]")).map((row) => ({ project: row.dataset.activityProject ?? "", coverage: row.dataset.coverage ?? null })),
-    hosts: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-host]")).map((row) => ({ host: row.dataset.activityHost ?? "", connected: row.dataset.connected ?? null })),
+    hosts: Array.from(document.querySelectorAll<HTMLElement>("[data-activity-host]")).map((row) => ({
+      host: row.dataset.activityHost ?? "",
+      connected: row.dataset.connected ?? null,
+      complete: row.dataset.complete ?? null,
+      terminalUnread: row.querySelector("[data-activity-terminal-unread]") !== null,
+    })),
     expanded: document.querySelectorAll("[data-activity-project-details]").length,
   };
 }
@@ -4360,6 +4367,21 @@ async function activityMain(): Promise<void> {
       host: "stage", coveredFrom: days[2]!.start, coveredUntil: days[8]!.start, exportedAt: days[8]!.start + 3_600_000, records: stageInputs.length + 57,
       excluded: { "agent-message": 14, "stage-template": 6, notification: 4, unmarked: 9, attachment: 3, duplicate: 11 },
     }, stageInputs));
+    /* This host's own export, run last midnight: every store read from day 1,
+       with a few prompts typed into an agent's terminal. Today is not in it. */
+    const terminalInputs = [];
+    for (const day of [4, 6]) {
+      if (day === flagDay) continue;
+      for (const [hh, mm] of [[19, 5], [19, 20]] as const) {
+        terminalInputs.push({ ids: [messageId("claude-prompt", `workstation-${day}-${hh}-${mm}`)], at: at(day, hh, mm), host: "workstation", source: "transcripts" as const, project: keys["lantern-api"], kind: "message" as const, surface: "terminal" as const, hash: null });
+      }
+    }
+    const localDir = path.join(activityDir, "hosts", "workstation");
+    fs.mkdirSync(localDir, { recursive: true });
+    fs.writeFileSync(path.join(localDir, "human-input.jsonl"), exportLines({
+      host: "workstation", coveredFrom: days[1]!.start, coveredUntil: days[9]!.start, exportedAt: days[9]!.start + 60_000, records: terminalInputs.length + 212,
+      excluded: { "agent-message": 61, "stage-template": 9, recovery: 7, notification: 22, injected: 48, unmarked: 5, duplicate: 64 },
+    }, terminalInputs));
     fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [{ id: "stage", label: "Stage host", projects: ["orchard-client"] }] }));
     fs.writeFileSync(path.join(activityDir, "settings.json"), JSON.stringify({ v: 1, tz: ACTIVITY_TZ, billable: ["orchard-client"] }));
 
@@ -4417,7 +4439,10 @@ async function activityMain(): Promise<void> {
       const projectView = await capture(surface, "range=7d&view=projects", "projects-7d", "en", keys["harbor-ledger"]);
       must(projectView.expanded === 1, `${surface}: ${projectView.expanded} project rows open`);
       must(projectView.projects.find((row) => row.project === "orchard-client")?.coverage === "unknown", `${surface}: the stage host's project does not read unknown`);
-      must(projectView.projects.find((row) => row.project === keys["harbor-ledger"])?.coverage === "complete", `${surface}: harbor-ledger does not read complete`);
+      /* Today's terminal input on this host is not exported yet: a lower bound. */
+      must(projectView.projects.find((row) => row.project === keys["harbor-ledger"])?.coverage === "unknown", `${surface}: harbor-ledger reads complete with today's terminal input unread`);
+      const workstation = projectView.hosts.find((host) => host.host === "workstation");
+      must(workstation?.connected === "true" && workstation.complete === "false" && workstation.terminalUnread, `${surface}: the workstation row does not say its terminal input is unread: ${JSON.stringify(workstation)}`);
       const month = await capture(surface, "range=30d&view=days", "day-30d");
       must(month.days.length === 30, `${surface}: ${month.days.length} day rows in 30 days`);
       must(month.days.filter((day) => day.coverage === "unknown").length >= 20, `${surface}: days before the ledger do not read unknown`);

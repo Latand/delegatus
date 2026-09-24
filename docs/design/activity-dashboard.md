@@ -113,13 +113,17 @@ untouched.
    `{ ids, at, host, source, project, kind, surface, hash }`. Two sources exist
    and more can be added behind the same interface:
    - `ledger`: this host's request ledger, written at each direct-operator
-     ingress (exact, with the browser surface), from its first row on.
+     ingress (exact, with the browser surface), from its first row on. It
+     sees only requests made through Delegatus.
    - `transcripts`: an export file per host, produced on that host by
      `scripts/export-human-input.ts` from all of its transcript stores, keeping
      only real operator input, and copied into `activity/hosts/<host>/`.
 2. **Coverage.** The expected hosts are this one, the hosts in
    `activity/hosts.json`, and any host with an export directory. The stretch a
    host's sources did not cover is *unknown* for the projects that host holds.
+   Only a source that read every store of its host covers it: a transcript
+   export. The ledger's rows count, but the ledger never covers its host,
+   because input typed into an agent's terminal there never reaches it.
    A figure missing a host is a lower bound (`≥`); nothing read is `Unknown`.
 3. **Counting method.** The operator's method, parameterised: engagement
    window `W`, episode threshold `T`, rounding. Defaults follow the restated
@@ -170,6 +174,12 @@ The ledger call sits beside the WakaTime call, after it, and never refuses.
 | 10 | pipeline create | `pipeline` | `src/app/api/pipelines/route.ts:140` |
 | 11 | task create, and task edit of text, details or status | `task` | `src/app/api/tasks/route.ts:64`, `src/app/api/tasks/[id]/route.ts:56` |
 
+The ledger covers nothing by itself (`scope: "delegatus"`,
+`src/lib/activity/hostSources.ts:143`). It records every Delegatus request
+and nothing typed into an agent's terminal on the same host, so the host is
+read only where its own transcript export covers (`scope: "all"`, `:260`).
+Until one does, this host's figures carry `≥` and the hosts table says why.
+
 Board moves, colours, icons, links and hides instruct no agent and are not
 recorded. **Surface** comes from the request's `User-Agent` through
 `requestSurface` (`src/lib/view/device.ts`): `desktop`, `tablet`, `phone`, or
@@ -187,9 +197,9 @@ desktop app, so "web" and "desktop" are one surface: a desktop browser.
 | the stores | the Claude and Codex homes (`ROOTS`, `src/lib/scanner/roots.ts`), every account store and retired archive (`claudeProjectRoots`, `codexSessionRoots`), the shared mirror (`sharedClaudeProjectsRoot`), and any `--root` |
 | which files | every `.jsonl` modified since the window began (`listTranscriptFiles`); the date directory a session was filed under is ignored |
 | Claude record | `type: "user"` with text: `uuid`, `promptId`, `promptSource` (`typed`, `sdk`, `system`), `turnOrigin`, `isMeta`, `isSidechain`, `isCompactSummary`, `entrypoint`, `cwd`, `timestamp` (`parseClaudeUserRecord`) |
-| Codex record | `response_item` message with role `user`: its `id`, the `llv:structured-user` marker (origin and delivery key), `timestamp`; the session's `session_meta` `originator`, `source` and `cwd` (`parseCodexUserRecord`, `codexSessionKind`) |
-| origin of a delivery | the marker; otherwise `claudeMessageProvenance` and `submissionIdentities` on a host that runs Delegatus, which also give the client message id |
-| how a conversation was launched | the host registry: a pipeline membership (stage), a lineage edge or delegation depth of 1 or more (delegated spawn), otherwise the operator |
+| Codex record | `response_item` message with role `user`: its `id`, the `llv:structured-user` marker read by the runtime's own `decodeCodexStructuredUserText` (`src/lib/runtime/codexStructuredUserText.ts:89`: origin, and the 64-hex delivery key in either the compact `ctx` form or the legacy `dedup` form), `timestamp`; the session's `session_meta` `originator`, `source` and `cwd` (`parseCodexUserRecord`, `codexSessionKind`) |
+| origin of a delivery | the marker; otherwise `claudeMessageProvenance` and `submissionIdentities` (keyed by the same 64-hex delivery key) on a host that runs Delegatus, which also give the client message id |
+| how a conversation was launched | the host registry: a pipeline membership (stage), a lineage edge or delegation depth of 1 or more (delegated spawn), otherwise the operator; unknown when the registry is skipped (`--no-registry`), unreadable, or does not name the transcript |
 | project | the registry's ownership, else the conversation's cwd through `resolveProjectAttribution` |
 
 The export is placed under `activity/hosts/<host>/` on the host that runs the
@@ -283,7 +293,7 @@ their mode.
 
 ### Only real operator input counts
 
-`classifyUserRecord` (`src/lib/activity/humanInput.ts:266`) keeps a record
+`classifyUserRecord` (`src/lib/activity/humanInput.ts:262`) keeps a record
 only on a positive signal:
 
 1. the `llv:structured-user` marker with operator origin (`ctx=o.…` or
@@ -300,7 +310,9 @@ which the page lists per host:
 |---|---|
 | `scaffold` | the first prompt of a delegated spawn, or an unmarked role scaffold of an operator launch |
 | `stage-template` | a pipeline stage's first prompt (builder, reviewer, auditor, deployer…), marked or not |
+| `unregistered` | the first message of a Delegatus session the host's registry does not name, marked or not |
 | `notification` | task, bridge, seat and recovery notifications, `promptSource: "system"`, compaction summaries |
+| `recovery` | a notice Delegatus sent into a conversation it re-hosted after a restart or a release, marked or not |
 | `injected` | system reminders, skill hints, AGENTS.md and environment context, local command output, other `isMeta` records |
 | `attachment` | an auto-attached screenshot (`isMeta` image records) |
 | `agent-message` | a message from one agent to another that arrived with role=user (`a.` marker, or provenance naming an agent) |
@@ -309,6 +321,25 @@ which the page lists per host:
 | `interrupt` | an interrupt marker |
 | `unmarked` | no positive signal at all |
 | `duplicate` | a copy of an input already counted |
+
+Two of these exist because the operator marker is not proof by itself:
+
+- **Restart notices.** At startup Delegatus sends "Continue the interrupted
+  turn from the transcript." to every interrupted Codex conversation, and an
+  interruption notice to every conversation whose turn it cut. Both were sent
+  with no origin, and the Codex host stamps a send with no origin as the
+  operator's, so each restart wrote one operator-marked record per
+  conversation; the fan-out rule then collapsed them into one input per host,
+  a fabricated window per restart. Both sends now carry the agent origin
+  `startup-recovery` (`src/lib/runtime/recoveryNotices.ts`), and the
+  classifier excludes their text whatever the marker says, which catches the
+  records already written.
+- **Unregistered sessions.** Pipeline and orchestrator spawns write their
+  first prompt with the operator marker (a spawn at delegation depth 0 is
+  stamped operator). Only the registry's launch record tells a stage template
+  from an operator's own spawn, so when it is missing the first message of a
+  Delegatus-hosted session is excluded. This undercounts an operator spawn the
+  registry lost, which is the safe direction.
 
 ### Copies count once
 
@@ -335,9 +366,10 @@ within 90 s adds at most 90 s to a union of 10-minute windows.
 
 ### Coverage: unknown is never zero
 
-`uncoveredSpans` (`method.ts:601`) returns, for a window and optionally a
+`uncoveredSpans` (`method.ts:589`) returns, for a window and optionally a
 project, the stretches some expected host holding that project was not read
-for. A day, a project row and the range each carry `{ complete, missingHosts }`:
+for. A host is read where a transcript export of it covers; the ledger's span
+does not count toward this (see source 1). A day, a project row and the range each carry `{ complete, missingHosts }`:
 
 - complete: the figure is exact, and a zero is a real zero;
 - incomplete with time read: the figure is a lower bound, shown `≥ 2 h 10 m`;
@@ -397,7 +429,8 @@ The page shows these in its "What is counted" panel, with a hosts table.
 | host state | effect | shown as |
 |---|---|---|
 | read for the whole window | exact figures | plain figures |
-| read for part of it (an old export, a ledger that started later) | lower bound | `≥` figure, hatched unknown stretch, tooltip naming the host |
+| read for part of it (an old export, an export that started later) | lower bound | `≥` figure, hatched unknown stretch, tooltip naming the host |
+| this host with its ledger read and no export for the stretch | lower bound: Delegatus requests counted, terminal input unread | `≥` figure, and a warning under the host in the hosts table |
 | listed and never read | unknown | `Unknown`, "Not connected" in the hosts table, flagged workdays |
 | an export file for another host, or malformed | covers nothing | "unreadable" in the hosts table |
 
@@ -409,7 +442,7 @@ The page shows these in its "What is counted" panel, with a hosts table.
 | Tablet | same as desktop | same; an iPad that asks for the desktop site reads as desktop |
 | Phone | same as desktop, including voice | same |
 | Voice call | each final utterance in a live call | listening, partial speech, dictation never sent |
-| Terminal | prompts an agent CLI records as typed by a person, through the host's export | a client that records no such flag: excluded as unmarked |
+| Terminal | prompts an agent CLI records as typed by a person, through the host's export, this host's included | a client that records no such flag: excluded as unmarked; a stretch no export of the host covers: unknown |
 | Other same-origin client | counted as `other` (the authority rule's documented residual) | whether a person was behind it |
 | Outside Delegatus: editors, Telegram, GitHub review | nothing | all of it |
 
@@ -490,15 +523,23 @@ The page shows these in its "What is counted" panel, with a hosts table.
   missing-source flag on a workday and not on a Sunday, and the billable pass.
 - `src/lib/activity/humanInput.test.ts`: marker-only counting, a
   worker-to-manager role=user message excluded, the typed flag, each exclusion
-  reason, session kinds, mirror and continuation copies once, the 90 s
-  fallback, same-conversation messages kept apart, fan-out, cross-host
-  dedupe, ledger precedence, and an export round trip with no text.
+  reason, restart notices excluded with the operator marker on them, an
+  unregistered session's marked first message excluded, one delivery id for
+  the compact and legacy marker forms and none for a forged one, session
+  kinds, mirror and continuation copies once, the 90 s fallback,
+  same-conversation messages kept apart, fan-out, cross-host dedupe, ledger
+  precedence, and an export round trip with no text.
 - `src/lib/activity/transcriptExport.test.ts`: files chosen by mtime, each
-  message on its own Kyiv day, the manifest's exclusion counts, context over
-  keywords for the project, and no text or path in the export.
+  message on its own Kyiv day, the manifest's exclusion counts, a restart that
+  reaches four conversations adding no human time, an unregistered stage
+  session, context over keywords for the project, and no text or path in the
+  export.
 - `src/lib/activity/hostSources.test.ts`: the two-host fixture with real
-  export files (complete, then the stage host missing), an export that ends
-  early, a mislabelled file, cross-host dedupe, and the hosts file.
+  export files (complete, then the stage host missing), a ledger alone leaving
+  its host incomplete and a partial export of it, an export that ends early, a
+  mislabelled file, cross-host dedupe, and the hosts file.
+- `src/lib/runtime/startup.test.ts`: the Codex continuation carries the
+  `startup-recovery` origin.
 - `src/lib/activity/requestLedger.test.ts`, `src/app/api/activity/route.test.ts`,
   `src/lib/runtime/http.activityLedger.test.ts`,
   `src/app/api/tasks/activityLedger.test.ts`, and the exporter's case in
@@ -508,17 +549,22 @@ The page shows these in its "What is counted" panel, with a hosts table.
 
 The `activity` case of `scripts/capture-board-geometry.ts`
 (`BOARD_CAPTURE_CASE=activity`) seeds a home with invented projects, a local
-ledger, a stage host export, invented transcripts indexed by the Viewer's own
-scan, and `hosts.json`, then captures at 1440 x 900 and 390 x 844: the day
-view, the project view with one row expanded, the unknown-coverage state (the
-stage host listed and not connected), and a home with no data at all. Output:
+ledger, this host's own export up to last midnight (with a few terminal
+prompts), a stage host export that stops two days back, invented transcripts
+indexed by the Viewer's own scan, and `hosts.json`, then captures at
+1440 x 900 and 390 x 844: the day view, the project view with one row
+expanded, the unknown-coverage state (the stage host not read for the last two
+days, and today's terminal input on this host not exported yet, which the
+hosts table names), and a home with no data at all. Output:
 `~/Pictures/delegatus-review/activity-dashboard/`.
 
 ### What it does not do
 
 - No network pull of remote exports: a host's file is copied in by hand.
 - No agent axis for other hosts.
-- No backfill of this host's own history unless its exporter is run for it.
+- No automatic read of this host's terminal input: its exporter is run by
+  hand, like any host's, and until it has covered a stretch this host's
+  figures there are lower bounds.
 - No settings UI; `hosts.json` and `settings.json` are edited as files.
 - No per-conversation or per-stage durations.
 - No change to WakaTime, #zvit or their data; no background scheduler.
@@ -528,6 +574,7 @@ stage host listed and not connected), and a home with no data at all. Output:
 | item | why deferred | what would justify it |
 |---|---|---|
 | Pulling a remote host's export over SSH or from its Viewer | Needs access decisions per host; a copied file proves the model first. | The operator wants the dashboard current without a manual step. |
+| Reading this host's terminal input without a manual export (a scheduled export, or an in-process read cached per file) | A live read on each request walks gigabytes; a schedule is a background job the prototype does not add. | Today's figure has to be exact without the operator running the exporter. |
 | Agent axis from other hosts | The export could carry turn intervals; the prototype keeps it to human input, which the corrections are about. | Supervised/unattended split for stage-host projects. |
 | A canonical turn-window index | The approximation is within 1.7% in aggregate. | Per-conversation agent durations become a requirement. |
 | Settings UI for hosts, zone and billable tags | Files cover the prototype. | The operator edits them regularly. |
