@@ -67,6 +67,7 @@ test("builder parameters select the cheap fixer and the frontend implementation 
   const frontend = resolveRole("builder", { mode: "plain", domain: "frontend" });
   expect(frontend).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "opus", effort: "high" } } });
   expect(frontend.ok && frontend.value.prompt).toContain("UI/frontend implementation guidance");
+  expect(frontend.ok && frontend.value.prompt).toContain("add no new colour, font, pill or card shape");
 });
 
 test("role registry rejects unknown and missing required parameters with bounded errors", () => {
@@ -89,6 +90,7 @@ test("role registry rejects unknown and missing required parameters with bounded
 test("the reviewer scaffold names the typecheck command, and a cross-engine inherited model is rejected", () => {
   const reviewer = resolveRole("reviewer", { diffSource: "origin/main...HEAD", lens: "all" });
   expect(reviewer.ok && reviewer.value.prompt).toContain("bunx tsc --noEmit --incremental false");
+  expect(reviewer.ok && reviewer.value.prompt).toContain("how to show it fails");
 
   expect(resolveSpawnRole({ role: "builder", roleParams: { mode: "plain" }, engine: "claude" })).toEqual({
     ok: false,

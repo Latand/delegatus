@@ -45,7 +45,7 @@ export function reviewerPrompt(flow: Flow, round: Round): string {
     "Output exactly this format:",
     "VERDICT: APPROVE | REQUEST_CHANGES | COMMENT",
     "",
-    "Then write findings in Markdown. For each finding include severity, file, line, title, and explanation. Use REQUEST_CHANGES for required fixes, COMMENT for non-blocking notes, and APPROVE only when no blocking issues remain.",
+    "Then write findings in Markdown. For each finding include severity, file, line, title, explanation, and how to show it fails. Use REQUEST_CHANGES for required fixes, COMMENT for non-blocking notes, and APPROVE only when no blocking issues remain.",
   ].join("\n");
 }
 
