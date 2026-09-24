@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 
 import type { BoardTask } from "@/lib/tasks/types";
+import type { FileEntry } from "@/lib/types";
 
 /* A card counts only the conversations the operator can open, and each one it
    counts opens on click; a launch that never produced a transcript is listed
@@ -28,6 +29,7 @@ Object.assign(globalThis, {
   PointerEvent: dom.PointerEvent ?? dom.MouseEvent,
   requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
 });
 
 const { flushSync } = await import("react-dom");
@@ -72,7 +74,7 @@ const elsewhere = task("elsewhere", {
   assignments: [{ conversationId: "conversation_elsewhere", path: "/elsewhere/conversation-9.jsonl", panePid: null, state: "linked", error: null, at: iso(NOW - 3600) }],
 });
 
-function mount(tasks: BoardTask[]) {
+function mount(tasks: BoardTask[], files: FileEntry[] = [], hooks: { onOpened?: (path: string) => void; onRetry?: (file: FileEntry) => void } = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -82,7 +84,7 @@ function mount(tasks: BoardTask[]) {
       project="fixture"
       groups={[]}
       manual={[]}
-      files={[]}
+      files={files}
       flows={[]}
       pipelines={[]}
       tasks={[]}
@@ -94,6 +96,8 @@ function mount(tasks: BoardTask[]) {
       selection={new Set()}
       onOpenConversations={() => {}}
       seatRefs={null}
+      onConversationOpened={hooks.onOpened}
+      onSpawnRetry={hooks.onRetry}
     />,
   ));
   return host as unknown as HTMLElement;
@@ -128,4 +132,34 @@ test("every conversation a card counts opens on click, loaded on this board or n
   expect(open.length).toBe(1);
   flushSync(() => (open[0] as HTMLElement).click());
   expect(dom.location.hash).toBe(formatConversationHash({ conversationId: "conversation_elsewhere", path: "/elsewhere/conversation-9.jsonl" }));
+});
+
+test("a failed launch shows at once with its error, opens its launch view, and counts as no conversation", () => {
+  const failed = task("failed", {
+    text: "Fix the upload retries",
+    assignments: [{ launchId: "launch-failed", conversationId: "conversation_failed", path: "spawn:launch-failed", panePid: null, state: "spawning", error: null, at: iso(NOW - 120), engine: "claude" }],
+  });
+  const placeholder = {
+    path: "spawn:launch-failed", conversationId: "conversation_failed", title: "Fix the upload retries", project: "fixture",
+    root: "claude-projects", kind: "session", fmt: "claude", engine: "claude", mtime: NOW - 120, size: 0, activity: "idle",
+    proc: null, pid: null, parent: null, model: null, pendingQuestion: null, waitingInput: null, name: "launch-failed",
+    spawn: { launchId: "launch-failed", clientAttemptId: null, accountId: null, conversationId: "conversation_failed", state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached" },
+  } as unknown as FileEntry;
+  const opened: string[] = [];
+  const retried: string[] = [];
+  const host = mount([failed], [placeholder], { onOpened: (path) => opened.push(path), onRetry: (file) => retried.push(file.path) });
+  const failedCard = card(host, "failed")!;
+  expect(failedCard.querySelector("[data-foot-conversations]")).toBeNull();
+  expect(failedCard.querySelector("[data-member]")).toBeNull();
+  const row = failedCard.querySelector('[data-launch-failed="launch-failed"]') as HTMLElement | null;
+  expect(row?.textContent).toContain("Launch failed");
+  expect(row?.querySelector('[data-launch-error="launch-failed"]')?.textContent).toBe("account limit reached");
+  expect(row?.querySelector('[data-launch-dismiss="launch-failed"]')).not.toBeNull();
+  flushSync(() => (row!.querySelector('[data-launch-open="launch-failed"]') as HTMLElement).click());
+  expect(opened).toEqual(["spawn:launch-failed"]);
+  /* The launch view it opens carries the error and a working Retry. */
+  const launchView = host.querySelector('[data-launch-state="failed"]') as HTMLElement | null;
+  expect(launchView?.textContent).toContain("account limit reached");
+  flushSync(() => (launchView!.querySelector("[data-launch-retry]") as HTMLElement).click());
+  expect(retried).toEqual(["spawn:launch-failed"]);
 });

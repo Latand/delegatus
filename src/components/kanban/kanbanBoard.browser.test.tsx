@@ -7557,10 +7557,13 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
      young one still says its name is coming, the launch that did not start
      is listed as such with a Dismiss and counts no conversation, and the
      conversation the board did not load opens from its own row. The dismiss
-     is sent and the card leaves the column. Frames go to GHOST_TASKS_PNG_DIR;
+     is sent and the card leaves the column. A launch that failed two minutes
+     ago is listed at once with its error, counts no conversation, and opens
+     its launch view with Retry. Frames go to GHOST_TASKS_PNG_DIR;
      every frame is taken before any gate is read, so the same case renders
      the "before" frames on a tree without the change. */
-  const GHOSTS = ["t-ghost-backfill", "t-ghost-fixture", "t-ghost-young", "t-ghost-elsewhere"] as const;
+  const GHOSTS = ["t-ghost-backfill", "t-ghost-fixture", "t-ghost-young", "t-ghost-elsewhere", "t-ghost-failed"] as const;
+  const FAILED_ERROR = "account limit reached: the weekly window resets in 3 days";
   const read = `(() => {
     const out = {};
     for (const id of ${JSON.stringify(GHOSTS)}) {
@@ -7573,11 +7576,13 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
         conversations: card.querySelector("[data-foot-conversations]")?.getAttribute("data-foot-conversations") ?? null,
         notStarted: card.querySelectorAll("[data-launch-not-started]").length,
         notLoaded: card.querySelectorAll("[data-not-loaded]").length,
+        failed: card.querySelectorAll("[data-launch-failed]").length,
+        error: (card.querySelector("[data-launch-error]")?.textContent ?? "").trim() || null,
       };
     }
     return out;
   })()`;
-  type Reading = Record<string, { title: string; pending: boolean; conversations: string | null; notStarted: number; notLoaded: number } | null>;
+  type Reading = Record<string, { title: string; pending: boolean; conversations: string | null; notStarted: number; notLoaded: number; failed: number; error: string | null } | null>;
 
   browserTest("ended placeholders borrow their conversation's title, a launch that never started is listed apart with a Dismiss, and a conversation off the board opens — desktop and phone, en and uk", async () => {
     const out = path.resolve(".artifacts/ghost-tasks");
@@ -7617,6 +7622,27 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
             if (at("t-ghost-fixture")?.notStarted !== 1) failures.push(`${label}: no «launch did not start» row`);
             if (!at("t-ghost-young")?.pending) failures.push(`${label}: the young task no longer waits for its agent's name`);
             if (at("t-ghost-elsewhere")?.conversations !== "1" || at("t-ghost-elsewhere")?.notLoaded !== 1) failures.push(`${label}: the conversation off the board is not counted with its own open row ${JSON.stringify(at("t-ghost-elsewhere"))}`);
+            if (at("t-ghost-failed")?.pending || at("t-ghost-failed")?.title === untitled) failures.push(`${label}: the failed launch still waits for a name`);
+            if (at("t-ghost-failed")?.conversations !== null || at("t-ghost-failed")?.failed !== 1 || at("t-ghost-failed")?.error !== FAILED_ERROR) failures.push(`${label}: the launch that failed two minutes ago is not listed with its error ${JSON.stringify(at("t-ghost-failed"))}`);
+            /* The failed launch opens its launch view: the error and Retry. */
+            const openFailed = page.locator(`${card("t-ghost-failed")} [data-launch-open]`);
+            if (await openFailed.count()) {
+              await openFailed.click();
+              await page.waitForTimeout(600);
+              const view = page.locator('[data-launch-state="failed"]').first();
+              if (await view.count()) {
+                await view.scrollIntoViewIfNeeded();
+                await page.screenshot({ path: path.join(pngDir, `${label}-t-ghost-failed-opened.png`) });
+              }
+              const opened = await page.evaluate(() => ({
+                text: document.querySelector('[data-launch-state="failed"]')?.textContent ?? null,
+                retry: document.querySelectorAll('[data-launch-state="failed"] [data-launch-retry]').length,
+              }));
+              readings[`${label}-failed-opened`] = opened;
+              if (!opened.text?.includes(FAILED_ERROR) || opened.retry !== 1) failures.push(`${label}: the failed launch's view ${JSON.stringify(opened)}`);
+              await page.keyboard.press("Escape").catch(() => {});
+              await page.waitForTimeout(300);
+            } else failures.push(`${label}: the failed launch offers no Open`);
             /* The conversation off the board opens by its own link. */
             const open = page.locator(`${card("t-ghost-elsewhere")} [data-not-loaded]`);
             if (await open.count()) {
@@ -7678,6 +7704,36 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
               await page.goBack().catch(() => {});
               await page.waitForTimeout(500);
             }
+            /* The failed launch's screen: the error at once, and Open reaches its launch view with Retry. */
+            const failedCard = page.locator('[data-phone-card="task:t-ghost-failed"]');
+            let failedScreen: Record<string, unknown> | null = null;
+            if (await failedCard.count()) {
+              await failedCard.first().click();
+              await page.waitForTimeout(800);
+              await page.screenshot({ path: path.join(pngDir, `${label}-task-t-ghost-failed.png`) });
+              failedScreen = await page.evaluate(() => ({
+                failed: document.querySelectorAll("[data-phone-task-launch-failed]").length,
+                error: document.querySelector("[data-phone-launch-error]")?.textContent ?? null,
+                open: document.querySelectorAll("[data-phone-launch-open]").length,
+              }));
+              if (failedScreen.failed !== 1 || failedScreen.error !== FAILED_ERROR || failedScreen.open !== 1) failures.push(`${label}: the failed launch's task screen ${JSON.stringify(failedScreen)}`);
+              const open = page.locator("[data-phone-launch-open]");
+              if (await open.count()) {
+                await open.first().click();
+                await page.waitForTimeout(1000);
+                await page.screenshot({ path: path.join(pngDir, `${label}-t-ghost-failed-opened.png`) });
+                const opened = await page.evaluate(() => ({
+                  text: document.querySelector('[data-launch-state="failed"]')?.textContent ?? null,
+                  retry: document.querySelectorAll('[data-launch-state="failed"] [data-launch-retry]').length,
+                }));
+                failedScreen.opened = opened;
+                if (!opened.text?.includes(FAILED_ERROR)) failures.push(`${label}: the failed launch's view ${JSON.stringify(opened)}`);
+                await page.goBack().catch(() => {});
+                await page.waitForTimeout(500);
+              }
+              await page.goBack().catch(() => {});
+              await page.waitForTimeout(500);
+            }
             const elsewhere = page.locator('[data-phone-card="task:t-ghost-elsewhere"]');
             let elsewhereScreen: Record<string, number> | null = null;
             if (await elsewhere.count()) {
@@ -7687,7 +7743,7 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
               elsewhereScreen = await page.evaluate(() => ({ notLoaded: document.querySelectorAll("[data-phone-task-not-loaded]").length }));
               if (elsewhereScreen.notLoaded !== 1) failures.push(`${label}: the off-board conversation has no row of its own on the task screen`);
             }
-            readings[label] = { titles, ghostScreen: screen, elsewhereScreen };
+            readings[label] = { titles, ghostScreen: screen, elsewhereScreen, failedScreen };
             if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
           } finally {
             await context.close();

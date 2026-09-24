@@ -8,7 +8,7 @@ import { admissionSnapshot } from "./groupHide";
 import { readTaskIconInput } from "./taskIcon";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { editStoredWorkLinks, normalizeWorkLinkInput, workLinkInputs, type NormalizedWorkLink, type StoredWorkLink, type WorkLinkKind, type WorkLinkVia } from "@/lib/forge/workLinks";
-import { TASK_COLORS, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
+import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
 /* The caps live beside the type, which a client component can import without
    pulling this module's node dependencies into the browser bundle. */
@@ -658,8 +658,6 @@ export function removeAssignment(existing: BoardTask[], id: string, handle: stri
   return { ok: true, tasks: replaced.tasks, task: updated };
 }
 
-/** The error a dismissed launch row carries. */
-export const LAUNCH_NOT_STARTED_ERROR = "launch did not start (dismissed)";
 
 /**
  * Dismiss a launch that never produced a transcript (the card's «launch did

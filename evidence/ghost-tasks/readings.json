@@ -6,36 +6,58 @@
         "pending": false,
         "conversations": "1",
         "notStarted": 0,
-        "notLoaded": 0
+        "notLoaded": 0,
+        "failed": 0,
+        "error": null
       },
       "t-ghost-fixture": {
         "title": "Exercise legacy spawn fixture",
         "pending": false,
         "conversations": null,
         "notStarted": 1,
-        "notLoaded": 0
+        "notLoaded": 0,
+        "failed": 0,
+        "error": null
       },
       "t-ghost-young": {
         "title": "Untitled task",
         "pending": true,
         "conversations": "1",
         "notStarted": 0,
-        "notLoaded": 0
+        "notLoaded": 0,
+        "failed": 0,
+        "error": null
       },
       "t-ghost-elsewhere": {
         "title": "Tune the upload retries",
         "pending": false,
         "conversations": "1",
         "notStarted": 0,
-        "notLoaded": 1
+        "notLoaded": 1,
+        "failed": 0,
+        "error": null
+      },
+      "t-ghost-failed": {
+        "title": "Rotate the webhook signing secret",
+        "pending": false,
+        "conversations": null,
+        "notStarted": 1,
+        "notLoaded": 0,
+        "failed": 1,
+        "error": "account limit reached: the weekly window resets in 3 days"
       }
+    },
+    "desktop-1440-en-failed-opened": {
+      "text": "Launch failedThe launch ended with an error.First message: failedInitial message: failedlaunch-gaccount limit reached: the weekly window resets in 3 days Retry",
+      "retry": 1
     },
     "phone-390-en": {
       "titles": {
         "t-ghost-backfill": "Migrate the invoice CSV importer to the new parser",
         "t-ghost-fixture": "Exercise legacy spawn fixture",
         "t-ghost-young": "Untitled task",
-        "t-ghost-elsewhere": "Tune the upload retries"
+        "t-ghost-elsewhere": "Tune the upload retries",
+        "t-ghost-failed": "Rotate the webhook signing secret"
       },
       "ghostScreen": {
         "unstarted": 1,
@@ -44,6 +66,15 @@
       },
       "elsewhereScreen": {
         "notLoaded": 1
+      },
+      "failedScreen": {
+        "failed": 1,
+        "error": "account limit reached: the weekly window resets in 3 days",
+        "open": 1,
+        "opened": {
+          "text": "Launch failedThe launch ended with an error.First message: failedInitial message: failedlaunch-gaccount limit reached: the weekly window resets in 3 days",
+          "retry": 0
+        }
       }
     },
     "desktop-1440-uk": {
@@ -52,36 +83,58 @@
         "pending": false,
         "conversations": "1",
         "notStarted": 0,
-        "notLoaded": 0
+        "notLoaded": 0,
+        "failed": 0,
+        "error": null
       },
       "t-ghost-fixture": {
         "title": "Exercise legacy spawn fixture",
         "pending": false,
         "conversations": null,
         "notStarted": 1,
-        "notLoaded": 0
+        "notLoaded": 0,
+        "failed": 0,
+        "error": null
       },
       "t-ghost-young": {
         "title": "Задача без назви",
         "pending": true,
         "conversations": "1",
         "notStarted": 0,
-        "notLoaded": 0
+        "notLoaded": 0,
+        "failed": 0,
+        "error": null
       },
       "t-ghost-elsewhere": {
         "title": "Налаштувати повтори завантаження",
         "pending": false,
         "conversations": "1",
         "notStarted": 0,
-        "notLoaded": 1
+        "notLoaded": 1,
+        "failed": 0,
+        "error": null
+      },
+      "t-ghost-failed": {
+        "title": "Замінити секрет підпису вебхуків",
+        "pending": false,
+        "conversations": null,
+        "notStarted": 1,
+        "notLoaded": 0,
+        "failed": 1,
+        "error": "account limit reached: the weekly window resets in 3 days"
       }
+    },
+    "desktop-1440-uk-failed-opened": {
+      "text": "Запуск не вдавсяЗапуск завершився з помилкою.Перше повідомлення: помилкаПерше повідомлення: помилка доставкиlaunch-gaccount limit reached: the weekly window resets in 3 days Повторити",
+      "retry": 1
     },
     "phone-390-uk": {
       "titles": {
         "t-ghost-backfill": "Перенести імпорт рахунків CSV на новий парсер",
         "t-ghost-fixture": "Exercise legacy spawn fixture",
         "t-ghost-young": "Задача без назви",
-        "t-ghost-elsewhere": "Налаштувати повтори завантаження"
+        "t-ghost-elsewhere": "Налаштувати повтори завантаження",
+        "t-ghost-failed": "Замінити секрет підпису вебхуків"
       },
       "ghostScreen": {
         "unstarted": 1,
@@ -90,6 +143,15 @@
       },
       "elsewhereScreen": {
         "notLoaded": 1
+      },
+      "failedScreen": {
+        "failed": 1,
+        "error": "account limit reached: the weekly window resets in 3 days",
+        "open": 1,
+        "opened": {
+          "text": "Запуск не вдавсяЗапуск завершився з помилкою.Перше повідомлення: помилкаПерше повідомлення: помилка доставкиlaunch-gaccount limit reached: the weekly window resets in 3 days",
+          "retry": 0
+        }
       }
     }
   },

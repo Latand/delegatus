@@ -744,6 +744,12 @@ const flows = PIPELINES ? [
 ] : LOOSE ? [reviewFlow("flow-export-review", exportImpl, exportReview!, ["APPROVE"], 30 * MIN)] : [];/* Ghost cards: the conversations behind them. */
 const ghostOld = GHOSTS ? add(conversation("ghost-backfill", L("Migrate the invoice CSV importer to the new parser", "Перенести імпорт рахунків CSV на новий парсер"), { mtime: now - 3 * 24 * 60 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
 const ghostYoung = GHOSTS ? add(conversation("ghost-young", L("Starting on the settings audit", "Починаю аудит налаштувань"), working({ plan: { current: L("Reading the settings screen", "Читаю екран налаштувань") } }))) : null;
+/* A launch whose receipt failed two minutes ago: no transcript, only its placeholder. */
+const ghostFailed = GHOSTS ? add(conversation("ghost-failed", L("Rotate the webhook signing secret", "Замінити секрет підпису вебхуків"), {
+  path: "spawn:launch-ghost-failed", size: 0, mtime: now - 2 * MIN, activityReason: "structured_spawn_failed",
+  spawn: { launchId: "launch-ghost-failed", clientAttemptId: null, accountId: null, conversationId: "conversation_ghost-failed",
+    state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached: the weekly window resets in 3 days" },
+})) : null;
 
 let revision = 1;
 function task(id: string, status: TaskStatus, title: string, description: string, updatedAgo: number, members: FileEntry[] = [], over: Partial<BoardTask> = {}): BoardTask {
@@ -808,6 +814,11 @@ const tasks: BoardTask[] = [
     task("t-ghost-young", "assigned", L("Audit the settings screen", "Аудит екрана налаштувань"), "", 3 * MIN, [ghostYoung!], {
       origin: { kind: "launch", key: "launch-ghost-young", refinement: "pending" },
       createdAt: iso(3 * MIN),
+    } as Partial<BoardTask>),
+    task("t-ghost-failed", "assigned", L("Rotate the webhook signing secret", "Замінити секрет підпису вебхуків"), "", 2 * MIN, [], {
+      origin: { kind: "launch", key: "launch-ghost-failed", refinement: "pending" },
+      createdAt: iso(2 * MIN),
+      assignments: [{ launchId: "launch-ghost-failed", conversationId: ghostFailed!.conversationId, path: ghostFailed!.path, panePid: null, state: "spawning", error: null, at: iso(2 * MIN), engine: "claude" }],
     } as Partial<BoardTask>),
     task("t-ghost-elsewhere", "assigned", L("Tune the upload retries", "Налаштувати повтори завантаження"), "", 26 * 60 * MIN, [], {
       assignments: [{ path: "/elsewhere/upload-retries.jsonl", conversationId: "conversation_upload-retries", panePid: null, state: "linked", error: null, at: iso(26 * 60 * MIN) }],

@@ -3,7 +3,7 @@ import { conversationIdentity } from "@/lib/accounts/identity";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { groupHideState, isSeatConversation, seatAssignment, seatOnlyTask, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
-import { TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
+import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttempts, stageChipState, stageFailEdgeRoundsUsed, type StageChipState } from "@/components/pipelines/pipelineModel";
@@ -106,8 +106,10 @@ export interface KanbanCard {
   notLoaded: number;
   /** Those conversations, each with the transcript it opens. */
   notLoadedRefs: KanbanRecordedConversation[];
-  /** The task's launches that never produced a transcript, past the grace a
-      starting launch gets. Nothing opens; the card offers to dismiss each. */
+  /** The task's launches that never produced a transcript: a failed one at
+      once, any other past the grace a starting launch gets. None is a
+      conversation; the card offers to dismiss each, and a failed one opens
+      its launch view. */
   unstarted: KanbanUnstartedLaunch[];
   /** Review decks and worker stacks the band carries besides conversations. */
   otherSurfaces: number;
@@ -150,6 +152,12 @@ export interface KanbanUnstartedLaunch {
   conversationId: string | null;
   /** When the launch was recorded, epoch ms. */
   atMs: number;
+  /** The launch failed: its receipt's error, and the placeholder that opens
+      the launch view, where Retry lives. Null for a launch that simply never
+      produced a transcript. */
+  failed: { error: string | null; file: FileEntry } | null;
+  /** The task still holds a live assignment for it, which Dismiss settles. */
+  dismissable: boolean;
 }
 
 /** How long a launch may run before its transcript appears and still count as
@@ -419,8 +427,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const cards: KanbanCard[] = bands.flatMap((band): KanbanCard[] => {
     const task = band.task;
     const nodes = band.members.filter((member) => member.kind === "node" && member.file && !seatFile(member.file));
-    /* A launch placeholder whose launch failed opens nothing: it is listed as
-       a launch that did not start, never as a conversation. */
+    /* A launch placeholder whose launch failed is no conversation: it is
+       listed as a failed launch, which opens its launch view with Retry. */
     const members = nodes
       .filter((member) => !failedLaunchPlaceholder(member.file!))
       .map((member) => memberOf(member.key, member.file!, stageByPath, now));
@@ -458,7 +466,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       const identity = referenceIdentity(reference);
       if (!identity || identities.has(identity)) return;
       if (reference.file && failedLaunchPlaceholder(reference.file)) {
-        unopenable.push(reference);
+        failedLaunches.push(reference.file);
         return;
       }
       const known = Boolean(reference.file)
@@ -488,6 +496,30 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const unstarted: KanbanUnstartedLaunch[] = [];
     const unstartedKeys = new Set<string>();
     const nowMs = now * 1000;
+    /* A failed launch is final the moment its receipt says so: it is listed
+       at once, with its error, and no start grace applies. A dismissed one is
+       gone, and a stage's has its stage chip and past attempt instead. */
+    for (const failed of failedLaunches) {
+      if (stageByPath.has(failed.path) || failed.durableLineage?.memberships.some((membership) => membership.kind === "pipeline")) continue;
+      const launchId = failed.spawn?.launchId ?? null;
+      const conversationId = failed.spawn?.conversationId ?? failed.conversationId ?? null;
+      const assignment = task?.assignments.find((candidate) => (launchId && candidate.launchId === launchId) || (conversationId && candidate.conversationId === conversationId));
+      if (assignment?.state === "failed" && assignment.error === LAUNCH_NOT_STARTED_ERROR) continue;
+      const key = launchId ?? conversationId ?? failed.path;
+      if (unstartedKeys.has(key)) continue;
+      unstartedKeys.add(key);
+      if (assignment?.launchId) unstartedKeys.add(assignment.launchId);
+      if (assignment?.conversationId) unstartedKeys.add(assignment.conversationId);
+      const atMs = assignment ? Date.parse(assignment.at) : Number.NaN;
+      unstarted.push({
+        key,
+        launchId,
+        conversationId,
+        atMs: Number.isFinite(atMs) ? atMs : failed.mtime * 1000,
+        failed: { error: failed.spawn?.error ?? null, file: failed },
+        dismissable: Boolean(assignment && assignment.state !== "failed"),
+      });
+    }
     for (const reference of unopenable) {
       if (reference.kind !== "assignment" || reference.state === "failed" || !task) continue;
       const assignment = task.assignments.find((candidate) => candidate.state !== "failed"
@@ -498,7 +530,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       const key = assignment.launchId ?? assignment.conversationId ?? "";
       if (!key || unstartedKeys.has(key)) continue;
       unstartedKeys.add(key);
-      unstarted.push({ key, launchId: assignment.launchId ?? null, conversationId: assignment.conversationId ?? null, atMs: Number.isFinite(atMs) ? atMs : 0 });
+      unstarted.push({ key, launchId: assignment.launchId ?? null, conversationId: assignment.conversationId ?? null, atMs: Number.isFinite(atMs) ? atMs : 0, failed: null, dismissable: true });
     }
     const notLoaded = notLoadedRefs.length;
 
@@ -520,7 +552,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
     /* A placeholder no agent will name any more borrows its conversation's
        title rather than staying «Untitled task» for good. */
-    const naming = task ? placeholderTitle({ task, members, mirrors, nowMs: now * 1000 }) : null;
+    const naming = task ? placeholderTitle({ task, members, mirrors, failedLaunches: unstarted.flatMap((launch) => (launch.failed ? [launch.failed.file] : [])), nowMs: now * 1000 }) : null;
     const title = naming?.derived ?? band.title;
     const description = task ? descriptionOf(task.text) : "";
     /* Retain modification metadata separately from agent-work ordering. A

@@ -26,6 +26,8 @@ export interface PlaceholderTitleInput {
   /** The card's conversations, in the band's order. */
   members: readonly { file: Pick<FileEntry, "title" | "activity" | "proc">; working: boolean }[];
   mirrors?: readonly { file: Pick<FileEntry, "title"> }[];
+  /** Launches of the task that failed: none of them will ever name it. */
+  failedLaunches?: readonly Pick<FileEntry, "title">[];
   nowMs: number;
 }
 
@@ -52,14 +54,17 @@ export function placeholderTitle(input: PlaceholderTitleInput): PlaceholderTitle
   if (!awaitsName(task)) return { pending: false, derived: null };
   const createdMs = Date.parse(task.createdAt);
   const young = Number.isFinite(createdMs) && nowMs - createdMs < TITLE_REFINE_WINDOW_MS;
-  /* Ended: every conversation it holds has stopped. A task with none yet (a
-     launch whose transcript has not appeared) waits out the window. */
-  const ended = members.length > 0 && !members.some(stillRunning);
+  /* Ended: every conversation it holds has stopped, or its launch failed. A
+     task with none yet (a launch whose transcript has not appeared) waits out
+     the window. */
+  const failed = input.failedLaunches ?? [];
+  const ended = (members.length > 0 || failed.length > 0) && !members.some(stillRunning);
   if (young && !ended) return { pending: true, derived: null };
   const own = taskTitle(task.text);
   const candidates = [
     ...members.map((member) => member.file.title),
     ...(input.mirrors ?? []).map((mirror) => mirror.file.title),
+    ...failed.map((file) => file.title),
     own === UNTITLED_TASK_TEXT ? null : own,
   ];
   for (const candidate of candidates) {

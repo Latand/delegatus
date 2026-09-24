@@ -16,6 +16,10 @@ export const TASK_TEXT_LIMIT = 6000;
  */
 export const TASK_DETAILS_LIMIT = 20000;
 
+/** The error a dismissed launch row carries (the card's «launch did not
+    start» Dismiss). */
+export const LAUNCH_NOT_STARTED_ERROR = "launch did not start (dismissed)";
+
 /** Board membership of a task's band. Absent on a row is `shown`; the value is
     written explicitly so a restore is durable and readable in the state file. */
 export type TaskBoardVisibility = "shown" | "hidden";

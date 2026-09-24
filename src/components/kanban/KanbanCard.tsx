@@ -637,10 +637,29 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       {!collapsed && card.unstarted.length ? (
         <div className="unstarted" role="list" aria-label={t("kanban.launchNotStarted")}>
           {card.unstarted.map((launch) => (
-            <div key={launch.key} role="listitem" className="unstarted-row" data-launch-not-started={launch.key} title={t("kanban.launchNotStartedHint")}>
-              <span className="what">{t("kanban.launchNotStarted")}</span>
+            <div
+              key={launch.key}
+              role="listitem"
+              className={`unstarted-row${launch.failed ? " failed" : ""}`}
+              data-launch-not-started={launch.key}
+              data-launch-failed={launch.failed ? launch.key : undefined}
+              title={t(launch.failed ? "kanban.launchFailedHint" : "kanban.launchNotStartedHint")}
+            >
+              <span className="what">{t(launch.failed ? "kanban.launchFailed" : "kanban.launchNotStarted")}</span>
               <span className="age num">{ageLabel(t, launch.atMs, nowMs)}</span>
-              {props.onDismissLaunch ? (
+              {/* A failed launch opens its launch view: the error in full and Retry. */}
+              {launch.failed ? (
+                <button
+                  type="button"
+                  className="open"
+                  data-launch-open={launch.key}
+                  aria-label={t("kanban.openFailedLaunchAria", { title })}
+                  onClick={() => props.onOpenMember(launch.failed!.file)}
+                >
+                  {t("kanban.openFailedLaunch")}
+                </button>
+              ) : null}
+              {props.onDismissLaunch && launch.dismissable ? (
                 <button
                   type="button"
                   className="dismiss"
@@ -651,6 +670,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
                   {t("kanban.dismissLaunch")}
                 </button>
               ) : null}
+              {launch.failed?.error ? <span className="error" data-launch-error={launch.key}>{launch.failed.error}</span> : null}
             </div>
           ))}
         </div>

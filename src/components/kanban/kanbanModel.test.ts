@@ -252,6 +252,35 @@ test("the conversation count holds only what opens: a transcript elsewhere opens
   expect(byId.get("elsewhere")!.notLoadedRefs).toEqual([{ key: "conversation_elided_elsewhere_0", path: "/elsewhere/conversation-9.jsonl", conversationId: "conversation_elided_elsewhere_0" }]);
 });
 
+test("a failed launch is listed at once with its error, opens its launch view, and is never a conversation", () => {
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const placeholder = (id: string) => ({
+    path: `spawn:launch-${id}`,
+    conversationId: `conversation_${id}`,
+    title: "Fix the upload retries",
+    mtime: NOW - 120,
+    spawn: { launchId: `launch-${id}`, clientAttemptId: null, accountId: null, conversationId: `conversation_${id}`, state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached" },
+  }) as Partial<FileEntry>;
+  const failedFile = file(1, placeholder("failed"));
+  const dismissedFile = file(2, placeholder("dismissed"));
+  const launch = (id: string, extra: Record<string, unknown> = {}) => ({ launchId: `launch-${id}`, conversationId: `conversation_${id}`, path: failedFile.path.replace("failed", id), panePid: null, state: "spawning", error: null, at: iso(NOW - 120), engine: "claude", ...extra });
+  const failed = task("failed", "assigned", [], { text: "Untitled task", origin: { kind: "launch", key: "launch-failed", refinement: "pending" }, createdAt: iso(NOW - 120), assignments: [launch("failed")] as BoardTask["assignments"] });
+  const dismissed = task("dismissed", "assigned", [], { assignments: [launch("dismissed", { state: "failed", error: "launch did not start (dismissed)" })] as BoardTask["assignments"] });
+  const result = model([failed, dismissed], [failedFile, dismissedFile]);
+  const byId = new Map(KANBAN_STATUSES.flatMap((status) => result.columns[status].cards).map((card) => [card.task!.id, card] as const));
+  const card = byId.get("failed")!;
+  /* Two minutes old, well inside a starting launch's grace: a failed receipt is final. */
+  expect(card.conversations).toBe(0);
+  expect(card.members).toEqual([]);
+  expect(card.unstarted.map((row) => ({ key: row.key, error: row.failed?.error, opens: row.failed?.file.path, dismissable: row.dismissable }))).toEqual([
+    { key: "launch-failed", error: "account limit reached", opens: "spawn:launch-failed", dismissable: true },
+  ]);
+  /* Nothing will name it now: it reads its launch's own title at once. */
+  expect({ title: card.title, pending: card.titlePending }).toEqual({ title: "Fix the upload retries", pending: false });
+  /* Once dismissed, the row is gone. */
+  expect(byId.get("dismissed")?.unstarted ?? []).toEqual([]);
+});
+
 function pipeline(): Pipeline {
   const attempt = (n: number, state: string, activatedBy: unknown = null) => ({ n, state, activatedBy, agentPath: null, conversationId: null, launchId: null, sessionId: null, paneId: null, flowId: null, effectiveRole: {}, output: null, verdict: null, error: null });
   return {

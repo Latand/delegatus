@@ -125,14 +125,14 @@ function Receipt() {
   return receipt ? <div data-test-receipt="">{receipt.text}{receipt.inverse ? <button type="button" data-test-undo="" onClick={() => receipts.undo()}>undo</button> : null}</div> : null;
 }
 
-function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: BoardTask = theTask) {
+function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: BoardTask = theTask, extra: { files?: FileEntry[]; onOpen?: (file: FileEntry) => void } = {}) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
   roots.push(root);
   const nav = createMobileNav(fakeHistory("http://localhost/").host);
   nav.push({ kind: "task", id: subject.id });
-  const files = [file(1)];
+  const files = [file(1), ...(extra.files ?? [])];
   flushSync(() => root.render(
     <MobileNavContext.Provider value={nav}>
       <MobileTaskScreen
@@ -152,7 +152,7 @@ function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: 
         mutationPorts={ports}
         acts={createPendingPipelineActs()}
         ports={pipelinePorts}
-        onOpenConversation={() => {}}
+        onOpenConversation={extra.onOpen ?? (() => {})}
         onOpenPipeline={() => {}}
       />
       <Receipt />
@@ -258,6 +258,28 @@ test("the title is edited in place and written as the task's text, the descripti
     text: "Name every pipeline row by its first prompt line\nThe phone names each lane of a task by its first prompt line.",
     expectedRevision: "r-t-many-1",
   });
+});
+
+test("the phone shows a failed launch at once, with its error, and opens its launch view", () => {
+  const subject = {
+    ...theTask,
+    id: "t-failed",
+    assignments: [{ launchId: "launch-failed", conversationId: "conversation_failed", path: "spawn:launch-failed", panePid: null, state: "spawning", error: null, at: iso(120), engine: "claude" }],
+  } as unknown as BoardTask;
+  const placeholder = file(7, {
+    path: "spawn:launch-failed", conversationId: "conversation_failed", mtime: NOW - 120,
+    spawn: { launchId: "launch-failed", clientAttemptId: null, accountId: null, conversationId: "conversation_failed", state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached" },
+  });
+  const opened: string[] = [];
+  const { host } = mount(taskPorts([]), noPipelinePorts, subject, { files: [placeholder], onOpen: (entry) => opened.push(entry.path) });
+  /* Not an agent: the launch never ran. */
+  expect(qa(host, "[data-phone-task-agent]").map((row) => row.getAttribute("data-phone-task-agent"))).not.toContain("spawn:launch-failed");
+  const row = q(host, '[data-phone-task-launch-failed="launch-failed"]');
+  expect(row?.textContent).toContain("Launch failed");
+  expect(q(host, '[data-phone-launch-error="launch-failed"]')?.textContent).toBe("account limit reached");
+  expect(q(host, '[data-phone-launch-dismiss="launch-failed"]')).not.toBeNull();
+  click(q(host, '[data-phone-launch-open="launch-failed"]'));
+  expect(opened).toEqual(["spawn:launch-failed"]);
 });
 
 test("the phone lists only what opens: a transcript the board did not load opens by its path, a launch that never started offers a Dismiss", async () => {

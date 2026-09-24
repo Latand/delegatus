@@ -24,6 +24,7 @@ A task is marked **done** when all of the following hold:
   link;
 - no pipeline names it, and it is not a pipeline's or review flow's own
   container task;
+- it holds no conversation of an active or pending orchestrator seat;
 - every conversation it holds has ended. Its transcript has been quiet for
   `--idle-hours` (6 by default) or does not exist, and the row itself is at
   least that old.
@@ -49,8 +50,15 @@ bun scripts/settle-ghost-tasks.ts --state-dir "$STATE_DIR" --apply    # mark don
 
 `--state-dir` is required: the script never assumes which store it settles.
 Kinds in the report are `fixture`, `handoff-digest`, `probe`, `orchestrator`,
-`launch-not-started`, `launch` and `conversation`. Reasons for keeping a task
-are `still-running`, `operator-edit`, `pipeline` and `container`.
+`launch-not-started`, `launch` and `conversation`. Reasons for keeping a task:
+
+- `still-running`: one of its conversations has not ended yet;
+- `operator-edit`: somebody renamed it or gave it notes, a colour, an icon, a
+  deadline or a link;
+- `pipeline`: a pipeline names it;
+- `container`: it is a pipeline's or review flow's own container task;
+- `active-seat`: it holds a conversation of an active or pending orchestrator
+  seat.
 
 Run the dry run first and read it. Then run `--apply` with the same arguments.
 A second dry run should report `settle: 0`.
