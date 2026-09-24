@@ -11,8 +11,8 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tasks-read-model-"));
 process.env.LLV_STATE_DIR = sandbox;
 
 const route = await import("./route");
-const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
-const { saveTasks, TASKS_FILE } = await import("@/lib/tasks/store");
+const { buildPipeline, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -59,6 +59,7 @@ test("GET derives pipelineIds including closed history and filters stale task id
   const body = await response.json() as { tasks: Array<BoardTask & { pipelineIds: string[] }> };
 
   expect(body.tasks).toEqual([{ ...task, pipelineIds: [pipeline.id] }]);
-  expect((JSON.parse(fs.readFileSync(TASKS_FILE, "utf8")).tasks[0] as BoardTask & { pipelineIds?: string[] }).pipelineIds).toBeUndefined();
-  expect((JSON.parse(fs.readFileSync(path.join(sandbox, "pipelines.json"), "utf8")).pipelines[0] as Pipeline).taskIds).toEqual([task.id, "deleted-task"]);
+  /* The read model is derived per answer; neither store is written with it. */
+  expect((loadTasks()[0] as BoardTask & { pipelineIds?: string[] }).pipelineIds).toBeUndefined();
+  expect((loadPipelines()[0] as Pipeline).taskIds).toEqual([task.id, "deleted-task"]);
 });

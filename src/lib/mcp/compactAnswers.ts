@@ -156,6 +156,8 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
          re-reviewed (#1868). */
       budgetSpent: selected.budgetSpent === true,
       conversationId: selected.conversationId ?? null,
+      /* The launch pipeline_action retry-stage names beside the stage. */
+      launchId: selected.launchId ?? null,
       flowId: selected.flowId ?? null,
       startedAt: selected.startedAt ?? null,
       completedAt: selected.completedAt ?? null,
