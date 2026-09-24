@@ -2072,6 +2072,8 @@ export const en = {
   "resources.killAllNone": "no agent sessions to kill",
   "resources.sessionsStale": "rows captured {age}: the last refresh failed, so some of these hosts may no longer run",
   "resources.sessionsUnavailable": "the session list could not be collected: the last refresh failed",
+  "resources.rowStale": "stale capture",
+  "resources.rowStaleHint": "from an earlier capture: this host may have exited since",
   "resources.sessionsStaleDot": "the session list is stale: captured {age}",
   "resources.viewer": "Delegatus",
   "resources.viewerTitle": "Delegatus itself",

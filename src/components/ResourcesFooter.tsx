@@ -436,7 +436,11 @@ export function CleanupPanel({
 
   return (
     <div data-resources-panel className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(430px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[12px] border border-border bg-card shadow-2 sm:absolute sm:bottom-1 sm:left-full sm:ml-2 sm:translate-x-0`}>
-      <header className="flex items-center gap-2 border-b border-border px-3 py-2">
+      {/* The stale mark lives in the header, which never scrolls: a banner at
+          the top of the list scrolled away and left the counts, the rows and
+          the bulk controls reading as a current capture (#2110). */}
+      <header className="border-b border-border px-3 py-2">
+        <div className="flex items-center gap-2">
         <span className="text-[12.5px] font-bold">{t("resources.title")}</span>
         {sessions.length ? (
           <span className="text-[11px] tabular-nums text-muted" data-testid="resources-counts">
@@ -455,11 +459,10 @@ export function CleanupPanel({
         >
           <X className="h-3.5 w-3.5" aria-hidden />
         </button>
-      </header>
-      <div className="max-h-[min(420px,60vh)] overflow-y-auto py-1">
+        </div>
         {sessionsStale ? (
           <div
-            className="mx-3 my-1 rounded-[8px] border border-warning/50 bg-warning/10 px-2.5 py-1.5 text-[11px] font-semibold text-warning"
+            className="mt-1.5 rounded-[8px] border border-warning/50 bg-warning/10 px-2.5 py-1.5 text-[11px] font-semibold text-warning"
             data-testid="resources-sessions-stale"
           >
             {sessionsCapturedAt
@@ -467,6 +470,8 @@ export function CleanupPanel({
               : t("resources.sessionsUnavailable")}
           </div>
         ) : null}
+      </header>
+      <div className="max-h-[min(420px,60vh)] overflow-y-auto py-1">
         {sessions.length === 0 ? (
           sessionsStale ? null : <div className="px-3 py-4 text-center text-[12px] text-muted">{t("resources.empty")}</div>
         ) : (
@@ -474,6 +479,7 @@ export function CleanupPanel({
             <SessionRow
               key={session.target}
               session={session}
+              stale={sessionsStale}
               busy={busy.has(session.target)}
               armed={armed === session.target}
               seatTicked={tickedSeats.has(session.target)}
@@ -617,6 +623,7 @@ const OWNERSHIP_COPY = {
 
 function SessionRow({
   session,
+  stale = false,
   busy,
   armed,
   seatTicked,
@@ -626,6 +633,8 @@ function SessionRow({
   onRefresh,
 }: {
   session: ResourceSession;
+  /** The row comes from an earlier capture a failed refresh fell back on. */
+  stale?: boolean;
   busy: boolean;
   armed: boolean;
   seatTicked: boolean;
@@ -655,13 +664,21 @@ function SessionRow({
      agent mid-turn with one stray tap. */
   const needsArm = live && !armed;
   return (
-    <div className="px-3 py-1.5 hover:bg-canvas" data-testid={structured ? "resource-host-row" : "resource-pane-row"} data-target={session.target}>
+    <div
+      className={`px-3 py-1.5 hover:bg-canvas ${stale ? "opacity-70" : ""}`}
+      data-testid={structured ? "resource-host-row" : "resource-pane-row"}
+      data-target={session.target}
+      data-stale={stale ? "true" : undefined}
+    >
       {/* The chips take a second line under the title. The panel is never
           wider than 430 px, and in one line the ownership badge and the seat
           tick left an orchestrator's title 8 px in Ukrainian and pushed Kill
           out of the panel on a phone. */}
       <div className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1">
-        <span className={`h-2 w-2 shrink-0 rounded-full ${activityDot(session.activity ?? "idle")}`} />
+        {/* A stale row's activity is what it was at capture time; a green dot
+            would claim a turn nobody has seen running since. The kill guard
+            above still reads it, so a host that was live then stays armed. */}
+        <span className={`h-2 w-2 shrink-0 rounded-full ${stale ? "border border-strong" : activityDot(session.activity ?? "idle")}`} />
         <span
           className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
           style={{ backgroundColor: tint.soft, color: tint.color }}
@@ -688,8 +705,17 @@ function SessionRow({
             {session.turnBusy === true ? " · " + t("resources.hostBusy") : ""}
           </span>
         </span>
-        {ownership || session.seat === true || (structured && (session.seat === null || session.seat === undefined)) ? (
+        {stale || ownership || session.seat === true || (structured && (session.seat === null || session.seat === undefined)) ? (
           <span className="flex min-w-0 shrink-0 flex-wrap items-center gap-2 col-start-3 row-start-2">
+        {stale ? (
+          <span
+            className="shrink-0 rounded-full border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[9.5px] font-semibold text-warning"
+            data-testid="resource-row-stale"
+            title={t("resources.rowStaleHint")}
+          >
+            {t("resources.rowStale")}
+          </span>
+        ) : null}
         {ownership ? (
           <span
             className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9.5px] font-semibold ${ownership.tone}`}

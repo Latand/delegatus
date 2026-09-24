@@ -7,8 +7,9 @@ import type { ProcessMemory } from "@/lib/proc/types";
 import { defaultRuntimeHostEndpoint, runtimeHostFencePath } from "@/lib/runtime/localEndpoint";
 import { runtimeHostSocket } from "@/lib/runtime/flags";
 import { readStructuredHostStamp } from "@/lib/scanner/process";
+import { stateOwner } from "@/lib/stateOwnership";
 
-import type { ResourcesViewer, ResourcesViewerProcess } from "./types";
+import type { ResourcesViewer, ResourcesViewerProcess, ResourcesViewerUnavailable } from "./types";
 
 /**
  * Delegatus's own process tree (#1817): the web server this code runs in, the
@@ -204,12 +205,26 @@ export function defaultViewerTreeDependencies(): ViewerTreeDependencies {
   };
 }
 
-/** Never throws: a failed measurement leaves the section out and the rest of the payload whole. */
-export function readViewerTree(agentRoots: Iterable<number>): ResourcesViewer | null {
+export type ViewerTreeRead = { viewer: ResourcesViewer | null; unavailable: ResourcesViewerUnavailable | null };
+
+/** Never throws: a failed measurement leaves the section out and the rest of the payload whole.
+
+    The tree is rooted at this process, so it is measured only where this
+    process is the Viewer. The same reader also runs inside a stdio MCP server,
+    a Bun child of an agent CLI, where rooting the tree at `process.pid` would
+    label that child the web server and leave the real one out; there the
+    section is null and says why. */
+export function readViewerTree(
+  agentRoots: Iterable<number>,
+  env: NodeJS.ProcessEnv = process.env,
+  dependencies: () => ViewerTreeDependencies = defaultViewerTreeDependencies,
+): ViewerTreeRead {
+  if (stateOwner(env) !== "viewer") return { viewer: null, unavailable: "not-the-viewer" };
   try {
-    return measureViewerTree(agentRoots, defaultViewerTreeDependencies());
+    const viewer = measureViewerTree(agentRoots, dependencies());
+    return viewer ? { viewer, unavailable: null } : { viewer: null, unavailable: "measurement-failed" };
   } catch (error) {
     console.error(`[resources] viewer process tree failed: ${error instanceof Error ? error.message : String(error)}`);
-    return null;
+    return { viewer: null, unavailable: "measurement-failed" };
   }
 }

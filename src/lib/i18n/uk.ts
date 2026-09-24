@@ -2009,6 +2009,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "resources.killAllNone": "немає сесій агентів для закриття",
   "resources.sessionsStale": "рядки зняті {age}: останнє оновлення не вдалося, тож частини цих хостів може вже не бути",
   "resources.sessionsUnavailable": "список сесій не вдалося зібрати: останнє оновлення не вдалося",
+  "resources.rowStale": "застарілий знімок",
+  "resources.rowStaleHint": "з давнішого знімка: цей хост міг уже завершитися",
   "resources.sessionsStaleDot": "список сесій застарів: знято {age}",
   "resources.viewer": "Delegatus",
   "resources.viewerTitle": "Сам Delegatus",

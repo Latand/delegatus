@@ -75,9 +75,10 @@
  * 1280 × 800 in en and uk, light and dark, and the phone's projects sheet with
  * the footer at its foot and the panel open at 390 × 844. It requires the
  * Delegatus line in the footer, the stale mark and banner only on the stale
- * table, a Delegatus section with every process and no control in it, the
- * panel inside the viewport with nothing overflowing sideways, and 44 px
- * targets on the phone.
+ * table, the stale text still in the frame with the list scrolled to its end
+ * and a stale tag on every row, a Delegatus section with every process and no
+ * control in it, the panel inside the viewport with nothing overflowing
+ * sideways, and 44 px targets on the phone.
  *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
@@ -4044,6 +4045,11 @@ function readResources() {
     panelScrollerOverflowX: scroller ? scroller.scrollWidth - scroller.clientWidth : null,
     overflowing,
     staleBanner: panel?.querySelector('[data-testid="resources-sessions-stale"]')?.textContent ?? null,
+    /* Where the stale text is drawn, and whether a scrolling box can take it away. */
+    staleBannerBox: box(panel?.querySelector('[data-testid="resources-sessions-stale"]') ?? null),
+    staleBannerScrolls: Boolean(scroller?.querySelector('[data-testid="resources-sessions-stale"]')),
+    staleRowMarks: panel?.querySelectorAll('[data-testid="resource-host-row"] [data-testid="resource-row-stale"]').length ?? 0,
+    scrollerAtBottom: scroller ? Math.abs(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) <= 1 : null,
     hostRows: panel?.querySelectorAll('[data-testid="resource-host-row"]').length ?? 0,
     section: box(section),
     sectionText: section?.textContent ?? null,
@@ -4145,11 +4151,25 @@ async function resourcesMain(): Promise<void> {
       must(open.titleWidths.length === 4 && open.titleWidths.every((width) => width >= 100), `${tag}: host titles are ${JSON.stringify(open.titleWidths)}px wide`);
       must(open.controlsOutside.length === 0, `${tag}: controls outside the panel ${JSON.stringify(open.controlsOutside)}`);
       await page.screenshot({ path: path.join(OUT_DIR, `resources-${tag}-panel.png`) });
-      /* The section sits below the rows; bring it into the frame. */
-      await page.evaluate(() => document.querySelector('[data-resources-panel] [data-testid="resources-viewer-section"]')?.scrollIntoView({ block: "end" }));
+      must(open.staleRowMarks === (shot.stale ? 4 : 0), `${tag}: ${open.staleRowMarks} rows marked stale on a ${shot.stale ? "stale" : "current"} table`);
+      /* The section sits below the rows; scroll the list to its end, where the
+         review found the only stale mark scrolled away (#2110). */
+      await page.evaluate(() => {
+        const scroller = document.querySelector("[data-resources-panel] .overflow-y-auto");
+        if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      });
       await page.waitForTimeout(150);
+      const scrolled: ResourcesReading = await page.evaluate(readResources);
+      must(scrolled.scrollerAtBottom === true, `${tag}: the panel list did not reach its end`);
+      if (shot.stale) {
+        const mark = scrolled.staleBannerBox;
+        must(!scrolled.staleBannerScrolls, `${tag}: the stale text sits inside the scrolling list`);
+        must(mark !== null && mark.h > 0 && mark.y >= 0 && mark.y + mark.h <= scrolled.viewport.h
+          && scrolled.panel !== null && mark.y >= scrolled.panel.y && mark.y + mark.h <= scrolled.panel.y + scrolled.panel.h,
+          `${tag}: scrolled to the end, the stale text is at ${JSON.stringify(mark)}`);
+      }
       await page.screenshot({ path: path.join(OUT_DIR, `resources-${tag}-panel-delegatus.png`) });
-      report[tag] = { closed, open };
+      report[tag] = { closed, open, scrolled };
       await context.close();
     }
   } finally {

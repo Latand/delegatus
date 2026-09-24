@@ -13,6 +13,7 @@ import {
   agentArgv,
   defaultViewerTreeDependencies,
   measureViewerTree,
+  readViewerTree,
   runtimeHostPidFromFence,
   viewerProcessName,
   type ViewerTreeDependencies,
@@ -160,4 +161,30 @@ test("on this machine: a worker child counts, a child running an agent binary do
   expect(viewer.processes.find((item) => item.pid === worker.pid)).toMatchObject({ role: "worker", name: "sleep" });
   expect(pids).not.toContain(agent.pid!);
   expect(viewer.rssBytes).toBeGreaterThan(0);
+});
+
+function ownerEnv(owner: string | undefined): NodeJS.ProcessEnv {
+  return { NODE_ENV: "test", ...(owner === undefined ? {} : { LLV_STATE_OWNER: owner }) };
+}
+
+test("a reader outside the Viewer never labels its own pid the server (#1817, stdio MCP)", () => {
+  /* A stdio MCP server is a Bun child of the agent CLI: rooting the tree at
+     its pid would call it the web server and leave the real one out. */
+  let measured = false;
+  const dependencies = () => {
+    measured = true;
+    return fakeDependencies(MACHINE, { selfPid: 112 });
+  };
+  for (const owner of ["mcp", "runtime-host", "launcher", "tool", undefined]) {
+    const env = ownerEnv(owner);
+    expect(readViewerTree([], env, dependencies)).toEqual({ viewer: null, unavailable: "not-the-viewer" });
+  }
+  expect(measured).toBe(false);
+
+  const inViewer = readViewerTree([110], ownerEnv("viewer"), () => fakeDependencies());
+  expect(inViewer.unavailable).toBeNull();
+  expect(inViewer.viewer!.processes[0]).toMatchObject({ role: "server", pid: 100 });
+
+  const unmeasured = readViewerTree([], ownerEnv("viewer"), () => fakeDependencies(MACHINE, { memory: () => new Map() }));
+  expect(unmeasured).toEqual({ viewer: null, unavailable: "measurement-failed" });
 });

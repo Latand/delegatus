@@ -2581,8 +2581,8 @@ export async function readResources(fresh = false): Promise<ResourcesPayload> {
     relies on the host stamp and the command line alone. */
 function withViewerSection(read: ResourcesRead): ResourcesRead {
   const agentRoots = read.payload.sessionsStale ? [] : read.payload.sessions.map((session) => session.panePid);
-  const viewer = readViewerTree(agentRoots);
-  return { ...read, payload: { ...read.payload, viewer } };
+  const { viewer, unavailable } = readViewerTree(agentRoots);
+  return { ...read, payload: { ...read.payload, viewer, viewerUnavailable: unavailable } };
 }
 
 export async function readResourcesWithDiagnostic(fresh = false): Promise<ResourcesRead> {

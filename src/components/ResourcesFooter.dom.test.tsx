@@ -276,14 +276,40 @@ const VIEWER: ResourcesViewer = {
   ],
 };
 
-test("rows from a failed refresh carry their capture time and a stale banner (#2110)", () => {
+test("a stale table is marked in the header, which never scrolls, and on every row (#2110)", () => {
   /* fmtAge reads the wall clock, so the capture is four days before it. */
-  const view = mount([host({ target: "structured:claude:lane" })], { sessionsStale: true, sessionsCapturedAt: new Date(Date.now() - 96 * 3_600_000).toISOString() });
+  const sessions = [
+    host({ target: "structured:claude:lane", activity: "live" }),
+    host({ target: "structured:codex:seat", engine: "codex" }),
+    host({ target: "structured:claude:idle" }),
+  ];
+  const view = mount(sessions, { sessionsStale: true, sessionsCapturedAt: new Date(Date.now() - 96 * 3_600_000).toISOString() });
 
-  const banner = view.querySelector('[data-testid="resources-sessions-stale"]')?.textContent ?? "";
+  const header = view.querySelector("[data-resources-panel] > header")!;
+  const banner = header.querySelector('[data-testid="resources-sessions-stale"]')?.textContent ?? "";
   expect(banner).toContain("the last refresh failed");
   expect(banner).toContain("4d");
-  expect(view.querySelectorAll('[data-testid="resource-host-row"]')).toHaveLength(1);
+  /* The list is the only scrolling box; the stale text sits outside it. */
+  const list = view.querySelector('[data-resources-panel] > div[class*="overflow-y-auto"]')!;
+  expect(list.querySelector('[data-testid="resources-sessions-stale"]')).toBeNull();
+
+  const rows = [...view.querySelectorAll('[data-testid="resource-host-row"]')];
+  expect(rows).toHaveLength(3);
+  for (const row of rows) {
+    expect(row.getAttribute("data-stale")).toBe("true");
+    expect(row.querySelector('[data-testid="resource-row-stale"]')?.textContent).toBe("stale capture");
+    /* No green pulse: the capture says nothing about a turn running now. */
+    expect(row.querySelector(".bg-success")).toBeNull();
+  }
+});
+
+test("a current table carries no stale mark (#2110)", () => {
+  const view = mount([host({ target: "structured:claude:lane", activity: "live" })]);
+
+  expect(view.querySelector('[data-testid="resources-sessions-stale"]')).toBeNull();
+  expect(view.querySelector('[data-testid="resource-row-stale"]')).toBeNull();
+  expect(view.querySelector('[data-testid="resource-host-row"]')!.hasAttribute("data-stale")).toBe(false);
+  expect(view.querySelector(".bg-success")).not.toBeNull();
 });
 
 test("an empty table after a failed collection never reads as no agents running (#2110)", () => {

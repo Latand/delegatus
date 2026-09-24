@@ -839,6 +839,11 @@ export interface ResourcesViewer {
   processes: ResourcesViewerProcess[];
 }
 
+/** Why a payload carries no viewer section. `not-the-viewer`: the reader ran
+    in a process other than the Viewer (a stdio MCP server beside an agent),
+    which cannot tell the web server's tree from its own. */
+export type ResourcesViewerUnavailable = "not-the-viewer" | "measurement-failed";
+
 /** GET /api/resources response. `system` is null when no platform probe worked. */
 export interface ResourcesPayload {
   system: ResourcesSystem | null;
@@ -853,4 +858,6 @@ export interface ResourcesPayload {
   sessionsStale?: boolean;
   /** Delegatus's own process tree; null when it could not be measured. */
   viewer?: ResourcesViewer | null;
+  /** Set exactly when `viewer` is null. */
+  viewerUnavailable?: ResourcesViewerUnavailable | null;
 }
