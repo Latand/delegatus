@@ -10,13 +10,14 @@ import { Database } from "bun:sqlite";
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
-const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, terminalFlowStageVerdict, tickPipelines } = engineModule;
+const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { newRound, setRelayDeliveryForTest, tickFlow } = await import("@/lib/flows/engine");
@@ -2176,11 +2177,41 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   expect(stored.runs).toEqual(before.runs);
   expect(h.calls.length).toBe(callsBefore);
 
-  /* A second hide keeps the first instant. */
-  expect((await patchPipeline(created.id, { action: "dismiss" }, h.ports)).pipeline!.dismissedAt).toBe(hiddenAt);
+  expect(stored.dismissedBy).toEqual({ kind: "operator" });
+
+  /* A second dismissal stamps its own instant (docs/design/needs-attention.md
+     §5): a lane that parked again after an earlier one is cleared for the
+     decision it waits on now, so the phone no longer clears it first. */
+  const again = (await patchPipeline(created.id, { action: "dismiss" }, h.ports, { kind: "agent", role: "orchestrator", conversationId: "conversation_seat" })).pipeline!;
+  expect(Date.parse(again.dismissedAt!)).toBeGreaterThan(Date.parse(hiddenAt!));
+  expect(again.dismissedBy).toEqual({ kind: "agent", conversationId: "conversation_seat", role: "orchestrator" });
+
+  /* The dismissal service's own write carries the attribution it derived. */
+  const serviced = await setPipelineDismissal(created.id, true, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, h.ports);
+  expect(serviced.pipeline!.dismissedBy).toEqual({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" });
+
+  /* A card drawn before the lane's last movement clears nothing: that
+     decision is one the operator has not seen. The one it drew, it clears. */
+  const ran = loadPipelines()[0]!;
+  ran.runs[0]!.attempts.push({
+    n: 1, state: "failed", effectiveRole: structuredClone(ran.stages[0]!.effectiveRole),
+    launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-09-24T09:00:00.000Z", completedAt: "2026-09-24T09:30:00.000Z",
+    input: null, activatedBy: null, output: null, verdict: null, error: null,
+  });
+  savePipelines([ran]);
+  const lastMove = laneMovedAt(ran);
+  expect(lastMove).toBe(Date.parse("2026-09-24T09:30:00.000Z"));
+  const stale = await setPipelineDismissal(created.id, true, { kind: "operator", surface: "desktop" }, h.ports, lastMove - 1);
+  expect(stale.moved).toBe(true);
+  expect(loadPipelines()[0]!).toMatchObject({ dismissedAt: serviced.pipeline!.dismissedAt, dismissedBy: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" } });
+  const current = await setPipelineDismissal(created.id, true, { kind: "operator", surface: "desktop" }, h.ports, lastMove);
+  expect(current.moved).toBeUndefined();
+  expect(current.pipeline!.dismissedBy).toEqual({ kind: "operator", surface: "desktop" });
 
   const shown = await patchPipeline(created.id, { action: "undismiss" }, h.ports);
   expect(shown.pipeline!.dismissedAt).toBeNull();
+  expect(shown.pipeline!.dismissedBy).toBeUndefined();
   expect(loadPipelines()[0]!).toMatchObject({ state: before.state, dismissedAt: null });
 
   const closed = await closeAndDrain(created.id, { action: "close" }, h.ports);
@@ -2188,6 +2219,7 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   for (const action of ["dismiss", "undismiss"] as const) {
     expect((await patchPipeline(created.id, { action }, h.ports)).status).toBe(409);
   }
+  expect((await setPipelineDismissal(created.id, true, { kind: "operator" }, h.ports)).status).toBe(409);
 
   savePipelines([]);
   const draft = await createPipelineFromRequest({ task: "A draft", repoDir: "/repo", stages: RUN_STAGES as never, autoStart: false }, h.ports);

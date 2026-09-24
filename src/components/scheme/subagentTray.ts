@@ -237,9 +237,9 @@ export function isEngineNativeChild(entry: FileEntry): boolean {
 /**
  * An engine child needs the board's attention right now, so it surfaces to a
  * full P2 node beside its parent even when it would otherwise fold (§1.4:
- * attention beats the tray). Covers a structured question, waiting input, a
- * rate-limit wall, a live stall, a failed spawn and a killed host — the
- * actionable-failure set from the presence policy.
+ * attention beats the tray). Covers whatever the reason model counts (an
+ * orchestrator's ask, a question, waiting input, an owed message), a failed
+ * spawn and a killed host.
  */
 export function engineChildNeedsAttention(entry: FileEntry, now: number): boolean {
   if (attentionId(entry, now) !== null) return true;

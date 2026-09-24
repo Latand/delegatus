@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import type { FileEntry, PendingQuestion, WaitingInput } from "@/lib/types";
+import type { AttentionDismissalMark } from "@/lib/attention/dismissalTypes";
+import type { FileEntry, PendingQuestion, StuckDelivery, WaitingInput } from "@/lib/types";
 
 import { BRIDGE_ASK_TTL_SECONDS } from "@/lib/bridge/types";
 
-import { advanceAttentionCycle, attentionExpiries, attentionId, buildAttentionQueue, nextAttention, STALLED_ATTENTION_TTL } from "./attention";
+import { advanceAttentionCycle, attentionExpiries, attentionId, attentionReason, buildAttentionQueue, nextAttention, STALLED_ATTENTION_TTL, stalledAttention } from "./attention";
 
 const NOW = 1_800_000_000;
 
@@ -45,11 +46,18 @@ function waiting(since: number): WaitingInput {
   return { since, screenTail: "❯ 1. Yes", target: "llv:0.0", menu: null };
 }
 
+function owed(sinceSeconds: number, state: StuckDelivery["state"] = "held"): StuckDelivery {
+  return { since: new Date(sinceSeconds * 1000).toISOString(), attempts: 1, state };
+}
+
+const HALF_HOUR = 30 * 60;
+
 describe("attentionId", () => {
-  test("precedence: question > rate limit > waiting > stalled > null", () => {
+  test("precedence: question > waiting > owed message > null; a wall and a stall raise nothing", () => {
     const both = entry({
       path: "/q",
       activity: "stalled",
+      proc: "running",
       pendingQuestion: question("toolu_1", NOW - 10),
       rateLimit: { source: "pane", accountId: null, window: null, resetAt: NOW + 60 },
       waitingInput: waiting(NOW - 20),
@@ -61,16 +69,20 @@ describe("attentionId", () => {
       rateLimit: { source: "pane", accountId: null, window: null, resetAt: NOW + 60 },
       waitingInput: waiting(NOW - 20),
     });
-    expect(attentionId(limited, NOW)).toBe(`/limited:rate-limited:${NOW + 60}`);
-    const wait = entry({ path: "/w", activity: "stalled", waitingInput: waiting(NOW - 20) });
+    expect(attentionId(limited, NOW)).toBe(`/limited:waiting:${NOW - 20}`);
+    const wait = entry({ path: "/w", activity: "stalled", waitingInput: waiting(NOW - 20), stuckDelivery: owed(NOW - 2 * HALF_HOUR) });
     expect(attentionId(wait, NOW)).toBe(`/w:waiting:${NOW - 20}`);
+    const delivery = entry({ path: "/d", stuckDelivery: owed(NOW - 2 * HALF_HOUR) });
+    expect(attentionId(delivery, NOW)).toBe(`/d:delivery:${NOW - 2 * HALF_HOUR}`);
     const stalled = entry({ path: "/s", activity: "stalled", proc: "running", mtime: NOW - 300 });
-    expect(attentionId(stalled, NOW)).toBe(`/s:stalled:${NOW - 300}`);
+    expect(attentionId(stalled, NOW)).toBeNull();
     expect(attentionId(entry({ path: "/idle" }), NOW)).toBeNull();
     expect(attentionId(entry({ path: "/live", activity: "live" }), NOW)).toBeNull();
   });
 
-  test("a rate-limited live conversation enters hard-blocked attention", () => {
+  /* docs/design/needs-attention.md §3, reason 4: the wall lifts on its own
+     clock and nothing waits on the operator. */
+  test("a rate-limited live conversation raises nothing", () => {
     const limited = entry({
       path: "/limited",
       activity: "live",
@@ -78,10 +90,9 @@ describe("attentionId", () => {
       rateLimit: { source: "pane", accountId: "main", window: "session", resetAt: NOW + 900 },
     });
 
-    expect(attentionId(limited, NOW)).toBe(`/limited:rate-limited:${NOW + 900}`);
-    expect(buildAttentionQueue([limited], NOW)).toMatchObject([
-      { file: { path: "/limited" }, tier: "blocked", since: limited.mtime },
-    ]);
+    expect(attentionId(limited, NOW)).toBeNull();
+    expect(attentionReason(limited, NOW)).toBeNull();
+    expect(buildAttentionQueue([limited], NOW)).toEqual([]);
   });
 
   /* The toast seen-set and push-sent.json entries carry ids in the historical
@@ -91,43 +102,143 @@ describe("attentionId", () => {
     expect(attentionId(q, NOW)).toBe(q.pendingQuestion!.toolUseId);
     const w = entry({ path: "/b", waitingInput: waiting(NOW - 33.7) });
     expect(attentionId(w, NOW)).toBe(`${w.path}:waiting:${Math.floor(w.waitingInput!.since)}`);
-    const s = entry({ path: "/c", activity: "stalled", proc: "running", mtime: NOW - 400.9 });
-    expect(attentionId(s, NOW)).toBe(`${s.path}:stalled:${Math.floor(s.mtime)}`);
+    const d = entry({ path: "/c", stuckDelivery: owed(NOW - HALF_HOUR - 0.9) });
+    expect(attentionId(d, NOW)).toBe(`${d.path}:delivery:${Math.floor(NOW - HALF_HOUR - 0.9)}`);
   });
+});
 
-  test("stalled TTL boundary: in at 2h, out just past it", () => {
+/* The row still says «Stalled»; the rule no longer raises needs-you
+   (docs/design/needs-attention.md §3, reason 7). */
+describe("stalledAttention", () => {
+  test("TTL boundary: in at 2h, out just past it, and never an attention id", () => {
     const inside = entry({ path: "/in", activity: "stalled", proc: "running", mtime: NOW - STALLED_ATTENTION_TTL });
-    expect(attentionId(inside, NOW)).toBe(`/in:stalled:${NOW - STALLED_ATTENTION_TTL}`);
+    expect(stalledAttention(inside, NOW)).toBe(true);
+    expect(attentionId(inside, NOW)).toBeNull();
     const outside = entry({ path: "/out", activity: "stalled", proc: "running", mtime: NOW - STALLED_ATTENTION_TTL - 1 });
-    expect(attentionId(outside, NOW)).toBeNull();
+    expect(stalledAttention(outside, NOW)).toBe(false);
   });
 
-  test("a stalled session without a live process never counts as attention", () => {
-    const abandoned = entry({ path: "/dead", activity: "stalled", proc: null });
-    expect(attentionId(abandoned, NOW)).toBeNull();
-    const exited = entry({ path: "/done", activity: "stalled", proc: "done" });
-    expect(attentionId(exited, NOW)).toBeNull();
-    const killed = entry({ path: "/killed", activity: "stalled", proc: "killed" });
-    expect(attentionId(killed, NOW)).toBeNull();
+  test("a stalled session without a live process is not stalled", () => {
+    expect(stalledAttention(entry({ path: "/dead", activity: "stalled", proc: null }), NOW)).toBe(false);
+    expect(stalledAttention(entry({ path: "/done", activity: "stalled", proc: "done" }), NOW)).toBe(false);
+    expect(stalledAttention(entry({ path: "/killed", activity: "stalled", proc: "killed" }), NOW)).toBe(false);
+  });
+});
+
+/* docs/design/needs-attention.md §4: one named reason per conversation. */
+describe("attentionReason", () => {
+  const ASK = { id: "lane-4-blocked", at: new Date((NOW - 900) * 1000).toISOString() };
+
+  test("names each kept reason, with its id and its start", () => {
+    expect(attentionReason(entry({ path: "/seat", bridgeAsk: ASK }), NOW)).toMatchObject({ kind: "decision", id: "lane-4-blocked", since: NOW - 900, raisedAt: NOW - 900, dismissal: null });
+    const asked = entry({ path: "/q", pendingQuestion: { ...question("toolu_q", NOW - 60), questions: [{ question: "Which unit stays?", header: " Unit ", multiSelect: false, options: [] }] } });
+    expect(attentionReason(asked, NOW)).toMatchObject({ kind: "question", id: "toolu_q", since: NOW - 60, header: "Unit" });
+    const plan = entry({ path: "/p", pendingQuestion: { ...question("toolu_p", NOW - 30), kind: "plan" } });
+    expect(attentionReason(plan, NOW)).toMatchObject({ kind: "plan", id: "toolu_p", header: null });
+    expect(attentionReason(entry({ path: "/w", waitingInput: waiting(NOW - 20) }), NOW)).toMatchObject({ kind: "permission", id: `/w:waiting:${NOW - 20}` });
+    expect(attentionReason(entry({ path: "/d", stuckDelivery: owed(NOW - HALF_HOUR) }), NOW)).toMatchObject({
+      kind: "delivery", id: `/d:delivery:${NOW - HALF_HOUR}`, since: NOW - HALF_HOUR, raisedAt: NOW,
+    });
   });
 
-  test("a returned subagent never counts as stalled attention", () => {
-    const returned = entry({ path: "/sub", activity: "stalled", kind: "subagent", proc: "done" });
-    expect(attentionId(returned, NOW)).toBeNull();
-    const running = entry({ path: "/sub2", activity: "stalled", kind: "subagent", proc: "running" });
-    expect(attentionId(running, NOW)).toBe(`/sub2:stalled:${running.mtime}`);
+  test("an owed message asks at thirty minutes and not at twenty-nine", () => {
+    const early = entry({ path: "/d", stuckDelivery: owed(NOW - 29 * 60) });
+    expect(attentionReason(early, NOW)).toBeNull();
+    expect(attentionReason(early, NOW + 60)).toMatchObject({ kind: "delivery" });
+  });
+
+  test("a record the server already calls uncertain asks at once, from its admission", () => {
+    const uncertain = entry({ path: "/d", stuckDelivery: owed(NOW - 60, "delivery-uncertain") });
+    expect(attentionReason(uncertain, NOW)).toMatchObject({ kind: "delivery", since: NOW - 60, raisedAt: NOW - 60 });
+  });
+
+  test("a stalled turn with a question open is a question", () => {
+    const quiet = entry({ path: "/q", activity: "stalled", proc: "running", mtime: NOW - 400, pendingQuestion: question("toolu_q", NOW - 500) });
+    expect(attentionReason(quiet, NOW)?.kind).toBe("question");
+  });
+});
+
+/* docs/design/needs-attention.md §5: a dismissal hides what started at or
+   before it, and something newer comes back. */
+describe("dismissals", () => {
+  const mark = (atSeconds: number, reasonId: string | null = null): AttentionDismissalMark => ({
+    at: new Date(atSeconds * 1000).toISOString(),
+    by: { kind: "operator", surface: "desktop" },
+    reasonId,
+  });
+
+  test("hides a reason that started at or before it, and keeps it named", () => {
+    const asked = entry({ path: "/q", pendingQuestion: question("toolu_q", NOW - 60), attentionDismissal: mark(NOW - 60) });
+    const reason = attentionReason(asked, NOW);
+    expect(reason).toMatchObject({ kind: "question", id: "toolu_q" });
+    expect(reason?.dismissal?.by).toEqual({ kind: "operator", surface: "desktop" });
+    expect(attentionId(asked, NOW)).toBeNull();
+    expect(buildAttentionQueue([asked], NOW)).toEqual([]);
+  });
+
+  test("a newer question comes back", () => {
+    const again = entry({ path: "/q", pendingQuestion: question("toolu_next", NOW - 10), attentionDismissal: mark(NOW - 60) });
+    expect(attentionId(again, NOW)).toBe("toolu_next");
+    expect(attentionReason(again, NOW)?.dismissal).toBeNull();
+  });
+
+  test("an owed message is dismissed from when it began to ask", () => {
+    const delivery = entry({ path: "/d", stuckDelivery: owed(NOW - 2 * HALF_HOUR), attentionDismissal: mark(NOW - HALF_HOUR - 1) });
+    /* It began to ask at admission + 30 min, one second after the dismissal. */
+    expect(attentionId(delivery, NOW)).toBe(`/d:delivery:${NOW - 2 * HALF_HOUR}`);
+    expect(attentionId({ ...delivery, attentionDismissal: mark(NOW - HALF_HOUR) }, NOW)).toBeNull();
+  });
+
+  test("an undated question is compared by the id that was on screen", () => {
+    const undated = entry({ path: "/q", mtime: NOW - 5, pendingQuestion: { ...question("toolu_q", NOW), askedAt: "sometime" } });
+    expect(attentionId({ ...undated, attentionDismissal: mark(NOW - 100) }, NOW)).toBe("toolu_q");
+    expect(attentionId({ ...undated, attentionDismissal: mark(NOW - 100, "toolu_q") }, NOW)).toBeNull();
+    expect(attentionId({ ...undated, attentionDismissal: mark(NOW - 100, "toolu_other") }, NOW)).toBe("toolu_q");
+  });
+
+  test("a stale card's dismissal does not hide the question asked after it was drawn", () => {
+    /* The card still shows toolu_q1. It was answered and toolu_q2 asked at
+       NOW - 3; the tap lands at NOW, naming the question it drew. */
+    const next = entry({ path: "/q", pendingQuestion: question("toolu_q2", NOW - 3), attentionDismissal: mark(NOW, "toolu_q1") });
+    expect(attentionId(next, NOW)).toBe("toolu_q2");
+    expect(attentionReason(next, NOW)?.dismissal).toBeNull();
+    /* The question it drew stays cleared. */
+    expect(attentionId({ ...next, pendingQuestion: question("toolu_q1", NOW - 60) }, NOW)).toBeNull();
+  });
+
+  test("a dismissal of one reason does not hide a message that turned uncertain after it", () => {
+    /* Owed since NOW - 300, uncertain since a moment ago; a question was
+       cleared at NOW - 180, while the message still asked nothing. */
+    const uncertain = entry({ path: "/d", stuckDelivery: owed(NOW - 300, "delivery-uncertain"), attentionDismissal: mark(NOW - 180, "toolu_q1") });
+    expect(attentionId(uncertain, NOW)).toBe(`/d:delivery:${NOW - 300}`);
+    /* A dismissal of that message itself keeps covering it. */
+    expect(attentionId({ ...uncertain, attentionDismissal: mark(NOW - 60, `/d:delivery:${NOW - 300}`) }, NOW)).toBeNull();
+  });
+
+  test("a dismissal whose own time does not parse covers nothing", () => {
+    const asked = entry({ path: "/q", pendingQuestion: question("toolu_q", NOW - 60), attentionDismissal: { at: "never", by: { kind: "operator" } } });
+    expect(attentionId(asked, NOW)).toBe("toolu_q");
+  });
+
+  test("an agent's dismissal is attributed as the agent", () => {
+    const asked = entry({
+      path: "/q",
+      pendingQuestion: question("toolu_q", NOW - 60),
+      attentionDismissal: { at: new Date(NOW * 1000).toISOString(), by: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" } },
+    });
+    expect(attentionReason(asked, NOW)?.dismissal?.by).toEqual({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" });
   });
 });
 
 describe("buildAttentionQueue", () => {
-  test("blocked segment precedes stalled regardless of since", () => {
+  test("a stalled turn is not queued; a question is, with its reason", () => {
     const files = [
       entry({ path: "/old-stall", activity: "stalled", proc: "running", mtime: NOW - 7000 }),
       entry({ path: "/fresh-q", pendingQuestion: question("toolu_q", NOW - 5) }),
     ];
     const queue = buildAttentionQueue(files, NOW);
-    expect(queue.map((item) => item.tier)).toEqual(["blocked", "stalled"]);
-    expect(queue[0]!.file.path).toBe("/fresh-q");
+    expect(queue.map((item) => item.file.path)).toEqual(["/fresh-q"]);
+    expect(queue[0]).toMatchObject({ tier: "blocked", reason: { kind: "question" } });
   });
 
   test("FIFO inside a segment: oldest wait first", () => {
@@ -160,16 +271,16 @@ describe("buildAttentionQueue", () => {
     expect(alpha[0]!.project).toBe("alpha");
   });
 
-  test("since sources: askedAt for questions, since for waiting, mtime for stalled", () => {
+  test("since sources: askedAt for questions, since for waiting, admission for an owed message", () => {
     const files = [
       entry({ path: "/q", pendingQuestion: question("toolu_s", NOW - 111) }),
       entry({ path: "/w", waitingInput: waiting(NOW - 222) }),
-      entry({ path: "/s", activity: "stalled", proc: "running", mtime: NOW - 333 }),
+      entry({ path: "/d", stuckDelivery: owed(NOW - HALF_HOUR - 333) }),
     ];
     const bySince = new Map(buildAttentionQueue(files, NOW).map((item) => [item.file.path, item.since]));
     expect(bySince.get("/q")).toBe(NOW - 111);
     expect(bySince.get("/w")).toBe(NOW - 222);
-    expect(bySince.get("/s")).toBe(NOW - 333);
+    expect(bySince.get("/d")).toBe(NOW - HALF_HOUR - 333);
   });
 });
 
@@ -201,15 +312,15 @@ describe("bridge asks", () => {
     expect(buildAttentionQueue([seat], NOW)[0]!.since).toBe(NOW - 900);
   });
 
-  test("it sorts inside the hard-blocked segment, ahead of a stalled tail", () => {
+  test("it sorts by its own age among the other hard blocks", () => {
     const files = [
       entry({ path: "/stall", activity: "stalled", proc: "running", mtime: NOW - 7000 }),
       entry({ path: "/fresh-q", pendingQuestion: question("toolu_q", NOW - 5) }),
       entry({ path: "/seat", bridgeAsk: ASK }),
     ];
     const queue = buildAttentionQueue(files, NOW);
-    expect(queue.map((item) => item.file.path)).toEqual(["/seat", "/fresh-q", "/stall"]);
-    expect(queue.map((item) => item.tier)).toEqual(["blocked", "blocked", "stalled"]);
+    expect(queue.map((item) => item.file.path)).toEqual(["/seat", "/fresh-q"]);
+    expect(queue.map((item) => item.tier)).toEqual(["blocked", "blocked"]);
   });
 
   test("the project filter keeps the seat inside its own project queue", () => {
@@ -260,15 +371,16 @@ describe("bridge asks", () => {
     expect(buildAttentionQueue([seat], NOW)).toEqual([]);
   });
 
-  test("the ask's own expiry is one of the ticks the queue schedules", () => {
+  test("the ask's own expiry is one of the ticks the queue schedules, and an owed message's half hour another", () => {
     const filed = NOW - 900;
     const files = [
       entry({ path: "/seat", bridgeAsk: { id: "lane-4-blocked", at: new Date(filed * 1000).toISOString() } }),
       entry({ path: "/stall", activity: "stalled", proc: "running", mtime: NOW - 60 }),
+      entry({ path: "/d", stuckDelivery: owed(NOW - 60) }),
     ];
     expect(attentionExpiries(files).sort((a, b) => a - b)).toEqual([
       filed + BRIDGE_ASK_TTL_SECONDS,
-      NOW - 60 + STALLED_ATTENTION_TTL,
+      NOW - 60 + HALF_HOUR,
     ].sort((a, b) => a - b));
     /* An unparseable time schedules nothing: there is no moment to wake for. */
     expect(attentionExpiries([entry({ path: "/seat", bridgeAsk: { id: "x", at: "whenever" } })])).toEqual([]);

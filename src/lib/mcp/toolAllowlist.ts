@@ -199,6 +199,32 @@ export function permitAttentionHandoff(
 }
 
 /**
+ * Who may clear a needs-you flag off the operator's board
+ * (docs/design/needs-attention.md §5).
+ *
+ * `dismiss_attention` changes what the operator is told needs them, so it is
+ * entitled exactly as `request_attention` is: the operator's own root/gateway
+ * session, and the validated orchestrator seat of the project the target lives
+ * in. A worker is refused with nothing written, which is what keeps a stage
+ * agent from clearing its own question off the operator's board. The same two
+ * phases: identity first, the project once the target has named one.
+ */
+export function permitAttentionDismissal(
+  authority: AttentionCallerAuthority,
+  seats: readonly { conversationId: string; project: string | null }[],
+  targetProject: string | null,
+): AttentionHandoffVerdict {
+  const verdict = permitAttentionHandoff(authority, seats, targetProject);
+  if (verdict.allowed) return verdict;
+  const error = verdict.refusedAs === "unidentified"
+    ? "dismiss_attention clears what the operator is told needs them, and no durable evidence names this caller; only the root session or the designated orchestrator may clear it"
+    : verdict.refusedAs === "worker"
+      ? "dismiss_attention clears what the operator is told needs them; a worker session may not clear it — signal the orchestrator or the root session instead"
+      : verdict.error;
+  return { ...verdict, error };
+}
+
+/**
  * Who may put words in the operator's own composer (#1202).
  *
  * `suggest_replies` writes the drafts that render under the manager's message

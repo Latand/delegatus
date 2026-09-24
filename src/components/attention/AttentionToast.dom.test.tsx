@@ -134,16 +134,15 @@ const WAITS: Array<[string, Partial<FileEntry>, string]> = [
     "a question",
   ],
   ["a plan", { pendingQuestion: { ...question, kind: "plan", plan: "1. read 2. write" } }, "plan approval"],
-  ["a wall", { rateLimit: { source: "account", accountId: "primary", window: "session", resetAt: null } }, "rate-limited"],
   [
     "a terminal prompt, whatever the menu says",
     { waitingInput: { since: NOW - 60, screenTail: "❯ 1. Yes", target: "llv:0.0", menu: { question: "Allow the write to src/?", tabs: [], options: [] } } },
     "permission prompt",
   ],
-  ["an interrupted turn", { activity: "stalled", mtime: NOW - 60 }, "interrupted or awaiting permission"],
+  ["a message owed for half an hour", { stuckDelivery: { since: new Date((NOW - 31 * 60) * 1000).toISOString(), attempts: 2, state: "held" } }, "message delivery"],
 ];
 
-test("a plan, a wall, a terminal prompt and an interrupted turn each name themselves", async () => {
+test("a plan, a terminal prompt and an owed message each name themselves", async () => {
   for (const [, overrides, expected] of WAITS) {
     const host = await render(
       <AttentionToast file={file(overrides as Partial<FileEntry>)} mobile={false} onOpen={() => {}} onDismiss={() => {}} />,
@@ -232,4 +231,17 @@ test("the phone banner names the decision under «Needs you», and open and dism
   await click(open);
   await click(dismiss);
   expect(events).toEqual(["open", "dismiss"]);
+});
+
+/* docs/design/needs-attention.md §3, reasons 4 and 7: a wall and a quiet turn
+   ask nothing of the operator, so no toast names them as a decision. */
+test("a wall and an interrupted turn are not decisions: the toast keeps its generic wording", async () => {
+  for (const overrides of [
+    { rateLimit: { source: "account", accountId: "primary", window: "session", resetAt: null } },
+    { activity: "stalled", mtime: NOW - 60 },
+  ] as Array<Partial<FileEntry>>) {
+    const host = await render(<AttentionToast file={file(overrides)} mobile={false} onOpen={() => {}} onDismiss={() => {}} />);
+    expect(title(host)).toBe("Agent is waiting for a reply");
+    await unmount();
+  }
 });

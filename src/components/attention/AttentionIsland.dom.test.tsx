@@ -281,18 +281,15 @@ test("a queue row carries the decision line, the title, the project and the age"
   expect(opened).toEqual([item.id]);
 });
 
-test("a terminal prompt and a stalled agent each keep their own wording", async () => {
+test("a terminal prompt keeps its own wording, and a stalled agent is not in the queue", async () => {
   /* The prompt is named by its KIND, never by the menu the terminal happens to
      be drawing: «❯ 1. Yes» names the options, and a row that says it has told
      the operator nothing about what they are being asked to allow. */
   const terminal = buildAttentionQueue([entry("/alpha-terminal", "alpha", NOW - 60)], NOW)[0]!;
-  let host = await render(<AttentionQueueRow item={terminal} onOpen={() => {}} />);
+  const host = await render(<AttentionQueueRow item={terminal} onOpen={() => {}} />);
   expect(host.querySelector("[data-attention-decision]")!.textContent).toBe("permission prompt");
-  await act(async () => { root?.unmount(); });
-  document.body.replaceChildren();
 
+  /* docs/design/needs-attention.md §3, reason 7: a quiet turn asks nothing. */
   const stalledFile = { ...entry("/alpha-stalled", "alpha", NOW - 60), waitingInput: null, activity: "stalled", proc: "running", mtime: NOW - 60 } as FileEntry;
-  const stalled = buildAttentionQueue([stalledFile], NOW)[0]!;
-  host = await render(<AttentionQueueRow item={stalled} onOpen={() => {}} />);
-  expect(host.querySelector("[data-attention-decision]")!.textContent).toBe("interrupted or awaiting permission");
+  expect(buildAttentionQueue([stalledFile], NOW)).toEqual([]);
 });

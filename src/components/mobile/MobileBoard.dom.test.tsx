@@ -6,6 +6,7 @@ import { flushSync } from "react-dom";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { applyBoardMutations } from "@/lib/board/mutations";
 import { translate, type Locale, type TFunction } from "@/lib/i18n";
+import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -101,6 +102,11 @@ const OVERRIDES: Record<string, unknown> = {
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     requestLog.push(`${init?.method ?? "GET"} ${url}`);
+    if (url === "/api/attention/dismissals" && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      dismissals.push(body);
+      return jsonResponse({ ok: true, dismissed: [], alreadyClear: [], at: new Date().toISOString(), by: { kind: "operator", surface: "phone" }, undo: body.undo === true });
+    }
     if (url.startsWith("/api/pipelines/") && init?.method === "PATCH") {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       pipelinePatches.push({ url, body });
@@ -143,6 +149,8 @@ let seatReads = 0;
 /** Every request this phone made, as `METHOD url`. */
 const requestLog: string[] = [];
 const pipelinePatches: Array<{ url: string; body: Record<string, unknown> }> = [];
+/** Every POST to `/api/attention/dismissals` (docs/design/needs-attention.md §5). */
+const dismissals: Array<Record<string, unknown>> = [];
 let boardRejectsClose = false;
 
 const HAS: Record<string, boolean> = {};
@@ -280,6 +288,7 @@ beforeEach(() => {
   seatReads = 0;
   requestLog.length = 0;
   pipelinePatches.length = 0;
+  dismissals.length = 0;
   boardRejectsClose = false;
   pendingPipelineActs.cancel();
   /* The seat read is cached per project for the whole module (#1149), so a
@@ -335,7 +344,8 @@ test("with no conversation focused the phone leaf is the board: the seat card ab
   expect(lane.textContent).toContain("Fast conversation switching");
   /* The pipeline card (#2072 slice 3): the badge in the desktop's state word,
      the stage chain by the names the stage list gives, and the reason. */
-  expect(lane.querySelector(".pstate-chip")?.textContent).toBe(translate("en", "pipelineState.needs_decision"));
+  /* It names its reason and the stage it stopped on (docs/design/needs-attention.md §4). */
+  expect(lane.querySelector(".pstate-chip")?.textContent).toBe(translate("en", "needs.laneDecisionStage", { stage: "review" }));
   expect([...lane.querySelectorAll(".pb-pill .pb-name")].map((node) => node.textContent)).toEqual(["Implement", "Review"]);
   expect(lane.querySelector("[data-pipeline-reason]")?.textContent).toBe(
     `${translate("en", "pipelineBlock.reason.failed", { stage: "Review" })} · ${translate("en", "pipelineVerdict.findings", { count: 2 })} · 1h`,
@@ -517,10 +527,13 @@ test("a row at its account's limit says which account and when the window reopen
   expect(await waitFor(() => board(root) !== null)).toBe(true);
   const row = rowFor(root, limited.path)!;
   expect(row).not.toBeNull();
-  /* A wall needs the operator, so the row is pinned, edged and badged. */
-  expect(row.getAttribute("data-needs")).toBe("1");
-  expect(row.getAttribute("data-edge")).toBe("warning");
-  expect(q(row, "[data-phone-card-badge]")!.textContent).toBe(translate("en", "mobile2.board.badgeLimit"));
+  /* A wall lifts on its own clock and asks nothing of the operator
+     (docs/design/needs-attention.md §3, reason 4): no pin, no edge, no badge,
+     and the row still says which account and when. */
+  expect(row.getAttribute("data-needs")).toBeNull();
+  expect(row.getAttribute("data-edge")).toBeNull();
+  expect(q(row, "[data-phone-card-badge]")).toBeNull();
+  expect(q(row, "[data-phone-card-state]")!.className).toContain("text-warning");
   expect(q(row, "[data-phone-card-meta]")!.textContent).toContain(translate("en", "mobile2.board.limitAccountResets", {
     account: "Main", time: formatResetClock(RESET_AT, NOW),
   }));
@@ -619,27 +632,32 @@ test("a close the server refuses brings the row back and says the close was not 
   expect(mutations.some((mutation) => mutation.kind === "close")).toBe(false);
 });
 
-test("a lane parked on a decision holds to Hide and Close lane: Hide sends the reversible dismiss, Close lane waits out its receipt", async () => {
+test("a lane parked on a decision holds to Dismiss and Close lane: Dismiss clears it through the dismissal route, Close lane waits out its receipt", async () => {
   const root = mount({ pipelines: [decisionPipeline] });
   expect(await waitFor(() => board(root) !== null && laneCard(root) !== null)).toBe(true);
   inbox(root);
   await settle();
   await hold(laneCard(root)!);
-  expect(sheetActions()).toEqual(["hide", "closeLane"]);
-  expect(page().textContent).toContain(translate("en", "mobile2.board.hidePipelineHint"));
+  expect(sheetActions()).toEqual(["dismiss", "closeLane"]);
+  expect(page().textContent).toContain(translate("en", "needs.dismissRowHint"));
   expect(page().textContent).toContain(translate("en", "mobile2.board.closeLaneHint"));
   expect(q(page(), "[data-phone-card-sheet]")!.textContent).not.toMatch(/\b(Mute|Delete)\b/);
   /* The held press did not open the pipeline under it. */
   expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
 
-  click(q(page(), '[data-phone-card-action="hide"]'));
+  /* docs/design/needs-attention.md §5: the one dismissal every surface sends,
+     attributed to the operator on the phone, and its Undo. */
+  click(q(page(), '[data-phone-card-action="dismiss"]'));
   expect(getMobileNav().getState().sheet).toBeNull();
-  expect(await waitFor(() => pipelinePatches.length === 1)).toBe(true);
-  expect(pipelinePatches[0]).toEqual({ url: `/api/pipelines/${decisionPipeline.id}`, body: { action: "dismiss" } });
-  expect(receiptNow()!.textContent).toContain(translate("en", "mobile2.board.pipelineHidden", { task: decisionPipeline.task }));
-  click(q(receiptNow()!, '[data-mobile2-receipt-undo="restore"]'));
-  expect(await waitFor(() => pipelinePatches.length === 2)).toBe(true);
-  expect(pipelinePatches[1]!.body).toEqual({ action: "undismiss" });
+  expect(await waitFor(() => dismissals.length === 1)).toBe(true);
+  /* It names the lane as the card drew it, so a lane that parked again
+     before the tap landed is not cleared. */
+  expect(dismissals[0]).toEqual({ target: { kind: "subjects", subjects: [{ kind: "pipeline", pipelineId: decisionPipeline.id, laneMovedAt: laneMovedAt(decisionPipeline) }] }, undo: false, surface: "phone" });
+  expect(receiptNow()!.textContent).toContain(translate("en", "needs.dismissedReceipt", { title: decisionPipeline.task }));
+  click(q(receiptNow()!, '[data-mobile2-receipt-undo="undo"]'));
+  expect(await waitFor(() => dismissals.length === 2)).toBe(true);
+  expect(dismissals[1]).toMatchObject({ undo: true, surface: "phone" });
+  expect(pipelinePatches).toHaveLength(0);
 
   /* Close lane: the card goes on the tap, and nothing is sent inside the window. */
   expect(await waitFor(() => laneCard(root) !== null)).toBe(true);
@@ -648,18 +666,18 @@ test("a lane parked on a decision holds to Hide and Close lane: Hide sends the r
   expect(await waitFor(() => q(root, '[data-phone-card-kind="pipeline"]') === null)).toBe(true);
   expect(receiptNow()!.textContent).toContain(translate("en", "mobile2.pipeline.archived"));
   await settle();
-  expect(pipelinePatches).toHaveLength(2);
+  expect(pipelinePatches).toHaveLength(0);
   click(q(receiptNow()!, '[data-mobile2-receipt-undo="restore"]'));
   expect(await waitFor(() => laneCard(root) !== null)).toBe(true);
   await settle();
-  expect(pipelinePatches).toHaveLength(2);
+  expect(pipelinePatches).toHaveLength(0);
 
   /* Letting the window close sends the engine's own close. */
   await hold(laneCard(root)!);
   click(q(page(), '[data-phone-card-action="closeLane"]'));
   flushSync(() => pendingPipelineActs.flush());
-  expect(await waitFor(() => pipelinePatches.length === 3)).toBe(true);
-  expect(pipelinePatches[2]!.body).toEqual({ action: "close" });
+  expect(await waitFor(() => pipelinePatches.length === 1)).toBe(true);
+  expect(pipelinePatches[0]!.body).toEqual({ action: "close" });
 });
 
 test("a finger that moves is the pager or the column scrolling: it opens no sheet and no card", async () => {

@@ -27,6 +27,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { BADGE_LABEL, ConversationRow } from "./MobileBoard";
 import { launchedAt, mobileRowState, nowFragment, type MobileBoardConversation } from "./mobileBoardModel";
+import { attentionReason } from "../attention";
 import { mobilePipelineActions, pendingPipelineActs, usePhonePipelineActs, useScrolledAway, type PendingPipelineActs } from "./MobilePipelineScreen";
 import { showReceipt } from "./MobileReceipt";
 import type { MobileRowActionTarget } from "./MobileRowActions";
@@ -869,7 +870,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   launchedAt: launchedAt(agent.file),
                   crowned: false,
                 };
-                const actions = props.rowActions?.({ kind: "conversation", row: { path: agent.file.path, title: rowTitle } }) ?? [];
+                const reason = row.state.key === "waiting" ? attentionReason(agent.file, now) : null;
+                const actions = props.rowActions?.({ kind: "conversation", row: { path: agent.file.path, title: rowTitle, conversationId: agent.file.conversationId ?? null, reasonId: reason?.id ?? null } }) ?? [];
                 const view = <ConversationRow row={row} now={now} onOpen={props.onOpenConversation} />;
                 return (
                   <div key={agent.file.path} data-phone-task-agent={agent.file.path} data-phone-task-agent-stage={agent.stage?.stage.id}>

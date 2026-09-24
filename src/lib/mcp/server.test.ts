@@ -1748,6 +1748,7 @@ describe("MCP tool service", () => {
         "lifecycle_events",
         "request_attention",
         "suggest_replies",
+        "dismiss_attention",
         "bridge_report",
         "bridge_directive",
         "get_orchestrator",

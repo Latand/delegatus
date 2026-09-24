@@ -2179,6 +2179,222 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
 }, 600_000);
 
 /*
+ * docs/design/needs-attention.md — why a phone card needs the operator, its
+ * Dismiss, and an agent's request_attention that moves nothing, on the real
+ * Viewer over the fixture's `?needs=1` scene at 390 × 844:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable LLV_NEEDS_PHASE=after \
+ *     LLV_NEEDS_FRAMES=<dir> bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "needs attention"
+ *
+ * The same case renders the scene on a checkout without the change
+ * (`LLV_NEEDS_PHASE=before`), which records frames and readings and gates
+ * nothing, so the two phases are the before and after of one scene. Frames go
+ * to `LLV_NEEDS_FRAMES` (default `.artifacts/needs-attention`, not committed);
+ * the after readings to `evidence/needs-attention/phone.json`.
+ */
+const NEEDS_PHASE = process.env.LLV_NEEDS_PHASE === "before" ? "before" : "after";
+const NEEDS_OUT = path.resolve(process.env.LLV_NEEDS_FRAMES || ".artifacts/needs-attention");
+const NEEDS_EVIDENCE = path.resolve("evidence/needs-attention");
+const NEEDS_READER = "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl";
+
+/** What one column shows about what needs the operator, card by card. */
+const needsReading = (page: Page, status: string) => page.evaluate((wanted) => {
+  const column = document.querySelector<HTMLElement>(`[data-phone-kanban-column="${wanted}"]`)!;
+  const rect = (element: Element | null) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+  };
+  const cross = (a: DOMRect, b: DOMRect) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+  return {
+    tabNeeds: document.querySelector(`[data-phone-kanban-tab="${wanted}"] [data-phone-tab-needs]`)?.textContent ?? null,
+    cards: [...column.querySelectorAll<HTMLElement>("[data-phone-card]")].map((card) => {
+      const frame = card.closest("[data-phone-card-frame]");
+      const dismiss = frame?.querySelector("[data-phone-card-dismiss]") ?? null;
+      const undo = frame?.querySelector("[data-phone-card-undo]") ?? null;
+      const inks = [...card.querySelectorAll("[data-phone-card-title], [data-phone-card-badge]")].map((node) => node.getBoundingClientRect());
+      const control = (dismiss ?? undo)?.getBoundingClientRect() ?? null;
+      return {
+        key: card.getAttribute("data-phone-card"),
+        title: card.querySelector("[data-phone-card-title]")?.textContent ?? "",
+        needs: card.getAttribute("data-needs") === "1",
+        edge: card.closest("[data-phone-card-frame]") ? frame?.className.includes("inset_3px") ?? false : card.getAttribute("data-edge"),
+        badge: card.querySelector("[data-phone-card-badge]")?.textContent ?? null,
+        state: card.querySelector("[data-phone-card-state]")?.textContent ?? null,
+        cleared: card.querySelector("[data-phone-card-cleared]")?.textContent ?? null,
+        dismiss: rect(dismiss),
+        undo: rect(undo),
+        /* The card's own button and its control are side by side, never on
+           top of each other, and the control covers none of the card's text. */
+        controlCrossesCard: control ? cross(control, card.getBoundingClientRect()) > 0.5 : false,
+        controlOnText: control ? inks.some((ink) => cross(control, ink) > 0.5) : false,
+      };
+    }),
+  };
+}, status);
+
+/** Where the operator is: the screen on top and how far its feed is scrolled. */
+const whereAmI = (page: Page) => page.evaluate(() => {
+  const screens = [...document.querySelectorAll<HTMLElement>("[data-mobile2-screen]")];
+  const top = screens.at(-1) ?? null;
+  const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]");
+  return {
+    screen: top?.getAttribute("data-mobile2-screen") ?? null,
+    conversation: top?.getAttribute("data-mobile2-conversation") ?? null,
+    feedScrollTop: feed ? Math.round(feed.scrollTop) : null,
+    banner: document.querySelectorAll("[data-mobile2-banner]").length,
+    badge: document.querySelector("[data-mobile2-open='attention']")?.getAttribute("aria-label") ?? null,
+    dot: document.querySelectorAll("[data-mobile2-notice-dot]").length,
+    hash: location.hash,
+  };
+});
+
+browserTest("needs attention: why a phone card needs the operator, its Dismiss, and a request that moves nothing", async () => {
+  fs.mkdirSync(NEEDS_OUT, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const readings: Record<string, unknown> = { phase: NEEDS_PHASE };
+  const failures: string[] = [];
+  const fail = (label: string) => failures.push(label);
+  const after = NEEDS_PHASE === "after";
+  const shot = (page: Page, name: string) => page.screenshot({ path: path.join(NEEDS_OUT, `${NEEDS_PHASE}-${name}.png`) });
+  try {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 3, colorScheme: "light" });
+    await context.addInitScript(() => { localStorage.setItem("llv_lang", "en"); });
+    try {
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await page.goto(`${fixtureBase}/?kanban=1&needs=1&notice=1#p=atlas`);
+      await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+      await pause(page, 900);
+
+      /* Assigned: a card for each reason that still asks, then the rest. */
+      await page.locator('[data-phone-kanban-tab="assigned"]').click();
+      await pagerAtRest(page);
+      await shot(page, "assigned");
+      const assigned = await needsReading(page, "assigned");
+      readings.assigned = assigned;
+      const geometry = await readColumn(page);
+      readings.assignedGeometry = { smallControls: geometry.smallControls, crossingControls: geometry.crossingControls, inkOverlaps: geometry.inkOverlaps, inkOnControls: geometry.inkOnControls, pinnedFirst: geometry.pinnedFirst };
+      /* The card someone cleared, scrolled to where the operator reads it. */
+      await page.evaluate(() => document.querySelector('[data-phone-card="task:t-cleared"]')?.scrollIntoView({ block: "center" }));
+      await pause(page, 400);
+      await shot(page, "assigned-cleared");
+
+      /* Inbox: the question, then what no task owns, stalled and walled among it. */
+      await page.locator('[data-phone-kanban-tab="inbox"]').click();
+      await pagerAtRest(page);
+      await shot(page, "inbox");
+      const inbox = await needsReading(page, "inbox");
+      readings.inbox = inbox;
+      await page.evaluate(() => document.querySelector('[data-phone-kanban-column="inbox"] [data-phone-kanban-unlinked]')?.scrollIntoView({ block: "start" }));
+      await pause(page, 400);
+      await shot(page, "inbox-loose");
+
+      if (after) {
+        const byKey = new Map(assigned.cards.map((card) => [card.key, card] as const));
+        const expectBadge = (key: string, words: RegExp) => {
+          const card = byKey.get(key);
+          if (!card?.needs) fail(`${key} is not pinned as needing the operator`);
+          else if (!words.test(card.badge ?? "")) fail(`${key} names «${card.badge}», wanted ${words}`);
+          if (card && (!card.dismiss || card.dismiss.width < 44 || card.dismiss.height < 44)) fail(`${key} has no 44 × 44 Dismiss: ${JSON.stringify(card.dismiss)}`);
+          if (card?.controlCrossesCard || card?.controlOnText) fail(`${key}'s Dismiss sits over the card`);
+        };
+        expectBadge("task:t-data", /^needs a decision · /);
+        expectBadge("task:t-copilot", /^review budget spent · /);
+        expectBadge("task:t-prompt", /^permission prompt$/);
+        expectBadge("task:t-owed", /^message not delivered$/);
+        const cleared = byKey.get("task:t-cleared");
+        if (!cleared || cleared.needs || !/^Cleared · orchestrator · /.test(cleared.cleared ?? "")) fail(`the cleared card reads ${JSON.stringify(cleared)}`);
+        if (cleared && (!cleared.undo || cleared.undo.height < 44)) fail("the cleared card has no 44 px Undo");
+        if (geometry.crossingControls.length) fail(`controls crossing: ${JSON.stringify(geometry.crossingControls)}`);
+        if (geometry.inkOverlaps.length) fail(`text over text: ${JSON.stringify(geometry.inkOverlaps.slice(0, 6))}`);
+        if (geometry.inkOnControls.length) fail(`text over a control: ${JSON.stringify(geometry.inkOnControls.slice(0, 6))}`);
+        if (geometry.smallControls.length) fail(`controls under 44 px: ${JSON.stringify(geometry.smallControls)}`);
+        const loose = inbox.cards.filter((card) => card.key !== "task:t-systemd" && card.state);
+        if (!loose.some((card) => /resets/.test(card.state ?? ""))) fail("the walled row does not say when it resets");
+        if (!loose.some((card) => /^stalled/i.test(card.state ?? ""))) fail("a stalled row lost its word");
+        if (inbox.cards.some((card) => card.state && card.needs)) fail("a stalled or walled row is pinned as needing the operator");
+
+        /* One tap on Dismiss: the card clears on the tap and says who cleared it. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pagerAtRest(page);
+        await page.evaluate(() => document.querySelector('[data-phone-kanban-column="assigned"]')!.scrollTop = 0);
+        await pause(page, 300);
+        await page.locator('[data-phone-card-dismiss="task:t-prompt"]').click();
+        await pause(page, 900);
+        await shot(page, "dismissed");
+        const dismissedReading = await needsReading(page, "assigned");
+        readings.dismissed = dismissedReading;
+        readings.dismissals = await page.evaluate(() => (window as unknown as { evidence: { dismissals: unknown[] } }).evidence.dismissals);
+        const prompt = dismissedReading.cards.find((card) => card.key === "task:t-prompt");
+        if (!prompt || prompt.needs || !/^Cleared · you · /.test(prompt.cleared ?? "")) fail(`the dismissed card reads ${JSON.stringify(prompt)}`);
+      }
+
+      /* The operator reads a conversation; the orchestrator asks for them. */
+      await page.locator('[data-phone-kanban-tab="inbox"]').click();
+      await pagerAtRest(page);
+      await page.locator(`[data-phone-card-agent="${NEEDS_READER}"]`).first().scrollIntoViewIfNeeded();
+      await page.locator(`[data-phone-card-agent="${NEEDS_READER}"]`).first().click();
+      await page.waitForSelector('[data-mobile2-screen="chat"]', { timeout: 10_000 });
+      await pause(page, 1_200);
+      await page.evaluate(() => {
+        const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]");
+        if (feed) feed.scrollTop = Math.max(0, feed.scrollHeight - feed.clientHeight - 360);
+      });
+      await pause(page, 500);
+      const before = await whereAmI(page);
+      await shot(page, "chat-before-notice");
+      await page.evaluate(() => {
+        (window as unknown as { evidence: { noticeOn: boolean } }).evidence.noticeOn = true;
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await pause(page, 1_500);
+      const arrived = await whereAmI(page);
+      await shot(page, "chat-notice");
+      readings.chat = { before, arrived };
+      if (before.screen !== arrived.screen || before.conversation !== arrived.conversation || before.hash !== arrived.hash) fail(`the screen moved: ${JSON.stringify({ before, arrived })}`);
+      if (before.feedScrollTop !== arrived.feedScrollTop) fail(`the feed moved from ${before.feedScrollTop} to ${arrived.feedScrollTop}`);
+      if (arrived.banner > before.banner) fail("a banner was put above the conversation");
+      if (after && arrived.dot !== 1) fail(`the badge's dot is ${arrived.dot}, wanted one`);
+
+      /* The ⚠ sheet: the request as a row, above the queue. */
+      const badge = page.locator("[data-mobile2-open='attention']");
+      if (await badge.count()) {
+        await badge.click();
+        await pause(page, 700);
+        await shot(page, "sheet-notice");
+        readings.sheet = await page.evaluate(() => ({
+          notices: [...document.querySelectorAll("[data-mobile2-notice-row]")].map((row) => row.textContent ?? ""),
+          queue: [...document.querySelectorAll("[data-attention-row]")].map((row) => row.textContent ?? ""),
+          dotAfterOpen: document.querySelectorAll("[data-mobile2-notice-dot]").length,
+        }));
+        const sheet = readings.sheet as { notices: string[]; dotAfterOpen: number };
+        if (after && sheet.notices.length !== 1) fail(`the sheet lists ${sheet.notices.length} notices`);
+        if (after && sheet.dotAfterOpen !== 0) fail("the dot stays lit after the sheet showed the notice");
+      } else if (after) {
+        fail("no ⚠ badge to open");
+      }
+      if (pageErrors.length) fail(`page errors: ${pageErrors.join(" | ")}`);
+      await page.close();
+    } finally {
+      await context.close();
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  readings.failures = failures;
+  fs.writeFileSync(path.join(NEEDS_OUT, `readings-${NEEDS_PHASE}.json`), `${JSON.stringify(readings, null, 2)}\n`);
+  if (after) {
+    fs.mkdirSync(NEEDS_EVIDENCE, { recursive: true });
+    fs.writeFileSync(path.join(NEEDS_EVIDENCE, "phone.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }
+}, 300_000);
+
+/*
  * #2105 — Back and screen history on the phone follow the path the operator
  * took. The kanban fixture (`?kanban=1`) at 390 × 844, dark, touch. Every
  * phone screen and every sheet over one is one history entry; the browser's

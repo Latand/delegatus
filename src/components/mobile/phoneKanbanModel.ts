@@ -1,10 +1,11 @@
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import type { ClearedNeed, NeedReason } from "@/components/attention/needReason";
 import { KANBAN_STATUSES, type KanbanCard, type KanbanMember, type KanbanModel, type KanbanPipeline } from "@/components/kanban/kanbanModel";
 import { pipelineEnded, pipelineNeedsYou } from "@/components/pipelines/pipelineBlockModel";
 
-import { mobileRowState, pipelineHiddenFromBoard, type MobileRowState } from "./mobileBoardModel";
+import { mobileRowState, pipelineAsks, type MobileRowState } from "./mobileBoardModel";
 
 /*
  * The phone's columns (#2072 slice 4; docs/design/phone-kanban.md §3.2, §3.4),
@@ -40,10 +41,11 @@ export const DEFAULT_COLUMN: TaskStatus = "assigned";
 
 export type PhoneCardKind = "task" | "pipeline" | "conversation" | "flow";
 
-/** Why a card needs the operator: one reason, which its badge and edge say. */
+/** Why a card needs the operator: one of the card's `reasons`, the one that
+    asked first by the attention queue's order, which its badge and edge say. */
 export type PhoneNeed =
-  | { kind: "pipeline"; pipeline: Pipeline }
-  | { kind: "conversation"; member: KanbanMember; state: MobileRowState };
+  | { kind: "pipeline"; pipeline: Pipeline; reason: NeedReason }
+  | { kind: "conversation"; member: KanbanMember; state: MobileRowState; reason: NeedReason };
 
 export interface PhoneCard {
   /** The band id, stable across polls. */
@@ -51,6 +53,12 @@ export interface PhoneCard {
   kind: PhoneCardKind;
   card: KanbanCard;
   need: PhoneNeed | null;
+  /** Every reason the card carries that the column counts, oldest first: what
+      its Dismiss clears. */
+  reasons: NeedReason[];
+  /** The newest dismissal still live, while nothing else asks: the muted
+      «Cleared · who» line and its Undo. */
+  cleared: ClearedNeed | null;
   /** The card's one coloured edge: the need's hue. A task's colour label
       takes the edge only when nothing is needed (the component draws it). */
   edge: "warning" | "danger" | null;
@@ -139,14 +147,26 @@ function firstAgentOf(card: KanbanCard): FileEntry | null {
 }
 
 /** Whether a lane asks the operator for anything now: parked on them, and not
-    set aside — hidden for this decision or closing. */
+    set aside — dismissed for this decision or closing. */
 function asks(pipeline: Pipeline, closing: ReadonlySet<string>): boolean {
-  return pipelineNeedsYou(pipeline) && !pipelineHiddenFromBoard(pipeline) && !closing.has(pipeline.id);
+  return pipelineAsks(pipeline) && !closing.has(pipeline.id);
+}
+
+/** The card's reasons the ⚠ queue counts: a closing lane asks nothing. */
+function liveReasons(card: KanbanCard, closing: ReadonlySet<string>): NeedReason[] {
+  return card.reasons.filter((need) => need.subject !== "pipeline" || !closing.has(need.pipeline.id));
 }
 
 /** Whether the card needs the operator, as the ⚠ queue reads it. */
 function cardNeeds(card: KanbanCard, closing: ReadonlySet<string>): boolean {
-  return card.members.some((member) => member.needsYou) || card.pipelines.some((summary) => asks(summary.pipeline, closing));
+  return liveReasons(card, closing).length > 0;
+}
+
+/** Where a reason stands in the attention queue, or Infinity when the queue
+    does not rank it. */
+function rankOf(need: NeedReason, rank: ReadonlyMap<string, number>): number {
+  const key = need.subject === "pipeline" ? attentionKey.pipeline(need.pipeline.id) : attentionKey.conversation(need.file.path);
+  return rank.get(key) ?? Infinity;
 }
 
 function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<string, number>, now: number, closing: ReadonlySet<string>): PhoneCard {
@@ -155,7 +175,7 @@ function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<stri
   for (const summary of card.pipelines) {
     if (summary === shown) continue;
     const state = summary.pipeline.state;
-    if (pipelineNeedsYou(summary.pipeline)) others.needs += 1;
+    if (asks(summary.pipeline, closing)) others.needs += 1;
     else if (RUNNING.has(state)) others.running += 1;
     else if (state === "paused") others.paused += 1;
   }
@@ -164,23 +184,21 @@ function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<stri
   /* One reason, the one that asked first: its words are the badge and its hue
      the edge, so a card never draws two status colours (§3.4). A lane the
      queue does not rank still outranks a conversation it does not rank. */
-  let need: PhoneNeed | null = null;
+  const reasons = liveReasons(card, closing);
+  let first: NeedReason | null = null;
   let best = Infinity;
-  for (const summary of card.pipelines) {
-    if (!asks(summary.pipeline, closing)) continue;
-    const at = rank.get(attentionKey.pipeline(summary.pipeline.id)) ?? Infinity;
-    if (!need || at < best) {
-      need = { kind: "pipeline", pipeline: summary.pipeline };
+  for (const need of [...reasons.filter((entry) => entry.subject === "pipeline"), ...reasons.filter((entry) => entry.subject === "conversation")]) {
+    const at = rankOf(need, rank);
+    if (!first || at < best) {
+      first = need;
       best = at;
     }
   }
-  for (const member of card.members) {
-    if (!member.needsYou) continue;
-    const at = rank.get(attentionKey.conversation(member.file.path)) ?? Infinity;
-    if (!need || at < best) {
-      need = { kind: "conversation", member, state: mobileRowState(member.file, now) };
-      best = at;
-    }
+  let need: PhoneNeed | null = null;
+  if (first?.subject === "pipeline") need = { kind: "pipeline", pipeline: first.pipeline, reason: first };
+  else if (first?.subject === "conversation") {
+    const member = card.members.find((entry) => entry.file.path === first.file.path);
+    if (member) need = { kind: "conversation", member, state: mobileRowState(member.file, now), reason: first };
   }
   const edge = need?.kind === "conversation" ? need.state.edge ?? "warning" : need ? "warning" : null;
 
@@ -192,19 +210,13 @@ function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<stri
      agent and its age; the agents line then only adds agents still working. */
   const says = need?.kind === "conversation" ? working > 0 : !shown || outside > 0;
   const agents = kind === "task" && says ? { working, conversations: card.conversations, atMs } : null;
-  return { key: card.id, kind, card, need, edge, shown, others, finished, agents, firstAgent: firstAgentOf(card) };
+  const cleared = reasons.length ? null : card.cleared[0] ?? null;
+  return { key: card.id, kind, card, need, reasons, cleared, edge, shown, others, finished, agents, firstAgent: firstAgentOf(card) };
 }
 
 /** Where each card stands in the attention queue: its earliest ask. */
 function askRank(card: KanbanCard, rank: ReadonlyMap<string, number>, closing: ReadonlySet<string>): number {
-  let best = Infinity;
-  for (const summary of card.pipelines) {
-    if (asks(summary.pipeline, closing)) best = Math.min(best, rank.get(attentionKey.pipeline(summary.pipeline.id)) ?? Infinity);
-  }
-  for (const member of card.members) {
-    if (member.needsYou) best = Math.min(best, rank.get(attentionKey.conversation(member.file.path)) ?? Infinity);
-  }
-  return best;
+  return Math.min(Infinity, ...liveReasons(card, closing).map((need) => rankOf(need, rank)));
 }
 
 export function buildPhoneKanban({ model, attention = [], doneShown = DONE_WINDOW, closing: closingIds = [], now }: PhoneKanbanInput): PhoneKanbanModel {

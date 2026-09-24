@@ -1,10 +1,13 @@
 "use client";
 
-import { ChevronRight } from "@/components/icons";
+import { useEffect } from "react";
+
+import { ChevronRight, X } from "@/components/icons";
 import { ChatEngineMark } from "@/components/mobile/chatEngineMark";
 import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardModel";
 import { topScreen, useMobileNav, type MobileScreen } from "@/components/mobile/mobileNav";
-import { MobileSheet } from "@/components/mobile/MobileSheet";
+import { MobileSheet, MobileSheetSection } from "@/components/mobile/MobileSheet";
+import type { AttentionNotice } from "@/lib/attention/types";
 import { useLocale } from "@/lib/i18n";
 
 import type { AttentionItem } from "../attention";
@@ -18,9 +21,8 @@ import { decisionLine } from "./decision";
  * The Needs-you sheet (issue #1439, lane 8; docs/design/mobile-v2/README.md
  * §4.1, §4.6; the prototype's `attentionSheet`). The bar's `⚠ n` opens it
  * over whatever screen is showing, and it lists the ONE phone queue
- * (`attentionQueue.ts`): conversations waiting on a decision, stalled or at
- * their account limit, and pipelines in `needs_decision`, in the board's
- * Needs-you order. Its header says «Needs you · n» and, when there is more
+ * (`attentionQueue.ts`): conversations waiting on a decision, and pipelines in
+ * `needs_decision`, in the board's Needs-you order. Its header says «Needs you · n» and, when there is more
  * than one item, carries «Next ›», which skips the item the operator is
  * looking at and wraps.
  *
@@ -36,7 +38,24 @@ import { decisionLine } from "./decision";
  * stamps the card seen. Pipelines have a destination once lane 7 lands the
  * pipeline screen; until the host passes `onOpenPipeline`, a pipeline row is a
  * statement rather than a control, and «Next ›» walks the conversations.
+ *
+ * Above the queue, «From your agents» lists the root agent's recent
+ * `request_attention` calls (docs/design/needs-attention.md §6): on the phone
+ * a request is this row and the bar's dot, never a move. A tap goes where it
+ * points, × clears it on this phone, and opening the sheet marks the rows it
+ * shows as seen, which puts the dot out. The count and «Next ›» stay the
+ * queue's.
  */
+
+/** One notice as the sheet draws it: the host names its target. */
+export interface MobileNoticeRow {
+  notice: AttentionNotice;
+  /** The target's own name (a conversation's title, a lane's task), or its
+      kind when the board holds no row for it. */
+  target: string;
+  /** Who asked, in the operator's words. */
+  by: string;
+}
 
 export interface MobileAttentionSheetProps {
   entries: readonly MobileAttentionEntry[];
@@ -48,14 +67,26 @@ export interface MobileAttentionSheetProps {
   onClose: () => void;
   /** Test seam: the screen «Next ›» steps from. Production reads the nav store. */
   screen?: MobileScreen;
+  /** An agent's requests for the operator, newest first. */
+  notices?: readonly MobileNoticeRow[];
+  onOpenNotice?: (notice: AttentionNotice) => void;
+  onClearNotice?: (id: string) => void;
+  /** Called with the notices the sheet showed, so the bar's dot goes out. */
+  onNoticesSeen?: (ids: readonly string[]) => void;
 }
 
 const ROW = "flex min-h-11 w-full items-center gap-3 px-4 py-1.5 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40";
 const META = "flex items-center gap-[5px] overflow-hidden text-label font-medium tabular-nums text-muted";
 const SEP = <span aria-hidden className="shrink-0 opacity-60">·</span>;
 
-export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onClose, screen }: MobileAttentionSheetProps) {
+const NO_NOTICES: readonly MobileNoticeRow[] = [];
+
+export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onClose, screen, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen }: MobileAttentionSheetProps) {
   const { t } = useLocale();
+  const shownNotices = notices.map((row) => row.notice.id).join("\n");
+  useEffect(() => {
+    if (shownNotices) onNoticesSeen?.(shownNotices.split("\n"));
+  }, [shownNotices, onNoticesSeen]);
   const navState = useMobileNav();
   const here = screen ?? topScreen(navState);
   /* «Next ›» walks what can be opened: every entry once the pipeline screen
@@ -88,6 +119,21 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
         </button>
       ) : null}
     >
+      {notices.length ? (
+        <div className="flex flex-col" data-mobile2-notices={notices.length}>
+          <MobileSheetSection>{t("notices.title")}</MobileSheetSection>
+          {notices.map((row) => (
+            <NoticeRow
+              key={row.notice.id}
+              row={row}
+              now={now}
+              onOpen={onOpenNotice ? () => onOpenNotice(row.notice) : undefined}
+              onClear={onClearNotice ? () => onClearNotice(row.notice.id) : undefined}
+            />
+          ))}
+          {entries.length ? <MobileSheetSection>{t("mobile2.attention.title")}</MobileSheetSection> : null}
+        </div>
+      ) : null}
       {entries.length ? (
         <div className="flex flex-col" data-mobile2-attention-list>
           {entries.map((entry) => entry.kind === "conversation" ? (
@@ -96,17 +142,56 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
             <PipelineRow key={entry.id} row={entry.row} current={here.kind === "pipeline" && here.id === entry.row.id} onOpen={onOpenPipeline ? () => open(entry) : undefined} />
           ))}
         </div>
-      ) : (
+      ) : notices.length ? null : (
         <div className="px-4 py-4 text-center text-ui text-muted" data-mobile2-attention-empty>{t("mobile2.attention.empty")}</div>
       )}
     </MobileSheet>
   );
 }
 
+function NoticeRow({ row, now, onOpen, onClear }: { row: MobileNoticeRow; now: number; onOpen?: () => void; onClear?: () => void }) {
+  const { t } = useLocale();
+  const asked = Date.parse(row.notice.createdAt);
+  const age = Number.isFinite(asked) ? humanizeDuration(Math.max(0, now - asked / 1000)) : null;
+  const Tag = onOpen ? "button" : "div";
+  return (
+    <div className="flex min-w-0 items-center" data-mobile2-notice-row={row.notice.id}>
+      <Tag
+        {...(onOpen ? { type: "button" as const, onClick: onOpen, "aria-label": t("notices.open", { title: row.target }) } : {})}
+        data-mobile2-notice-open={onOpen ? row.notice.target.kind : undefined}
+        className={`${ROW} min-w-0 flex-1`}
+      >
+        <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-accent" />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{row.notice.reason}</span>
+          <span className={META}>
+            <span className="min-w-0 truncate">{row.target}</span>
+            {SEP}
+            <span className="shrink-0">{row.by}</span>
+            {age ? <>{SEP}<span className="shrink-0">{age}</span></> : null}
+          </span>
+        </span>
+        {onOpen ? <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden /> : null}
+      </Tag>
+      {onClear ? (
+        <button
+          type="button"
+          data-mobile2-notice-clear={row.notice.id}
+          aria-label={t("notices.clear")}
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-[8px] text-muted active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+          onClick={onClear}
+        >
+          <X className="h-4 w-4" aria-hidden />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; now: number; current: boolean; onOpen: () => void }) {
-  const { t, locale } = useLocale();
+  const { t } = useLocale();
   const title = cleanTitle(item.file.title, 90);
-  const decision = decisionLine(t, locale, item.file, now) ?? t("status.stalled");
+  const decision = decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
   return (
     <button
       type="button"
@@ -119,7 +204,7 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
       className={ROW}
       onClick={onOpen}
     >
-      <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${item.tier === "stalled" ? "bg-danger" : "bg-warning"}`} />
+      <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-warning" />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
         <span className={META}>

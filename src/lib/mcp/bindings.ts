@@ -34,10 +34,13 @@ import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
   ATTENTION_ARRIVAL_TIMEOUT_MS,
   awaitAttentionArrival,
+  noticeCapableViewOpen,
   raiseAttentionRequest,
   resolveDirectedAttentionView,
 } from "@/lib/attention/service";
 import { readAttentionFile } from "@/lib/attention/store";
+import { DismissalError, dismissAttention as dismissAttentionService, parseDismissalTarget, type DismissalPorts } from "@/lib/attention/dismissals";
+import type { DismissalTarget, DismissedBy } from "@/lib/attention/dismissalTypes";
 import {
   CONVERSATION_PATH_EXAMPLE,
   describeFocusTargetRejection,
@@ -200,7 +203,7 @@ import {
   type VoiceUtteranceLookup,
   type VoiceWorkLookupIdentity,
 } from "./selectedContextTarget";
-import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
+import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
 const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review"]);
 /* Writes whose clientRequestId is their durable receipt key, attributed to the caller. */
@@ -651,6 +654,14 @@ export interface ViewerMcpDomainDependencies {
       from. Called on the raise path, which is the moment that identity matters. */
   adoptRootSession(): void;
   raiseAttentionRequest: typeof raiseAttentionRequest;
+  /** What the dismissal service reads and writes besides its own record
+      (docs/design/needs-attention.md §5). Optional: production wires the
+      registry, the task store and the pipeline engine. */
+  dismissalPorts?: DismissalPorts;
+  /** Whether a phone the operator is looking at is open, for a request with no
+      desktop to move (docs/design/needs-attention.md §6). Optional: production
+      reads presence. */
+  noticeCapableViewOpen?: () => boolean;
   /** #873: block until the directed view lands or the handoff closes as a
       bounded failure. Optional so partial harnesses fall back to the real
       awaiter; tests override it only to shorten its clocks. */
@@ -1532,6 +1543,10 @@ function closeReportCounts(report: PipelineCloseReport) {
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
+  /* Clearing a lane off the operator's queue is the dismissal service's write
+     (docs/design/needs-attention.md §5): the same gate and the same attributed
+     record `dismiss_attention` writes. */
+  if (action === "dismiss" || action === "undismiss") return pipelineDismissal(pipelineId, action, args, dependencies);
   const request = withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact"]);
   const before = dependencies.readPipelineRecord
     ? dependencies.readPipelineRecord(pipelineId)
@@ -1606,6 +1621,25 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
       at: result.legacyReviewConversion.at,
       ...(result.legacyReviewConversion.reverted ? { reverted: result.legacyReviewConversion.reverted } : {}),
     }, replayed: result.replayed } : {}),
+  });
+}
+
+async function pipelineDismissal(pipelineId: string, action: "dismiss" | "undismiss", args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  const read = () => dependencies.readPipelineRecord
+    ? dependencies.readPipelineRecord(pipelineId)
+    : dependencies.getPipelines?.().pipelines.find((pipeline) => pipeline.id === pipelineId) ?? null;
+  const beforeFields = fieldValues(read());
+  const outcome = await dismissThroughService({ kind: "pipeline", pipelineId }, action === "undismiss", mcpOperationId("pipeline_action", requestId(args)), dependencies);
+  const after = read();
+  if (!after) throw new Error("pipeline not found");
+  return redactPayload({
+    ...pipelineActionAcknowledgement(after),
+    revision: recordRevision(after),
+    changedFields: changedFieldNames(beforeFields, after),
+    taskIds: after.taskIds,
+    dismissal: { dismissed: outcome.dismissed.length > 0, alreadyClear: outcome.alreadyClear.length > 0, at: outcome.at, by: outcome.by },
+    ...(fullAnswer(args) ? { pipeline: after } : { omittedRecordCount: 1 }),
+    readMore: "get_pipeline(pipelineId) or pipeline_action with full:true returns the full record.",
   });
 }
 
@@ -4560,6 +4594,20 @@ async function requestAttention(
     ?? ((key: string) => readAttentionFile().requests.find((request) => request.operationKey === key) ?? null);
   let request = findByOperation(operationKey);
   let created: ReturnType<typeof raiseAttentionRequest> | null = null;
+  /* No desktop to move and a phone open: the request reaches the phone as a
+     quiet notice and moves nothing there (docs/design/needs-attention.md §6).
+     There is no arrival to wait for, so the call answers at once. */
+  const noticeAnswer = (notice: AttentionRequestV1, raised: typeof created) => redactPayload({
+    attentionId: notice.id,
+    request: notice,
+    delivered: "notice",
+    handoff: null,
+    recovered: raised === null,
+    superseded: raised?.superseded ?? [],
+    dropped: raised?.dropped ?? [],
+    ...mutationReceipt(operationKey),
+  });
+  if (request?.delivery === "notice") return noticeAnswer(request, null);
   if (!request) {
     /* Resolved BEFORE anything durable is written: with no view that can move,
        the honest answer is a refusal, not a pending ask nobody could ever act
@@ -4569,9 +4617,32 @@ async function requestAttention(
        the answer: two tabs share a device id, and only the named tab may run
        the move. */
     const view = resolveDirectedAttentionView();
+    if (!view && (dependencies.noticeCapableViewOpen ?? noticeCapableViewOpen)()) {
+      dependencies.adoptRootSession();
+      const raised = dependencies.raiseAttentionRequest({
+        origin: "root-agent",
+        raisedBy,
+        target,
+        frameAtCreation: {
+          project,
+          rect: isGeometricTarget(target) ? geometricFrameRect(target) : UNREAD_FRAME_RECT,
+          boardRevision: null,
+        },
+        intent,
+        reason,
+        /* Named nowhere: the phone reads the notice and never answers it, so a
+           desktop that opens before the record ends can still follow it. */
+        offeredTo: [],
+        delivery: "notice",
+        operationKey,
+        ...(zoom ? { zoom } : {}),
+        ...(contextLabel ? { contextLabel } : {}),
+      });
+      return noticeAnswer(raised.request, raised.adopted ? null : raised);
+    }
     if (!view) {
       throw new McpToolRefusal(
-        "no active Viewer can be moved right now: no visible, active desktop board is open",
+        "no active Viewer can be moved right now: no visible, active desktop board or phone is open",
         { code: "NO_ACTIVE_VIEW" },
       );
     }
@@ -4655,6 +4726,72 @@ async function requestAttention(
     dropped: created?.dropped ?? [],
     ...mutationReceipt(operationKey),
   });
+}
+
+/**
+ * Clear a needs-you flag through the one dismissal service
+ * (docs/design/needs-attention.md §5), for `dismiss_attention` and for
+ * `pipeline_action` dismiss/undismiss, which is the same write.
+ *
+ * The gate is `request_attention`'s, and it runs the same two phases: the
+ * caller's identity before the target is read, then the target's project
+ * against the seat. A refused caller writes nothing. Who dismissed is the
+ * server's own attribution, never the caller's claim, and the MCP operation
+ * rides on the record so a replay answers what the first run wrote.
+ */
+async function dismissThroughService(
+  target: DismissalTarget,
+  undo: boolean,
+  operationKey: string,
+  dependencies: ViewerMcpDomainDependencies,
+) {
+  const authority = dependencies.attentionAuthority();
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const admission = permitAttentionDismissal(authority, seats, null);
+  if (!admission.allowed) {
+    throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: admission.refusedAs });
+  }
+  const focus = focusTargetFromArgs(target.kind === "conversation"
+    ? { kind: "conversation", ...(target.conversationId ? { conversationId: target.conversationId } : {}), ...(target.path ? { path: target.path } : {}) }
+    : target, dependencies);
+  const project = canonicalOrchestratorProject(await focusTargetProject(focus, "", dependencies));
+  const verdict = permitAttentionDismissal(authority, seats, project);
+  if (!verdict.allowed) {
+    throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: verdict.refusedAs });
+  }
+  const attribution = attributionOf(dependencies);
+  const by: DismissedBy = { kind: attribution.kind, conversationId: attribution.conversationId, role: attribution.role };
+  try {
+    return await dismissAttentionService(
+      /* A conversation named by id resolves to its current transcript, which
+         is how the service keys it when the registry does not. */
+      target.kind === "conversation" && focus.kind === "conversation" ? { ...target, path: target.path ?? focus.path } : target,
+      by,
+      { undo, operationKey, ...(dependencies.dismissalPorts ? { ports: dependencies.dismissalPorts } : {}) },
+    );
+  } catch (error) {
+    if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code, status: error.status });
+    throw error;
+  }
+}
+
+async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  let target: DismissalTarget;
+  try {
+    target = parseDismissalTarget(args.target, { allowSubjects: false });
+  } catch (error) {
+    if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code });
+    throw error;
+  }
+  const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies);
+  return {
+    dismissed: outcome.dismissed,
+    alreadyClear: outcome.alreadyClear,
+    ...(outcome.changed.length ? { changed: outcome.changed } : {}),
+    at: outcome.at,
+    by: outcome.by,
+    undo: outcome.undo,
+  };
 }
 
 /**
@@ -5204,6 +5341,7 @@ export function viewerMcpBindings(
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     suggest_replies: (args) => Promise.resolve(suggestReplies(args, domainDependencies)),
+    dismiss_attention: (args) => dismissAttentionTool(args, domainDependencies),
     bridge_report: (args) => Promise.resolve(bridgeReport(args, domainDependencies)),
     bridge_directive: (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     get_orchestrator: (args) => getOrchestrator(args, domainDependencies),

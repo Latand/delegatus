@@ -1153,7 +1153,7 @@ export function seatWordOf(t: (key: MessageKey) => string, state: OrchestratorPa
 }
 
 function StateBadge({ state, file, word = false }: { state: OrchestratorPanelState; file: FileEntry | null; word?: boolean }) {
-  const { t, locale } = useLocale();
+  const { t } = useLocale();
   const seatBadge = state.kind === "live" ? seatBadgeOf(state) : null;
   const badge = seatBadge ? SEAT_BADGE[seatBadge] : null;
   const tone = badge
@@ -1175,7 +1175,7 @@ function StateBadge({ state, file, word = false }: { state: OrchestratorPanelSta
   /* The tooltip follows the badge: a seat the badge calls «needs you» carries
      the decision behind it, and every other badge is already its own whole
      answer. */
-  const decision = seatBadge === "needs-you" && file ? decisionLine(t, locale, file) : null;
+  const decision = seatBadge === "needs-you" && file ? decisionLine(t, file) : null;
   if (word) {
     /* The seat header's form: a dot and the word, toned the same way. */
     const wordTone = tone.includes("success") ? "working" : tone.includes("warning") ? "needs" : tone.includes("danger") ? "failed" : tone.includes("accent") ? "accent" : "quiet";

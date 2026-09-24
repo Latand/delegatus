@@ -188,6 +188,9 @@ function projectionBaseKey(
       hotStateSignature("flows", "flows.json"),
       hotStateSignature("pipelines", "pipelines.json"),
       hotStateSignature("workflows", "workflows.json"),
+      /* A needs-you dismissal (or its undo) moves no scan and no other store,
+         and the projection carries it onto its conversation's entries. */
+      hotStateSignature("attention_dismissals", "attention-dismissals.json"),
       /* The orchestrator's open ask is derived from the bridge report log (issue
          #1168), so a report filed — or answered — between two identical scans
          has to invalidate the projection. Without it the ask would appear, and

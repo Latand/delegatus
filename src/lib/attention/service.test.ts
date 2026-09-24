@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { resetPresenceForTest, upsertPresence } from "@/lib/view/presenceStore";
 import type { PresencePayloadV1 } from "@/lib/view/types";
 
@@ -11,10 +12,14 @@ import {
   ATTENTION_ARRIVAL_TIMEOUT_MS,
   answerAttentionRequest,
   attentionForDevice,
+  attentionNotices,
+  attentionRecordsForSurface,
   autoFollowEligible,
   awaitAttentionArrival,
+  noticeCapableViewOpen,
   raiseAttentionRequest,
   resolveDirectedAttentionDevice,
+  resolveDirectedAttentionView,
 } from "./service";
 import { AttentionRequestError, validateAttentionCreate, validateAttentionEvent } from "./validation";
 import { FOLLOW_HOLD_MS, OFFER_TTL_MS, RETURN_WINDOW_MS, type FocusFrame, type ReturnPoint } from "./types";
@@ -37,6 +42,9 @@ beforeEach(() => {
 
 afterEach(() => {
   resetPresenceForTest();
+  /* The process-wide registry is opened on the first test's state directory;
+     each test deletes its own, so the next one must reopen it. */
+  closeAgentRegistryForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -546,3 +554,58 @@ test("an aborted wait closes the request rather than leaving it in flight", asyn
 test("the default wait stays far inside the MCP transport's own deadline", () => {
   expect(ATTENTION_ARRIVAL_TIMEOUT_MS).toBeLessThan(30_000);
 });
+
+/* ── The phone's notices (docs/design/needs-attention.md §6) ─────────────── */
+
+test("only a phone open: a notice-capable view, and no view a handoff could move", () => {
+  upsertPresence(view({ viewSessionId: "phone", deviceId: "device-phone", device: { kind: "mobile", browser: "safari" }, mode: "mobile-focus", viewport: { width: 390, height: 844, dpr: 3 } }), T0.getTime());
+  expect(resolveDirectedAttentionView(T0)).toBeNull();
+  expect(noticeCapableViewOpen(T0)).toBe(true);
+});
+
+test("no view at all is neither", () => {
+  expect(resolveDirectedAttentionView(T0)).toBeNull();
+  expect(noticeCapableViewOpen(T0)).toBe(false);
+  /* A phone the operator put away does not count either. */
+  upsertPresence(view({ viewSessionId: "phone", deviceId: "device-phone", device: { kind: "mobile", browser: "safari" }, visibility: "hidden" }), T0.getTime());
+  expect(noticeCapableViewOpen(T0)).toBe(false);
+});
+
+test("the phone reads the root agent's recent requests as notices, newest first, and answers none of them", () => {
+  raise({ delivery: "notice", offeredTo: [] });
+  raiseAttentionRequest({
+    origin: "root-agent",
+    raisedBy: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" },
+    target: { kind: "pipeline", pipelineId: "lane-1" },
+    frameAtCreation: frame,
+    intent: "open",
+    reason: "The lane needs a decision.",
+    contextLabel: "review stage",
+    offeredTo: [],
+    delivery: "notice",
+  }, { now: later(60_000), id: "attention_2" });
+
+  const notices = attentionRecordsForSurface({ now: later(120_000), records: { pipelines: () => [], tasks: () => [] } }).notices;
+  expect(notices.map((notice) => notice.id)).toEqual(["attention_2"]);
+  /* The second superseded the first: one root, one speaker. */
+  expect(notices[0]).toEqual({
+    id: "attention_2",
+    reason: "The lane needs a decision.",
+    target: { kind: "pipeline", pipelineId: "lane-1" },
+    contextLabel: "review stage",
+    raisedBy: { kind: "manager", role: "orchestrator" },
+    createdAt: later(60_000).toISOString(),
+  });
+  /* Read, never answered: the record is where it was. */
+  expect(readAttentionFile().requests.find((request) => request.id === "attention_2")).toMatchObject({ state: "pending", revision: 0 });
+});
+
+test("a notice ends with its record's clock, and a refused one is never shown", () => {
+  raise({ delivery: "notice", offeredTo: [] });
+  const file = readAttentionFile();
+  expect(attentionNotices(file, later(OFFER_TTL_MS - 1)).map((notice) => notice.id)).toEqual(["attention_1"]);
+  expect(attentionNotices(file, later(OFFER_TTL_MS + 1))).toEqual([]);
+  const declined = { ...file, requests: file.requests.map((request) => ({ ...request, state: "declined" as const })) };
+  expect(attentionNotices(declined, T0)).toEqual([]);
+});
+

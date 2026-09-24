@@ -749,6 +749,10 @@ export type Pipeline = {
       transcripts are untouched, and `undismiss` clears it. `hiddenAt` cannot
       carry this, because every reader takes it to mean closed or discarded. */
   dismissedAt?: string | null;
+  /** Who cleared the lane off the queue at `dismissedAt`, attributed on the
+      server (docs/design/needs-attention.md §5). Absent on a dismissal written
+      before attribution existed. */
+  dismissedBy?: import("@/lib/attention/dismissalTypes").DismissedBy | null;
   /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
       at read time and never stored here. */
