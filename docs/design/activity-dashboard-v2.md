@@ -12,15 +12,25 @@
   reproduces it byte for byte, and a browser screenshot cannot meet that.
 - Prior work searched: the transcript index returned the prototype lane's own
   design, build and review conversations (2026-09-24) and nothing earlier on
-  presenting this page. A second search in this revision, for how unread
-  stretches and an unknown split were drawn before, found only this lane's
-  review. The dashboard design rules applied here come from the
-  data-visualisation method the lane loaded, checked against the app's tokens.
+  presenting this page. Later searches, for how unread stretches and an
+  unknown split were drawn before and for judging that split per project,
+  found only this lane's reviews. The dashboard design rules applied here come
+  from the data-visualisation method the lane loaded, checked against the
+  app's tokens.
 - Revision 2 answers the design review of revision 1: a day whose input was
   not read no longer draws its agent time as unattended; unsplit agent time
   has its own fill; Today draws an unread hour; agent-hours and the
   per-project breakdowns can be reached again; the expanded project row and
   the day tooltip carry their marks and every part of the split.
+- Revision 3 answers the review of revision 2. "Unclear" is now judged per
+  project, by the same rule as the Projects list's `≥`: a project's agent
+  time is unclear only where a host holding that project was not read, or on
+  a flagged day. Revision 2 judged it per day, so on Wed 23 it called
+  ≈ 3 h 40 m of lantern-api, kestrel-cli and sorrel-bot agent time unclear
+  while the list showed those projects fully read; the 7-day meter now reads
+  ≈ 28 h unattended and ≈ 5 h unclear where it read ≈ 25 h and ≈ 8 h. The
+  definition of unattended no longer reads as "you were away" (below,
+  Agents and Rhythm).
 
 ## Originating requirement
 
@@ -110,7 +120,7 @@ always open.
 - The same gap is stated three times: in the banner, on the day rows, and
   under the host in the hosts table.
 - A day whose human input was not read still shows its agent time as
-  `0 m supervised`, a claim that the operator was away. The split cannot be
+  `0 m supervised`, a claim that none of it was watched. The split cannot be
   known for that day.
 
 **Labelling.** Each day row carries four numbers
@@ -125,7 +135,7 @@ explanation), and the page subtitle is a two-line sentence.
 | # | Question | Answered by | At a glance |
 |---|---|---|---|
 | 1 | How much did I work, on which projects? | the **You** figure (reported hours, 44 px) and the **Projects** list | yes: one number, one ranked list |
-| 2 | How much did agents work, how much unattended? | the **Agents** figure with its labelled meter: supervised, unattended, and unclear where your input was not read | yes: one number, one proportion |
+| 2 | How much did agents work, how much unattended? | the **Agents** figure with its labelled meter: supervised, unattended, and unclear where your input for the agents' project was not read | yes: one number, one proportion |
 | 1+2 per day | …and on which day? | the **by-day chart**: your reported hours beside agent time | yes: seven column pairs |
 | 3 | When during the day? | the **Rhythm** grid, one cell per clock hour; on Today, the hourly chart | a compact second read |
 | 4 | Can I trust it? | one **trust chip** in the header, `≥`/`?` marks and the hatch where they apply, the **drawer** | quiet until opened |
@@ -136,8 +146,8 @@ One screen with one number to read first, one chart to read second, and
 nothing that is not an answer to the four questions. Two hues carry the whole
 page: the app's accent (indigo) is **you**, its info teal is **agents**, each
 with one lighter step. **Texture means one thing: your input was not read.**
-It comes in two forms, grey where nothing is known and teal where agents
-worked. Status colour (warning amber) appears only where trust is in
+It comes in two forms: grey where a host was not read and nothing else is
+known, teal where agents worked on a project whose input was not read. Status colour (warning amber) appears only where trust is in
 question. Everything that explains the method lives behind one drawer.
 
 ```
@@ -148,7 +158,7 @@ question. Everything that explains the method lives behind one drawer.
 │ ≥ 27.5 h reported          ≈ 50 h                     │ orchard-client [billable] ≥9 h│
 │ ≥ 23 h 42 m by the minute  ▇▇▇▇▇▇▇░░░░░░░░░░▨▨▨▨       │ ▇▇▇▇▇▇▇▇▇▇            ≈ 12 h │
 │ · ≥ 14 h billable          ■ ≈ 17 h supervised        │ lantern-api        7.5 h ≈15 h│
-│                            ■ ≈ 25 h unattended ▨ ≈ 8 h│ …  (rows fill the column;     │
+│                            ■ ≈ 28 h unattended ▨ ≈ 5 h│ …  (rows fill the column;     │
 │ ───────────────────────────────────────────────────── │     the rest folds into       │
 │ 16 h                  10.5                            │     "+ N more")               │
 │      8.5               ▇░                   ≥ 4  4.5  │                              │
@@ -206,18 +216,38 @@ copies; it appears only when a project is tagged billable
 **Agents.** `≈ 50 h` at 32 px: wall-clock with at least one agent working.
 Under it an 8 px meter in up to three parts with a 2 px surface gap, and the
 parts labelled beneath it:
-`■ ≈ 17 h supervised  ■ ≈ 25 h unattended  ▨ ≈ 8 h unclear`.
+`■ ≈ 17 h supervised  ■ ≈ 28 h unattended  ▨ ≈ 5 h unclear`.
 
-- **Supervised** (teal): inside your read time on the same project.
-  **Unattended** (light teal): outside it, and every expected host was read
-  then, so you were away. **Unclear** (light teal, hatched): outside your
-  read time, where your input was not read (a host unread, or a day flagged
-  as a probable missing source), so it may have been supervised. The unclear
-  part is shown only when it is above zero.
-- Why a third part and not `≥`/`≤` marks on two (revision 1): a mark on
-  "unattended" still drew the unread hours in the unattended colour, which
-  told the operator they were away on a day nothing was read for. With the
-  part separated, supervised and unattended are exact up to the `≈` of the
+- **One rule decides the parts, per project.** Your input for a project is
+  *not read* at a moment when a host holding that project (its `projects`
+  lists it, or is `"all"`) was not read then, or when the day is flagged as a
+  probable missing source. A flag names no host and no project, so it counts
+  as an unread host that holds every project. For hosts this is the test
+  the Projects list uses for its `≥`, so the list and the split agree; the
+  flag is the one difference, explained under Projects.
+  - **Supervised** (teal): agent time inside your read time on its own
+    project.
+  - **Unclear** (light teal, hatched): outside that time, while your input
+    for that project was not read. It may have been supervised.
+  - **Unattended** (light teal): the rest, agent time outside your time on
+    its own project while that project's input was read. It includes time
+    you spent on another project: it says nobody watched that project's
+    agents, and leaves open where you were. The Rhythm shows the hours with
+    no read input from you at all (below).
+- When agents of several projects share a minute, the day and the range
+  count it once, with the precedence supervised > unclear > unattended, the
+  way the method already counts wall-clock and its supervised part. The
+  unclear part is shown only when it is above zero.
+- In the mockup, the stage host holds only orchard-client and harbor-ledger
+  and was not read on 22–23 Sept. On Wed 23 the unclear part is
+  ≈ 1 h 35 m, all of it harbor-ledger's night run; the lantern-api,
+  kestrel-cli and sorrel-bot time that day is supervised or unattended,
+  because the workstation, which holds them, was read. Tue 22 is flagged, so
+  its ≈ 3 h 15 m of tidewater-app and kestrel-cli time is unclear.
+- Why a third part in place of `≥`/`≤` marks on two (revision 1): a mark
+  on "unattended" still drew the unread hours in the unattended colour,
+  which told the operator nobody watched them on a day nothing was read for.
+  With the part separated, supervised and unattended are exact up to the `≈` of the
   method, and the uncertainty has its own place in the chart, the meter and
   the tooltips.
 - The label "Agents" carries no swatch: agent time is drawn in three fills,
@@ -243,15 +273,17 @@ which is the rule "never added" drawn as geometry.
 - Your column carries its value on the cap (`8.5`, `≥ 4`, `0`, `?`): that is
   the day's figure for the report, and the only number labelled per day. Agent
   columns carry none; the axis and the tooltip hold their values.
-- **A day whose input was not read never shows solid unattended.** Agent time
-  in a stretch a host did not read is unclear. On a day flagged as a probable
-  missing source the whole agent column is unclear, whatever was read,
-  because the flag says your input for that day is not trusted. In the mockup,
-  Tue 22 (flagged) is one hatched column and Wed 23 (a lower-bound day) is
-  supervised plus unclear. The chart and the Rhythm agree hour for hour: every
-  hour the Rhythm hatches contributes to the column's unclear part and to
-  nothing solid-unattended (the mockup's self-check,
-  `unattendedInUnreadHours`, is 0 for every day).
+- **Agent time whose project's input was not read never shows solid
+  unattended.** The column's unclear part is the day's share of the rule
+  under Agents: agent time on a project a then-unread host holds, and all
+  agent time on a flagged day. In the mockup, Tue 22 (flagged) is one hatched
+  column, and Wed 23 (the stage host unread) is supervised, unattended and a
+  hatched ≈ 1 h 35 m, harbor-ledger's part. A lower-bound day can therefore
+  show solid unattended: that is agent time on projects whose hosts were all
+  read. The mockup checks the rule per project and hour on every range: no
+  unclear time on a project whose input was read, and no unattended time on
+  one whose input was not (`unclearOnReadProjects` and
+  `unattendedOnUnreadProjects`, both 0 on every day).
 - Columns are at most 22 px wide, 3 px rounded at the data end and square at
   the baseline; hairline solid gridlines on clean ticks (every 4 h up to 16 h);
   the unit sits on the top tick (`16 h`).
@@ -267,9 +299,11 @@ considered and set aside (see Options).
 axis, labels every 3 h, a hairline at now, nothing drawn after now. **A
 stretch a host did not read** is one hatched band (the grey "not read" hatch)
 behind those hours, the full height of the plot, with a direct label above
-its start: `Stage host not read`. Whatever was read is drawn over the band;
-an empty slot inside it means "not read", never zero, and agent minutes there
-are unclear. The Rhythm card, which carries the legend on the other ranges,
+its start: `Stage host not read`. The band is per host; whatever was read is
+drawn over it, and an empty slot inside it means "not read", never zero.
+Agent minutes inside it are unclear only on projects that host holds (in the
+render, orchard-client's run from 09:00 to 12:00); other projects' minutes
+there stay supervised or unattended. The Rhythm card, which carries the legend on the other ranges,
 is hidden on Today, so the band is labelled where it stands. The hero and the
 by-the-minute and billable figures carry `≥`, and the chip reads
 `⚠ Lower bound` (render `mockup-1440-today-gap.png`: the stage host unread
@@ -284,21 +318,39 @@ hour. A cell is
 |---|---|
 | indigo | an hour you worked a full reported hour (40 minutes or more) |
 | light indigo | an hour that reported half an hour (10 to 39 minutes) |
-| light teal | agents worked at least 10 minutes without you, every host read |
-| hatched light teal (unclear) | agents worked, your input for that hour was not read |
-| hatched grey (not read) | a host was not read for that hour, nothing else known |
+| light teal | no reported weight from you, and agents worked at least 10 minutes outside your time on their project, mostly on projects whose input was read (unattended) |
+| hatched light teal (unclear) | the same, mostly on projects whose input was not read (a tie goes to unclear) |
+| hatched grey (not read) | some host was not read for that hour, and nothing above applies |
 | faint track | nothing happened, and everything was read |
 | none | a future hour today |
 
-Every hour of a day flagged as a probable missing source counts as not read.
+The agent cells follow the agents' projects, by the rule under Agents; the
+grey hatch and the cell tooltip's `You` line follow the hosts. So on Wed 23,
+with the stage host unread all day, the 18:00 cell is solid teal
+(lantern-api's agents, a project the stage host does not hold), and its
+tooltip still reads `You  not read (Stage host)`, because input you typed on
+the stage host that hour, on its own projects, was not read. Every hour of a
+day flagged as a probable missing source counts as not read for every
+project.
 
 One cell per hour ties the rhythm to the billable figure: under clock-hour
 weights, a row's indigo cells count one hour each and its light ones half an
-hour, so the row adds up to the day's reported hours. Agents alongside you are
-already inside your hours; the grid shows agents only where they worked
-without you, which is the "while I was away" part of question 2 and the
-"gaps" part of question 3. Under half-hour rounding the same bins are
-labelled `40+ min` and `10–39 min`.
+hour, so the row adds up to the day's reported hours. An hour with your
+weight is drawn as yours whatever the agents did in it, so **the teal cells
+are the part of agent time outside your time on its project that falls in
+hours with no reported input from you** (under 10 read minutes). That is the
+closest the page comes to question 2's "while I was away", and it is the
+"gaps" part of question 3; where a host was not read in such an hour, the
+cell's tooltip says `You  not read ({host})`, because input there could
+exist. The rest of unattended time
+sits under indigo cells, as agents working on one project while you worked
+on another. Today in the mockup shows it: at 11:00 you worked most of the
+hour on harbor-ledger while orchard-client's agents ran, so the hour is
+indigo and that orchard-client time is unattended; the 7-day Today row has
+two teal cells against ≈ 2 h 50 m unattended. The Agents meter and the
+columns carry the whole unattended figure; the grid is the stricter view.
+Under half-hour rounding the same bins are labelled `40+ min` and
+`10–39 min`.
 
 Legend, top right of the card:
 `■ 1 h  ■ ½ h  ■ agents without you  ▨ unclear  ▨ not read`; with nothing
@@ -324,13 +376,23 @@ ink (`≈ 12 h`, `–` for none).
 - Your hours read `≥ 5 h` when a host holding the project was not read for
   part of the range, `?` when that leaves nothing read for it (a lower bound
   of zero says nothing), and a clean `0` only when every host holding it was
-  read.
+  read. This is the project's `coverage` from the response, unchanged.
+- A flagged day does not put `≥` on the rows. It holds every project, so it
+  would mark all of them and tell nothing about any one; it is stated once,
+  on its day's cap, in the hero's `≥`, the chip and the drawer. It still
+  makes that day's agent time unclear for every project, so a row can read a
+  plain `2 h` with some unclear agent time behind it. The expanded row says
+  where that comes from: its unclear part names its days (next bullet).
 - **Click a row to expand it in place** (render `mockup-1440-expand.png`,
   harbor-ledger, a lower-bound billable project):
   `You  ≥ 4 h 13 m by the minute · 37 inputs · 12 m counted under a later input's project`
-  `Agents  ≈ 3 h 15 m supervised · ≈ 4 h unattended · ≈ 1 h 35 m unclear · 5 agents · ≈ 11 agent-hours`
+  `Agents  ≈ 3 h 15 m supervised · ≈ 4 h unattended · ≈ 1 h 35 m unclear (Wed 23) · 5 agents · ≈ 11 agent-hours`
   `Hosts  Stage host ≥ 3 h 38 m · Workstation 35 m`
   `› More detail`
+  The unclear part names its days, or counts them past two (`3 days`).
+  kestrel-cli, whose only host was read all week, reads
+  `≈ 55 m unclear (Tue 22)`: the flagged day (render
+  `mockup-1440-expand-kestrel.png`).
 - **Supervised is never more than your time on the project** in the mockup's
   data, as the method guarantees against the project's own episodes. When
   some of the project's minutes went to a later input's project, the page
@@ -405,20 +467,28 @@ label, so a value is never read off a sentence. Every agent value carries
   ```
   The muted last line is the day's reported hours per project, which is what
   the daily report copies. A lower-bound day prints `≥` on your figures, adds
-  its unclear part (`▨ ≈ 5 h 15 m unclear`) and two notes: `Stage host not
-  read: your time is at least this.` and `Unclear: your input was not read,
-  so it may have been supervised.` A flagged day prints `? reported` with the
-  grey hatch swatch, its agent time as unclear only, and `A workday reads
-  zero while agents ran: a source is probably missing.`
+  its unclear part when it has one (Wed 23: `▨ ≈ 1 h 35 m unclear`) and two
+  notes: `Stage host not read: your time is at least this.` and
+  `Unclear: your input for harbor-ledger was not read, so it may have been
+  supervised.` The unclear note names the projects it covers, largest first
+  (`a`, `a and b`, `a, b and 2 more`), which is what keeps it from reading as
+  a claim about the whole day. A flagged day prints `? reported` with the
+  grey hatch swatch, its agent time as unclear only, and
+  `A workday reads zero while agents ran: a source is probably missing.`
 - **Agents figure** (render `mockup-1440-hover-agents.png`), under the figure
   so the meter stays visible:
   `≈ 50 h  time at least one agent worked` /
-  `≈ 71  agent-hours: parallel agents each counted`, and the unclear note
-  when that part is above zero.
+  `≈ 71  agent-hours: parallel agents each counted`, and, when the unclear
+  part is above zero, `Unclear: agent time on projects whose input from you
+  was not read then. It may have been supervised.`
 - **Rhythm cell** (render `mockup-1440-hover-cell.png`):
   `Wed 23 Sept, 18:00–19:00` / `You  not read (Stage host)` /
-  `Agents  ≈ 50 m unclear · lantern-api`. A read hour reads
-  `You  48 m · lantern-api` / `Agents  ≈ 55 m · lantern-api`.
+  `Agents  ≈ 50 m unattended · lantern-api`. `You` is judged per host and
+  `Agents` per project, as in the grid. A read hour reads
+  `You  48 m · lantern-api` / `Agents  ≈ 55 m · lantern-api`; an hour that
+  read some input while a host was not read prints `≥` on it
+  (`You  ≥ 51 m · lantern-api` on Wed 23 at 16:00); on a flagged day with no
+  unread host, `You  not read (a source is probably missing)`.
 
 Every tooltip value is also reachable without hover: day values through the
 table view of the chart (screen readers and `forced-colors`), project values
@@ -430,19 +500,19 @@ in the list and its detail, agent-hours in the drawer.
 |---|---|---|---|
 | header date | `Thursday, 24 Sept` | `18–24 Sept` | `26 Aug – 24 Sept` |
 | main chart | hourly pairs, minutes per hour (`60 min` top tick), a hairline at now, labels every 3 h | daily pairs, value on each of your caps | daily pairs, 10 px columns; only `≥`/`?` marks on caps; labels on Mondays and today |
-| an unread stretch | one hatched band behind the hours, labelled `{host} not read`; agent minutes in it unclear | `≥`/`?` on the day's cap; agent time unclear | as 7 days |
+| an unread stretch | one hatched band behind the hours, labelled `{host} not read`; agent minutes in it unclear on the projects that host holds | `≥`/`?` on the day's cap; agent time unclear on the projects the host holds | as 7 days |
 | rhythm | hidden (the chart is hourly) | 7 rows × 24, 18 px | 30 rows × 24, 7 px |
 | projects | today's projects | the range's | the range's |
-| fits 1440×900 | yes, ends at 585 px (uk with an unread stretch: 605 px, the agents legend wraps to a second line) | yes, ends at 778 px | yes, ends at 861 px |
+| fits 1440×900 | yes, ends at 585 px (uk with an unread stretch: 605 px, the agents legend wraps to a second line) | yes, ends at 778 px; the document (794 px) also fits the 813 px viewport of a 1440×900 screen with browser chrome | yes, ends at 861 px (document 877 px); in an 813 px viewport it scrolls 64 px |
 
 ## States
 
 | state | You figure | chart | rhythm | projects | chip |
 |---|---|---|---|---|---|
 | complete | `27.5 h` | caps plain, `0` in muted ink on a clean zero; agents supervised + unattended | cells as read | plain | `✓ All sources read` |
-| lower bound (a host unread for part of the range) | `≥ 27.5 h`; `≥` on minutes and billable; Agents meter gains its unclear part | `≥ 4` on the affected days; their agent time in unread stretches is unclear (hatched), never solid unattended | grey hatch where nothing is known, teal hatch where agents worked | `≥` on projects the unread host holds, `?` where that leaves zero | `⚠ Lower bound` |
-| probable missing source (a flagged day) | as lower bound | amber `?` on the day's cap; the whole agent column unclear | every cell of the day hatched | – | `⚠ Lower bound`; one row in the drawer |
-| Today, a host unread for some hours | `≥ 1.5 h` and `≥` on its line | the hatched band behind those hours, labelled; read minutes drawn over it; agent minutes there unclear | (hidden on Today) | `≥` / `?` as above | `⚠ Lower bound`; the drawer names the hours |
+| lower bound (a host unread for part of the range) | `≥ 27.5 h`; `≥` on minutes and billable; Agents meter gains its unclear part when agents worked on a project the host holds | `≥ 4` on the affected days; agent time there on the host's projects is unclear (hatched), on other projects supervised or unattended as usual | grey hatch where a host was unread and nothing else applies; teal hatch where agents worked mostly on the host's projects, solid teal where they worked on others | `≥` on projects the unread host holds, `?` where that leaves zero; their expanded unclear part names its days | `⚠ Lower bound` |
+| probable missing source (a flagged day) | as lower bound | amber `?` on the day's cap; the whole agent column unclear, every project | every cell of the day hatched | no mark on the rows (it would mark all of them); an expanded row names the day on its unclear part | `⚠ Lower bound`; one row in the drawer |
+| Today, a host unread for some hours | `≥ 1.5 h` and `≥` on its line | the hatched band behind those hours, labelled; read minutes drawn over it; agent minutes there unclear on the host's projects | (hidden on Today) | `≥` / `?` as above | `⚠ Lower bound`; the drawer names the hours |
 | nothing read for the range | `Unknown` (32 px), "No host was read for this range." and `🔌 Connect a host` (opens the drawer at Hosts) | agent columns only, every one unclear; muted `?` on every cap | agents teal-hatched, the rest grey-hatched | `?` in the You column, sorted by Agents | `⚠ Nothing read` |
 | agent index not built yet | unchanged | your columns only | your cells only | agents column `…` | unchanged; the drawer says "Agent time appears after the first transcript scan." |
 | a project with no agent time | – | – | – | `–` in the Agents column | – |
@@ -453,8 +523,9 @@ in the list and its detail, agent-hours in the drawer.
 
 The rule behind every row: a figure that could be higher carries `≥`, a
 value nothing was read for is `?`, `Unknown` or hatched, agent time is
-called unattended only where every host was read, and a zero is printed only
-when every expected source was read. A flag that applies to the whole range
+called unattended only where every host holding its project was read and
+the day is not flagged, and a zero is printed only when every expected
+source was read. A flag that applies to the whole range
 (nothing read) is stated once and is not repeated per day.
 
 ## Copy
@@ -480,6 +551,9 @@ decimals use a comma in Ukrainian.
 | `activity.fig.supervised` | {value} supervised | {value} під наглядом |
 | `activity.fig.unattended` | {value} unattended | {value} без нагляду |
 | `activity.fig.unclear` | {value} unclear | {value} неясно |
+| `activity.project.unclearOn` | {value} unclear ({days}) | {value} неясно ({days}) |
+| `activity.project.days` | {n} day / days | {n} день / дні / днів / дня |
+| `activity.list.and2` / `andMore` | {a} and {b} / {a}, {b} and {n} more | {a} і {b} / {a}, {b} та ще {n} |
 | `activity.fig.splitUnknown` | Split unknown: your time was not read. | Розподіл невідомий: ваш час не прочитано. |
 | `activity.unknown` (kept) | Unknown | Невідомо |
 | `activity.fig.noneRead` | No host was read for this range. | За цей період не прочитано жодного хоста. |
@@ -523,10 +597,12 @@ decimals use a comma in Ukrainian.
 | `activity.tip.agents` | agents | агенти |
 | `activity.tip.supervised` / `unattended` / `unclear` | supervised / unattended / unclear | під наглядом / без нагляду / неясно |
 | `activity.tip.lower` | {host} not read: your time is at least this. | {host} не прочитано: вашого часу щонайменше стільки. |
-| `activity.tip.unclear` | Unclear: your input was not read, so it may have been supervised. | Неясно: ваш ввід не прочитано, тож це міг бути нагляд. |
+| `activity.tip.unclear` | Unclear: your input for {projects} was not read, so it may have been supervised. | Неясно: ваш ввід для {projects} не прочитано, тож це міг бути нагляд. |
+| `activity.tip.unclearAny` | Unclear: agent time on projects whose input from you was not read then. It may have been supervised. | Неясно: час агентів на проєктах, ваш ввід для яких тоді не прочитано. Це міг бути нагляд. |
 | `activity.tip.missing` | A workday reads zero while agents ran: a source is probably missing. | Робочий день показує нуль, хоча агенти працювали: ймовірно, бракує джерела. |
 | `activity.cell.you` / `agents` | You / Agents | Ви / Агенти |
 | `activity.cell.notRead` | not read ({host}) | не прочитано ({host}) |
+| `activity.cell.missing` | not read (a source is probably missing) | не прочитано (ймовірно, бракує джерела) |
 | `activity.cell.none` | no input | без вводу |
 | `activity.drawer.title` | How this is counted | Як це рахується |
 | `activity.drawer.close` | Close | Закрити |
@@ -538,7 +614,7 @@ decimals use a comma in Ukrainian.
 | `activity.drawer.m1` | Each of your inputs opens a 10-minute window; overlapping windows merge. A minute counts once, for the project of the latest input. | Кожен ваш ввід відкриває вікно на 10 хвилин; вікна, що перетинаються, зливаються. Хвилина рахується один раз — для проєкту останнього вводу. |
 | `activity.drawer.m2` | Reported hours weigh each clock hour: under 10 minutes 0, 10–39 half an hour, 40 or more a full hour. The hour goes to the project with the most minutes. | Години у звіті зважують кожну годину за годинником: менше 10 хвилин — 0, 10–39 — пів години, 40 і більше — година. Година дістається проєкту з найбільшою кількістю хвилин. |
 | `activity.drawer.m3` | Only your own input counts. Stage prompts, agent-to-agent messages, notifications and injected text are left out. | Рахується лише ваш власний ввід. Промпти етапів, повідомлення між агентами, сповіщення та вставлений текст не враховуються. |
-| `activity.drawer.m4` | Agent time (≈) runs from each message to the agent's last reply. Inside your time on the same project it is supervised; where your input was not read it is unclear; the rest is unattended. Your time and agent time are never added. | Час агентів (≈) триває від повідомлення до останньої відповіді агента. У межах вашого часу на тому ж проєкті це нагляд; там, де ваш ввід не прочитано, — неясно; решта — без нагляду. Ваш час і час агентів ніколи не додаються. |
+| `activity.drawer.m4` | Agent time (≈) runs from each message to the agent's last reply. Inside your time on the same project it is supervised; where a host holding that project was not read, or on a day that probably misses a source, it is unclear; the rest is unattended, including time you spent on another project. Your time and agent time are never added. | Час агентів (≈) триває від повідомлення до останньої відповіді агента. У межах вашого часу на тому ж проєкті це нагляд; де хост цього проєкту не прочитано або дню ймовірно бракує джерела — неясно; решта — без нагляду, зокрема поки ви працювали над іншим проєктом. Ваш час і час агентів ніколи не додаються. |
 | `activity.drawer.m5` | Days and hours are in {tz}. | Дні й години — за {tz}. |
 | `activity.drawer.hostRead` | Read to {when} | Прочитано до {when} |
 | `activity.drawer.hostGap` | Not read {when} | Не прочитано: {when} |
@@ -568,7 +644,7 @@ sub-lines, `activity.gap.*` banner strings, `activity.legend.*`,
 | by the minute | hours and minutes | `23 h 42 m` |
 | agent time | `≈` before every value, parts included; whole hours from 10 h, 5-minute steps below; `–` for none | `≈ 50 h`, `≈ 8 h 50 m`, `–` |
 | agent-hours | `≈` and a count of hours, no unit: halves below 10, whole above | `≈ 71 agent-hours`, `≈ 9` |
-| a split | rounded so its parts add up to the total beside it; the same for engine and role against agent-hours | `17 h` + `25 h` + `8 h` = `≈ 50 h` |
+| a split | rounded so its parts add up to the total beside it; the same for engine and role against agent-hours | `17 h` + `28 h` + `5 h` = `≈ 50 h` |
 | lower bound | `≥` before the value, in muted ink, smaller on the hero | `≥ 27.5 h` |
 | not read | `?` on a day or row, `Unknown` for the range, the hatch in a chart | |
 
@@ -611,7 +687,7 @@ clicks from the main view, and a render shows each.
 | per hour: your input, its project and host, agents supervised or not, unread | Rhythm cell tooltip; on Today the hourly chart | 0 + hover | `-hover-cell.png`, `-today-gap.png` |
 | per project: reported hours, agent wall-clock | Projects row | 0 | `mockup-1440.png` |
 | per project: your minutes, inputs, reassigned minutes | expanded row, You line | 1 | `-expand.png` |
-| per project: supervised / unattended, agents, agent-hours | expanded row, Agents line | 1 | `-expand.png` |
+| per project: supervised / unattended (plus unclear and its days), agents, agent-hours | expanded row, Agents line | 1 | `-expand.png`, `-expand-kestrel.png` |
 | per project: your time by host | expanded row, Hosts line | 1 | `-expand.png` |
 | per project: by surface, by input kind | `More detail` | 2 | `-expand-more.png` |
 | per project: agent-hours by engine, by role; top pipelines | `More detail` | 2 | `-expand-more.png` |
@@ -657,59 +733,93 @@ Validation with the data-visualisation palette checker (OKLab ΔE):
   vision deficiency and `forced-colors` renders it as a pattern.
 
 Texture carries one meaning on the page, "your input was not read", in two
-forms: grey where nothing is known, teal where agents worked. The
-prototype's second hatch (unattended agents) is gone.
+forms: grey where a host was not read and nothing else is known, teal where
+agents worked on a project whose input was not read. The prototype's second
+hatch (unattended agents) is gone.
 
 ## API additions (presentation only)
 
-The page must never re-implement the method, and three things it draws are
-method outputs the response does not carry today. Each is a value
+The page must never re-implement the method, and the things it draws below
+are method outputs the response does not carry today. Each is a value
 `src/lib/activity/method.ts` already has on the way to its totals, or an
-intersection of two it already returns; exposing them changes no count.
+intersection of intervals it already builds; exposing them changes no count.
 
 ```ts
 interface AgentSplit {
   // …existing fields…
-  /** The part of unattendedMs that fell where your input was not read: inside
-      a stretch some expected host (holding the project, for a project row)
-      was not read for, or on a day flagged as a probable missing source. The
-      page draws it as "unclear" and draws unattendedMs − unattendedUnreadMs
-      as unattended. Days, totals and projects all carry it. */
+  /** The part of unattendedMs whose project's input was not read: a host
+      holding that project was not read then (uncoveredSpans with the
+      project), or the day is flagged as a probable missing source. The page
+      draws it as "unclear" and draws unattendedMs − unattendedUnreadMs as
+      unattended. Days, totals and projects all carry it. */
   unattendedUnreadMs: number;
+}
+
+interface ProjectActivity {
+  // …existing fields…
+  /** The dates (in the zone) its unattendedUnreadMs falls on, oldest first. */
+  unclearDays: string[];
 }
 
 interface DayActivity {
   // …existing fields…
   /** One entry per clock hour of the day in the zone (23 or 25 on DST days). */
   hours: Array<{
-    start: number;            // the hour's start, ms
-    humanMs: number;          // covered minutes of your time in the hour
+    start: number;              // the hour's start, ms
+    humanMs: number;            // covered minutes of your time in the hour
     weight: 0 | 0.5 | 1 | null; // clockHourWeight of those minutes; null under half-hour rounding
-    project: string | null;   // the project the hour's weight went to
+    project: string | null;     // the project the hour's weight went to
     supervisedMs: number;
     unattendedMs: number;
     unattendedUnreadMs: number; // as on AgentSplit, within the hour
-    unknown: boolean;         // some expected host was not read for part of it, or the day is flagged
+    agentProject: string | null; // the project with the most agent wall-clock in the hour
+    unreadHosts: string[];      // expected hosts not read for part of the hour (per host)
   }>;
   /** dayReportHours for the day, with the raw minutes behind each entry. */
   projects: Array<{ project: string | null; humanMs: number; humanHours: number }>;
 }
 ```
 
-`unattendedUnreadMs` for a day is `totalMs(intersect(unattended stretches of
-day.agent, day.unknown))`, or all of `unattendedMs` when `missingSource` is
-set; totals sum the days; a project row intersects its own unattended
-stretches with `uncoveredSpans(range, hosts, project)` and the flagged days.
-Supervised stays exactly what it is: agent time inside the project's own
-episodes.
+How the method builds `unattendedUnreadMs`, with what it already has
+(`agentsByProject`, each project's own episodes `own`, `supervisedUnion`,
+`uncoveredSpans`, and the days' `missingSource`, which is decided before any
+of this):
+
+1. `flagged` is the union of the windows of the flagged days.
+2. For each project `P`: `unread(P) = uncoveredSpans(range, hosts, P).spans ∪
+   flagged`, and `unclear(P) = (wall(P) ∩ unread(P)) − own(P)`, where
+   `wall(P)` is the union of `P`'s agents' activity. The project row's
+   `unattendedUnreadMs` is `totalMs(unclear(P))`, and `unclearDays` the days
+   it touches. `uncoveredSpans` already asks `holdsProject`, so a host whose
+   `projects` is `"all"` counts for every project, and unattributed time
+   (`null`) for every host.
+3. For a day, the range and an hour: `unclearAll = ⋃ unclear(P) −
+   supervisedUnion`, clipped to the window. That is the precedence
+   supervised > unclear > unattended for a minute several projects' agents
+   share, the way `wallMs` and `supervisedMs` already count it.
+
+So a project's figure is unclear only where its own hosts were unread or its
+day flagged, and the day and the range show exactly the union of those
+stretches. Supervised stays exactly what it is: agent time inside the
+project's own episodes. Where no two projects' agents share a minute, the
+projects' unclear parts add up to the range's; where they do, the range
+counts the minute once, as it does for wall-clock, and the projects' parts
+add up to more.
 
 Tests the builder adds beside `method.test.ts`: for every day, the weights
 of `hours` sum to `humanHours` under clock-hour rounding; `projects` sums to
 `humanHours` and `humanMs`; the hours' supervised, unattended and unread
-parts sum to the day's; an hour inside an uncovered span is `unknown` and has
-no unattended time outside `unattendedUnreadMs`; a flagged day's
-`unattendedUnreadMs` equals its `unattendedMs`; with nothing read,
-`supervisedMs` is 0 and `unattendedUnreadMs` equals `wallMs`.
+parts sum to the day's. The unclear rule gets its own cases: a host holding
+only project A is unread for a day, and project B's agents that day, read on
+another host, have `unattendedUnreadMs` 0 while A's unattended time in the
+gap is all unread (the Wed 23 case); a host with `projects: "all"` unread
+makes every project's time there unread; a flagged day's
+`unattendedUnreadMs` equals its `unattendedMs` for the day and for each
+project; a minute where A is supervised and B is unread counts as supervised
+for the day, and one where A is unread and B unattended counts as unread;
+the day's figure equals the union of the projects' `unclear` stretches minus
+`supervisedUnion`; with nothing read, `supervisedMs` is 0 and
+`unattendedUnreadMs` equals `wallMs`.
 
 Everything else the page shows is already in the response: `totals`
 (reported, by-the-minute, billable, the agent split, agent-hours, `coverage`,
@@ -757,13 +867,19 @@ proposed fields, and the page drawn in HTML and SVG. The data is uneven on
 purpose: a 10.5-hour Monday, an empty weekend with night agent runs, the
 stage host offline on Tuesday and Wednesday (a lower-bound Wednesday and a
 flagged Tuesday), 13 projects of which three have agent time only, and a
-generated month behind the last week. Supervised time is computed per
+generated month behind the last week. Two hosts: the workstation holds every
+project and is always read (except in the nothing-read state); the stage host
+holds orchard-client and harbor-ledger. Supervised time is computed per
 project and hour as agent minutes inside your read minutes on that project,
-so no project shows more supervised time than your own.
+so no project shows more supervised time than your own; the rest of a
+project's agent minutes is unclear where its input was not read (its host
+unread, or a flagged day) and unattended otherwise. Projects never share a
+minute in this data, so their parts add up to the day's exactly.
 
 Parameters: `lang=en|uk`, `range=today|7d|30d`,
 `state=default|drawer|expand|expand-more|hover|hover-agents|hover-cell|empty`,
-`day=YYYY-MM-DD` (the day the hover tooltip opens on), `data=gap` (the stage
+`day=YYYY-MM-DD` (the day the hover tooltip opens on), `project=<name>` (the
+row `state=expand` opens, harbor-ledger by default), `data=gap` (the stage
 host unread today 09:00–12:00), `theme=light|dark`.
 
 Render, from a copy outside the worktree:
@@ -777,16 +893,29 @@ google-chrome-stable --headless=new --hide-scrollbars --force-device-scale-facto
 The page writes a self-check into `body[data-measure]` (read it with
 `--dump-dom`): the card rectangles, the document's scroll width, any text
 element whose content overflows its box, any tooltip outside the viewport, a
-word count, and per day the supervised, unattended and unclear minutes with
-the unattended minutes that fall in an hour the Rhythm hatches
-(`unattendedInUnreadHours`, 0 on every day of every range).
+word count, and the unclear rule checked three ways:
+
+- per day, the supervised, unattended and unclear minutes, with
+  `unclearOnReadProjects` (unclear minutes on a project whose input was read)
+  and `unattendedOnUnreadProjects` (unattended minutes on one whose input was
+  not); both are 0 on every day of every range and state;
+- per project, its unclear minutes and the part of them from flagged days,
+  with `projectsUnclearSum` against the range's unclear minutes, and
+  `unclearOnProjectsReadThrough`: the unclear minutes, outside flagged days,
+  of the projects no unread host holds. On 7 days: harbor-ledger 96 (all on
+  Wed 23, its host unread), tidewater-app 135 and kestrel-cli 58 (all on the
+  flagged Tue 22), sum 289 = the range's 289, and 0 for the projects read
+  through. Today with the gap: orchard-client 162 = 162. Nothing read: 3,015
+  = 3,015;
+- `wed18`, the Wed 23 18:00 cell: 51 minutes unattended, 0 unclear, drawn
+  solid teal.
 
 Renders in `~/Pictures/delegatus-review/activity-dashboard-v2/`, all at
 1440×900 unless named otherwise: `mockup-1440.png` (7 days, en),
 `mockup-1440-{uk,30d,uk-30d,dark}.png`,
 `mockup-1440-{today,today-gap,uk-today-gap,today-gap-drawer}.png`,
 `mockup-1440-{drawer,uk-drawer}.png`,
-`mockup-1440-{expand,expand-more,uk-expand-more}.png`,
+`mockup-1440-{expand,expand-more,uk-expand-more,expand-kestrel}.png`,
 `mockup-1440-{hover,hover-wed,hover-tue,uk-hover-wed,hover-agents,hover-cell}.png`,
 `mockup-1440-{empty,uk-empty,dark-empty}.png`, and `mockup-1280x800{,-uk}.png`.
 
@@ -800,10 +929,14 @@ Measured on those renders:
 | Today, all read | 585 px | none | none | 88 |
 | Today, stage host unread 09:00–12:00 (en / uk) | 585 / 605 px | none | none | 92 |
 | nothing read (en / uk / dark) | 778 / 779 / 778 px | none | none | 123 / 121 / 123 |
-| a project expanded / with `More detail` | 778 px (rows fold into `+ N more`) | none | none | 207 / 271 |
-| tooltips (day, Agents, Rhythm cell) | 778 px | none | none, every tooltip inside the viewport | 180–222 |
-| drawer open (en / uk / Today unread) | – | none | none | 382 / 361 / 292 with the drawer |
-| 7 days at 1280×800, en and uk | 778 px (document 794 px, inside the 800 px window) | none | none | 166 |
+| a project expanded (harbor-ledger / kestrel-cli) / with `More detail` (en / uk) | 778 px (rows fold into `+ N more`) | none | none | 209 / 201 / 273 / 262 |
+| tooltips (day, Agents, Rhythm cell) | 778 px | none | none, every tooltip inside the viewport | 180–229 |
+| drawer open (en / uk / Today unread) | – | none | none | 401 / 373 / 311 with the drawer |
+| 7 days at 1280×800, en and uk | 778 px (document 794 px, inside an 800 px viewport; with browser chrome, a 713 px one, it scrolls 81 px) | none | none | 166 |
+
+The "inside the viewport" checks ran in the 1440×813 viewport that headless
+Chrome reports for a 1440×900 window when it dumps the DOM, the size of a
+1440×900 screen minus browser chrome; the 7-day page fits it (794 px).
 
 Every render was looked at, at full size or zoomed, after the last change.
 Faults found on the way and fixed in the mockup: raw-minute precision on
@@ -822,7 +955,12 @@ explains and another that ran over the Projects card; agent-hours printed as
 `11 h agent-hours`; engine and role lists that did not add up to the
 agent-hours beside them; hatch stripes leaning one way in the chart and the
 other in the legend; a project showing more supervised time than your own
-time on it.
+time on it. In revision 3: unclear judged per day, which hatched lantern-api,
+kestrel-cli and sorrel-bot time on Wed 23 while the list showed those
+projects fully read (≈ 8 h unclear on the 7-day meter where ≈ 5 h is
+supported); an unclear note that did not say which projects it covered; a
+Rhythm cell tooltip that printed read minutes without `≥` inside an unread
+stretch.
 
 ## Options considered
 
@@ -851,12 +989,24 @@ time on it.
    hides which day had the gap. Deferred.
 8. **Bounds on a two-part split** (`≥ supervised · ≤ unattended`, revision
    1). Cheaper in words, and it left the unread hours drawn in the
-   unattended colour, so the chart said "away" where the text said "at
-   most". Chosen: a third, textured part.
+   unattended colour, so the chart said "unattended" where the text said
+   "at most". Chosen: a third, textured part.
 9. **Today's unread hours as a hatched ghost in each of your slots**
    (revision 2's first render). Precise per hour, and three striped columns
    read as a third series with no legend on that range. Chosen: one band
    behind the stretch, labelled with the host.
+10. **Unclear judged per day** (revision 2): any agent time outside your
+    time in a stretch some host was not read. One interval test per day, and
+    it contradicts the Projects list whenever the unread host holds only some
+    projects: on Wed 23 it called ≈ 3 h 40 m unclear on projects the list
+    showed as fully read. Chosen: judged per project with the list's own
+    test (`uncoveredSpans` with the project), and the day shows the union.
+11. **A flagged day marks every project row `≥`**, which would make the list
+    and the split one test for flags too. It puts the same mark on all 13
+    rows for one suspect day and says nothing about any one project, the
+    noise the prototype was rejected for. Chosen: the flag marks its day,
+    the hero and the chip, makes that day's agent time unclear for every
+    project, and an expanded row names the day on its unclear part.
 
 ## Deferred — not currently justified
 
@@ -873,7 +1023,7 @@ time on it.
 | requirement | v2 |
 |---|---|
 | Q1 at a glance: how much, which projects, report hours | the 44 px reported-hours figure with billable beside it; the Projects list; each day's reported hours on its column |
-| Q2 at a glance: agent work, unattended share | one `≈` figure and a meter whose three parts are labelled; unattended is only what ran while every host was read |
+| Q2 at a glance: agent work, unattended share | one `≈` figure and a meter whose three parts are labelled; unattended is agent time outside your time on its project while that project's input was read; the Rhythm's teal cells show the hours with no reported input from you in which agents kept working |
 | one strong chart | the by-day paired columns |
 | Q3 as a compact timeline | the Rhythm grid, 7 rows × 24 hours in 250 px; on Today the hourly chart |
 | Q4 small, quiet, expands on demand | one header chip opening the drawer; `≥`/`?` and the hatch only on what they qualify |
@@ -884,7 +1034,7 @@ time on it.
 | keep the method, the API and its data | unchanged; presentation fields added, each an existing intermediate value or an intersection of two returned ones; every prototype measure reachable in two clicks (table above) |
 | human and agent time never added | two figures, two columns side by side, never stacked together |
 | supervised vs unattended | the meter, the stacked agent column, the rhythm's "agents without you", each project's Agents line |
-| Unknown / lower bound, never a clean zero for unread data | `≥`, `?`, `Unknown`, the hatch; `0` printed only when everything was read; agent time never called unattended where your input was not read, on any range |
+| Unknown / lower bound, never a clean zero for unread data | `≥`, `?`, `Unknown`, the hatch; `0` printed only when everything was read; agent time never called unattended where its project's input was not read, on any range, and never called unclear where it was (checked per project and hour) |
 | Today / 7 days / 30 days | all three, drawn and measured, Today also with an unread stretch |
 | days and projects views | both on one screen; a project row expands to its detail and its breakdowns |
 | en + uk | every string in the Copy table, both languages rendered |

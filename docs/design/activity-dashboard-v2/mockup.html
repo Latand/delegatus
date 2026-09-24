@@ -17,6 +17,7 @@
              | hover-cell | empty
     data   = gap: the stage host is unread today from 09:00 to 12:00
     day    = the day the hover tooltip opens on (2026-09-21 by default)
+    project = the project state=expand opens (harbor-ledger by default)
     theme  = light | dark
   Rendered with headless Chrome at 1440x900; see the doc for the command.
 -->
@@ -261,6 +262,7 @@ const COPY = {
     you: "You", agents: "Agents", reported: "reported",
     byMinute: "{v} by the minute", billable: "{v} billable",
     supervised: "{v} supervised", unattended: "{v} unattended", unclear: "{v} unclear",
+    unclearOn: "{v} unclear ({days})", daysN: { one: "{n} day", other: "{n} days" },
     unknown: "Unknown", noneRead: "No host was read for this range.", connect: "Connect a host",
     todayX: "Today", hoursUnit: "h", minUnit: "min",
     bandUnread: "{host} not read",
@@ -272,9 +274,11 @@ const COPY = {
     tSup: "supervised", tUna: "unattended", tUnr: "unclear",
     tWall: "time at least one agent worked", tAgentHours: "agent-hours: parallel agents each counted",
     tipLow: "{host} not read: your time is at least this.",
-    tipUnclear: "Unclear: your input was not read, so it may have been supervised.",
+    tipUnclear: "Unclear: your input for {projects} was not read, so it may have been supervised.",
+    tipUnclearAny: "Unclear: agent time on projects whose input from you was not read then. It may have been supervised.",
+    and2: "{a} and {b}", andMore: "{a}, {b} and {n} more",
     tipMissing: "A workday reads zero while agents ran: a source is probably missing.",
-    cellYou: "You", cellAgents: "Agents", cellNotRead: "not read ({host})", cellNone: "no input",
+    cellYou: "You", cellAgents: "Agents", cellNotRead: "not read ({host})", cellMissing: "not read (a source is probably missing)", cellNone: "no input",
     inputs: { one: "{n} input", other: "{n} inputs" }, agentsN: { one: "{n} agent", other: "{n} agents" },
     dYou: "You", dAgents: "Agents", hostsLine: "Hosts",
     reassigned: "{v} counted under a later input's project",
@@ -292,7 +296,7 @@ const COPY = {
     m1: "Each of your inputs opens a 10-minute window; overlapping windows merge. A minute counts once, for the project of the latest input.",
     m2: "Reported hours weigh each clock hour: under 10 minutes 0, 10–39 half an hour, 40 or more a full hour. The hour goes to the project with the most minutes.",
     m3: "Only your own input counts. Stage prompts, agent-to-agent messages, notifications and injected text are left out.",
-    m4: "Agent time (≈) runs from each message to the agent's last reply. Inside your time on the same project it is supervised; where your input was not read it is unclear; the rest is unattended. Your time and agent time are never added.",
+    m4: "Agent time (≈) runs from each message to the agent's last reply. Inside your time on the same project it is supervised; where a host holding that project was not read, or on a day that probably misses a source, it is unclear; the rest is unattended, including time you spent on another project. Your time and agent time are never added.",
     m5: "Days and hours are in Europe/Kyiv.",
     hostRead: "Read to {when}", hostGap: "Not read {when}", thisHost: "this host",
     srcBoth: "Request ledger and transcript export", srcExport: "Transcript export",
@@ -313,6 +317,7 @@ const COPY = {
     you: "Ви", agents: "Агенти", reported: "у звіті",
     byMinute: "{v} похвилинно", billable: "{v} оплачуваних",
     supervised: "{v} під наглядом", unattended: "{v} без нагляду", unclear: "{v} неясно",
+    unclearOn: "{v} неясно ({days})", daysN: { one: "{n} день", few: "{n} дні", many: "{n} днів", other: "{n} дня" },
     unknown: "Невідомо", noneRead: "За цей період не прочитано жодного хоста.", connect: "Підʼєднати хост",
     todayX: "Сьогодні", hoursUnit: "год", minUnit: "хв",
     bandUnread: "{host}: не прочитано",
@@ -324,9 +329,11 @@ const COPY = {
     tSup: "під наглядом", tUna: "без нагляду", tUnr: "неясно",
     tWall: "час, коли працював хоча б один агент", tAgentHours: "агенто-години: паралельні агенти окремо",
     tipLow: "{host} не прочитано: вашого часу щонайменше стільки.",
-    tipUnclear: "Неясно: ваш ввід не прочитано, тож це міг бути нагляд.",
+    tipUnclear: "Неясно: ваш ввід для {projects} не прочитано, тож це міг бути нагляд.",
+    tipUnclearAny: "Неясно: час агентів на проєктах, ваш ввід для яких тоді не прочитано. Це міг бути нагляд.",
+    and2: "{a} і {b}", andMore: "{a}, {b} та ще {n}",
     tipMissing: "Робочий день показує нуль, хоча агенти працювали: ймовірно, бракує джерела.",
-    cellYou: "Ви", cellAgents: "Агенти", cellNotRead: "не прочитано ({host})", cellNone: "без вводу",
+    cellYou: "Ви", cellAgents: "Агенти", cellNotRead: "не прочитано ({host})", cellMissing: "не прочитано (ймовірно, бракує джерела)", cellNone: "без вводу",
     inputs: { one: "{n} ввід", few: "{n} вводи", many: "{n} вводів", other: "{n} вводу" },
     agentsN: { one: "{n} агент", few: "{n} агенти", many: "{n} агентів", other: "{n} агента" },
     dYou: "Ви", dAgents: "Агенти", hostsLine: "Хости",
@@ -345,7 +352,7 @@ const COPY = {
     m1: "Кожен ваш ввід відкриває вікно на 10 хвилин; вікна, що перетинаються, зливаються. Хвилина рахується один раз — для проєкту останнього вводу.",
     m2: "Години у звіті зважують кожну годину за годинником: менше 10 хвилин — 0, 10–39 — пів години, 40 і більше — година. Година дістається проєкту з найбільшою кількістю хвилин.",
     m3: "Рахується лише ваш власний ввід. Промпти етапів, повідомлення між агентами, сповіщення та вставлений текст не враховуються.",
-    m4: "Час агентів (≈) триває від повідомлення до останньої відповіді агента. У межах вашого часу на тому ж проєкті це нагляд; там, де ваш ввід не прочитано, — неясно; решта — без нагляду. Ваш час і час агентів ніколи не додаються.",
+    m4: "Час агентів (≈) триває від повідомлення до останньої відповіді агента. У межах вашого часу на тому ж проєкті це нагляд; де хост цього проєкту не прочитано або дню ймовірно бракує джерела — неясно; решта — без нагляду, зокрема поки ви працювали над іншим проєктом. Ваш час і час агентів ніколи не додаються.",
     m5: "Дні й години — за Europe/Kyiv.",
     hostRead: "Прочитано до {when}", hostGap: "Не прочитано: {when}", thisHost: "цей хост",
     srcBoth: "Журнал запитів і експорт транскриптів", srcExport: "Експорт транскриптів",
@@ -470,9 +477,10 @@ function generatedDay(date, r) {
 function scaleTo(obj, cap) { const t = sum(obj); if (t > cap) for (const k in obj) obj[k] *= cap / t; }
 
 /* Hours of one day: your minutes per clock hour by project, the hour's
-   report weight and owner, and agent minutes split three ways: supervised
-   (inside your read time on the same project), unattended (outside it, with
-   every host read) and unclear (outside it, where your input was not read).
+   report weight and owner, and agent minutes split three ways, per project:
+   supervised (inside your read time on that project), unclear (outside it,
+   where a host holding that project was not read, or on a flagged day) and
+   unattended (the rest, which includes time you spent on another project).
    This is what the proposed days[].hours field carries; the server computes
    it with the method, the page never does. */
 function buildDay(date, spec) {
@@ -481,7 +489,14 @@ function buildDay(date, spec) {
   for (let h = 0; h < 24; h++) {
     const future = isToday && h >= Math.ceil(NOW_HOUR);
     const gapHour = GAP && isToday && h >= GAP_SPAN[0] && h < GAP_SPAN[1];
-    const unknown = !future && (EMPTY || !!spec.unread || gapHour);
+    /* Per host: some expected host was not read for this hour. It decides
+       the "You" figures and the grey "not read" hatch. */
+    const stageUnread = !future && (!!spec.unread || gapHour);
+    const unknown = !future && (EMPTY || stageUnread);
+    /* Per project: your input for it was not read. The workstation holds
+       every project and is unread only when nothing was read; the stage host
+       holds the two client projects. */
+    const unreadFor = (p) => !future && (EMPTY || (stageUnread && STAGE.has(p)));
     const youBy = {};
     if (!EMPTY) for (const [a, b, p, dens] of spec.you) {
       const o = Math.max(0, Math.min(b, h + 1) - Math.max(a, h));
@@ -500,12 +515,12 @@ function buildDay(date, spec) {
     for (const [p, m] of Object.entries(agentBy)) {
       const s = Math.min(m, youBy[p] || 0);
       supBy[p] = s;
-      (unknown ? unrBy : unaBy)[p] = m - s;
+      (unreadFor(p) ? unrBy : unaBy)[p] = m - s;
     }
     const humanMin = sum(youBy);
     const weight = humanMin >= 40 ? 1 : humanMin >= 10 ? 0.5 : 0;
     const owner = Object.entries(youBy).sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
-    hours.push({ hour: h, future, unknown, humanMin, weight, owner, youBy, agentMin: sum(agentBy), agentBy, supBy, unaBy, unrBy });
+    hours.push({ hour: h, future, unknown, unreadFor, humanMin, weight, owner, youBy, agentMin: sum(agentBy), agentBy, supBy, unaBy, unrBy });
   }
   const wd = new Date(date + "T00:00:00Z").getUTCDay();
   const workday = wd >= 1 && wd <= 5;
@@ -513,15 +528,18 @@ function buildDay(date, spec) {
   const humanMin = hours.reduce((s, x) => s + x.humanMin, 0);
   const wall = hours.reduce((s, x) => s + x.agentMin, 0);
   const missingSource = !EMPTY && workday && humanMin === 0 && (!complete || wall >= 30);
-  /* A flagged day: your input for it is not trusted at all, so none of its
-     agent time can be called unattended. */
+  /* A flagged day: a source is probably missing and nobody knows which
+     projects it holds, so it stands for an unread host holding them all.
+     None of the day's agent time can be called unattended. */
   if (missingSource) for (const x of hours) if (!x.future) {
     x.unknown = true;
+    x.unreadFor = () => true;
     for (const p in x.unaBy) { x.unrBy[p] = (x.unrBy[p] || 0) + x.unaBy[p]; x.unaBy[p] = 0; }
   }
   for (const x of hours) { x.supMin = sum(x.supBy); x.unaMin = sum(x.unaBy); x.unrMin = sum(x.unrBy); }
   return {
     date, d: new Date(date + "T00:00:00Z"), hours, workday, complete, missingSource, today: isToday,
+    hostUnread: EMPTY || !!spec.unread || (GAP && isToday),
     humanHours: hours.reduce((s, x) => s + x.weight, 0), humanMin,
     supMin: hours.reduce((s, x) => s + x.supMin, 0),
     unaMin: hours.reduce((s, x) => s + x.unaMin, 0),
@@ -563,11 +581,14 @@ function buildReport(range) {
   const days = all.slice(-n).map(([date, spec]) => buildDay(date, spec));
   const unreadDays = days.filter((d) => !d.complete);
   const projects = {};
-  const row = (p) => (projects[p] ||= { you: 0, youMin: 0, sup: 0, una: 0, unr: 0, inputs: 0 });
+  const row = (p) => (projects[p] ||= { you: 0, youMin: 0, sup: 0, una: 0, unr: 0, unrDays: {}, inputs: 0 });
   for (const day of days) for (const x of day.hours) {
     if (x.weight && x.owner) row(x.owner).you += x.weight;
     for (const [p, m] of Object.entries(x.youBy)) { row(p).youMin += m; row(p).inputs += Math.round(m / 7); }
-    for (const p of Object.keys(x.agentBy)) { const o = row(p); o.sup += x.supBy[p] || 0; o.una += x.unaBy[p] || 0; o.unr += x.unrBy[p] || 0; }
+    for (const p of Object.keys(x.agentBy)) {
+      const o = row(p); o.sup += x.supBy[p] || 0; o.una += x.unaBy[p] || 0; o.unr += x.unrBy[p] || 0;
+      if (x.unrBy[p]) o.unrDays[day.date] = (o.unrDays[day.date] || 0) + x.unrBy[p];
+    }
   }
   const rows = Object.entries(projects).map(([name, v]) => {
     const p = { name, ...v, billable: BILLABLE.has(name), agents: v.sup + v.una + v.unr, unknown: EMPTY, lowerBound: !EMPTY && STAGE.has(name) && unreadDays.length > 0 };
@@ -763,6 +784,16 @@ function dayChart(width) {
 /* ------------------------------------------------------------------ */
 /* Rhythm: a day x hour grid, one cell per clock hour                  */
 /* ------------------------------------------------------------------ */
+/* One cell per clock hour: your weight wins; otherwise agents working at
+   least 10 minutes outside your time on their project, hatched when most of
+   it was on projects whose input was not read (a tie goes to unclear);
+   otherwise a grey hatch where some host was not read. */
+function rhythmFill(x) {
+  const without = x.unaMin + x.unrMin;
+  return x.weight === 1 ? "var(--mark-you)" : x.weight === 0.5 ? "var(--mark-you-half)"
+    : without >= 10 ? (x.unrMin >= x.unaMin ? "url(#hatch-unr)" : "var(--mark-unattended)")
+    : x.unknown ? "url(#hatch)" : "var(--mark-track)";
+}
 function rhythm(width) {
   const labelW = 60;
   const gridW = width - labelW;
@@ -783,15 +814,9 @@ function rhythm(width) {
     d.hours.forEach((x, i) => {
       if (x.future) return;
       const cx = labelW + i * (cw + cg);
-      /* One cell per clock hour: your weight wins; otherwise agents working
-         without you (unclear where your input was not read); otherwise a
-         hatch where a host was not read. */
-      const alone = x.agentMin >= 10;
-      const fill = x.weight === 1 ? "var(--mark-you)" : x.weight === 0.5 ? "var(--mark-you-half)"
-        : alone ? (x.unknown ? "url(#hatch-unr)" : "var(--mark-unattended)")
-        : x.unknown ? "url(#hatch)" : "var(--mark-track)";
+      const fill = rhythmFill(x);
       s += `<rect x="${cx}" y="${y0}" width="${cw}" height="${lane}" rx="${dense ? 1.5 : 3}" fill="${fill}"/>`;
-      cells.push({ date: d.date, hour: x.hour, x: cx, y: y0, w: cw, h: lane });
+      cells.push({ date: d.date, hour: x.hour, x: cx, y: y0, w: cw, h: lane, fill });
     });
   });
   const ay = height - 6;
@@ -806,7 +831,7 @@ function rhythm(width) {
 /* ------------------------------------------------------------------ */
 /* Projects                                                            */
 /* ------------------------------------------------------------------ */
-const OPEN_PROJECT = "harbor-ledger";
+const OPEN_PROJECT = qs.get("project") || "harbor-ledger";
 function projectsCard(budget) {
   const rows = R.projects;
   const fit = rows.length <= budget ? rows.length : budget - 1;
@@ -836,8 +861,12 @@ function projectDetailHtml(p, moreOpen) {
   const D = p.detail;
   const ge = p.lowerBound ? "≥ " : "";
   const [s, u, n] = partsRound(p.agents, [p.sup, p.una, p.unr]);
-  const agentParts = [[s, C.supervised], [u, C.unattended], [n, C.unclear]].filter(([v]) => v > 0)
-    .map(([v, label]) => `<span class="nw">${fmt(label, { v: `<span class="v">≈ ${adur(v)}</span>` })}</span>`);
+  /* The unclear part names the days it comes from, so a project whose own
+     hosts were read (unclear only on a flagged day) explains itself. */
+  const unrDays = R.days.filter((d) => (p.unrDays[d.date] || 0) >= 2.5);
+  const where = unrDays.length <= 2 ? unrDays.map((d) => d.today ? C.todayX : dayShort(d.d)).join(", ") : plural(C.daysN, unrDays.length);
+  const agentParts = [[s, C.supervised], [u, C.unattended], [n, C.unclearOn]].filter(([v]) => v > 0)
+    .map(([v, label]) => `<span class="nw">${fmt(label, { v: `<span class="v">≈ ${adur(v)}</span>`, days: where })}</span>`);
   const list = (items, f) => items.filter((x) => x[1] >= 2.5).map(f).join(" · ");
   /* A list that shares out agent-hours, rounded so it adds up to them. */
   const share = (items, total) => { const r = partsRound(total, items.map((x) => x[1])); return items.map(([k], i) => r[i] ? `<span class="nw">${k} <span class="v">≈ ${adur(r[i])}</span></span>` : "").filter(Boolean).join(" · "); };
@@ -908,20 +937,34 @@ function dayTip(d) {
   if (byProject.length) notes.push(byProject.map(([p, v]) => `<span>${p} ${hrs(v)}</span>`).join(" · "));
   if (d.missingSource) notes.push(C.tipMissing);
   else if (low) notes.push(fmt(C.tipLow, { host: "Stage host" }));
-  if (n && !d.missingSource) notes.push(C.tipUnclear);
+  /* The unclear note names the projects it applies to, largest first. */
+  if (n && !d.missingSource) {
+    const by = {};
+    for (const x of d.hours) for (const [p, m] of Object.entries(x.unrBy)) by[p] = (by[p] || 0) + m;
+    notes.push(fmt(C.tipUnclear, { projects: names(Object.entries(by).filter(([, m]) => m >= 2.5).sort((a, b) => b[1] - a[1]).map(([p]) => p)) }));
+  }
   return `<div class="d">${dayLong(d.d)}</div><div class="tg">${g}</div>${notes.map((x) => `<div class="note">${x}</div>`).join("")}`;
 }
 
 function agentsTip() {
   const t = R.totals;
   const row = (val, lab) => `<span class="val">${val}</span><span class="lab">${lab}</span>`;
-  return `<div class="tg nosw">${row(ax(t.wallMin), C.tWall)}${row(ah(t.agentHoursMin), C.tAgentHours)}</div>${t.unrMin >= 2.5 ? `<div class="note">${C.tipUnclear}</div>` : ""}`;
+  return `<div class="tg nosw">${row(ax(t.wallMin), C.tWall)}${row(ah(t.agentHoursMin), C.tAgentHours)}</div>${t.unrMin >= 2.5 ? `<div class="note">${C.tipUnclearAny}</div>` : ""}`;
+}
+
+/* "a", "a and b", "a, b and 2 more". */
+function names(list) {
+  if (list.length <= 1) return list[0] || "";
+  if (list.length === 2) return fmt(C.and2, { a: list[0], b: list[1] });
+  return fmt(C.andMore, { a: list[0], b: list[1], n: list.length - 2 });
 }
 
 function cellTip(d, x) {
+  /* "You" is judged per host: any unread host leaves your hour unknown,
+     whatever the agents' projects were. */
   const you = x.unknown && x.humanMin < 1
-    ? fmt(C.cellNotRead, { host: "Stage host" })
-    : x.humanMin >= 1 ? `${dur(x.humanMin)} · ${x.owner}` : C.cellNone;
+    ? (d.missingSource && !d.hostUnread ? C.cellMissing : fmt(C.cellNotRead, { host: "Stage host" }))
+    : x.humanMin >= 1 ? `${x.unknown ? "≥ " : ""}${dur(x.humanMin)} · ${x.owner}` : C.cellNone;
   const topAgent = Object.entries(x.agentBy).sort((a, b) => b[1] - a[1])[0]?.[0];
   const parts = [[x.supMin, C.tSup], [x.unaMin, C.tUna], [x.unrMin, C.tUnr]].filter(([v]) => v >= 2.5);
   const agents = x.agentMin >= 2.5 ? `≈ ${adur(x.agentMin)}${parts.length === 1 ? ` ${parts[0][1]}` : ""} · ${topAgent}` : "–";
@@ -1006,11 +1049,30 @@ function measure() {
   }
   out.cards = [...document.querySelectorAll("[data-card]")].map((c) => { const r = c.getBoundingClientRect(); return [c.dataset.card, Math.round(r.top), Math.round(r.bottom), Math.round(r.left), Math.round(r.right)]; });
   out.words = document.getElementById("app").innerText.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
-  /* Per day: agent minutes drawn solid-unattended inside an hour the rhythm
-     hatches must be zero, and a flagged day draws no solid unattended. */
+  /* One rule, checked per project and hour: agent time on a project whose
+     input was read is never unclear, and agent time on a project whose input
+     was not read (a host holding it unread, or a flagged day) is never
+     unattended. Both counts must be 0 on every day of every range. */
+  const onRead = (d) => d.hours.reduce((s, x) => s + Object.entries(x.unrBy).reduce((t, [p, m]) => t + (x.unreadFor(p) ? 0 : m), 0), 0);
+  const onUnread = (d) => d.hours.reduce((s, x) => s + Object.entries(x.unaBy).reduce((t, [p, m]) => t + (x.unreadFor(p) ? m : 0), 0), 0);
   out.days = R.days.map((d) => ({ date: d.date, you: d.humanHours, sup: Math.round(d.supMin), una: Math.round(d.unaMin), unr: Math.round(d.unrMin),
-    unattendedInUnreadHours: Math.round(d.hours.filter((x) => x.unknown).reduce((s, x) => s + x.unaMin, 0)), missing: d.missingSource, complete: d.complete }));
+    unclearOnReadProjects: Math.round(onRead(d)), unattendedOnUnreadProjects: Math.round(onUnread(d)), missing: d.missingSource, complete: d.complete }));
   out.totals = Object.fromEntries(Object.entries(R.totals).map(([k, v]) => [k, Math.round(v * 10) / 10]));
+  /* The projects' unclear parts add up to the range's (projects never share
+     a minute in this data), and each project's unclear time is split into
+     the part from its own hosts and the part from flagged days. */
+  const flagged = new Set(R.days.filter((d) => d.missingSource).map((d) => d.date));
+  const unrBy = {}, unrFlagged = {};
+  for (const d of R.days) for (const x of d.hours) for (const [p, m] of Object.entries(x.unrBy)) {
+    unrBy[p] = (unrBy[p] || 0) + m;
+    if (flagged.has(d.date)) unrFlagged[p] = (unrFlagged[p] || 0) + m;
+  }
+  out.projectsUnclear = Object.entries(unrBy).filter(([, m]) => m >= 0.5).map(([p, m]) => ({ project: p, unr: Math.round(m), fromFlaggedDays: Math.round(unrFlagged[p] || 0), heldByUnreadHost: EMPTY || (STAGE.has(p) && R.unreadDays.some((d) => d.hostUnread)) }));
+  out.projectsUnclearSum = Math.round(Object.values(unrBy).reduce((a, b) => a + b, 0));
+  /* Unclear time on a project no unread host holds must come from flagged days only. */
+  out.unclearOnProjectsReadThrough = Math.round(out.projectsUnclear.filter((p) => !p.heldByUnreadHost).reduce((s, p) => s + p.unr - p.fromFlaggedDays, 0));
+  const probe = document.querySelector("#rhythm") && R.days.find((d) => d.date === "2026-09-23");
+  if (probe) { const x = probe.hours[18]; out.wed18 = { you: Math.round(x.humanMin), una: Math.round(x.unaMin), unr: Math.round(x.unrMin), fill: rhythmFill(x) }; }
   document.body.dataset.measure = JSON.stringify(out);
 }
 render();
