@@ -46,6 +46,7 @@ import {
   interruptionObligationDirectory,
   interruptionObligationStore,
   interruptionObligationUnresolved,
+  submittedContinuationOutcome,
   type InterruptionObligation,
   type InterruptionObligationStore,
 } from "./interruptionObligations";
@@ -436,26 +437,14 @@ function settleSubmittedInterruptionObligations(
   const snapshot = registry.readOnlySnapshot();
   const unresolved: InterruptionObligation[] = [];
   for (const obligation of obligations) {
-    if (obligation.state !== "submitted") {
+    const outcome = obligation.state === "submitted"
+      ? submittedContinuationOutcome(obligation, snapshot, (id) => registry.canonicalConversationId(id))
+      : null;
+    if (!outcome) {
       unresolved.push(obligation);
       continue;
     }
-    const reservation = Object.values(snapshot.heldDeliveries).find((delivery) =>
-      delivery.clientMessageId === obligation.id
-        && registry.canonicalConversationId(delivery.conversationId)
-          === registry.canonicalConversationId(obligation.conversationId));
-    const owner = obligation.operationId ? snapshot.deliveryOperationOwners[obligation.operationId] : undefined;
-    const settled = reservation
-      ? reservation.state === "delivered" || reservation.state === "failed" ? reservation.state : null
-      : owner?.terminalState ?? "delivered";
-    if (settled === null) {
-      unresolved.push(obligation);
-      continue;
-    }
-    const resolution = settled === "failed"
-      ? reservation?.error || owner?.terminalReason || "the continuation delivery failed"
-      : reservation || owner ? "delivered" : "delivered; its settled reservation was compacted";
-    store.update(obligation.id, { state: settled, resolvedAt: new Date().toISOString(), resolution });
+    store.update(obligation.id, { state: outcome.state, resolvedAt: outcome.at ?? new Date().toISOString(), resolution: outcome.resolution });
   }
   return unresolved;
 }

@@ -1,8 +1,9 @@
 /**
  * The HTTP half of #1766: a create refused on the registry lock says nothing
  * was admitted and may be repeated, instead of answering 500 and leaving the
- * caller to guess whether a pipeline exists. The route carries no idempotency
- * receipt of its own, so what it owes is a truthful, repeatable refusal.
+ * caller to guess whether a pipeline exists. Since #1835 such a create is
+ * queued rather than refused: the answer carries the pipeline, 202 says it is
+ * not stored yet, and the serving release's controller stores it once.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -22,6 +23,7 @@ fs.mkdirSync(path.join(process.env.LLV_CODEX_HOME, "sessions"), { recursive: tru
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { loadPipelines, withPipelineMutation } = await import("@/lib/pipelines/store");
+const { tickPipelines } = await import("@/lib/pipelines/engine");
 const { POST } = await import("./route");
 
 /** A durable creator lineage, the same one an agent caller carries. */
@@ -104,17 +106,18 @@ test("two creates racing on the registry lock both succeed", async () => {
   expect(pipelinesNamed("http race b")).toHaveLength(1);
 });
 
-test("a create refused on the lock is retryable, admits nothing, and succeeds when repeated", async () => {
+test("a create refused on the lock is queued, stores nothing yet, and is stored once by the controller (#1766, #1835)", async () => {
   process.env.LLV_PIPELINE_LOCK_WAIT_MS = "200";
   const releaseLease = await holdRegistryLease();
   const task = "http busy refusal";
 
   const startedAt = Date.now();
-  const refused = await POST(createRequest(task));
+  const queued = await POST(createRequest(task));
   const elapsed = Date.now() - startedAt;
 
-  expect(refused.status).toBe(503);
-  expect(await refused.json()).toMatchObject({ code: "store_busy", retryable: true });
+  expect(queued.status).toBe(202);
+  const body = await queued.json() as { ok: boolean; pipeline: { id: string }; queued?: { reason: string } };
+  expect(body).toMatchObject({ ok: true, queued: { reason: "pipeline state is busy" } });
   expect(pipelinesNamed(task)).toEqual([]);
   /* It waited for the lock, and the wait was bounded: the request answered
      while the lease was still held by someone else. */
@@ -122,7 +125,8 @@ test("a create refused on the lock is retryable, admits nothing, and succeeds wh
   expect(elapsed).toBeLessThan(10_000);
 
   await releaseLease();
-  const repeated = await POST(createRequest(task));
-  expect(repeated.status).toBe(201);
-  expect(pipelinesNamed(task)).toHaveLength(1);
+  await tickPipelines([]);
+  expect(pipelinesNamed(task)).toEqual([body.pipeline.id]);
+  await tickPipelines([]);
+  expect(pipelinesNamed(task)).toEqual([body.pipeline.id]);
 });
