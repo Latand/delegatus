@@ -16,6 +16,7 @@ export function compactTask(task: BoardTask & { pipelineIds?: string[] }) {
     detailsLength: task.details?.length ?? 0, textLength: task.text.length,
     ...(task.board ? { board: task.board } : {}),
     ...(task.color ? { color: task.color } : {}),
+    ...(task.icon ? { icon: task.icon } : {}),
     ...(task.pos ? { pos: task.pos } : {}),
   };
 }
@@ -44,7 +45,7 @@ export function taskAcknowledgement(task: BoardTask, args: Record<string, unknow
       if (value && typeof value === "object" && Buffer.byteLength(JSON.stringify(value)) > 300) return [key, { omitted: true }];
       return [key, value ?? null];
     })),
-    omittedFieldCount: full ? 0 : Object.keys(task).filter(key => !["id", "project", "status", "updatedAt", "revision", "placement", "board", "color", "pos"].includes(key)).length,
+    omittedFieldCount: full ? 0 : Object.keys(task).filter(key => !["id", "project", "status", "updatedAt", "revision", "placement", "board", "color", "icon", "pos"].includes(key)).length,
     readMore: "get_task(taskId) reads the complete stored task; full:true returns it on a write.",
   };
 }

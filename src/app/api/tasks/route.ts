@@ -26,7 +26,7 @@ export async function GET(): Promise<NextResponse<{ tasks: TaskPipelineReadModel
   }
 }
 
-export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; task: BoardTask } | ApiError>> {
+export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; task: BoardTask; notes?: string[] } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -57,5 +57,6 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
      reads the freshest task list (not this request's snapshot), so it never
      evaluates references against stale state. */
   sweepAttachments(loadTasks(), Date.now());
-  return NextResponse.json({ ok: true, task: result.task });
+  /* An icon that names no lucide icon was clamped to none, and says so (#2102). */
+  return NextResponse.json({ ok: true, task: result.task, ...(result.notes ? { notes: result.notes } : {}) });
 }

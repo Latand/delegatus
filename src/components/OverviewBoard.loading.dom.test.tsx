@@ -7,6 +7,7 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { setLocale, translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
+import type { FileEntry } from "@/lib/types";
 
 /*
  * The Overview before its first answer (#2071, docs/design/skeletons-and-
@@ -77,7 +78,7 @@ for (const surface of ["desktop", "phone"] as const) {
     expect(host.textContent).not.toContain(en["overview.firstRunTitle"]);
     expect(host.textContent).not.toContain(en["common.nothingRunning"]);
     expect(host.querySelector('[aria-busy="true"]')).not.toBeNull();
-    expect(host.querySelector(phone ? '[data-skeleton="rows-list"]' : "[data-kanban-skeleton]")).not.toBeNull();
+    expect(host.querySelector(phone ? '[data-skeleton="phone-kanban"]' : "[data-kanban-skeleton]")).not.toBeNull();
   });
 }
 
@@ -90,4 +91,34 @@ test("desktop: the subtitle says loading, in en and uk, and the first run waits 
   root = null;
   const answered = render(true);
   expect(answered.querySelector('[data-testid="overview-first-run"]')).not.toBeNull();
+});
+
+/* #2098: ⋯ › Hidden tasks is the phone kanban's sheet, so the row waits for
+   the board. Before the first answer the Overview holds the board's skeleton,
+   and the menu offers nothing that would open onto it. */
+test("phone: ⋯ lists Hidden tasks only once the board has answered", () => {
+  phone = true;
+  const files = [{
+    path: "/sessions/loading.jsonl", root: "claude-projects", name: "loading.jsonl", project: "-work-acme-ledger", title: "Builder",
+    engine: "claude", kind: "session", fmt: "claude", parent: null, mtime: 990, size: 1, activity: "live", proc: "running", pid: null,
+    model: null, pendingQuestion: null, waitingInput: null, lastTurn: { startedAt: 900_000, endedAt: null },
+  }] as unknown as FileEntry[];
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  root = createRoot(host as unknown as Element);
+  const draw = (loaded: boolean) => flushSync(() => root!.render(
+    <OverviewBoard files={files} projectCatalog={[]} pipelines={[]} workflows={[]} archivedProjects={new Set()} loaded={loaded} now={1_000} onSelectProject={() => {}} />,
+  ));
+  const hiddenRow = () => dom.document.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-open="hidden"]');
+  const openMenu = () => flushSync(() => (host.querySelector('[data-mobile2-open="menu"]') as unknown as HTMLElement).click());
+
+  draw(false);
+  expect(host.querySelector('[data-skeleton="phone-kanban"]')).not.toBeNull();
+  openMenu();
+  expect(dom.document.querySelector('[data-mobile2-sheet="menu"]')).not.toBeNull();
+  expect(hiddenRow()).toBeNull();
+
+  draw(true);
+  expect(host.querySelector("[data-phone-kanban]")).not.toBeNull();
+  expect(hiddenRow()).not.toBeNull();
 });

@@ -29,7 +29,7 @@ export type MobileScreen =
   | { kind: "pipeline"; id: string }
   | { kind: "accounts" };
 export type MobileScreenKind = MobileScreen["kind"];
-export type MobileSheetName = "projects" | "attention" | "menu" | "host" | "search" | "seat" | "rotate" | "tick" | "switch" | "model" | "stage" | "row" | "links" | "card" | "status" | "lane";
+export type MobileSheetName = "projects" | "attention" | "menu" | "host" | "search" | "seat" | "rotate" | "tick" | "switch" | "model" | "stage" | "row" | "links" | "card" | "status" | "lane" | "hidden";
 /** How the current state was reached; the shell picks its transition from it. */
 export type MobileNavMotion = "load" | "push" | "pop" | "switch" | "sheet" | "act";
 

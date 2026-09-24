@@ -118,6 +118,8 @@ export interface KanbanCard {
   searchText: string;
   /** The task's colour label, when it names one this build knows. */
   color: TaskColor | null;
+  /** The task's stored lucide icon (#2102); null draws the title's suggestion. */
+  icon: string | null;
   /** Earlier attempts and review rounds of the card's pipelines, newest first. */
   past: PastAttempt[];
   /** Whether the task's group is hidden, and why a hidden one came back. */
@@ -503,6 +505,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
         .join("\n")
         .toLowerCase(),
       color,
+      icon: typeof task?.icon === "string" && task.icon ? task.icon : null,
       past: pastAttempts(summaries.map((summary) => summary.pipeline), flowsById),
       hide,
       holdsSeat,

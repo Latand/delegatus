@@ -17,6 +17,7 @@ import { type FavoriteRow } from "@/components/favorites/favoriteRows";
 import { updateTask } from "./taskApi";
 import { pushTaskToast } from "./taskToast";
 import { TaskComposer } from "./TaskComposer";
+import { TaskIcon } from "./TaskIcon";
 import { TASK_TONES, taskTitle } from "./taskModel";
 import { useTaskCreateDraft } from "./useTaskCreateDraft";
 
@@ -243,6 +244,7 @@ export function TaskPanel({
                     >
                       {t(`tasks.status.${task.status}`)}
                     </span>
+                    <TaskIcon icon={task.icon} title={taskTitle(task.text)} size={14} />
                     <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold">
                       {taskTitle(task.text) || t("tasks.untitled")}
                     </span>

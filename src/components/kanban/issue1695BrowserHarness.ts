@@ -4,10 +4,14 @@ import tailwind from "@tailwindcss/postcss";
 import type { Browser } from "playwright-core";
 import postcss from "postcss";
 
+import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
+
 /* The rendered-evidence harness shared by the browser drivers: a fixture
    module bundled for the browser and served with the production stylesheet on
    an ephemeral loopback port. `entry` defaults to the kanban board's fixture,
-   so every #1695 caller is unchanged; another surface's driver passes its own. */
+   so every #1695 caller is unchanged; another surface's driver passes its own.
+   It also answers `/api/task-icons` the way the Viewer does (#2102), so a
+   fixture draws lucide's real icons. */
 
 export async function serveEvidenceFixture(
   outDir: string,
@@ -27,8 +31,9 @@ export async function serveEvidenceFixture(
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch(request) {
-      const pathname = new URL(request.url).pathname;
+    async fetch(request) {
+      const { pathname, searchParams } = new URL(request.url);
+      if (pathname === "/api/task-icons") return Response.json({ icons: await taskIconNodes((searchParams.get("names") ?? "").split(",")) });
       if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
       if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
       return new Response(

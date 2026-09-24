@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { EyeOff } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
@@ -13,7 +14,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
-import { BoardRowsSkeleton, KanbanSkeleton } from "./skeletons";
+import { KanbanSkeleton, PhoneKanbanSkeleton } from "./skeletons";
 import { FolderPlus, Search } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
@@ -22,7 +23,7 @@ import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
 import { openOnboarding } from "./onboarding/useOnboarding";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
-import { OverviewKanban } from "./OverviewKanban";
+import { OverviewKanban, type OverviewPhoneDoors } from "./OverviewKanban";
 import { SoundToggle } from "./SoundToggle";
 import { buildProjectSummaries } from "./projectModel";
 import { CREATE_PROJECT_FORM_EVENT } from "./ProjectRail";
@@ -62,6 +63,10 @@ interface Props {
       badge, the arrival for the banner slot and the sheets the Viewer owns.
       Absent on the desktop. */
   mobileShell?: MobileShellHost | null;
+  /** The Viewer's half of a conversation a card opens on the phone (#2098):
+      it pushes the conversation's screen over the Overview and puts the
+      conversation on its own project's board, which draws that screen. */
+  onOpenConversation?: (file: FileEntry) => void;
 }
 
 const NO_TASKS: readonly BoardTask[] = [];
@@ -77,7 +82,7 @@ const NO_FLOWS: Flow[] = [];
  * that used to live here was a second, smaller board beside the real one, and
  * the rail already lists the projects it listed.
  */
-export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, tasks = NO_TASKS, flows = NO_FLOWS, loaded = true, cached = false, now, catalogFailures = 0, onSelectProject, onOpenSearch, mobileShell = null }: Props) {
+export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, tasks = NO_TASKS, flows = NO_FLOWS, loaded = true, cached = false, now, catalogFailures = 0, onSelectProject, onOpenSearch, mobileShell = null, onOpenConversation }: Props) {
   const { t, locale } = useLocale();
   const isMobile = useIsMobile();
   const mobileNav = useMobileNavStore();
@@ -113,6 +118,38 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
     [summaries, projectDisplayNames],
   );
 
+  /* The phone's Overview is the phone kanban (#2098), and a card opens what
+     a project's card opens: its task, its pipeline or its conversation, each
+     a screen pushed over the Overview, so ‹ comes back to this column. The
+     board tells the ⋯ menu how many tasks it is not drawing. */
+  const [hiddenCount, setHiddenCount] = useState(0);
+  /* The phone kanban is drawn once there are projects and an answer, the
+     condition `OverviewKanban` holds its skeleton on; the Hidden tasks sheet
+     is the board's, so its ⋯ row waits for it. */
+  const boardDrawn = projects.length > 0 && (loaded || cached);
+  /* A screen over the Overview is drawn by its own project's dashboard. One
+     the Viewer cannot place (a task deleted while its screen sat in the
+     history, reached again by Forward) leaves the Overview drawn under a
+     stack that names it, and every later door would land above it and never
+     show: the stack goes home instead. Nothing opened on purpose lands here
+     before its data does: a task and a lane come from the payload the door
+     was drawn from, and a conversation opened over the Overview carries its
+     project from the open (`openOverOverview`), whether or not the poll has
+     carried its file yet. */
+  const stranded = isMobile && !["board", "accounts"].includes(topScreen(mobileNavState).kind);
+  useEffect(() => {
+    if (stranded) mobileNav.home();
+  }, [stranded, mobileNav]);
+  const phoneDoors = useMemo<OverviewPhoneDoors | null>(
+    () => (isMobile ? {
+      onOpenTask: (task) => mobileNav.push({ kind: "task", id: task.id }),
+      onOpenPipeline: (pipeline) => mobileNav.push({ kind: "pipeline", id: pipeline.id }),
+      onOpenConversation: (file) => (onOpenConversation ? onOpenConversation(file) : mobileNav.push({ kind: "chat", id: file.path })),
+      onHiddenCount: setHiddenCount,
+    } : null),
+    [isMobile, mobileNav, onOpenConversation],
+  );
+
   const grid = (
     <div data-testid="overview-body" className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* Issue #696: a failed fetch and a genuinely empty installation must
@@ -134,11 +171,12 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           catalogFailures={catalogFailures}
           onSelectProject={onSelectProject}
           onOpenConversations={onOpenSearch ?? noop}
+          phone={phoneDoors}
         />
       ) : degraded || allSummaries.length ? null : !loaded ? (
         /* Not answered yet (#2071): the shape of the board, never the first
            run, which is a claim that nothing exists. */
-        isMobile ? <BoardRowsSkeleton variant="list" /> : <KanbanSkeleton overview />
+        isMobile ? <PhoneKanbanSkeleton seat={false} /> : <KanbanSkeleton overview />
       ) : (
         /* First run (issue #1162). A board with nothing on it used to state
            the fact and stop there; it now says where sessions come from and
@@ -187,10 +225,23 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
   if (isMobile) {
     /* The phone (mobile v2 lane 1): the shell's bar with «Overview» as the
        title cell (it opens the project switcher), the badge, search and ⋯; the
-       menu holds the device-local settings. */
+       menu holds the hidden tasks (#2098, as a project's does) and the
+       device-local settings. */
     const renderSheet = (name: MobileSheetName, close: () => void) => {
       if (name === "menu") {
         const entries: MobileMenuEntry[] = [
+          ...(boardDrawn ? [
+            {
+              kind: "row" as const,
+              key: "hidden",
+              icon: <EyeOff className="h-[18px] w-[18px]" aria-hidden />,
+              label: t("kanban.hiddenTitle"),
+              trailing: hiddenCount ? String(hiddenCount) : undefined,
+              opens: "hidden" as const,
+              onSelect: () => mobileNav.openSheet("hidden"),
+            },
+            { kind: "divider" as const, key: "d-board" },
+          ] : []),
           {
             kind: "custom",
             key: "sound",
@@ -214,7 +265,9 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
     return (
       <MobileShell
         screen="board"
-        title={<MobileBarTitle>{t("rail.overview")}</MobileBarTitle>}
+        /* The board under the title is narrowed to live work, for good
+           (#1820): the bar says so once, where a project names its state. */
+        title={<MobileBarTitle meta={cached && !loaded ? t("dash.updating") : projects.length ? t("mobile2.overview.workingNow") : undefined}>{t("rail.overview")}</MobileBarTitle>}
         titleLabel={t("mobile2.bar.switchProject")}
         titleOpens={mobileShell ? "projects" : undefined}
         host={mobileShell}
