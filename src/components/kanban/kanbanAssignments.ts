@@ -64,12 +64,9 @@ export function assignmentRefFor(task: BoardTask, file: FileEntry): AssignmentRe
   return assignment.panePid ? { panePid: assignment.panePid } : null;
 }
 
-/**
- * Dismiss a launch that never produced a transcript (the card's «launch did
- * not start» row) over `PATCH /api/tasks/:id/assignment`. The row is kept on
- * the task, marked failed; a placeholder task left with nothing else is done.
- */
-export async function dismissUnstartedLaunch(taskId: string, launch: { launchId: string | null; conversationId: string | null }): Promise<AssignmentAnswer> {
+type LaunchRef = { launchId: string | null; conversationId: string | null };
+
+async function patchDismiss(taskId: string, launch: LaunchRef): Promise<AssignmentAnswer> {
   try {
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/assignment`, {
       method: "PATCH",
@@ -80,9 +77,36 @@ export async function dismissUnstartedLaunch(taskId: string, launch: { launchId:
     if (!response.ok) {
       return { ok: false, status: response.status, error: json?.error ?? translate(getLocale(), "tasks.failed", { status: response.status }) };
     }
-    fireTasksChanged();
     return { ok: true, task: json?.task ?? null };
   } catch {
     return { ok: false, status: 0, error: translate(getLocale(), "common.serverUnavailable") };
   }
+}
+
+/**
+ * Dismiss a launch that did not start (the card's «launch did not start» row)
+ * over `PATCH /api/tasks/:id/assignment`. The row is kept on the task, marked
+ * failed; a placeholder task left with nothing else is done.
+ */
+export async function dismissUnstartedLaunch(taskId: string, launch: LaunchRef): Promise<AssignmentAnswer> {
+  const answer = await patchDismiss(taskId, launch);
+  if (answer.ok) fireTasksChanged();
+  return answer;
+}
+
+/**
+ * «Dismiss all»: each launch in turn, so each request reads the task the one
+ * before it wrote. A refusal does not stop the rest; the answer is the first
+ * refusal, or the last success. The board refreshes once.
+ */
+export async function dismissUnstartedLaunches(taskId: string, launches: readonly LaunchRef[]): Promise<AssignmentAnswer> {
+  let refused: AssignmentAnswer | null = null;
+  let last: AssignmentAnswer | null = null;
+  for (const launch of launches) {
+    const answer = await patchDismiss(taskId, launch);
+    if (answer.ok) last = answer;
+    else refused ??= answer;
+  }
+  if (last) fireTasksChanged();
+  return refused ?? last ?? { ok: true, task: null };
 }

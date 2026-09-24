@@ -1,5 +1,10 @@
 import { NATIVE_MULTI_AGENT_TOOLS } from "@/lib/agent/spawnPolicy";
 
+import {
+  NATIVE_INJECT_CAPABILITY,
+  NATIVE_QUEUE_CAPABILITY,
+  NATIVE_TURN_PROFILE_CAPABILITY,
+} from "./codexCapabilityFlags";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
 
 /**
@@ -12,8 +17,12 @@ import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
  *   advertises {@link STRUCTURED_IMAGE_CAPABILITY} for its whole life, and one
  *   launched with the native multi-agent denial also advertises the effective
  *   denied-tool set (#381) so a registry snapshot can verify the restriction
- *   without the argv. Both are true of an idle host and of a busy one.
- * - **Activity flags** — something the host is doing right now.
+ *   without the argv. A Codex host advertises what its app-server negotiated
+ *   — a native queue, injection, a per-turn profile — for as long as it
+ *   holds the thread. All of them are true of an idle host and of a busy one.
+ * - **Activity flags** — something the host is doing right now: the
+ *   app-server's own thread flags (`waitingOnApproval`, `waitingOnUserInput`)
+ *   and anything else nobody has named here.
  *
  * Automatic retirement (#747) reads this channel for the second kind. Reading
  * the raw array instead makes the clause vacuous in the direction that matters:
@@ -24,7 +33,11 @@ import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
  * The classification is a closed list on purpose. An advertisement a later
  * release adds is invisible here until it is named, so it blocks retirement
  * until then: an unrecognised flag is treated as activity, and treating an
- * unknown as idle is the mistake this whole predicate exists to avoid.
+ * unknown as idle is the mistake this whole predicate exists to avoid. The
+ * cost of that choice is a stall that looks like a quiet machine: the three
+ * Codex advertisements went unnamed for two weeks and no Codex host retired in
+ * that time (#2137), which is why the retirement report and the seat-tick
+ * signal count the flags that refused.
  */
 
 /** Durable launch evidence: hosts that launched with the native multi-agent
@@ -33,7 +46,12 @@ import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
 export const NATIVE_MULTI_AGENT_DENY_FLAG = `native-multi-agent-deny:${NATIVE_MULTI_AGENT_TOOLS.join(",")}`;
 
 /** Advertisements whose whole value is the exact string. */
-const CAPABILITY_FLAGS: ReadonlySet<string> = new Set([STRUCTURED_IMAGE_CAPABILITY]);
+const CAPABILITY_FLAGS: ReadonlySet<string> = new Set([
+  STRUCTURED_IMAGE_CAPABILITY,
+  NATIVE_QUEUE_CAPABILITY,
+  NATIVE_INJECT_CAPABILITY,
+  NATIVE_TURN_PROFILE_CAPABILITY,
+]);
 
 /** Advertisements that carry a payload after a colon — the denied-tool set is
     the argv-free record of the restriction, so it changes with the tool list

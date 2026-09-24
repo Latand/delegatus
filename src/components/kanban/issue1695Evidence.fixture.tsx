@@ -117,6 +117,12 @@ const SEAT_HEAD = SCENARIO === "seat-head";
    transcript (the leaked fixture's), a young task whose agent is still at
    work, and a named task whose conversation this board did not load. */
 const GHOSTS = SCENARIO === "ghost-tasks";
+/* Old cards whose lanes ran for days: an assignment per stage attempt, review
+   round and handshake retry, each with the conversation it minted and no path,
+   none of them loaded on this board, two of their lanes still the task's own.
+   Beside them, a card with launches of its own that did not start: three rows
+   from before launches reserved a conversation, and one whose receipt failed. */
+const UNSTARTED = SCENARIO === "unstarted-regression";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -582,7 +588,61 @@ const UPLOAD_UI = FLAT ? "verify-backward-compatibility-and-migrations" : "build
    for a 390 px card's line even alone, so its name wraps inside the pill. */
 const ATTACH_VERIFY = FLAT ? "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-telegram-bridge" : "verify";
 
+/* The assignments a task's lanes leave behind: one per stage attempt, three
+   handshake retries after a lane's first review, and one per review round. */
+function laneAssignments(prefix: string, daysAgo: number, lanes: ReadonlyArray<readonly [string, readonly string[]]>, rounds: number) {
+  const rows: Array<Record<string, unknown>> = [];
+  const add = (clientAttemptId: string) => {
+    const n = rows.length + 1;
+    rows.push({ launchId: `launch-${prefix}-${n}`, clientAttemptId, path: null, conversationId: `conversation_${prefix}-${n}`, panePid: null, state: "linked", error: null, at: iso(daysAgo * 24 * 60 * MIN - n * 25 * MIN), engine: n % 3 ? "claude" : "codex" });
+  };
+  lanes.forEach(([lane, stages], laneIndex) => stages.forEach((stageId, index) => {
+    add(`pipeline_${lane}_${stageId}_${index + 1}`);
+    if (laneIndex === 1 && index === 1) for (let retry = 1; retry <= 3; retry += 1) add(`handshake_retry_${retry}_pipeline_${lane}_${stageId}_${index + 1}`);
+  }));
+  for (let round = 1; round <= rounds; round += 1) add(`flow_${prefix}${round}_round${round}`);
+  return rows;
+}
+const sqliteRows = UNSTARTED ? laneAssignments("sqlite", 5, [
+  ["a1", ["design", "build", "review", "build", "review", "build", "review", "build", "review", "review"]],
+  ["a2", ["build", "review", "build", "review"]],
+  ["a3", ["build", "review", "build", "review"]],
+  ["a4", ["fix", "review"]],
+  ["a5", ["build", "review", "build"]],
+  ["a6", ["build"]],
+  ["a7", ["fix", "review", "fix", "review", "fix", "review", "fix", "review"]],
+  ["a8", ["review"]],
+  ["slice4", ["build"]],
+  ["slice5", ["build"]],
+], 5) : [];
+const flowsRows = UNSTARTED ? laneAssignments("flows", 4, [
+  ["b1", ["design"]],
+  ["b2", ["build", "review"]],
+  ["b4", ["build", "review", "build", "review", "build"]],
+  ["b5", ["build", "review", "build", "build"]],
+  ["b6", ["build", "review", "build", "review", "build"]],
+  ["b7", ["review", "build"]],
+  ["s4", ["build"]],
+  ["s5", ["build"]],
+], 3) : [];
+const mixedRows = UNSTARTED ? laneAssignments("mixed", 3, [["c1", ["build", "review", "build", "review"]]], 0) : [];
+/* A lane of the task's own: its one build attempt ran the assignment's conversation. */
+function ownLane(id: string, title: string, taskId: string, state: string, rows: ReadonlyArray<Record<string, unknown>>, daysAgo: number): Pipeline {
+  const row = rows.find((entry) => String(entry.clientAttemptId).startsWith(`pipeline_${id}_`))!;
+  const at = daysAgo * 24 * 60 * MIN;
+  return pipeline(`p-${id}`, title, taskId, state, [stage("build", "builder", null)],
+    [{ stageId: "build", attempts: [attempt(1, "passed", null, { launchId: row.launchId, conversationId: row.conversationId, startedAt: iso(at), completedAt: iso(at - 40 * MIN), verdict: { status: "pass", findings: [] } })] }],
+    null, { createdAt: iso(at + 10 * MIN), closedAt: iso(at - 45 * MIN) });
+}
+const unstartedPipelines: Pipeline[] = UNSTARTED ? [
+  ownLane("slice4", L("State in SQLite, slice 4: the bridge stores", "Стан у SQLite, зріз 4: сховища мосту"), "t-lanes-sqlite", "completed", sqliteRows, 2),
+  ownLane("slice5", L("State in SQLite, slice 5: the operator's small stores", "Стан у SQLite, зріз 5: дрібні сховища оператора"), "t-lanes-sqlite", "closed", sqliteRows, 2),
+  ownLane("s4", L("Retire flows, slice 4: decode old definitions", "Прибрати флоу, зріз 4: декодувати старі визначення"), "t-lanes-flows", "completed", flowsRows, 2),
+  ownLane("s5", L("Retire flows, slice 5: freeze flows", "Прибрати флоу, зріз 5: заморозити флоу"), "t-lanes-flows", "closed", flowsRows, 2),
+] : [];
+
 const pipelines: Pipeline[] = [
+  ...unstartedPipelines,
   ...flatPipelines,
   ...reviewSpentPipelines,
   ...balancePipelines,
@@ -751,6 +811,13 @@ const ghostFailed = GHOSTS ? add(conversation("ghost-failed", L("Rotate the webh
     state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached: the weekly window resets in 3 days" },
 })) : null;
 
+/* The mixed card's launch whose receipt failed an hour ago: only its placeholder. */
+const mixedFailed = UNSTARTED ? add(conversation("mixed-failed", L("Replay the missed webhook deliveries", "Повторити пропущені доставки вебхуків"), {
+  path: "spawn:launch-mixed-failed", size: 0, mtime: now - 60 * MIN, activityReason: "structured_spawn_failed",
+  spawn: { launchId: "launch-mixed-failed", clientAttemptId: null, accountId: null, conversationId: "conversation_mixed-failed",
+    state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached: the weekly window resets in 3 days" },
+})) : null;
+
 let revision = 1;
 function task(id: string, status: TaskStatus, title: string, description: string, updatedAgo: number, members: FileEntry[] = [], over: Partial<BoardTask> = {}): BoardTask {
   return {
@@ -809,7 +876,8 @@ const tasks: BoardTask[] = [
     } as Partial<BoardTask>),
     task("t-ghost-fixture", "assigned", "Exercise legacy spawn fixture", "", 20 * 60 * MIN, [], {
       origin: { kind: "launch", key: "launch-ghost-fixture", refinement: "pending" },
-      assignments: [{ launchId: "launch-ghost-fixture", conversationId: "conversation_ghost-fixture", path: null, panePid: null, state: "linked", error: null, at: iso(20 * 60 * MIN), engine: "codex" }],
+      /* A row from before launches reserved a conversation: it never minted one. */
+      assignments: [{ launchId: "launch-ghost-fixture", path: null, panePid: null, state: "linked", error: null, at: iso(20 * 60 * MIN), engine: "codex" }],
     } as Partial<BoardTask>),
     task("t-ghost-young", "assigned", L("Audit the settings screen", "Аудит екрана налаштувань"), "", 3 * MIN, [ghostYoung!], {
       origin: { kind: "launch", key: "launch-ghost-young", refinement: "pending" },
@@ -822,6 +890,21 @@ const tasks: BoardTask[] = [
     } as Partial<BoardTask>),
     task("t-ghost-elsewhere", "assigned", L("Tune the upload retries", "Налаштувати повтори завантаження"), "", 26 * 60 * MIN, [], {
       assignments: [{ path: "/elsewhere/upload-retries.jsonl", conversationId: "conversation_upload-retries", panePid: null, state: "linked", error: null, at: iso(26 * 60 * MIN) }],
+    } as Partial<BoardTask>),
+  ] : []),
+  ...(UNSTARTED ? [
+    task("t-lanes-sqlite", "inbox", L("Viewer state in SQLite: the remaining slices and dropping legacy JSON", "Стан Viewer у SQLite: решта зрізів і видалення legacy JSON"), L("Tasks, the agent registry, the board and accounts moved. Left: the remaining collections, one slice per lane.", "Переїхали задачі, реєстр агентів, дошка й акаунти. Лишилось: решта колекцій, по зрізу на лейн."), 2 * 24 * 60 * MIN, [], {
+      assignments: sqliteRows as unknown as BoardTask["assignments"],
+    } as Partial<BoardTask>),
+    task("t-lanes-flows", "inbox", L("Retire flows: one mechanism, pipelines (continued)", "Прибрати флоу: один механізм — пайплайни (продовжити)"), L("The design is ready in nine slices. Next: freeze flows, then replace their UI with pipeline attempts.", "Дизайн готовий, девʼять зрізів. Далі: заморозити флоу, потім замінити їхній UI спробами пайплайна."), 2 * 24 * 60 * MIN, [], {
+      assignments: flowsRows as unknown as BoardTask["assignments"],
+    } as Partial<BoardTask>),
+    task("t-lanes-mixed", "inbox", L("Replay the missed webhook deliveries", "Повторити пропущені доставки вебхуків"), "", 60 * MIN, [], {
+      assignments: [
+        ...mixedRows,
+        ...["a", "b", "c"].map((id, index) => ({ launchId: `launch-mixed-legacy-${id}`, path: null, panePid: null, state: "linked", error: null, at: iso((2 * 24 + index) * 60 * MIN), engine: "codex" })),
+        { launchId: "launch-mixed-failed", conversationId: mixedFailed!.conversationId, path: mixedFailed!.path, panePid: null, state: "spawning", error: null, at: iso(60 * MIN), engine: "claude" },
+      ] as unknown as BoardTask["assignments"],
     } as Partial<BoardTask>),
   ] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),

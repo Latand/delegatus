@@ -232,24 +232,145 @@ test("a placeholder no agent will name borrows its conversation's cleaned title 
 
 test("the conversation count holds only what opens: a transcript elsewhere opens by its path, a launch that never started is listed apart", () => {
   const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
-  const launch = (id: string, at: number) => ({ launchId: `launch-${id}`, conversationId: `conversation_${id}`, path: null, panePid: null, state: "linked", error: null, at: iso(at), engine: "codex" });
-  const ghost = task("ghost", "assigned", [], { text: "Exercise legacy spawn fixture", origin: { kind: "launch", key: "launch-ghost", refinement: "pending" }, assignments: [launch("ghost", NOW - 3600)] as BoardTask["assignments"] });
-  const starting = task("starting", "assigned", [], { assignments: [launch("starting", NOW - 30)] as BoardTask["assignments"] });
-  const dismissed = task("dismissed", "assigned", [], { assignments: [{ ...launch("dismissed", NOW - 3600), state: "failed", error: "launch did not start (dismissed)" }] as BoardTask["assignments"] });
+  /* A row from before launches reserved a conversation: a launch id and nothing else. */
+  const legacy = (id: string, at: number) => ({ launchId: `launch-${id}`, path: null, panePid: null, state: "linked", error: null, at: iso(at), engine: "codex" });
+  const ghost = task("ghost", "assigned", [], { text: "Exercise legacy spawn fixture", origin: { kind: "launch", key: "launch-ghost", refinement: "pending" }, assignments: [legacy("ghost", NOW - 3600)] as BoardTask["assignments"] });
+  const starting = task("starting", "assigned", [], { assignments: [legacy("starting", NOW - 30)] as BoardTask["assignments"] });
+  const dismissed = task("dismissed", "assigned", [], { assignments: [{ ...legacy("dismissed", NOW - 3600), conversationId: "conversation_dismissed", state: "failed", error: "launch did not start (dismissed)" }] as BoardTask["assignments"] });
   const elsewhere = task("elsewhere", "assigned", ["/elsewhere/conversation-9.jsonl"]);
-  const result = model([ghost, starting, dismissed, elsewhere], []);
+  /* A launch that minted its conversation started, whether or not this board loaded it. */
+  const minted = task("minted", "assigned", [], { assignments: [{ ...legacy("minted", NOW - 3600), conversationId: "conversation_minted" }] as BoardTask["assignments"] });
+  const result = model([ghost, starting, dismissed, elsewhere, minted], []);
   const byId = new Map(KANBAN_STATUSES.flatMap((status) => result.columns[status].cards).map((card) => [card.task!.id, card] as const));
   /* The ghost: no conversation counted, one launch that did not start. */
   expect(byId.get("ghost")!.conversations).toBe(0);
-  expect(byId.get("ghost")!.unstarted.map((row) => row.launchId)).toEqual(["launch-ghost"]);
+  expect(byId.get("ghost")!.unstarted.map((row) => ({ launchId: row.launchId, conversationId: row.conversationId, failed: row.failed, dismissable: row.dismissable }))).toEqual([
+    { launchId: "launch-ghost", conversationId: null, failed: null, dismissable: true },
+  ]);
   /* A launch still inside its start grace is neither. */
   expect(byId.get("starting")!.conversations).toBe(0);
   expect(byId.get("starting")!.unstarted).toEqual([]);
-  /* A dismissed launch is gone from the card. */
+  /* A dismissed launch is gone from the card, and is no conversation either. */
   expect(byId.get("dismissed")!.unstarted).toEqual([]);
+  expect(byId.get("dismissed")!.conversations).toBe(0);
   /* A transcript the board did not load counts, and names the path it opens. */
   expect(byId.get("elsewhere")!.conversations).toBe(1);
   expect(byId.get("elsewhere")!.notLoadedRefs).toEqual([{ key: "conversation_elided_elsewhere_0", path: "/elsewhere/conversation-9.jsonl", conversationId: "conversation_elided_elsewhere_0" }]);
+  /* A minted conversation with no path counts as not loaded and opens by its id. */
+  expect(byId.get("minted")!.unstarted).toEqual([]);
+  expect({ conversations: byId.get("minted")!.conversations, notLoaded: byId.get("minted")!.notLoaded }).toEqual({ conversations: 1, notLoaded: 1 });
+  expect(byId.get("minted")!.notLoadedRefs).toEqual([{ key: "conversation_minted", path: null, conversationId: "conversation_minted" }]);
+});
+
+/* The two cards of the report: a task that ran lane after lane for days, its
+   assignments one per stage attempt, review round and handshake retry, each
+   holding the conversation it minted and no path, none of them loaded on the
+   board. Some of those lanes are the task's own (one closed, one completed);
+   the older ones are gone from the store. */
+function laneTask(id: string, days: number, lanes: ReadonlyArray<{ pipeline: string; stages: readonly string[] }>, flows: number, extra: Array<Record<string, unknown>> = []) {
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const assignments: Array<Record<string, unknown>> = [];
+  let n = 0;
+  const add = (clientAttemptId: string) => {
+    n += 1;
+    assignments.push({ launchId: `launch-${id}-${n}`, clientAttemptId, path: null, conversationId: `conversation_${id}_${n}`, panePid: null, state: "linked", error: null, at: iso(NOW - days * 86_400 + n * 600), engine: n % 2 ? "claude" : "codex" });
+  };
+  for (const lane of lanes) {
+    lane.stages.forEach((stage, index) => {
+      add(`pipeline_${lane.pipeline}_${stage}_${index + 1}`);
+      if (stage === "review" && index === 1) for (let retry = 1; retry <= 3; retry += 1) add(`handshake_retry_${retry}_pipeline_${lane.pipeline}_${stage}_${index + 1}`);
+    });
+  }
+  for (let round = 1; round <= flows; round += 1) add(`flow_${id}${round}_round${round}`);
+  assignments.push(...extra);
+  return task(id, "inbox", [], { assignments: assignments as unknown as BoardTask["assignments"] });
+}
+
+function ownLane(id: string, taskId: string, state: string, stages: ReadonlyArray<{ stage: string; n: number; conversationId: string }>): Pipeline {
+  return {
+    id,
+    task: `Lane ${id}`,
+    project: "fixture",
+    state,
+    cursor: null,
+    stages: [...new Set(stages.map((entry) => entry.stage))].map((stage) => ({ id: stage, kind: "run", prompt: "", next: null, effectiveRole: {} })),
+    runs: [...new Set(stages.map((entry) => entry.stage))].map((stage) => ({
+      stageId: stage,
+      attempts: stages.filter((entry) => entry.stage === stage).map((entry) => ({ n: entry.n, state: "passed", activatedBy: null, agentPath: null, conversationId: entry.conversationId, launchId: null, sessionId: null, paneId: null, flowId: null, effectiveRole: {}, output: null, verdict: null, error: null, startedAt: "2026-09-14T10:00:00.000Z", completedAt: "2026-09-14T10:30:00.000Z" })),
+    })),
+    taskIds: [taskId],
+    createdAt: "2026-09-14T10:00:00.000Z",
+  } as unknown as Pipeline;
+}
+
+test("the report's two cards: days of stage attempts that started list no launch and count as not loaded", () => {
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const sqlite = laneTask("sqlite", 5, [
+    { pipeline: "lane01", stages: ["design", "build", "review", "build", "review"] },
+    { pipeline: "lane02", stages: ["build", "review", "build", "review"] },
+    { pipeline: "lane03", stages: ["fix", "review", "fix", "review", "fix", "review"] },
+    { pipeline: "own01", stages: ["build"] },
+    { pipeline: "own02", stages: ["build"] },
+  ], 5);
+  const flows = laneTask("flows", 4, [
+    { pipeline: "lane11", stages: ["design"] },
+    { pipeline: "lane12", stages: ["build", "review", "build", "review", "build"] },
+    { pipeline: "lane13", stages: ["build", "review", "build", "build"] },
+    { pipeline: "own11", stages: ["build"] },
+  ], 3);
+  const assignment = (card: BoardTask, clientAttemptId: string) => (card.assignments as Array<{ clientAttemptId?: string; conversationId?: string }>).find((row) => row.clientAttemptId === clientAttemptId)!.conversationId!;
+  /* The task's own lanes, loaded on the board: one closed, one completed. A
+     helper its stage agent brought in holds a client id of its own. */
+  const helper = { launchId: "launch-sqlite-helper", clientAttemptId: "mcp_spawn_helper", path: null, conversationId: "conversation_sqlite_helper", panePid: null, state: "linked", error: null, at: iso(NOW - 3 * 86_400), engine: "codex" };
+  sqlite.assignments.push(helper as unknown as BoardTask["assignments"][number]);
+  const pipelines = [
+    ownLane("own01", "sqlite", "closed", [{ stage: "build", n: 1, conversationId: assignment(sqlite, "pipeline_own01_build_1") }, { stage: "helper", n: 1, conversationId: "conversation_sqlite_helper" }]),
+    ownLane("own02", "sqlite", "completed", [{ stage: "build", n: 1, conversationId: assignment(sqlite, "pipeline_own02_build_1") }]),
+    ownLane("own11", "flows", "closed", [{ stage: "build", n: 1, conversationId: assignment(flows, "pipeline_own11_build_1") }]),
+  ];
+  const result = model([sqlite, flows], [], { pipelines });
+  const byId = new Map(KANBAN_STATUSES.flatMap((status) => result.columns[status].cards).map((card) => [card.task!.id, card] as const));
+  for (const [id, stored] of [["sqlite", sqlite], ["flows", flows]] as const) {
+    const card = byId.get(id)!;
+    expect(stored.assignments.length).toBeGreaterThanOrEqual(20);
+    /* Not one of them is a launch that did not start. */
+    expect(card.unstarted).toEqual([]);
+    /* Each started: it counts, as a conversation this board did not load. */
+    expect(card.notLoaded).toBe(stored.assignments.length);
+    expect(card.conversations).toBe(stored.assignments.length);
+    /* Their home is their pipeline's chips and Past attempts: the card lists none of them. */
+    expect(card.notLoadedRefs).toEqual([]);
+  }
+});
+
+test("of the same card, a launch of the task's own still shows: a minted one opens by its id, a never-minted one past the grace did not start", () => {
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const direct = { launchId: "launch-direct", clientAttemptId: "mcp_spawn_direct", path: null, conversationId: "conversation_direct", panePid: null, state: "linked", error: null, at: iso(NOW - 2 * 86_400), engine: "codex" };
+  const legacy = { launchId: "launch-legacy", path: null, panePid: null, state: "linked", error: null, at: iso(NOW - 2 * 86_400), engine: "codex" };
+  /* A stage attempt that never minted a conversation is its pipeline's, not the card's. */
+  const stageLegacy = { launchId: "launch-stage-legacy", clientAttemptId: "pipeline_gone_build_9", path: null, panePid: null, state: "linked", error: null, at: iso(NOW - 2 * 86_400), engine: "claude" };
+  const card = laneTask("mixed", 3, [{ pipeline: "lane21", stages: ["build", "review", "build", "review"] }], 2, [direct, legacy, stageLegacy]);
+  const result = model([card], []);
+  const built = result.columns.inbox.cards[0]!;
+  expect(built.unstarted.map((row) => ({ key: row.key, launchId: row.launchId, failed: row.failed }))).toEqual([{ key: "launch-legacy", launchId: "launch-legacy", failed: null }]);
+  expect(built.notLoadedRefs).toEqual([{ key: "conversation_direct", path: null, conversationId: "conversation_direct" }]);
+  /* Four stage attempts, three handshake retries, two review rounds and the direct launch. */
+  expect(built.notLoaded).toBe(10);
+});
+
+test("a stage attempt whose launch failed is its stage's, never a failed launch of the card", () => {
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const placeholder = file(3, {
+    path: "spawn:launch-stage-failed",
+    conversationId: "conversation_stage_failed",
+    mtime: NOW - 120,
+    spawn: { launchId: "launch-stage-failed", clientAttemptId: "pipeline_gone_build_2", accountId: null, conversationId: "conversation_stage_failed", state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached" },
+  } as Partial<FileEntry>);
+  const stage = task("stage", "assigned", [], { assignments: [{ launchId: "launch-stage-failed", clientAttemptId: "pipeline_gone_build_2", conversationId: "conversation_stage_failed", path: "spawn:launch-stage-failed", panePid: null, state: "spawning", error: null, at: iso(NOW - 120), engine: "claude" }] as BoardTask["assignments"] });
+  const result = model([stage], [placeholder]);
+  const card = KANBAN_STATUSES.flatMap((status) => result.columns[status].cards).find((entry) => entry.task?.id === "stage")!;
+  expect(card.unstarted).toEqual([]);
+  expect(card.conversations).toBe(0);
 });
 
 test("a failed launch is listed at once with its error, opens its launch view, and is never a conversation", () => {

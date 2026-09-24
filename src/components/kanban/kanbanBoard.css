@@ -352,6 +352,13 @@
 .kb .unstarted-row .open { flex: 0 0 auto; color: var(--color-accent); font-weight: 600; border-radius: 4px; padding: 2px 6px; }
 .kb .unstarted-row .open:hover { background: var(--surface-well); }
 .kb .unstarted-row .error { flex: 1 0 100%; min-width: 0; color: var(--color-secondary); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* Two or more fold behind one summary row: the fold opens the list, Dismiss all
+   stays beside it on the same line, and a long count wraps inside the fold. */
+.kb .unstarted-row.summary { flex-wrap: nowrap; }
+.kb .unstarted-row.summary .fold { flex: 1 1 0; display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: inherit; font-weight: 600; text-align: left; border-radius: 4px; }
+.kb .unstarted-row.summary .fold svg { flex: 0 0 auto; width: 12px; height: 12px; }
+.kb .unstarted-row.summary .fold .what { white-space: normal; overflow-wrap: anywhere; }
+.kb .unstarted-list { display: flex; flex-direction: column; gap: 4px; }
 .kb .refs { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .kb .refs .ref { font-size: var(--text-label); color: var(--color-accent); font-weight: 600; text-align: left; border-radius: 4px; padding: 2px 4px; margin-left: -4px; }
 .kb .refs .ref.quiet { color: var(--color-muted); font-weight: 500; }
@@ -515,7 +522,7 @@
   .kb { --target: 44px; }
   .kb .bar[data-bar="overview"] .search input { height: 44px; }
   .kb .card .title { min-height: 44px; }
-  .kb .tabs-nav button, .kb .btn, .kb .pill, .kb .receipt .act, .kb .popover .row .show, .kb .refs .ref, .kb .unstarted-row .dismiss, .kb .unstarted-row .open { min-height: 44px; }
+  .kb .tabs-nav button, .kb .btn, .kb .pill, .kb .receipt .act, .kb .popover .row .show, .kb .refs .ref, .kb .unstarted-row .dismiss, .kb .unstarted-row .open, .kb .unstarted-row .fold { min-height: 44px; }
   .kb .pill { height: 36px; padding: 0 12px; }
   .kb .tile, .kb .card .add { min-height: 44px; }
   .kb .card button.task-icon { width: 36px; height: 44px; padding: 13px 0; margin: -13px -2px -13px -10px; }

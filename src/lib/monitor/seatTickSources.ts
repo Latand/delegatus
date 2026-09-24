@@ -901,11 +901,13 @@ async function seatInput(project: string, policy: SeatTickPolicy, sources: SeatT
 }
 
 /** One sweep as the retirement journal keeps it: retirements whole, refusals
-    as a count per clause. */
+    as a count per clause, and `no-active-flags` refusals as a count per flag
+    (#2137; empty for a sweep journaled before that count existed). */
 export interface RetirementJournalSweep {
   finishedAt: string;
   retired: number;
   refusedByClause: Record<string, number>;
+  refusedByFlag: Record<string, number>;
 }
 
 /** The sweeps inside a window, oldest first. `covered` says the journal
@@ -934,20 +936,53 @@ const RETIREMENT_JOURNAL_TAIL_BYTES = 1024 * 1024;
  * the host population grows; the journal's per-clause counts are where it
  * shows. Null when the window is not fully observed, when anything retired, or
  * when no clause crossed the threshold.
+ *
+ * When that clause is `no-active-flags`, `flags` carries the flags it refused
+ * on across the window, most frequent first: a flag the classifier does not
+ * know refuses every host that carries it, and the name is the whole diagnosis
+ * (#2137).
  */
 export function stalledRetirementClause(
   window: RetirementJournalWindow,
   threshold: number = RETIREMENT_STALL_REFUSALS,
-): { clause: string; refusals: number; sweeps: number } | null {
+): { clause: string; refusals: number; sweeps: number; flags: [string, number][] } | null {
   if (!window.covered || window.sweeps.length === 0) return null;
   if (window.sweeps.some((sweep) => sweep.retired > 0)) return null;
   const totals = new Map<string, number>();
+  const flagTotals = new Map<string, number>();
   for (const sweep of window.sweeps) {
     for (const [clause, count] of Object.entries(sweep.refusedByClause)) totals.set(clause, (totals.get(clause) ?? 0) + count);
+    for (const [flag, count] of Object.entries(sweep.refusedByFlag)) flagTotals.set(flag, (flagTotals.get(flag) ?? 0) + count);
   }
   let worst: { clause: string; refusals: number } | null = null;
   for (const [clause, refusals] of totals) if (!worst || refusals > worst.refusals) worst = { clause, refusals };
-  return worst && worst.refusals > threshold ? { ...worst, sweeps: window.sweeps.length } : null;
+  if (!worst || worst.refusals <= threshold) return null;
+  const flags = worst.clause === "no-active-flags"
+    ? [...flagTotals].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    : [];
+  return { ...worst, sweeps: window.sweeps.length, flags };
+}
+
+/** Flags named in the stall signal; the rest are counted, not listed, so an
+    unexpected flood of flag names cannot swamp the tick's agenda. */
+const RETIREMENT_STALL_FLAGS_SHOWN = 5;
+
+function stalledRetirementFlags(flags: readonly [string, number][]): string {
+  if (flags.length === 0) return "";
+  const shown = flags.slice(0, RETIREMENT_STALL_FLAGS_SHOWN).map(([flag, count]) => `${flag} ${count}`).join(", ");
+  const more = flags.length > RETIREMENT_STALL_FLAGS_SHOWN ? `, +${flags.length - RETIREMENT_STALL_FLAGS_SHOWN} more` : "";
+  return ` (flags: ${shown}${more})`;
+}
+
+/** A journal record's `name -> count` map, keeping only finite counts. */
+function journalCounts(value: unknown): Record<string, number> {
+  const counts: Record<string, number> = {};
+  if (value && typeof value === "object") {
+    for (const [name, count] of Object.entries(value)) {
+      if (typeof count === "number" && Number.isFinite(count)) counts[name] = count;
+    }
+  }
+  return counts;
 }
 
 /** The journal's last `bytes`, as sweeps oldest first, and whether the read
@@ -978,15 +1013,14 @@ function retirementJournalTail(filename: string, bytes: number): { sweeps: Retir
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
-      const record = JSON.parse(line) as { finishedAt?: unknown; retired?: unknown; refusedByClause?: unknown };
+      const record = JSON.parse(line) as { finishedAt?: unknown; retired?: unknown; refusedByClause?: unknown; refusedByFlag?: unknown };
       if (typeof record.finishedAt !== "string" || !Number.isFinite(Date.parse(record.finishedAt)) || !Array.isArray(record.retired)) continue;
-      const refusedByClause: Record<string, number> = {};
-      if (record.refusedByClause && typeof record.refusedByClause === "object") {
-        for (const [clause, count] of Object.entries(record.refusedByClause)) {
-          if (typeof count === "number" && Number.isFinite(count)) refusedByClause[clause] = count;
-        }
-      }
-      sweeps.push({ finishedAt: record.finishedAt, retired: record.retired.length, refusedByClause });
+      sweeps.push({
+        finishedAt: record.finishedAt,
+        retired: record.retired.length,
+        refusedByClause: journalCounts(record.refusedByClause),
+        refusedByFlag: journalCounts(record.refusedByFlag),
+      });
     } catch { /* a torn line */ }
   }
   return { sweeps, truncated };
@@ -1034,7 +1068,7 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
   if (stalled) {
     found.push({
       id: "host-retirement-stalled",
-      label: `host retirement: nothing retired in ${stalled.sweeps} sweeps over ${RETIREMENT_STALL_WINDOW_MS / 3_600_000}h while ${stalled.clause} refused ${stalled.refusals} times`,
+      label: `host retirement: nothing retired in ${stalled.sweeps} sweeps over ${RETIREMENT_STALL_WINDOW_MS / 3_600_000}h while ${stalled.clause} refused ${stalled.refusals} times${stalledRetirementFlags(stalled.flags)}`,
     });
   }
   /* The one signal that is about the seat itself: its own turn has stopped

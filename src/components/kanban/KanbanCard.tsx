@@ -199,9 +199,9 @@ export interface KanbanCardProps {
   onToggleGraph: (cardId: string, pipelineId: string, open: boolean) => void;
   /** Open the conversation an earlier attempt or review round kept. */
   onOpenAttempt: (conversation: PastAttempt["conversation"]) => void;
-  /** Dismiss a launch of this task that never produced a transcript. Absent,
-      the row still says so and offers nothing. */
-  onDismissLaunch?: (card: KanbanCardModel, launch: KanbanUnstartedLaunch) => void;
+  /** Dismiss launches of this task that did not start: one row's, or all of
+      them. Absent, the rows still say so and offer nothing. */
+  onDismissLaunch?: (card: KanbanCardModel, launches: readonly KanbanUnstartedLaunch[]) => void;
   /** Open readers this card shows, by conversation identity, one per line —
       a string so an unchanged set never re-renders the card. */
   readerKeys: string;
@@ -261,6 +261,90 @@ function ageLabel(t: TFunction, updatedAtMs: number, nowMs: number): string {
   if (!updatedAtMs) return "";
   if (nowMs - updatedAtMs < 60_000) return t("kanban.justNow");
   return fmtAge(updatedAtMs / 1000);
+}
+
+/** The launches of a task that did not start. One is its own row; more fold
+    behind one summary row that opens on click, with Dismiss all beside it. */
+function UnstartedLaunches({ card, title, nowMs, onOpen, onDismiss }: {
+  card: KanbanCardModel;
+  title: string;
+  nowMs: number;
+  onOpen: (file: FileEntry) => void;
+  onDismiss?: (card: KanbanCardModel, launches: readonly KanbanUnstartedLaunch[]) => void;
+}) {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  const launches = card.unstarted;
+  const row = (launch: KanbanUnstartedLaunch) => (
+    <div
+      key={launch.key}
+      role="listitem"
+      className={`unstarted-row${launch.failed ? " failed" : ""}`}
+      data-launch-not-started={launch.key}
+      data-launch-failed={launch.failed ? launch.key : undefined}
+      title={t(launch.failed ? "kanban.launchFailedHint" : "kanban.launchNotStartedHint")}
+    >
+      <span className="what">{t(launch.failed ? "kanban.launchFailed" : "kanban.launchNotStarted")}</span>
+      <span className="age num">{ageLabel(t, launch.atMs, nowMs)}</span>
+      {/* A failed launch opens its launch view: the error in full and Retry. */}
+      {launch.failed ? (
+        <button
+          type="button"
+          className="open"
+          data-launch-open={launch.key}
+          aria-label={t("kanban.openFailedLaunchAria", { title })}
+          onClick={() => onOpen(launch.failed!.file)}
+        >
+          {t("kanban.openFailedLaunch")}
+        </button>
+      ) : null}
+      {onDismiss && launch.dismissable ? (
+        <button
+          type="button"
+          className="dismiss"
+          data-launch-dismiss={launch.key}
+          aria-label={t("kanban.dismissLaunchAria", { title })}
+          onClick={() => onDismiss(card, [launch])}
+        >
+          {t("kanban.dismissLaunch")}
+        </button>
+      ) : null}
+      {launch.failed?.error ? <span className="error" data-launch-error={launch.key}>{launch.failed.error}</span> : null}
+    </div>
+  );
+  if (launches.length === 1) {
+    return <div className="unstarted" role="list" aria-label={t("kanban.launchNotStarted")}>{row(launches[0]!)}</div>;
+  }
+  const dismissable = launches.filter((launch) => launch.dismissable);
+  return (
+    <div className="unstarted" data-launches-not-started={launches.length}>
+      <div className={`unstarted-row summary${launches.some((launch) => launch.failed) ? " failed" : ""}`}>
+        <button
+          type="button"
+          className="fold"
+          aria-expanded={open}
+          aria-label={t(open ? "kanban.launchesNotStartedHide" : "kanban.launchesNotStartedShow", { count: launches.length })}
+          data-launches-toggle={card.id}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? <ChevronDown /> : <ChevronRight />}
+          <span className="what">{t("kanban.launchesNotStarted", { count: launches.length })}</span>
+        </button>
+        {onDismiss && dismissable.length ? (
+          <button
+            type="button"
+            className="dismiss"
+            data-launches-dismiss-all={card.id}
+            aria-label={t("kanban.dismissAllLaunchesAria", { count: dismissable.length, title })}
+            onClick={() => onDismiss(card, dismissable)}
+          >
+            {t("kanban.dismissAllLaunches")}
+          </button>
+        ) : null}
+      </div>
+      {open ? <div className="unstarted-list" role="list" aria-label={t("kanban.launchNotStarted")}>{launches.map(row)}</div> : null}
+    </div>
+  );
 }
 
 export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
@@ -685,45 +769,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ) : null}
 
       {!collapsed && card.unstarted.length ? (
-        <div className="unstarted" role="list" aria-label={t("kanban.launchNotStarted")}>
-          {card.unstarted.map((launch) => (
-            <div
-              key={launch.key}
-              role="listitem"
-              className={`unstarted-row${launch.failed ? " failed" : ""}`}
-              data-launch-not-started={launch.key}
-              data-launch-failed={launch.failed ? launch.key : undefined}
-              title={t(launch.failed ? "kanban.launchFailedHint" : "kanban.launchNotStartedHint")}
-            >
-              <span className="what">{t(launch.failed ? "kanban.launchFailed" : "kanban.launchNotStarted")}</span>
-              <span className="age num">{ageLabel(t, launch.atMs, nowMs)}</span>
-              {/* A failed launch opens its launch view: the error in full and Retry. */}
-              {launch.failed ? (
-                <button
-                  type="button"
-                  className="open"
-                  data-launch-open={launch.key}
-                  aria-label={t("kanban.openFailedLaunchAria", { title })}
-                  onClick={() => props.onOpenMember(launch.failed!.file)}
-                >
-                  {t("kanban.openFailedLaunch")}
-                </button>
-              ) : null}
-              {props.onDismissLaunch && launch.dismissable ? (
-                <button
-                  type="button"
-                  className="dismiss"
-                  data-launch-dismiss={launch.key}
-                  aria-label={t("kanban.dismissLaunchAria", { title })}
-                  onClick={() => props.onDismissLaunch!(card, launch)}
-                >
-                  {t("kanban.dismissLaunch")}
-                </button>
-              ) : null}
-              {launch.failed?.error ? <span className="error" data-launch-error={launch.key}>{launch.failed.error}</span> : null}
-            </div>
-          ))}
-        </div>
+        <UnstartedLaunches card={card} title={title} nowMs={nowMs} onOpen={props.onOpenMember} onDismiss={props.onDismissLaunch} />
       ) : null}
 
       {!collapsed && (card.mirrors.length || card.notLoadedRefs.length || card.otherSurfaces) ? (
@@ -733,7 +779,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
               {t("kanban.alsoOn", { title: cleanTitle(mirror.file.title ?? "", 48) || t("kanban.untitledConversation"), card: mirror.primaryTitle })}
             </button>
           ))}
-          {/* Each conversation the count holds opens on its own, loaded here or not. */}
+          {/* Each conversation the card lists opens on its own, loaded here or
+              not; a stage's opens from its pipeline's chips and Past attempts. */}
           {card.notLoadedRefs.map((ref) => (
             <button key={ref.key} type="button" className="ref quiet" data-not-loaded={ref.key} onClick={() => props.onOpenAttempt({ path: ref.path, conversationId: ref.conversationId })}>
               {t("kanban.notLoadedOpen")}
