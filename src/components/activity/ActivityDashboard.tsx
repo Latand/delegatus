@@ -1,9 +1,10 @@
 "use client";
 
-import { ArrowLeft, ChevronDown } from "lucide-react";
+import { ArrowLeft, ChevronDown, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
-import { REQUEST_KINDS, SURFACES, type DayActivity, type RangeKey } from "@/lib/activity/method";
+import type { HostReport } from "@/lib/activity/hostSources";
+import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES, type Coverage, type DayActivity, type RangeKey } from "@/lib/activity/method";
 import type { ActivityProjectRow, ActivityResponse } from "@/lib/activity/report";
 import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { useLocale, type Locale, type MessageKey, type TFunction } from "@/lib/i18n";
@@ -12,8 +13,11 @@ import { useLocale, type Locale, type MessageKey, type TFunction } from "@/lib/i
  * The activity dashboard (docs/design/activity-dashboard.md, "Page"). Two
  * axes, each in its own hue and never added together: human time (accent) and
  * agent time (info), the agent part split into supervised (solid) and
- * unattended (hatched). Days before the request ledger existed are hatched
- * grey and read "Not recorded", which is not zero.
+ * unattended (hatched). Time an expected host was not read for is hatched
+ * grey and reads "Unknown"; a total that misses a host is a lower bound
+ * ("≥"); a workday that reads zero while a source was unread or agents were
+ * busy says "Probable missing source". None of these is shown as a clean
+ * zero.
  */
 
 export type ActivityView = "days" | "projects";
@@ -26,7 +30,7 @@ const HATCH_UNATTENDED: CSSProperties = {
   backgroundColor: "var(--color-info-soft)",
   backgroundImage: "repeating-linear-gradient(135deg, var(--color-info) 0 2px, transparent 2px 5px)",
 };
-const HATCH_UNRECORDED: CSSProperties = {
+const HATCH_UNKNOWN: CSSProperties = {
   backgroundImage: "repeating-linear-gradient(135deg, var(--color-strong) 0 1px, transparent 1px 6px)",
 };
 
@@ -48,20 +52,31 @@ function approx(ms: number, t: TFunction): string {
   return t("activity.approx", { value: duration(ms, t) });
 }
 
-function reportHours(hours: number, locale: Locale, t: TFunction): string {
-  return t("activity.reportHours", { hours: new Intl.NumberFormat(locale === "uk" ? "uk-UA" : "en-US", { maximumFractionDigits: 1 }).format(hours) });
+/** Human time under its coverage: a lower bound when a host was not read,
+    "Unknown" when nothing was read there and nothing else counted. */
+function humanFigure(ms: number, coverage: Coverage, t: TFunction): string {
+  if (coverage.complete) return duration(ms, t);
+  return ms > 0 ? t("activity.atLeast", { value: duration(ms, t) }) : t("activity.unknown");
+}
+
+function reportHours(hours: number, locale: Locale, t: TFunction, key: MessageKey = "activity.reportHours"): string {
+  return t(key, { hours: new Intl.NumberFormat(locale === "uk" ? "uk-UA" : "en-US", { maximumFractionDigits: 1 }).format(hours) });
+}
+
+function intlLocale(locale: Locale): string {
+  return locale === "uk" ? "uk-UA" : "en-GB";
 }
 
 function dayLabel(day: DayActivity, locale: Locale, tz: string): string {
-  return new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: tz }).format(new Date(day.start + 12 * 3_600_000));
+  return new Intl.DateTimeFormat(intlLocale(locale), { weekday: "short", day: "numeric", month: "short", timeZone: tz }).format(new Date(day.start + 12 * 3_600_000));
 }
 
 function clockTime(ms: number, locale: Locale, tz: string): string {
-  return new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { hour: "2-digit", minute: "2-digit", timeZone: tz }).format(new Date(ms));
+  return new Intl.DateTimeFormat(intlLocale(locale), { hour: "2-digit", minute: "2-digit", timeZone: tz }).format(new Date(ms));
 }
 
 function dateTime(ms: number, locale: Locale, tz: string): string {
-  return new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: tz }).format(new Date(ms));
+  return new Intl.DateTimeFormat(intlLocale(locale), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: tz }).format(new Date(ms));
 }
 
 function projectName(project: string | null, name: string | null, t: TFunction): string {
@@ -74,6 +89,14 @@ function roleName(role: string, t: TFunction): string {
   if (role === "unregistered") return t("activity.role.unregistered");
   if (role === "none") return t("activity.role.none");
   return role;
+}
+
+function hostName(host: string, hosts: readonly HostReport[]): string {
+  return hosts.find((entry) => entry.host === host)?.label ?? host;
+}
+
+function hostList(ids: readonly string[], hosts: readonly HostReport[]): string {
+  return ids.map((id) => hostName(id, hosts)).join(", ");
 }
 
 const ENGINE_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot" };
@@ -107,18 +130,20 @@ function Segmented<T extends string>({ label, value, options, onChange }: {
   );
 }
 
-function Swatch({ kind }: { kind: "human" | "supervised" | "unattended" | "unrecorded" }) {
-  const style = kind === "unattended" ? HATCH_UNATTENDED : kind === "unrecorded" ? HATCH_UNRECORDED : undefined;
-  const tone = kind === "human" ? "bg-accent" : kind === "supervised" ? "bg-info" : kind === "unrecorded" ? "bg-sunken border border-border" : "";
+type SwatchKind = "human" | "supervised" | "unattended" | "unknown";
+
+function Swatch({ kind }: { kind: SwatchKind }) {
+  const style = kind === "unattended" ? HATCH_UNATTENDED : kind === "unknown" ? HATCH_UNKNOWN : undefined;
+  const tone = kind === "human" ? "bg-accent" : kind === "supervised" ? "bg-info" : kind === "unknown" ? "bg-sunken border border-border" : "";
   return <span aria-hidden className={`inline-block h-2.5 w-3 shrink-0 rounded-[2px] ${tone}`} style={style} />;
 }
 
 function Legend({ t }: { t: TFunction }) {
-  const items: Array<{ kind: "human" | "supervised" | "unattended" | "unrecorded"; label: MessageKey }> = [
+  const items: Array<{ kind: SwatchKind; label: MessageKey }> = [
     { kind: "human", label: "activity.legend.human" },
     { kind: "supervised", label: "activity.legend.supervised" },
     { kind: "unattended", label: "activity.legend.unattended" },
-    { kind: "unrecorded", label: "activity.legend.unrecorded" },
+    { kind: "unknown", label: "activity.legend.unknown" },
   ];
   return (
     <ul className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-secondary" data-activity-legend="">
@@ -132,7 +157,7 @@ function Legend({ t }: { t: TFunction }) {
   );
 }
 
-function Tile({ label, value, sub, children, testId }: { label: string; value: string; sub?: string; children?: ReactNode; testId: string }) {
+function Tile({ label, value, sub, children, testId }: { label: string; value: string; sub?: ReactNode; children?: ReactNode; testId: string }) {
   return (
     <div className="min-w-0 rounded-[12px] border border-border bg-card px-4 py-3" data-activity-tile={testId}>
       <div className="text-[11px] font-semibold text-secondary">{label}</div>
@@ -140,6 +165,16 @@ function Tile({ label, value, sub, children, testId }: { label: string; value: s
       {sub ? <div className="mt-1 text-[11px] leading-snug text-muted">{sub}</div> : null}
       {children}
     </div>
+  );
+}
+
+function MissingSource({ reasons, t }: { reasons: DayActivity["missingSource"]; t: TFunction }) {
+  if (!reasons) return null;
+  return (
+    <span className="flex items-center gap-1 font-semibold text-warning" data-activity-missing-source={reasons.join(" ")}>
+      <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
+      {t("activity.missingSource")}
+    </span>
   );
 }
 
@@ -156,17 +191,17 @@ function position(start: number, end: number, day: DayActivity): CSSProperties {
 
 interface Hover { x: number; at: number }
 
-function DayRow({ day, tz, nowMs, names, locale, t }: {
+function DayRow({ day, tz, nowMs, names, hosts, locale, t }: {
   day: DayActivity;
   tz: string;
   nowMs: number;
   names: ReadonlyMap<string | null, string>;
+  hosts: readonly HostReport[];
   locale: Locale;
   t: TFunction;
 }) {
   const strip = useRef<HTMLDivElement | null>(null);
   const [hover, setHover] = useState<Hover | null>(null);
-  const unrecordedEnd = !day.recorded ? Math.min(day.end, nowMs) : day.recordedFrom;
   const track = (event: ReactPointerEvent<HTMLDivElement>) => {
     const rect = strip.current?.getBoundingClientRect();
     if (!rect || rect.width <= 0) return;
@@ -175,16 +210,17 @@ function DayRow({ day, tz, nowMs, names, locale, t }: {
   };
   const hoverHuman = hover ? day.human.find((segment) => segment.start <= hover.at && hover.at < segment.end) : undefined;
   const hoverAgent = hover ? day.agent.find((segment) => segment.start <= hover.at && hover.at < segment.end) : undefined;
-  const hoverUnrecorded = hover && unrecordedEnd !== null && hover.at < unrecordedEnd;
+  const hoverUnknown = hover ? day.unknown.some((span) => span.start <= hover.at && hover.at < span.end) : false;
   const label = dayLabel(day, locale, tz);
+  const humanText = day.missingSource ? t("activity.missingSource") : humanFigure(day.humanMs, day.coverage, t);
   const summary = t("activity.day.aria", {
     day: label,
-    human: day.recorded ? duration(day.humanMs, t) : t("activity.notRecorded"),
+    human: humanText,
     agent: approx(day.wallMs, t),
     supervised: approx(day.supervisedMs, t),
   });
   return (
-    <li className="grid grid-cols-[112px_minmax(0,1fr)_minmax(176px,auto)] items-center gap-x-4 border-t border-border py-2.5 first:border-t-0 max-sm:grid-cols-1 max-sm:gap-y-2" data-activity-day={day.date} data-recorded={day.recorded ? "true" : "false"}>
+    <li className="grid grid-cols-[112px_minmax(0,1fr)_minmax(176px,auto)] items-center gap-x-4 border-t border-border py-2.5 first:border-t-0 max-sm:grid-cols-1 max-sm:gap-y-2" data-activity-day={day.date} data-coverage={day.coverage.complete ? "complete" : "unknown"}>
       <div className="flex items-baseline justify-between gap-2 max-sm:order-1">
         <span className="text-[12px] font-semibold text-primary">{label}</span>
       </div>
@@ -201,9 +237,9 @@ function DayRow({ day, tz, nowMs, names, locale, t }: {
           {HOUR_TICKS.slice(1, -1).map((hour) => (
             <span key={hour} aria-hidden className="absolute inset-y-0 w-px bg-border" style={{ left: `${(hour / 24) * 100}%` }} />
           ))}
-          {unrecordedEnd !== null && unrecordedEnd > day.start ? (
-            <span className="absolute inset-y-0" style={{ ...position(day.start, unrecordedEnd, day), ...HATCH_UNRECORDED }} data-activity-unrecorded="" />
-          ) : null}
+          {day.unknown.map((span) => (
+            <span key={`u${span.start}`} className="absolute inset-y-0" style={{ ...position(span.start, span.end, day), ...HATCH_UNKNOWN }} data-activity-unknown="" />
+          ))}
           {day.human.map((segment) => (
             <span key={`${segment.start}`} className="absolute inset-y-0 rounded-[2px] bg-accent" style={position(segment.start, segment.end, day)} data-activity-segment="human" />
           ))}
@@ -227,19 +263,23 @@ function DayRow({ day, tz, nowMs, names, locale, t }: {
         {hover ? (
           <div
             role="tooltip"
-            className="pointer-events-none absolute bottom-full z-10 mb-1.5 w-max max-w-[240px] -translate-x-1/2 rounded-[8px] border border-border bg-raised px-2.5 py-1.5 text-[11px] leading-snug shadow-2"
-            style={{ left: Math.min(Math.max(hover.x, 90), (strip.current?.clientWidth ?? 0) - 90) }}
+            className="pointer-events-none absolute bottom-full z-10 mb-1.5 w-max max-w-[260px] -translate-x-1/2 rounded-[8px] border border-border bg-raised px-2.5 py-1.5 text-[11px] leading-snug shadow-2"
+            style={{ left: Math.min(Math.max(hover.x, 100), (strip.current?.clientWidth ?? 0) - 100) }}
             data-activity-tooltip=""
           >
             <div className="font-semibold text-primary">{clockTime(hover.at, locale, tz)}</div>
             <div className="flex items-center gap-1.5 text-secondary">
-              <Swatch kind={hoverUnrecorded ? "unrecorded" : "human"} />
-              {hoverUnrecorded
-                ? t("activity.notRecorded")
-                : hoverHuman
-                  ? t("activity.tooltip.human", { project: names.get(hoverHuman.project) ?? t("activity.unattributed") })
-                  : t("activity.tooltip.noHuman")}
+              <Swatch kind="human" />
+              {hoverHuman
+                ? t("activity.tooltip.human", { project: names.get(hoverHuman.project) ?? t("activity.unattributed"), host: hostName(hoverHuman.host, hosts) })
+                : t("activity.tooltip.noHuman")}
             </div>
+            {hoverUnknown ? (
+              <div className="flex items-center gap-1.5 text-secondary">
+                <Swatch kind="unknown" />
+                {t("activity.tooltip.unknown", { hosts: hostList(day.coverage.missingHosts, hosts) })}
+              </div>
+            ) : null}
             <div className="flex items-center gap-1.5 text-secondary">
               <Swatch kind={hoverAgent?.supervised === false ? "unattended" : "supervised"} />
               {hoverAgent ? t(hoverAgent.supervised ? "activity.tooltip.supervised" : "activity.tooltip.unattended") : t("activity.tooltip.noAgent")}
@@ -248,14 +288,14 @@ function DayRow({ day, tz, nowMs, names, locale, t }: {
         ) : null}
       </div>
       <div className="flex flex-col gap-0.5 text-[11px] tabular-nums max-sm:order-2 max-sm:flex-row max-sm:flex-wrap max-sm:gap-x-3" data-activity-day-totals="">
-        <span className="flex items-center gap-1.5 text-primary">
-          <Swatch kind={day.recorded ? "human" : "unrecorded"} />
-          {day.recorded ? (
+        <span className="flex items-center gap-1.5 text-primary" title={day.coverage.complete ? undefined : t("activity.unread", { hosts: hostList(day.coverage.missingHosts, hosts) })}>
+          <Swatch kind={day.coverage.complete || day.humanMs > 0 ? "human" : "unknown"} />
+          {day.missingSource ? <MissingSource reasons={day.missingSource} t={t} /> : (
             <>
-              <span className="font-semibold">{duration(day.humanMs, t)}</span>
+              <span className={day.coverage.complete || day.humanMs > 0 ? "font-semibold" : "text-muted"}>{humanFigure(day.humanMs, day.coverage, t)}</span>
               {day.humanHours ? <span className="text-muted">· {reportHours(day.humanHours, locale, t)}</span> : null}
             </>
-          ) : <span className="text-muted">{t("activity.notRecorded")}</span>}
+          )}
         </span>
         <span className="flex items-center gap-1.5 text-primary">
           <Swatch kind="supervised" />
@@ -331,7 +371,7 @@ function Breakdown({ title, rows, kind, t }: {
               <div className="min-w-0">
                 <div className={`truncate text-primary ${row.mono ? "font-mono text-[10.5px]" : ""}`} title={row.label}>{row.label}</div>
                 {row.note ? <div className={`truncate text-muted ${row.mono ? "font-mono text-[10px]" : ""}`} title={row.note}>{row.note}</div> : null}
-                <div className="mt-0.5 h-1 rounded-r-[2px]" style={{ width: `${max ? (row.ms / max) * 100 : 0}%`, ...(kind === "human" ? { backgroundColor: "var(--color-accent)" } : { backgroundColor: "var(--color-info)" }) }} />
+                <div className="mt-0.5 h-1 rounded-r-[2px]" style={{ width: `${max ? (row.ms / max) * 100 : 0}%`, backgroundColor: kind === "human" ? "var(--color-accent)" : "var(--color-info)" }} />
               </div>
               <span className="text-right tabular-nums text-secondary">{kind === "agent" ? approx(row.ms, t) : duration(row.ms, t)}</span>
             </li>
@@ -342,18 +382,20 @@ function Breakdown({ title, rows, kind, t }: {
   );
 }
 
-function ProjectRow({ row, max, expanded, onToggle, locale, t }: {
+function ProjectRow({ row, max, expanded, onToggle, hosts, locale, t }: {
   row: ActivityProjectRow;
   max: number;
   expanded: boolean;
   onToggle(): void;
+  hosts: readonly HostReport[];
   locale: Locale;
   t: TFunction;
 }) {
   const name = projectName(row.project, row.name, t);
   const detailsId = `activity-project-${row.project ?? "unattributed"}`;
+  const unread = row.coverage.complete ? null : t("activity.unread", { hosts: hostList(row.coverage.missingHosts, hosts) });
   return (
-    <li className="border-t border-border first:border-t-0" data-activity-project={row.project ?? ""}>
+    <li className="border-t border-border first:border-t-0" data-activity-project={row.project ?? ""} data-coverage={row.coverage.complete ? "complete" : "unknown"}>
       <button
         type="button"
         aria-expanded={expanded}
@@ -364,6 +406,7 @@ function ProjectRow({ row, max, expanded, onToggle, locale, t }: {
         <div className="min-w-0">
           <div className="truncate text-[13px] font-semibold text-primary" title={name}>{name}</div>
           <div className="truncate text-[11px] text-muted">
+            {row.billable ? `${t("activity.project.billable")} · ` : ""}
             {t("activity.project.requests", { count: row.requests })} · {t("activity.project.agents", { count: row.conversations })}
           </div>
         </div>
@@ -371,9 +414,9 @@ function ProjectRow({ row, max, expanded, onToggle, locale, t }: {
         <div className="flex min-w-0 flex-col gap-1.5 max-sm:col-span-2">
           <div className="flex items-center gap-2">
             <Bar value={row.humanMs} max={max} kind="human" />
-            <span className="w-[132px] shrink-0 text-[11px] tabular-nums text-primary max-sm:w-[118px]">
-              <span className="font-semibold">{duration(row.humanMs, t)}</span>
-              {row.humanHours ? <span className="text-muted"> · {reportHours(row.humanHours, locale, t)}</span> : null}
+            <span className="w-[132px] shrink-0 text-[11px] tabular-nums text-primary max-sm:w-[118px]" title={unread ?? undefined}>
+              <span className={row.coverage.complete || row.humanMs > 0 ? "font-semibold" : "text-muted"}>{humanFigure(row.humanMs, row.coverage, t)}</span>
+              {row.humanHours ? <span className="text-muted"> · {reportHours(row.humanHours, locale, t, "activity.reportHoursShort")}</span> : null}
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -385,8 +428,9 @@ function ProjectRow({ row, max, expanded, onToggle, locale, t }: {
         </div>
       </button>
       {expanded ? (
-        <div id={detailsId} className="border-t border-dashed border-border bg-sunken/60 px-4 py-3" data-activity-project-details="">
+        <div id={detailsId} className="border-t border-border bg-sunken/60 px-4 py-3" data-activity-project-details="">
           <p className="mb-3 text-[11px] leading-snug text-secondary">
+            {unread ? <span className="font-semibold text-primary">{unread} </span> : null}
             {t("activity.project.split", {
               supervised: approx(row.supervisedMs, t),
               unattended: approx(row.unattendedMs, t),
@@ -394,7 +438,8 @@ function ProjectRow({ row, max, expanded, onToggle, locale, t }: {
             })}
             {row.humanReassignedMs > 0 ? ` ${t("activity.project.reassigned", { value: duration(row.humanReassignedMs, t) })}` : ""}
           </p>
-          <div className="grid grid-cols-5 gap-5 max-lg:grid-cols-3 max-sm:grid-cols-1 max-sm:gap-4">
+          <div className="grid grid-cols-3 gap-5 max-sm:grid-cols-1 max-sm:gap-4">
+            <Breakdown kind="human" t={t} title={t("activity.breakdown.host")} rows={Object.entries(row.byHost).sort((a, b) => b[1] - a[1]).map(([host, ms]) => ({ key: host, label: hostName(host, hosts), ms }))} />
             <Breakdown kind="human" t={t} title={t("activity.breakdown.surface")} rows={SURFACES.map((surface) => ({ key: surface, label: t(`activity.surface.${surface}` as MessageKey), ms: row.bySurface[surface] }))} />
             <Breakdown kind="human" t={t} title={t("activity.breakdown.kind")} rows={REQUEST_KINDS.map((kind) => ({ key: kind, label: t(`activity.kind.${kind}` as MessageKey), ms: row.byKind[kind] }))} />
             <Breakdown kind="agent" t={t} title={t("activity.breakdown.engine")} rows={Object.entries(row.byEngine).sort((a, b) => b[1] - a[1]).map(([engine, ms]) => ({ key: engine, label: ENGINE_NAMES[engine] ?? engine, ms }))} />
@@ -421,25 +466,85 @@ const COVERAGE_ROWS: ReadonlyArray<{ key: string; surface: MessageKey; counted: 
   { key: "tablet", surface: "activity.coverage.tablet", counted: "activity.coverage.tabletCounted", missing: "activity.coverage.tabletMissing" },
   { key: "phone", surface: "activity.coverage.phone", counted: "activity.coverage.phoneCounted", missing: "activity.coverage.phoneMissing" },
   { key: "voice", surface: "activity.coverage.voice", counted: "activity.coverage.voiceCounted", missing: "activity.coverage.voiceMissing" },
+  { key: "terminal", surface: "activity.coverage.terminal", counted: "activity.coverage.terminalCounted", missing: "activity.coverage.terminalMissing" },
   { key: "other", surface: "activity.coverage.other", counted: "activity.coverage.otherCounted", missing: "activity.coverage.otherMissing" },
   { key: "outside", surface: "activity.coverage.outside", counted: "activity.coverage.outsideCounted", missing: "activity.coverage.outsideMissing" },
 ];
 
+function sourceLine(source: HostReport["sources"][number], locale: Locale, tz: string, t: TFunction): string {
+  const name = t(source.source === "ledger" ? "activity.hosts.ledger" : "activity.hosts.transcripts");
+  if (source.state === "absent") return t("activity.hosts.absent", { source: name });
+  if (source.state === "unreadable") return t("activity.hosts.unreadable", { source: name });
+  const first = source.covered[0];
+  const last = source.covered.at(-1);
+  return t("activity.hosts.readSpan", {
+    source: name,
+    from: first ? dateTime(first.start, locale, tz) : "—",
+    until: last ? dateTime(last.end, locale, tz) : "—",
+    count: source.inputs,
+  });
+}
+
+function HostsTable({ hosts, locale, tz, t }: { hosts: readonly HostReport[]; locale: Locale; tz: string; t: TFunction }) {
+  return (
+    <div className="mt-1 overflow-x-auto">
+      <table className="w-full min-w-[560px] border-collapse text-left text-[11.5px] max-sm:min-w-0" data-activity-hosts="">
+        <thead>
+          <tr className="text-[11px] text-muted">
+            <th scope="col" className="w-[22%] py-1.5 pr-3 font-semibold">{t("activity.hosts.host")}</th>
+            <th scope="col" className="w-[39%] py-1.5 pr-3 font-semibold">{t("activity.hosts.read")}</th>
+            <th scope="col" className="py-1.5 font-semibold">{t("activity.hosts.excluded")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {hosts.map((host) => {
+            const connected = host.sources.some((source) => source.state === "read");
+            const excluded = EXCLUSION_REASONS
+              .map((reason) => [reason, host.sources.reduce((sum, source) => sum + (source.excluded[reason] ?? 0), 0)] as const)
+              .filter(([, count]) => count > 0);
+            return (
+              <tr key={host.host} className="border-t border-border align-top max-sm:flex max-sm:flex-col max-sm:py-2" data-activity-host={host.host} data-connected={connected ? "true" : "false"}>
+                <th scope="row" className="py-1.5 pr-3 font-semibold text-primary max-sm:py-0.5">
+                  {host.label ?? host.host}
+                  {host.local ? <span className="font-normal text-muted"> · {t("activity.hosts.thisHost")}</span> : null}
+                  {!connected ? (
+                    <span className="mt-0.5 flex items-center gap-1 font-semibold text-warning">
+                      <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
+                      {t("activity.hosts.notConnected")}
+                    </span>
+                  ) : null}
+                </th>
+                <td className="py-1.5 pr-3 text-secondary max-sm:py-0.5">
+                  {host.sources.map((source) => <div key={source.source}>{sourceLine(source, locale, tz, t)}</div>)}
+                </td>
+                <td className="py-1.5 text-muted max-sm:py-0.5">
+                  {excluded.length
+                    ? excluded.map(([reason, count]) => t("activity.hosts.excludedItem", { reason: t(`activity.exclusion.${reason}` as MessageKey), count })).join(", ")
+                    : t("activity.hosts.excludedNone")}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function Counted({ data, locale, t }: { data: ActivityResponse; locale: Locale; t: TFunction }) {
   const { params, coverage } = data;
+  const windowsOnly = params.breakMin === params.windowMin;
   return (
     <section className="rounded-[12px] border border-border bg-card px-4 py-4" aria-labelledby="activity-counted" data-activity-counted="">
       <h2 id="activity-counted" className="text-[13px] font-semibold text-primary">{t("activity.counted.title")}</h2>
       <div className="mt-2 flex flex-col gap-1.5 text-[12px] leading-relaxed text-secondary">
-        <p>{t("activity.counted.method", { window: params.windowMin, break: params.breakMin })}</p>
+        <p>{t(windowsOnly ? "activity.counted.methodWindows" : "activity.counted.methodEpisodes", { window: params.windowMin, break: params.breakMin })}</p>
         <p>{t(params.rounding === "half-hour" ? "activity.counted.halfHour" : "activity.counted.clockHour")}</p>
+        <p>{t("activity.counted.operatorOnly")}</p>
         <p>{t("activity.counted.agent")}</p>
         <p>
-          {coverage.ledgerStartMs !== null
-            ? t("activity.counted.ledgerSince", { when: dateTime(coverage.ledgerStartMs, locale, params.tz) })
-            : t("activity.counted.ledgerNone")}
-          {" "}
-          {coverage.indexedAtMs !== null ? t("activity.counted.indexUpdated", { when: dateTime(coverage.indexedAtMs, locale, params.tz) }) : null}
+          {t("activity.counted.hosts")}
+          {coverage.indexedAtMs !== null ? ` ${t("activity.counted.indexUpdated", { when: dateTime(coverage.indexedAtMs, locale, params.tz) })}` : ""}
         </p>
         <p>
           {t("activity.counted.gaps")}
@@ -447,7 +552,10 @@ function Counted({ data, locale, t }: { data: ActivityResponse; locale: Locale; 
         </p>
         <p className="text-muted">{t("activity.counted.zone", { tz: params.tz })}</p>
       </div>
-      <div className="mt-3 overflow-x-auto">
+      <h3 className="mt-4 text-[12px] font-semibold text-primary">{t("activity.hosts.title")}</h3>
+      <HostsTable hosts={coverage.hosts} locale={locale} tz={params.tz} t={t} />
+      <h3 className="mt-4 text-[12px] font-semibold text-primary">{t("activity.coverage.title")}</h3>
+      <div className="mt-1 overflow-x-auto">
         <table className="w-full min-w-[560px] border-collapse text-left text-[11.5px] max-sm:min-w-0" data-activity-coverage="">
           <thead>
             <tr className="text-[11px] text-muted">
@@ -475,14 +583,6 @@ function Counted({ data, locale, t }: { data: ActivityResponse; locale: Locale; 
 /* The page                                                                 */
 /* ------------------------------------------------------------------------ */
 
-function browserZone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
-}
-
 export function ActivityDashboard({ initialRange, initialView }: { initialRange: RangeKey; initialView: ActivityView }) {
   const { t, locale } = useLocale();
   const [range, setRange] = useState<RangeKey>(initialRange);
@@ -494,11 +594,13 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
   const [failed, setFailed] = useState(false);
   const request = useRef(0);
 
+  /* No zone is sent: days and hours follow the zone in the settings
+     (Europe/Kyiv unless changed), whatever zone this device is in. */
   const load = useCallback(async (target: RangeKey) => {
     const id = ++request.current;
     setLoading(true);
     try {
-      const response = await fetch(`/api/activity?range=${target}&tz=${encodeURIComponent(browserZone())}`, { cache: "no-store" });
+      const response = await fetch(`/api/activity?range=${target}`, { cache: "no-store" });
       if (!response.ok) throw new Error(String(response.status));
       const body = (await response.json()) as ActivityResponse;
       if (id !== request.current) return;
@@ -542,10 +644,11 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
   }, [data, sort]);
   const projectMax = Math.max(0, ...projects.map((row) => Math.max(row.humanMs, row.wallMs)));
   const days = useMemo(() => [...(data?.days ?? [])].reverse(), [data]);
-  const tz = data?.params.tz ?? browserZone();
-  const nothingRecorded = data !== null && data.coverage.ledger !== "ok";
-  const noAgentIndex = data !== null && data.coverage.agentIndex !== "ok";
+  const hosts = data?.coverage.hosts ?? [];
+  const tz = data?.params.tz ?? "Europe/Kyiv";
   const totals = data?.totals;
+  const incomplete = totals ? !totals.coverage.complete : false;
+  const noAgentIndex = data !== null && data.coverage.agentIndex !== "ok";
   const roundingName = data ? t(data.params.rounding === "half-hour" ? "activity.rounding.halfHour" : "activity.rounding.clockHour") : "";
 
   return (
@@ -585,9 +688,20 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
 
         {data && totals ? (
           <div className={`flex flex-col gap-4 transition-opacity ${loading ? "opacity-60" : ""}`} data-activity-loaded={data.range.key}>
-            {nothingRecorded || noAgentIndex ? (
+            {incomplete || totals.missingSourceDays || noAgentIndex ? (
               <div className="flex flex-col gap-1 rounded-[12px] border border-border bg-card px-4 py-3 text-[12px] leading-snug text-secondary" data-activity-gap="">
-                {nothingRecorded ? <p><span className="font-semibold text-primary">{t("activity.gap.ledgerTitle")}</span> {t("activity.gap.ledger")}</p> : null}
+                {incomplete ? (
+                  <p className="flex items-start gap-1.5">
+                    <TriangleAlert className="mt-[2px] h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
+                    <span>
+                      <span className="font-semibold text-primary">{t("activity.gap.incompleteTitle")}</span>{" "}
+                      {t("activity.gap.incomplete", { hosts: hostList(totals.coverage.missingHosts, hosts) })}
+                    </span>
+                  </p>
+                ) : null}
+                {totals.missingSourceDays ? (
+                  <p><span className="font-semibold text-primary">{t("activity.gap.missingSourceTitle", { count: totals.missingSourceDays })}</span> {t("activity.gap.missingSource")}</p>
+                ) : null}
                 {noAgentIndex ? <p><span className="font-semibold text-primary">{t("activity.gap.indexTitle")}</span> {t("activity.gap.index")}</p> : null}
               </div>
             ) : null}
@@ -596,8 +710,13 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
               <Tile
                 testId="human"
                 label={t("activity.tile.human")}
-                value={nothingRecorded ? t("activity.notRecorded") : duration(totals.humanMs, t)}
-                sub={nothingRecorded ? undefined : t("activity.tile.humanSub", { hours: reportHours(totals.humanHours, locale, t), mode: roundingName })}
+                value={humanFigure(totals.humanMs, totals.coverage, t)}
+                sub={(
+                  <>
+                    {t("activity.tile.humanSub", { hours: reportHours(totals.humanHours, locale, t), mode: roundingName })}
+                    {data.billableConfigured ? <><br />{reportHours(totals.billableHours, locale, t, "activity.tile.billable")}</> : null}
+                  </>
+                )}
               />
               <Tile testId="agent" label={t("activity.tile.agent")} value={approx(totals.wallMs, t)} sub={t("activity.tile.agentSub")} />
               <Tile
@@ -630,7 +749,7 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
                 <DayAxis />
                 <ul>
                   {days.map((day) => (
-                    <DayRow key={day.date} day={day} tz={tz} nowMs={data.range.now} names={names} locale={locale} t={t} />
+                    <DayRow key={day.date} day={day} tz={tz} nowMs={data.range.now} names={names} hosts={hosts} locale={locale} t={t} />
                   ))}
                 </ul>
               </section>
@@ -647,6 +766,7 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
                           max={projectMax}
                           expanded={expanded === key}
                           onToggle={() => setExpanded((current) => (current === key ? null : key))}
+                          hosts={hosts}
                           locale={locale}
                           t={t}
                         />
@@ -654,7 +774,9 @@ export function ActivityDashboard({ initialRange, initialView }: { initialRange:
                     })}
                   </ul>
                 ) : (
-                  <p className="px-4 py-6 text-center text-[12px] text-muted" data-activity-empty="">{t("activity.projects.empty")}</p>
+                  <p className="px-4 py-6 text-center text-[12px] text-muted" data-activity-empty="">
+                    {incomplete ? t("activity.projects.emptyUnknown") : t("activity.projects.empty")}
+                  </p>
                 )}
               </section>
             )}

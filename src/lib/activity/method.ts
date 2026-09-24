@@ -4,25 +4,59 @@ import type { RequestSurface } from "@/lib/view/device";
  * The operator's counting method, and the agent axis beside it
  * (docs/design/activity-dashboard.md, "Counting method" and "Agent axis
  * calculation"). Pure: no I/O, no clock, no environment. Every figure the
- * activity dashboard shows is computed here from three inputs: the request
- * anchors the ledger recorded, the agent turns read from the search index, and
- * the method parameters.
+ * activity dashboard shows is computed here from four inputs: the human
+ * inputs every expected host yielded, what each host was read for, the agent
+ * turns read from the search index, and the method parameters.
  *
  * Human time and agent time are two parallel axes. Neither is subtracted from
  * the other: agent work inside a human episode is SUPERVISED and is already
  * inside the human figure, agent work outside every episode is UNATTENDED and
- * adds nothing to it. Only a request anchor opens or extends an episode.
+ * adds nothing to it. Only a human input opens or extends an episode. Every
+ * input is bucketed by its own time in the configured zone, whatever day its
+ * session began.
  */
 
 export const MINUTE_MS = 60_000;
 export const HOUR_MS = 60 * MINUTE_MS;
 const HALF_HOUR_MS = 30 * MINUTE_MS;
 
-export type Surface = RequestSurface;
-export const SURFACES: readonly Surface[] = ["desktop", "tablet", "phone", "other"];
+/** Where a human input was made. The request ledger names the browser
+    surface; a host's transcripts add `terminal` (typed straight into an agent
+    CLI or desktop app) and `unknown` (a Delegatus delivery recovered from a
+    transcript, whose surface was never recorded). */
+export type Surface = RequestSurface | "terminal" | "unknown";
+export const SURFACES: readonly Surface[] = ["desktop", "tablet", "phone", "other", "terminal", "unknown"];
 
 export type RequestKind = "message" | "dialog" | "answer" | "spawn" | "voice" | "decision" | "pipeline" | "task";
 export const REQUEST_KINDS: readonly RequestKind[] = ["message", "dialog", "answer", "spawn", "voice", "decision", "pipeline", "task"];
+
+/** Why a user record in a transcript is not operator input. */
+export type ExclusionReason =
+  /** A spawn's first prompt: a role scaffold or another agent's delegation. */
+  | "scaffold"
+  /** A pipeline stage's generated prompt (builder, reviewer, auditor, deployer…). */
+  | "stage-template"
+  /** Bridge, automation and recovery notifications, compaction summaries. */
+  | "notification"
+  /** Injected skill hints, system reminders, instructions, command output. */
+  | "injected"
+  /** A screenshot attached by the client. */
+  | "attachment"
+  /** A message from one agent to another that arrived with role=user. */
+  | "agent-message"
+  /** A subagent's prompt from its parent agent. */
+  | "subagent"
+  /** A non-interactive run: `codex exec`, an SDK session no Viewer owns. */
+  | "automation"
+  | "interrupt"
+  /** No positive operator signal: counted conservatively as not operator input. */
+  | "unmarked"
+  /** A copy of an input already counted. */
+  | "duplicate";
+
+export const EXCLUSION_REASONS: readonly ExclusionReason[] = [
+  "scaffold", "stage-template", "notification", "injected", "attachment", "agent-message", "subagent", "automation", "interrupt", "unmarked", "duplicate",
+];
 
 export type Rounding = "half-hour" | "clock-hour";
 export type RangeKey = "today" | "7d" | "30d";
@@ -45,8 +79,12 @@ export interface MethodParams {
   tz: string;
 }
 
-/** The defaults are the operator's 2026-07-29 refinement. */
-export const METHOD_DEFAULTS = { windowMin: 10, breakMin: 30, rounding: "half-hour" as Rounding };
+/** The defaults are the method the operator restated on 2026-09-24 and used
+    for the recount they accepted: a 10-minute window per input, windows
+    combined only where they overlap (T = W), clock-hour weights, days and
+    hours in Europe/Kyiv. `break=30&rounding=half-hour` is the 2026-07-29
+    refinement. */
+export const METHOD_DEFAULTS = { windowMin: 10, breakMin: null as number | null, rounding: "clock-hour" as Rounding, tz: "Europe/Kyiv" };
 export const WINDOW_LIMITS_MIN = { min: 10, max: 15 } as const;
 export const BREAK_MAX_MIN = 120;
 
@@ -55,6 +93,31 @@ export interface Anchor {
   project: string | null;
   surface: Surface;
   kind: RequestKind;
+  /** The host the input was made on. One operator works across hosts, so
+      episodes join anchors of every host; the host only labels the time. */
+  host: string;
+}
+
+/**
+ * What one expected host's human-input sources could speak for. A host whose
+ * spans do not cover a stretch of time leaves that stretch UNKNOWN for every
+ * project the host holds: its input there may exist and was not read, so the
+ * report never shows it as zero.
+ */
+export interface HostCoverage {
+  host: string;
+  /** The projects whose input can come from this host. */
+  projects: "all" | readonly string[];
+  /** Before this instant the host held no work, so nothing is missing. */
+  since: number | null;
+  /** The stretches its sources were read for. */
+  covered: readonly Interval[];
+}
+
+export interface Coverage {
+  complete: boolean;
+  /** Expected hosts that were not read for part of the window. */
+  missingHosts: string[];
 }
 
 export interface Interval {
@@ -73,6 +136,7 @@ export interface HumanSegment extends Interval {
   project: string | null;
   surface: Surface;
   kind: RequestKind;
+  host: string;
   anchorAt: number;
 }
 
@@ -125,19 +189,19 @@ function finiteNumber(value: unknown): number | null {
 /**
  * Clamp, never refuse: every value that is missing or out of range takes its
  * default or its nearest bound. W is 10-15 minutes, T is W to 120 minutes (a T
- * below W becomes W), both in whole minutes; an unknown rounding is
- * `half-hour`; an unknown zone falls back to `fallbackTz`.
+ * below W, and a missing T, become W), both in whole minutes; an unknown
+ * rounding is `clock-hour`; an unknown zone falls back to `fallbackTz`.
  */
 export function clampMethodParams(
   input: Partial<Record<keyof MethodParams, unknown>>,
-  fallbackTz: string = serverTimeZone(),
+  fallbackTz: string = METHOD_DEFAULTS.tz,
 ): MethodParams {
   const windowInput = finiteNumber(input.windowMs);
   const windowMin = Math.min(WINDOW_LIMITS_MIN.max, Math.max(WINDOW_LIMITS_MIN.min,
     Math.round((windowInput ?? METHOD_DEFAULTS.windowMin * MINUTE_MS) / MINUTE_MS)));
   const breakInput = finiteNumber(input.breakMs);
   const breakMin = Math.min(BREAK_MAX_MIN, Math.max(windowMin,
-    Math.round((breakInput ?? METHOD_DEFAULTS.breakMin * MINUTE_MS) / MINUTE_MS)));
+    Math.round((breakInput ?? (METHOD_DEFAULTS.breakMin ?? windowMin) * MINUTE_MS) / MINUTE_MS)));
   const rounding: Rounding = input.rounding === "clock-hour" || input.rounding === "half-hour"
     ? input.rounding
     : METHOD_DEFAULTS.rounding;
@@ -281,6 +345,15 @@ function zonedDayAt(y: number, m: number, d: number, tz: string): ZonedDay {
   return { date: dateKey(y, m, d), start: zonedMidnight(y, m, d, tz), end: zonedMidnight(next.y, next.m, next.d, tz) };
 }
 
+/** The wall-clock day a `YYYY-MM-DD` date names in the zone, or null. */
+export function zonedDate(date: string, tz: string): ZonedDay | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!match) return null;
+  const [y, m, d] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  return zonedDayAt(y, m, d, tz);
+}
+
 /** The wall-clock day containing `t`. */
 export function zonedDay(t: number, tz: string): ZonedDay {
   const w = wallClock(t, tz);
@@ -395,10 +468,10 @@ export function humanSegments(episodes: readonly Episode[]): HumanSegment[] {
     if (!owner) continue;
     const last = out.at(-1);
     if (last && last.end === start && last.anchorAt === owner.at && last.project === owner.project
-      && last.surface === owner.surface && last.kind === owner.kind) {
+      && last.surface === owner.surface && last.kind === owner.kind && last.host === owner.host) {
       last.end = end;
     } else {
-      out.push({ start, end, project: owner.project, surface: owner.surface, kind: owner.kind, anchorAt: owner.at });
+      out.push({ start, end, project: owner.project, surface: owner.surface, kind: owner.kind, host: owner.host, anchorAt: owner.at });
     }
   }
   return out;
@@ -411,7 +484,7 @@ export function roundHalfHour(ms: number): number {
   return Math.max(0.5, Math.round(ms / HALF_HOUR_MS) * 0.5);
 }
 
-/** `clock-hour`: the original weights for one project's minutes in one clock
+/** `clock-hour`: the original weights for the covered minutes of one clock
     hour: under 10 min = 0, 10-39 min = 0.5 h, 40 min or more = 1 h. */
 export function clockHourWeight(ms: number): number {
   const minutes = ms / MINUTE_MS;
@@ -422,9 +495,9 @@ export function clockHourWeight(ms: number): number {
 
 /**
  * Step 5, per day: report hours per project. `half-hour` rounds each
- * project's raw time for the day. `clock-hour` gives each clock hour to the one
- * project with the most of its minutes (a tie goes to the more recent anchor)
- * and weighs that project's minutes in the hour.
+ * project's raw time for the day. `clock-hour` combines every window in a
+ * clock hour, weighs the hour's covered minutes, and gives the hour to the one
+ * project with the most of them (a tie goes to the more recent input).
  */
 export function dayReportHours(segments: readonly HumanSegment[], day: Interval, rounding: Rounding): Map<string, number> {
   const hours = new Map<string, number>();
@@ -451,7 +524,9 @@ export function dayReportHours(segments: readonly HumanSegment[], day: Interval,
           || (entry[1].latest === winner[1].latest && entry[0] > winner[0])))) winner = entry;
     }
     if (!winner) continue;
-    const weight = clockHourWeight(winner[1].ms);
+    let covered = 0;
+    for (const entry of perProject.values()) covered += entry.ms;
+    const weight = clockHourWeight(covered);
     if (weight > 0) hours.set(winner[0], (hours.get(winner[0]) ?? 0) + weight);
   }
   return hours;
@@ -508,6 +583,55 @@ export function agentTurns(rows: readonly AgentRow[], range: Interval, nowMs: nu
 /* The report                                                               */
 /* ------------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------------ */
+/* Coverage across hosts                                                    */
+/* ------------------------------------------------------------------------ */
+
+function holdsProject(host: HostCoverage, project: string | null | undefined): boolean {
+  /* A day's total (undefined) and unattributed time (null) can come from any host. */
+  if (project === undefined || project === null || host.projects === "all") return true;
+  return host.projects.includes(project);
+}
+
+/**
+ * The stretches of `window` that some expected host holding `project` was
+ * not read for, and which hosts. Undefined asks about every project at once.
+ * An empty answer is the only state in which a zero may be shown as zero.
+ */
+export function uncoveredSpans(
+  window: Interval,
+  hosts: readonly HostCoverage[],
+  project?: string | null,
+): { spans: Interval[]; hosts: string[] } {
+  const spans: Interval[] = [];
+  const missing: string[] = [];
+  if (window.end <= window.start) return { spans, hosts: missing };
+  for (const host of hosts) {
+    if (!holdsProject(host, project)) continue;
+    const required = { start: Math.max(window.start, host.since ?? window.start), end: window.end };
+    if (required.end <= required.start) continue;
+    const gaps = subtractIntervals([required], unionIntervals([...host.covered]));
+    if (gaps.length) {
+      spans.push(...gaps);
+      missing.push(host.host);
+    }
+  }
+  return { spans: unionIntervals(spans), hosts: [...new Set(missing)].sort() };
+}
+
+function coverageOf(window: Interval, hosts: readonly HostCoverage[], project?: string | null): Coverage {
+  const { hosts: missingHosts } = uncoveredSpans(window, hosts, project);
+  return { complete: missingHosts.length === 0, missingHosts };
+}
+
+/** Monday to Friday: the days a zero is checked for a missing source. */
+export const DEFAULT_WORKDAYS: readonly number[] = [1, 2, 3, 4, 5];
+/** Agent wall-clock on a zero-hour workday past which the operator was
+    probably working somewhere no source reached. */
+export const ACTIVE_ELSEWHERE_AGENT_MS = 30 * MINUTE_MS;
+
+export type MissingSourceReason = "unread-source" | "agent-activity";
+
 export interface ReportInput {
   params: MethodParams;
   range: RangeKey;
@@ -515,9 +639,14 @@ export interface ReportInput {
   /** Anchors from at least T before the first day: an episode reaching into
       the range from before it is then counted exactly. */
   anchors: readonly Anchor[];
-  /** The first recorded request, or null when the ledger holds none. */
-  ledgerStartMs: number | null;
+  /** Every expected host and what its sources were read for. */
+  hosts: readonly HostCoverage[];
   agents: readonly AgentConversation[];
+  /** Projects tagged billable in the settings: their report hours are also
+      counted on their own, from their own inputs only, as a paid report is. */
+  billable?: readonly string[];
+  /** Weekdays (0 = Sunday) checked for a probable missing source. */
+  workdays?: readonly number[];
 }
 
 export interface AgentSplit {
@@ -536,20 +665,30 @@ export interface DayActivity extends AgentSplit {
   date: string;
   start: number;
   end: number;
-  /** False for a day that ended before the ledger's first request. */
-  recorded: boolean;
-  /** On the day the ledger started: when. Earlier time that day is not recorded. */
-  recordedFrom: number | null;
+  /** Complete when every expected host was read for the whole day (up to
+      now); otherwise the human figures are a lower bound. */
+  coverage: Coverage;
+  /** The stretches of the day some expected host was not read for. */
+  unknown: Interval[];
   humanMs: number;
   humanHours: number;
-  /** Human time, each stretch labelled with the project that owns it. */
-  human: Array<{ start: number; end: number; project: string | null }>;
+  /** Report hours of the billable projects alone. */
+  billableHours: number;
+  /** A workday that reads zero human time while a source was unread or agents
+      were busy: probably a source is missing, and the zero is not shown as a
+      clean zero. Null otherwise. */
+  missingSource: MissingSourceReason[] | null;
+  /** Human time, each stretch labelled with the project that owns it and the
+      host its input came from. */
+  human: Array<{ start: number; end: number; project: string | null; host: string }>;
   /** Agent wall-clock, split into supervised and unattended stretches. */
   agent: Array<{ start: number; end: number; supervised: boolean }>;
 }
 
 export interface ProjectActivity extends AgentSplit {
   project: string | null;
+  /** Tagged billable in the settings. */
+  billable: boolean;
   /** Human time owned by the project after one-minute-once reassignment. */
   humanMs: number;
   /** The project's own episodes before reassignment. */
@@ -561,6 +700,10 @@ export interface ProjectActivity extends AgentSplit {
   episodes: number;
   bySurface: Record<Surface, number>;
   byKind: Record<RequestKind, number>;
+  /** Human time by the host its input came from. */
+  byHost: Record<string, number>;
+  /** Complete when every host holding the project was read for the range. */
+  coverage: Coverage;
   /** Agent-hours by engine and by role id. */
   byEngine: Record<string, number>;
   byRole: Record<string, number>;
@@ -571,8 +714,16 @@ export interface ProjectActivity extends AgentSplit {
 export interface ActivityReport {
   range: { key: RangeKey; start: number; end: number; now: number };
   params: MethodParams;
-  ledgerStartMs: number | null;
-  totals: AgentSplit & { humanMs: number; humanHours: number; requests: number; unregisteredConversations: number };
+  totals: AgentSplit & {
+    humanMs: number;
+    humanHours: number;
+    billableHours: number;
+    requests: number;
+    unregisteredConversations: number;
+    coverage: Coverage;
+    /** Days flagged as a probable missing source. */
+    missingSourceDays: number;
+  };
   days: DayActivity[];
   projects: ProjectActivity[];
 }
@@ -632,6 +783,14 @@ export function activityReport(input: ReportInput): ActivityReport {
 
   const episodes = humanEpisodes(input.anchors, params, nowMs);
   const segments = clipIntervals(humanSegments(episodes), rangeStart, limit);
+  /* The billable figure is counted as the paid report counts: from the
+     billable projects' inputs alone, so another project's request never takes
+     a billable minute. */
+  const billable = new Set(input.billable ?? []);
+  const billableSegments = billable.size
+    ? clipIntervals(humanSegments(humanEpisodes(input.anchors.filter((anchor) => anchor.project !== null && billable.has(anchor.project)), params, nowMs)), rangeStart, limit)
+    : [];
+  const workdays = new Set(input.workdays ?? DEFAULT_WORKDAYS);
 
   /* Each project's own episodes, before the one-minute-once reassignment: the
      supervision that decides which of its agents' time was watched. */
@@ -658,10 +817,15 @@ export function activityReport(input: ReportInput): ActivityReport {
   for (const anchor of input.anchors) {
     if (anchor.at >= rangeStart && anchor.at <= limit) projectKeys.add(projectKey(anchor.project));
   }
+  /* A project a host is known to hold gets a row even with no input read:
+     when that host was not read, the row says unknown instead of vanishing. */
+  for (const host of input.hosts) if (host.projects !== "all") for (const project of host.projects) projectKeys.add(projectKey(project));
+  const rangeWindow = { start: rangeStart, end: limit };
   const projects = new Map<string, ProjectActivity>();
   for (const key of projectKeys) {
     projects.set(key, {
       project: projectOf(key),
+      billable: billable.has(key),
       humanMs: 0,
       humanOwnMs: totalMs(own.get(key) ?? []),
       humanReassignedMs: 0,
@@ -670,6 +834,8 @@ export function activityReport(input: ReportInput): ActivityReport {
       episodes: episodeCounts.get(key) ?? 0,
       bySurface: zeroRecord(SURFACES),
       byKind: zeroRecord(REQUEST_KINDS),
+      byHost: {},
+      coverage: coverageOf(rangeWindow, input.hosts, projectOf(key)),
       byEngine: {},
       byRole: {},
       pipelines: [],
@@ -686,6 +852,7 @@ export function activityReport(input: ReportInput): ActivityReport {
     row.humanMs += ms;
     row.bySurface[segment.surface] += ms;
     row.byKind[segment.kind] += ms;
+    row.byHost[segment.host] = (row.byHost[segment.host] ?? 0) + ms;
   }
 
   /* Supervision across all projects, for the day strip: a moment of agent work
@@ -720,14 +887,17 @@ export function activityReport(input: ReportInput): ActivityReport {
   const totals: ActivityReport["totals"] = {
     humanMs: 0,
     humanHours: 0,
+    billableHours: 0,
     requests: 0,
     unregisteredConversations: agents.filter((agent) => agent.role === UNREGISTERED_ROLE).length,
+    coverage: coverageOf(rangeWindow, input.hosts),
+    missingSourceDays: 0,
     ...emptySplit(),
   };
   const dayRows: DayActivity[] = [];
   for (const day of days) {
     const window = { start: day.start, end: Math.min(day.end, limit) };
-    const recorded = input.ledgerStartMs !== null && input.ledgerStartMs < day.end;
+    const uncovered = uncoveredSpans(window, input.hosts);
     const daySegments = clipIntervals(segments, day.start, day.end);
     const reportHours = dayReportHours(segments, day, params.rounding);
     let humanHours = 0;
@@ -752,6 +922,14 @@ export function activityReport(input: ReportInput): ActivityReport {
       }
     }
     const humanMs = totalMs(daySegments);
+    let billableHours = 0;
+    for (const hours of dayReportHours(billableSegments, day, params.rounding).values()) billableHours += hours;
+    const weekday = new Date(`${day.date}T12:00:00Z`).getUTCDay();
+    const reasons: MissingSourceReason[] = [];
+    if (workdays.has(weekday) && humanMs === 0 && window.end > window.start) {
+      if (uncovered.hosts.length) reasons.push("unread-source");
+      if (split.wallMs >= ACTIVE_ELSEWHERE_AGENT_MS) reasons.push("agent-activity");
+    }
     const agentLane = [
       ...clipIntervals(supervisedUnion, window.start, window.end).map((item) => ({ ...item, supervised: true })),
       ...subtractIntervals(clipIntervals(wallAll, window.start, window.end), supervisedUnion).map((item) => ({ ...item, supervised: false })),
@@ -760,16 +938,24 @@ export function activityReport(input: ReportInput): ActivityReport {
       date: day.date,
       start: day.start,
       end: day.end,
-      recorded,
-      recordedFrom: recorded && input.ledgerStartMs! > day.start ? input.ledgerStartMs : null,
+      coverage: { complete: uncovered.hosts.length === 0, missingHosts: uncovered.hosts },
+      unknown: uncovered.spans,
       humanMs,
       humanHours,
-      human: mergeLabelled(daySegments, (segment) => segment.project).map(({ start, end, label }) => ({ start, end, project: label })),
+      billableHours,
+      missingSource: reasons.length ? reasons : null,
+      human: mergeLabelled(daySegments, (segment) => `${projectKey(segment.project)}\0${segment.host}`)
+        .map(({ start, end, label }) => {
+          const [project, host] = label.split("\0") as [string, string];
+          return { start, end, project: projectOf(project), host };
+        }),
       agent: mergeLabelled(agentLane, (item) => item.supervised).map(({ start, end, label }) => ({ start, end, supervised: label })),
       ...split,
     });
     totals.humanMs += humanMs;
     totals.humanHours += humanHours;
+    totals.billableHours += billableHours;
+    if (reasons.length) totals.missingSourceDays += 1;
     addSplit(totals, split);
   }
   for (const row of projects.values()) {
@@ -779,7 +965,6 @@ export function activityReport(input: ReportInput): ActivityReport {
   return {
     range: { key: input.range, start: rangeStart, end: rangeEnd, now: nowMs },
     params,
-    ledgerStartMs: input.ledgerStartMs,
     totals,
     days: dayRows,
     projects: [...projects.values()].sort((a, b) => b.humanMs - a.humanMs || b.wallMs - a.wallMs

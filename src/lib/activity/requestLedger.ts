@@ -15,7 +15,8 @@ import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { requestSurface } from "@/lib/view/device";
 
-import { REQUEST_KINDS, SURFACES, type Anchor, type RequestKind, type Surface } from "./method";
+import { ledgerRowKey } from "./humanInput";
+import { REQUEST_KINDS, SURFACES, type RequestKind, type Surface } from "./method";
 
 /*
  * The operator request ledger (docs/design/activity-dashboard.md, "Privacy
@@ -32,7 +33,6 @@ import { REQUEST_KINDS, SURFACES, type Anchor, type RequestKind, type Surface } 
 
 export const LEDGER_ROW_VERSION = 1;
 export const LEDGER_RETENTION_DAYS = 90;
-const KEY_DOMAIN = "delegatus-activity-request-v1";
 const DAY_FILE = /^requests-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -96,9 +96,7 @@ function dayFile(dir: string, date: string): string {
 
 function rowKey(idempotencyKey: string | null | undefined): string {
   const key = idempotencyKey?.trim() ?? "";
-  return key
-    ? crypto.createHash("sha256").update(`${KEY_DOMAIN}\0${key}`).digest("hex")
-    : crypto.randomBytes(32).toString("hex");
+  return key ? ledgerRowKey(key) : crypto.randomBytes(32).toString("hex");
 }
 
 function cleanProject(project: string | null | undefined): string | null {
@@ -226,7 +224,7 @@ function readRows(file: string): LedgerRow[] {
 }
 
 export interface LedgerRead {
-  anchors: Anchor[];
+  rows: LedgerRow[];
   /** The earliest request the ledger still holds, or null when it holds none. */
   ledgerStartMs: number | null;
 }
@@ -245,7 +243,7 @@ export function readRequests(
   try {
     names = fs.readdirSync(dir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { anchors: [], ledgerStartMs: null };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { rows: [], ledgerStartMs: null };
     throw error;
   }
   const dates = names.flatMap((name) => DAY_FILE.exec(name)?.[1] ?? []).sort();
@@ -260,16 +258,16 @@ export function readRequests(
   const first = utcDate(fromMs);
   const last = utcDate(toMs);
   const seen = new Set<string>();
-  const anchors: Anchor[] = [];
+  const rows: LedgerRow[] = [];
   for (const date of dates) {
     if (date < first || date > last) continue;
     for (const row of readRows(dayFile(dir, date))) {
       if (seen.has(row.key)) continue;
       seen.add(row.key);
       if (row.at < fromMs || row.at > toMs) continue;
-      anchors.push({ at: row.at, project: row.project, surface: row.surface, kind: row.kind });
+      rows.push(row);
     }
   }
-  anchors.sort((a, b) => a.at - b.at);
-  return { anchors, ledgerStartMs };
+  rows.sort((a, b) => a.at - b.at);
+  return { rows, ledgerStartMs };
 }

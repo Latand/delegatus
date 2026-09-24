@@ -8,6 +8,7 @@ import type { RegistryFile } from "@/lib/agent/registry";
 import { LEDGER_RETENTION_DAYS, readRequests, recordOperatorRequest, type RequestLedgerDependencies } from "./requestLedger";
 
 const DAY = 24 * 60 * 60 * 1000;
+const anchorsOf = (read: ReturnType<typeof readRequests>) => read.rows.map(({ at, project, surface, kind }) => ({ at, project, surface, kind }));
 const NOW = Date.parse("2026-09-21T10:00:00Z");
 const DESKTOP = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
 const PHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
@@ -45,7 +46,7 @@ describe("recording operator requests", () => {
     }
     recordOperatorRequest(request(PHONE), { kind: "voice", idempotencyKey: "realtime:abc", project: "lantern" }, deps({ now: () => NOW + 60_000 }));
     const read = readRequests(NOW - DAY, NOW + DAY, { dir: () => path.join(root, "activity") });
-    expect(read.anchors).toEqual([
+    expect(anchorsOf(read)).toEqual([
       { at: NOW, project: "harbor", surface: "desktop", kind: "message" },
       { at: NOW + 60_000, project: "lantern", surface: "phone", kind: "voice" },
     ]);
@@ -56,7 +57,7 @@ describe("recording operator requests", () => {
   test("requests with no idempotency key are never merged", () => {
     recordOperatorRequest(request(DESKTOP), { kind: "task", project: "harbor" }, deps());
     recordOperatorRequest(request(DESKTOP), { kind: "task", project: "harbor" }, deps());
-    expect(readRequests(NOW - DAY, NOW + DAY, { dir: () => path.join(root, "activity") }).anchors).toHaveLength(2);
+    expect(readRequests(NOW - DAY, NOW + DAY, { dir: () => path.join(root, "activity") }).rows).toHaveLength(2);
   });
 
   test("a row carries exactly the six allowed keys and nothing that names the target", () => {
@@ -136,12 +137,12 @@ describe("retention and reading", () => {
     fs.writeFileSync(path.join(dir, "requests-2026-09-19.jsonl"), lines.join("\n") + "\n");
     fs.writeFileSync(path.join(dir, "requests-2026-09-21.jsonl"), JSON.stringify({ v: 1, key: key(4), at: NOW, kind: "task", surface: "phone", project: null }) + "\n");
     const read = readRequests(NOW, NOW, { dir: () => dir });
-    expect(read.anchors).toEqual([{ at: NOW, project: null, surface: "phone", kind: "task" }]);
+    expect(anchorsOf(read)).toEqual([{ at: NOW, project: null, surface: "phone", kind: "task" }]);
     expect(read.ledgerStartMs).toBe(NOW - 2 * DAY);
-    expect(readRequests(NOW - 3 * DAY, NOW, { dir: () => dir }).anchors).toHaveLength(2);
+    expect(readRequests(NOW - 3 * DAY, NOW, { dir: () => dir }).rows).toHaveLength(2);
   });
 
   test("a home with no ledger reads as nothing recorded", () => {
-    expect(readRequests(0, NOW, { dir: () => path.join(root, "missing") })).toEqual({ anchors: [], ledgerStartMs: null });
+    expect(readRequests(0, NOW, { dir: () => path.join(root, "missing") })).toEqual({ rows: [], ledgerStartMs: null });
   });
 });

@@ -15,6 +15,7 @@ import {
   zonedDays,
   type AgentConversation,
   type Anchor,
+  type HostCoverage,
   type MethodParams,
   type RequestKind,
   type Surface,
@@ -24,10 +25,19 @@ const MIN = MINUTE_MS;
 const HOUR = 60 * MIN;
 const T0 = Date.parse("2026-09-21T09:00:00Z");
 
+/* The 2026-07-29 refinement (T = 30, half-hour), in UTC: most cases below
+   exercise the episode mechanics, which the refinement makes visible. The
+   defaults have their own cases. */
 const PARAMS: MethodParams = { windowMs: 10 * MIN, breakMs: 30 * MIN, rounding: "half-hour", tz: "UTC" };
 
-function anchor(minute: number, project: string | null = "harbor", surface: Surface = "desktop", kind: RequestKind = "message"): Anchor {
-  return { at: T0 + minute * MIN, project, surface, kind };
+/** A host read for all time: coverage is complete. */
+function readHost(host: string, projects: HostCoverage["projects"] = "all", covered = [{ start: 0, end: Number.MAX_SAFE_INTEGER }]): HostCoverage {
+  return { host, projects, since: null, covered };
+}
+const LOCAL = readHost("local");
+
+function anchor(minute: number, project: string | null = "harbor", surface: Surface = "desktop", kind: RequestKind = "message", host = "local"): Anchor {
+  return { at: T0 + minute * MIN, project, surface, kind, host };
 }
 
 function humanMs(anchors: Anchor[], params: MethodParams = PARAMS, now = T0 + 24 * HOUR): number {
@@ -54,7 +64,7 @@ function dayReport(anchors: Anchor[], agents: AgentConversation[] = [], params: 
     range: "today",
     nowMs: Date.parse("2026-09-21T23:59:00Z"),
     anchors,
-    ledgerStartMs: Date.parse("2026-09-01T00:00:00Z"),
+    hosts: [LOCAL],
     agents,
   });
 }
@@ -274,15 +284,21 @@ describe("report hours", () => {
     expect(report.totals.humanHours).toBe(1.5);
   });
 
-  test("clock-hour gives an hour to one project, the one with the most minutes, ties to the more recent request", () => {
+  test("clock-hour combines every window in the hour and gives the hour to the project with the most minutes", () => {
     const clock = { ...PARAMS, rounding: "clock-hour" as const, windowMs: 10 * MIN, breakMs: 10 * MIN };
     const day = { start: T0, end: T0 + 24 * HOUR };
-    /* harbor 09:00-09:25 (25 min), lantern 09:40-09:55 (15 min): harbor takes the hour at 0.5 h. */
+    /* harbor 09:00-09:25 (25 min) and lantern 09:40-09:55 (15 min): the hour
+       holds 40 covered minutes, weighs 1 h, and goes to harbor. */
     const most = humanSegments(humanEpisodes([anchor(0, "harbor"), anchor(10, "harbor"), anchor(15, "harbor"), anchor(40, "lantern"), anchor(45, "lantern")], clock, T0 + HOUR));
-    expect(Object.fromEntries(dayReportHours(most, day, "clock-hour"))).toEqual({ harbor: 0.5 });
+    expect(Object.fromEntries(dayReportHours(most, day, "clock-hour"))).toEqual({ harbor: 1 });
     /* 20 minutes each: the more recently asked project takes the hour. */
     const tied = humanSegments(humanEpisodes([anchor(0, "harbor"), anchor(10, "harbor"), anchor(30, "lantern"), anchor(40, "lantern")], clock, T0 + HOUR));
-    expect(Object.fromEntries(dayReportHours(tied, day, "clock-hour"))).toEqual({ lantern: 0.5 });
+    expect(Object.fromEntries(dayReportHours(tied, day, "clock-hour"))).toEqual({ lantern: 1 });
+    /* One hour is never split between projects: harbor's 5 minutes and
+       lantern's 5 weigh as 10 together, and the hour goes to lantern, asked
+       last. Lantern's 5 minutes past 10:00 weigh nothing in their own hour. */
+    const split = humanSegments(humanEpisodes([anchor(50, "harbor"), anchor(55, "lantern")], clock, T0 + 2 * HOUR));
+    expect(Object.fromEntries(dayReportHours(split, day, "clock-hour"))).toEqual({ lantern: 0.5 });
   });
 });
 
@@ -296,8 +312,8 @@ describe("days in the operator's zone", () => {
       params: kyiv,
       range: "7d",
       nowMs: Date.parse("2026-09-21T12:00:00Z"),
-      anchors: [{ at, project: "harbor", surface: "phone", kind: "voice" }],
-      ledgerStartMs: Date.parse("2026-09-01T00:00:00Z"),
+      anchors: [{ at, project: "harbor", surface: "phone", kind: "voice", host: "local" }],
+      hosts: [LOCAL],
       agents: [],
     });
     const byDate = Object.fromEntries(report.days.map((day) => [day.date, day.humanMs / MIN]));
@@ -316,27 +332,28 @@ describe("days in the operator's zone", () => {
     expect(days[2]!.start).toBe(Date.parse("2026-10-25T22:00:00Z"));
     /* Clock hours of that day: 25 of them, each one hour. */
     const segments = humanSegments(humanEpisodes([
-      { at: Date.parse("2026-10-25T00:30:00Z"), project: "harbor", surface: "desktop", kind: "message" },
-      { at: Date.parse("2026-10-25T01:10:00Z"), project: "harbor", surface: "desktop", kind: "message" },
+      { at: Date.parse("2026-10-25T00:30:00Z"), project: "harbor", surface: "desktop", kind: "message", host: "local" },
+      { at: Date.parse("2026-10-25T01:10:00Z"), project: "harbor", surface: "desktop", kind: "message", host: "local" },
     ], { ...kyiv, breakMs: 10 * MIN }, Date.parse("2026-10-26T00:00:00Z")));
     /* 03:30-03:40 EEST and 03:10-03:20 EET: two different clock hours. */
     expect(Object.fromEntries(dayReportHours(segments, days[1]!, "clock-hour"))).toEqual({ harbor: 1 });
   });
 
-  test("days before the ledger's first request are not recorded, which is not zero", () => {
+  test("time before a host's sources begin is unknown, which is not zero", () => {
     const report = activityReport({
       params: PARAMS,
       range: "7d",
       nowMs: Date.parse("2026-09-21T12:00:00Z"),
       anchors: [],
-      ledgerStartMs: Date.parse("2026-09-19T15:00:00Z"),
+      hosts: [readHost("local", "all", [{ start: Date.parse("2026-09-19T15:00:00Z"), end: Date.parse("2026-09-21T12:00:00Z") }])],
       agents: [],
     });
-    expect(report.days.map((day) => day.recorded)).toEqual([false, false, false, false, true, true, true]);
-    expect(report.days[4]!.recordedFrom).toBe(Date.parse("2026-09-19T15:00:00Z"));
-    expect(report.days[5]!.recordedFrom).toBeNull();
-    const empty = activityReport({ params: PARAMS, range: "today", nowMs: T0, anchors: [], ledgerStartMs: null, agents: [] });
-    expect(empty.days[0]!.recorded).toBe(false);
+    expect(report.days.map((day) => day.coverage.complete)).toEqual([false, false, false, false, false, true, true]);
+    expect(report.days[4]!.unknown).toEqual([{ start: Date.parse("2026-09-19T00:00:00Z"), end: Date.parse("2026-09-19T15:00:00Z") }]);
+    expect(report.days[4]!.coverage.missingHosts).toEqual(["local"]);
+    expect(report.totals.coverage).toEqual({ complete: false, missingHosts: ["local"] });
+    const empty = activityReport({ params: PARAMS, range: "today", nowMs: T0, anchors: [], hosts: [readHost("local", "all", [])], agents: [] });
+    expect(empty.days[0]!.coverage.complete).toBe(false);
   });
 
   test("an episode that began before the range counts only its part inside it", () => {
@@ -345,10 +362,10 @@ describe("days in the operator's zone", () => {
       range: "today",
       nowMs: Date.parse("2026-09-21T12:00:00Z"),
       anchors: [
-        { at: Date.parse("2026-09-20T23:40:00Z"), project: "harbor", surface: "desktop", kind: "message" },
-        { at: Date.parse("2026-09-20T23:58:00Z"), project: "harbor", surface: "desktop", kind: "message" },
+        { at: Date.parse("2026-09-20T23:40:00Z"), project: "harbor", surface: "desktop", kind: "message", host: "local" },
+        { at: Date.parse("2026-09-20T23:58:00Z"), project: "harbor", surface: "desktop", kind: "message", host: "local" },
       ],
-      ledgerStartMs: Date.parse("2026-09-01T00:00:00Z"),
+      hosts: [LOCAL],
       agents: [],
     });
     expect(report.totals.humanMs).toBe(8 * MIN);
@@ -387,8 +404,10 @@ describe("agent turns from message rows", () => {
 });
 
 describe("parameters are clamped, never refused", () => {
-  test("defaults", () => {
-    expect(clampMethodParams({}, "Europe/Kyiv")).toEqual({ windowMs: 10 * MIN, breakMs: 30 * MIN, rounding: "half-hour", tz: "Europe/Kyiv" });
+  test("defaults: the restated method, W = T = 10 minutes, clock-hour weights, Europe/Kyiv", () => {
+    expect(clampMethodParams({})).toEqual({ windowMs: 10 * MIN, breakMs: 10 * MIN, rounding: "clock-hour", tz: "Europe/Kyiv" });
+    /* A longer window keeps T at least W. */
+    expect(clampMethodParams({ windowMs: 15 * MIN })).toMatchObject({ windowMs: 15 * MIN, breakMs: 15 * MIN });
   });
 
   test("bounds, strings, T below W, rounding and zone", () => {
@@ -398,11 +417,130 @@ describe("parameters are clamped, never refused", () => {
     expect(clampMethodParams({ windowMs: "soon" }, "UTC").windowMs).toBe(10 * MIN);
     expect(clampMethodParams({ windowMs: 15 * MIN, breakMs: 5 * MIN }, "UTC").breakMs).toBe(15 * MIN);
     expect(clampMethodParams({ breakMs: 500 * MIN }, "UTC").breakMs).toBe(120 * MIN);
-    expect(clampMethodParams({ breakMs: Number.NaN }, "UTC").breakMs).toBe(30 * MIN);
+    expect(clampMethodParams({ breakMs: Number.NaN }, "UTC").breakMs).toBe(10 * MIN);
+    expect(clampMethodParams({ breakMs: 30 * MIN }, "UTC").breakMs).toBe(30 * MIN);
     expect(clampMethodParams({ rounding: "clock-hour" }, "UTC").rounding).toBe("clock-hour");
-    expect(clampMethodParams({ rounding: "weekly" }, "UTC").rounding).toBe("half-hour");
+    expect(clampMethodParams({ rounding: "weekly" }, "UTC").rounding).toBe("clock-hour");
     expect(clampMethodParams({ tz: "Not/AZone" }, "Europe/Kyiv").tz).toBe("Europe/Kyiv");
     expect(clampMethodParams({ tz: "America/New_York" }, "UTC").tz).toBe("America/New_York");
     expect(clampMethodParams({ tz: "Not/AZone" }, "Also/Invalid").tz).toBe("UTC");
+  });
+});
+
+describe("human input from more than one host", () => {
+  const DEFAULTS = clampMethodParams({}, "UTC");
+  const report = (anchors: Anchor[], hosts: HostCoverage[], agents: AgentConversation[] = []) => activityReport({
+    params: DEFAULTS,
+    range: "today",
+    nowMs: Date.parse("2026-09-21T23:59:00Z"),
+    anchors,
+    hosts,
+    agents,
+  });
+  const stageInput = [anchor(0, "client-a", "unknown", "message", "stage"), anchor(5, "client-a", "unknown", "message", "stage"), anchor(35, "client-a", "unknown", "message", "stage")];
+
+  test("the local host read and empty, the remote host with input: the hours come from the remote host and coverage is complete", () => {
+    const result = report(stageInput, [LOCAL, readHost("stage")]);
+    /* 09:00-09:15 and 09:35-09:45: 25 minutes in the 09:00 hour. */
+    expect(result.totals.humanMs).toBe(25 * MIN);
+    expect(result.totals.humanHours).toBe(0.5);
+    expect(result.totals.coverage).toEqual({ complete: true, missingHosts: [] });
+    expect(result.days[0]!.missingSource).toBeNull();
+    const client = result.projects.find((row) => row.project === "client-a")!;
+    expect(client.byHost).toEqual({ stage: 25 * MIN });
+    expect(client.coverage.complete).toBe(true);
+  });
+
+  test("the same with the remote host unread: coverage is unknown and the zero is flagged, never a clean zero", () => {
+    const result = report([], [LOCAL, readHost("stage", "all", [])]);
+    expect(result.totals.humanMs).toBe(0);
+    expect(result.totals.coverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    expect(result.days[0]!.coverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    expect(result.days[0]!.missingSource).toEqual(["unread-source"]);
+    expect(result.totals.missingSourceDays).toBe(1);
+  });
+
+  test("a host that holds only some projects leaves only those unknown, and lists them even with nothing read", () => {
+    const result = report([anchor(0, "harbor")], [LOCAL, readHost("stage", ["client-a"], [])]);
+    const harbor = result.projects.find((row) => row.project === "harbor")!;
+    const client = result.projects.find((row) => row.project === "client-a")!;
+    expect(harbor.coverage.complete).toBe(true);
+    expect(client.humanMs).toBe(0);
+    expect(client.coverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    expect(result.days[0]!.coverage.complete).toBe(false);
+  });
+
+  test("a host is not expected before the day it started holding work", () => {
+    const stage: HostCoverage = { host: "stage", projects: "all", since: Date.parse("2026-09-22T00:00:00Z"), covered: [] };
+    expect(report([anchor(0)], [LOCAL, stage]).totals.coverage.complete).toBe(true);
+  });
+});
+
+describe("every message is bucketed by its own time in Europe/Kyiv", () => {
+  test("a session crossing midnight in Kyiv puts each message on its own day", () => {
+    const kyiv = clampMethodParams({});
+    const session = [
+      /* 23:50 and 00:20 in Kyiv (EEST, UTC+3): one conversation, two days. */
+      { at: Date.parse("2026-09-22T20:50:00Z"), project: "client-a", surface: "unknown" as const, kind: "message" as const, host: "stage" },
+      { at: Date.parse("2026-09-22T21:20:00Z"), project: "client-a", surface: "unknown" as const, kind: "message" as const, host: "stage" },
+    ];
+    const result = activityReport({ params: kyiv, range: "7d", nowMs: Date.parse("2026-09-23T12:00:00Z"), anchors: session, hosts: [LOCAL, readHost("stage")], agents: [] });
+    const byDate = Object.fromEntries(result.days.map((day) => [day.date, [day.humanMs / MIN, day.humanHours]]));
+    expect(byDate["2026-09-22"]).toEqual([10, 0.5]);
+    expect(byDate["2026-09-23"]).toEqual([10, 0.5]);
+    /* In UTC both messages fall on the 22nd. */
+    const utc = activityReport({ params: { ...kyiv, tz: "UTC" }, range: "7d", nowMs: Date.parse("2026-09-23T12:00:00Z"), anchors: session, hosts: [LOCAL, readHost("stage")], agents: [] });
+    expect(utc.days.find((day) => day.date === "2026-09-22")!.humanMs).toBe(20 * MIN);
+  });
+});
+
+describe("a zero-hour workday is flagged as a probable missing source", () => {
+  const DEFAULTS = clampMethodParams({}, "UTC");
+  const week = (anchors: Anchor[], agents: AgentConversation[], hosts: HostCoverage[] = [LOCAL]) => activityReport({
+    params: DEFAULTS,
+    range: "7d",
+    nowMs: Date.parse("2026-09-21T23:59:00Z"),
+    anchors,
+    hosts,
+    agents,
+  });
+  const onDay = (date: string, fromMin: number, toMin: number): AgentConversation => ({
+    key: `agent-${date}`, project: "harbor", engine: "codex", role: "builder", pipelineId: null, stageId: null,
+    activity: [{ start: Date.parse(`${date}T09:00:00Z`) + fromMin * MIN, end: Date.parse(`${date}T09:00:00Z`) + toMin * MIN }],
+  });
+
+  test("agents busy for an hour on a Friday nobody asked anything: flagged", () => {
+    const result = week([], [onDay("2026-09-18", 0, 60)]);
+    expect(result.days.find((day) => day.date === "2026-09-18")!.missingSource).toEqual(["agent-activity"]);
+    expect(result.totals.missingSourceDays).toBe(1);
+  });
+
+  test("the same on a Sunday, a short agent run, or a day with input: not flagged", () => {
+    const result = week([anchor(0)], [onDay("2026-09-20", 0, 60), onDay("2026-09-17", 0, 20), onDay("2026-09-21", 0, 60)]);
+    expect(result.days.find((day) => day.date === "2026-09-20")!.missingSource).toBeNull();
+    expect(result.days.find((day) => day.date === "2026-09-17")!.missingSource).toBeNull();
+    expect(result.days.find((day) => day.date === "2026-09-21")!.missingSource).toBeNull();
+  });
+});
+
+describe("billable projects are counted on their own", () => {
+  test("another project's request never takes a billable minute", () => {
+    const result = activityReport({
+      params: clampMethodParams({}, "UTC"),
+      range: "today",
+      nowMs: Date.parse("2026-09-21T23:59:00Z"),
+      /* harbor (billable) at 09:00, lantern at 09:05: lantern owns 09:05-09:15. */
+      anchors: [anchor(0, "harbor"), anchor(5, "lantern")],
+      hosts: [LOCAL],
+      agents: [],
+      billable: ["harbor"],
+    });
+    /* All projects: 15 minutes in the hour, 0.5 h to lantern. Billable alone:
+       harbor's own 10 minutes, 0.5 h. */
+    expect(result.totals.humanHours).toBe(0.5);
+    expect(result.projects.find((row) => row.project === "lantern")!.humanHours).toBe(0.5);
+    expect(result.totals.billableHours).toBe(0.5);
+    expect(result.projects.find((row) => row.project === "harbor")!.billable).toBe(true);
+    expect(result.projects.find((row) => row.project === "lantern")!.billable).toBe(false);
   });
 });

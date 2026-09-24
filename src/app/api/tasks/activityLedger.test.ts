@@ -29,7 +29,7 @@ const { statePath } = await import("@/lib/configDir");
 const DESKTOP = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
 const headers = (extra: Record<string, string> = {}) => ({ "content-type": "application/json", host: "localhost", "user-agent": DESKTOP, ...extra });
 const ledgerDir = () => statePath("activity");
-const rows = () => readRequests(0, Date.now() + 60_000, { dir: ledgerDir }).anchors;
+const rows = () => readRequests(0, Date.now() + 60_000, { dir: ledgerDir }).rows.map(({ at, project, surface, kind }) => ({ at, project, surface, kind }));
 
 async function createTask(text: string): Promise<{ id: string; project: string }> {
   const response = await POST(new NextRequest("http://localhost/api/tasks", {

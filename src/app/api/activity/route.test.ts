@@ -57,15 +57,18 @@ test("the answer carries both axes and no path, title or message text", async ()
   expect(response.status).toBe(200);
   const text = await response.text();
   const body = JSON.parse(text) as {
-    params: { windowMin: number; breakMin: number; rounding: string };
-    coverage: { ledger: string; agentIndex: string };
+    params: { windowMin: number; breakMin: number; rounding: string; tz: string };
+    coverage: { agentIndex: string; hosts: Array<{ host: string; sources: Array<{ source: string; state: string }> }> };
     totals: { humanMs: number; wallMs: number; supervisedMs: number; unattendedMs: number };
     days: unknown[];
     projects: Array<{ project: string | null; humanMs: number; wallMs: number; byEngine: Record<string, number>; byRole: Record<string, number> }>;
   };
-  expect(body.params).toMatchObject({ windowMin: 15, breakMin: 15, rounding: "half-hour" });
+  /* An unknown zone falls back to the settings' zone, Europe/Kyiv by default. */
+  expect(body.params).toEqual({ windowMin: 15, breakMin: 15, rounding: "clock-hour", tz: "Europe/Kyiv" });
   expect(body.days).toHaveLength(7);
-  expect(body.coverage).toMatchObject({ ledger: "ok", agentIndex: "ok" });
+  expect(body.coverage.agentIndex).toBe("ok");
+  expect(body.coverage.hosts.map((host) => [host.host, host.sources.map((source) => `${source.source}:${source.state}`)]))
+    .toEqual([["local", ["ledger:read", "transcripts:absent"]]]);
   /* One request 45 minutes ago with a 15-minute window, and a 30-minute turn
      that began 5 minutes before it: 15 minutes supervised, 15 unattended. */
   expect(body.totals.humanMs).toBe(15 * 60_000);

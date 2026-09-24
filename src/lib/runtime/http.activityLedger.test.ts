@@ -50,7 +50,7 @@ function dependencies(enqueued: unknown[]): RuntimeHttpDependencies {
   };
 }
 
-const rows = () => readRequests(0, Date.now() + 60_000, { dir: () => ledgerDir }).anchors;
+const rows = () => readRequests(0, Date.now() + 60_000, { dir: () => ledgerDir }).rows.map(({ at, project, surface, kind }) => ({ at, project, surface, kind }));
 
 beforeEach(() => {
   process.env.LLV_STATE_DIR = path.join(sandbox, `state-${Math.random().toString(36).slice(2)}`);

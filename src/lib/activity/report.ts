@@ -1,21 +1,23 @@
+import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { UNRESOLVED_PROJECT } from "@/lib/projects/identity";
 
 import { cachedAgentConversations, type AgentSourceRead } from "./agentSource";
+import { readHumanInputs, type HostReport, type HumanInputRead } from "./hostSources";
+import { readActivitySettings, type ActivitySettings } from "./settings";
 import {
   activityReport,
   clampMethodParams,
   MINUTE_MS,
+  METHOD_DEFAULTS,
   RANGE_KEYS,
   rangeDays,
-  serverTimeZone,
   type ActivityReport,
   type Anchor,
   type MethodParams,
   type ProjectActivity,
   type RangeKey,
 } from "./method";
-import { readRequests, type LedgerRead } from "./requestLedger";
 
 /*
  * GET /api/activity, as a function the route calls: parse and clamp the
@@ -35,12 +37,16 @@ export interface ActivityResponse extends Omit<ActivityReport, "projects" | "par
   generatedAt: number;
   params: { windowMin: number; breakMin: number; rounding: MethodParams["rounding"]; tz: string };
   coverage: {
-    ledger: SourceState;
-    ledgerStartMs: number | null;
+    /** Whether `activity/hosts.json` names the expected hosts. */
+    hostsConfig: HumanInputRead["config"];
+    /** Every expected host and what each of its sources was read for. */
+    hosts: HostReport[];
     agentIndex: SourceState;
     indexedAtMs: number | null;
     unregisteredConversations: number;
   };
+  /** Whether any project is tagged billable, so the billable figure means something. */
+  billableConfigured: boolean;
   projects: ActivityProjectRow[];
 }
 
@@ -49,8 +55,9 @@ export interface ActivityQuery {
   params: MethodParams;
 }
 
-/** Every input is clamped: a bad value gets its default, never an error. */
-export function parseActivityQuery(search: URLSearchParams, fallbackTz: string = serverTimeZone()): ActivityQuery {
+/** Every input is clamped: a bad value gets its default, never an error. The
+    zone defaults to the settings' zone (Europe/Kyiv unless set). */
+export function parseActivityQuery(search: URLSearchParams, fallbackTz: string = METHOD_DEFAULTS.tz): ActivityQuery {
   const rawRange = search.get("range");
   const range = RANGE_KEYS.includes(rawRange as RangeKey) ? rawRange as RangeKey : "7d";
   const minutes = (value: string | null) => value === null || !value.trim() ? undefined : Number(value) * MINUTE_MS;
@@ -67,7 +74,8 @@ export function parseActivityQuery(search: URLSearchParams, fallbackTz: string =
 
 export interface ActivityResponseDependencies {
   now(): number;
-  readRequests(fromMs: number, toMs: number): LedgerRead;
+  settings(): ActivitySettings;
+  humanInputs(window: { start: number; end: number }, nowMs: number): HumanInputRead;
   agents(cacheKey: string, range: { start: number; end: number }, nowMs: number): AgentSourceRead;
   canonicalProject(project: string): string;
   /** Live display names by project key. */
@@ -97,37 +105,44 @@ async function catalogProjectNames(): Promise<ReadonlyMap<string, string>> {
 
 const productionDependencies: ActivityResponseDependencies = {
   now: Date.now,
-  readRequests: (fromMs, toMs) => readRequests(fromMs, toMs),
+  settings: () => readActivitySettings(statePath("activity")),
+  humanInputs: (window, nowMs) => readHumanInputs(window, nowMs),
   agents: cachedAgentConversations,
   canonicalProject,
   projectNames: catalogProjectNames,
 };
 
 export async function activityResponse(
-  query: ActivityQuery,
+  search: URLSearchParams,
   overrides: Partial<ActivityResponseDependencies> = {},
 ): Promise<ActivityResponse> {
   const dependencies = { ...productionDependencies, ...overrides };
   const nowMs = dependencies.now();
-  const { params, range } = query;
+  const settings = dependencies.settings();
+  const { params, range } = parseActivityQuery(search, settings.tz);
   const days = rangeDays(range, nowMs, params.tz);
   const window = { start: days[0]!.start, end: days.at(-1)!.end };
 
-  let ledger: SourceState = "ok";
-  let ledgerRead: LedgerRead = { anchors: [], ledgerStartMs: null };
-  try {
-    /* From T before the first day: an episode running into the range from
-       before it is then counted exactly (see ReportInput.anchors). */
-    ledgerRead = dependencies.readRequests(window.start - params.breakMs, Math.min(window.end, nowMs));
-    if (ledgerRead.ledgerStartMs === null) ledger = "absent";
-  } catch {
-    ledger = "unreadable";
-  }
-  const anchors: Anchor[] = ledgerRead.anchors.map((anchor) => {
-    if (anchor.project === null) return anchor;
-    const project = dependencies.canonicalProject(anchor.project);
-    return { ...anchor, project: project && project !== UNRESOLVED_PROJECT ? project : null };
-  });
+  /* From T before the first day: an episode running into the range from
+     before it is then counted exactly (see ReportInput.anchors). A source
+     that cannot be read covers nothing, which leaves its host unknown. */
+  const human = dependencies.humanInputs({ start: window.start - params.breakMs, end: Math.min(window.end, nowMs) }, nowMs);
+  const canonical = (project: string | null): string | null => {
+    if (project === null) return null;
+    const resolved = dependencies.canonicalProject(project);
+    return resolved && resolved !== UNRESOLVED_PROJECT ? resolved : null;
+  };
+  const anchors: Anchor[] = human.inputs.map((input) => ({
+    at: input.at,
+    project: canonical(input.project),
+    surface: input.surface,
+    kind: input.kind,
+    host: input.host,
+  }));
+  const hostCoverage = human.coverage.map((host) => ({
+    ...host,
+    projects: host.projects === "all" ? "all" as const : host.projects.map((project) => canonical(project) ?? project),
+  }));
 
   let agentIndex: SourceState = "ok";
   let agentRead: AgentSourceRead = { agents: [], index: { available: false, indexedAtMs: null } };
@@ -143,8 +158,10 @@ export async function activityResponse(
     range,
     nowMs,
     anchors,
-    ledgerStartMs: ledgerRead.ledgerStartMs,
+    hosts: hostCoverage,
     agents: agentRead.agents,
+    billable: settings.billable.map((project) => canonical(project) ?? project),
+    workdays: settings.workdays,
   });
   const names = await dependencies.projectNames();
   return {
@@ -156,16 +173,16 @@ export async function activityResponse(
       tz: params.tz,
     },
     range: report.range,
-    ledgerStartMs: report.ledgerStartMs,
     coverage: {
-      ledger,
-      ledgerStartMs: ledgerRead.ledgerStartMs,
+      hostsConfig: human.config,
+      hosts: human.hosts,
       agentIndex,
       indexedAtMs: agentRead.index.indexedAtMs,
       unregisteredConversations: report.totals.unregisteredConversations,
     },
     totals: report.totals,
     days: report.days,
+    billableConfigured: settings.billable.length > 0,
     projects: report.projects.map((row) => ({ ...row, name: row.project === null ? null : names.get(row.project) ?? null })),
   };
 }
