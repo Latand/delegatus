@@ -8,6 +8,7 @@ import { readActivitySettings, type ActivitySettings } from "./settings";
 import {
   activityReport,
   clampMethodParams,
+  holdsProject,
   MINUTE_MS,
   METHOD_DEFAULTS,
   RANGE_KEYS,
@@ -15,6 +16,7 @@ import {
   uncoveredSpans,
   type ActivityReport,
   type Anchor,
+  type HostCoverage,
   type Interval,
   type MethodParams,
   type ProjectActivity,
@@ -41,11 +43,23 @@ export interface ActivityHostRow extends HostReport {
   complete: boolean;
   /** The stretches of the range, up to now, it was not read for. */
   unread: Interval[];
+  /** Whether its agent turns were read for the whole range up to now. They
+      come only from the host's own record (this host's ingest or index,
+      another host's pull), so a host read by an export alone, or listed with
+      a pull that never answered, is not. */
+  agentsComplete: boolean;
+  agentsUnread: Interval[];
+  /** Whether the host can hold the project the page is scoped to (always,
+      unscoped): only such a host's gaps bear on the figures shown. */
+  inScope: boolean;
 }
 
-export interface ActivityResponse extends Omit<ActivityReport, "projects" | "params"> {
+export interface ActivityResponse extends Omit<ActivityReport, "projects" | "params" | "scope"> {
   generatedAt: number;
   params: { windowMin: number; breakMin: number; rounding: MethodParams["rounding"]; tz: string };
+  /** The project `totals` and `days` count alone, by its canonical key and
+      its name as its row reads, or null for every project. */
+  scope: { project: string; name: string | null } | null;
   coverage: {
     /** Whether `activity/hosts.json` names the expected hosts. */
     hostsConfig: HumanInputRead["config"];
@@ -63,7 +77,12 @@ export interface ActivityResponse extends Omit<ActivityReport, "projects" | "par
 export interface ActivityQuery {
   range: RangeKey;
   params: MethodParams;
+  /** A project key to scope the view to, as asked; null for every project. */
+  project: string | null;
 }
+
+/** A project key is a short printable word; anything else scopes nothing. */
+const PROJECT_KEY_MAX = 300;
 
 /** Every input is clamped: a bad value gets its default, never an error. The
     zone defaults to the settings' zone (Europe/Kyiv unless set). */
@@ -71,8 +90,11 @@ export function parseActivityQuery(search: URLSearchParams, fallbackTz: string =
   const rawRange = search.get("range");
   const range = RANGE_KEYS.includes(rawRange as RangeKey) ? rawRange as RangeKey : "7d";
   const minutes = (value: string | null) => value === null || !value.trim() ? undefined : Number(value) * MINUTE_MS;
+  const project = search.get("project")?.trim() ?? "";
   return {
     range,
+    // eslint-disable-next-line no-control-regex
+    project: project && project.length <= PROJECT_KEY_MAX && !/[\u0000-\u001f\u007f]/.test(project) ? project : null,
     params: clampMethodParams({
       windowMs: minutes(search.get("window")),
       breakMs: minutes(search.get("break")),
@@ -129,7 +151,8 @@ export async function activityResponse(
   const dependencies = { ...productionDependencies, ...overrides };
   const nowMs = dependencies.now();
   const settings = dependencies.settings();
-  const { params, range } = parseActivityQuery(search, settings.tz);
+  const query = parseActivityQuery(search, settings.tz);
+  const { params, range } = query;
   const days = rangeDays(range, nowMs, params.tz);
   const window = { start: days[0]!.start, end: days.at(-1)!.end };
 
@@ -149,10 +172,6 @@ export async function activityResponse(
     kind: input.kind,
     host: input.host,
   }));
-  const hostCoverage = human.coverage.map((host) => ({
-    ...host,
-    projects: host.projects === "all" ? "all" as const : host.projects.map((project) => canonical(project) ?? project),
-  }));
 
   let agentIndex: SourceState = "ok";
   let agentRead: AgentSourceRead = { agents: [], index: { available: false, indexedAtMs: null } };
@@ -163,6 +182,16 @@ export async function activityResponse(
     agentIndex = "unreadable";
   }
 
+  const reports = new Map(human.hosts.map((host) => [host.host, host]));
+  const hostCoverage: HostCoverage[] = human.coverage.map((host) => ({
+    ...host,
+    projects: host.projects === "all" ? "all" as const : host.projects.map((project) => canonical(project) ?? project),
+    agents: agentSpans(reports.get(host.host), agentRead.local),
+  }));
+  /* A project is asked for by its key as the page knows it; an older key of
+     the same project names it too. */
+  const scope = query.project === null ? null : canonical(query.project) ?? query.project;
+
   const report = activityReport({
     params,
     range,
@@ -172,8 +201,11 @@ export async function activityResponse(
     agents: agentRead.agents,
     billable: settings.billable.map((project) => canonical(project) ?? project),
     workdays: settings.workdays,
+    ...(scope === null ? {} : { scope: { project: scope } }),
   });
   const names = await dependencies.projectNames();
+  const projects = distinctNames(report.projects.map((row) => ({ ...row, name: row.project === null ? null : names.get(row.project) ?? null })));
+  const upToNow = { start: window.start, end: Math.min(window.end, nowMs) };
   return {
     generatedAt: nowMs,
     params: {
@@ -183,11 +215,21 @@ export async function activityResponse(
       tz: params.tz,
     },
     range: report.range,
+    scope: scope === null ? null : { project: scope, name: projects.find((row) => row.project === scope)?.name ?? names.get(scope) ?? null },
     coverage: {
       hostsConfig: human.config,
       hosts: human.hosts.map((host) => {
-        const unread = uncoveredSpans({ start: window.start, end: Math.min(window.end, nowMs) }, hostCoverage.filter((entry) => entry.host === host.host)).spans;
-        return { ...host, complete: unread.length === 0, unread };
+        const coverage = hostCoverage.filter((entry) => entry.host === host.host);
+        const unread = uncoveredSpans(upToNow, coverage).spans;
+        const agentsUnread = uncoveredSpans(upToNow, coverage, undefined, "agents").spans;
+        return {
+          ...host,
+          complete: unread.length === 0,
+          unread,
+          agentsComplete: agentsUnread.length === 0,
+          agentsUnread,
+          inScope: scope === null || coverage.some((entry) => holdsProject(entry, scope)),
+        };
       }),
       agentIndex,
       indexedAtMs: agentRead.index.indexedAtMs,
@@ -196,8 +238,22 @@ export async function activityResponse(
     totals: report.totals,
     days: report.days,
     billableConfigured: settings.billable.length > 0,
-    projects: distinctNames(report.projects.map((row) => ({ ...row, name: row.project === null ? null : names.get(row.project) ?? null }))),
+    projects,
   };
+}
+
+/** Always read: the search index's approximation of this host's turns reads
+    whatever it indexed, and says so through `coverage.agentIndex`. */
+const ALWAYS: Interval = { start: 0, end: Number.MAX_SAFE_INTEGER };
+
+/** What a host's agent turns were read for. This host's come from its ingest
+    once that has read, and from the search index before it; another host's
+    arrive only by its pull. An export or a ledger carries no agent turn, so a
+    host read by nothing else has none read. */
+export function agentSpans(host: HostReport | undefined, local: AgentSourceRead["local"]): Interval[] {
+  if (!host) return [];
+  if (host.local && local !== "ingest") return [ALWAYS];
+  return host.sources.find((source) => source.source === (host.local ? "ingest" : "pull"))?.covered ?? [];
 }
 
 /** Rows are one per canonical project, so two rows that would read the same

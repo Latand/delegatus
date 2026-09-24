@@ -128,3 +128,22 @@ test("with this host's ingest caught up, its coverage is complete and no export 
   expect(body.totals.coverage.complete).toBeTrue();
   expect(body.totals.humanMs).toBeGreaterThan(0);
 });
+
+test("?project= answers that project's share of the same count: the numbers its row carries", async () => {
+  type Figures = { humanMs: number; humanHours: number; requests: number; wallMs: number; supervisedMs: number; unattendedMs: number; agentHoursMs: number; coverage: unknown; agentCoverage: unknown };
+  type Body = { scope: { project: string; name: string | null } | null; totals: Figures; projects: Array<Figures & { project: string | null }> };
+  const all = await (await get("?range=7d")).json() as Body;
+  const response = await get("?range=7d&project=harbor");
+  expect(response.status).toBe(200);
+  const scoped = await response.json() as Body;
+  expect(all.scope).toBeNull();
+  expect(scoped.scope).toEqual({ project: "harbor", name: null });
+  const pick = (figures: Figures) => ({
+    humanMs: figures.humanMs, humanHours: figures.humanHours, requests: figures.requests, wallMs: figures.wallMs, supervisedMs: figures.supervisedMs,
+    unattendedMs: figures.unattendedMs, agentHoursMs: figures.agentHoursMs, coverage: figures.coverage, agentCoverage: figures.agentCoverage,
+  });
+  const harbor = all.projects.find((row) => row.project === "harbor")!;
+  expect(harbor.humanMs).toBeGreaterThan(0);
+  expect(pick(scoped.totals)).toEqual(pick(harbor));
+  expect(scoped.projects).toEqual(all.projects);
+});

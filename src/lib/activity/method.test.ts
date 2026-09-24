@@ -671,3 +671,140 @@ describe("presentation fields: the unclear part of unattended time and the clock
     expect(day(week(anchors, agents, hosts), "2026-09-22").hours[0]!.unreadHosts).toEqual([]);
   });
 });
+
+describe("one project's view: the page filtered to a project", () => {
+  const DEFAULTS = clampMethodParams({}, "UTC");
+  const NOW = Date.parse("2026-09-24T20:00:00Z");
+  const WED = { start: Date.parse("2026-09-23T00:00:00Z"), end: Date.parse("2026-09-24T00:00:00Z") };
+  const at = (date: string, hhmm: string) => Date.parse(`${date}T${hhmm}:00Z`);
+  const input = (date: string, hhmm: string, project: string, host = "local"): Anchor => ({ at: at(date, hhmm), project, surface: "desktop", kind: "message", host });
+  const run = (key: string, project: string, date: string, from: string, to: string, role = "builder"): AgentConversation => ({
+    key, project, engine: "claude", role, pipelineId: null, stageId: null, activity: [{ start: at(date, from), end: at(date, to) }],
+  });
+  /* Minutes that move to a later input's project, an hour two projects share,
+     parallel agents, a flagged Tuesday, a host holding only A unread on
+     Wednesday, and a billable project. */
+  const anchors = [
+    input("2026-09-21", "09:02", "A"), input("2026-09-21", "09:09", "A"), input("2026-09-21", "09:30", "B"), input("2026-09-21", "09:36", "A"),
+    input("2026-09-21", "13:05", "B"), input("2026-09-21", "13:12", "B"), input("2026-09-23", "10:00", "B"), input("2026-09-24", "08:55", "A"),
+  ];
+  const agents = [
+    run("a1", "A", "2026-09-21", "08:00", "11:00"), run("a2", "A", "2026-09-21", "09:30", "10:30", "reviewer"),
+    run("b1", "B", "2026-09-21", "12:30", "16:00"), run("b2", "B", "2026-09-22", "01:00", "02:00"), run("c", "A", "2026-09-23", "01:00", "03:00"),
+  ];
+  const hosts = [LOCAL, readHost("stage", ["A"], [{ start: 0, end: WED.start }, { start: WED.end, end: Number.MAX_SAFE_INTEGER }])];
+  const week = (params: MethodParams, project?: string) => activityReport({
+    params, range: "7d", nowMs: NOW, anchors, hosts, agents, billable: ["A"],
+    ...(project === undefined ? {} : { scope: { project } }),
+  });
+
+  test("each figure of the view is the number the project's row carries, and the list still holds every project", () => {
+    for (const params of [DEFAULTS, { ...DEFAULTS, breakMs: 30 * MIN, rounding: "half-hour" as const }]) {
+      const all = week(params);
+      expect(all.scope).toBeNull();
+      for (const project of ["A", "B"]) {
+        const view = week(params, project);
+        const row = all.projects.find((entry) => entry.project === project)!;
+        expect(view.scope).toEqual({ project });
+        expect(view.projects).toEqual(all.projects);
+        const { humanMs, humanHours, requests, wallMs, supervisedMs, unattendedMs, unattendedUnreadMs, agentHoursMs, agentHoursSupervisedMs, agentHoursUnattendedMs, coverage, agentCoverage } = view.totals;
+        expect({ humanMs, humanHours, requests, wallMs, supervisedMs, unattendedMs, unattendedUnreadMs, agentHoursMs, agentHoursSupervisedMs, agentHoursUnattendedMs, coverage, agentCoverage }).toEqual({
+          humanMs: row.humanMs, humanHours: row.humanHours, requests: row.requests, wallMs: row.wallMs, supervisedMs: row.supervisedMs,
+          unattendedMs: row.unattendedMs, unattendedUnreadMs: row.unattendedUnreadMs, agentHoursMs: row.agentHoursMs,
+          agentHoursSupervisedMs: row.agentHoursSupervisedMs, agentHoursUnattendedMs: row.agentHoursUnattendedMs,
+          coverage: row.coverage, agentCoverage: row.agentCoverage,
+        });
+        /* A is the only billable project, so its billable hours are the page's. */
+        expect(view.totals.billableHours).toBe(project === "A" ? all.totals.billableHours : 0);
+        /* A flag is about the day, not a project: the view keeps it. */
+        expect(view.days.map((day) => day.missingSource)).toEqual(all.days.map((day) => day.missingSource));
+        expect(view.totals.missingSourceDays).toBe(all.totals.missingSourceDays);
+        for (const day of view.days) {
+          expect(day.projects.every((entry) => entry.project === project)).toBe(true);
+          expect(day.human.every((segment) => segment.project === project)).toBe(true);
+          const sum = (pick: (hour: typeof day.hours[number]) => number) => day.hours.reduce((total, hour) => total + pick(hour), 0);
+          expect(sum((hour) => hour.humanMs)).toBe(day.humanMs);
+          expect(sum((hour) => hour.supervisedMs)).toBe(day.supervisedMs);
+          expect(sum((hour) => hour.unattendedMs)).toBe(day.unattendedMs);
+          expect(sum((hour) => hour.unattendedUnreadMs)).toBe(day.unattendedUnreadMs);
+          if (params.rounding === "clock-hour") expect(sum((hour) => hour.weight ?? 0)).toBe(day.humanHours);
+          const whole = all.days.find((entry) => entry.date === day.date)!;
+          expect(day.humanHours).toBe(whole.projects.find((entry) => entry.project === project)?.humanHours ?? 0);
+        }
+      }
+      /* The projects' views partition the page's human figures. */
+      const views = ["A", "B"].map((project) => week(params, project).totals);
+      expect(views.reduce((sum, totals) => sum + totals.humanMs, 0)).toBe(all.totals.humanMs);
+      expect(views.reduce((sum, totals) => sum + totals.humanHours, 0)).toBe(all.totals.humanHours);
+      expect(views.reduce((sum, totals) => sum + totals.agentHoursMs, 0)).toBe(all.totals.agentHoursMs);
+    }
+  });
+
+  test("the view of a project whose host was unread on Wednesday reads a lower bound there; the other project's does not", () => {
+    const a = week(DEFAULTS, "A");
+    const b = week(DEFAULTS, "B");
+    expect(a.totals.coverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    expect(a.days.find((day) => day.date === "2026-09-23")!.coverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    expect(a.days.find((day) => day.date === "2026-09-23")!.hours[1]!.unreadHosts).toEqual(["stage"]);
+    expect(b.totals.coverage).toEqual({ complete: true, missingHosts: [] });
+    expect(b.days.find((day) => day.date === "2026-09-23")!.unknown).toEqual([]);
+    /* A's night run on Wednesday is unclear; B's time never is. */
+    expect(a.days.find((day) => day.date === "2026-09-23")!.unattendedUnreadMs).toBe(2 * HOUR);
+    expect(b.days.find((day) => day.date === "2026-09-23")!.unattendedUnreadMs).toBe(0);
+  });
+
+  test("a project with only agent time whose host was not read: its time is a zero that is not complete, never a clean zero", () => {
+    const view = activityReport({
+      params: DEFAULTS, range: "7d", nowMs: NOW,
+      anchors: [input("2026-09-22", "10:00", "harbor")],
+      hosts: [LOCAL, readHost("stage", ["client-a"], [])],
+      agents: [run("k", "client-a", "2026-09-22", "11:00", "13:00")],
+      scope: { project: "client-a" },
+    });
+    expect(view.totals.humanMs).toBe(0);
+    expect(view.totals.humanHours).toBe(0);
+    expect(view.totals.requests).toBe(0);
+    expect(view.totals.coverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    expect(view.totals.wallMs).toBe(2 * HOUR);
+    expect(view.days.every((day) => !day.coverage.complete)).toBe(true);
+    /* Its agents ran while its input was not read: unclear, never unattended. */
+    expect(view.totals.unattendedUnreadMs).toBe(2 * HOUR);
+  });
+});
+
+describe("agent turns a host did not send make the agent figures a lower bound", () => {
+  const DEFAULTS = clampMethodParams({}, "UTC");
+  const NOW = Date.parse("2026-09-21T23:59:00Z");
+  const report = (hosts: HostCoverage[]) => activityReport({
+    params: DEFAULTS, range: "today", nowMs: NOW,
+    anchors: [anchor(0, "harbor"), anchor(60, "client-a", "unknown", "message", "stage")],
+    hosts,
+    agents: [agent("h", "harbor", 0, 90), agent("c", "client-a", 60, 180)],
+  });
+
+  test("a listed host whose pull never answered: every total missing it is a lower bound, and names it", () => {
+    const result = report([LOCAL, { ...readHost("stage", ["client-a"], []), agents: [] }]);
+    expect(result.totals.agentCoverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    expect(result.days[0]!.agentCoverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    expect(result.projects.find((row) => row.project === "client-a")!.agentCoverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    /* A project the host does not hold is exact. */
+    expect(result.projects.find((row) => row.project === "harbor")!.agentCoverage).toEqual({ complete: true, missingHosts: [] });
+  });
+
+  test("a host whose export read your input but whose agent turns nothing pulled: your time is complete, agent time is not", () => {
+    const result = report([LOCAL, { ...readHost("stage", ["client-a"]), agents: [] }]);
+    expect(result.totals.coverage).toEqual({ complete: true, missingHosts: [] });
+    expect(result.totals.agentCoverage).toEqual({ complete: false, missingHosts: ["stage"] });
+    const scoped = activityReport({
+      params: DEFAULTS, range: "today", nowMs: NOW, anchors: [anchor(60, "client-a", "unknown", "message", "stage")],
+      hosts: [LOCAL, { ...readHost("stage", ["client-a"]), agents: [] }], agents: [agent("c", "client-a", 60, 180)], scope: { project: "client-a" },
+    });
+    expect(scoped.totals.agentCoverage).toEqual({ complete: false, missingHosts: ["stage"] });
+  });
+
+  test("a host whose pull read it all: exact", () => {
+    const result = report([LOCAL, readHost("stage", ["client-a"])]);
+    expect(result.totals.agentCoverage).toEqual({ complete: true, missingHosts: [] });
+    expect(result.days[0]!.agentCoverage.complete).toBe(true);
+  });
+});
