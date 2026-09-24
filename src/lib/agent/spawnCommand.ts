@@ -10,6 +10,7 @@ import { claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } fr
 import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { copilotBinaryGap, freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
 import { NoCopilotAccountError, UnknownCopilotAccountError } from "@/lib/accounts/copilot";
 import { agentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnRequest } from "@/lib/agent/registry";
@@ -117,6 +118,8 @@ export interface SpawnCommandDependencies {
    */
   internalGrant?(): { sessionClass: McpSessionClass; mcpServers: readonly string[] } | null;
   recordOperatorActivity?: typeof recordDirectOperatorWakatimeActivity;
+  /** The activity dashboard's request ledger; never throws. */
+  recordOperatorRequest?: typeof recordOperatorRequest;
   /** Whether an engine's command resolves and it has a signed-in account
       (#1876). A role-shaped launch onto an engine that is not ready is refused
       before any receipt exists; absent means no check. */
@@ -142,6 +145,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   adoptPipelineAttemptFromSource,
   pipelineAttemptTargetForSource,
   recordOperatorActivity: recordDirectOperatorWakatimeActivity,
+  recordOperatorRequest,
   engineReadiness: (engine, project) => engine === "claude" || engine === "codex" ? engineReadiness(engine, project) : "connected",
 };
 
@@ -471,6 +475,7 @@ export async function executeSpawnRequest(
     } catch {
       return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
     }
+    dependencies.recordOperatorRequest?.(req, { kind: "spawn", idempotencyKey: `spawn:${clientAttemptId!}`, project });
   }
 
   /* Saved paths stay visible to the catch. A pane-bound receipt keeps them:

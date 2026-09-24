@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { Activity, Archive, Bot, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -2052,6 +2052,8 @@ function ProjectDashboardView({
         ),
         onSelect: () => mobileNav.openSheet("host"),
       },
+      /* Your time and your agents' time, per day and per project. */
+      { kind: "row", key: "activity", icon: <Activity className="h-[18px] w-[18px]" aria-hidden />, label: t("activity.menu"), testId: "menu-activity", onSelect: () => { mobileNav.closeSheet(); window.location.assign("/activity"); } },
       { kind: "divider", key: "d2" },
     );
     entries.push(

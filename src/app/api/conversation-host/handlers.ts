@@ -135,6 +135,7 @@ async function recordAuthorizedOperatorActivity(
   req: NextRequest,
   target: { pid: number; hasPid: boolean; filePath: string; conversationId: string },
   identity: { idempotencyKey?: string },
+  kind: "message" | "dialog",
 ): Promise<AuthorizedOperatorAction> {
   if (!directOperatorActivityAuthority(req).ok) return { byOperator: false, conversationId: target.conversationId };
   const fallbackEntry = operatorFallbackEntry((await dependencies.completedFileScan()).snapshot.files, target);
@@ -143,6 +144,15 @@ async function recordAuthorizedOperatorActivity(
     ...(target.filePath ? { path: target.filePath } : {}),
     ...identity,
     ...(fallbackEntry ? { fallbackEntry } : {}),
+  });
+  /* Beside the WakaTime point, never inside it: the dashboard's ledger is
+     written only once the gesture is admitted, and it cannot refuse it. */
+  dependencies.recordOperatorRequest(req, {
+    kind,
+    idempotencyKey: identity.idempotencyKey ?? null,
+    conversationId: target.conversationId || null,
+    path: target.filePath || null,
+    fallbackEntry: fallbackEntry ?? null,
   });
   return { byOperator: true, conversationId: target.conversationId || fallbackEntry?.conversationId || "" };
 }
@@ -293,6 +303,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
           req,
           target,
           clientMessageId ? { idempotencyKey: clientMessageId } : {},
+          "dialog",
         );
       } catch (error) {
         if (error instanceof OperatorActivityTargetConflictError) {
@@ -389,6 +400,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
       req,
       operatorTarget,
       clientMessageId ? { idempotencyKey: clientMessageId } : {},
+      "message",
     );
   } catch (error) {
     if (error instanceof OperatorActivityTargetConflictError) {

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
+import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { carryingTaskWorkLinks, pipelineWorkLinks } from "@/lib/forge/resolve";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -88,6 +90,15 @@ export async function PATCH(
       ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}),
     }, { status: result.status ?? 400 });
     if (CONTROLLER_ACTIONS.has(body.action)) requestPipelineTick();
+    /* The operator's answer to a decision is a request to the lane; an
+       agent's answer (named by its capability) is not recorded. */
+    if (body.action === "resolve-decision" && directOperatorActivityAuthority(req).ok) {
+      recordOperatorRequest(req, {
+        kind: "decision",
+        idempotencyKey: result.decisionAnswer ? `decision:${result.pipeline.id}:${result.decisionAnswer.clientRequestId}` : null,
+        project: result.pipeline.project,
+      });
+    }
     return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? {
       workLinks: pipelineWorkLinks(result.pipeline),
       /* The task cards that aggregate this pipeline redraw from the same answer. */

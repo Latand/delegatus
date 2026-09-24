@@ -1,3 +1,4 @@
+import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { canonicalTranscriptTarget, readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { applyConversationAction, CONVERSATION_ACTIONS } from "@/lib/conversation/actions";
 import { deliverConversationMessage, reconfigureConversation } from "@/lib/delivery";
@@ -35,6 +36,8 @@ export interface ConversationHostDependencies {
   resolveTmuxAttach: typeof resolveTmuxAttach;
   tmuxEndpointDescriptor: typeof tmuxEndpointDescriptor;
   recordDirectOperatorWakatimeActivity: typeof recordDirectOperatorWakatimeActivity;
+  /** The activity dashboard's request ledger; never throws. */
+  recordOperatorRequest: typeof recordOperatorRequest;
 }
 
 const productionDependencies: ConversationHostDependencies = {
@@ -60,6 +63,7 @@ const productionDependencies: ConversationHostDependencies = {
   resolveTmuxAttach,
   tmuxEndpointDescriptor,
   recordDirectOperatorWakatimeActivity,
+  recordOperatorRequest,
 };
 
 let testDependencies: Partial<ConversationHostDependencies> | null = null;
