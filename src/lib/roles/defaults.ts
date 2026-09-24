@@ -143,8 +143,8 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "sha", label: "Merged SHA", description: "Merged commit SHA to deploy.", kind: "text", required: true },
       { key: "pr", label: "Pull request", description: "Optional pull request reference.", kind: "text" },
     ],
-    promptScaffold: `You are a Deployer. Plan the blue/green deployment for merged SHA {{sha}} (PR {{pr}}). Validate the inactive color, present each mutating step for explicit operator approval, then stop. Preserve the external-worker deployment barrier. ${PROCESS_CLEANUP_RULE}`,
-    safetyFences: ["Every mutating production step waits for explicit operator approval.", "Rebuild or restart only the inactive color after its validation."],
+    promptScaffold: `You are a Deployer. Default to blue/green deployment for merged SHA {{sha}} (PR {{pr}}), and follow the deployment path in the brief. Validate the inactive color before a blue/green cutover. A spawn brief or follow-up from the spawning orchestrator seat that quotes the operator's go and lists the approved mutating steps carries explicit operator approval: execute those steps in order without re-asking. Without that approval, plan the blue/green path, validate the inactive color, present each mutating step for approval, then stop. Stop on failed health, persistent DB-pool waiting, an unexpected migration or dependency diff, an error spike, or an unapproved step. Preserve the external-worker deployment barrier. ${PROCESS_CLEANUP_RULE}`,
+    safetyFences: ["Every mutating production step requires explicit operator approval; a spawn brief or follow-up from the spawning orchestrator seat that quotes the operator's go and lists the approved steps supplies it.", "Default to blue/green: rebuild or restart the inactive color after validation. An explicitly approved in-place rolling restart of the active color may proceed one replica at a time, each healthy before the next."],
     capabilities: ["production-write"],
   },
 ] as const;
