@@ -98,6 +98,19 @@
  * tooltips inside the viewport, and the marks on the unread and flagged days.
  * With ACTIVITY_RENDER_DIR set, the images are copied there.
  *
+ * With BOARD_CAPTURE_CASE=lightbox it walks the full-screen image viewer
+ * through one conversation's 26 invented pictures (#2144): inbox attachments,
+ * markdown images and pictures a tool showed its agent, interleaved. It opens
+ * the newest picture, steps ← to the first and → back to the last, and counts
+ * every image request the page makes, per step: nothing beyond the shown
+ * picture and its neighbours, and nothing fetched twice. On the desktop it
+ * also puts the other 25 pictures above rows the feed never mounts, collects
+ * garbage and waits out the pictures' 60 s freshness before walking back, so
+ * a picture the viewer stopped holding would have to be downloaded again.
+ * Real clicks, a real drag and real taps check that the dimmed backdrop closes
+ * the viewer while a click on the picture or a pan that ends off it does not;
+ * it renders the viewer mid-gallery at 1440 × 900 and 390 × 844.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -4686,9 +4699,345 @@ async function activityMain(): Promise<void> {
   }
 }
 
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=lightbox (#2144)                                        */
+/* ------------------------------------------------------------------------- */
+
+const LIGHTBOX_COUNT = 26;
+const LIGHTBOX_INBOX = new Set([1, 5, 10, 15, 20, 25]);
+const LIGHTBOX_TOOL = new Set([3, 8, 13, 18, 23]);
+const LIGHTBOX_TOPICS = ["sign-in form", "empty inbox", "settings panel", "billing table", "error toast", "search results", "profile card", "dark theme", "export dialog", "onboarding step"];
+const LIGHTBOX_SHOTS = path.join(REPO_DIR, "shots");
+const LIGHTBOX_INBOX_DIR = path.join(HOME, ".config", "agent-log-viewer", "inbox");
+/** The picture the renders show: a markdown image in the middle of the walk. */
+const LIGHTBOX_MID = 12;
+type LightboxLayout = "dense" | "spread" | "unmounted";
+/** Short answers between the last picture and the rest in the `unmounted` layout: more rows
+    than the 1,500 a reader mounts, few enough bytes that every picture stays in the 768 KB
+    tail the feed reads. */
+const LIGHTBOX_FILLER = 1_600;
+const LIGHTBOX_TAIL_BYTES = 768 * 1024;
+
+/** Invented screens, painted by the browser: a coloured frame with its number large enough to read in a render. */
+async function paintLightboxPictures(browser: Browser): Promise<string[]> {
+  const page = await browser.newPage();
+  const pictures = await page.evaluate(([count, topics]) => Array.from({ length: count }, (_, i) => {
+    const n = i + 1;
+    const canvas = document.createElement("canvas");
+    canvas.width = 1200;
+    canvas.height = 750;
+    const g = canvas.getContext("2d")!;
+    const hue = (n * 47) % 360;
+    g.fillStyle = `hsl(${hue} 45% 92%)`;
+    g.fillRect(0, 0, 1200, 750);
+    g.fillStyle = `hsl(${hue} 55% 36%)`;
+    g.fillRect(0, 0, 1200, 96);
+    g.fillStyle = "#ffffff";
+    for (let column = 0; column < 3; column += 1) g.fillRect(60 + column * 370, 170, 330, 470);
+    g.font = "bold 44px sans-serif";
+    g.fillText(`Screen ${n} · ${topics[n % topics.length]}`, 48, 64);
+    g.fillStyle = `hsl(${hue} 55% 36%)`;
+    g.font = "bold 240px sans-serif";
+    g.textAlign = "center";
+    g.fillText(String(n), 600, 500);
+    return canvas.toDataURL("image/png").split(",")[1]!;
+  }), [LIGHTBOX_COUNT, LIGHTBOX_TOPICS] as const);
+  await page.close();
+  return pictures;
+}
+
+/** One conversation drawing the 26 pictures in order. `spread` puts a long note before each
+    picture, so a picture sits screens away from the next and the feed's own lazy thumbnails
+    reach only the last few; `dense` has them follow one another. `unmounted` puts 1,600 short
+    answers before the last picture, so the feed mounts none of the other rows and the viewer's
+    own elements are the only thing on the page that loads them. `urls` collects the URL each
+    picture that loads over the network is asked for by. */
+function writeLightboxConversation(id: string, layout: LightboxLayout, pictures: string[], urls: Map<string, number>): string {
+  const base = { cwd: REPO_DIR, sessionId: id };
+  const at = (n: number, s = 0) => `2100-01-03T10:${String(n).padStart(2, "0")}:${String(s).padStart(2, "0")}.000Z`;
+  const say = (uuid: string, n: number, text: string) => ({ type: "assistant", uuid, timestamp: at(n), ...base, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text }] } });
+  const lines: unknown[] = [{ type: "user", uuid: `${id}-u0`, timestamp: at(0), ...base, message: { role: "user", content: "Walk me through the redesign screens, one by one." } }];
+  for (let n = 1; n <= LIGHTBOX_COUNT; n += 1) {
+    const topic = LIGHTBOX_TOPICS[n % LIGHTBOX_TOPICS.length]!;
+    const bytes = Buffer.from(pictures[n - 1]!, "base64");
+    if (layout === "spread") lines.push(say(`${id}-n${n}`, n, `Notes before screen ${n}:\n${Array.from({ length: 120 }, (_, line) => `- Note ${line + 1} on the ${topic}: spacing, contrast and copy checked.`).join("\n")}`));
+    /* Bare answers: the session's own fields ride on the other rows, and the bytes they save keep every picture in the tail. */
+    if (layout === "unmounted" && n === LIGHTBOX_COUNT) for (let i = 1; i <= LIGHTBOX_FILLER; i += 1) lines.push({ type: "assistant", uuid: `${id}-f${i}`, timestamp: at(n - 1, 30), message: { role: "assistant", content: [{ type: "text", text: `Checked item ${i}.` }] } });
+    if (LIGHTBOX_INBOX.has(n)) {
+      const name = `img-${String(n).padStart(2, "0")}-redesign.png`;
+      fs.writeFileSync(path.join(LIGHTBOX_INBOX_DIR, name), bytes);
+      lines.push({ type: "user", uuid: `${id}-u${n}`, timestamp: at(n), ...base, message: { role: "user", content: `Screen ${n}, the ${topic}:\n${path.join(LIGHTBOX_INBOX_DIR, name)}` } });
+      urls.set(`/api/inbox?name=${encodeURIComponent(name)}`, n);
+    } else if (LIGHTBOX_TOOL.has(n)) {
+      const file = path.join(LIGHTBOX_SHOTS, `capture-${n}.png`);
+      lines.push({ type: "assistant", uuid: `${id}-t${n}`, timestamp: at(n), ...base, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "tool_use", id: `toolu_${n}`, name: "Read", input: { file_path: file } }] } });
+      lines.push({ type: "user", uuid: `${id}-r${n}`, timestamp: at(n, 1), ...base, message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_${n}`, content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: pictures[n - 1] } }] }] } });
+    } else {
+      const file = path.join(LIGHTBOX_SHOTS, `step-${n}.png`);
+      fs.writeFileSync(file, bytes);
+      lines.push(say(`${id}-a${n}`, n, `Screen ${n} is the ${topic}:\n![Screen ${n}, ${topic}](${file})`));
+      urls.set(`/api/image?path=${encodeURIComponent(file)}`, n);
+    }
+  }
+  lines.push({ type: "result", subtype: "success", uuid: `${id}-done`, timestamp: at(59), ...base, is_error: false, duration_ms: 1200, num_turns: 1, result: "All screens reviewed." });
+  const folder = path.join(HOME, ".claude/projects", projectSlug(REPO_DIR));
+  fs.mkdirSync(folder, { recursive: true });
+  const transcript = path.join(folder, `${id}.jsonl`);
+  fs.writeFileSync(transcript, lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+  const size = fs.statSync(transcript).size;
+  if (size > LIGHTBOX_TAIL_BYTES) throw new Error(`the ${layout} conversation is ${size} bytes; the feed would not read its first pictures`);
+  return transcript;
+}
+
+function seedLightbox(pictures: string[]): { transcripts: Record<LightboxLayout, string>; urls: Map<string, number> } {
+  for (const dir of [LIGHTBOX_SHOTS, LIGHTBOX_INBOX_DIR]) fs.mkdirSync(dir, { recursive: true });
+  const urls = new Map<string, number>();
+  /* Session ids assembled from parts, like the other seeded ones. */
+  const id = (tail: string) => ["00000026", "0000", "4000", "8000", tail.padStart(12, "0")].join("-");
+  const dense = writeLightboxConversation(id("cafe"), "dense", pictures, urls);
+  const spread = writeLightboxConversation(id("beef"), "spread", pictures, urls);
+  const unmounted = writeLightboxConversation(id("f00d"), "unmounted", pictures, urls);
+  return { transcripts: { dense, spread, unmounted }, urls };
+}
+
+/** The open viewer, read in the page. */
+function readLightbox() {
+  const rect = (el: Element | null) => { if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const dialog = document.querySelector<HTMLElement>("[role=dialog][aria-modal=true]");
+  const shown = dialog?.querySelector<HTMLImageElement>("img:not([hidden])") ?? null;
+  /* An inline picture's source is its whole encoding; the record keeps its length. */
+  const source = (img: Element | null) => { const src = img?.getAttribute("src") ?? null; return src?.startsWith("data:") ? `data:(${src.length} chars)` : src; };
+  return {
+    open: dialog !== null,
+    position: dialog?.querySelector("[data-lightbox-position]")?.textContent ?? null,
+    src: source(shown),
+    loaded: Boolean(shown && shown.complete && shown.naturalWidth > 0),
+    image: rect(shown),
+    /* The picture area the backdrop fills around the picture. */
+    area: rect(shown?.parentElement?.parentElement ?? null),
+    mounted: dialog ? [...dialog.querySelectorAll("img")].map(source) : [],
+    previous: rect(dialog?.querySelector("[data-lightbox-step=previous]") ?? null),
+    next: rect(dialog?.querySelector("[data-lightbox-step=next]") ?? null),
+    caption: dialog?.querySelector(".truncate")?.textContent ?? null,
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+  };
+}
+
+async function lightboxMain(): Promise<void> {
+  seedHome();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(encodeURIComponent(HOME)).join(encodeURIComponent("$HOME")).split(HOME).join("$HOME"));
+  const report: Record<string, unknown> = { commit: captureCommit(), pictures: LIGHTBOX_COUNT };
+  try {
+    /* `gc()` lets the walk drop every picture nothing holds any more. */
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage", "--js-flags=--expose-gc"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const { transcripts, urls } = seedLightbox(await paintLightboxPictures(browser));
+    report.networkPictures = urls.size;
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    const dismissed = await fetch(`${baseUrl}/api/onboarding`, {
+      method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }),
+    });
+    must(dismissed.ok, `dismissing the setup guide answered ${dismissed.status}`);
+    const lastSrc = `/api/image?path=${encodeURIComponent(path.join(LIGHTBOX_SHOTS, `step-${LIGHTBOX_COUNT}.png`))}`;
+    const thumbnail = `[data-log-feed-scroller] img[src="${lastSrc}"]`;
+    const viewports = [
+      { device: "desktop", phone: false, options: { viewport: { width: 1440, height: 900 } } },
+      { device: "phone", phone: true, options: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true } },
+    ] as const;
+    /* A phone's reader keeps only its last 1,000 lines while it follows the tail, fewer than
+       the 1,500 rows it mounts, so there every picture the feed holds has a mounted row. */
+    for (const { device, phone, options } of viewports) for (const layout of (phone ? ["dense", "spread"] : ["dense", "spread", "unmounted"]) as LightboxLayout[]) {
+      const tag = `${device}-${layout}`;
+      const context = await browser.newContext({ ...options, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      const page = await context.newPage();
+      /* Every image request the page puts on the network, attributed to the
+         phase it happened in. A picture the page already holds is served from
+         its own memory and never reaches the network. */
+      let phase = "feed";
+      const requests: { phase: string; picture: number | null; url: string }[] = [];
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (!/^\/api\/(image|inbox|artifact)$/.test(url.pathname)) return;
+        const local = url.pathname + url.search;
+        requests.push({ phase, picture: urls.get(local) ?? null, url: local });
+      });
+      await page.goto(`${baseUrl}/#f=${encodeURIComponent(transcripts[layout])}`);
+      await page.waitForSelector(thumbnail, { timeout: 60_000 }).catch(() => {});
+      await page.waitForTimeout(1_500);
+      const feedPictures = requests.map((request) => request.picture);
+      /* The pictures a mounted feed row draws. */
+      const heldByFeed = (await page.evaluate(() => [...document.querySelectorAll("[data-log-feed-scroller] img")].map((img) => img.getAttribute("src") ?? "")))
+        .filter((src) => /^(\/api\/(image|inbox|artifact)\?|data:image\/)/.test(src))
+        .map((src) => (src.startsWith("data:") ? "inline" : urls.get(src) ?? src));
+      if (layout === "unmounted") must(JSON.stringify(heldByFeed) === JSON.stringify([LIGHTBOX_COUNT]), `${tag}: the feed's mounted rows draw pictures ${JSON.stringify(heldByFeed)}`);
+      const read = () => page.evaluate(readLightbox);
+      const settle = async () => {
+        await page.waitForFunction(() => {
+          const img = document.querySelector<HTMLImageElement>("[role=dialog] img:not([hidden])");
+          return Boolean(img && img.complete && img.naturalWidth > 0);
+        }, undefined, { timeout: 10_000 }).catch(() => {});
+        await page.waitForTimeout(250);
+      };
+
+      /* Open the newest picture, walk to the first, one step past it, and back. */
+      phase = "open";
+      await page.locator(thumbnail).click();
+      await settle();
+      const opened = await read();
+      const openPictures = requests.filter((request) => request.phase === "open").map((request) => request.picture);
+      must(opened.open && opened.position === `${LIGHTBOX_COUNT} / ${LIGHTBOX_COUNT}`, `${tag}: the viewer opened at «${opened.position}»`);
+      must(opened.next === null && opened.previous !== null, `${tag}: at the last picture the edge buttons are ${JSON.stringify({ previous: opened.previous, next: opened.next })}`);
+      for (const picture of openPictures) must(picture !== null && picture >= LIGHTBOX_COUNT - 1, `${tag}: opening the last picture asked for picture ${picture}`);
+      const walk: { position: string | null; loaded: boolean; mounted: number; requested: (number | null)[] }[] = [];
+      const stepOnce = async (key: "ArrowLeft" | "ArrowRight", label: string) => {
+        phase = label;
+        const before = requests.length;
+        await page.keyboard.press(key);
+        await settle();
+        const reading = await read();
+        walk.push({ position: reading.position, loaded: reading.loaded, mounted: reading.mounted.length, requested: requests.slice(before).map((request) => request.picture) });
+        return reading;
+      };
+      let mid: Awaited<ReturnType<typeof read>> | null = null;
+      for (let n = LIGHTBOX_COUNT - 1; n >= 1; n -= 1) {
+        const reading = await stepOnce("ArrowLeft", `left-to-${n}`);
+        must(reading.position === `${n} / ${LIGHTBOX_COUNT}`, `${tag}: ← to ${n} shows «${reading.position}»`);
+        must(reading.loaded, `${tag}: picture ${n} did not load`);
+        must(reading.mounted.length >= (n === 1 ? 2 : 3), `${tag}: at ${n} the viewer holds ${reading.mounted.length} pictures`);
+        /* Only the neighbour the move brought into reach may load. */
+        for (const picture of walk.at(-1)!.requested) must(picture === n - 1, `${tag}: at ${n} the page asked for picture ${picture}`);
+        if (n === LIGHTBOX_MID) {
+          mid = reading;
+          if (layout === "dense") await page.screenshot({ path: path.join(OUT_DIR, `lightbox-${device}-mid-gallery.png`) });
+        }
+      }
+      const pastFirst = await stepOnce("ArrowLeft", "left-past-first");
+      must(pastFirst.position === `1 / ${LIGHTBOX_COUNT}` && pastFirst.previous === null, `${tag}: ← at the first picture shows «${pastFirst.position}»`);
+      /* Nothing but the viewer holds pictures 1 to 25 here. Collect garbage and outlast
+         /api/image's 60 s freshness, so a picture the viewer let go of can only come back over
+         the network (/api/inbox answers no-store). */
+      let collected: boolean | null = null;
+      if (layout === "unmounted") {
+        const collect = () => page.evaluate(() => {
+          const gc = (globalThis as { gc?: () => void }).gc;
+          if (gc) { gc(); gc(); }
+          return Boolean(gc);
+        });
+        collected = await collect();
+        await page.waitForTimeout(61_000);
+        collected = (await collect()) && collected;
+        must(collected, `${tag}: the page could not collect garbage`);
+      }
+      const backFrom = requests.length;
+      for (let n = 2; n <= LIGHTBOX_COUNT; n += 1) await stepOnce("ArrowRight", `right-to-${n}`);
+      const pastLast = await stepOnce("ArrowRight", "right-past-last");
+      must(pastLast.position === `${LIGHTBOX_COUNT} / ${LIGHTBOX_COUNT}` && pastLast.next === null, `${tag}: → at the last picture shows «${pastLast.position}»`);
+      const backRequests = requests.length - backFrom;
+      must(backRequests === 0, `${tag}: walking back over reached pictures made ${backRequests} image requests`);
+      const perUrl = new Map<string, number>();
+      for (const request of requests) perUrl.set(request.url, (perUrl.get(request.url) ?? 0) + 1);
+      const refetched = [...perUrl].filter(([, count]) => count > 1);
+      must(refetched.length === 0, `${tag}: fetched more than once: ${JSON.stringify(refetched)}`);
+      must(mid !== null && mid.previous !== null && mid.next !== null, `${tag}: mid-gallery the edge buttons are ${JSON.stringify(mid && { previous: mid.previous, next: mid.next })}`);
+      if (mid) for (const [name, box] of [["previous", mid.previous], ["next", mid.next]] as const) {
+        must(Boolean(box && box.x >= 0 && box.y >= 0 && box.x + box.w <= mid.viewport.w && box.y + box.h <= mid.viewport.h), `${tag}: the ${name} button sits at ${JSON.stringify(box)}`);
+        if (phone) must((box?.h ?? 0) >= 44 && (box?.w ?? 0) >= 44, `${tag}: the ${name} button is ${box?.w}×${box?.h}px`);
+      }
+
+      /* The backdrop: a click on the picture keeps it, a drag that ends off
+         the picture keeps it, a still click or tap on the dimmed area closes it.
+         The drag ends below the picture and carries it down, so the closing
+         click lands above it. */
+      let backdrop: Record<string, boolean | null> | null = null;
+      if (layout === "dense") {
+        const center = (box: { x: number; y: number; w: number; h: number }) => ({ x: box.x + box.w / 2, y: box.y + box.h / 2 });
+        const now = await read();
+        const picture = center(now.image!);
+        const below = { x: Math.round(now.area!.x + now.area!.w / 2), y: now.area!.y + now.area!.h - 8 };
+        const above = { x: below.x, y: now.area!.y + 8 };
+        must(below.y > now.image!.y + now.image!.h && above.y < now.image!.y, `${tag}: no backdrop above and below the picture ${JSON.stringify({ image: now.image, area: now.area })}`);
+        if (phone) await page.touchscreen.tap(picture.x, picture.y);
+        else await page.mouse.click(picture.x, picture.y);
+        await page.waitForTimeout(250);
+        const afterPictureClick = (await read()).open;
+        must(afterPictureClick, `${tag}: a ${phone ? "tap" : "click"} on the picture closed the viewer`);
+        let afterPan: boolean | null = null;
+        if (!phone) {
+          await page.mouse.move(picture.x, picture.y);
+          await page.mouse.down();
+          await page.mouse.move(below.x - 40, below.y - 30, { steps: 8 });
+          await page.mouse.move(below.x, below.y, { steps: 4 });
+          await page.mouse.up();
+          await page.waitForTimeout(250);
+          afterPan = (await read()).open;
+          must(afterPan, `${tag}: a pan that ended off the picture closed the viewer`);
+        }
+        if (phone) await page.touchscreen.tap(above.x, above.y);
+        else await page.mouse.click(above.x, above.y);
+        await page.waitForTimeout(250);
+        const afterBackdrop = (await read()).open;
+        must(!afterBackdrop, `${tag}: a ${phone ? "tap" : "click"} on the backdrop left the viewer open`);
+        /* A viewer the backdrop failed to close would cover the thumbnail. */
+        if (afterBackdrop) await page.keyboard.press("Escape");
+        await page.locator(thumbnail).click();
+        await settle();
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(250);
+        const afterEscape = (await read()).open;
+        must(!afterEscape, `${tag}: Escape left the viewer open`);
+        backdrop = { afterPictureClick, afterPan, afterBackdrop, afterEscape };
+      }
+
+      const viewing = requests.filter((request) => request.phase !== "feed");
+      report[tag] = {
+        requests: {
+          feed: feedPictures.length,
+          open: openPictures.length,
+          walkingLeft: viewing.filter((request) => request.phase.startsWith("left")).length,
+          walkingBack: backRequests,
+          total: requests.length,
+          distinctUrls: perUrl.size,
+          fetchedTwice: refetched.length,
+        },
+        feedPictures: [...feedPictures].sort((a, b) => (a ?? 0) - (b ?? 0)),
+        heldByFeed,
+        collectedGarbageBeforeWalkingBack: collected,
+        openPictures,
+        walk,
+        opened,
+        midGallery: mid,
+        backdrop,
+        log: requests,
+      };
+      await context.close();
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "lightbox.json"), JSON.stringify(scrub(report), null, 2) + "\n", "utf8");
+  console.log(`lightbox measurements: ${path.join(OUT_DIR, "lightbox.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`lightbox acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("lightbox acceptance passed at 1440 × 900 and 390 × 844.");
+  }
+}
+
 /* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), activity the activity dashboard's, instead of the camera probes. */
 if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
+else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
