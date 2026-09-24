@@ -123,6 +123,8 @@ const GHOSTS = SCENARIO === "ghost-tasks";
    Beside them, a card with launches of its own that did not start: three rows
    from before launches reserved a conversation, and one whose receipt failed. */
 const UNSTARTED = SCENARIO === "unstarted-regression";
+/* Board order: working cards first, then recently worked, then idle. */
+const BOARD_ORDER = SCENARIO === "board-order";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -961,6 +963,48 @@ if (SCENARIO === "stopped-launches") {
   files.splice(0, files.length, ...launches.map((entry) => entry.file));
   pipelines.splice(0, pipelines.length, ...launches.map((entry) => entry.pipeline));
   tasks.splice(0, tasks.length, task("t-stopped", "done", "Recover stopped launches", "", 0, files));
+}
+/* Board order: an Assigned column as the operator reported it on 2026-09-24.
+   `t-order-tint`'s build stage is running and its conversation is live on the
+   host's turn evidence, with neither a turn boundary nor an agent-work stamp
+   on its row yet, which is how the live row read. Beside it, a direct worker
+   and a research lane at work, a card whose agent finished minutes ago, one
+   that finished yesterday, and a task nobody has worked on that was edited a
+   minute ago. */
+if (BOARD_ORDER) {
+  const agent = (id: string, title: string, over: Record<string, unknown>) => conversation(id, title, over);
+  const live = (turnAgo: number | null, workAgo: number | null, over: Record<string, unknown> = {}) => ({
+    ...working({ mtime: now - (workAgo ?? 114) }),
+    activityReason: "turn_evidence_working",
+    lastTurn: turnAgo === null ? undefined : { startedAt: (now - turnAgo) * 1_000, endedAt: null },
+    ...(workAgo === null ? {} : { lastAgentWorkAt: (now - workAgo) * 1_000 }),
+    ...over,
+  });
+  const ended = (workAgo: number) => ({
+    activity: workAgo < 15 * MIN ? "recent" : "idle", mtime: now - workAgo, lastAgentWorkAt: (now - workAgo) * 1_000,
+    authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(workAgo) },
+    lastTurn: { startedAt: (now - workAgo - 20 * MIN) * 1_000, endedAt: (now - workAgo) * 1_000 },
+  });
+  const tint = agent("order-tint-build", L("Builder: one icon and colour rule for every new task", "Білдер: одне правило іконки й кольору для кожної нової задачі"),
+    live(null, null, { authoritativeTurn: { state: "unknown", source: "empty", terminalAt: null }, lastTurn: undefined }));
+  const maint = agent("order-maint", L("Keeping the board's tasks current", "Тримаю задачі дошки актуальними"), live(7 * MIN, 119, { plan: { current: L("Closing tasks whose PRs merged", "Закриваю задачі зі злитими PR") } }));
+  const research = agent("order-research", L("Architect: interface improvements from the design skills", "Архітектор: покращення інтерфейсу за дизайн-скілами"), live(35 * MIN, 189));
+  const review = agent("order-review", L("Image viewer: arrows and click-outside close", "Перегляд зображень: стрілки й закриття кліком поза ним"), ended(408));
+  const yesterday = agent("order-yesterday", L("Rate-limit banner copy", "Текст банера про ліміт"), ended(26 * 60 * MIN));
+  const lane = (id: string, stageId: string, file: FileEntry, startedAgo: number) => pipeline(id, `Lane ${id}`, id.replace(/^p-/, "t-"), "running",
+    [stage(stageId, "builder", "review"), stage("review", "builder", null)],
+    [{ stageId, attempts: [attempt(1, "running", file, { startedAt: iso(startedAgo) })] }],
+    { stageId, state: "running", input: null, activatedBy: null });
+  files.splice(0, files.length, orchestrator, tint, maint, research, review, yesterday);
+  pipelines.splice(0, pipelines.length, lane("p-order-tint", "build", tint, 2 * MIN), lane("p-order-research", "research", research, 35 * MIN));
+  tasks.splice(0, tasks.length,
+    task("t-order-tint", "assigned", L("Every new task gets an icon and a colour by one rule", "Кожна нова задача отримує іконку й колір за одним правилом"), "", 2 * MIN),
+    task("t-order-maint", "assigned", L("Board upkeep: an agent that keeps tasks current", "Обслуговування дошки: агент, який тримає задачі актуальними"), "", 7 * MIN, [maint]),
+    task("t-order-research", "assigned", L("Research: improving the interface with the design skills", "Дослідження: як покращити інтерфейс за дизайн-скілами"), "", 35 * MIN),
+    task("t-order-review", "assigned", L("Agent image viewer: arrows and click-outside close", "Перегляд зображень агента: стрілки й закриття кліком поза ним"), "", 30 * MIN, [review]),
+    task("t-order-yesterday", "assigned", L("Rate-limit banner copy", "Текст банера про ліміт"), "", 26 * 60 * MIN, [yesterday]),
+    task("t-order-notes", "assigned", L("Write the upgrade notes", "Написати нотатки до оновлення"), L("Nobody has worked on it yet.", "Над нею ще ніхто не працював."), 1 * MIN),
+  );
 }
 if (BALANCE) {
   for (const column of BALANCE_COLUMNS) {
